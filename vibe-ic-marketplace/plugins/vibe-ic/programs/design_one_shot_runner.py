@@ -10704,7 +10704,8 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                           detail=f"class not derivable ({gen.get('reason', '')})", reason_class=_V.ReasonClass.INPUT_ABSENT)
     if status != "PASS":
         _write({**gen, "ran_cocotb": False})
-        if status == "INCOMPLETE" and gen.get("memory_signature_required"):
+        if status == "INCOMPLETE" and (gen.get("memory_signature_required")
+                                       or gen.get('fallback_skill') == 'testbench-gen'):
             return StepResult("professional_tb_gen", "NOT_MEASURED", time.time() - t0,
                               detail=gen.get("reason", "memory_signature contract unresolved"),
                               extras={"fallback_skill": "testbench-gen",

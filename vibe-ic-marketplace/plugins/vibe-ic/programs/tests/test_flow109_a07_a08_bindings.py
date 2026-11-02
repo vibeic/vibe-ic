@@ -35,7 +35,7 @@ def authority(root, metric, *, ceiling=.7):
     source = root / 'input/independent-bound-source.txt'
     source.write_text('Synthetic independent source-control authority; no IC qualification.')
     document = {'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED',
-        'authority': 'requirements_owner', 'source_reference': {'path': str(source.relative_to(root)), 'sha256': sha(source)}},
+        'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': {'path': str(source.relative_to(root)), 'sha256': sha(source)}},
         'limits': {'unit_alpha': {'vout_dc': {'min': .5, 'max': ceiling}}},
         'units': {'unit_alpha': {'vout_dc': 'V'}}}
     if metric == 'early_model_correlation':
@@ -229,7 +229,7 @@ def partial_pvt_source_fixture(case):
     """
     root, _, nominal, *_ = case
     requirement = put(root, 'requirements/base_A7/pvt_load_modes.json', {
-        'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
             'source_reference': {'path': 'input/independent-bound-source.txt', 'sha256': sha(root / 'input/independent-bound-source.txt')}},
         'required_items': [{'block': 'unit_alpha', 'name': 'typical_27c'}, {'block': 'unit_alpha', 'name': 'slow_125c'}]})
     scalar = nominal['native_results']['steps'][0]

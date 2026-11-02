@@ -769,6 +769,58 @@ def _runner_terminal_error(rc, stdout: str, stderr: str) -> str | None:
     return None
 
 
+def _reference_model_reentry_reason(project: Path, result: dict) -> str | None:
+    """Why Step 4 must measure unchanged RTL again, or None.
+
+    Step 4 hands a missing reference model to the expert and asks for a re-run.
+    A candidate whose RTL stays the same otherwise never returns to the runner,
+    so it stays INELIGIBLE on a measurement that no longer describes its
+    verification input and the run cannot complete. The gate report names the
+    model it measured, so only a different accepted model re-enters, and a
+    repeated --resume cannot loop.
+    """
+    if (result.get("accepted") or "sim" not in
+            (_required_gate_ledger(result).get("failed_required") or [])):
+        return None
+    try:
+        report = _read_json_regular(Path(project) / _PROFESSIONAL_TB_REPORT)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(report, dict):
+        return None
+    top = Path(str(report.get("out_dir") or "")).name
+    measured = report.get("reference_model_sha256")
+    tier = report.get("reference_model_tier")
+    if not top or not isinstance(tier, str) or tier not in {
+            "hook_unfilled", "expert_filled"}:
+        return None
+    import professional_tb_gen as tb                     # noqa: PLC0415
+    current = tb.reference_model_identity(
+        Path(project) / "phase2" / "stage1" / "sim_professional" / top)
+    if current is None or current == measured:
+        return None
+    return ("REFERENCE_MODEL_CHANGED: Step 4 has not measured the current "
+            f"reference model {current}")
+
+
+def _reference_model_next(project) -> dict:
+    """Name the missing model, when that rather than the RTL is what Step 4 waits on."""
+    try:
+        report = _read_json_regular(Path(str(project)) / _PROFESSIONAL_TB_REPORT)
+    except (OSError, ValueError):
+        return {}
+    handoff = report.get("reference_model_handoff") if isinstance(report, dict) else None
+    if not isinstance(handoff, dict):
+        return {}
+    return {"reference_model_handoff": handoff,
+            "required_next": (
+                "Step 4 requires a usable reference model: author or correct "
+                f"{handoff.get('artifact_path')} from the visible input, then run "
+                "--resume to re-measure the same bytes and submit a fresh AI review; "
+                "an independent semantic PASS does not discharge a required "
+                "in-scope gate failure")}
+
+
 def _runner_reentry_reason(task: dict, result: dict, *,
                            allow_repaired_output: bool = False,
                            repaired_output_sha256: str | None = None) -> str | None:
@@ -1073,6 +1125,8 @@ class _RunnerBudget:
                     # A private per-call env, including when worker_threads=0.
                     # Never mutate a shared worker environment across siblings.
                     kwargs["env"] = dict(kwargs.get("env") or os.environ)
+                    if "--container" in argv:
+                        kwargs["env"]["VIBEIC_EDA_CONTAINER"] = argv[argv.index("--container") + 1]
                     kwargs["env"][_RUNNER_CONTEXT_ENV] = json.dumps({
                         "invocation_id": invocation_id, "argv": argv,
                         "project": str(project), "source": source_before,
@@ -1562,6 +1616,8 @@ _REPAIR_WORKLIST = "needs_ai_repair.jsonl"
 _CLARIFICATION_WORKLIST = "needs_spec_clarification.jsonl"
 _ENHANCEMENT_WORKLIST = "program_enhancement_candidates.jsonl"
 _ACCEPTANCE_REPORT = "program_first_ai_review_acceptance.json"
+_PROFESSIONAL_TB_REPORT = "reports/phase2/gates/professional_tb.json"
+_STEP4_FUNCTIONAL_EVIDENCE = 4
 _REVIEW_CORRECTION_SCHEMA = "vibeic.benchmark.ai_review_correction.v1"
 _PROGRAM_REGATE_SCHEMA = "vibeic.benchmark.program_regate.v1"
 _PRE_GATE_INPUT_SCHEMA = "vibeic.benchmark.pre_gate_input.v1"
@@ -6703,6 +6759,14 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
                 del argv[index:index + 2]
         argv += ["--flow", "109", "--flow109-manifest", str(manifest_path),
                  "--entry-step", first, "--exit-step", last]
+    # Same-bytes re-entry stages below program_regates, rather than projects.
+    for owner in Path(proj).resolve().parents:
+        if ((owner / _RUNTIME_PAIR_RECORD).exists()
+                or _native_challenge_identity_path(owner).exists()):
+            container = _recorded_benchmark_container(owner)
+            if container:
+                argv += ["--container", container]
+            break
     return argv
 
 
@@ -8385,7 +8449,8 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
                          source: str, detail: str, bench: str,
                          dataset: Path, run_p: Path,
                          required_top: str | None = None,
-                         expected_public_input: dict | None = None) -> dict:
+                         expected_public_input: dict | None = None,
+                         exit_step: object = None) -> dict:
     """Build one prompt-bound handoff into the runner-owned RTL directory.
 
     `required_top` carries the module name the benchmark's SCORER will
@@ -8458,6 +8523,19 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
     task["public_original_input_paths"] = [
         str(project / "input" / "public_original" / "files" / row["relative_path"])
         for row in task["public_original_input"]["files"]]
+    if str(exit_step).isdigit() and int(exit_step) >= _STEP4_FUNCTIONAL_EVIDENCE:
+        # Advisory, like the producer's own handoff: Program may still derive
+        # the reference itself. Filling it now measures the first re-gate
+        # instead of spending a review on a candidate Step 4 could not measure.
+        import professional_tb_gen as tb                 # noqa: PLC0415
+        task["reference_model_handoff"] = {
+            **tb.reference_model_handoff(
+                project / "phase2" / "stage1" / "sim_professional"
+                / (required_top or "<top_module>")),
+            "status": "CONDITIONAL",
+            "when": ("this route's evidence window includes Step 4; it reads "
+                     "this model when Program cannot derive the reference"),
+        }
     task["task_sha256"] = _sha256_text(json.dumps(task, sort_keys=True))
     _write_immutable_json(run_p / "ai_backup_tasks" /
                           f"{task['task_sha256']}.json", task)
@@ -8498,6 +8576,10 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
         str(receipt.get("input_contract") or "structured"),
         _rtl_delivery_target(receipt), resolve_manifest=False)
     expected[0] = invocation["argv"][0]  # its recorded interpreter is checked below
+    if "--container" not in invocation["argv"] and "--container" in expected:
+        # Historical runners inherited their selection through the environment.
+        index = expected.index("--container")
+        del expected[index:index + 2]
     if (invocation.get("status") != "COMPLETED" or invocation.get("error")
             or invocation.get("rc") not in (0, 1)
             or invocation.get("project") != str(project)
@@ -8537,7 +8619,7 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
             str(waive.get("detail") or "") if waive else str(got.get("reason") or ""),
             bench, Path(dataset), run_p,
             required_top=_required_scorer_top(_entry(bench), fmt),
-            expected_public_input=public)
+            expected_public_input=public, exit_step=result.get("exit"))
     observed = result.get("runner_invocation")
     result.update(
         runner_invocation=invocation, runner_diagnostics=diagnostic,
@@ -8610,19 +8692,71 @@ def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
 _RUNTIME_PAIR_RECORD = "runtime_pair_preflight.json"
 
 
+def _recorded_benchmark_container(run_p: Path) -> str | None:
+    """Keep a run's original native selection across coordinator processes."""
+    frozen = _frozen_native_challenge_identity(run_p)
+    if frozen is not None:
+        return frozen["container"]
+    path = run_p / _RUNTIME_PAIR_RECORD
+    if path.exists():
+        pair = _read_json_regular(path)
+        if pair.get("execution_route") != "LOCAL":
+            if pair.get("selected_container"):
+                return pair["selected_container"]
+            if pair.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH:
+                return pair.get("container")
+    return None
+
+
+def _benchmark_runtime_env(run_p: Path, *, fresh: bool) -> dict:
+    """Supply only an implicit fresh Docker runtime through the deployment owner."""
+    env = dict(os.environ)
+    recorded = _recorded_benchmark_container(run_p)
+    if recorded:
+        env["VIBEIC_EDA_CONTAINER"] = recorded
+    elif (fresh and not env.get("VIBEIC_EDA_CONTAINER", "").strip()
+          and not _challenge_exec.no_container_route()):
+        pin = _runtime_pair._pin
+        source = pin.default_container_name(env)
+        reference, why = pin.container_image_reference(source)
+        if not reference:
+            raise ValueError(why or "source container image is unreadable")
+        name = "vibeic-bench-" + _sha256_text(str(run_p.resolve()))[:24]
+        helper = Path(__file__).resolve().parents[1] / "tools/vibeic-eda/restart-eda.sh"
+        helper_env = {**env, "NAME": name, "SOURCE_CONTAINER": source,
+                      "ENSURE_ONLY": "1", "PULL": "0"}
+        result = subprocess.run(
+            ["bash", str(helper), reference],
+            env=helper_env, capture_output=True, text=True)
+        if result.returncode:
+            raise ValueError((result.stderr or result.stdout).strip()
+                             or "run runtime creation refused")
+        env["VIBEIC_EDA_CONTAINER"] = name
+    return env
+
+
 def _write_runtime_pair_record(run_p: Path, record: dict) -> None:
     """Record the reconciliation where the run that used it can be read with it."""
     run_p.mkdir(parents=True, exist_ok=True)
     path = run_p / _RUNTIME_PAIR_RECORD
-    if record.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH and path.is_file():
+    if path.is_file():
         prior_text = path.read_text()
         try:
             prior = _strict_json_loads(prior_text)
         except ValueError:
             prior = None
-        if isinstance(prior, dict) and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MISMATCH:
-            _write_immutable_text(run_p / "runtime_pair_refusals" /
-                                  f"{_sha256_text(prior_text)}.json", prior_text)
+        if isinstance(prior, dict):
+            if (record.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH
+                    and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MISMATCH):
+                _write_immutable_text(run_p / "runtime_pair_refusals" /
+                                      f"{_sha256_text(prior_text)}.json", prior_text)
+            # A failed readback is the latest status, not a new run selection.
+            if prior.get("execution_route") != "LOCAL":
+                selected = prior.get("selected_container")
+                if not selected and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH:
+                    selected = prior.get("container")
+                if selected:
+                    record["selected_container"] = selected
     _atomic_write_json(path, record)
     if _read_json_regular(path) != record:
         raise ValueError("runtime pair persistence readback differs")
@@ -8674,7 +8808,14 @@ def _runtime_pair_gate(run_p: Path, operation: str,
     root would make the next `--solve` refuse it as non-empty and the operator
     would read the clean-room message instead of the mismatch.
     """
-    record = _runtime_pair.preflight()
+    try:
+        env = _benchmark_runtime_env(run_p, fresh=pristine)
+        record = _runtime_pair.preflight(env)
+    except (OSError, ValueError) as exc:
+        record = {"schema": "vibeic.runtime.pair_preflight.v1",
+                  "verdict": _runtime_pair.RUNTIME_PAIR_MISMATCH,
+                  "container": None, "required_digest": None, "found_digest": None,
+                  "checks": [], "disagreed": "run_runtime_supply", "evidence": [str(exc)]}
     record["operation"] = operation
     if record["verdict"] == _runtime_pair.RUNTIME_PAIR_MATCH:
         if not pristine:
@@ -9120,7 +9261,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                     pid, proj, backup_skills, str(backup_source),
                     backup_detail, bench, ds, run_p,
                     required_top=_required_scorer_top(_entry(bench), fmt),
-                    expected_public_input=staged["public_original_input"])
+                    expected_public_input=staged["public_original_input"],
+                    exit_step=exit_step)
             state = ("candidate->AI-review" if got.get("ok")
                      else ("WAIVE->AI" if backup_source == "rtl_gen_waive"
                            else ("route-declared->AI" if awaiting_backup
@@ -9799,7 +9941,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             backup.append(_make_ai_backup_task(
                 pid, proj, backup_skills, str(backup_source), backup_detail,
                 bench, Path(dataset).resolve(), run_p,
-                required_top=_required_scorer_top(_entry(bench), fmt)))
+                required_top=_required_scorer_top(_entry(bench), fmt),
+                exit_step=result.get("exit")))
             existing_backup_ids.add(pid)
         print(f"  {pid:44s} Program worker retry completed (rc={rc})")
 
@@ -10066,6 +10209,16 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         invocation_reason = _runner_reentry_reason(
             task, result, allow_repaired_output=repair_state,
             repaired_output_sha256=repair_output_sha256)
+        if not invocation_reason and working_hash == task.get("rtl_sha256"):
+            invocation_reason = _reference_model_reentry_reason(proj, result)
+            if invocation_reason and Path(str(task.get("review_path") or "")).is_file():
+                # Filling a model cannot erase a proven RTL defect or an
+                # unresolved source question. Keep its existing review and
+                # repair authorization until that issue is resolved.
+                prior_review = _validate_ai_review(task)
+                if prior_review.get("status") in {
+                        "REPAIR_REQUIRED", "SPEC_CLARIFICATION_REQUIRED"}:
+                    invocation_reason = None
         if invocation_reason:
             reentry_state = _route_reentry_state(pid, result, allow_d1_only=False)
             if reentry_state.get("status") != "ACTIVE":
@@ -10649,6 +10802,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                     "run --resume for PROGRAM gates and submit a fresh AI "
                     "review for the new hash; an independent semantic PASS "
                     "does not discharge a required in-scope gate failure"),
+                **(_reference_model_next(task.get("project"))
+                   if "sim" in gate_ledger["failed_required"] else {}),
             })
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": False,

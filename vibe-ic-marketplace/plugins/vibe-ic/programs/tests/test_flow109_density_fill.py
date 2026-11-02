@@ -36,7 +36,7 @@ def _unit_inputs(project):
                {'schema': fill.SCHEMA, 'operation': 'density_fill', 'area': 'core'})),
            'semantics': {'operation_sources': fill.operation_sources()}}
     owner = put('inputs/owner.md', 'approved unit-only D62 contract\n')
-    approval = {'status': 'APPROVED', 'authority': 'requirements_owner',
+    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                 'source_reference': owner}
     put('requirements/base_43/fill_density_rules.json', json.dumps({
         'schema': 'vibeic.flow109.requirement-authority.v1', 'approval': approval,

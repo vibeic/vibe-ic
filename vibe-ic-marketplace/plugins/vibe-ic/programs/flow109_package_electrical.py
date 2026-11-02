@@ -101,7 +101,9 @@ def _number(value, *, positive=False):
 def _approved(project, doc):
     approval = doc.get('approval', {})
     if (approval.get('status') != 'APPROVED'
-            or approval.get('authority') != 'requirements_owner'):
+            or approval.get('authority') != 'requirements_owner'
+            or not isinstance(approval.get('approver'), str)
+            or not approval['approver'].strip()):
         _refuse('REQUIREMENTS_NOT_APPROVED', approval)
     return _bound(project, approval.get('source_reference'))
 

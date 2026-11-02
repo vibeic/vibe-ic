@@ -574,6 +574,16 @@ def planned_declaration(project: Path, spec: Dict[str, Any]) -> Tuple[dict, Opti
     """Pure author-preserving plan shared with the normal emit/refresh writer."""
     source_decl = project / "plugin_output/declaration.json"
     declaration = plugin_declaration(spec)
+    from arith_oracle_tb_gen import _function_declarations, serial_function_role_refusal
+    functions, reason = _function_declarations(project)
+    if reason:
+        raise ValueError(reason)
+    for function in functions.values():
+        if (function["operator"] != "*"
+                or function["modulus_bits"] != spec["size_default"]
+                or serial_function_role_refusal(function, spec["parallel"],
+                                                spec["serial_in"], spec["serial_out"])):
+            raise ValueError("declared function conflicts with serial RTL — defer to testbench-gen")
     prior_declaration = None
     populations = _declared_scenario_populations(project, spec)
     if source_decl.exists():

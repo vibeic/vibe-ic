@@ -808,6 +808,8 @@ def _mk_project(tmp_path: Path, *, die: bool, chip_top: bool = True,
     _write(gd / "L4_REGMAP.json", json.dumps({"registers": []}))
     _write(gd / "L2_FRS.json", json.dumps(
         {"function": "p = x * y mod 2^N (serial-parallel multiplier)"}))
+    _write(proj / "declaration.json", json.dumps({
+        "integer_encoding": "unsigned", "function": {"result": "p", "operands": ["x", "y"], "operator": "*", "modulus_bits": 8}}))
     _write(gd / "L9_INTEGRATION_SPEC.json", json.dumps({
         "top_module": CORE,
         "top_ports": [
@@ -2093,7 +2095,8 @@ module PUBLIC_OUT(input A, output Y); buf #{od}(Y,A); endmodule
         observation['sample_offset_ns'] = period / 2
     elif refusal == 'before_settle':
         observation['sample_offset_ns'] = cd + od
-    declaration = {'bit_order': 'LSB_first', 'latency_cycles': latency,
+    declaration = {'function': {'result': p, 'operands': [x, y], 'operator': '*', 'modulus_bits': width},
+        'bit_order': 'LSB_first', 'latency_cycles': latency,
         'latency_cycles_origin': 'settled_edge_offset', 'integer_encoding': 'unsigned',
         'reset_polarity': 'active_high', 'transaction_rearm': rearm,
         'rearm_reset_cycles': 2, 'parallel_hold': 'through_final_product_bit',
@@ -2102,6 +2105,7 @@ module PUBLIC_OUT(input A, output Y); buf #{od}(Y,A); endmodule
     if refusal == 'missing':
         declaration['verification_stimuli'] = {}
     (root / 'plugin_output/declaration.json').write_text(json.dumps(declaration, sort_keys=True))
+    (root / 'declaration.json').write_text(json.dumps({'function': declaration['function']}))
     return cases
 
 

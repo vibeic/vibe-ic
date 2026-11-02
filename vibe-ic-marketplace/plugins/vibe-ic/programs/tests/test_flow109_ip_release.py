@@ -58,7 +58,7 @@ def _requirements(project, actual):
     for name, body in payload.items():
         _write(project / f"requirements/base_49/{name}.json", {
             "schema": D79.metrics.AUTHORITY_SCHEMA, **body,
-            "approval": {"status": "APPROVED", "authority": "requirements_owner",
+            "approval": {"status": "APPROVED", "authority": "requirements_owner", 'approver': 'neutral-requirements-reviewer',
                          "source_reference": {"path": str(source), "sha256": D79._sha(project / source)}}})
 
 

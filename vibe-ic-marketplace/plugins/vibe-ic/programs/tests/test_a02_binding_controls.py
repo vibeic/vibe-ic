@@ -38,7 +38,7 @@ def case(tmp_path, monkeypatch):
     config = put(root, 'input/analog_flow.json', {'model_smokes': [smoke]})
     authority = put(root, 'requirements/base_A2/model_corner_statistics_coverage.json', {
         'schema': metrics.AUTHORITY_SCHEMA,
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': {'path': str(source.relative_to(root)), 'sha256': sha(source)}},
         'required_items': [{'block': 'cell_alpha', 'device': 'device_alpha', 'corner': 'typical', 'temperature_c': '27'}]})
     image = stated_image()

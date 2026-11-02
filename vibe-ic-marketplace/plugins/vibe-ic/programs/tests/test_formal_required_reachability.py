@@ -193,7 +193,7 @@ def test_genuine_retained_source_reuse_does_not_restamp_or_qualify_software(reac
     put(source, {'purpose': 'D14.original_formal_execution', 'project': str(project), 'reference': reference})
     put(project / 'adopted/base_08/formal_execution.json',
         {'schema': 'vibeic.flow109.adopted-reference.v1',
-         'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+         'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                       'source_reference': {'path': str(source.relative_to(project)), 'sha256': sha(source)}},
          'reference': reference})
     software_covers(project)

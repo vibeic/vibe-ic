@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import professional_tb_check as G  # noqa: E402
@@ -116,3 +118,56 @@ def test_unexecuted_l10_rows_cannot_become_professional_pass(tmp_path):
     res = G.check(tmp_path)
     assert res["verdict"] == "NOT_CHECKED"
     assert res["reason_class"] == "BLOCKED_BY_UPSTREAM"
+
+
+def test_generator_skip_without_measurement_is_not_checked(tmp_path):
+    _report(tmp_path, {"status": "SKIP", "reason": "generate raised: invalid input"})
+    res = G.check(tmp_path)
+    assert res["verdict"] == "NOT_CHECKED", res
+    assert res["reason_class"] == "BLOCKED_BY_UPSTREAM", res
+    assert G.main([str(tmp_path)]) == 2
+
+
+def test_generator_skip_can_use_valid_independent_l10_track(tmp_path):
+    _report(tmp_path, {"status": "SKIP", "ran_cocotb": False})
+    _l10_unit_track(tmp_path)
+    res = G.check(tmp_path)
+    assert res["verdict"] == "PASS", res
+    assert res["professional_track"] == "l10_unit_tb_execution"
+    assert res["l10_cases"] == 2
+
+
+@pytest.mark.parametrize('defect', ['missing', 'empty'])
+def test_generator_skip_keeps_declared_bundle_defect(tmp_path, defect):
+    out = tmp_path / 'phase2/stage1/sim_professional/neutral'
+    out.mkdir(parents=True)
+    if defect == 'empty':
+        (out / 'tb_neutral.py').write_bytes(b'')
+    _report(tmp_path, {"status": "SKIP", "ran_cocotb": False,
+                       "out_dir": str(out), "files": ["tb_neutral.py"]})
+    res = G.check(tmp_path)
+    assert res['verdict'] == 'FAIL', res
+    assert res['bundle'][defect] == ['tb_neutral.py']
+
+
+@pytest.mark.parametrize('status', ['SKIP', 'INCOMPLETE'])
+def test_independent_l10_pass_cannot_hide_functional_mismatch(tmp_path, status):
+    _report(tmp_path, {"status": status, "functional_mismatch": True,
+                       "cocotb_xml_failures": 1})
+    _l10_unit_track(tmp_path)
+    res = G.check(tmp_path)
+    assert res["verdict"] == "FAIL", res
+    assert res["cocotb_xml_failures"] == 1
+
+
+@pytest.mark.parametrize('status', ['PASS', 'SKIP', 'INCOMPLETE'])
+def test_independent_l10_pass_cannot_hide_declared_bundle_defect(tmp_path, status):
+    _l10_unit_track(tmp_path)
+    out = tmp_path / "phase2/stage1/sim_professional/neutral"
+    out.mkdir()
+    _report(tmp_path, {"status": status, "ran_cocotb": True,
+                       "functional_mismatch": False, "out_dir": str(out),
+                       "files": ["tb_neutral.py"]})
+    res = G.check(tmp_path)
+    assert res["verdict"] == "FAIL", res
+    assert res["bundle"]["missing"] == ["tb_neutral.py"]

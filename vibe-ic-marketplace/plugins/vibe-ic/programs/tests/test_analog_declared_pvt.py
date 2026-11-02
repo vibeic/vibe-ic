@@ -36,7 +36,7 @@ def configure(project):
         'pvt': {'kind': 'declared_testbench', 'process_sections': SECTIONS}}}})
     source = project / 'input/pvt-source.txt'
     source.write_text('Neutral source consumer contract. No ADC qualification.\n')
-    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': {
+    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': {
         'path': str(source.relative_to(project)), 'sha256': sha(source)}}
     put(project, 'requirements/base_A7/pvt_load_modes.json', {'schema': metrics.AUTHORITY_SCHEMA,
         'approval': approval, 'required_items': [

@@ -88,7 +88,7 @@ def subject(tmp_path, monkeypatch):
     def approve():
         payload = {k: body[k] for k in ("profile", "mapping", "reference", "reference_identity")}
         write(authority_input, {"dft_test_access": payload})
-        body["approval"] = {"status": "APPROVED", "authority": "requirements_owner",
+        body["approval"] = {"status": "APPROVED", "authority": "requirements_owner", 'approver': 'neutral-requirements-reviewer',
                             "source_reference": {"path": "input/flow109/pad-choice.json",
                                                  "sha256": digest(authority_input)}}
         write(project / "config/dft_test_access.json", body)

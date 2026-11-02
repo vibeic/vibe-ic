@@ -289,6 +289,8 @@ def prepare(project, context):
     required = requirements.get('required_smokes')
     if (requirements.get('schema') != SCHEMA or approval.get('status') != 'APPROVED'
             or approval.get('authority') != 'requirements_owner'
+            or not isinstance(approval.get('approver'), str)
+            or not approval['approver'].strip()
             or not approval.get('source_reference') or not isinstance(required, list) or not required):
         raise AdmissionRefusal('A02_REQUIREMENTS_NOT_APPROVED', str(requirements_path))
     if (any(not isinstance(row, dict) for row in required)

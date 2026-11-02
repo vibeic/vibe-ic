@@ -40,6 +40,8 @@ def _mk_project(tmp_path: Path, *, top: str, ports: list, l2: str,
         (root / "plugin_output").mkdir()
         (root / "plugin_output" / "declaration.json").write_text(
             json.dumps(decl))
+        if "function" in decl:
+            (root / "declaration.json").write_text(json.dumps({"function": decl["function"]}))
     return root
 
 
@@ -63,6 +65,9 @@ def test_binary_oracle_defers_unmodelled_controls_and_outputs(tmp_path, extra_po
     project = _mk_project(tmp_path, top="selected_datapath",
                           ports=ports + extra_ports,
                           l2="value = left + right; a binary arithmetic datapath.")
+    (project / "declaration.json").write_text(json.dumps({
+        "integer_encoding": "unsigned", "function": {
+            "result": "value", "operands": ["left", "right"], "operator": "+", "modulus_bits": 6}}))
     report, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 2, report
     assert report["verdict"] == "DEFER"
@@ -111,7 +116,7 @@ def test_a_parallel_multiplier_emits_tb_with_computed_golden(tmp_path):
     project = _mk_project(
         tmp_path, top="mult8", ports=ports,
         l2="p = x * y mod 2^N parallel multiplier",
-        decl={"size_param": 8, "integer_encoding": "unsigned"})
+        decl={"size_param": 8, "integer_encoding": "unsigned", "function": {"result": "p", "operands": ["x", "y"], "operator": "*", "modulus_bits": 16}})
 
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0, rep
@@ -152,7 +157,7 @@ def test_a_unsigned_8bit_truncation_matches_pure_compute(tmp_path):
     ]
     project = _mk_project(tmp_path, top="mul8t", ports=ports,
                           l2="c = a * b multiplier",
-                          decl={"size_param": 8, "integer_encoding": "unsigned"})
+                          decl={"size_param": 8, "integer_encoding": "unsigned", "function": {"result": "c", "operands": ["a", "b"], "operator": "*", "modulus_bits": 8}})
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0
     tb = _oracle_tbs(project)[0].read_text()
@@ -226,7 +231,7 @@ def test_b_serial_streaming_datapath_emits_self_calibrating_oracle(tmp_path):
     ]
     project = _mk_project(tmp_path, top="spm", ports=ports,
                           l2="p = (x * y) mod 2^N serial multiplier",
-                          decl={"size_param": 32,
+                          decl={"size_param": 32, "function": {"result": "p", "operands": ["x", "y"], "operator": "*", "modulus_bits": 32},
                                 "integer_encoding": "unsigned"})
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0 and rep["verdict"] == "TB_EMITTED"

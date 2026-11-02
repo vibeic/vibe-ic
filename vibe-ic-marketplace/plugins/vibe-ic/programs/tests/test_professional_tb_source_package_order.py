@@ -119,6 +119,9 @@ def test_package_compile_order_does_not_replace_the_top_parameter_width(tmp_path
     (gd / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps(l9))
     (gd / 'L2_FRS.json').write_text(json.dumps({'frs_sections': [
         {'title': 'Function', 'content': 'serial-parallel multiplier p = (x * y) mod 2^N'}]}))
+    (root / 'declaration.json').write_text(json.dumps({
+        'integer_encoding': 'unsigned',
+        'function': {'result': 'p', 'operands': ['x', 'y'], 'operator': '*', 'modulus_bits': 32}}))
     rtl = root / 'phase2/stage1/rtl'
     rtl.mkdir(parents=True)
     sources = {'a_spm.sv': 'import z_defs::*;\nmodule spm #(parameter size = 32)(input logic clk, rst, input logic [size-1:0] x, input logic y, output logic p);\nendmodule\n', 'z_defs.sv': 'package z_defs;\n  parameter AUX_WIDTH = 4;\nendpackage\n'}

@@ -343,7 +343,7 @@ def _case(project):
         'y': {'rail': 'core', 'capacitance_library_units': 0.05},
         'z': {'rail': 'core', 'capacitance_library_units': 0.07}}}
     requirement = _put(project, 'inputs/requirements.json', {
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': 'neutral developer fixture, not a product requirement'},
         'modes': {'mission': {'required_ports': ['a', 'b', 'c', 'y', 'z'],
                              'window': {'start_tick': 0, 'end_tick': 45008, 'timescale': '1ps'}}},
@@ -382,6 +382,74 @@ def _case(project):
                                   'qualification_registry': 'qualifications.json'})
     return flow109.execution_context(plan, 'D55', 'D55', runtime_tool_uses=uses,
                                       qualification_registry='qualifications.json')
+
+
+def _approval_boundary_case(project):
+    fixture = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs', 'tests',
+                           'fixtures', 'flow109_functional_activity')
+    loads = {'rails': {'core': {'voltage_v': 5.0}}, 'ports': {
+        'y': {'rail': 'core', 'capacitance_library_units': 0.05},
+        'z': {'rail': 'core', 'capacitance_library_units': 0.07}}}
+    source = _put(project, 'inputs/authority.md', 'Neutral activity requirements.\n')
+    requirements = _put(project, 'inputs/requirements.json', {
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+                     'approver': 'neutral-requirements-reviewer', 'source_reference': source},
+        'modes': {'mission': {'required_ports': ['a', 'b', 'c', 'y', 'z'],
+                             'window': {'start_tick': 0, 'end_tick': 45008, 'timescale': '1ps'}}},
+        'external_loads': loads})
+    adopted = _put(project, 'inputs/adopted.v', (fixture / 'rtl.v').read_text())
+    _put(project, activity.INPUT, {
+        'schema': activity.SCHEMA, 'basis': 'adopted_netlist_gls', 'top': 'activity_beta',
+        'adopted_netlist': adopted,
+        'liberty': _put(project, 'inputs/cells.lib', 'library(neutral) { nom_voltage : 5.0; }\n'),
+        'simulation_models': [adopted], 'requirements': requirements,
+        'loads': _put(project, 'inputs/loads.json',
+                      {**loads, 'requirements_sha256': requirements['sha256']}),
+        'sdc': _put(project, 'inputs/constraints.sdc', 'create_clock -name virtual -period 10\n'),
+        'modes': {'mission': {'testbench': _put(project, 'inputs/workload.v',
+                                              (fixture / 'tb.v').read_text())}}})
+    return {'requested_step': 'D55', 'native_step_id': 'flow109.D55', 'runtime_tool_uses': []}
+
+
+@pytest.mark.parametrize('approver', [
+    pytest.param({}, id='missing'),
+    pytest.param({'approver': None}, id='null'),
+    pytest.param({'approver': ''}, id='empty'),
+    pytest.param({'approver': ' \t\n'}, id='blank'),
+    pytest.param({'approver': 17}, id='nonstring'),
+    pytest.param({'approver': 'neutral-requirements-reviewer'}, id='named'),
+])
+def test_d55_requirements_need_named_approver(tmp_path, approver):
+    context = _approval_boundary_case(tmp_path)
+    manifest = json.loads((tmp_path / activity.INPUT).read_text())
+    requirements = json.loads((tmp_path / manifest['requirements']['path']).read_text())
+    requirements['approval'].pop('approver', None)
+    requirements['approval'].update(approver)
+    manifest['requirements'] = _put(tmp_path, manifest['requirements']['path'], requirements)
+    loads = json.loads((tmp_path / manifest['loads']['path']).read_text())
+    loads['requirements_sha256'] = manifest['requirements']['sha256']
+    manifest['loads'] = _put(tmp_path, manifest['loads']['path'], loads)
+    _put(tmp_path, activity.INPUT, manifest)
+    observed = 'ADMITTED'
+    try:
+        activity.prepare(tmp_path, context)
+    except admission.AdmissionRefusal as exc:
+        observed = exc.code
+    expected = ('ADMITTED' if approver.get('approver') == 'neutral-requirements-reviewer'
+                else 'D55_REQUIREMENTS_NOT_APPROVED')
+    assert observed == expected
+
+
+def test_d55_named_approver_does_not_admit_stale_requirements(tmp_path):
+    context = _approval_boundary_case(tmp_path)
+    requirements = tmp_path / 'inputs/requirements.json'
+    requirements.write_text(requirements.read_text() + '\n')
+    observed = 'ADMITTED'
+    try:
+        activity.prepare(tmp_path, context)
+    except admission.AdmissionRefusal as exc:
+        observed = exc.code
+    assert observed == 'D55_STALE_OR_MISSING_INPUT'
 
 
 def test_actual_front_door_runs_gls_and_consumes_all_data_ports_not_only_clock(tmp_path):
@@ -706,7 +774,7 @@ def _approved(project, relative, schema, body, source_relative, source_key=None)
     source_body = ({source_key: body} if source_key else {'doc': 'L-layer requirement excerpt'})
     source = _put(project, source_relative, source_body)
     _put(project, relative, {'schema': schema, 'approval': {
-        'status': 'APPROVED', 'authority': 'requirements_owner',
+        'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
         'source_reference': {'path': source['path'], 'sha256': source['sha256']}}, **body})
 
 
