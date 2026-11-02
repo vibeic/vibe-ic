@@ -1,0 +1,38 @@
+[
+  {
+    "step": "runtime.retained_integrity",
+    "design": "versioned runtime gate dependencies",
+    "bucket": "A",
+    "classification": "AUGMENT-EXISTING",
+    "rule_name": "retain_declared_runtime_companions",
+    "pattern": "A product gate depends on versioned companion files inside a directory excluded from ordinary runtime retention, so the standalone retained gate cannot perform its declared checks.",
+    "docstring": "Retain and hash the exact source version declarations without copying unrelated test corpora.",
+    "expected_signal": "ERROR",
+    "fix_action": "Have the owning gate declare companion assets and retain them in the bundle manifest; revalidate them before child launch.",
+    "before_state": "Excluded backing files caused the retained gate contract consumer to report missing test backing.",
+    "after_state": "The retained gate consumer runs with its declared backing; changed, missing, or unmanifested declared assets remain refused.",
+    "ai_reasoning": "The producer owns its dependency declaration, and bundle identity includes every declared asset.",
+    "program_targets": [
+      "programs/runtime_program_tree.py",
+      "programs/phase1_gate_contract_check.py"
+    ]
+  },
+  {
+    "step": "runtime.retained_integrity",
+    "design": "unchanged historical producer proof",
+    "bucket": "A",
+    "classification": "AUGMENT-EXISTING",
+    "rule_name": "verify_historical_without_launch_authority",
+    "pattern": "A new runtime dependency API is required while inspecting an intact archive produced before that API existed, invalidating completed measurements despite unchanged source and reports.",
+    "docstring": "Verify the archived source contract through a read-only capability while keeping current launch admission strict.",
+    "expected_signal": "ERROR",
+    "fix_action": "Use `load_historical` only for historical runner evidence; verify manifested producer and owner declarations, and keep current retain/activate checks unchanged.",
+    "before_state": "The companion-aware current loader refused intact older producer bundles without the new owner API.",
+    "after_state": "Historical integrity verification accepts intact old bundles without granting launch capability, and current declared dependencies cannot be skipped by using the shared old schema.",
+    "ai_reasoning": "Past measurement integrity and permission to launch code are different contracts.",
+    "program_targets": [
+      "programs/runtime_program_tree.py",
+      "programs/benchmark_dispatch.py"
+    ]
+  }
+]

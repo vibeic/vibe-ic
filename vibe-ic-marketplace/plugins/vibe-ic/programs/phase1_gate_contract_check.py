@@ -83,6 +83,11 @@ DEFAULT_GATES = [
 ]
 
 
+def companion_assets() -> list[str]:
+    """Plugin-relative runtime backing consumed by the default gate contract."""
+    return [f"programs/tests/test_{gate}.py" for gate in DEFAULT_GATES]
+
+
 @dataclass
 class Finding:
     gate: str
