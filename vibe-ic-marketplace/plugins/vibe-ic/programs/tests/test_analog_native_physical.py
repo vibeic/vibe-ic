@@ -388,6 +388,97 @@ def test_a14_reuses_explicit_actual_canonical_inputs_without_legacy_argv(project
     assert record["source"] == "A07"
 
 
+def _declared_pre_state(project, source="sidecar"):
+    import analog_native_sim as sim
+    bdir, _ = physical._paths(project, "unit")
+    declaration = bdir / "testbench_inputs.json" if source == "sidecar" else project / "declared/inputs.json"
+    put(declaration, {"block": "unit", "ports": ["a", "b", "vss"],
+        "rails": {"vss": "vss"}, "testbench": {"supply_exprs": ["1.8"],
+        "stimulus": ["v1 a 0 {supply}"], "cards": ["i_load b 0 PULSE(0 1m 2n 1p 1p 4n 10n)"],
+        "control": ["op", "let sensed = v(b)", 'echo "MEAS vout=" $&sensed',
+            "tran 1p 10n", "meas tran rising_min MIN v(b) FROM=2n TO=5n",
+            "meas tran falling_peak MAX v(b) FROM=6n TO=9n"]}})
+    config = {} if source == "sidecar" else {"blocks": {"unit": {
+        "testbench_inputs": str(declaration.relative_to(project))}}}
+    if config:
+        put(project / "input/analog_flow.json", config)
+    def run(program, argv, **kwargs):
+        log = put(Path(argv[argv.index("-o") + 1]), "MEAS vout=1.2 rising_min=1.15 falling_peak=1.25\n")
+        return {"returncode": 0, "log": str(log), "log_sha256": physical._sha(log),
+                "argv": ["ngspice", *argv]}
+    return sim.run_step("A07", project, {"name": "unit"}, {"config": config}, run)
+
+
+@pytest.mark.parametrize("source", ["config", "sidecar"])
+def test_a14_reuses_declared_pre_and_substitutes_pex_without_new_pre_run(project, monkeypatch, source):
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    _extraction_project(project, monkeypatch)
+    extraction = physical._extract(project, "unit", "container", "image", "process", {})
+    _, work = physical._paths(project, "unit")
+    put(work / "A13.json", extraction)
+    state = _declared_pre_state(project, source)
+    assert state["status"] == "PASS"
+    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
+    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
+    calls = []
+    def spice(container, deck, **kwargs):
+        calls.append(Path(deck))
+        assert "v1 a 0 1.8" in calls[-1].read_text()
+        assert "unit_post_" in calls[-1].read_text()
+        assert "PULSE(0 1m 2n 1p 1p 4n 10n)" in calls[-1].read_text()
+        assert "meas tran rising_min MIN v(b) FROM=2n TO=5n" in calls[-1].read_text()
+        assert "meas tran falling_peak MAX v(b) FROM=6n TO=9n" in calls[-1].read_text()
+        return True, {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}, "MEAS vout=1.19 rising_min=1.14 falling_peak=1.26\n", {}
+    monkeypatch.setattr(ars, "_run_ngspice", spice)
+    result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
+    assert result["status"] == "PASS"
+    assert len(calls) == 1
+    assert result["metrics"]["pre"]["measurements"] == {"vout": 1.2, "rising_min": 1.15, "falling_peak": 1.25}
+    assert result["metrics"]["corners"][0]["measurements"] == {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}
+
+
+@pytest.mark.parametrize("changed", ["declaration", "deck", "spec", "removed", "different_selection"])
+def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch, changed):
+    import analog_real_corner_sweep as ars
+    state = _declared_pre_state(project)
+    bdir, _ = physical._paths(project, "unit")
+    declaration = bdir / "testbench_inputs.json"
+    if changed == "removed":
+        declaration.unlink()
+    elif changed == "different_selection":
+        other = put(project / "other.json", json.loads(declaration.read_text()))
+        put(project / "input/analog_flow.json", {"blocks": {"unit": {"testbench_inputs": str(other)}}})
+    else:
+        path = declaration if changed == "declaration" else Path(state["native_inputs"]["testbench"]["path"]) if changed == "deck" else bdir / "spec.json"
+        path.write_text(path.read_text() + "\n")
+    monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: pytest.fail("stale PRE must not run"))
+    values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
+    assert values == {}
+    assert "no completed source-bound" in record["detail"]
+
+
+@pytest.mark.parametrize("changed", ["declaration", "pre_log"])
+def test_a14_declared_pre_change_during_post_keeps_unmeasured(project, monkeypatch, changed):
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    _extraction_project(project, monkeypatch)
+    extraction = physical._extract(project, "unit", "container", "image", "process", {})
+    bdir, work = physical._paths(project, "unit")
+    put(work / "A13.json", extraction)
+    state = _declared_pre_state(project)
+    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
+    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
+    def spice(*args, **kwargs):
+        path = bdir / "testbench_inputs.json" if changed == "declaration" else Path(state["executions"][0]["log"])
+        path.write_text(path.read_text() + "\n")
+        return True, {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}, "MEAS vout=1.19\n", {}
+    monkeypatch.setattr(ars, "_run_ngspice", spice)
+    result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
+    assert result["status"] == "NOT_MEASURED"
+    assert "changed during POST" in result["detail"]
+
+
 @pytest.mark.parametrize("kind", ["alternate_actual_tb", "changed_actual_input", "legacy_no_argv", "legacy_alternate_tb"])
 def test_a14_refuses_actual_or_unproved_noncanonical_pre_testbench(project, kind):
     state = _pre_state(project)

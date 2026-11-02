@@ -146,6 +146,94 @@ def _performance_deck(project, *, analyses=True, definitions=True):
     return deck
 
 
+def _declared_performance_inputs(project):
+    _source_performance_spec(project)
+    text = _performance_deck(project).read_text()
+    # Keep the canonical producer's OP-only deck as the negative control.
+    deck = _op_deck(project)
+    deck.write_text(deck.read_text().replace("MEAS level=", "MEAS vout="))
+    declaration = project / "declared-inputs.json"
+    declaration.write_text(json.dumps({"block": "stage", "ports": ["in", "out"],
+        "testbench": {"supply_exprs": ["1"], "stimulus": ["v1 in 0 {supply} ac 1"],
+        "control": text.split(".control\n")[1].split(".endc")[0].splitlines() + [
+            "let monitored = v(in)", 'echo "MEAS supply_monitor=" $&monitored']}}))
+    return declaration
+
+
+@pytest.mark.parametrize("source", ["config", "sidecar"])
+@pytest.mark.parametrize("vout,expected", [(1.2, "PASS"), (1.5, "FAIL")])
+def test_a07_declared_inputs_render_and_measure_without_changing_canonical_deck(
+        project, source, vout, expected):
+    declaration = _declared_performance_inputs(project)
+    config = {"blocks": {"stage": {"testbench_inputs": str(declaration.relative_to(project))}}}
+    if source == "sidecar":
+        target = project / "phase3/analog/stage/testbench_inputs.json"
+        declaration.rename(target)
+        declaration, config = target, {}
+    canonical = project / "phase3/analog/stage/tb_stage.sp"
+    before = canonical.read_bytes()
+    calls = []
+    def run(program, argv, **kwargs):
+        calls.append(Path(argv[1]))
+        assert program == "@ngspice"
+        assert "meas ac psrr" in calls[-1].read_text()
+        assert sim._validate_deck(project / "phase3/analog/stage/stage.sp", calls[-1], {})[0] == "PASS"
+        return {"returncode": 0, "stdout": f"MEAS vout={vout} iq=20 dropout=0.3 psrr=50 supply_monitor=1\n"}
+    result = sim.run_step("A07", project, {"name": "stage"}, _options(config=config), run)
+    assert result["status"] == expected
+    assert len(calls) == 1 and calls[0] != canonical
+    assert result["metrics"]["iq"] == 20
+    assert result["native_inputs"]["testbench_inputs"]["sha256"] == hashlib.sha256(declaration.read_bytes()).hexdigest()
+    assert canonical.read_bytes() == before
+
+
+@pytest.mark.parametrize("fault", ["missing", "malformed", "wrong_block", "wrong_ports", "unbound_supply"])
+def test_a07_invalid_explicit_declaration_never_falls_back_or_launches(project, fault):
+    declaration = _declared_performance_inputs(project)
+    data = json.loads(declaration.read_text())
+    if fault == "missing":
+        declaration.unlink()
+    elif fault == "malformed":
+        declaration.write_text("{")
+    else:
+        if fault == "wrong_block": data["block"] = "other"
+        if fault == "wrong_ports": data["ports"] = ["out", "in"]
+        if fault == "unbound_supply": data["testbench"]["supply_exprs"] = ["undefined_supply"]
+        declaration.write_text(json.dumps(data))
+    result = sim.run_step("A07", project, {"name": "stage"}, _options(config={
+        "blocks": {"stage": {"testbench_inputs": str(declaration)}}}), _never)
+    assert result["status"] == "NOT_MEASURED"
+    assert "declared testbench" in result["detail"]
+
+
+def test_a07_repo_declared_op_only_testbench_keeps_source_coverage_refusal(project):
+    fixture = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+                           "fixtures", "a8_native_rc_wrapper")
+    ir = json.loads((fixture / "topology.json").read_text())
+    ir["block"] = "stage"
+    bdir = project / "phase3/analog/stage"
+    (bdir / "stage.sp").write_text(f".subckt stage {' '.join(ir['ports'])}\n.ends stage\n")
+    (bdir / "spec.json").write_bytes((fixture / "spec.json").read_bytes())
+    (bdir / "testbench_inputs.json").write_text(json.dumps(ir))
+    result = sim.run_step("A07", project, {"name": "stage"}, _options(), _never)
+    assert result["status"] == "NOT_MEASURED"
+    assert result["metrics"]["measurement_definition_coverage"]["missing"] == ["dropout", "iq", "psrr"]
+    rendered = Path(result["native_inputs"]["testbench"]["path"])
+    assert rendered != bdir / "tb_stage.sp"
+    assert "r_load vout 0 1k" in rendered.read_text()
+
+
+def test_a07_declared_inputs_changed_during_simulation_stay_unmeasured(project):
+    declaration = _declared_performance_inputs(project)
+    def run(*args, **kwargs):
+        declaration.write_text(declaration.read_text() + "\n")
+        return {"returncode": 0, "stdout": "MEAS vout=1.2 iq=20 dropout=0.3 psrr=50\n"}
+    result = sim.run_step("A07", project, {"name": "stage"}, _options(config={"blocks": {
+        "stage": {"testbench_inputs": str(declaration)}}}), run)
+    assert result["status"] == "NOT_MEASURED"
+    assert "testbench_inputs" in result["detail"]
+
+
 @pytest.mark.parametrize("analyses,definitions", [(False, True), (True, False)])
 def test_a06_and_a07_require_both_source_analyses_and_measurement_definitions(project, analyses, definitions):
     _source_performance_spec(project)

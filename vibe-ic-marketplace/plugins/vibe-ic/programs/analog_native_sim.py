@@ -4,6 +4,14 @@ The caller stops dependent work on FAIL or NOT_MEASURED. These functions run
 existing producers and native ngspice; they do not issue tool qualifications.
 Limits and calibration applicability come from the project's ordinary config.
 An executed measurement without its required limits is reported NOT_MEASURED.
+
+A07 accepts ``blocks.<name>.testbench_inputs`` (a project-relative JSON path)
+in input/analog_flow.json, including its usual per-step overrides, or the
+block's testbench_inputs.json sidecar. The JSON is the existing A3 IR shape:
+block, ordered ports, optional rails/constants/knobs, and testbench. It is
+rendered with analog_a3_netlist_emit.render_testbench against spec.json and
+the delivered netlist's PDK provenance. It never rewrites the DUT or canonical
+testbench. Without a declaration, existing deck/study behavior is unchanged.
 """
 from __future__ import annotations
 
@@ -26,6 +34,7 @@ if str(HERE) not in sys.path:
 import analog_real_corner_sweep as sweep
 import ams_analysis_select
 from _atomic_artefact import write_json
+from _atomic_artefact import write_text as atomic_write_text
 
 _ANALYSIS = re.compile(r"(?im)^\s*\.?((?:tran|ac|dc|op|noise|tf|pz|disto))\b")
 _MEASURE = re.compile(r"(?im)^\s*\.?meas(?:ure)?\s+(?:tran|ac|dc|op|noise|sp)\s+([A-Za-z_]\w*)\b")
@@ -72,6 +81,61 @@ def _inputs(project, name, config):
     return (_path(project, config.get("netlist"), bdir / (name + ".sp")),
             _path(project, config.get("testbench"), bdir / ("tb_" + name + ".sp")),
             _path(project, config.get("spec"), bdir / "spec.json"))
+
+
+def _testbench_inputs_path(project, name, config):
+    """Explicit project-relative input, or the block's declared sidecar."""
+    netlist, _deck, _spec = _inputs(project, name, config)
+    if "testbench_inputs" in config:
+        value = config["testbench_inputs"]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("declared testbench inputs must name a JSON file")
+        return _path(project, value, netlist.parent).resolve()
+    path = netlist.parent / "testbench_inputs.json"
+    return path.resolve() if path.exists() else None
+
+
+def _declared_testbench(project, name, config, destination):
+    """Render only declared A3 testbench inputs; never infer measurements.
+
+    A07 writes this text into its own attempt. A14 re-renders it for identity
+    checking and reuses the measured deck before the existing PEX substitution.
+    Invalid declarations block dependent execution with NOT_MEASURED.
+    """
+    declaration = _testbench_inputs_path(project, name, config)
+    if declaration is None:
+        return None, {}
+    import analog_a3_netlist_emit as emitter
+    import analog_a7_post_layout_emit as relocation
+    netlist, _deck, spec_path = _inputs(project, name, config)
+    inputs = {}
+    def read(path, role):
+        raw = path.read_bytes()
+        inputs[role] = {"path": str(path.resolve()), "sha256": hashlib.sha256(raw).hexdigest()}
+        return json.loads(raw)
+    try:
+        ir = read(declaration, "testbench_inputs")
+        spec = read(spec_path, "spec")
+        if (not isinstance(ir, dict) or ir.get("block") != name
+                or not isinstance(ir.get("testbench"), dict)):
+            raise ValueError("block and testbench object must match the selected block")
+        ports = relocation.subckt_ports(netlist.read_text(), name)
+        if not ports or ir.get("ports") != ports:
+            raise ValueError("ports must match the delivered DUT subcircuit in order")
+        provenance_path = netlist.parent / "netlist_provenance.json"
+        provenance = read(provenance_path, "netlist_provenance") if provenance_path.is_file() else {}
+        context = provenance.get("pdk") or {}
+        env = emitter._resolve_params(ir, emitter.spec_values(spec))[3]
+        text, _env, notes = emitter.render_testbench(ir, context, env,
+            ["_provenance: declared_testbench_inputs=" + str(declaration)], spec)
+        if text is None:
+            raise ValueError("; ".join(notes))
+        # Use the existing relocation path; the source circuit stays intact.
+        text = relocation.post_layout_testbench(text, name,
+            os.path.relpath(netlist.resolve(), destination), netlist.parent, destination)
+        return text, inputs
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise ValueError("declared testbench inputs are not renderable: " + str(exc)) from exc
 
 
 def _attempt(project, step, name):
@@ -605,9 +669,22 @@ def _has_incremental_study(project, name, config):
 
 def _nominal(project, name, config, options, run, *, step="A07"):
     netlist, deck, spec_path = _inputs(project, name, config)
+    declared_inputs = {}
+    if step == "A07":
+        try:
+            if _testbench_inputs_path(project, name, config) is not None:
+                destination = _attempt(project, step, name)
+                text, declared_inputs = _declared_testbench(project, name, config, destination)
+                if text is None:
+                    raise ValueError("declared testbench inputs disappeared during rendering")
+                deck = destination / ("tb_" + name + ".sp")
+                atomic_write_text(deck, text)
+        except ValueError as exc:
+            return _result("NOT_MEASURED", str(exc))
     native_inputs = {role: {"path": str(path.resolve()),
                             "sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None}
                      for role, path in (("netlist", netlist), ("testbench", deck), ("spec", spec_path))}
+    native_inputs.update(declared_inputs)
 
     def result(status, detail, **values):
         measured_inputs = values.pop("native_inputs", {})
@@ -631,6 +708,11 @@ def _nominal(project, name, config, options, run, *, step="A07"):
                               metrics={**readiness, **studies["metrics"]}, outputs=studies["outputs"],
                               executions=studies["executions"], native_inputs=studies.get("native_inputs", {}))
             return result("NOT_MEASURED", missing, metrics=readiness)
+        # Diagnostics remain in metrics. Only source requirements (or an
+        # explicit required list) have electrical acceptance limits.
+        source_required = readiness["measurement_definition_coverage"]["source_required"]
+        if declared_inputs and source_required and "required_measurements" not in config:
+            required = source_required
     # Retention verifies ngspice's own live -o stream. The executor's captured
     # stdout log is written only after exit and cannot identify running work.
     native_log = _attempt(project, step, name) / "ngspice.log"
