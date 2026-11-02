@@ -7,9 +7,14 @@ cache.  This module copies the runtime-relevant plugin files under the project,
 binds every byte in a manifest, and verifies each plugin child immediately
 before launch.  Descendant runners inherit the retained tree through the
 environment; a separately started run does not.
+
+``source_tree_sha256`` identifies this entire retained bundle, including declared
+runtime companion assets. It is not a Git revision or an installed-source
+authority receipt.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -28,6 +33,7 @@ ENV_ROOT = "VIBEIC_RETAINED_PLUGIN_ROOT"
 ENV_MANIFEST = "VIBEIC_RETAINED_PLUGIN_MANIFEST"
 _EXCLUDED_DIRS = frozenset({".git", ".pytest_cache", "__pycache__",
                             "node_modules", "tests", "test"})
+_COMPANION_ASSET_OWNERS = ("phase1_gate_contract_check.py",)
 
 
 class RuntimeTreeError(RuntimeError):
@@ -43,6 +49,15 @@ def _digest(path: Path) -> str:
 
 
 def _selected_files(plugin_root: Path) -> Iterable[Path]:
+    selected = set(_runtime_files(plugin_root))
+    yield from sorted(selected)
+    for path in _companion_assets(plugin_root):
+        if path not in selected:
+            yield path
+
+
+def _runtime_files(plugin_root: Path) -> Iterable[Path]:
+    """The original selection contract, before declared companions existed."""
     for root, dirs, files in os.walk(plugin_root):
         dirs[:] = sorted(d for d in dirs if d not in _EXCLUDED_DIRS)
         root_path = Path(root)
@@ -52,6 +67,44 @@ def _selected_files(plugin_root: Path) -> Iterable[Path]:
                 raise RuntimeTreeError(f"RUNTIME_SOURCE_SYMLINK: {path}")
             if path.is_file():
                 yield path
+
+
+def _companion_assets(plugin_root: Path) -> Iterable[Path]:
+    """Read declarations from the exact source version being retained.
+
+    A separate bytecode-free interpreter keeps imports from the source owner
+    out of an active runner's module cache and leaves its source tree untouched.
+    """
+    for name in _COMPANION_ASSET_OWNERS:
+        owner = plugin_root / "programs" / name
+        if not owner.exists():
+            continue
+        script = (
+            "import json, runpy, sys; sys.path.insert(0, sys.argv[1]); "
+            "owner = runpy.run_path(sys.argv[2]); "
+            "print(json.dumps(owner['companion_assets']()))")
+        try:
+            raw = subprocess.check_output(
+                [sys.executable, "-B", "-c", script, str(owner.parent), str(owner)],
+                text=True, stderr=subprocess.PIPE)
+            assets = json.loads(raw)
+        except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+            raise RuntimeTreeError(
+                f"RUNTIME_COMPANION_DECLARATION_INVALID: {name}: {exc}") from exc
+        if not isinstance(assets, list) or not all(isinstance(p, str) for p in assets):
+            raise RuntimeTreeError(f"RUNTIME_COMPANION_DECLARATION_INVALID: {name}")
+        for relative in assets:
+            rel = Path(relative)
+            if (rel.is_absolute() or ".." in rel.parts or not rel.parts
+                    or rel.as_posix() != relative):
+                raise RuntimeTreeError(f"RUNTIME_COMPANION_PATH_INVALID: {relative}")
+            path = plugin_root / rel
+            if any((plugin_root / parent).is_symlink()
+                   for parent in (rel, *rel.parents)):
+                raise RuntimeTreeError(f"RUNTIME_SOURCE_SYMLINK: {path}")
+            if not path.is_file():
+                raise RuntimeTreeError(f"RUNTIME_COMPANION_MISSING: {relative}")
+            yield path
 
 
 def _source_commit(plugin_root: Path) -> str | None:
@@ -97,6 +150,94 @@ def _atomic_json(path: Path, value: object) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _verify_files(plugin_root: Path, manifest: Mapping) -> set[str]:
+    expected = manifest.get("files")
+    if not isinstance(expected, dict) or not expected:
+        raise RuntimeTreeError("RUNTIME_SOURCE_MANIFEST_EMPTY")
+    observed = {}
+    for rel, digest in expected.items():
+        if (not isinstance(rel, str) or not rel or Path(rel).is_absolute()
+                or ".." in Path(rel).parts or Path(rel).as_posix() != rel
+                or not isinstance(digest, str)):
+            raise RuntimeTreeError("RUNTIME_SOURCE_MANIFEST_PATH_INVALID")
+        path = plugin_root / rel
+        if (any((plugin_root / parent).is_symlink()
+                for parent in (Path(rel), *Path(rel).parents))
+                or not path.is_file()):
+            raise RuntimeTreeError(f"RUNTIME_SOURCE_MISSING: {rel}")
+        actual = _digest(path)
+        if actual != digest:
+            raise RuntimeTreeError(f"RUNTIME_SOURCE_CHANGED: {rel}: {actual} != {digest}")
+        observed[rel] = actual
+    if _tree_hash(observed) != manifest.get("source_tree_sha256"):
+        raise RuntimeTreeError("RUNTIME_SOURCE_TREE_HASH_MISMATCH")
+    return set(expected)
+
+
+def _verify_selection(plugin_root: Path, expected: set[str], files: Iterable[Path]) -> None:
+    extras = {str(path.relative_to(plugin_root)) for path in files} - expected
+    if extras:
+        raise RuntimeTreeError(
+            "RUNTIME_SOURCE_UNMANIFESTED: " + ", ".join(sorted(extras)[:8]))
+
+
+@dataclass(frozen=True)
+class HistoricalProgramTree:
+    """Verified past source bytes only; this type grants no launch capability."""
+
+    plugin_root: Path
+    source_root: Path
+    manifest: Mapping
+
+    @property
+    def tree_sha256(self) -> str:
+        return str(self.manifest["source_tree_sha256"])
+
+
+def load_historical(manifest_path: Path) -> HistoricalProgramTree:
+    """Read archived integrity under its own versioned companion contract.
+
+    Schema /1 spans both producers. The manifested producer and owner source,
+    rather than that shared schema alone, determine whether companions were
+    declared. A current producer with a missing owner API still refuses.
+    """
+    manifest_path = Path(manifest_path)
+    if manifest_path.is_symlink() or manifest_path.resolve() != manifest_path:
+        raise RuntimeTreeError("RUNTIME_HISTORICAL_PATH_INVALID")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise RuntimeTreeError(f"RUNTIME_SOURCE_MANIFEST_UNREADABLE: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
+        raise RuntimeTreeError("RUNTIME_SOURCE_MANIFEST_SCHEMA")
+    root = manifest_path.parent / "plugin"
+    if (manifest_path.name != "manifest.json"
+            or manifest_path.parent.name != manifest.get("source_tree_sha256")
+            or manifest.get("retained_plugin_root") != str(root)
+            or not Path(manifest.get("source_plugin_root", "")).is_absolute()):
+        raise RuntimeTreeError("RUNTIME_HISTORICAL_IDENTITY_MISMATCH")
+    expected = _verify_files(root, manifest)
+    producer = "programs/runtime_program_tree.py"
+    if producer not in expected:
+        raise RuntimeTreeError("RUNTIME_HISTORICAL_PRODUCER_MISSING")
+    requires_companions = False
+    for relative in (producer, *(f"programs/{name}" for name in _COMPANION_ASSET_OWNERS)):
+        if relative not in expected:
+            continue
+        try:
+            module = ast.parse((root / relative).read_bytes())
+        except (OSError, SyntaxError, ValueError) as exc:
+            raise RuntimeTreeError("RUNTIME_HISTORICAL_SOURCE_INVALID") from exc
+        requires_companions |= any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in {"companion_assets", "_companion_assets"}
+            for node in module.body)
+    _verify_selection(root, expected, _runtime_files(root))
+    if requires_companions:
+        _verify_selection(root, expected, _companion_assets(root))
+    return HistoricalProgramTree(root, Path(manifest["source_plugin_root"]), manifest)
+
+
 @dataclass
 class RuntimeProgramTree:
     plugin_root: Path
@@ -111,28 +252,8 @@ class RuntimeProgramTree:
         return str(self.manifest["source_tree_sha256"])
 
     def verify_tree(self) -> None:
-        expected = self.manifest.get("files")
-        if not isinstance(expected, dict) or not expected:
-            raise RuntimeTreeError("RUNTIME_SOURCE_MANIFEST_EMPTY")
-        observed = {}
-        for rel, digest in expected.items():
-            path = self.plugin_root / rel
-            if path.is_symlink() or not path.is_file():
-                raise RuntimeTreeError(f"RUNTIME_SOURCE_MISSING: {rel}")
-            actual = _digest(path)
-            if actual != digest:
-                raise RuntimeTreeError(
-                    f"RUNTIME_SOURCE_CHANGED: {rel}: {actual} != {digest}")
-            observed[rel] = actual
-        extras = {
-            str(path.relative_to(self.plugin_root))
-            for path in _selected_files(self.plugin_root)
-        } - set(expected)
-        if extras:
-            raise RuntimeTreeError(
-                "RUNTIME_SOURCE_UNMANIFESTED: " + ", ".join(sorted(extras)[:8]))
-        if _tree_hash(observed) != self.tree_sha256:
-            raise RuntimeTreeError("RUNTIME_SOURCE_TREE_HASH_MISMATCH")
+        expected = _verify_files(self.plugin_root, self.manifest)
+        _verify_selection(self.plugin_root, expected, _selected_files(self.plugin_root))
 
     def verify_child(self, path: Path) -> str:
         try:
@@ -149,6 +270,16 @@ class RuntimeProgramTree:
         if actual != expected:
             raise RuntimeTreeError(
                 f"RUNTIME_CHILD_CHANGED: {rel}: {actual} != {expected}")
+        if rel in {f"programs/{name}" for name in _COMPANION_ASSET_OWNERS}:
+            for asset in _companion_assets(self.plugin_root):
+                asset_rel = str(asset.relative_to(self.plugin_root))
+                asset_expected = self.manifest["files"].get(asset_rel)
+                if asset_expected is None:
+                    raise RuntimeTreeError(
+                        f"RUNTIME_COMPANION_UNMANIFESTED: {asset_rel}")
+                if _digest(asset) != asset_expected:
+                    raise RuntimeTreeError(
+                        f"RUNTIME_COMPANION_CHANGED: {asset_rel}")
         self._record_launch(rel, actual)
         return actual
 

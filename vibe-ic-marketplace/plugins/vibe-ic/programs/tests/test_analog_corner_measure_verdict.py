@@ -102,6 +102,25 @@ def test_sidecar_verdict_ignores_wording_entirely(monkeypatch):
     assert "ugbw" in ss["nulled_metrics"]
 
 
+def test_native_executor_preserves_structured_failed_measure(monkeypatch):
+    calls = []
+
+    def run(program, argv, **kwargs):
+        calls.append((program, argv))
+        stdout = (_SIDECAR_FAILED if program == "@cat" else
+                  "MEAS ugbw=0.00000e+00\n" if "-b" in argv else "ngspice version\n")
+        return {"argv": [program[1:], *argv], "returncode": 0, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(A, "_docker", lambda *a, **k: pytest.fail("native executor owns every command"))
+    _ok, measured, _text, state = A._run_ngspice("", "/deck.sp", run_to_completion=True, run=run)
+    assert measured["ugbw"] is None
+    assert state["measure_source"] == "json_sidecar"
+    assert state["measures_structurally_verified"] is True
+    assert "ugbw" in state["nulled_metrics"]
+    assert [program for program, _ in calls] == ["@ngspice", "@ngspice", "@cat"]
+    assert "--json-measure=/deck.sp.measure.json" in calls[1][1]
+
+
 def test_sidecar_passing_measures_are_kept(monkeypatch):
     """POSITIVE GATE: a genuinely successful measure is KEPT — no over-nulling."""
     _ok, meas, _t, ss = _run(monkeypatch, _HEALTHY, _SIDECAR_OK)

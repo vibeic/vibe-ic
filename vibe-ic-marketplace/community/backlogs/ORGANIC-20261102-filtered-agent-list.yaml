@@ -1,0 +1,53 @@
+type: enhancement
+component: program:blindness_audit
+title: Recognize the closed optional filter schema for metadata-only agent-list audit calls
+plugin_version: 1.35.51
+plugin_version_role: filing-time plugin version
+target_repository: vibeic/vibe-ic
+status: SUBMITTED_OPEN
+issue_url: https://github.com/vibeic/vibe-ic/issues/3786
+source_snapshot:
+  plugin_base: 95a3be2b31bb3fe17c0e5bdbf3f654be020ee078
+  plugin_version: 1.35.51
+  eda_base: 0af058989303d36f3d79ced703b5da3ad0fea7c8
+capture_ids:
+- filtered-agent-list-schema-coverage
+body_sha256: c0a9e5ff621133ea625b3c9e168ea2148eb9de0e7a3038cb02567e3ee442d1f6
+body_contract: pattern is the exact complete Markdown issue body; title and all acceptance commands are included without rewriting
+pattern: |
+  # Recognize the closed optional filter schema for metadata-only agent-list audit calls
+
+  ## General gap
+
+  The transcript audit recognizes empty `list_agents` arguments as metadata-only but does not recognize the supported optional string filter. A legitimate filtered listing is consequently treated as unknown execution context. Exempting every call with that tool name would be unsafe because malformed keys or nested payloads could contain uninspected executable content.
+
+  Current pinned source: `programs/blindness_audit.py` near the metadata-only recognition returning `name == "list_agents" and payload == {}`. This is filtered-agent-list-schema-coverage.
+
+  ## Neutral minimal reproduction
+
+  Build synthetic transcript frames containing `list_agents` with `{}`, with `{"path_prefix":"/root/example"}`, with a numeric or object filter, and with an extra unknown/nested executable field. Only the supported empty or exact optional-string-filter schema may be classified as metadata-only. Malformed/extra fields must keep the existing fail-closed audit behavior. Exercise the normal audit CLI across supported transcript envelope forms.
+
+  ## Existing tracking and retained evidence
+
+  Merged #3770 already inspects communication and preserves unknown execution contexts. This is a narrow supported-argument-schema addition to that implementation, not a proposal to suppress unknown contexts.
+
+  Local candidate `af23d2fd1c77d24fcf1f5f5612cdd0845fe3d673` has retained focused and independent neutral controls. Metadata reports 30 neutral cases over three CLI arms, with the original supported frame returning base rc3, candidate rc0 and reverse-mutant rc3. No transcript contents are published here. No current full-run blindness verdict or benchmark acceptance follows from this bounded repair.
+
+  ## 驗收
+
+  Use a closed allowlist of keys and value types; do not accept arbitrary payloads by tool name. Preserve inspection of nested executable content and the current malformed-frame behavior. Check both function-call schema and actual CLI result, with unsupported and smuggled-payload negative controls.
+
+  After adding the neutral focused suite, run from repository root:
+
+  ```bash
+  cd vibe-ic-marketplace/plugins/vibe-ic
+  python3 -m pytest -q programs/tests/test_blindness_audit_filtered_agent_list.py
+  ```
+
+  The named module is a new implementation deliverable. It must include actual CLI cases rather than only source-string assertions.
+
+  ## Evidence and submission boundary
+
+  This is a general enhancement backlog, not a benchmark result. Filing source: plugin 1.35.51, main `95a3be2b31bb3fe17c0e5bdbf3f654be020ee078`. The owning source presence and related public submissions were inspected at this snapshot. The behavioral findings below come from retained local capture metadata; the complete implementation has not been ported or freshly reproduced on this upstream snapshot. No benchmark solution, official reference, private transcript, or local machine path is included.
+
+  Local candidate implementation and focused acceptance are distinct from upstream delivery. No new native run, full-suite result, source-semantic approval, or benchmark PASS is claimed by filing this issue. The commands under acceptance are implementation deliverables, not filing-time execution claims. Any named new test module must be added before its command can supply evidence; missing-module errors do not count as negative controls.

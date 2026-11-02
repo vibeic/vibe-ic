@@ -1,0 +1,51 @@
+type: enhancement
+component: program:nix_capability_probe
+title: Extend existing EDA release validation with offline tool identity and neutral compatibility seeds
+plugin_version: 1.35.51
+plugin_version_role: filing-time plugin caller and sanitizer version
+target_repository: vibeic/vibeic-eda
+status: SUBMITTED_OPEN
+issue_url: https://github.com/vibeic/vibeic-eda/issues/455
+source_snapshot:
+  plugin_base: 95a3be2b31bb3fe17c0e5bdbf3f654be020ee078
+  plugin_version: 1.35.51
+  eda_base: 0af058989303d36f3d79ced703b5da3ad0fea7c8
+capture_ids:
+- EDA-001
+- EDA-002
+- EDA-003
+body_sha256: e903b01b2d6d694b66f48a58d928a7e13ddae81aeb0c683c6ab75848f1a7019b
+body_contract: pattern is the exact complete Markdown issue body; title and all acceptance commands are included without rewriting
+pattern: |
+  # Extend existing EDA release validation with offline tool identity and neutral compatibility seeds
+
+  ## Proposal, not an engine defect
+
+  This captures three related release-validation suggestions: container-local/offline tool discovery (EDA-001), an image-produced tool identity contract for the plugin consumer (EDA-002), and visible-source HDL/arithmetic compatibility regression seeds (EDA-003). **Confirmed EDA engine defects: 0.** These are proposals, not implemented or release-qualified capabilities.
+
+  The originating plugin capture recorded an in-image professional suite with 20 passed and 19 NOT_VERIFIED because a nested image resolver required Docker. Separate host-driven native hooks passed. The capture did not modify an image, tool fork or shared container and did not run a new EDA qualification. Host Icarus 11 and image Icarus 14 receipts remain distinct. Mixed-signedness remains UNVERIFIED until the source/language contract and a native reference are fixed.
+
+  ## Existing capability gate and proposed extension
+
+  Closed #87 already replaced mere tool-presence checks with value-sensitive capability probes wired into release blocking. Filing source is main `0af058989303d36f3d79ced703b5da3ad0fea7c8`; its [existing capability gate](https://github.com/vibeic/vibeic-eda/blob/0af058989303d36f3d79ced703b5da3ad0fea7c8/fork-gatekeeper/capability_gate.py) is present alongside `fork-gatekeeper/capability_smoke.py` and `fork-gatekeeper/nix_capability_probe.py`. Preserve and extend those existing release owners; do not claim the repository has no capability gate and do not create a parallel green path.
+
+  1. Explicitly define whether validation inside the image is supported without nested Docker. If supported, resolve the actual local binary and immutable image/tool identity offline. Missing identity must report NOT_VERIFIED or refusal, not fabricate a digest or silently fall back to an unrelated host tool.
+  2. Define the stable image-produced fields consumed by the ordinary plugin: image revision/digest, exact binary path/version/hash and relevant build identity. Preserve actual compiler/run return codes and consumed-input/output closure in the plugin's native receipt. Distinguish image identity, capability checks and design verdicts.
+  3. Add neutral public-source positive and reverse controls to the existing capability corpus: initialized/repeated-direction ANSI declarations, exact declared widths, and supported complete arithmetic expressions. Check values and killed wrong-function controls. Do not derive tests from protected benchmark references or treat these seeds as complete language/release coverage.
+
+  ## Neutral reproduction setup
+
+  Run the same neutral capability fixture through the normal host-driven resolver and a documented container-local path without a Docker daemon. Compare the actual tools selected and their provenance; do not compare only version strings. An altered binary or inconsistent image manifest must refuse. Missing Docker inside a container must either follow the documented offline path or clearly state unsupported execution, never be counted as a passed check. Keep the existing release blocking rules for unmeasured capability probes.
+
+  ## 驗收
+
+  Add neutral tests to the existing release-validation owner. At minimum cover: supported offline tool discovery, absent/invalid manifest, binary hash drift, wrong image binding, unsupported local validation, host/image distinction, true positive native values and wrong-function negative controls. A tool manifest alone does not qualify a native design or release.
+
+  After implementing the contract and its focused fixtures, run from repository root:
+
+  ```bash
+  python3 -m pytest -q fork-gatekeeper/test_nix_offline_tool_identity.py fork-gatekeeper/test_native_compatibility_seeds.py
+  python3 -m pytest -q fork-gatekeeper/test_nix_capability_floor.py fork-gatekeeper/test_capability_check_blocks_the_tick.py
+  ```
+
+  The first two modules are proposed implementation deliverables; the latter modules already exist and protect the release gate. These commands have not been run for this filing. The concrete in-image/native positive and reverse executions remain required before claiming the proposal implemented. No image rebuild, release, native benchmark run or whole-suite PASS is claimed.
