@@ -174,6 +174,7 @@ def test_split_refusal_retains_the_scope_of_each_branch(tmp_path):
 @pytest.mark.parametrize("token, scalar", [
     ("(5.5 ns)", "55 ns"), ("{1e+}", "1e"),
     ("[[−40 °C]]", "40 C"), ("≥ 10", "10"),
+    ("[NaN]", "NaN"), ("NaN V", "NaN V"),
 ])
 def test_wrapping_punctuation_cannot_hide_numeric_intent(tmp_path, token, scalar):
     case = project(tmp_path, {"quantity": scalar})

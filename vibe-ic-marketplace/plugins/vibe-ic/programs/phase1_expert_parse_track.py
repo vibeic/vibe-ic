@@ -1642,7 +1642,7 @@ def _unsupported_numeric_token(token: str) -> bool:
         return False
     unwrapped = re.sub(r"^[^A-Za-z0-9]+", "", text)
     return bool(re.match(r"[0-9]", unwrapped)
-                or re.fullmatch(r"[-+]?(?:inf(?:inity)?|nan)", text, re.I))
+                or re.match(r"(?:inf(?:inity)?|nan)(?:$|[^A-Za-z0-9_])", unwrapped, re.I))
 
 
 def _key_unit(key: Any) -> Optional[Tuple[str, int]]:
