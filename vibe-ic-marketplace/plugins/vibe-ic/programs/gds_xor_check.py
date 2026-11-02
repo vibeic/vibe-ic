@@ -58,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # reads this receipt. An unimportable helper is a broken installation and must
 # say so at import time, not degrade the guarantee silently.
 from _atomic_artefact import write_json as _atomic_write_json
+from _atomic_artefact import write_text as _atomic_write_text
 import _stream_input_record as _sir  # noqa: E402
 
 GATE = "gds_xor_check"
@@ -1423,6 +1424,248 @@ def judge_receipt(project: Path, rel: str) -> Tuple[int, str, Dict[str, Any]]:
         f"PASS: the run's own receipt {rel} records 0 design-layer difference(s) "
         f"across {layers} layer(s) compared and the shipped GDS's connectivity "
         f"measured by {conn.get('basis')} — {reason}"), doc
+
+
+# ── The IC front door: the delivered GDS against the signoff GDS (#88 D3) ────
+#
+# On the Flow109 IC front door no selected row runs step 37.3: the IC profile of
+# D64 is the native final-geometry adapter, which refuses IC seal re-entry and
+# writes no REPORT_REL. D77 (`signoff_metrics_aggregate._xor`) still reads it,
+# so before this producer the IC path could never measure that key. Ruling #88
+# D3 names the measurement: KLayout's own XOR, with the deck LibreLane's
+# KLayout.XOR step runs, of the DELIVERED GDS (the final post-fill stream this
+# carrier ships) against the SIGNOFF GDS (the stream step 31 is admitted to sign
+# off) of the same carrier. No layer is exempt here, so a difference on any
+# layer is a FAIL; an unrun or unreadable comparison is NOT_MEASURED.
+
+#: LibreLane's own resolver for the deck it ships, asked in the runner's
+#: environment, so the script is the image's and never a copy of it.
+NATIVE_XOR_SCRIPT_PROBE = ("import os; from librelane.common import get_script_dir; "
+                           "print(os.path.join(get_script_dir(), 'klayout', 'xor.drc'))")
+NATIVE_XOR_RDB_REL = "reports/phase3/gds_xor.xml"
+NATIVE_XOR_LOG_REL = "reports/phase3/gds_xor.log"
+NATIVE_XOR_THREADS = 2
+_NATIVE_METRIC_RE = re.compile(r"^%OL_METRIC_I (\S+) (\d+)\s*$", re.M)
+_RDB_LAYER_RE = re.compile(r"^(\d+)/(\d+)$")
+
+
+def ic_front_door_owns_xor() -> bool:
+    """True on a Flow109 IC launch whose validated plan selects no 37.3 row."""
+    import os
+    import flow109
+    raw = os.environ.get(flow109.CONTEXT_ENV)
+    if not raw:
+        return False
+    context = flow109.validate_execution_context(json.loads(Path(raw).read_text()))
+    if context["features"].get("ic") is not True:
+        return False
+    plan = flow109.resolve_plan(context["features"], context["step_profiles"])
+    return not any(str((row["profile"].get("dispatch") or {}).get("native_step_id")) == "37.3"
+                   for row in plan["rows"])
+
+
+def delivered_gds(project: Path) -> Path:
+    """The stream this carrier ships, bound by `shipped_and_source`."""
+    gds, _source_def, binding = shipped_and_source(project)
+    if gds is None or not gds.is_file():
+        raise ValueError("XOR_DELIVERED_GDS_UNBOUND: "
+                         + json.dumps(binding, sort_keys=True, default=str)[:300])
+    if (binding.get("binding") == "flow-canonical"
+            and len(list(project.glob(CANONICAL_GDS_GLOB))) != 1):
+        raise ValueError(f"XOR_DELIVERED_GDS_AMBIGUOUS: {CANONICAL_GDS_GLOB} names "
+                         f"more than one stream and no record selects one")
+    recorded = binding.get("gds_sha256_recorded")
+    if isinstance(recorded, str) and recorded and recorded != _sha256(gds):
+        raise ValueError(f"XOR_DELIVERED_GDS_CHANGED: {gds.name} is not the "
+                         f"stream {binding.get('source')} records")
+    return gds.resolve()
+
+
+def signoff_gds(project: Path) -> Path:
+    """The stream step 31 is admitted to sign off.
+
+    Step 31 refuses any routed GDS `_gds_admission.admitted_gds` does not admit
+    (`execution_backend_producers.produce_signoff`), so the admission record
+    names the signoff GDS; `admitted_gds` re-proves it is still current.
+    """
+    import _gds_admission as admission
+    record = json.loads(admission.admission_path(project).read_text())
+    rel = record.get("gds_relpath") if isinstance(record, dict) else None
+    gds = project / str(rel or "")
+    if not rel or not gds.is_file() or not admission.admitted_gds(project, gds):
+        raise ValueError(f"XOR_SIGNOFF_GDS_NOT_ADMITTED: {rel!r} is not the "
+                         f"current admitted stream")
+    return gds.resolve()
+
+
+def _single_top(gds: Path) -> str:
+    import gds_topcell_name_check as topcell
+    defined, referenced, valid = topcell.parse_structures(gds.read_bytes())
+    tops = sorted(set(defined) - referenced)
+    if not valid or len(tops) != 1:
+        raise ValueError(f"XOR_TOP_CELL_UNDETERMINED: {gds.name} tops {tops[:4]}")
+    return tops[0]
+
+
+def rdb_layer_counts(path: Path) -> Dict[Tuple[int, int], int]:
+    """{(layer, datatype): differing polygons} from the native report database.
+
+    xor.drc declares one top-level category per compared layer and writes one
+    item per differing polygon, naming its category quoted (`'68/20'`).
+    """
+    import xml.etree.ElementTree as ET
+    declared: List[str] = []
+    items: Dict[str, int] = {}
+    stack: List[str] = []
+    for event, elem in ET.iterparse(str(path), events=("start", "end")):
+        if event == "start":
+            stack.append(elem.tag)
+            continue
+        stack.pop()
+        if elem.tag == "name" and stack == ["report-database", "categories", "category"]:
+            declared.append((elem.text or "").strip())
+        elif elem.tag == "category" and stack == ["report-database", "items", "item"]:
+            name = (elem.text or "").strip()
+            if len(name) >= 2 and name[0] == name[-1] == "'":
+                name = name[1:-1]
+            items[name] = items.get(name, 0) + 1
+        elif elem.tag == "item":
+            elem.clear()
+    if set(items) - set(declared):
+        raise ValueError(f"XOR_REPORT_UNDECLARED_CATEGORY: {sorted(set(items) - set(declared))[:4]}")
+    counts: Dict[Tuple[int, int], int] = {}
+    for name in declared:
+        m = _RDB_LAYER_RE.match(name)
+        if not m:
+            raise ValueError(f"XOR_REPORT_CATEGORY_NOT_A_LAYER: {name!r}")
+        counts[(int(m.group(1)), int(m.group(2)))] = items.get(name, 0)
+    return counts
+
+
+def native_delivered_xor(project: Path, *, container: Optional[str] = None,
+                         runner=None, out: Optional[Path] = None,
+                         timeout: int = 24 * 3600) -> Dict[str, Any]:
+    """Run LibreLane's xor.drc on the delivered and signoff GDS; write REPORT_REL.
+
+    Total 0 -> PASS (rc 0), total > 0 -> FAIL (rc 1), anything unrun,
+    unbound or unreadable -> NOT_MEASURED (rc 2). The total is the deck's own
+    `design__xor_difference__count`; the per-layer counts are its report
+    database, and the two must agree.
+    """
+    project = Path(project).resolve()
+    out = Path(out) if out is not None else project / REPORT_REL
+    report: Dict[str, Any] = {
+        "gate": GATE, "producer": "gds_xor_check.native_delivered_xor",
+        "basis": "ruling #88 D3: KLayout XOR of the delivered GDS against the "
+                 "signoff GDS of the same carrier",
+        "project": str(project), "verdict": "NOT_MEASURED", "rc": 2,
+        "reference": {"kind": "signoff_gds"}}
+
+    def finish(verdict: str, rc: int, reason: str) -> Dict[str, Any]:
+        report.update(verdict=verdict, rc=rc, reason=reason)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(out, report)
+        return report
+
+    try:
+        delivered = delivered_gds(project)
+        signoff = signoff_gds(project)
+        report["delivered"] = {"path": str(delivered.relative_to(project)),
+                               "sha256": _sha256(delivered)}
+        report["reference"].update(path=str(signoff.relative_to(project)),
+                                   sha256=_sha256(signoff),
+                                   source="reports/phase3/gds_admission.json")
+        top = _single_top(delivered)
+        if _single_top(signoff) != top:
+            raise ValueError("XOR_TOP_CELL_MISMATCH: the delivered and signoff GDS "
+                             "have different top cells")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return finish("NOT_MEASURED", 2, str(exc))
+    report["top_cell"] = top
+
+    if runner is None:
+        import _klayout_launch as kl
+        runner = kl.find_runner(container, project=project)
+    if runner is None or not all(runner.covers(p) for p in
+                                 (delivered, signoff, project / NATIVE_XOR_RDB_REL)):
+        return finish("NOT_MEASURED", 2, "XOR_TOOL_ABSENT: no KLayout runner reaches "
+                                         "this project; an unrun XOR is not a zero")
+    report["runner"] = {"kind": runner.kind, "detail": runner.detail}
+    try:
+        verdict, rc, reason = _run_native_xor(project, report, runner, delivered,
+                                              signoff, top, timeout)
+        import _gds_admission as admission
+        if not admission.admitted_gds(project, signoff):
+            report.pop("design__xor_difference__count", None)
+            return finish("NOT_MEASURED", 2,
+                          "XOR_SIGNOFF_GDS_CHANGED: signoff GDS changed after admission")
+        return finish(verdict, rc, reason)
+    except (OSError, ValueError, KeyError, TypeError, SyntaxError) as exc:
+        return finish("NOT_MEASURED", 2, f"XOR_NATIVE_FAILED: {type(exc).__name__}: {exc}")
+
+
+def _run_native_xor(project, report, runner, delivered, signoff, top, timeout):
+    """(verdict, rc, reason) of one native run; its counts go into `report`."""
+    rc, so, se = runner.run_argv(["python3", "-c", NATIVE_XOR_SCRIPT_PROBE], {}, timeout=300)
+    script = (so or "").strip().splitlines()[-1].strip() if rc == 0 and (so or "").strip() else ""
+    if not script.endswith("/klayout/xor.drc"):
+        return ("NOT_MEASURED", 2,
+                f"XOR_NATIVE_SCRIPT_ABSENT: LibreLane's klayout/xor.drc is not "
+                f"resolvable in the runner (rc={rc}): {(se or so or '').strip()[-200:]}")
+    rdb, log = project / NATIVE_XOR_RDB_REL, project / NATIVE_XOR_LOG_REL
+    rdb.parent.mkdir(parents=True, exist_ok=True)
+    rdb.unlink(missing_ok=True)
+    argv = [runner.klayout_bin(), "-b", "-r", script,
+            "-rd", f"top_cell={top}", "-rd", f"a={runner.cpath(delivered)}",
+            "-rd", f"b={runner.cpath(signoff)}", "-rd", f"jobs={NATIVE_XOR_THREADS}",
+            "-rd", f"rdb_out={runner.cpath(rdb)}", "-rd", "ignore=", "-rd", "tilesize="]
+    rc, so, se = runner.run_argv(argv, {}, timeout=timeout)
+    _atomic_write_text(log, (so or "") + "\n" + (se or ""))
+    report["native"] = {"tool": "klayout", "script": script, "argv": argv, "rc": rc,
+                        "report": NATIVE_XOR_RDB_REL, "log": NATIVE_XOR_LOG_REL}
+    metrics = {key: int(value) for key, value in _NATIVE_METRIC_RE.findall(so or "")}
+    total = metrics.get("design__xor_difference__count")
+    if rc != 0 or total is None or not rdb.is_file():
+        return ("NOT_MEASURED", 2,
+                f"XOR_NATIVE_FAILED: rc={rc}, total metric "
+                f"{'present' if total is not None else 'absent'}, report "
+                f"{'present' if rdb.is_file() else 'absent'}: "
+                f"{(se or so or '').strip()[-200:]}")
+    shapes = [metrics.get(f"design__xor__shape__count__layout:{side}") for side in "ab"]
+    report["census"] = {"delivered_shapes": shapes[0], "signoff_shapes": shapes[1]}
+    if not all(isinstance(n, int) and n > 0 for n in shapes):
+        return ("NOT_MEASURED", 2, "XOR_VACUOUS: a compared layout carries no shape "
+                                   "under its top cell")
+    counts = rdb_layer_counts(rdb)
+    if not counts or sum(counts.values()) != total:
+        return ("NOT_MEASURED", 2,
+                f"XOR_NATIVE_COUNTS_DISAGREE: the report database lists "
+                f"{sum(counts.values())} difference(s) on {len(counts)} layer(s); "
+                f"the deck's metric says {total}")
+    rows = [{"layer": layer, "datatype": datatype, "differences": n}
+            for (layer, datatype), n in sorted(counts.items())]
+    differing = [row for row in rows if row["differences"]]
+    report.update(layers_compared=len(rows), layer_differences=rows,
+                  design_layer_differences=differing, finishing_layer_differences=[],
+                  design__xor_difference__count=total)
+    if total:
+        named = ", ".join(f"{r['layer']}/{r['datatype']}={r['differences']}"
+                          for r in differing[:6])
+        return ("FAIL", 1, f"the delivered GDS differs from the signoff GDS on "
+                           f"{len(differing)} layer(s) ({total} differing polygon(s): {named})")
+    return ("PASS", 0, f"0 differences between the delivered GDS and the signoff GDS "
+                       f"across {len(rows)} layer(s) compared")
+
+
+def ic_front_door_xor(project: Path) -> Optional[Dict[str, Any]]:
+    """D77's XOR receipt on the IC front door; None on every other route."""
+    try:
+        owned = ic_front_door_owns_xor()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"[{GATE}] IC front door not established, XOR not produced: {exc}",
+              file=sys.stderr)
+        return None
+    return native_delivered_xor(project) if owned else None
 
 
 def main(argv: Optional[List[str]] = None) -> int:
