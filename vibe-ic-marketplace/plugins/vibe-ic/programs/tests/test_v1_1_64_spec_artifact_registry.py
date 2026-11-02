@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _prose_handoff_assertions import assert_prose_chain_handoff
 
 PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
@@ -143,10 +144,18 @@ def test_generated_public_order_reaches_positional_and_named_consumers(tmp_path,
     import module_port_audit as audit
     import rtl_repair_contract as contract
     kind, prompt, tb = _PUBLIC_CASES[family]
-    if entry == 'registry':
-        emitted_kind, rtl = R.generate(prompt, 'LogicBlock')
-    else:
-        emitted_kind, rtl, _ = chain.try_emit_ex(prompt, '', 'LogicBlock')
+    if entry == 'chain':
+        result = chain.try_emit_ex(prompt, '', 'LogicBlock')
+        assert_prose_chain_handoff(result, prompt)
+        sentence = {
+            'counter': ('Implement a 4-bit up counter that counts from 0 through 15, inclusive, '
+                        'with a period of 16.'),
+            'interleaved': ('Implement two independent AND gates with these exact output functions:\n'
+                            'p1y: p1a and p1b\np2y: p2a and p2b\n'
+                            'module LogicBlock(input p1a, input p1b, output p1y, input p2a, input p2b, output p2y);'),
+        }[family]
+        assert f'[0:{len(sentence)}] {sentence}' in dict(result[2])['SPEC_SENTENCES_UNACCOUNTED']
+    emitted_kind, rtl = R.generate(prompt, 'LogicBlock')
     assert emitted_kind == kind and rtl
     iverilog, vvp = shutil.which('iverilog'), shutil.which('vvp')
     if not iverilog or not vvp:
@@ -272,8 +281,12 @@ def test_non_applicable_source_preserves_real_generator_behavior(source_kind, en
     if entry == 'registry':
         observed = R.generate(prompt, 'LogicBlock')
     else:
-        kind, rtl, _ = chain.try_emit_ex(prompt, '', 'LogicBlock')
-        observed = kind, rtl
+        result = chain.try_emit_ex(prompt, '', 'LogicBlock')
+        assert_prose_chain_handoff(result, prompt)
+        sentence = ('Implement a 4-bit up counter that counts from 0 through 15, inclusive, '
+                    'with a period of 16.')
+        assert f'[0:{len(sentence)}] {sentence}' in dict(result[2])['SPEC_SENTENCES_UNACCOUNTED']
+        observed = R.generate(prompt, 'LogicBlock')
     assert observed == ('counter_popcount', unchanged), observed
 
 

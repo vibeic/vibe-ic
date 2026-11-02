@@ -81,7 +81,7 @@ def _case(project):
     source = _put(project / 'input/independent-bounds.json', {'prelayout_timing_targets': payload})
     authority = _put(project / 'requirements/base_13/prelayout_timing_targets.json', {
         'schema': metrics.AUTHORITY_SCHEMA, **payload,
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': _ref(project, source)}})
     return context, {'timing_modes_receipt': _ref(project, timing)}, folder, authority
 

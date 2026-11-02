@@ -661,6 +661,449 @@ class SpecContract:
     # gate on their own; spec_conformance_check re-emits them as INFO findings so a
     # silent 0-port skip on a table-only interface spec is visible.
     notes: List[str] = field(default_factory=list)
+    logic_obligations: List["LogicObligation"] = field(default_factory=list)
+    function: Optional[dict] = None
+    accounted_source_spans: List["SourceAccounting"] = field(default_factory=list)
+    unaccounted_source_spans: List["SourceAccounting"] = field(default_factory=list)
+
+
+DECLARED_LOGIC_OBLIGATION_UNSUPPORTED = "DECLARED_LOGIC_OBLIGATION_UNSUPPORTED"
+SPEC_SENTENCES_UNACCOUNTED = "SPEC_SENTENCES_UNACCOUNTED"
+
+
+@dataclass(frozen=True)
+class LogicObligation:
+    kind: str
+    family: Tuple[str, ...]
+    source_span: Tuple[int, int]
+    source_sentence: str
+    module: Optional[str] = None
+
+    @property
+    def clause(self) -> str:
+        return " ".join(self.source_sentence.split())
+
+
+@dataclass(frozen=True)
+class SourceAccounting:
+    kind: str
+    source_span: Tuple[int, int]
+    source_sentence: str
+    contract_field: str
+
+    @property
+    def clause(self) -> str:
+        return " ".join(self.source_sentence.split())
+
+
+def unaccounted_spec_sentences(contract: SpecContract) -> Tuple[SourceAccounting, ...]:
+    return tuple(contract.unaccounted_source_spans)
+
+
+_LOGIC_FAMILIES = frozenset({"nand", "nor", "xor", "xnor", "and", "or", "not", "mux"})
+_COST_FAMILIES = frozenset({"gates", "literals", "cells", "transistors", "area", "expression"})
+_EXCLUSIVE = re.compile(r"\bonly\b|\b(?:exclusively|solely|purely)\b|\bnothing\s+but\b|\brestricted\s+to\b", re.I)
+_MINIMIZE = re.compile(r"\bminimi[sz](?:e[sd]?|ing|ation)\b|\bfewest\b|\b(?:minimum|least|smallest)(?:\s+number)?\b|\bsimplif(?:y|ied)\b", re.I)
+_COST_TERM = re.compile(r"\b(gates?|literals?|cells?|transistors?|area|expressions?)\b", re.I)
+_GATE_TERM = re.compile(r"\b(nand|nor|xor|xnor|multiplexers?|mux(?:es)?|inverters?|and|or|not)\b", re.I)
+
+
+def logic_obligations_from_records(rows, source_text: Optional[str] = None) -> List[LogicObligation]:
+    """Read the shared structured field, preserving its exact source sentence."""
+    if not isinstance(rows, (list, tuple)):
+        raise ValueError("logic_obligations must be a list")
+    result = []
+    for row in rows:
+        if isinstance(row, LogicObligation):
+            row = {"kind": row.kind, "family": row.family, "source_span": row.source_span,
+                   "source_sentence": row.source_sentence, "module": row.module}
+        if not isinstance(row, dict):
+            raise ValueError("logic obligation must be an object")
+        kind = row.get("kind")
+        allowed = _LOGIC_FAMILIES if kind == "logic_basis" else _COST_FAMILIES if kind == "logic_minimization" else None
+        family = row.get("family")
+        span, sentence = row.get("source_span"), row.get("source_sentence")
+        module = row.get("module")
+        if (allowed is None or not isinstance(family, (list, tuple)) or not family
+                or any(not isinstance(v, str) or v not in allowed for v in family)
+                or not isinstance(span, (list, tuple)) or len(span) != 2
+                or any(type(v) is not int for v in span)
+                or not 0 <= span[0] < span[1]
+                or not isinstance(sentence, str) or not sentence.strip()
+                or span[1] - span[0] != len(sentence)
+                or (module is not None and (not isinstance(module, str)
+                    or re.fullmatch(r"[A-Za-z_]\w*", module) is None))):
+            raise ValueError("invalid structured logic obligation")
+        if source_text is not None and (span[1] > len(source_text)
+                                       or source_text[span[0]:span[1]] != sentence):
+            raise ValueError("logic obligation source span does not match the spec")
+        obligation = LogicObligation(kind, tuple(sorted(set(family))), tuple(span), sentence, module)
+        if obligation not in result:
+            result.append(obligation)
+    return result
+
+
+def structured_logic_contract(data: dict) -> SpecContract:
+    """Project only the shared typed obligations, without a producer's schema."""
+    return SpecContract(
+        module=data.get('module') or data.get('top_module'), source='json',
+        logic_obligations=logic_obligations_from_records(data.get('logic_obligations', [])))
+
+
+def unsupported_logic_obligations(contract: SpecContract) -> Tuple[LogicObligation, ...]:
+    return tuple(row for row in contract.logic_obligations
+                 if (contract.source != 'json' or row.module is None
+                     or contract.module is None or row.module == contract.module)
+                 and (row.kind == "logic_minimization" or not {"and", "or", "not"}.issubset(row.family)))
+
+
+def _gate_families(sentence: str) -> Tuple[str, ...]:
+    families = set()
+    for match in _GATE_TERM.finditer(sentence):
+        raw, term = match.group(0), match.group(0).lower()
+        if term == "nand" and re.match(r"\s+flash\b", sentence[match.end():], re.I):
+            continue
+        named_operator = raw.isupper() and re.match(
+            r"\s*(?:$|[.!?;:)]|(?:is|are)\s+(?:allowed|permitted|required)\b)",
+            sentence[match.end():], re.I)
+        gate_list = (
+            re.match(r"\s*[,/\-]\s*" + _GATE_TERM.pattern,
+                     sentence[match.end():], re.I)
+            or re.search(_GATE_TERM.pattern + r"\s*[,/\-]\s*$",
+                         sentence[:match.start()], re.I))
+        if term in {"and", "or", "not"} and not (named_operator
+                or re.match(r"\s+(?:logic\s+)?gates?\b", sentence[match.end():], re.I)
+                or gate_list):
+            continue
+        families.add("mux" if term.startswith(("mux", "multiplexer")) else
+                     "not" if term.startswith("inverter") else term)
+    return tuple(sorted(families))
+
+
+def _detect_logic_obligations(text: str, top: Optional[str] = None, *,
+                              source_module: Optional[str] = None) -> List[LogicObligation]:
+    try:
+        from _hdl_code_text import strip_hdl_comments_and_strings
+    except ImportError:
+        from ._hdl_code_text import strip_hdl_comments_and_strings
+    clean = strip_hdl_comments_and_strings(text)
+    declarations = list(re.finditer(
+        r"(?im)^\s*module\s+name\s*:\s*`?([A-Za-z_]\w*)`?"
+        r"|\bmodule\s+(?:is\s+)?named\s+`?([A-Za-z_]\w*)`?"
+        r"|^\s*module\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()", clean))
+    names = {next(g for g in m.groups() if g) for m in declarations}
+    owner = source_module or (top if top in names else next(iter(names)) if len(names) == 1 else top)
+    sections = list(re.finditer(r"(?im)^\s*module\s+name\s*:\s*`?([A-Za-z_]\w*)`?", clean))
+    prose = re.sub(r"(?m)^[ \t]*(?:[01]+\s*\|[^\n]*|[-*]\s*(?:input|output|inout)\b[^\n]*)$",
+                   lambda m: '.' + ' ' * (len(m.group(0)) - 1), clean)
+    for section in reversed(sections):
+        prose = prose[:section.start()] + '.' + ' ' * (section.end() - section.start() - 1) + prose[section.end():]
+    obligations: List[LogicObligation] = []
+    for match in re.finditer(r"[^.!?]+", prose):
+        raw = match.group(0)
+        lo, hi = match.start() + len(raw) - len(raw.lstrip()), match.end() - len(raw) + len(raw.rstrip())
+        if lo >= hi:
+            continue
+        if match.end() < len(prose) and prose[match.end()] in ".!?":
+            hi = match.end() + 1
+        sentence = " ".join(prose[lo:hi].split())
+        scoped_owner = owner
+        for section in sections:
+            if section.start() <= lo:
+                scoped_owner = section.group(1)
+        explicit = re.search(r"\bfor\s+module\s+`?([A-Za-z_]\w*)`?"
+                             r"|^module\s+`?([A-Za-z_]\w*)`?\s+(?:must|shall|should|may|can)\b", sentence, re.I)
+        if explicit:
+            scoped_owner = explicit.group(1) or explicit.group(2)
+        if scoped_owner != owner:
+            continue
+        family = _gate_families(sentence)
+        costs = tuple(sorted({"expression" if m.group(1).lower().startswith("expression")
+                              else "area" if m.group(1).lower() == "area"
+                              else m.group(1).lower().rstrip('s') + 's' for m in _COST_TERM.finditer(sentence)}))
+        minimized = _MINIMIZE.search(sentence) is not None and bool(costs)
+        retired = re.search(r"\b(?:withdrawn|removed|obsolete|superseded|no\s+longer\s+required)\b"
+                            r"|\b(?:is|are)\s+not\s+(?:required|a\s+requirement|applicable)\b", sentence, re.I)
+        if re.search(r"\bnot\s+(?:withdrawn|removed|obsolete|superseded)\b", sentence, re.I):
+            retired = None
+        if retired:
+            if minimized:
+                obligations = [o for o in obligations if o.kind != "logic_minimization"]
+            elif family:
+                obligations = [o for o in obligations if o.kind != "logic_basis" or o.family != family]
+            elif re.search(r"\b(?:this|that|previous)\s+(?:requirement|restriction|request)\b", sentence, re.I):
+                obligations = obligations[:-1]
+            continue
+        exclusive = _EXCLUSIVE.search(sentence)
+        if exclusive:
+            prefix = sentence[max(sentence.rfind(';', 0, exclusive.start()), 0):exclusive.start()]
+            polarity = re.sub(r"\bnot(?=\s+(?:logic\s+)?gates?\b)", 'gate', prefix, flags=re.I)
+            if re.search(r"\b(?:not|never)\b", polarity, re.I):
+                exclusive = None
+            elif re.match(r"\s+(?:the\s+)?(?:data\s+)?(?:inputs?|outputs?|ports?|pins?|selectors?|bits?|signals?)\b",
+                          sentence[exclusive.end():], re.I):
+                exclusive = None
+        request = re.search(r"\b(?:must|shall|should|required|requirement)\b", sentence, re.I)
+        directive = re.search(r"(?:^|[,;])\s*(?:use|implement|build|realize|construct|compose|design|make|limit|restrict|minimi[sz]e|simplify)\b", sentence, re.I)
+        fact = re.search(r"\b(?:library|libraries|characteri[sz]ed|catalog|examples?)\b", sentence, re.I)
+        if fact and not (request or directive):
+            continue
+        if minimized and not re.search(r"\b(?:do|does|must|shall|should)\s+not\b", sentence, re.I):
+            obligations.append(LogicObligation("logic_minimization", costs, (lo, hi), text[lo:hi], owner))
+        if exclusive and family:
+            allowed_clause = re.split(r"\b(?:do|must|shall|should)\s+not\b", sentence, maxsplit=1, flags=re.I)[0]
+            allowed = _gate_families(allowed_clause)
+            if allowed:
+                obligations.append(LogicObligation("logic_basis", allowed, (lo, hi), text[lo:hi], owner))
+    return obligations
+
+
+def declared_logic_obligations(text: str, top: Optional[str] = None, *,
+                               source_module: Optional[str] = None) -> Tuple[LogicObligation, ...]:
+    contract = emission_spec_contract(text, top=top)
+    if source_module is not None and contract.source != "json":
+        contract.logic_obligations = _detect_logic_obligations(text, top, source_module=source_module)
+    return unsupported_logic_obligations(contract)
+
+
+def _parsed_kmap_function(text: str, contract: SpecContract):
+    """The producer's complete scalar-output grid and its actual source range."""
+    if 'karnaugh' not in text.lower():
+        return None
+    try:
+        import kmap_grid_synth as kmap
+    except ImportError:
+        from . import kmap_grid_synth as kmap
+    parsed = kmap._parse_kmap(text)
+    ports = kmap.parse_ports(text)
+    if parsed is None or ports is None:
+        return None
+    col_bits, row_bits, col_codes, (row_codes, grid) = parsed
+    outputs = [(direction, width, name) for direction, width, name in ports.values()
+               if direction == 'output']
+    if len(outputs) != 1 or outputs[0][1] != 1:
+        return None
+    axes = list(row_bits) + list(col_bits)
+    if len(set(axes)) != len(axes):
+        return None
+    actual_ports = {port.name: (port.direction, port.width) for port in contract.ports}
+    for direction, width, name in ports.values():
+        if actual_ports.get(name) != (direction, width):
+            return None
+    physical_axes = set()
+    for axis in axes:
+        token = re.fullmatch(r'([A-Za-z_]\w*)(?:\[(\d+)\])?', axis)
+        if token is None:
+            return None
+        name, index = token.groups()
+        declared = ports.get(name.lower())
+        if declared is None or declared[0] != 'input' or declared[2] != name:
+            return None
+        if index is None:
+            if declared[1] != 1:
+                return None
+            packed = kmap._decl_range(text, name, declared[1])
+            bounds = re.fullmatch(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*', packed)
+            index = bounds.group(1) if bounds is not None else '0'
+        else:
+            packed = kmap._decl_range(text, name, declared[1])
+            bounds = re.fullmatch(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*', packed)
+            lower, upper = (sorted(map(int, bounds.groups())) if bounds else (0, 0))
+            if not lower <= int(index) <= upper:
+                return None
+        physical_axis = (name, int(index))
+        if physical_axis in physical_axes:
+            return None
+        physical_axes.add(physical_axis)
+    for codes, bits in ((col_codes, col_bits), (row_codes, row_bits)):
+        if (len(codes) != 2 ** len(bits)
+                or {int(code, 2) for code in codes} != set(range(2 ** len(bits)))):
+            return None
+    if any(value not in ('0', '1') for row in grid for value in row):
+        return None
+    lines = text.splitlines(keepends=True)
+    starts, offset = [], 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line)
+    grid_start = next((i for i, line in enumerate(lines) if kmap._GRID_ROW.fullmatch(line.rstrip('\r\n'))), None)
+    if grid_start is None:
+        return None
+    grid_end = grid_start
+    while grid_end < len(lines) and kmap._GRID_ROW.fullmatch(lines[grid_end].rstrip('\r\n')):
+        grid_end += 1
+    if grid_end - grid_start != len(row_codes):
+        return None
+    header = grid_start - 1
+    while header >= 0 and not lines[header].strip():
+        header -= 1
+    axis = header - 1
+    while axis >= 0 and not lines[axis].strip():
+        axis -= 1
+    if axis < 0:
+        return None
+    function = {'kind': 'truth_table', 'inputs': axes, 'output': outputs[0][2],
+                'rows': [{'in': row_code + col_code, 'out': grid[i][j]}
+                         for i, row_code in enumerate(row_codes)
+                         for j, col_code in enumerate(col_codes)]}
+    end = starts[grid_end] if grid_end < len(lines) else len(text)
+    return function, (starts[axis], end)
+
+
+def _supported_sop_sentence(sentence: str) -> Optional[Tuple[str, ...]]:
+    """A fully consumed permission/basis declaration for the K-map SOP producer."""
+    if re.fullmatch(r'(?:sum-of-products|sop)(?:\s+(?:logic|implementation))?\s+'
+                    r'is\s+(?:explicitly\s+)?(?:allowed|permitted)', sentence, re.I):
+        return ('and', 'not', 'or')
+    match = re.fullmatch(
+        r'(?:(?:you|the\s+(?:module|implementation|circuit))\s+)?'
+        r'(?:(?:must|shall|should|may|can)\s+)?(?:use|implement\s+using)\s+'
+        r'(?:only\s+)?(.+)', sentence, re.I)
+    if match is None:
+        return None
+    unit = re.compile(r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|inverters?|multiplexers?|mux(?:es)?)'
+                      r'(?:\s+(?:logic\s+)?gates?)?', re.I)
+    def read_list(tail, families):
+        gate = unit.match(tail)
+        if gate is None:
+            return None
+        family = gate.group(1).lower()
+        family = ('not' if family.startswith('inverter') else
+                  'mux' if family.startswith(('mux', 'multiplexer')) else family)
+        families = families | {family}
+        tail = tail[gate.end():]
+        if not tail:
+            return tuple(sorted(families)) if {'and', 'or', 'not'}.issubset(families) else None
+        for pattern in (r'\s*,\s*', r'\s*,?\s*(?:and|or)\s+'):
+            separator = re.match(pattern, tail, re.I)
+            if separator is not None:
+                parsed = read_list(tail[separator.end():], families)
+                if parsed is not None:
+                    return parsed
+        return None
+    return read_list(match.group(1), set())
+
+
+def account_spec_source(text: str, contract: SpecContract) -> SpecContract:
+    """Rebuild semantic source consumption from positive parsers, never caller claims."""
+    clean = text
+    remainder = list(clean)
+    accounted: List[SourceAccounting] = []
+
+    def add(kind, lo, hi, contract_field):
+        while lo < hi and clean[lo].isspace():
+            lo += 1
+        while hi > lo and clean[hi - 1].isspace():
+            hi -= 1
+        if lo == hi:
+            return
+        accounted.append(SourceAccounting(kind, (lo, hi), text[lo:hi], contract_field))
+        remainder[lo:hi] = ['\n' if ch == '\n' else ' ' for ch in clean[lo:hi]]
+
+    port_map = {port.name: (port.direction, port.width) for port in contract.ports}
+    offset = 0
+    for line in clean.splitlines(keepends=True):
+        content = line.rstrip('\r\n')
+        port = re.fullmatch(r'\s*[-*]\s*(input|output|inout)\s+`?([A-Za-z_]\w*)`?'
+                            r'(?:\s*\(\s*(\d+)\s*bits?\s*\))?\s*', content, re.I)
+        if port is not None:
+            direction, name, width = port.groups()
+            if port_map.get(name) == (direction.lower(), int(width) if width else 1):
+                add('interface', offset, offset + len(content), 'ports.' + name)
+        offset += len(line)
+    parsed = _parsed_kmap_function(clean, contract)
+    contract.function = parsed[0] if parsed is not None else None
+    if parsed is not None:
+        add('function', *parsed[1], 'function')
+    unknown: List[SourceAccounting] = []
+    for match in re.finditer(r'[^.!?;]+[.!?;]?', ''.join(remainder)):
+        raw = match.group(0)
+        lo = match.start() + len(raw) - len(raw.lstrip())
+        hi = match.end() - len(raw) + len(raw.rstrip())
+        if lo >= hi:
+            continue
+        sentence = ' '.join(clean[lo:hi].split()).rstrip('.!?;').strip()
+        if not sentence:
+            continue
+        module = re.fullmatch(
+            r'(?:implement|design|create|build)\s+(?:a\s+|the\s+)?(?:Verilog\s+)?'
+            r'module\s+(?:named|called)\s+`?([A-Za-z_]\w*)`?', sentence, re.I)
+        reference = re.fullmatch(
+            r'(?:the|this)\s+module\s+(?:(?:should|must|shall|will)\s+)?'
+            r'implement(?:s)?\s+the\s+function\s+shown\s+in\s+the\s+'
+            r'(?:Karnaugh\s+map|K-map)\s+(?:below|above)', sentence, re.I)
+        if module is not None and module.group(1) == contract.module:
+            add('interface', lo, hi, 'module')
+        elif contract.function is not None and reference is not None:
+            add('function', lo, hi, 'function')
+        elif contract.function is not None and _supported_sop_sentence(sentence):
+            field = ('logic_obligations' if any(row.source_span == (lo, hi)
+                     for row in contract.logic_obligations) else 'function')
+            add('supported_implementation', lo, hi, field)
+        else:
+            unknown.append(SourceAccounting('unaccounted', (lo, hi), text[lo:hi], ''))
+    contract.accounted_source_spans = sorted(accounted, key=lambda row: row.source_span)
+    contract.unaccounted_source_spans = unknown
+    return contract
+
+
+def _apply_interface_logic_obligations(contract: SpecContract, interface_text: str) -> None:
+    if interface_text:
+        try:
+            interface = json.loads(interface_text)
+        except (ValueError, TypeError):
+            interface = None
+        if isinstance(interface, dict) and "logic_obligations" in interface:
+            declared = logic_obligations_from_records(interface['logic_obligations'])
+            module = interface.get('module') or interface.get('top_module')
+            contract.logic_obligations = [row for row in declared
+                                          if row.module is None or module is None or row.module == module]
+
+
+def prose_emission_spec_contract(text: str, interface_text: str = "",
+                                 top: Optional[str] = None) -> SpecContract:
+    """Account a source consumed raw, including text inside JSON or YAML syntax."""
+    contract = extract_spec_contract(text, is_json=False, confirm=False, top=top)
+    _apply_interface_logic_obligations(contract, interface_text)
+    return account_spec_source(text, contract)
+
+
+def emission_spec_contract(text: str, interface_text: str = "", top: Optional[str] = None) -> SpecContract:
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        data = None
+        try:
+            import yaml
+        except ImportError:
+            pass
+        else:
+            try:
+                decoded = yaml.safe_load(text)
+            except yaml.YAMLError:
+                pass
+            else:
+                if (isinstance(decoded, list) and all(
+                        isinstance(port, dict) and isinstance(port.get('name'), str)
+                        for port in decoded)
+                        or isinstance(decoded, dict) and set(decoded) & {
+                            'module', 'top_module', 'ports', 'inputs', 'outputs',
+                            'rows', 'function', 'logic_obligations', 'description',
+                            'reset', 'latency_registered', 'fsm_output_style'}):
+                    data = decoded
+    structured = isinstance(data, (dict, list))
+    if structured:
+        ports = data if isinstance(data, list) else data.get('ports', [])
+        if (not isinstance(ports, list) or any(
+                not isinstance(port, dict) or not isinstance(port.get('name'), str)
+                for port in ports)):
+            raise ValueError('invalid structured ports: expected a list of named port objects')
+        if isinstance(data, dict) and data.get('reset') is not None and not isinstance(data['reset'], dict):
+            raise ValueError('invalid structured reset: expected an object')
+    contract = extract_spec_contract(json.dumps(data, default=str) if structured else text,
+                                     is_json=structured, confirm=False, top=top)
+    _apply_interface_logic_obligations(contract, interface_text)
+    return contract if structured else account_spec_source(text, contract)
 
 
 # Natural-language interface bullet:  " - input  d   (8 bits)"  /  " - output q"
@@ -1650,7 +2093,8 @@ def _json_port_width(d: dict) -> int:
 
 def extract_spec_contract(text: str, is_json: bool = False,
                           confirm: bool = True, client_factory=None,
-                          project: Optional[Path] = None) -> SpecContract:
+                          project: Optional[Path] = None,
+                          top: Optional[str] = None) -> SpecContract:
     """Extract a declared contract from spec text.
 
     SEMANTIC double-confirm: prose-inferred fields (reset mode/polarity, output latency,
@@ -1696,14 +2140,17 @@ def extract_spec_contract(text: str, is_json: bool = False,
         ports = [Port(d['name'], _json_port_direction(d), _json_port_width(d),
                       bool(d.get('optional')) if isinstance(d, dict) else False)
                  for d in port_dicts]
-        return SpecContract(module=mod, ports=ports,
+        contract = SpecContract(module=mod, ports=ports,
                             reset_mode=rst.get('mode'),
                             reset_polarity=rst.get('polarity'),
                             reset_signal=rst.get('signal'),
                             latency_registered=lat,
                             fsm_output_style=(data.get('fsm_output_style')
                                               if isinstance(data, dict) else None),
-                            source='json')
+                            source='json',
+                            logic_obligations=logic_obligations_from_records(
+                                data.get('logic_obligations', []) if isinstance(data, dict) else []))
+        return contract
 
     clean = strip_comments(text)
     ports = _parse_nl_ports(clean)
@@ -1768,7 +2215,8 @@ def extract_spec_contract(text: str, is_json: bool = False,
                             reset_polarity=polarity, reset_signal=signal,
                             latency_registered=_detect_latency(text),
                             fsm_output_style=_detect_fsm_output_style(text), source=source,
-                            notes=table_notes)
+                            notes=table_notes,
+                            logic_obligations=_detect_logic_obligations(text, top or mod))
     if confirm:
         # program PROPOSES (above) -> LLM CONFIRMS/CORRECTS the semantic candidates.
         try:
@@ -1777,4 +2225,4 @@ def extract_spec_contract(text: str, is_json: bool = False,
             from .llm_semantic_confirm import confirm_contract, manifest  # packaged
         contract.semantic_confirmations = manifest(
             confirm_contract(contract, text, client_factory=client_factory))
-    return contract
+    return account_spec_source(text, contract)

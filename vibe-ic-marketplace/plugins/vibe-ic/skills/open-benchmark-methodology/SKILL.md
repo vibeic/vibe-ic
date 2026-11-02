@@ -138,6 +138,16 @@ Every candidate therefore has two required checks: deterministic product gates
 and semantic AI review. `program_first_ai_acceptance.json` must be `COMPLETE`
 before scoring.
 
+### A required Step 4 needs its reference model
+
+When a route's evidence window includes Step 4 and Program cannot derive the
+reference, the required `sim` gate fails on the unfilled hook, and an independent
+semantic PASS does not discharge that failure. The AI backup task names the
+model in `reference_model_handoff`; an independent IC expert derives it from the
+visible input and fills it before `--resume`. A model filled or replaced later is
+measured by the next `--resume` on the same RTL bytes, followed by a fresh review.
+Editing the RTL is not a way back to the runner without a proven failure.
+
 ### Autonomous evaluation: IC-expert adjudication of ambiguity
 
 In an autonomous evaluation, the IC expert owns engineering adjudication of

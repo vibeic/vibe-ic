@@ -86,7 +86,7 @@ endmodule
                  'required_items': [{'task': 'safety'}]})
     put(project / 'requirements/base_08/proof_partition_coverage.json',
         {'schema': metrics.AUTHORITY_SCHEMA,
-         'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+         'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                       'source_reference': {'path': str(source.relative_to(project)), 'sha256': sha(source)}},
          'required_items': [{'task': 'safety'}]})
     reseal(project)

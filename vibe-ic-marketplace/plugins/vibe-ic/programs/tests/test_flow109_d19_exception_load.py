@@ -57,7 +57,7 @@ def exception_authority(project, context, fields, *, command=None, validated_abs
     reference = _ref(project, str(path.relative_to(project)), json.dumps({'exception_justification': payload}))
     _write(project / 'requirements/base_10/exception_justification.json', {
         'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED',
-        'authority': 'requirements_owner', 'source_reference': reference}, **payload})
+        'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': reference}, **payload})
 
 
 def software_loads(project, context, current, top, pdk_name):

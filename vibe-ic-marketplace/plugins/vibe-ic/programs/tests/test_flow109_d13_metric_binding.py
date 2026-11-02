@@ -51,7 +51,7 @@ def qualified_context(project):
 def seal_software_authority(project, source):
     """Only source-test fixture construction, never a product authority writer."""
     path = project / 'input/flow109/D13/source.json';put(path, source)
-    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': ref(project, path)}
+    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': ref(project, path)}
     for name in ('required_function_scenarios', 'coverage_targets'):
         put(project / ('requirements/base_07/' + name + '.json'),
             {'schema': metrics.AUTHORITY_SCHEMA, 'approval': approval, **source[name]})

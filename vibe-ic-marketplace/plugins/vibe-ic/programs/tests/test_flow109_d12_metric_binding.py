@@ -222,7 +222,7 @@ def test_d12_genuine_native_failure_survives_unmeasured_census_protocol(tmp_path
     sp = p / 'input/flow109/D12/source.json'; put(sp, source)
     put(p / 'requirements/base_06/clock_reset_crossing_census.json', {
         'schema': metrics.AUTHORITY_SCHEMA, **source['clock_reset_crossing_census'],
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': {'path': str(sp.relative_to(p)), 'sha256': sha(sp)}}})
     c = qualified_context(p)
     r = metrics.accept_d12(p, c)

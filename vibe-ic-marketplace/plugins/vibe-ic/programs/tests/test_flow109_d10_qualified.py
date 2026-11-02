@@ -211,7 +211,7 @@ def bound_row(tmp_path_factory):
     source_ref['path'] = str(source.relative_to(project))
     adopted = project / 'adopted/base_04/feature_inventory.json'
     put(adopted, {'schema': 'vibeic.flow109.adopted-reference.v1',
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': source_ref},
         'reference': reference, 'reference_identity': reference_identity})
     registry_path = os.environ['FLOW109_D10_APPROVED_REGISTRY']
@@ -369,7 +369,7 @@ def test_d10_native_unexpected_blackbox_fails_independent_empty_set(cases, bound
     record['path'] = str(src.relative_to(project))
     put(project / 'adopted/base_04/feature_inventory.json', {
         'schema': 'vibeic.flow109.adopted-reference.v1',
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': record},
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': record},
         'reference': reference, 'reference_identity': identity})
     result = metrics.accept_d10(project, c['context'], c['p0'])
     assert result['native_metric_observation']['qualification'] == 'PASS', result

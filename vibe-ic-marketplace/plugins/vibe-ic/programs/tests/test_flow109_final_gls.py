@@ -131,7 +131,7 @@ def _case(project):
     d70_doc['sdf_provenance']['sta_state'] = state
     d70 = _put(project, 'reports/flow109/D70/component.json', d70_doc)
     requirements = _put(project, 'requirements/final_gls.json', {
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': 'neutral D71 native component contract'},
         'required_corners': ['tt'], 'required_scenarios': ['functional'],
         'required_timing_behaviors': ['sdf_delay_annotation', 'functional_self_check']})
@@ -338,6 +338,47 @@ def test_canonical_prepare_reopens_all_three_owning_producers(tmp_path, monkeypa
     assert prepared['d69_receipt'] == d69
     assert prepared['d70_receipt'] == d70
     assert set(prepared['sdfs']) == {'tt'}
+
+
+@pytest.mark.parametrize('approver', [
+    pytest.param({}, id='missing'),
+    pytest.param({'approver': None}, id='null'),
+    pytest.param({'approver': ''}, id='empty'),
+    pytest.param({'approver': ' \t\n'}, id='blank'),
+    pytest.param({'approver': 17}, id='nonstring'),
+    pytest.param({'approver': 'neutral-requirements-reviewer'}, id='named'),
+])
+def test_d71_requirements_need_named_approver(tmp_path, monkeypatch, approver):
+    _case(tmp_path)
+    _replace_with_owning_producer_receipts(tmp_path, monkeypatch)
+    manifest = json.loads((tmp_path / final_gls.INPUT).read_text())
+    requirements = json.loads((tmp_path / manifest['requirements']['path']).read_text())
+    requirements['approval'].pop('approver', None)
+    requirements['approval'].update(approver)
+    manifest['requirements'] = _put(tmp_path, manifest['requirements']['path'], requirements)
+    _put(tmp_path, final_gls.INPUT, manifest)
+    observed = 'ADMITTED'
+    try:
+        final_gls.prepare(tmp_path, _prepare_context())
+    except admission.AdmissionRefusal as exc:
+        observed = exc.code
+    expected = ('ADMITTED' if approver.get('approver') == 'neutral-requirements-reviewer'
+                else 'D71_REQUIREMENTS_NOT_APPROVED')
+    assert observed == expected
+
+
+def test_d71_named_approver_does_not_admit_stale_requirements(tmp_path, monkeypatch):
+    _case(tmp_path)
+    _replace_with_owning_producer_receipts(tmp_path, monkeypatch)
+    manifest = json.loads((tmp_path / final_gls.INPUT).read_text())
+    requirements = tmp_path / manifest['requirements']['path']
+    requirements.write_text(requirements.read_text() + '\n')
+    observed = 'ADMITTED'
+    try:
+        final_gls.prepare(tmp_path, _prepare_context())
+    except admission.AdmissionRefusal as exc:
+        observed = exc.code
+    assert observed == 'D71_INPUT_UNBOUND'
 
 
 def test_equivalent_corner_population_order_is_not_semantic(tmp_path, monkeypatch):

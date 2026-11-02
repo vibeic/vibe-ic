@@ -82,7 +82,7 @@ def software_case(project, monkeypatch, output=OPTIMIZED):
     # Root authority is explicitly a SOFTWARE fixture here, never native adoption.
     source_ref=ref(project,'input/SOFTWARE_adoption.json',json.dumps({'reference':adopted,'native_component':component,'launch':authority}))
     write(project/'adopted/base_15/adopted_post_dft_netlist.json',{'schema':'vibeic.flow109.adopted-reference.v1',
-        'approval':{'status':'APPROVED','authority':'requirements_owner','source_reference':source_ref},
+        'approval':{'status':'APPROVED','authority':'requirements_owner', 'approver': 'neutral-requirements-reviewer','source_reference':source_ref},
         'reference':adopted,'native_component':component})
     return current,{'post_dft_component':component},document,upstream,original_binding
 

@@ -31,7 +31,7 @@ def inputs(project, checks, items):
                  {'required_items': items, 'expected_checks': checks})
     put(project, 'requirements/power_verify/required_power_transitions.json', {
         'schema': metrics.AUTHORITY_SCHEMA, 'required_items': items,
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': source}})
     manifest = {'schema': 'vibeic.flow109.power-simulation.v1', 'top': 'unit_tb',
         'rtl': [put(project, 'phase2/stage1/rtl/unit.sv', 'module unit; endmodule\n')],

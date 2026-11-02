@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shlex
 
 import _atomic_artefact as atomic
 import _path_layout as layout
@@ -19,6 +20,43 @@ import flow109_metric_acceptance as metrics
 SOURCE = 'input/base_requirements_candidates.json'
 REPORT = 'phase1/base_requirements_candidates.json'
 ROWS = (('base_01', 'requirements_trace'), ('base_02', 'endpoint_delivery_items'))
+
+
+def next_action(project: Path) -> str:
+    pack = layout.report_path(project, 'phase1/expert_parse_track.json').parent / 'expert_parse_track_pack'
+    handoff = pack / 'ic_expert_agent_handoff.json'
+    prerequisite = ''
+    if not handoff.is_file():
+        command = shlex.join(['python3', str(Path(__file__).with_name('phase1_expert_parse_track.py')),
+                              str(project)])
+        prerequisite = f'Run {command} to create the existing Phase-1 handoff, then '
+    continuation = shlex.join(['python3', str(Path(__file__).with_name('phase1_one_shot_runner.py')),
+                               str(project), '--second-track-only'])
+    return (
+        prerequisite + f'Invoke the Phase-1 IC Expert on {handoff}. '
+        'Review the complete input/docs/** census and input/owner_request.md, '
+        'complete the requirement population and explicit feature review in the existing source, '
+        'then update requirements/base_01/requirements_trace.json and '
+        'requirements/base_02/endpoint_delivery_items.json. '
+        'The requirements_owner is the owner or delegated IC Expert. Approval needs a named '
+        'approver and the current source hash in approval.source_reference. '
+        f'Run {continuation}, then rerun the same /vibe-ic-all window.')
+
+
+def pending_review_action(project: Path, step_id: str) -> str | None:
+    row = {'D01': ROWS[0], 'D02': ROWS[1]}.get(step_id)
+    if row is None:
+        return None
+    key, metric = row
+    try:
+        path = metrics._safe_project_file(project, f'requirements/{key}/{metric}.json')
+        body = json.loads(path.read_bytes())
+    except (OSError, ValueError, metrics.MetricRefusal):
+        return None
+    approval = body.get('approval') if isinstance(body, dict) else None
+    if isinstance(approval, dict) and approval.get('status') == 'PENDING':
+        return next_action(project)
+    return None
 
 
 def _owner_fact(project: Path, documents: dict) -> tuple[dict, str]:
@@ -44,6 +82,17 @@ def publish(project: Path) -> dict:
               'missing': ['reviewed complete requirement population', 'explicit feature review'],
               'scope': 'source-backed delivery candidate; no approval or acceptance'}
     try:
+        try:
+            for key, metric in ROWS:
+                metrics._d0102_population(project, key, metric, {})
+        except metrics.MetricRefusal:
+            pass
+        else:
+            result.update(status='PRESERVED', reason='D0102_REVIEWED_REQUIREMENTS_PRESERVED',
+                          preserved=[f'requirements/{key}/{metric}.json' for key, metric in ROWS],
+                          missing=[])
+            atomic.write_json(layout.report_path(project, REPORT), result)
+            return result
         documents = metrics._d0102_documents(project, {}, include_owner_request=True)
         try:
             fact, endpoint = _owner_fact(project, documents)
@@ -85,6 +134,14 @@ def publish(project: Path) -> dict:
         if result['preserved']:
             result['reason'] = 'D0102_PROTECTED_CANDIDATE_SOURCE'
             raise ValueError('D0102_PROTECTED_CANDIDATE_SOURCE')
+        for key, metric in ROWS:
+            relative = f'requirements/{key}/{metric}.json'
+            if relative in existing and existing[relative]['approval'].get('status') != 'PENDING':
+                try:
+                    metrics._d0102_population(project, key, metric, {})
+                except metrics.MetricRefusal:
+                    result['preserved'].append(relative)
+                    raise
         source = metrics._safe_project_file(project, SOURCE)
         if source.exists() and json.loads(source.read_text()) != payload:
             result['reason'] = 'D0102_CANDIDATE_SOURCE_CHANGED'
@@ -105,6 +162,7 @@ def publish(project: Path) -> dict:
                 atomic.write_json(path, candidate)
             result['published'].append(relative)
         result.update(status='PENDING', reason='D0102_REQUIREMENTS_OWNER_REVIEW_REQUIRED')
+        result['next_action'] = next_action(project)
     except (OSError, ValueError, TypeError, KeyError, metrics.MetricRefusal) as exc:
         if isinstance(exc, metrics.MetricRefusal):
             result['reason'] = exc.code

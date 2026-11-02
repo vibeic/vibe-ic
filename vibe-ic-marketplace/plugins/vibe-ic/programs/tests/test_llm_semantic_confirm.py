@@ -79,3 +79,79 @@ def test_json_contract_not_confirmed():
     contract = c.extract_spec_contract(spec, is_json=True)
     assert contract.semantic_confirmations == []
     assert contract.reset_mode == "synchronous"
+
+
+def test_existing_ai_review_fills_same_obligation_field_on_deterministic_miss():
+    import json
+    from dataclasses import asdict
+    import spec_artifact_registry as registry
+
+    sentence = 'Use the negated-conjunction building blocks, with all other elements excluded.'
+    prefix = 'Implement a module named neutral.\n'
+    text = prefix + sentence
+    before = c.extract_spec_contract(text, confirm=False)
+    assert not getattr(before, 'logic_obligations', [])
+    row = {'kind': 'logic_basis', 'family': ['nand'],
+           'source_span': [len(prefix), len(text)], 'source_sentence': sentence}
+    contract = c.extract_spec_contract(text, confirm=True, client_factory=_factory(json.dumps({
+        'value': [row], 'agree': False, 'reason': 'exclusive negated conjunction basis'})))
+    observed = [r.family for r in getattr(contract, 'logic_obligations', [])]
+    assert observed == [('nand',)], contract
+    confirmation = next(r for r in contract.semantic_confirmations if r['field'] == 'logic_obligations')
+    assert confirmation['confirmed'] and confirmation['source'] == 'llm'
+    assert registry.generate(text, 'neutral', contract=contract) == (None, None)
+    projected = c.extract_spec_contract(json.dumps(asdict(contract)), is_json=True)
+    assert projected.logic_obligations == contract.logic_obligations
+
+
+def test_ai_obligation_review_sees_full_source_and_can_clear_a_candidate():
+    import json
+
+    text = ('Source background. ' * 80) + 'Use NAND gates exclusively.'
+    prompts = []
+    class Client:
+        @property
+        def messages(self):
+            class Messages:
+                def create(self, **kwargs):
+                    prompts.append(kwargs['messages'][0]['content'])
+                    return _Msg(json.dumps({'value': [], 'agree': False, 'reason': 'withdrawn by review'}))
+            return Messages()
+    contract = c.extract_spec_contract(text, confirm=True, client_factory=Client)
+    assert prompts and text in prompts[-1]
+    assert getattr(contract, 'logic_obligations', None) == []
+
+
+def test_malformed_ai_obligation_span_cannot_replace_a_detected_requirement():
+    import json
+
+    text = 'The implementation must be NAND-only.'
+    row = {'kind': 'logic_basis', 'family': ['nand'],
+           'source_span': [0, 5000], 'source_sentence': text}
+    contract = c.extract_spec_contract(text, confirm=True, client_factory=_factory(json.dumps({
+        'value': [row], 'agree': False, 'reason': 'invalid source slice'})))
+    rows = getattr(contract, 'logic_obligations', [])
+    assert rows and rows[0].family == ('nand',)
+    confirmation = next(r for r in contract.semantic_confirmations if r['field'] == 'logic_obligations')
+    assert confirmation['confirmed'] is False
+    assert confirmation['source'] == 'error'
+
+
+def test_ai_source_offsets_use_the_untrimmed_spec():
+    import json
+
+    text = '\n  Use the negated-conjunction building blocks, with all other elements excluded.\n'
+    prompts = []
+    row = {'kind': 'logic_basis', 'family': ['nand'],
+           'source_span': [0, len(text)], 'source_sentence': text}
+    class Client:
+        @property
+        def messages(self):
+            class Messages:
+                def create(self, **kwargs):
+                    prompts.append(kwargs['messages'][0]['content'])
+                    return _Msg(json.dumps({'value': [row], 'agree': False, 'reason': 'declared basis'}))
+            return Messages()
+    contract = c.extract_spec_contract(text, confirm=True, client_factory=Client)
+    assert '\"\"\"\n' + text + '\n\"\"\"' in prompts[-1]
+    assert contract.logic_obligations[0].source_span == (0, len(text))

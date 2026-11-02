@@ -41,6 +41,22 @@ native work; it is not an invitation to invoke another path-ATPG command.
 rows in that request. A row not executed after the stop must remain explicitly
 not executed; it is not skipped-PASS.
 
+When Phase 1 publishes `PENDING` requirement authorities, it stops with
+`D0102_REQUIREMENTS_OWNER_REVIEW_REQUIRED` through the existing IC-expert
+handoff, using exit 4. This wait earns no metric or row acceptance.
+Follow the printed next action. Invoke the Phase-1 IC Expert on the existing
+`expert_parse_track_pack/ic_expert_agent_handoff.json`, review the complete
+`input/docs/**` census and `input/owner_request.md`, and complete the requirement
+population and explicit feature review in the existing source. Update
+`requirements/base_01/requirements_trace.json` and
+`requirements/base_02/endpoint_delivery_items.json` with the review.
+`requirements_owner` is the owner or a delegate, including the IC Expert.
+Approval requires a named approver and the current source hash in
+`approval.source_reference`. Programs only publish `PENDING` candidates and
+never write approvals. Run the printed `--second-track-only` continuation,
+then rerun the same public Flow109 request. Later rows stay unexecuted until
+their required authority and current evidence pass the existing consumers.
+
 Do not express scope with phase skip aliases. Select the exact current rows with
 `--entry-step <ID> --exit-step <ID>` and retain the resulting Flow109 request,
 attempt, component and consumer receipts.

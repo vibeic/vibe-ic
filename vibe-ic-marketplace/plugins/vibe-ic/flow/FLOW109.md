@@ -109,9 +109,13 @@ Each attempt is preserved under `reports/flow109/attempts/A01-*/`; the latest
 component view is `reports/flow109/components/A01.json`. A completed native
 component returns CLI success with `component_status: PASS`. The two A01
 `covers_all` obligations are then evaluated from the current emitted specs and
-gates against their exact requirements-owner-approved registry refs. Missing,
-stale, partial, defaulted or AI-owned authority remains `NOT_MEASURED`; a
-measured miss is `FAIL`. `flow109_acceptance` remains `NOT_MEASURED` because
+gates against their exact requirements-owner-approved registry refs.
+`requirements_owner` is a role held by the owner or delegated to the IC Expert.
+Missing, stale, partial or defaulted authority remains `NOT_MEASURED`.
+Approval requires a named approver and a current source hash.
+Programs never write approvals. The requirements producer publishes only
+`PENDING` candidates and preserves existing approvals. A measured miss is
+`FAIL`. `flow109_acceptance` remains `NOT_MEASURED` because
 G1-G9 and whole-flow delivery are outside this row binding. Qualification
 contract fixtures in developer tests are not production qualification records.
 
