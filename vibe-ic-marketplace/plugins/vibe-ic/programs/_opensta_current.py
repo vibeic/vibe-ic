@@ -275,17 +275,9 @@ def si_binding(project):
 
 
 def _validated_original_state_transport(project, state_files, image):
-    """Authorize only exact inputs of one retained Default fill owner.
-
-    A Flow-109 component may live in an isolated transport project while its
-    immutable final-fill ODB/DEF/netlist/SDC remain at the original Default
-    owner's paths.  The executed STAPostPNR readset already hashes those
-    objects.  Reopen the existing fill/stream and signoff owners as the second
-    authority; an arbitrary outside pathname in the readset is never enough.
-    """
-    import _physical_current as physical
+    """Bind transported timing inputs to their original final LibreLane State."""
+    import _prestream_native as native
     import librelane_contract as lc
-    import librelane_fill_dfm as fill
 
     project = Path(project).resolve()
     if not isinstance(state_files, dict) or not state_files:
@@ -307,41 +299,30 @@ def _validated_original_state_transport(project, state_files, image):
     if not foreign:
         return None
 
-    roots = None
-    for path in foreign:
-        owned = {parent for parent in path.parents
-                 if (parent / fill.RECORD_REL).is_file()}
-        roots = owned if roots is None else roots & owned
-    if not roots or len(roots) != 1:
+    roots = set.intersection(*(set(path.parents) for path in foreign))
+    projects = {parent for parent in roots if (parent / 'phase3/librelane').is_dir()}
+    roots = projects or {parent for parent in roots if (parent / 'state_out.json').is_file()}
+    if not roots:
         raise Refusal('CURRENT_STAPOSTPNR_FOREIGN_INPUT')
-    owner = next(iter(roots)).resolve()
+    matches = {}
     try:
-        stream = fill.validate_default_stream(owner)
-        selected = physical.default_signoff_inputs(owner)
-        doc = json.loads((owner / fill.RECORD_REL).read_text())
-        tool = doc['odb']['tool']
-        state_path = Path(tool['state']).resolve(strict=True)
-        lc.validate_step_receipt(state_path.parent, fill.ODB_FILL_STEP)
-        if (digest(state_path) != tool['state_sha256']
-                or stream.get('image') != image
-                or not isinstance(selected, dict)):
-            raise ValueError('owner State/image/signoff mapping changed')
-        state = json.loads(state_path.read_text())
-        odb, routed_def = (Path(state[name]).resolve(strict=True)
-                           for name in ('odb', 'def'))
-        if (not odb.is_relative_to(state_path.parent.resolve())
-                or digest(routed_def) != tool['filled_def_sha256']):
-            raise ValueError('owner ODB/DEF binding changed')
-        expected = {odb, routed_def, Path(selected['netlist']).resolve(strict=True),
-                    Path(selected['sdc']).resolve(strict=True)}
+        for owner in sorted(roots, key=lambda p: len(p.parts), reverse=True):
+            selected = native.signoff_inputs(owner, 'odb', 'def', 'netlist', 'sdc')
+            if foreign <= {p.resolve() for p in selected.values()}:
+                state_path = native.final_state(owner, streamed=True).resolve()
+                matches[state_path] = owner
+        if len(matches) != 1:
+            raise Refusal('CURRENT_STAPOSTPNR_FOREIGN_INPUT')
+        state_path, owner = next(iter(matches.items()))
+        if lc.resolve_image(owner, record=False) != image:
+            raise ValueError('owner State image changed')
+    except Refusal:
+        raise
     except (OSError, ValueError, KeyError, TypeError, lc.Refusal) as exc:
         raise Refusal(f'CURRENT_STAPOSTPNR_ORIGINAL_OWNER_INVALID: {exc}') from exc
-    if not foreign <= expected:
-        raise Refusal('CURRENT_STAPOSTPNR_FOREIGN_INPUT')
-    return {'kind': 'validated_default_fill_original',
+    return {'kind': 'final_state_original',
             'source_project': str(owner),
-            'source_record': {'path': str((owner / fill.RECORD_REL).resolve()),
-                              'sha256': digest(owner / fill.RECORD_REL)},
+            'source_record': {'path': str(state_path), 'sha256': digest(state_path)},
             'paths': {str(path): recorded_by_path[path] for path in sorted(foreign)}}
 
 

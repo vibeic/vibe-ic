@@ -688,8 +688,9 @@ def _filled_lvs_association(identity: dict, inputs: dict) -> bool:
         import _physical_current as physical
         import librelane_fill_dfm as fill
         project = Path(identity["project"]).resolve()
-        selected = physical.default_signoff_inputs(project)
-        if (selected is None or physical.digest(selected["gds"]) !=
+        from _prestream_native import signoff_inputs
+        selected = signoff_inputs(project, "gds", "def", "netlist")
+        if (physical.digest(selected["gds"]) !=
                 identity["derivation"]["gds"]["sha256"]):
             return False
         fill.validate_fill_consumption(project)

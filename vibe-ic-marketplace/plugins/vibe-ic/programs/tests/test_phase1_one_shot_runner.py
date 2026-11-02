@@ -269,8 +269,9 @@ def test_input_docs_directory_changes_branch(tmp_path):
         assert body.get("verdict") in ("NOT_MEASURED", "FAIL", "SKIP")
 
 
+@pytest.mark.parametrize("prior_document", [False, True])
 def test_docs_delegate_rc2_is_not_measured_and_blocks_downstream(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, prior_document):
     """A VACUOUS delegated gate result remains blocking at the front door."""
     import phase1_one_shot_runner as runner
     import execution_policy as policy
@@ -281,6 +282,10 @@ def test_docs_delegate_rc2_is_not_measured_and_blocks_downstream(
     project = tmp_path / "proj"
     (project / "input" / "docs").mkdir(parents=True)
     (project / "input" / "docs" / "spec.md").write_text("design input\n")
+    if prior_document:
+        prior = project / "phase1/generated_docs/L13_LAB_CALIBRATION.json"
+        prior.parent.mkdir(parents=True)
+        prior.write_text('{"criterion": "monotonic_adc_sweep"}')
 
     monkeypatch.setattr(runner, "_run_step_0_5ic",
                         lambda project, pdk=None: 0)
@@ -313,3 +318,4 @@ def test_docs_delegate_rc2_is_not_measured_and_blocks_downstream(
     assert report["steps"][0]["reason_class"] == "no_population"
     assert report["steps"][1]["status"] == "NOT_MEASURED"
     assert report["steps"][1]["reason_class"] == "upstream_refused"
+    assert "no L-doc population exists" not in report["second_track"]

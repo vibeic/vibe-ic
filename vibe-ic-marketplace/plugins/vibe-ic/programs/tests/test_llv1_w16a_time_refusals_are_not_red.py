@@ -30,6 +30,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import librelane_contract as contract  # noqa: E402
 import phase3_one_shot_runner as runner  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 TIME = ["LL_TOOL_DEADLINE", "LL_TOOL_STALLED"]  # pinned below against contract.TIME_REFUSALS
 
@@ -88,14 +89,29 @@ def test_step15_still_books_a_tool_refusal_fail(tmp_path, monkeypatch):
 # ── phase 3 step 31 ─────────────────────────────────────────────────────────
 
 def _step31(tmp_path, monkeypatch, code):
+    import _gdsii
     import librelane_pv_signoff as pv
+
+    project = tmp_path / "p"
+    project.mkdir()
+    views = {"gds": str(_gdsii.write_gdsii(project / "chip.gds", cell="chip"))}
+    for role, body in {
+        "def": "VERSION 5.8 ;\nDESIGN chip ;\nEND DESIGN\n",
+        "nl": "module chip(); endmodule\n",
+        "sdc": "create_clock -name clk -period 10 [get_ports clk]\n",
+    }.items():
+        path = project / f"chip.{role}"
+        path.write_text(body)
+        views[role] = str(path)
+    (project / "state_out.json").write_text(json.dumps(views))
+    publish_finished_gds(project)
 
     def refusing(*_a, **_k):
         raise contract.Refusal(code, "the half was stopped")
     monkeypatch.setattr(contract, "resolve_image", lambda p: "img")
     monkeypatch.setattr(contract, "resolve_pdk_root", lambda *a, **k: tmp_path)
     monkeypatch.setattr(pv, "run_half", refusing)
-    return runner._step31_librelane(tmp_path / "p", "chip", SimpleNamespace(name="procA"), "drc",
+    return runner._step31_librelane(project, "chip", SimpleNamespace(name="procA"), "drc",
                                     publish=False)
 
 

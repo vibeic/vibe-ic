@@ -155,17 +155,10 @@ def native_project_verdict(project: Path):
         raise ValueError(f"LVS_VERDICT_NOT_AN_OBJECT: {path}")
     if record.get("schema") != "vibeic.native_gds_lvs/1":
         return None
-    import _physical_current as current
+    from _prestream_native import signoff_inputs
     import klayout_pdk_lvs as native
-    selected = current.default_signoff_inputs(project)
-    if selected:
-        layout = selected["gds"]
-    else:
-        candidates = list((project / "phase3/stage4/gds").glob("*.gds"))
-        if len(candidates) != 1:
-            raise ValueError("NATIVE_LVS_CURRENT_FINAL_GDS_UNDETERMINED")
-        layout = candidates[0]
-    return native.read_current_verdict(project, path, layout)
+    selected = signoff_inputs(project, "gds")
+    return native.read_current_verdict(project, path, selected["gds"])
 
 
 def check(target: Path) -> Dict[str, object]:

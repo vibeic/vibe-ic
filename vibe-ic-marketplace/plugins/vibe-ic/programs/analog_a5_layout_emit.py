@@ -1304,6 +1304,24 @@ def box_separation(a: Tuple[int, int, int, int],
 # ──────────────────────────────────────────────────────────────────────
 # 5b. the routing geometry — every number the deck states, in lambda
 # ──────────────────────────────────────────────────────────────────────
+def _rail_half(geo, level):
+    return max(getattr(geo, "rail_wire", 0) // 2, geo.wire[level] // 2, 1)
+
+
+def _row_rail_centres(nets, y, pitch, geo):
+    """Rail centres from the row's first track, and the height a wide rail added."""
+    centres, extra = {}, 0
+    for index, net in enumerate(nets):
+        profile = _net_geo(geo, net)
+        grow = (max(0, _rail_half(profile, 2) - max(profile.wire[2] // 2, 1))
+                if getattr(profile, "rail_wire", 0) else 0)
+        reach = (profile.spacing_reach("metal2") - profile.metal_space("metal2")
+                 if grow else 0)
+        centres[net] = y + pitch * (index + 1) + extra + grow + reach
+        extra += 2 * (grow + reach)
+    return centres, extra
+
+
 def _net_geo(geo, net):
     return getattr(geo, "intent_profiles", {}).get(net, geo)
 
@@ -3767,9 +3785,9 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
                           max(1, spec["cuts"]))[0]])
         row_rails = []
         for ri, (row, ns) in enumerate(zip(placement_rows, row_nets)):
-            rails = {net: y + pitch * (i + 1) for i, net in enumerate(ns)}
+            rails, rail_growth = _row_rail_centres(ns, y, pitch, geo)
             row_rails.append(rails)
-            base = y + pitch * (len(ns) + 24)
+            base = y + pitch * (len(ns) + 24) + rail_growth
             for d in row:
                 d["row"] = ri
                 d["box_y"] = base
@@ -4103,7 +4121,7 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
             if rail_level == 4 and net in ports:
                 lo = 0
             rail_half = (max(geo.wire[4]//2,geo.short_half[3],geo.short_half[4])
-                         if rail_level == 4 else max(geo.wire[rail_level]//2,1))
+                         if rail_level == 4 else _rail_half(geo, rail_level))
             if rail_level != 4:
                 plan.paint(net, f"metal{rail_level}", lo, ty - rail_half, hi, ty + rail_half)
             rail_box.setdefault(net, (lo, ty - rail_half, hi, ty + rail_half))
@@ -4119,6 +4137,8 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
         ys = [r[net] for r in row_rails if net in r]
         half = max(geo.wire[4] // 2, 1)
         plan.paint(net, "metal4", bx - half, min(ys), bx + half, max(ys))
+    plan.rail_box = rail_box
+    plan.row_rails = row_rails
     for net, box in rail_box.items():
         if net not in ports or not pin_spec:
             plan.ports.append((net, box[0] + pitch, (box[1] + box[3]) // 2))
@@ -4170,7 +4190,8 @@ def tech_lef_layers(text: str) -> List[dict]:
         m = re.match(r"^LAYER\s+(\S+)\s*$", s)
         if m:
             cur = {"name": m.group(1), "type": "", "direction": "",
-                   "pitch": None, "width": None, "dc_density": None}
+                   "pitch": None, "width": None, "dc_density": None,
+                   "resistance": None}
             out.append(cur)
             continue
         if cur is None:
@@ -4191,6 +4212,8 @@ def tech_lef_layers(text: str) -> List[dict]:
                 cur["pitch"] = float(tok[1])
             elif key == "WIDTH" and len(tok) == 2 and cur["width"] is None:
                 cur["width"] = float(tok[1])
+            elif key == "RESISTANCE" and len(tok) > 1 and cur["resistance"] is None:
+                cur["resistance"] = float(tok[2] if tok[1].upper() == "RPERSQ" else tok[1])
             elif key == "DCCURRENTDENSITY" and len(tok) > 2 \
                     and tok[1].upper() == "AVERAGE" \
                     and cur["dc_density"] is None:
@@ -4392,7 +4415,9 @@ def pin_spec_for(ports: Sequence[str], rails: Optional[dict],
             rec["em"] = em
         out[net] = rec
     basis["result"] = "DETERMINED"
-    return {"ports": out}, basis
+    return {"ports": out, "resistance_ohm": {
+        "metal_per_square": {i + 1: r["resistance"] for i, r in enumerate(routing)},
+        "cut": {k: r["resistance"] for k, r in cut_of.items()}}}, basis
 
 
 def _pin_stack_boxes(x: int, y: int, lo: int, hi: int, geo: "Geo",
