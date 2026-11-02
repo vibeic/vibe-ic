@@ -431,8 +431,8 @@ def _collaboration_inspection_credit(node) -> bool | None:
 
     Invalid/unknown collaboration calls remain uninspected even when their
     command/path fields yield findings. Other tools retain the existing
-    actionable-payload contract. Empty list_agents arguments are fully read
-    metadata, rather than an opaque filesystem operation.
+    actionable-payload contract. The supported list_agents filter is fully
+    read metadata, rather than an opaque filesystem operation.
     """
     name = node.get("name") or node.get("tool_name")
     question = name == "request_user_input_async"
@@ -481,7 +481,9 @@ def _collaboration_inspection_credit(node) -> bool | None:
         return (payload == {} or (set(payload) == {"timeout_ms"}
                 and type(payload["timeout_ms"]) is int
                 and 10000 <= payload["timeout_ms"] <= 3600000))
-    return name == "list_agents" and payload == {}
+    return name == "list_agents" and (
+        payload == {} or (set(payload) == {"path_prefix"}
+                          and isinstance(payload["path_prefix"], str)))
 
 
 def _communication_strings(node) -> list[str]:
@@ -536,7 +538,7 @@ def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
             out.extend(_communication_strings(payload))
             if ((node.get("name") or node.get("tool_name")) in {"list_agents", "wait_agent"}
                   and _collaboration_inspection_credit(node)):
-                out.append(node["arguments"])  # the actual decoded empty payload
+                out.append(node["arguments"])  # the actual decoded metadata payload
             return out
         out = _harvest_frame_strings(payload, depth + 1)
         if _clock_inspection_credit(node):
