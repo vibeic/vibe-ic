@@ -12755,6 +12755,36 @@
       ],
       "profiles": [
         {
+          "id": "analog_die",
+          "select_when": "analog_physical and not digital_physical",
+          "provider": "other",
+          "tools": "Existing A14 native ngspice PEX performance against original L5 bounds and pre-layout comparison",
+          "native_steps": [
+            "analog_native.A14"
+          ],
+          "execution_status": "IMPLEMENTED_NATIVE_COMPONENT",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "spice_correlation_check",
+            "native_step_id": "flow109.D54",
+            "producer": "analog_native_physical.py:_resim existing A14 results",
+            "consumer": "spice_correlation_check.py:execute",
+            "engine_families": [
+              "ngspice"
+            ],
+            "engine_executables": {
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "ngspice": [
+                "analog_native.A14"
+              ]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only"
+          }
+        },
+        {
           "id": "default",
           "select_when": "otherwise",
           "provider": "other",
