@@ -992,6 +992,7 @@ def _native31_runtime_fixture(tmp_path, monkeypatch, local_image, case):
     selected["design"] = subject["design"]
     selected["material"] = root / "neutral/stream.lef"
     selected["sta_parent"] = subject["parent_netlist"]
+    assert selected["gds"] == Path(stream["canonical"])
     assert selected["def"] == Path(stream["filled_def"])
     master = subject["master"]
     cell_lef = put(root, "neutral/native31-cells.lef",

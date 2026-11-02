@@ -102,6 +102,22 @@ def test_record_naming_another_stream_state_is_refused(canonical):
         native.signoff_inputs(project, 'gds')
 
 
+@pytest.mark.parametrize('roles', [('gds',), ('gds', 'def', 'netlist', 'sdc', 'odb')])
+def test_rewritten_state_cannot_reuse_a_finished_gds_from_its_previous_bytes(canonical, roles):
+    project, _, final, _, finished, _ = canonical
+    state = json.loads(final.read_text())
+    for role in ('def', 'nl', 'sdc', 'odb'):
+        state[role] = str(put(project / 'new' / ('final.' + role), 'new ' + role))
+    put(final, state)
+    try:
+        selected = native.signoff_inputs(project, *roles)
+        observed = 'SELECTED ' + str(selected['gds'])
+    except ValueError as exc:
+        observed = str(exc).split(':', 1)[0]
+    assert observed == 'CURRENT_FINISHED_GDS_STATE_CHANGED'
+    assert finished.is_file()
+
+
 def test_finished_gds_changed_after_publication_is_refused(canonical):
     project, _, _, _, finished, _ = canonical
     finished.write_text('rewritten')
