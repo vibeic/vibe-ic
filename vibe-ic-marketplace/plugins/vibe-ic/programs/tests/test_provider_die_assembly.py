@@ -25,7 +25,7 @@ def profile(project):
 
 def test_provider_target_uses_existing_frozen_input_directory(tmp_path):
     parameters = {}
-    runtime = {"project": tmp_path, "policy": {"mode": "default"}}
+    runtime = {"project": tmp_path, "policy": {"mode": "default"}, "parameters": {"top": "chip_top"}}
     absent = policy._fixed_inputs(runtime, "37.5ic", parameters=parameters)
     assert finishing.PROVIDER_TARGET_REL not in absent
     path = profile(tmp_path)

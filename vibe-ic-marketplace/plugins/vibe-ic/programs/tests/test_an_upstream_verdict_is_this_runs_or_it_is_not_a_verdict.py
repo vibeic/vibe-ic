@@ -34,6 +34,7 @@ import flow_compliance_check as FCC          # noqa: E402
 import release_docs_check as RDC             # noqa: E402
 import step_metrics as SM                    # noqa: E402
 import _path_layout as _PL                   # noqa: E402
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 INV_ENV = "VIBEIC_FCC_INVOCATION"
 
@@ -282,7 +283,7 @@ def test_the_dependent_steps_are_evaluated_after_every_other_step():
     import inspect
     import textwrap
 
-    src = textwrap.dedent(inspect.getsource(FCC.main))
+    src = textwrap.dedent(inspect.getsource(getattr(FCC, '_audit_project', FCC.main)))
     assert "steps_that_read_another_steps_verdict" in src, (
         "the parallel path no longer asks which steps depend on another's row")
     assert "_wave1" in src and "_wave2" in src, src[:200]
@@ -364,6 +365,7 @@ def test_an_upstream_gate_that_named_the_artefact_still_excuses(tmp_path, mine):
     geometry IS step 37's failure about that artefact. Its gate names it -- measured,
     `gds_substance_check` prints `phase3/stage4/gds/zzdie.gds: [MALFORMED_RECORD] ...`.
     """
+    bind_invocation_top(tmp_path, 'zzdie')
     g = tmp_path / "phase3/stage4/gds/zzdie.gds"
     g.parent.mkdir(parents=True, exist_ok=True)
     g.write_bytes(b"\x00" * 448)
@@ -425,7 +427,7 @@ def test_the_record_is_written_on_both_branches_of_the_step_loop():
     """Sequential and wave: a record that appears only single-threaded is one nobody can rely on.
     The same contract the metrics row beside it already carries."""
     import inspect
-    src = inspect.getsource(FCC.main)
+    src = inspect.getsource(getattr(FCC, '_audit_project', FCC.main))
     assert src.count("_emit_step_output_record(project,") == 2, (
         f"the record is written at {src.count('_emit_step_output_record(project,')} of the two "
         f"step-loop branches")

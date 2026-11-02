@@ -61,6 +61,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import flow_compliance_check as FCC  # noqa: E402
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 _PLUGIN = _PROGRAMS.parent
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
@@ -83,6 +84,7 @@ def _step(sid):
 
 def test_dangling_symlink_is_not_a_match(tmp_path):
     """The unit statement of the defect, on the wildcard shape step 37 uses."""
+    bind_invocation_top(tmp_path, 'chip_top')
     d = tmp_path / "phase3" / "stage4" / "gds"
     d.mkdir(parents=True)
     link = d / "chip_top.gds"
@@ -100,6 +102,7 @@ def test_dangling_symlink_is_not_a_match(tmp_path):
 
 def test_dangling_symlink_does_not_satisfy_required_outputs(tmp_path):
     """`check_step` must not accept a link-to-nowhere as delivery."""
+    bind_invocation_top(tmp_path, 'chip_top')
     d = tmp_path / "phase3" / "stage4" / "gds"
     d.mkdir(parents=True)
     os.symlink("../../stage3/pnr/chip_top.gds", d / "chip_top.gds")
@@ -179,6 +182,7 @@ def test_broken_link_is_never_better_than_deletion(tmp_path):
 # ── Reverse control: what must STILL pass ────────────────────────────────────
 
 def test_plain_real_file_still_counts(tmp_path):
+    bind_invocation_top(tmp_path, 'chip_top')
     d = tmp_path / "phase3" / "stage4" / "gds"
     d.mkdir(parents=True)
     (d / "chip_top.gds").write_bytes(b"real bits")
@@ -189,6 +193,7 @@ def test_plain_real_file_still_counts(tmp_path):
 def test_symlink_to_a_real_file_still_counts(tmp_path):
     """Symlinks are NOT banned. A link to a real file is a produced artefact
     and is judged on what it points at."""
+    bind_invocation_top(tmp_path, 'chip_top')
     pnr = tmp_path / "phase3" / "stage3" / "pnr"
     pnr.mkdir(parents=True)
     (pnr / "chip_top.gds").write_bytes(b"real bits")

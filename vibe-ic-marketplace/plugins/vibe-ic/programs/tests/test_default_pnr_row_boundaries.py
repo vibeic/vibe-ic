@@ -1101,7 +1101,7 @@ def test_default_sta_publishes_the_selected_tool_without_a_second_sta(tmp_path, 
 def install_transport(monkeypatch, project, *, failed_step=None):
     calls = []
     monkeypatch.setattr(runner, '_backend_parameter_values', lambda *args: {})
-    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args: [])
+    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args, parameters=None: [])
 
     def producer(project_, params):
         sid = params['step_id']
@@ -1145,7 +1145,7 @@ def test_resume_at_cts_does_not_execute_prior_rows_and_stops_on_failure(tmp_path
 def test_missing_cts_inputs_stop_before_any_native_tool(tmp_path, monkeypatch):
     calls = install_transport(monkeypatch, tmp_path)
     monkeypatch.setattr(worker, 'resolve_input_contract',
-                        lambda *args: ['placed.def', 'clock_plan.json'])
+                        lambda *args, parameters=None: ['placed.def', 'clock_plan.json'])
     result = runner._default_pnr_rows(
         tmp_path, 'unit', SimpleNamespace(name='unit'), '',
         ['19'], die_um='auto', util=0.4)
@@ -1241,7 +1241,7 @@ def test_full_default_prestream_stops_on_the_actual_failed_row(
     monkeypatch.setattr(runner, '_ordinary_phase3_row', lambda *args: None)
     monkeypatch.setattr(runner, '_backend_parameter_values',
                         lambda *args: {'image_id': 'fixture', 'pdk_root': str(tmp_path)})
-    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args: [])
+    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args, parameters=None: [])
     monkeypatch.setattr(runner, '_dedupe_shipped_netlist_ports', lambda *args: {})
     monkeypatch.setattr(runner, '_layout_basis', lambda *args: ('current-layout', ''))
     monkeypatch.setattr(runner, '_canonicalize_postpnr_prerequisites', lambda *args: None)
@@ -1574,7 +1574,7 @@ def test_default_main_preserves_completed_inputs_before_repair(tmp_path, monkeyp
 def test_default_dfm_produces_its_report_before_its_canonical_consumer(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(runner, '_backend_parameter_values', lambda *args: {})
-    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args: [])
+    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args, parameters=None: [])
     report = tmp_path / 'reports/phase3/dfm_screen.json'
 
     def program(project, sid, manifest):

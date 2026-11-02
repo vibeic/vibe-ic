@@ -67,7 +67,7 @@ def test_p0_renders_skipped_condition():
     assert '_T.Verdict.NOT_APPLICABLE.value' in owner or \
         '"NOT_APPLICABLE"' in owner, owner[:400]
     assert "#447" in owner
-    fn = inspect.getsource(F.main)
+    fn = inspect.getsource(getattr(F, '_audit_project', F.main))
     assert 'id="P0"' in fn
     # The call spans two lines since R-0915-85 gave the owner a PAIR to return
     # (the word and the reason beside it), so the wiring is asserted on the

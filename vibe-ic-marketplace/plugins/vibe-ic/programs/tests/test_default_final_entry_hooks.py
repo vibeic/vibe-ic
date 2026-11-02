@@ -18,6 +18,7 @@ import phase3_one_shot_runner as phase3
 import step_output_collector as versions
 import step_preflight as preflight
 import vibe_ic_one_shot_runner as front
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -321,6 +322,7 @@ def test_real_die_finishing_no_gds_keeps_tuple_abi_and_no_pass(tmp_path):
 
 
 def test_real_die_finishing_nested_call_does_not_interrupt_parent(tmp_path, monkeypatch):
+    bind_invocation_top(tmp_path, 'top')
     def native(project, *_args):
         write(project, 'phase3/stage3/pnr/die_finished.def', b'current DEF')
         write(project, 'reports/phase3/die_finishing.json', b'{"verdict":"FAIL"}')
@@ -359,6 +361,7 @@ def test_actual_die_finishing_keeps_native_failure_or_capability_status(tmp_path
 
 
 def test_nested_existing_leaf_calls_both_finish_without_false_recovery(tmp_path):
+    bind_invocation_top(tmp_path, 'top')
     @preflight.retained_step('31')
     def child(project):
         return SimpleNamespace(name='drc', status='PASS', detail='', extras={})
@@ -373,6 +376,7 @@ def test_nested_existing_leaf_calls_both_finish_without_false_recovery(tmp_path)
 
 
 def test_exception_unwinds_local_call_stack_and_partial_evidence_is_recovered(tmp_path):
+    bind_invocation_top(tmp_path, 'top')
     attempt = versions.begin_step(tmp_path, '37')
     with pytest.raises(KeyboardInterrupt):
         with versions.active_steps(tmp_path, [attempt]):

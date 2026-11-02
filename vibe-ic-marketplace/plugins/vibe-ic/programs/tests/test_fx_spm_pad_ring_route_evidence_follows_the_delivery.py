@@ -27,6 +27,7 @@ import pytest                                            # noqa: E402
 import _tapeout_declaration as TD                        # noqa: E402
 import flow_compliance_check as F                        # noqa: E402
 import test_issue2277_hardmacro_owes_no_die_steps as H   # noqa: E402
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 EVIDENCE = "reports/phase3/pad_ring_route_evidence.json"
 GDS = "phase3/stage4/gds/top.gds"
@@ -50,6 +51,7 @@ def _mini_step():
 
 def _run(tmp_path, *, with_evidence=False, no_route=False, **kw):
     project = H._project(tmp_path, **kw)
+    bind_invocation_top(project, 'top')
     if no_route:
         for slot in (project / "input/submission_template/slots").glob("*.yaml"):
             slot.unlink()

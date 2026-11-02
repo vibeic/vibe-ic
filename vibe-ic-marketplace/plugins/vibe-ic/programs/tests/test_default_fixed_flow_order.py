@@ -8,6 +8,7 @@ import _flow_yaml as flow
 import execution_policy as policy
 import phase3_one_shot_runner as runner
 import step_preflight as preflight
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +45,7 @@ def test_legacy_label_backward_resume_is_refused(entry, exit_):
 
 @pytest.mark.parametrize('sid,earlier,later', [('31', '37', '36'), ('34', '37', '31'), ('36', '37.4', '37.5ic')])
 def test_actual_preflight_charges_due_inputs_in_yaml_order(tmp_path, sid, earlier, later):
+    bind_invocation_top(tmp_path, 'unit')
     due, error = preflight.due_steps('phase3_one_shot_runner', 'default_step_' + sid)
     assert error is None
     assert earlier in due and later not in due
