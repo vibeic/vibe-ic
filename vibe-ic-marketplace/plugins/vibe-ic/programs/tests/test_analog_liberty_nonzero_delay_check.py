@@ -340,12 +340,12 @@ def _native_passive_case(root, roles=("cap",), power=0.0):
     return b, root / "phase3/analog/hardmacro" / block / f"{block}.lib"
 
 
-def _native_measurement(root, block, roles, power):
+def _native_measurement(root, block, roles, power, ports=("TOP", "VSS")):
     """Synthetic loader-contract fixture; this does not run characterization."""
     producer = importlib.import_module("analog_a8_hardmacro_emit")
     b = root / "phase3/analog" / block
-    topology = {"ports": ["TOP", "VSS"],
-                "rails": {"vdd": "TOP", "vss": "VSS"}}
+    topology = {"ports": list(ports),
+                "rails": {"vdd": ports[0], "vss": ports[1]}}
     if roles is not None:
         topology["devices"] = [{"role": role} for role in roles]
     (b / "topology.json").write_text(json.dumps(topology))
@@ -353,7 +353,7 @@ def _native_measurement(root, block, roles, power):
              "source_netlist": "post_layout_extracted.spice", "native_log": "op.log"}
     contents = {"source_layout": "magic\ntech fixture\n",
                 "source_gds": "fixture layout bytes",
-                "source_netlist": f".subckt {block} TOP VSS\n.ends {block}\n",
+                "source_netlist": f".subckt {block} {' '.join(ports)}\n.ends {block}\n",
                 "native_log": f"ngspice-47\npwr = {power:.12g}\n"}
     rec = {"schema": producer._A8_MEASUREMENT_SCHEMA,
            "status": "MEASURED", "block": block, "metric": "cell_leakage_power",
