@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import phase3_one_shot_runner as runner
+from _finished_gds_fixture import publish_finished_gds
 
 
 def _subject(tmp_path):
@@ -18,6 +19,7 @@ def _subject(tmp_path):
         views[name] = path
     (tmp_path / "state_out.json").write_text(json.dumps({
         name: str(path) for name, path in views.items()}))
+    publish_finished_gds(tmp_path)
     aliases = tmp_path / "phase3/stage3/pnr"
     aliases.mkdir(parents=True)
     for name in ("unit.gds", "unit.def", "unit_pnr.v"):

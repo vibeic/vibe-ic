@@ -12,6 +12,7 @@ import _owner_declared as owner_declared  # noqa: E402
 import die_level_deck_rule_attribution as dla  # noqa: E402
 import phase3_one_shot_runner as runner  # noqa: E402
 import verdict  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 
 class _Pdk:
@@ -38,6 +39,7 @@ def _project(tmp_path, monkeypatch, rule, *, deck_source=""):
         "gds": (pnr / "unit.gds").relative_to(project).as_posix(),
         "def": (pnr / "unit.def").relative_to(project).as_posix(),
     }))
+    publish_finished_gds(project)
     pdk = _Pdk(project)
     rdb = ("<report-database><items><item>"
            f"<category>'{rule}'</category>"

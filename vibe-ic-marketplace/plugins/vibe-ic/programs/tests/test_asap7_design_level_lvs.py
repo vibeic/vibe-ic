@@ -22,6 +22,7 @@ sys.path.insert(0, str(_PROGRAMS))
 
 import phase3_one_shot_runner as R      # noqa: E402
 import asap7_finfet_lvs as A            # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 
 # ------------------------------------------------------------ golden-expander unit
@@ -110,6 +111,7 @@ def _routed_project(tmp_path, top="tiny"):
         "gds": str(proj / "phase3/stage3/pnr" / f"{top}.gds"),
         "def": str(proj / "phase3/stage3/pnr" / f"{top}.def"),
         "nl": str(proj / "phase2/stage2/synth" / f"{top}_synth.v")}))
+    publish_finished_gds(proj)
     return proj
 
 

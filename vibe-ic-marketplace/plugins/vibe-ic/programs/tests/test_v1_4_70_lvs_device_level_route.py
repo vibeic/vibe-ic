@@ -13,6 +13,7 @@ _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import phase3_one_shot_runner as R  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 _ASAP7_REG = {
     "device_lvs_program": "asap7_finfet_lvs.py",
@@ -29,6 +30,7 @@ def _state_project(tmp_path):
         view.write_text("native " + name)
         views[name] = str(view)
     (tmp_path / "state_out.json").write_text(json.dumps(views))
+    publish_finished_gds(tmp_path)
     return tmp_path
 
 

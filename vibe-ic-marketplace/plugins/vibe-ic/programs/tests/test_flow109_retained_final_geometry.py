@@ -5,6 +5,7 @@ import pytest
 import flow109_final_extract as D
 import librelane_fill_dfm as F
 import librelane_contract as C
+from _finished_gds_fixture import publish_finished_gds
 
 
 def setup(tmp_path, monkeypatch):
@@ -33,6 +34,7 @@ def setup(tmp_path, monkeypatch):
     (owner / 'state_out.json').write_text(json.dumps({
        'odb': str(paths['odb']), 'def': str(paths['def']),
        'nl': str(paths['v']), 'sdc': str(paths['sdc']), 'gds': str(paths['gds'])}))
+    publish_finished_gds(owner)
     manifest = {'retained_default_fill': D.files._record(tmp_path, report),
        'adopted_views': {'netlist': D.files._record(tmp_path, paths['v']),
                          'sdc': D.files._record(tmp_path, paths['sdc'])},
@@ -78,7 +80,7 @@ def test_retained_extraction_selects_final_state_odb_and_def(tmp_path, monkeypat
 @pytest.mark.parametrize('change,reason', [
     ('state', 'D69_RETAINED_STATE_CHANGED'), ('def', 'D69_RETAINED_DEF_CHANGED'),
     ('netlist', 'D69_RETAINED_ADOPTED_VIEW_MISMATCH'), ('image', 'D69_RETAINED_IMAGE_MISMATCH'),
-    ('gds', 'CURRENT_FINAL_STATE_VIEW_MISSING: gds')])
+    ('gds', 'CURRENT_FINISHED_GDS_MISSING')])
 def test_rejects_changed_native_authority_before_rcx(tmp_path, monkeypatch, change, reason):
     manifest, paths, state, calls = setup(tmp_path, monkeypatch)
     if change == 'state': state.write_text('{}')

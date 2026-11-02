@@ -30,6 +30,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import librelane_contract as contract  # noqa: E402
 import phase3_one_shot_runner as runner  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 TIME = ["LL_TOOL_DEADLINE", "LL_TOOL_STALLED"]  # pinned below against contract.TIME_REFUSALS
 
@@ -103,6 +104,7 @@ def _step31(tmp_path, monkeypatch, code):
         path.write_text(body)
         views[role] = str(path)
     (project / "state_out.json").write_text(json.dumps(views))
+    publish_finished_gds(project)
 
     def refusing(*_a, **_k):
         raise contract.Refusal(code, "the half was stopped")

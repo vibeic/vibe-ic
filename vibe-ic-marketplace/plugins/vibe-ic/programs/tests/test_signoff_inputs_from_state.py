@@ -9,6 +9,7 @@ import _prestream_native as native
 import librelane_contract as contract
 import librelane_pv_signoff as pv
 import phase3_one_shot_runner as runner
+from _finished_gds_fixture import publish_finished_gds
 
 
 def put(path, value):
@@ -25,6 +26,7 @@ def subject(tmp_path, monkeypatch):
     state = {name: str(path.relative_to(tmp_path)) for name, path in views.items()}
     state['metrics'] = {'route__drc_errors_final': 0}
     state_path = put(tmp_path / 'state_out.json', state)
+    publish_finished_gds(tmp_path)
     for name in ('unit.gds', 'unit.def', 'unit_pnr.v', 'constraint.sdc'):
         put(tmp_path / 'phase3/stage3/pnr' / name, 'old alias')
     monkeypatch.setattr(contract, 'resolve_image', lambda project: 'pinned')
@@ -66,7 +68,7 @@ def test_step31_consumes_final_state_without_legacy_receipts(subject, half):
 
 
 @pytest.mark.parametrize('half', ['drc', 'lvs'])
-@pytest.mark.parametrize('view', ['gds', 'def', 'nl', 'sdc'])
+@pytest.mark.parametrize('view', ['def', 'nl', 'sdc'])
 def test_step31_missing_view_is_named_without_alias_fallback(subject, half, view):
     project, _, state_path, pdk, calls = subject
     state = json.loads(state_path.read_text())
@@ -136,14 +138,13 @@ def test_unavailable_view_file_is_named(subject, damage):
         native.signoff_inputs(project, 'sdc')
 
 
-def test_declared_broken_gds_does_not_fall_back_to_other_stream(subject):
+def test_state_gds_fields_do_not_replace_the_finished_gds(subject):
     project, views, state_path, _, _ = subject
     state = json.loads(state_path.read_text())
-    state['klayout_gds'] = str(views['gds'])
+    state['klayout_gds'] = 'stream.gds'
     state['gds'] = 'missing.gds'
     put(state_path, state)
-    with pytest.raises(ValueError, match='CURRENT_FINAL_STATE_VIEW_MISSING: gds'):
-        native.signoff_inputs(project, 'gds')
+    assert native.signoff_inputs(project, 'gds') == {'gds': views['gds']}
 
 
 def stream_state(project, folder, state, step='KLayout.StreamOut'):
@@ -166,6 +167,7 @@ def test_native_stream_state_precedes_stale_sta_pointer(subject, step):
     stream_state(project, '34-fill/01-klayout-filler', {'gds': 'partial.gds'}, 'KLayout.Filler')
     stream_state(project, '31-drc/01-klayout-drc', state, 'KLayout.DRC')
     assert native.final_state(project, streamed=True) == expected
+    publish_finished_gds(project, expected)
     assert native.signoff_inputs(project, 'gds', 'netlist') == {
         'gds': views['gds'], 'netlist': views['nl']}
 
@@ -186,8 +188,8 @@ def test_ambiguous_native_streams_refuse_selection(subject):
     project, _, direct, _, _ = subject
     state = json.loads(direct.read_text())
     direct.unlink()
-    stream_state(project, 'first/01-klayout-streamout', state)
-    stream_state(project, 'second/01-klayout-streamout', state)
+    stream_state(project, '37-first/01-klayout-streamout', state)
+    stream_state(project, '37-second/01-klayout-streamout', state)
     with pytest.raises(ValueError, match='CURRENT_FINAL_STATE_AMBIGUOUS'):
         native.signoff_inputs(project, 'gds')
 
@@ -200,6 +202,7 @@ def test_canonical_stream_history_selects_the_final_flow_step(subject):
     stream_state(project, '15-floorplan/48-klayout-streamout', state)
     state['klayout_gds'] = state.pop('gds')
     expected = stream_state(project, '37-default-stream/01-klayout-streamout', state)
+    publish_finished_gds(project, expected)
     try:
         selected = native.final_state(project, streamed=True)
     except ValueError as exc:

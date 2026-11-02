@@ -54,6 +54,7 @@ import eda_report_audit as era  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 # Padding that clears the drc byte floor (MIN_REPORT_BYTES['drc'] == 2048)
 # without carrying any design-specific content.
@@ -484,6 +485,7 @@ def _plant_signoff_evidence(proj: Path):
             "gds": (gds / "chip_top.gds").relative_to(proj).as_posix(),
             "def": materials["def"][0].relative_to(proj).as_posix(),
             "nl": materials["netlist"][0].relative_to(proj).as_posix()}))
+        publish_finished_gds(proj)
         deck = materials["pdk_deck"][0]
         # Name the same material deck in the RDB and the fixture invocation.
         # A dirty/plain report is left dirty/plain; no result body is replaced.

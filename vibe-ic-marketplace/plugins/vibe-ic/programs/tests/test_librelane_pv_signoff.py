@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _finished_gds_fixture import publish_finished_gds
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
@@ -433,6 +434,7 @@ def _published_half(tmp_path, runner, monkeypatch, half, record, files, *, extra
         selected[key] = project / name
         selected[key].write_text(name)
     _put(project / "state_out.json", {key: str(path) for key, path in selected.items()})
+    publish_finished_gds(project)
     pdk = SimpleNamespace(name="procA")
     if half == "lvs":
         monkeypatch.setattr(runner, "_streamout_top", lambda *a: ("chip", None))
@@ -457,6 +459,7 @@ def test_librelane_lvs_caller_uses_current_final_and_well_tied_reference(
     if current_available:
         _put(tmp_path / "state_out.json", {
             "nl" if key == "netlist" else key: str(path) for key, path in selected.items()})
+        publish_finished_gds(tmp_path)
     provider_gds = None
     if provider_release:
         import die_finishing_gen
@@ -506,6 +509,7 @@ def test_librelane_lvs_reads_reference_views_from_the_release_source_project(
         selected[key] = source / name; selected[key].parent.mkdir(exist_ok=True)
         selected[key].write_text(name)
     _put(source / "state_out.json", {key: str(path) for key, path in selected.items()})
+    publish_finished_gds(source)
     extract_lef = runner._pl.extracted_dir(source) / "macro.extract.lef"
     extract_lef.parent.mkdir(parents=True); extract_lef.write_text("lef")
     record = assembly / "reports/phase3/provider_die_assembly.json"
@@ -542,6 +546,7 @@ def test_librelane_lvs_refuses_an_unadmitted_provider_release(tmp_path, runner, 
                       ("nl", "physical.v"), ("sdc", "current.sdc")):
         selected[key] = tmp_path / name; selected[key].write_text(name)
     _put(tmp_path / "state_out.json", {key: str(path) for key, path in selected.items()})
+    publish_finished_gds(tmp_path)
     record = tmp_path / "reports/phase3/provider_die_assembly.json"
     _put(record, {"producer": "die_finishing_gen", "kind": "provider_die_assembly",
                   "verdict": "FAIL"})

@@ -23,6 +23,7 @@ import drv_capture_plan as capture_plan  # noqa: E402
 import drv_signoff_judge as drv  # noqa: E402
 from test_drv_signoff_judge import (_bundle, _file,  # noqa: E402
                                     _synthetic_scene_profile)  # noqa: F401 (autouse)
+from _finished_gds_fixture import publish_finished_gds
 
 
 def _streamed(tmp_path, *, lvs_status="PASS", gds_def=None, lvs_def=None,
@@ -158,6 +159,7 @@ def _lvs_record_project(tmp_path):
     (project / "state_out.json").write_text(json.dumps({
         "def": str(project / "phase3/stage3/pnr/chip_top.def"),
         "nl": str(project / "phase2/stage2/synth/chip_top_synth.v")}))
+    publish_finished_gds(project)
     return project
 
 

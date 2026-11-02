@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _finished_gds_fixture import publish_finished_gds
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
@@ -1254,6 +1255,7 @@ def test_step31_reports_chain_stall_as_unmeasured(tmp_path, monkeypatch):
         (tmp_path / name).write_text(body)
     put(tmp_path / 'state_out.json', {
         'gds': 'block.gds', **{view: name for view, (name, _) in inputs.items()}})
+    publish_finished_gds(tmp_path)
     monkeypatch.setattr(contract, 'resolve_image', lambda project: 'candidate')
     monkeypatch.setattr(contract, 'resolve_pdk_root',
                         lambda project, pdk, image=None: str(tmp_path))

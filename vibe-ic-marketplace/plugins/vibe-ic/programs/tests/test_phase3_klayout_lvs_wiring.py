@@ -14,6 +14,7 @@ import json
 import shlex
 
 import pytest
+from _finished_gds_fixture import publish_finished_gds
 
 mod = importlib.import_module("phase3_one_shot_runner")
 guard_mod = importlib.import_module("decap_route_short_guard")
@@ -90,6 +91,7 @@ def test_native_producer_records_the_measured_child_and_refuses_stale_invocation
     def_file = tmp_path / "routed.def"; def_file.write_text("DESIGN unit ;")
     (tmp_path / "state_out.json").write_text(json.dumps(
         {"gds": str(layout), "def": str(def_file), "nl": str(netlist)}))
+    publish_finished_gds(tmp_path)
     monkeypatch.setattr(mod, "_streamout_top", lambda *a: ("unit", None))
     monkeypatch.setattr(mod, "_stage_padring_io_lefs_for_lvs", lambda *a: [])
     monkeypatch.setattr(mod, "_to_container_path", lambda path, container: str(path))

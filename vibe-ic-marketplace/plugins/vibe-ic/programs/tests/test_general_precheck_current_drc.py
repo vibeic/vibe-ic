@@ -18,6 +18,7 @@ import general_precheck as GP
 import phase3_one_shot_runner as P3
 from _hostpaths import repo_path
 from test_general_precheck import _die_at_origin
+from _finished_gds_fixture import publish_finished_gds
 
 
 def _put(project, rel, body):
@@ -37,6 +38,7 @@ def _fixture(project, violations=0):
         "gds": gds.relative_to(project).as_posix(),
         "def": "phase3/stage3/pnr/chip_top.def",
         "nl": "phase3/stage3/pnr/chip_top_pnr.v"}))
+    publish_finished_gds(project)
     tech = _put(project, "input/pdk/tech.lef", "VERSION 5.8 ;\nEND LIBRARY\n")
     cells = _put(project, "input/pdk/cells.lef", "VERSION 5.8 ;\nEND LIBRARY\n")
     deck = _put(project, "input/pdk/deck.lydrc", "# neutral parser-control recipe\n")

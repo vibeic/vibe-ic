@@ -24,6 +24,7 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 
 _SAMPLE_REPORT = """\
@@ -47,6 +48,7 @@ def _state_inputs(project, top):
         path.write_text("DESIGN " + top + " ;\nEND DESIGN\n" if view == "def" else view)
         views[view] = str(path)
     (project / "state_out.json").write_text(json.dumps(views))
+    publish_finished_gds(project)
 
 
 def test_parse_svrf_tally_counts_and_failing_rules(tmp_path):

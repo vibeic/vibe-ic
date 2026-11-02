@@ -26,6 +26,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import phase3_one_shot_runner as R  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 
 class _Pdk:
@@ -40,6 +41,7 @@ def project(tmp_path):
     (pnr / "topx.def").write_text("DESIGN topx ;\nEND DESIGN\n")
     (tmp_path / "state_out.json").write_text(json.dumps({
         "gds": str(pnr / "topx.gds"), "def": str(pnr / "topx.def")}))
+    publish_finished_gds(tmp_path)
     return tmp_path
 
 
@@ -50,6 +52,7 @@ def _patch(monkeypatch, *, engine, gds_present, project, top):
     monkeypatch.setattr(R, "_try_svrf_native_drc", lambda *a, **k: None)
     if gds_present:
         (R._pl.pnr_dir(project) / f"{top}.gds").write_text("gds")
+        publish_finished_gds(project)
 
 
 def test_no_layout_is_not_an_environment_gap(project, monkeypatch):
@@ -66,7 +69,7 @@ def test_no_layout_is_not_an_environment_gap(project, monkeypatch):
         "a missing GDS must never claim the environment is missing a tool — "
         f"that claim carries a waiver tier; got {res.reason_class!r}")
     assert res.reason_class != "tool_absent"
-    assert "CURRENT_FINAL_STATE_VIEW_MISSING: gds" in res.detail
+    assert "CURRENT_FINISHED_GDS_MISSING" in res.detail
     assert str(R._pl.pnr_dir(project) / "topx.gds") in res.detail
     assert "missing_tool" not in res.extras
 
@@ -92,6 +95,7 @@ def test_engine_absent_and_no_layout_still_reports_the_environment(
 def test_the_native_path_running_is_unchanged(project, monkeypatch):
     """When the engine runs, its own result is returned untouched."""
     (R._pl.pnr_dir(project) / "topx.gds").write_text("gds")
+    publish_finished_gds(project)
     monkeypatch.setattr(R, "_tool_in_path", lambda *a, **k: False)
     sentinel = R.StepResult("drc", "FAIL", 0.0, "15 rules fired", [])
     monkeypatch.setattr(R, "_try_svrf_native_drc", lambda *a, **k: sentinel)

@@ -17,6 +17,7 @@ from programs.phase3_one_shot_runner import (
     StepResult, _aggregate_verdict, _autogen_waivers_json,
     _tool_in_path, step_drc, step_lvs,
 )
+from _finished_gds_fixture import publish_finished_gds
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,7 @@ def final_layout(tmp_path: Path) -> Path:
     (pnr / "top.def").write_text("DESIGN top ;\nEND DESIGN\n")
     (tmp_path / "state_out.json").write_text(json.dumps({
         "gds": str(pnr / "top.gds"), "def": str(pnr / "top.def")}))
+    publish_finished_gds(tmp_path)
     return tmp_path
 
 

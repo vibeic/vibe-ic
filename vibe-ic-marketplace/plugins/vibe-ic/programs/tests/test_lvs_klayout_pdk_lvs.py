@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 import pytest
+from _finished_gds_fixture import publish_finished_gds
 
 mod = importlib.import_module("klayout_pdk_lvs")
 
@@ -383,6 +384,7 @@ def test_native_reader_and_existing_consumers_agree(tmp_path, monkeypatch, state
     import lvs_signoff_guard as guard
     layout, report, record = _bound_native_record(tmp_path, state)
     (tmp_path / "state_out.json").write_text(json.dumps({"gds": str(layout)}))
+    publish_finished_gds(tmp_path)
     assert mod.read_current_verdict(tmp_path, report, layout)["status"] == record["status"]
     assert signoff.check(tmp_path)["passed"] is passed
     assert audit._check_lvs(tmp_path).passed is passed
@@ -398,6 +400,7 @@ def test_corrupt_current_native_cannot_restore_a_retained_legacy_match(tmp_path,
     from test_eda_report_audit import _PAD
     layout, report, _ = _bound_native_record(tmp_path, "NoMatch")
     (tmp_path / "state_out.json").write_text(json.dumps({"gds": str(layout)}))
+    publish_finished_gds(tmp_path)
     report.with_name("lvs.rpt").write_text(
         "Netgen LVS comparison\nSubcircuit instance summary: 567 instances compared\n"
         "NET count: 1234\ndevice count: 567\n" + _MATCH + _PAD)

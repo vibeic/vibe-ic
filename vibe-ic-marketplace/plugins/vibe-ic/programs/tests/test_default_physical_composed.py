@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _physical_current as current
 import clock_plan_check as clock_gate
 import phase3_one_shot_runner as runner
+from _finished_gds_fixture import publish_finished_gds
 
 
 def put(project, name, text):
@@ -155,6 +156,7 @@ def _step31_control(tmp_path, monkeypatch, control):
     gds.write_bytes(_gds_bytes(top))
     put(project, "state_out.json", json.dumps({
         "gds": str(gds), "def": str(project / "phase3/stage3/pnr/chip_top.def")}))
+    publish_finished_gds(project)
     put(project, "phase3/stage3/pnr/chip_top_pnr.v", "module chip_top(); endmodule\n")
     put(project, "phase2/stage2/synth/netlist_yosys.v", "module chip_top(); endmodule\n")
     put(project, "phase2/stage1/rtl/chip_top.v", "module chip_top(); endmodule\n")

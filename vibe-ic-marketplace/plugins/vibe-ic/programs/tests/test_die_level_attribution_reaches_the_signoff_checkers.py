@@ -72,6 +72,7 @@ class _TIER:
     value = D.TIER_PASS_WITH_ATTRIBUTION
 
 import pytest  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 
 RULES = {"XX.9": 1, "YY.9": 1}
@@ -339,6 +340,7 @@ def _current_signoff_subject(project: Path, report: Path) -> None:
         path.write_text(body)
     (project / "state_out.json").write_text(json.dumps({
         "gds": str(gds), "def": str(materials["def"][0])}))
+    publish_finished_gds(project)
     native = project / "phase3/reports/drc.rpt"
     native.parent.mkdir(parents=True, exist_ok=True)
     native.write_bytes(report.read_bytes())
