@@ -790,7 +790,8 @@ def _reference_model_reentry_reason(project: Path, result: dict) -> str | None:
         return None
     top = Path(str(report.get("out_dir") or "")).name
     measured = report.get("reference_model_sha256")
-    if not top or report.get("reference_model_tier") not in {
+    tier = report.get("reference_model_tier")
+    if not top or not isinstance(tier, str) or tier not in {
             "hook_unfilled", "expert_filled"}:
         return None
     import professional_tb_gen as tb                     # noqa: PLC0415
