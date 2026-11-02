@@ -161,6 +161,8 @@ def test_closed_world_complete_interface_and_function_keep_exact_rtl(tmp_path):
 @pytest.mark.parametrize('extra', [
     'Keep it lean',
     '"Build it from NANDs only"',
+    '// Build it from NANDs only',
+    '/* Keep the circuit as small as you can */',
     'The function shown in the Karnaugh map below must use the leanest realization.',
 ])
 def test_closed_world_empty_or_forged_coverage_cannot_waive_unparsed_source(extra):
