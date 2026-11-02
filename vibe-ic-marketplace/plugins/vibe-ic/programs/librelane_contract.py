@@ -2243,6 +2243,66 @@ def resolve_state_pdk_asset(value: str | Path, *, pdk: str | None,
         return None
 
 
+def resolve_io_lefs_through_pad_lefs(recorded: object, folder: Path) -> list[Path]:
+    """Candidate reading of unavailable IO LEF names as the current PAD_LEFS.
+
+    The IO report has no digest for these names, so nothing here proves their
+    historical bytes. The complete recorded set must equal the receipt-bound
+    PAD_LEFS by PDK-relative suffix, and each returned file must match the
+    PAD_LEFS fingerprint. Paths stay in the recorded order.
+    """
+    def refuse(detail: str):
+        raise Refusal('LL_IO_LEF_JOIN_REFUSED', f'{folder}: {detail}')
+
+    receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
+    if 'config.json' not in receipt['sha256']:
+        refuse('config.json is not bound by the receipt')
+    config = _load(folder / 'config.json')
+    pdk = config.get('PDK')
+    registry = json.loads(Path(__file__).with_name('pdk_registry.json').read_text())
+    if pdk not in {entry['name'] for entry in registry['pdks']}:
+        refuse(f'undeclared or unknown PDK: {pdk!r}')
+
+    def by_suffix(values: object, label: str) -> dict[tuple, str]:
+        if not isinstance(values, list) or not values:
+            refuse(f'{label} is not a non-empty list')
+        rows, roots = {}, set()
+        for raw in values:
+            path = Path(raw) if isinstance(raw, str) and raw else Path()
+            parts = path.parts
+            if not path.is_absolute() or '..' in parts or parts.count(pdk) != 1:
+                refuse(f'{label} has no unique PDK-relative path: {raw!r}')
+            at = parts.index(pdk)
+            suffix = parts[at + 1:]
+            if len(suffix) < 2 or suffix[0] not in ('libs.ref', 'libs.tech'):
+                refuse(f'{label} is not a PDK library path: {raw!r}')
+            if suffix in rows:
+                refuse(f'{label} repeats a PDK-relative suffix: {raw!r}')
+            rows[suffix] = raw
+            roots.add(parts[:at])
+        if len(roots) != 1:
+            refuse(f'{label} spans {len(roots)} PDK roots')
+        return rows
+
+    names = by_suffix(recorded, 'io_library_lefs')
+    pads = by_suffix(config.get('PAD_LEFS'), 'PAD_LEFS')
+    if names.keys() != pads.keys():
+        refuse('io_library_lefs and PAD_LEFS name different PDK-relative sets')
+    fingerprints = receipt['input'].get('config_files')
+    if not isinstance(fingerprints, dict):
+        refuse('the receipt has no config fingerprints')
+    resolved = []
+    for suffix, raw in names.items():
+        if Path(raw).is_file():
+            refuse(f'partly readable io_library_lefs: {raw}')
+        source = resolve_state_pdk_asset(pads[suffix], pdk=pdk, fingerprint=receipt)
+        # The resolver opens an existing path without comparing its digest.
+        if source is None or digest(source) != fingerprints.get(pads[suffix]):
+            refuse(f'PAD_LEFS is absent, ambiguous or changed: {pads[suffix]}')
+        resolved.append(source)
+    return resolved
+
+
 def config_file_hashes(config: dict, mounts: list, *,
                        fingerprint: dict | None = None) -> dict[str, str]:
     """Hash config files, retaining their recorded names across image moves."""

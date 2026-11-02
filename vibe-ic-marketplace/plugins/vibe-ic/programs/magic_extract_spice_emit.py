@@ -918,7 +918,7 @@ def _d47_inputs(project):
         remember(declaration)
     if resolver.families_agree(target, tech) is not True:
         raise ValueError('D47_DECLARED_TECHNOLOGY_MISMATCH')
-    facts = resolver.resolve_pdk(target, project=project)
+    facts = resolver.resolve_pdk(target)
     if facts.get('source') != 'container_installed' or not facts.get('available'):
         raise ValueError('D47_INSTALLED_TECHNOLOGY_UNAVAILABLE')
     directory = (Path(facts['pdk_root']) / 'libs.tech/magic').resolve(strict=True)

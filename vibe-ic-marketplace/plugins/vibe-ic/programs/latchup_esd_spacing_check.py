@@ -270,6 +270,7 @@ def current_lef_context(project: Path, folder: Path, def_file: Path) -> Dict[str
     """
     import hashlib
     from _pad_ring import parse_lef_macro_classes
+    import librelane_contract as contract
 
     def digest(path):
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -296,19 +297,32 @@ def current_lef_context(project: Path, folder: Path, def_file: Path) -> Dict[str
     recorded = paths(io.get("io_library_lefs"))
     if not sc or not pads or not recorded:
         raise ValueError("PERC_LEF_CLOSURE_MISSING")
-    if {p.resolve(strict=True) for p in pads} != {p.resolve(strict=True) for p in recorded}:
+    if not all(p.is_file() for p in recorded):
+        try:
+            recorded = contract.resolve_io_lefs_through_pad_lefs(
+                io.get("io_library_lefs"), folder)
+        except contract.Refusal as exc:
+            raise ValueError(f"PERC_LEF_IO_AUTHORITY_MISMATCH: {exc}") from exc
+
+    def source(lef):
+        return contract.resolve_state_pdk_asset(
+            lef, pdk=config.get("PDK"), fingerprint=receipt) or lef
+
+    if ({source(p).resolve(strict=True) for p in pads}
+            != {p.resolve(strict=True) for p in recorded}):
         raise ValueError("PERC_LEF_IO_AUTHORITY_MISMATCH")
     classes: Dict[str, set[str]] = {}
     records = []
     for lef in dict.fromkeys(sc + pads + extra):
-        sha = digest(lef)
+        readable = source(lef)
+        sha = digest(readable)
         if expected.get(str(lef)) != sha:
             raise ValueError(f"PERC_LEF_BYTES_CHANGED: {lef}")
-        text = lef.read_text()
+        text = readable.read_text()
         for body in re.split(r"(?m)(?=^\s*MACRO\s+\S+)", text):
             for master, cls in parse_lef_macro_classes(body).items():
                 classes.setdefault(master, set()).add(cls)
-        records.append({"path": str(lef), "sha256": sha})
+        records.append({"path": str(readable), "sha256": sha})
     placed = {m for _i, m in _p._parse_def_components(def_file)}
     missing = sorted(m for m in placed if len(classes.get(m, ())) != 1)
     if missing:

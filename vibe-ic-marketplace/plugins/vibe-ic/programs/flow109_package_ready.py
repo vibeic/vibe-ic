@@ -380,9 +380,20 @@ def _io_lefs(project: Path, report: dict) -> list[Path]:
             except ValueError as exc:
                 raise D75Refusal("D75_INPUT_ESCAPES_PROJECT", raw) from exc
         if not path.is_file():
-            raise D75Refusal("D75_IO_LIBRARY_UNBOUND", raw)
+            return _io_lefs_from_current_pad_lefs(project, values, raw)
         paths.append(path)
     return paths
+
+
+def _io_lefs_from_current_pad_lefs(project: Path, values: list, missing: str) -> list[Path]:
+    import librelane_contract as contract
+    import librelane_postroute as postroute
+
+    try:
+        folder, _state = postroute.stapostpnr_state(project)
+        return contract.resolve_io_lefs_through_pad_lefs(values, folder)
+    except (contract.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+        raise D75Refusal("D75_IO_LIBRARY_UNBOUND", f"{missing}: {exc}") from exc
 
 
 def _tech_lef(project: Path) -> Path:
@@ -457,6 +468,9 @@ def _current_native_geometry(project: Path, io_lefs: list[Path]) -> dict | None:
                 raise ValueError(f"ambiguous native path mapping: {raw}")
             path = matches[0] if matches else (named if named.is_absolute()
                                                 else project / named)
+            if not path.exists():
+                path = contract.resolve_state_pdk_asset(
+                    named, pdk=config.get("PDK"), fingerprint=receipt) or path
             return path.resolve(strict=True)
 
         def bound_config_file(raw: str, kind: str) -> tuple[Path, dict]:
@@ -732,9 +746,11 @@ def execute(project: Path, context: Mapping) -> dict:
         rc, pads = pad_bterm_coincidence_check.run(
             def_path.read_text(errors="replace"),
             tech.read_text(errors="replace"), io_lefs)
-        if rc != 0 or pads.get("undecided_nets"):
+        if pads.get("not_connected_nets"):
+            pad_status = "FAIL"
+        elif rc != 0 or pads.get("undecided_nets"):
             pad_status = "NOT_MEASURED"
-        elif pads.get("not_connected_nets") or not pads.get("connected_nets"):
+        elif not pads.get("connected_nets"):
             pad_status = "FAIL"
         else:
             pad_status = "PASS"

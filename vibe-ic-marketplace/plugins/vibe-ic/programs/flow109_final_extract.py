@@ -521,7 +521,7 @@ def _analog_inputs(project):
     if not nets or any(not re.fullmatch(r'[A-Za-z0-9_!./:$-]+', n) for n in nets):
         raise AdmissionRefusal('D69_NET_CENSUS_UNSUPPORTED', 'complete logical net census required')
     target, target_source = declared_target(project)
-    facts = resolver.resolve_pdk(target, project=project)
+    facts = resolver.resolve_pdk(target)
     if not facts.get('available') or facts.get('source') != 'container_installed':
         raise AdmissionRefusal('D69_INSTALLED_MODEL_ABSENT', 'declared PDK must resolve in this runtime')
     directory = (Path(facts['pdk_root']) / 'libs.tech/magic').resolve(strict=True)

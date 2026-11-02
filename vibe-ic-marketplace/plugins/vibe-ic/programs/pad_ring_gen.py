@@ -1843,7 +1843,10 @@ def _d32_inputs(project):
     config=project/'input/flow109/D32.json'
     if any(p.is_symlink() for p in (config,*config.parents)):
         raise ValueError('D32_INPUT_SYMLINK')
-    data=json.loads(config.read_text());top=data.get('top')
+    data=json.loads(config.read_text())
+    if not isinstance(data,dict):
+        raise ValueError('D32_INPUT_INVALID: object required')
+    top=data.get('top')
     if not isinstance(top,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*',top):
         raise ValueError('D32_TOP_INVALID')
     floor=bound_file(project,data.get('floorplan_def'));assignment=bound_file(project,data.get('pad_assignment'));logical=bound_file(project,data.get('logical_netlist'))
@@ -1855,7 +1858,7 @@ def _d32_inputs(project):
         raise ValueError('D32_DECLARED_PORT_POPULATION_MISMATCH')
     target,target_source=declared_target(project)
     if not isinstance(target,str) or not target.strip():raise ValueError('D32_DECLARED_PDK_ABSENT')
-    facts=resolver.resolve_pdk(target,project=project)
+    facts=resolver.resolve_pdk(target)
     if facts.get('source')!='container_installed' or not facts.get('available'):
         raise ValueError('D32_INSTALLED_PDK_UNAVAILABLE')
     tree=Path(facts['pdk_root']);lefs=PR.discover_io_lefs(str(tree.parent),tree.name)
