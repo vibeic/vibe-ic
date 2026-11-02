@@ -391,3 +391,65 @@ def test_changed_prose_keeps_old_rtl_and_requires_signature_after_authorship(tmp
     accepted, why = judgement.check(tmp_path, "1")
     assert not accepted, why
     assert "awaiting_signed_judgement" in why
+
+
+@pytest.mark.parametrize("ic_class", CLASSES[:3])
+@pytest.mark.parametrize("rel", RAW_PATHS)
+@pytest.mark.parametrize("restriction", ["", PROSE], ids=["original", "sheffer"])
+def test_typed_non_registry_chain_source_requires_named_handoff(
+        tmp_path, ic_class, rel, restriction):
+    import bit_mapping_synth
+    import spec_artifact_registry
+    import spec_numeric_pack_extract
+    from test_issue2215_bit_mapping_synth import CONDITIONAL
+
+    text = "Module name: mapper.\n" + CONDITIONAL + "\n" + restriction
+    plan = bit_mapping_synth.plan(spec_numeric_pack_extract.extract(text), module="mapper")
+    assert plan["status"] == "READY", plan["reasons"]
+    assert spec_artifact_registry.generate(text, "mapper") == (None, None)
+    _write(tmp_path, rel, text)
+    result = runner.step_rtl_gen(tmp_path, ic_class, force_regen=True)
+    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    assert "SPEC_SENTENCES_UNACCOUNTED" in result.detail
+    assert result.extras["fallback_skill"] == "spec-to-rtl"
+    assert result.extras["spec_source"] == "phase1_plain_text"
+    spans = result.extras["unaccounted_source_spans"]
+    assert spans
+    for row in spans:
+        lo, hi = row["source_span"]
+        assert 0 <= lo < hi <= len(text)
+        assert text[lo:hi] == row["source_sentence"]
+    if restriction:
+        assert any(row["source_sentence"] == restriction.strip() for row in spans)
+    assert not any(path.suffix in (".v", ".sv")
+                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+    assert (tmp_path / "phase2/stage1/fallback_skill.md").is_file()
+
+
+@pytest.mark.parametrize("ic_class", CLASSES[:3])
+@pytest.mark.parametrize("rel", RAW_PATHS)
+@pytest.mark.parametrize("body", [
+    "Convert a 4-bit width to a larger width of 8-bit. "
+    "Bits result[3:0] always equal sample[3:0].",
+    "Convert a 4-bit width to a larger width of 8-bit. "
+    "Do not invert any source bit. "
+    "Bits result[3:0] are the inverse of sample[3:0]. "
+    "Bits result[7:4] are zero.",
+], ids=["uncovered-bits", "prohibited-transform"])
+def test_typed_nonapplicable_mapping_keeps_named_class_refusal(
+        tmp_path, ic_class, rel, body):
+    import bit_mapping_synth
+    import spec_numeric_pack_extract
+
+    text = "Module name: mapper.\n" + body
+    plan = bit_mapping_synth.plan(spec_numeric_pack_extract.extract(text), module="mapper")
+    assert plan["status"] == "REFUSED", plan
+    _write(tmp_path, rel, text)
+    result = runner.step_rtl_gen(tmp_path, ic_class, force_regen=True)
+    assert result.status == "FAIL", result.detail
+    expected = "L5_ADI_SPEC" if ic_class == "data_converter" else "EXAMPLE_PROTOCOL-class only"
+    assert expected in result.detail
+    assert "SPEC_SENTENCES_UNACCOUNTED" not in result.detail
+    assert "unaccounted_source_spans" not in result.extras
+    assert not any(path.suffix in (".v", ".sv")
+                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
