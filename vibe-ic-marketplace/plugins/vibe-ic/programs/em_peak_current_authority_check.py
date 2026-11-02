@@ -443,7 +443,10 @@ def evaluate(project: Path, jmax: Optional[Path], tech_lef: Optional[Path],
     if jt["verdict"] == "PASS":
         rep["verdict"] = "PASS"
         return "PASS", rep
-    rep["verdict"] = "INCOMPLETE"
+    from _prestream_native import final_state
+    # #62b: a final-State native solve that was not measured is not a pass.
+    incomplete = "NOT_MEASURED" if final_state(project) is not None else "INCOMPLETE"
+    rep["verdict"] = incomplete
     rep["missing_authority"] = (
         "same-DEF conductor geometry and per-layer Jmax for every PSM segment")
     rep["missing_authority_reason"] = jt.get("skip_reason")
@@ -477,7 +480,7 @@ def evaluate(project: Path, jmax: Optional[Path], tech_lef: Optional[Path],
     # the other, and a reader needs both to know where to go next.
     if not peaks and not authority:
         rep["reason_class"] = _reason_taxonomy.ZERO_DENOMINATOR
-    return "INCOMPLETE", rep
+    return incomplete, rep
 
 
 def _segments_screened(project: Path, jt: Dict[str, Any]) -> Tuple[int, int]:
@@ -583,7 +586,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  {settled}.")
     print(f"  A current that is physically possible can still be far over the "
           f"metal's Jmax, so the screen above is a floor, not an EM pass.")
-    print(f"INCOMPLETE: electromigration was NOT screened — missing authority: "
+    print(f"{verdict}: electromigration was NOT screened — missing authority: "
           f"{rep['missing_authority']} ({rep.get('missing_authority_reason')}); "
           f"{screened} of {total} segment(s) screened against Jmax.")
     # A REFUSAL EXITS 2, NOT 0 (vibe-ic#1017). See the module docstring: this
