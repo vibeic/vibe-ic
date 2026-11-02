@@ -202,3 +202,100 @@ def test_allowlist_preserves_plain_signed_preamble_and_row_whitespace(tmp_path):
     l1,l5=generate(tmp_path,text)
     assert pin_rows(l1)[0]['min_typ_max']=={'typ':2.,'min':1.96,'max':2.04}
     assert block_rows(l5)==pin_rows(l1)
+
+
+@pytest.fixture(params=['commonmark', 'fallback'])
+def markdown_backend(request, monkeypatch):
+    """Exercise installed MarkdownIt and genuinely unavailable parser imports."""
+    import builtins
+    if request.param == 'commonmark':
+        import markdown_it
+        calls = []
+        real = markdown_it.MarkdownIt
+        def tracked(*args, **kwargs):
+            parser = real(*args, **kwargs)
+            parse = parser.parse
+            def record(text, *args, **kwargs):
+                calls.append(text)
+                return parse(text, *args, **kwargs)
+            parser.parse = record
+            return parser
+        monkeypatch.setattr(markdown_it, 'MarkdownIt', tracked)
+    else:
+        calls = None
+        original = builtins.__import__
+        def unavailable(name, *args, **kwargs):
+            if name in {'markdown_it', 'commonmark'}:
+                raise ImportError('test: optional CommonMark parsers unavailable')
+            return original(name, *args, **kwargs)
+        monkeypatch.setattr(builtins, '__import__', unavailable)
+    return request.param, calls
+
+
+def test_backend_uses_parser_or_strict_fallback(tmp_path, markdown_backend):
+    backend, calls = markdown_backend
+    declaration = '*Signed addendum*\n\n' + table()
+    if backend == 'commonmark':
+        l1, l5 = generate(tmp_path, declaration)
+        assert block_rows(l5) == pin_rows(l1)
+        assert declaration in calls
+    else:
+        with pytest.raises(ValueError, match='PIN_INTERFACE_CONDITION_HIDDEN_TABLE'):
+            generate(tmp_path, declaration)
+
+
+@pytest.mark.parametrize('opener', ['1. ```text', '2) ~~~text', '> 1. ```text'])
+@pytest.mark.parametrize('emitter', ['gen_l1_datasheet', 'gen_l5_adi_spec'])
+def test_ordered_list_unclosed_fence_refuses_whole_set(
+        tmp_path, markdown_backend, opener, emitter):
+    # Generate a legitimate current L1 first so the L5 probe is independent.
+    generate(tmp_path, table())
+    docs = {'interface.md': INTERFACE, 'conditions.md': table(),
+            'other.md': opener + '\n   unclosed example\n'}
+    with pytest.raises(ValueError, match='PIN_INTERFACE_CONDITION_UNCLOSED_FENCE'):
+        getattr(runner, emitter)(tmp_path, docs)
+
+
+@pytest.mark.parametrize('hidden', [
+    lambda t: '<!--\n' + t + '\n## End\n-->\n',
+    lambda t: '\n'.join('    ' + line for line in t.splitlines()),
+    lambda t: '1. ```text\n' + '\n'.join('   ' + line for line in t.splitlines()) + '\n   ```\n',
+])
+def test_hidden_copy_refusal_in_both_backends(tmp_path, markdown_backend, hidden):
+    with pytest.raises(ValueError, match='PIN_INTERFACE_CONDITION_HIDDEN_TABLE'):
+        generate(tmp_path, hidden(table()))
+
+
+@pytest.mark.parametrize('selector', ['stale', 'sparse', 'current', 'explicit_empty'])
+def test_a1_current_named_l5_conditions_after_regeneration(tmp_path, selector):
+    import hashlib
+    from _analog_producer_fixture import GATE_A1, run_prog
+    generate(tmp_path, table(ROW.replace('1.96', '1.8').replace('2.04', '2.2')))
+    block_list = tmp_path / 'phase3/analog/analog_block_list.json'
+    previous = block_list.read_bytes()
+    _, l5 = generate(tmp_path, table())
+    if selector == 'stale':
+        block_list.write_bytes(previous)
+    elif selector in {'sparse', 'explicit_empty'}:
+        entries = [{'name': b['name'], 'type': b['type']} for b in l5['analog_blocks']]
+        if selector == 'explicit_empty':
+            for entry in entries:
+                entry['spec'] = {'input_conditions': []}
+        block_list.write_text(json.dumps({'blocks': entries}))
+    rc, report = a1.run(tmp_path)
+    spec_path = tmp_path / 'phase3/analog/pll/spec.json'
+    if selector in {'stale', 'explicit_empty'}:
+        assert rc == 1, report
+        assert 'A1_INPUT_CONDITIONS_BLOCK_LIST_MISMATCH' in report['reason']
+        assert not spec_path.exists()
+        gate = run_prog(GATE_A1, tmp_path, '--block', 'pll')
+        assert gate.returncode != 0, gate.stdout
+    else:
+        assert rc == 0, report
+        emitted = json.loads(spec_path.read_text())
+        assert emitted['input_conditions'] == block_rows(l5)
+        assert emitted['input_conditions'][0]['min_typ_max'] == {'typ': 2.0, 'min': 1.96, 'max': 2.04}
+        l5_path = tmp_path / 'phase1/generated_docs/L5_ADI_SPEC.json'
+        assert emitted['_provenance']['input']['sha256'] == hashlib.sha256(l5_path.read_bytes()).hexdigest()
+        gate = run_prog(GATE_A1, tmp_path, '--block', 'pll')
+        assert gate.returncode == 0, gate.stdout + gate.stderr
