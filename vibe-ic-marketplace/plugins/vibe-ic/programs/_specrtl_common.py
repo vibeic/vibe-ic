@@ -763,9 +763,17 @@ def _gate_families(sentence: str) -> Tuple[str, ...]:
         raw, term = match.group(0), match.group(0).lower()
         if term == "nand" and re.match(r"\s+flash\b", sentence[match.end():], re.I):
             continue
-        if term in {"and", "or", "not"} and not (raw.isupper()
-                or re.match(r"\s+(?:logic\s+)?gates?\b|\s*[,/\-]", sentence[match.end():], re.I)
-                or re.search(r"[,/\-]\s*$", sentence[:match.start()])):
+        named_operator = raw.isupper() and re.match(
+            r"\s*(?:$|[.!?;:)]|(?:is|are)\s+(?:allowed|permitted|required)\b)",
+            sentence[match.end():], re.I)
+        gate_list = (
+            re.match(r"\s*[,/\-]\s*" + _GATE_TERM.pattern,
+                     sentence[match.end():], re.I)
+            or re.search(_GATE_TERM.pattern + r"\s*[,/\-]\s*$",
+                         sentence[:match.start()], re.I))
+        if term in {"and", "or", "not"} and not (named_operator
+                or re.match(r"\s+(?:logic\s+)?gates?\b", sentence[match.end():], re.I)
+                or gate_list):
             continue
         families.add("mux" if term.startswith(("mux", "multiplexer")) else
                      "not" if term.startswith("inverter") else term)
@@ -774,7 +782,10 @@ def _gate_families(sentence: str) -> Tuple[str, ...]:
 
 def _detect_logic_obligations(text: str, top: Optional[str] = None, *,
                               source_module: Optional[str] = None) -> List[LogicObligation]:
-    from _hdl_code_text import strip_hdl_comments_and_strings
+    try:
+        from _hdl_code_text import strip_hdl_comments_and_strings
+    except ImportError:
+        from ._hdl_code_text import strip_hdl_comments_and_strings
     clean = strip_hdl_comments_and_strings(text)
     declarations = list(re.finditer(
         r"(?im)^\s*module\s+name\s*:\s*`?([A-Za-z_]\w*)`?"
@@ -859,7 +870,10 @@ def _parsed_kmap_function(text: str, contract: SpecContract):
     """The producer's complete scalar-output grid and its actual source range."""
     if 'karnaugh' not in text.lower():
         return None
-    import kmap_grid_synth as kmap
+    try:
+        import kmap_grid_synth as kmap
+    except ImportError:
+        from . import kmap_grid_synth as kmap
     parsed = kmap._parse_kmap(text)
     ports = kmap.parse_ports(text)
     if parsed is None or ports is None:
@@ -1038,7 +1052,35 @@ def emission_spec_contract(text: str, interface_text: str = "", top: Optional[st
         data = json.loads(text)
     except (ValueError, TypeError):
         data = None
-    contract = extract_spec_contract(text, is_json=isinstance(data, (dict, list)), confirm=False, top=top)
+        try:
+            import yaml
+        except ImportError:
+            pass
+        else:
+            try:
+                decoded = yaml.safe_load(text)
+            except yaml.YAMLError:
+                pass
+            else:
+                if (isinstance(decoded, list) and all(
+                        isinstance(port, dict) and isinstance(port.get('name'), str)
+                        for port in decoded)
+                        or isinstance(decoded, dict) and set(decoded) & {
+                            'module', 'top_module', 'ports', 'inputs', 'outputs',
+                            'rows', 'function', 'logic_obligations', 'description',
+                            'reset', 'latency_registered', 'fsm_output_style'}):
+                    data = decoded
+    structured = isinstance(data, (dict, list))
+    if structured:
+        ports = data if isinstance(data, list) else data.get('ports', [])
+        if (not isinstance(ports, list) or any(
+                not isinstance(port, dict) or not isinstance(port.get('name'), str)
+                for port in ports)):
+            raise ValueError('invalid structured ports: expected a list of named port objects')
+        if isinstance(data, dict) and data.get('reset') is not None and not isinstance(data['reset'], dict):
+            raise ValueError('invalid structured reset: expected an object')
+    contract = extract_spec_contract(json.dumps(data, default=str) if structured else text,
+                                     is_json=structured, confirm=False, top=top)
     if interface_text:
         try:
             interface = json.loads(interface_text)
@@ -1049,7 +1091,7 @@ def emission_spec_contract(text: str, interface_text: str = "", top: Optional[st
             module = interface.get('module') or interface.get('top_module')
             contract.logic_obligations = [row for row in declared
                                           if row.module is None or module is None or row.module == module]
-    return account_spec_source(text, contract)
+    return contract if structured else account_spec_source(text, contract)
 
 
 # Natural-language interface bullet:  " - input  d   (8 bits)"  /  " - output q"

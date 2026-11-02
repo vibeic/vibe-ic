@@ -2749,7 +2749,7 @@ def _defer_to_supplied(generator: str, project: Path,
 
 def _declared_logic_author_handoff(project: Path, t0: float,
                                   text: str) -> Optional[StepResult]:
-    """Read-only author handoff before unsupported deterministic implementation."""
+    """Hand off the contract of the source this producer consumes."""
     if _design_supplied_build_rtl(project):
         return None
     from _specrtl_common import emission_spec_contract, structured_logic_contract
@@ -2779,10 +2779,10 @@ def _declared_logic_author_handoff(project: Path, t0: float,
             'rtl_gen', 'NOT_MEASURED', time.time() - t0,
             f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
             reason_class=_V.ReasonClass.NOT_EXECUTED)
-    return _spec_contract_author_handoff(t0, contract, spec_source)
+    return _spec_contract_author_handoff(project, t0, contract, spec_source)
 
 
-def _spec_contract_author_handoff(t0: float, contract: SpecContract,
+def _spec_contract_author_handoff(project: Path, t0: float, contract: SpecContract,
                                   spec_source: str) -> Optional[StepResult]:
     from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
                                  SPEC_SENTENCES_UNACCOUNTED,
@@ -2797,17 +2797,16 @@ def _spec_contract_author_handoff(t0: float, contract: SpecContract,
     marker = DECLARED_LOGIC_OBLIGATION_UNSUPPORTED if obligations else SPEC_SENTENCES_UNACCOUNTED
     explanation = ("Deterministic producers do not establish this implementation obligation. "
                    if obligations else "The parsed contract does not account for the complete prose spec. ")
-    skill_source = SKILLS_DIR / "spec-to-rtl" / "SKILL.md"
+    skill_hint, skill_extras = _stage_fallback_skill(project, "spec-to-rtl")
+    author_hint, author_extras = _stage_author_knowledge_digests(project)
     return StepResult(
         "rtl_gen", "PASS_WITH_WAIVERS", time.time() - t0,
         f"{marker}: " + "; ".join(rules + unknown_rules)
         + ". " + explanation
-        + f"AI invokes `spec-to-rtl` from {skill_source} and reads the full spec; "
-        "no RTL was generated or changed.",
+        + "AI invokes `spec-to-rtl` and reads the full spec; "
+        "no RTL was generated or changed." + skill_hint + author_hint,
         extras={"fallback_skill": "spec-to-rtl",
-                "fallback_skill_source": str(skill_source),
-                "fallback_skill_staged": False,
-                "fallback_skill_unstaged_reason": "read-only declared-obligation handoff",
+                **skill_extras, **author_extras,
                 "rejected_emitters": [marker],
                 "rejected_rules": rules + unknown_rules,
                 "spec_source": spec_source,
@@ -2950,7 +2949,7 @@ def _structured_spec_author_handoff(project: Path, t0: float) -> Optional[StepRe
                 'rtl_gen', 'NOT_MEASURED', time.time() - t0,
                 f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
                 reason_class=_V.ReasonClass.NOT_EXECUTED)
-        return _spec_contract_author_handoff(t0, contract, name)
+        return _spec_contract_author_handoff(project, t0, contract, name)
     return None
 
 
@@ -3244,16 +3243,30 @@ def _try_canonical_primitive_rtl(
         shape, module, rtl = watchdog["shape"], watchdog["module"], watchdog["rtl"]
         desc = ""  # policy came from a declared mapping, not a prose guess
     else:
-        desc = _gather_spec_text(project, phase1_plain_text=phase1_plain_text)
+        desc = (_gather_spec_text(project, phase1_plain_text="")
+                if _pl.rtl_input(project) == "structured" else "")
         _phase1_project_checkpoint(project)
-        if not desc:
-            return None
         try:
-            shape = _cps.detect_shape(desc)
+            shape = _cps.detect_shape(desc) if desc else None
         except Exception:
             return None
-        if not shape:
-            return None  # DEFER → fall through to spec-to-rtl
+        if shape:
+            handoff = _declared_logic_author_handoff(project, t0, '')
+        else:
+            desc = _gather_spec_text(project, phase1_plain_text=phase1_plain_text)
+            _phase1_project_checkpoint(project)
+            if not desc:
+                return None
+            try:
+                shape = _cps.detect_shape(desc)
+            except Exception:
+                return None
+            if not shape:
+                return None
+            handoff = (_declared_logic_author_handoff(project, t0, phase1_plain_text)
+                       if phase1_plain_text is not None else None)
+        if handoff is not None:
+            return handoff
         module = _cps.module_name_of(desc) or "chip_top"
         try:
             rtl = _cps.emit_rtl(shape, desc)
@@ -8895,9 +8908,6 @@ def _step_rtl_gen_bound(
     project_binding.require_current()
     if _phase1_plain.refusal is not None:
         return _phase1_plain_spec_refusal_result(t0, _phase1_plain.refusal)
-    handoff = _declared_logic_author_handoff(project, t0, _phase1_plain.text)
-    if handoff is not None:
-        return handoff
     # The isolated project must not retain a portal back to a mutable external
     # namespace.  Operator-prose links have already received their more precise
     # named refusal above; any remaining symlink could be followed by one of the
@@ -8946,6 +8956,9 @@ def _step_rtl_gen_bound(
     # to spec-to-rtl. DEFERs (returns None) on every other shape/class, so all
     # non-matching designs keep the existing class-registry / AI-fallback path.
     project_binding.require_current()
+    handoff = _declared_logic_author_handoff(project, t0, '')
+    if handoff is not None:
+        return handoff
     _sp = _try_serial_parallel_mul_rtl(project, ic_class, t0)
     project_binding.require_current()
     if _sp is not None:
@@ -8956,56 +8969,63 @@ def _step_rtl_gen_bound(
     # structure unambiguously, emit verified-correct RTL deterministically BEFORE
     # deferring to spec-to-rtl. DEFERs (returns None) on every non-matching shape.
     project_binding.require_current()
-    _cp = _try_canonical_primitive_rtl(
-        project, t0, phase1_plain_text=_phase1_plain.text)
-    project_binding.require_current()
-    if _cp is not None:
-        return _cp
-    # PROMPT-TEXT DETERMINISTIC EMIT — the general form of the same idea, and
-    # the one the runner was NOT using (2026-08-25).
-    #
-    # `spec_artifact_registry.generate(text, top)` turns a parse-complete prompt
-    # into exact RTL. It is general, neutrally named and already lives in
-    # programs/ — the runner just never called it on plain prompt text; only the
-    # narrow `_try_phase1_behavioral_fsm_rtl_bound` path used it.
-    #
-    # The one place that DID call it that way was `benchmark/gates_atomic.py`,
-    # and it called it in the wrong ORDER: that harness refuses to run until an
-    # LLM has already authored sample.sv ("MISSING {f} — agent must author it
-    # first", sys.exit(2)) and only THEN runs the generator, overwriting the
-    # author's work. Program-first is structurally impossible in that shape —
-    # the program can only ever run second. Calling it HERE, before the
-    # spec-to-rtl waive, is what makes program-first actually first, for every
-    # entry point rather than only inside one benchmark harness.
-    # NARROWEST FIRST. A strictly recognized behavioral Moore FSM may live only
-    # in the original Phase-1 prompt/doc (before an L-doc extractor has
-    # materialized a structured rtl_spec). This path gives that prose the same
-    # registry-backed deterministic emit, accepts ONLY the behavioral_fsm family
-    # and otherwise DEFERs — so putting it first cannot take work away from the
-    # general chain below, and leaving it second DID take work away from it.
-    #
-    # Both paths reach `spec_artifact_registry` and get the same RTL. What
-    # differs is what they say about it: this one records `artifact_type`,
-    # `module`, `spec_source` and `spec_sources` and writes `<top>.v` named from
-    # the spec, where the general chain records the emitter name and writes
-    # `chip_top.sv`. Ordered general-first, the chain answered every behavioral
-    # FSM before this path was reached, and six tests that assert the richer
-    # record went red saying `KeyError: 'artifact_type'`. A more specific
-    # producer that DEFERS when it does not apply belongs ahead of a general one.
-    _behavior_force = (_FORCE_RTL_REGEN
-                       if force_regen is None else force_regen)
-    _bf = _try_phase1_behavioral_fsm_rtl(
-        project, t0, force_regen=_behavior_force, gathered=_phase1_plain,
-        project_binding=project_binding)
-    project_binding.require_current()
-    if _bf is not None:
-        return _bf
-    project_binding.require_current()
-    _sar = _try_spec_artifact_registry_rtl(
-        project, t0, phase1_plain_text=_phase1_plain.text)
-    project_binding.require_current()
-    if _sar is not None:
-        return _sar
+    # These registered generators consume typed L-docs. Unconsumed operator
+    # prose must not replace their result, including a named generator FAIL.
+    typed_generator = (_lookup_class(ic_class) or {}).get("rtl_gen")
+    if not typed_generator:
+        _cp = _try_canonical_primitive_rtl(
+            project, t0, phase1_plain_text=_phase1_plain.text)
+        project_binding.require_current()
+        if _cp is not None:
+            return _cp
+        # PROMPT-TEXT DETERMINISTIC EMIT — the general form of the same idea, and
+        # the one the runner was NOT using (2026-08-25).
+        #
+        # `spec_artifact_registry.generate(text, top)` turns a parse-complete prompt
+        # into exact RTL. It is general, neutrally named and already lives in
+        # programs/ — the runner just never called it on plain prompt text; only the
+        # narrow `_try_phase1_behavioral_fsm_rtl_bound` path used it.
+        #
+        # The one place that DID call it that way was `benchmark/gates_atomic.py`,
+        # and it called it in the wrong ORDER: that harness refuses to run until an
+        # LLM has already authored sample.sv ("MISSING {f} — agent must author it
+        # first", sys.exit(2)) and only THEN runs the generator, overwriting the
+        # author's work. Program-first is structurally impossible in that shape —
+        # the program can only ever run second. Calling it HERE, before the
+        # spec-to-rtl waive, is what makes program-first actually first, for every
+        # entry point rather than only inside one benchmark harness.
+        # NARROWEST FIRST. A strictly recognized behavioral Moore FSM may live only
+        # in the original Phase-1 prompt/doc (before an L-doc extractor has
+        # materialized a structured rtl_spec). This path gives that prose the same
+        # registry-backed deterministic emit, accepts ONLY the behavioral_fsm family
+        # and otherwise DEFERs — so putting it first cannot take work away from the
+        # general chain below, and leaving it second DID take work away from it.
+        #
+        # Both paths reach `spec_artifact_registry` and get the same RTL. What
+        # differs is what they say about it: this one records `artifact_type`,
+        # `module`, `spec_source` and `spec_sources` and writes `<top>.v` named from
+        # the spec, where the general chain records the emitter name and writes
+        # `chip_top.sv`. Ordered general-first, the chain answered every behavioral
+        # FSM before this path was reached, and six tests that assert the richer
+        # record went red saying `KeyError: 'artifact_type'`. A more specific
+        # producer that DEFERS when it does not apply belongs ahead of a general one.
+        _behavior_force = (_FORCE_RTL_REGEN
+                           if force_regen is None else force_regen)
+        handoff = _declared_logic_author_handoff(project, t0, _phase1_plain.text)
+        if handoff is not None:
+            return handoff
+        _bf = _try_phase1_behavioral_fsm_rtl(
+            project, t0, force_regen=_behavior_force, gathered=_phase1_plain,
+            project_binding=project_binding)
+        project_binding.require_current()
+        if _bf is not None:
+            return _bf
+        project_binding.require_current()
+        _sar = _try_spec_artifact_registry_rtl(
+            project, t0, phase1_plain_text=_phase1_plain.text)
+        project_binding.require_current()
+        if _sar is not None:
+            return _sar
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None and _design_supplied_build_rtl(project):

@@ -276,6 +276,8 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
                           for row in unaccounted]))
     if rejected:
         return None, None, rejected
+    if contract.source == 'json':
+        return None, None, rejected
     for name, fn in EMITTERS:
         try:
             kind, rtl = fn(prompt_text, ifc_text, top)
