@@ -284,7 +284,7 @@ class NativeCommands:
             if program == "@env":
                 native_tool = next((item for item in argv
                                     if not re.match(r"^[A-Za-z_]\w*=", item)), "")
-            if (self.step in ("A02", "A05", "A06", "A07", None)
+            if (self.step in ("A02", "A05", "A06", "A07", "A08", None)
                     and Path(native_tool).name == "ngspice" and not self.container
                     and os.environ.get("VIBEIC_LIBRELANE_LOCAL_ATTESTATION")):
                 startup_environment, native_init = _local_ngspice_startup(self.project, cwd, self.image)
@@ -1005,7 +1005,7 @@ def _a07_invocation(project, step="A07"):
     for block in _declared_blocks(project):
         name = block.get("name") or block.get("block")
         inputs.update(_input_views(project, name, step))
-        if step == "A07":
+        if step in ("A07", "A08"):
             selected = analog_native_sim._config({"config": _read(project / "input/analog_flow.json", {})}, block, step)
             if selected.get("nominal_testbench"):
                 selected = {**selected, "testbench": selected["nominal_testbench"]}

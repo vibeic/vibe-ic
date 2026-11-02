@@ -867,6 +867,16 @@ def run_step(step_id, project, block, options, run):
         if nominal.get("status") != "PASS":
             return _result("NOT_MEASURED", "nominal A07 has not passed; PVT sweep was not launched")
         pvt = config.get("pvt")
+        if isinstance(pvt, dict) and pvt.get("kind") == "declared_testbench":
+            import analog_declared_pvt as declared
+            try:
+                record = declared.run(project, name, config, pvt, _attempt(project, step_id, name), run)
+            except (OSError, ValueError, TypeError) as exc:
+                return _result("NOT_MEASURED", str(exc))
+            result = _result(record["status"], record["detail"], outputs=record["outputs"],
+                             metrics=record["metrics"], executions=record["executions"])
+            result["native_inputs"] = record["native_inputs"]
+            return result
         incremental = isinstance(pvt, dict) and pvt.get("kind") == "incremental_capture"
         if isinstance(pvt, dict) and (incremental or "result" in pvt):
             reference = pvt.get("manifest") if incremental else pvt["result"]

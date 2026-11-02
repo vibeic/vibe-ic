@@ -18,6 +18,7 @@ import json
 import math
 from pathlib import Path
 import re
+import tempfile
 from typing import Any, Mapping
 
 
@@ -10534,6 +10535,61 @@ def _a08_selected(project, name):
     return {**defaults, **selected}
 
 
+def _a08_declared_observation(project, row, selected, declaration, invocation):
+    """Reopen every corner the row ran: its re-derived deck, its log and its values."""
+    import analog_declared_pvt as declared
+    import analog_native_sim as sim
+    import analog_real_corner_sweep as sweep
+    name = row['block']
+    metrics = row.get('metrics') or {}
+    spec_path = sim._inputs(project, name, selected)[2]
+    required = sim._source_measurement_coverage(spec_path, [])['required']
+    spec = json.loads(spec_path.read_bytes())
+    units = {sweep.normalize_spec_label(v['name']) or v['name'].casefold(): v.get('unit', v.get('units'))
+             for v in spec.get('specs', []) if isinstance(v, dict) and v.get('name')}
+    answer = {'status': row.get('status'), 'corners': [], 'gaps': [], 'required': required,
+              'units': {key: units.get(key) for key in required}}
+    corners = {corner.get('name'): corner for corner in metrics.get('corners') or []}
+    expected = declared.coordinates(declaration)
+    if len(corners) != len(expected):
+        answer['gaps'].append('A08_DECLARED_CORNER_POPULATION_INCOMPLETE')
+    for section, temperature in expected:
+        label = declared.corner_label(section, temperature)
+        recorded = corners.get(label)
+        corner = {'name': label, 'status': 'NOT_MEASURED', 'observations': {}, 'complete': False}
+        try:
+            if not recorded:
+                raise MetricRefusal('A08_DECLARED_CORNER_ABSENT', label)
+            deck = _a0708_file(project, recorded['deck'], row['output_views'][recorded['deck']], invocation)
+            dut = _a0708_file(project, recorded['netlist'], row['output_views'][recorded['netlist']], invocation)
+            with tempfile.TemporaryDirectory(dir=deck.parent) as probe:
+                again = declared.write_corner(project, name, selected, Path(probe), list(declaration['process_sections']),
+                                              section, temperature)
+                same_dut = Path(again[1]).read_text() == dut.read_text()
+                deck_text = Path(again[0]).read_text().replace(str(Path(probe).resolve() / dut.name), str(dut))
+            if not same_dut or deck_text != deck.read_text():
+                raise MetricRefusal('A08_DECLARED_CORNER_DECK_CHANGED', label)
+            parsed = _a0708_transcript(project, [recorded['execution']], deck, invocation)
+            corner['status'] = recorded['status']
+            for key in required:
+                if recorded['measurements'].get(key) != parsed.get(key):
+                    raise MetricRefusal('A08_DECLARED_VALUE_UNBOUND', label + ':' + key)
+                if key in parsed:
+                    corner['observations'][key] = {'value': _finite_number(parsed[key]), 'unit': units.get(key)}
+            corner['complete'] = bool(required) and set(corner['observations']) == set(required)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            corner['detail'] = str(exc)
+            answer['gaps'].append(str(exc))
+        answer['corners'].append(corner)
+    if any(not corner['complete'] for corner in answer['corners']):
+        answer['gaps'].append('A08_COMPLETE_CURRENT_POINT_AND_CORNER_POPULATION_REQUIRED')
+    if any(corner['status'] == 'FAIL' for corner in answer['corners']):
+        answer['status'] = 'FAIL'
+    elif answer['gaps']:
+        answer['status'] = 'NOT_MEASURED'
+    return answer
+
+
 def _a08_incremental_observation(project, row, invocation):
     """Replay the selected producer; retained native FAIL precedes later gaps.
 
@@ -10549,6 +10605,8 @@ def _a08_incremental_observation(project, row, invocation):
     name = row['block']
     selected = _a08_selected(project, name)
     declaration = selected.get('pvt') or {}
+    if declaration.get('kind') == 'declared_testbench':
+        return _a08_declared_observation(project, row, selected, declaration, invocation)
     if declaration.get('kind') != 'incremental_capture':
         raise MetricRefusal('A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT', name)
     reference = declaration['manifest']
@@ -10665,7 +10723,7 @@ def accept_a08(project: Path, context: Mapping, component: Mapping) -> dict:
     try:
         invocation, rows = _a0708_rows(project, context, component, 'A08')
         if not observations and all((_a08_selected(project, row['block']).get('pvt') or {}).get('kind')
-                                   != 'incremental_capture' for row in rows):
+                                   not in ('incremental_capture', 'declared_testbench') for row in rows):
             # Preserve the existing unselected legacy summary diagnostics;
             # the selected producer repair does not qualify that old route.
             required, _ = _approved_authority(project, 'requirements/base_A7/pvt_load_modes.json#/required_items', ('block', 'name'))
