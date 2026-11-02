@@ -1226,7 +1226,9 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
                  if shape["kind"] == "generic" else None)
     if shape.get('reference_refusal') and expert_tb is None:
         return {'status': 'INCOMPLETE', 'reason': shape['reference_refusal'],
-                'ic_class': ic_class, 'fallback_skill': 'testbench-gen'}
+                'ic_class': ic_class, 'fallback_skill': 'testbench-gen',
+                'out_dir': str(out), 'reference_model_tier': 'hook_unfilled',
+                'reference_model_handoff': reference_model_handoff(out)}
     out.mkdir(parents=True, exist_ok=True)
 
     random_plan = (arithmetic_random_goal_plan(project, shape)
