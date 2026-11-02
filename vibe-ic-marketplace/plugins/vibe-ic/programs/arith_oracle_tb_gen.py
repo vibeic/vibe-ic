@@ -366,9 +366,11 @@ _FUNCTION_TITLES = frozenset({
     'arithmetic function', 'arithmetic datapath',
     '功能', '功能定義', '功能定义', '功能描述', '功能需求', '功能規格', '功能规格',
 })
-_QUALIFYING_PROSE = re.compile(
-    r"do not|don't|must not|not implement|forbidden|prohibit|disallow|negative|example"
-    r"|saturat|clamp|overflow|\brounding\b|禁止|不得|不可|不要|不准|反例|範例|范例|飽和|饱和", re.I)
+_PROHIBITING_PROSE = (r"do not|don't|must not|not implement|forbidden|prohibit|disallow|negative|example"
+                      r"|禁止|不得|不可|不要|不准|反例|範例|范例")
+_ARITHMETIC_QUALIFIER = re.compile(
+    r"saturat|clamp|overflow|underflow|\brounding\b|飽和|饱和|溢位|溢出|四捨五入", re.I)
+_QUALIFYING_PROSE = re.compile(_PROHIBITING_PROSE + '|' + _ARITHMETIC_QUALIFIER.pattern, re.I)
 
 
 def _title(record: dict) -> Optional[str]:
@@ -457,12 +459,16 @@ def _function_records(project: Path) -> List[str]:
             functions = [_fenced_function(row['content']) for row in rows
                          if _affirmative_function_record(row) and row['content'].strip()]
             # A record with another role is not read for the function, but one
-            # stating a different complete function leaves the source unresolved.
-            others = [_extract_operator(row['content']) for row in rows
-                      if not _affirmative_function_record(row)
-                      and not _QUALIFYING_PROSE.search(str(row.get('title', '')))]
+            # stating a different function or an arithmetic rule such as overflow
+            # handling leaves the source unresolved. A prohibiting title states neither.
+            others = [row for row in rows if not _affirmative_function_record(row)
+                      and not re.search(_PROHIBITING_PROSE, str(row.get('title', '')), re.I)]
             stated = {_extract_operator(record) for record in functions}
-            return [] if any(item and item not in stated for item in others) else functions
+            unresolved = any(
+                _extract_operator(row['content']) not in (None, *stated)
+                or _ARITHMETIC_QUALIFIER.search(f"{row.get('title', '')}\n{row['content']}")
+                for row in others)
+            return [] if unresolved else functions
     doc = _read_json(gd / 'L1_DATASHEET.json') or {}
     fields = doc.get('fields', doc)
     overview = fields.get('overview') if isinstance(fields, dict) else None

@@ -187,3 +187,22 @@ def test_native_signed_source_cannot_confirm_an_unsigned_reference(tmp_path, cas
     report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
     assert (step.status, report['status'], report['ran_cocotb']) == ('NOT_MEASURED', 'INCOMPLETE', False), report
     assert step.extras['fallback_skill'] == 'testbench-gen'
+
+
+@pytest.mark.parametrize('expression', ['left + right', "({1'b0, left} + {1'b0, right}) > 4'd7 ? 3'd7 : left + right"])
+def test_native_arithmetic_rule_in_another_record_blocks_the_wrapping_reference(tmp_path, expression):
+    p = project(tmp_path, 'result = left + right.', widths=(3, 3, 3))
+    path = p / 'phase1/generated_docs/L2_FRS.json'
+    doc = json.loads(path.read_text())
+    doc['frs_sections'].append({'title': 'Overflow policy', 'content': 'The result saturates on overflow.'})
+    path.write_text(json.dumps(doc))
+    rtl = p / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'neutral_arithmetic.v').write_text(
+        'module neutral_arithmetic(input [2:0] left, input [2:0] right, output [2:0] result); '
+        f'assign result = {expression}; endmodule\n')
+    import design_one_shot_runner as runner
+    step = runner.step_professional_tb_gen(p, 'neutral_arithmetic', 'unused')
+    report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
+    assert (step.status, report['status'], report['ran_cocotb']) == ('NOT_MEASURED', 'INCOMPLETE', False), report
+    assert step.extras['fallback_skill'] == 'testbench-gen'

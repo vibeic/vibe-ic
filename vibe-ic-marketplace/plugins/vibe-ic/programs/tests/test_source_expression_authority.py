@@ -437,6 +437,10 @@ def test_a_function_record_needs_exactly_one_complete_fenced_expression(tmp_path
     ([('Algorithm', 'p = x + y'), ('Function', 'p = x * y')], None),
     ([('功能定義 (negative example)', 'p = x * y')], None),
     ([('Function', 'p = x * y'), ('Function', 'Saturate on overflow.')], None),
+    ([('Function', 'p = x * y'), ('Overflow policy', 'Wraps.')], None),
+    ([('Function', 'p = x * y'), ('Datapath notes', 'The result saturates at its maximum.')], None),
+    ([('Function', 'p = x * y'), ('溢位行為', '結果飽和。')], None),
+    ([('Function', 'p = x * y'), ('Forbidden example: saturate on overflow', 'p = x + y')], '*'),
 ])
 def test_function_role_selects_records_and_a_stated_conflict_defers(tmp_path, records, operator):
     found = oracle._function_operator(phase1_project(tmp_path, records))
