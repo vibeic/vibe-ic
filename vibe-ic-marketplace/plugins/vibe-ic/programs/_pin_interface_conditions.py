@@ -21,16 +21,15 @@ def _sections(text):
     """One boundary model for masking and parsing the strict protocol.
 
     Fences use CommonMark's character, length, indentation and trailing-space
-    rules. In a protocol-bearing document, ambiguous/unclosed fences refuse;
-    hidden or quoted protocol copies never become authority or silent skips.
-    Unrelated documents remain outside this protocol's validation scope.
+    rules. Ambiguous/unclosed fences anywhere in the declared document set
+    refuse; hidden or quoted protocol copies never become authority or silent
+    skips. Validation finishes before any section can authorize a typed row.
     """
     lines = text.splitlines(keepends=True)
     sections = []
     start = level = None
     fence = None
     errors = []
-    protocol = False
     for index, raw in enumerate(lines):
         line = raw.rstrip('\r\n')
         # Blockquotes are containers, not top-level protocol authority. Strip
@@ -45,7 +44,6 @@ def _sections(text):
         header = tuple(c.strip() for c in unquoted.strip().strip('|').split('|'))
         candidate = title == 'Pin interface conditions' or header == _COLUMNS
         if candidate:
-            protocol = True
             if quoted or fence is not None:
                 errors.append(('HIDDEN_TABLE', index + 1))
         if quoted:
@@ -77,12 +75,11 @@ def _sections(text):
                 if start is not None:
                     _refuse('TABLE_MALFORMED', 'nested condition section')
                 start, level = index, depth
-    if protocol:
-        if errors:
-            reason, line = errors[0]
-            _refuse(reason, f'line {line}: hidden or ambiguous protocol boundary')
-        if fence is not None:
-            _refuse('UNCLOSED_FENCE', f'line {fence[2]}')
+    if errors:
+        reason, line = errors[0]
+        _refuse(reason, f'line {line}: hidden or ambiguous protocol boundary')
+    if fence is not None:
+        _refuse('UNCLOSED_FENCE', f'line {fence[2]}')
     if start is not None:
         sections.append((start, len(lines), lines))
     return sections

@@ -180,3 +180,12 @@ def test_nonclosing_indented_fence_like_line_refuses_even_before_a_real_close(tm
 def test_non_commonmark_heading_does_not_authorize_a_table(tmp_path):
     l1,l5=generate(tmp_path,table().replace('Pin interface conditions','Pin interface conditions###'))
     assert not pin_rows(l1) and not block_rows(l5)
+
+
+@pytest.mark.parametrize('text',['```markdown\nunclosed','```markdown\n```not-a-closer\n```\n'])
+@pytest.mark.parametrize('with_table',[False,True])
+def test_fence_refusal_covers_the_entire_declared_set(tmp_path,text,with_table):
+    docs={'interface.md':INTERFACE,'unrelated.md':text}
+    if with_table:docs['conditions.md']=table()
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_(UNCLOSED|INVALID)_FENCE'):
+        generate_docs(tmp_path,docs)
