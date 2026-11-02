@@ -1,4 +1,6 @@
 """Shared input/DAC and conversion-synchronous three-location chopping."""
+from itertools import product
+
 import pytest
 import subprocess
 import numpy as np
@@ -6,6 +8,7 @@ import analog_a3_netlist_emit as a3
 from _analog_producer_fixture import A2, A3, run_prog, bdir, read_json
 from test_analog_ciff import _emit, _project
 from test_analog_ota1_options import _case
+from test_incremental_reset_phase_alignment import logic
 
 
 def _caps(project, ir):
@@ -30,8 +33,14 @@ def test_shared_cs_uses_both_reference_polarities_and_preserves_total_feedback(t
     sharing = loop["sharing"]
     devs = {d["name"]: d for d in ir["devices"]}
     assert sharing["stage"] == 1 and sharing["total_dac_over_input_cap"] == pytest.approx(1.4)
-    assert devs["mn_smpb1"]["nets"][:3] == ["nsmp1", "nph2", "ndacb"]
-    assert devs["mp_smpb1"]["nets"][:3] == ["nsmp1", "nph2b", "ndacb"]
+    assert devs["mn_smpb1"]["nets"][::2] == ["nsmp1", "ndacb"]
+    assert devs["mp_smpb1"]["nets"][::2] == ["nsmp1", "ndacb"]
+    ready = ir["incremental_startup"]["transfer_ready_net"]
+    for reset, accepted, phi2 in product((0, 1), repeat=3):
+        known = {"nrstb": 1-reset, ready: accepted, "nph2": phi2}
+        expected = int(not reset and accepted and phi2)
+        assert logic(devs, devs["mn_smpb1"]["nets"][1], known) == expected
+        assert logic(devs, devs["mp_smpb1"]["nets"][1], known) == 1-expected
     assert devs["mn_dacs1"]["nets"][2] == "ndac"
     assert devs["mn_dacb1"]["nets"][1:3] == ["bit_out", "vrefp"]
     assert devs["mn_dacb0"]["nets"][1:3] == ["nqb", "vrefn"]

@@ -1,6 +1,9 @@
 """Phase and polarity contracts from the measured native timing arrangement."""
+from itertools import product
+
 import analog_a2_topology_emit as a2
-from test_analog_ciff import _emit
+from test_analog_ciff import _emit, _assert_phi2_or_reset_pair
+from test_incremental_reset_phase_alignment import logic
 
 
 def test_d1_strobe_preserves_the_native_measured_wiring(tmp_path):
@@ -11,8 +14,16 @@ def test_d1_strobe_preserves_the_native_measured_wiring(tmp_path):
     for name in ("mn_qdly1", "mp_qdly1"):
         assert devs[name]["nets"] == native[name]["nets"]
         assert devs[name]["nets"][1] == "nclkb"
-    for name in ("mn_qdly2", "mp_qdly2", "mn_qtail", "mn_qin", "mn_qref"):
+    for name in ("mn_qdly2", "mp_qdly2", "mn_qin", "mn_qref"):
         assert devs[name]["nets"] == native[name]["nets"]
+    for name in ("mn_qtail", "mp_qrst1", "mp_qrst2", "mp_qrsti1", "mp_qrsti2"):
+        assert devs[name]["nets"][::2] == native[name]["nets"][::2]
+        assert devs[name]["nets"][3] == native[name]["nets"][3]
+        assert (devs[name]["w"], devs[name]["l"]) == (native[name]["w"], native[name]["l"])
+        assert devs[name]["nets"][1] == devs["mn_qtail"]["nets"][1]
+    for reset, strobe, phi2 in product((0, 1), repeat=3):
+        known = {"nrstb": 1-reset, "nqstb": strobe, "nph2": phi2}
+        assert logic(devs, devs["mn_qtail"]["nets"][1], known) == int(not reset and strobe and phi2)
     assert ir["loop_declaration"]["D"] == 1
     assert ir["loop_declaration"]["k0_path"]["delay_clocks"] == 1
 
@@ -30,14 +41,21 @@ def test_default_d0_latches_at_integration_end_and_dac_samples_next_phase(tmp_pa
     # passive summer sampling in phi2 and returning in the next phi1.
     for name in ("mn_qdly1", "mp_qdly1"):
         assert devs[name]["nets"][1] == "clk"
-    assert devs["mn_sum_reset"]["nets"][:3] == ["nqz", "nph2", "vcm"]
-    assert devs["mn_ff0"]["nets"][:3] == ["nff0", "nph2", "vin"]
+    _assert_phi2_or_reset_pair(devs, "sum_reset", "nqz", "vcm")
+    _assert_phi2_or_reset_pair(devs, "ff0", "nff0", "vin")
     assert devs["mn_ffr0"]["nets"][:3] == ["nff0", "nph1", "vcm"]
     assert devs["mn_qin"]["nets"][1] == "vcm"
     assert devs["mn_qref"]["nets"][1] == "nqz"
     assert devs["mn_ndac1"]["nets"][1] == "nph1"
     assert devs["mn_dacs1"]["nets"][1] == "nckdac"
-    assert devs["mn_cftv1"]["nets"][1] == "nph2"
+    assert devs["mn_cftv1"]["nets"][::2] == ["ncft1", "vsum1"]
+    assert devs["mp_cftv1"]["nets"][::2] == ["ncft1", "vsum1"]
+    ready = ir["incremental_startup"]["transfer_ready_net"]
+    for reset, accepted, phi2 in product((0, 1), repeat=3):
+        known = {"nrstb": 1-reset, ready: accepted, "nph2": phi2}
+        expected = int(not reset and accepted and phi2)
+        assert logic(devs, devs["mn_cftv1"]["nets"][1], known) == expected
+        assert logic(devs, devs["mp_cftv1"]["nets"][1], known) == 1-expected
     assert "caz" not in devs and "csum_hold" not in devs
 
 
