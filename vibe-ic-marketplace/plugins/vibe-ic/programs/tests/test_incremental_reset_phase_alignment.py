@@ -170,3 +170,26 @@ def test_chopped_first_stage_is_not_lost_by_virtual_node_discovery(tmp_path):
     _, ir = _case(tmp_path, 1, 1, phase=1, ratio=2, stages=3, remove_cc=1)
     assert any(n["name"] == "mn_cstv1" for n, _ in transfer_pairs(ir))
     assert_qualified(ir)
+
+
+@pytest.mark.parametrize("delay", (0., 1.))
+def test_quantizer_does_not_evaluate_before_its_complete_phase_opens(tmp_path, delay):
+    ir, *_ = _emit(tmp_path, values={"feedback_delay": delay})
+    rows = devices(ir)
+    gate = rows["mn_qtail"]["nets"][1]
+    known = {"nall": 0, "nrstb": 1, "nqstb": 1,
+             "nph1": 0, "nph1b": 1, "nph2": 0, "nph2b": 1}
+    assert logic(rows, gate, known) == 0, "A retained strobe can evaluate before the new SC phase"
+    known["nph1" if delay == 0 else "nph2"] = 1
+    known["nph1b" if delay == 0 else "nph2b"] = 0
+    assert logic(rows, gate, known) == 1
+
+
+def test_delayed_summer_reset_follows_the_actual_comparator_event(tmp_path):
+    ir, *_ = _emit(tmp_path, values={"feedback_delay": 1.})
+    rows = devices(ir)
+    evaluation = rows["mn_qtail"]["nets"][1]
+    assert rows["mn_sumrb"]["nets"][1] == evaluation
+    assert rows["mp_sumrb"]["nets"][1] == evaluation
+    assert rows["mn_sumr"]["nets"][1] == "nsumrb"
+    assert rows["mp_sumr"]["nets"][1] == "nsumrb"
