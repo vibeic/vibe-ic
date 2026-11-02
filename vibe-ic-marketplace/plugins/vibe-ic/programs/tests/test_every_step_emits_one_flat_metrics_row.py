@@ -180,15 +180,19 @@ def test_both_branches_emit():
     the emit is still present on BOTH branches; nothing was lost.
 
     So the property is read from the syntax tree instead of from two string literals: every loop in
-    `main` that collects a step result must call `_emit_step_metrics`. That cannot be broken by a
+    `_audit_project` that collects a step result must call `_emit_step_metrics`. That cannot be broken by a
     re-spelling, and it catches the real defect — a branch that collects results without emitting —
     which the old `count(...) >= 2` could not (two emits on one branch would have satisfied it).
     """
     import ast
 
     tree = ast.parse(_FCC.read_text())
-    main_fn = next(n for n in ast.walk(tree)
+    main_fn = next(n for n in tree.body
                    if isinstance(n, ast.FunctionDef) and n.name == "main")
+    assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+               and n.func.id == "_audit_project" for n in ast.walk(main_fn))
+    audit_fn = next(n for n in tree.body
+                   if isinstance(n, ast.FunctionDef) and n.name == "_audit_project")
 
     def calls(node) -> set:
         out = set()
@@ -201,7 +205,7 @@ def test_both_branches_emit():
     #: A loop that COLLECTS a step's result — it appends to `results` or fills the by-id map the
     #: parallel path rebuilds `results` from. Either way it is a place a row must be emitted.
     collectors = []
-    for node in ast.walk(main_fn):
+    for node in ast.walk(audit_fn):
         if not isinstance(node, (ast.For, ast.AsyncFor)):
             continue
         body_src = ast.unparse(ast.Module(body=node.body, type_ignores=[]))

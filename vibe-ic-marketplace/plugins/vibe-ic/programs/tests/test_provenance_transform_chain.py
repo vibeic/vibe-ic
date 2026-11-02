@@ -290,12 +290,14 @@ def test_reextracted_spef_retains_openrcx_bytes_and_declares_augmentation(tmp_pa
 
 def test_historical_transform_reads_exact_managed_before_version(tmp_path):
     import step_output_collector as versions
+    from flow_artifact_paths import gate_parameters
 
     project, source, _middle, head = _immutable_chain(tmp_path)
-    attempt = versions.begin_step(project, '37')
-    with versions.active_steps(project, [attempt]):
-        versions.retain_before(project, '37', [source])
-    versions.finish_step(project, attempt, verdict='FAIL')
+    with gate_parameters(project, {'top': 'unit'}):
+        attempt = versions.begin_step(project, '37')
+        with versions.active_steps(project, [attempt]):
+            versions.retain_before(project, '37', [source])
+        versions.finish_step(project, attempt, verdict='FAIL')
     epoch = project / attempt['storage_root'] / attempt['folder']
     metadata = epoch / 'before/outputs.json'
     before = json.loads(metadata.read_text())

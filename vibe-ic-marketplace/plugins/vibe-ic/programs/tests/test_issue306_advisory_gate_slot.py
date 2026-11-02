@@ -24,11 +24,7 @@ import yaml
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
-_spec = importlib.util.spec_from_file_location(
-    "flow_compliance_check", _PROGRAMS / "flow_compliance_check.py")
-_flow = importlib.util.module_from_spec(_spec)
-sys.modules["flow_compliance_check"] = _flow
-_spec.loader.exec_module(_flow)
+import flow_compliance_check as _flow
 
 
 def _adv(cmd="some_check --flag", **kw):

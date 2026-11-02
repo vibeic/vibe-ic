@@ -598,7 +598,7 @@ def test_default_step34_retained_fill_reaches_current_consumer(
 
 
 @pytest.mark.parametrize('mutation', ['current', 'changed_final_gds', 'missing_native_proof'])
-def test_admitted_default_stream_rechecks_owner_without_restarting_native_producers(
+def test_admitted_default_stream_restarts_native_producers_and_rechecks_owner(
         tmp_path, monkeypatch, mutation):
     import phase3_one_shot_runner as R
     import librelane_contract as LC

@@ -161,7 +161,7 @@ def test_the_new_hints_are_held_out_of_the_displayed_reasons(tmp_path,
         f"an internal hint marker reached the displayed reasons: {leaked}")
 
 
-#: The four maps #599 requires, read out of `main` BY NAME instead of by a
+#: The four maps #599 requires, read out of `_audit_project` BY NAME instead of by a
 #: byte sequence. Every one of the four assertions this replaced was a literal
 #: that included the character AFTER the value — `'"NOT_MEASURED": 0}'`,
 #: `'"NOT_MEASURED": "NOT_MEASURED"}'` — so each of them was really asserting
@@ -172,18 +172,18 @@ def test_the_new_hints_are_held_out_of_the_displayed_reasons(tmp_path,
 #: (vibe-ic#2111). Parsed, the same widening is invisible; a label that is
 #: actually WRONG or actually GONE still fails.
 def _main_dict(name: str) -> dict:
-    """The dict literal `main` assigns to `name`, parsed, never imported.
+    """The dict literal `_audit_project` assigns to `name`, parsed, never imported.
 
-    `main` is a several-thousand-line function that takes a whole project on
+    `_audit_project` takes a whole project on
     disk; the tiers it prints are decided by these three literals and by the
-    one interpolation below, so those are what is read. A dict `main` builds
+    one interpolation below, so those are what is read. A dict the audit builds
     by comprehension is not this — the tally initialiser is the ALL-ZERO
     literal, and it is selected by that property rather than by line number.
     """
     import ast
     tree = ast.parse(SRC)
     main = next(n for n in tree.body
-                if isinstance(n, ast.FunctionDef) and n.name == "main")
+                if isinstance(n, ast.FunctionDef) and n.name == "_audit_project")
     for node in ast.walk(main):
         if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
             continue
@@ -199,7 +199,7 @@ def _main_dict(name: str) -> dict:
             continue
         return value
     raise AssertionError(
-        f"flow_compliance_check.main assigns no dict literal named {name!r}; "
+        f"flow_compliance_check._audit_project assigns no dict literal named {name!r}; "
         f"the #599 tier is decided there and this check cannot see it")
 
 
@@ -215,7 +215,7 @@ def test_the_tier_is_counted_labelled_and_rendered():
     """
     import ast
     main = next(n for n in ast.parse(SRC).body
-                if isinstance(n, ast.FunctionDef) and n.name == "main")
+                if isinstance(n, ast.FunctionDef) and n.name == "_audit_project")
     derived = [ast.unparse(n.value) for n in ast.walk(main)
                if isinstance(n, ast.Assign)
                and getattr(n.targets[0], "id", None) == "counts"
@@ -237,11 +237,11 @@ def test_the_incomplete_clause_actually_reaches_the_printed_summary():
     `"incomplete_str" in SRC` is satisfied by the assignment alone: the clause
     could be computed and then interpolated into nothing, and the tally line
     would silently drop the tier while this file stayed green. So the f-string
-    that `main` PRINTS is located and the name has to appear inside it.
+    that `_audit_project` PRINTS is located and the name has to appear inside it.
     """
     import ast
     main = next(n for n in ast.parse(SRC).body
-                if isinstance(n, ast.FunctionDef) and n.name == "main")
+                if isinstance(n, ast.FunctionDef) and n.name == "_audit_project")
     printed = []
     for node in ast.walk(main):
         if not (isinstance(node, ast.Call)

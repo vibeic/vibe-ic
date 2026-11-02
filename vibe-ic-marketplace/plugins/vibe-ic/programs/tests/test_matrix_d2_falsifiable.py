@@ -250,6 +250,7 @@ from typing import Callable, Dict, Optional, Tuple
 import pytest
 
 import flow_compliance_check as FCC
+from flow_artifact_paths import gate_parameters, resolve
 import _flow_reason_taxonomy as _RT
 
 from flow_matrix import flowref as F
@@ -2926,12 +2927,14 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
            "--budget-pct 10"): "HOLLOW_REPORTS",
     ("37", "gds_size_check --gds-file phase3/stage4/gds/*.gds --json "
            "reports/phase3/gds_size.json"): "GDS_BAD",
-    ("37", "gds_substance_check . --json reports/phase3/gds_substance.json"):
+    ("37", "gds_substance_check . --gds-file phase3/stage4/gds/*.gds "
+           "--def-file phase3/stage3/pnr/routed.def --json reports/phase3/gds_substance.json"):
         "GDS_BAD",
     # `GDS_BAD`'s 0-byte deliverable does not reach this gate's comparison — it
     # needs a PARSEABLE GDS and a DEF that places a port, or it answers
     # VACUOUS_PASS. See `_f_gds_no_labels`.
-    ("37", "gds_port_label_check . --json reports/phase3/gds_port_labels.json"):
+    ("37", "gds_port_label_check . --gds-file phase3/stage4/gds/*.gds "
+           "--json reports/phase3/gds_port_labels.json"):
         "GDS_NO_LABELS",
     ("M1", "mixed_signal_merge_check . --json "
            "reports/analog/mixed_signal/merge.json"): "MS_BAD",
@@ -3107,7 +3110,7 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
     # assertion (4) reddened step 23's cell for 79 versions. The clause is now
     # assigned `DRV_PROMOTION_CONTRADICTED`, which reaches the arm this entry
     # described. See the fixture's docstring for the measurement.
-    ('37', "gds_antenna_deck_check . --json "
+    ('37', "gds_antenna_deck_check . --gds phase3/stage4/gds/*.gds --json "
            "reports/phase2/gates/gate_oxide_geom_deck.json"):
         "VACUOUS: needs a real PDK antenna rule deck to grade; the check is "
         "inapplicable without one and no fixture can synthesise a PDK",
@@ -3309,7 +3312,8 @@ def _nonexec_artefact_present(project: Path, rel: str) -> bool:
     of those two remaps here is exactly the drift this module refuses
     everywhere else. Nothing is parsed out of the consumer's prose.
     """
-    ok, _found, _missing = FCC._check_files_exist(project, [rel], any_of=False)
+    with gate_parameters(project, {"top": "top"}):
+        ok, _found, _missing = FCC._check_files_exist(project, [rel], any_of=False)
     return ok
 
 
@@ -3344,11 +3348,13 @@ def _evaluate_clause(clause, project: Path) -> Tuple[str, str]:
                     f"condition_files_exist {list(clause.condition_files)} "
                     f"could not be materialised -> clause skipped, cannot fail")
         _prepare_report_dirs(project, clause.command)
-        passed, out = FCC._check_program_exit_zero(project, clause.command)
+        with gate_parameters(project, {"top": "top"}):
+            passed, out = FCC._check_program_exit_zero(project, clause.command)
         return _classify(passed, out), out.strip()[-400:]
     if clause.kind == F.K_FILES:
-        ok, found, missing = FCC._check_files_exist(
-            project, list(clause.files), any_of=clause.any_of)
+        with gate_parameters(project, {"top": "top"}):
+            ok, found, missing = FCC._check_files_exist(
+                project, list(clause.files), any_of=clause.any_of)
         if ok:
             return PASS, f"found={found} missing={missing}"
         return ABSENCE_RED, (
@@ -3623,7 +3629,8 @@ _WIRED_BLOCKING = (
 def _tier(project: Path, command: str) -> Tuple[str, str]:
     """The matrix's own consumer, so a control cannot pass by a softer path."""
     _prepare_report_dirs(project, command)
-    passed, out = FCC._check_program_exit_zero(project, command)
+    with gate_parameters(project, {"top": "top"}):
+        passed, out = FCC._check_program_exit_zero(project, command)
     return _classify(passed, out), out
 
 
@@ -4200,7 +4207,7 @@ def _materialise_files_exist(project: Path, clause) -> list:
     for pat in clause.files:
         # The consumer splits alternation on the literal " OR " (:2230-2231);
         # satisfying the first alternative satisfies the entry.
-        first = pat.split(F.ANY_OF_SEP)[0].strip()
+        first = resolve(project, pat.split(F.ANY_OF_SEP)[0].strip(), {"top": "top"})
         bad = [ch for ch in "?[" if ch in first]
         assert not bad, (
             f"pattern {first!r} uses glob metacharacter(s) {bad} that this "

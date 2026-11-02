@@ -10,6 +10,7 @@ import pytest
 import l24_signoff_evidence_backed_check as gate
 import phase1_post_process
 import step_output_collector as versions
+from flow_artifact_paths import gate_parameters
 
 
 def project(tmp_path, text="Sign-off requires DRC clean.\n"):
@@ -31,9 +32,10 @@ def project(tmp_path, text="Sign-off requires DRC clean.\n"):
 
 def attempt(p, constraint, sid, status=None):
     binding = {str(constraint.relative_to(p)): hashlib.sha256(constraint.read_bytes()).hexdigest()}
-    row = versions.begin_step(p, sid, binding)
-    if status is not None:
-        versions.finish_step(p, row, verdict=status, result={"detail": "synthetic producer outcome"})
+    with gate_parameters(p, {"top": "neutral"}):
+        row = versions.begin_step(p, sid, binding)
+        if status is not None:
+            versions.finish_step(p, row, verdict=status, result={"detail": "synthetic producer outcome"})
     return row
 
 
