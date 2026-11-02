@@ -59,7 +59,7 @@ _DECLARED_LOGIC_REQUESTS = [
 
 
 @pytest.mark.parametrize('obligation', _DECLARED_LOGIC_REQUESTS)
-@pytest.mark.parametrize('entry', ['producer', 'registry', 'chain', 'author'])
+@pytest.mark.parametrize('entry', ['producer', 'registry', 'record', 'chain', 'author'])
 def test_declared_logic_obligation_hands_off_before_sop(tmp_path, obligation, entry):
     import deterministic_emit_chain as chain
     import design_one_shot_runner as runner
@@ -71,6 +71,10 @@ def test_declared_logic_obligation_hands_off_before_sop(tmp_path, obligation, en
         rtl = K.synth(prompt, 'TopModule')
     elif entry == 'registry':
         _, rtl = registry.generate(prompt, 'TopModule')
+    elif entry == 'record':
+        rtl = registry.generate_from_record(
+            {'prompt': prompt},
+            text_fallthrough=lambda: K.synth(_KMAP_2IN, 'TopModule'))
     elif entry == 'chain':
         kind, rtl, rejected = chain.try_emit_ex(prompt, top='TopModule', check=False)
     else:
