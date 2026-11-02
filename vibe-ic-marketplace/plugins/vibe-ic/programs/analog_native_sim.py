@@ -70,6 +70,24 @@ def _read(path):
         return None
 
 
+def _selected_config(project, options, block, step):
+    """Use the same per-step sidecar/config selection for launch and readers."""
+    selected = _config(options, block, step)
+    sidecar_name = {'A08': 'pvt_inputs.json', 'A09': 'statistics_inputs.json'}.get(step)
+    if sidecar_name:
+        name = str(block.get('name') or block.get('block') or '')
+        path = project / 'phase3/analog' / name / sidecar_name
+        if path.is_file():
+            try:
+                defaults = json.loads(path.read_bytes())
+            except (OSError, ValueError) as exc:
+                raise ValueError(sidecar_name + ' execution inputs unreadable: ' + str(exc)) from exc
+            if not isinstance(defaults, dict):
+                raise ValueError(sidecar_name + ' execution inputs must be an object')
+            selected = {**defaults, **selected}
+    return selected
+
+
 def _path(project, value, fallback):
     path = Path(value) if value else fallback
     return path if path.is_absolute() else project / path
@@ -138,7 +156,7 @@ def _declared_testbench(project, name, config, destination):
             inputs["include:" + str(path)] = {
                 "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         return text, inputs
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+    except (OSError, ValueError, OverflowError, TypeError, KeyError, AttributeError) as exc:
         raise ValueError("declared testbench inputs are not renderable: " + str(exc)) from exc
 
 
@@ -794,18 +812,10 @@ def run_step(step_id, project, block, options, run):
     name = str(block.get("name") or block.get("block") or "")
     if not name or Path(name).name != name or name in (".", ".."):
         return _result("NOT_MEASURED", "analog block name is absent or invalid")
-    config = _config(options, block, step_id)
-    sidecar_name = {"A08": "pvt_inputs.json", "A09": "statistics_inputs.json"}.get(step_id)
-    if sidecar_name:
-        sidecar = project / "phase3" / "analog" / name / sidecar_name
-        if sidecar.is_file():
-            try:
-                defaults = json.loads(sidecar.read_bytes())
-            except (OSError, ValueError) as exc:
-                return _result("NOT_MEASURED", f"{sidecar_name} execution inputs unreadable: {exc}")
-            if not isinstance(defaults, dict):
-                return _result("NOT_MEASURED", f"{sidecar_name} execution inputs must be an object")
-            config = {**defaults, **config}
+    try:
+        config = _selected_config(project, options, block, step_id)
+    except (OSError, ValueError) as exc:
+        return _result('NOT_MEASURED', str(exc))
     if step_id == "A10":
         calibration = config.get("calibration")
         features = options.get("features") or (options.get("config") or {}).get("features") or {}
@@ -867,6 +877,16 @@ def run_step(step_id, project, block, options, run):
         if nominal.get("status") != "PASS":
             return _result("NOT_MEASURED", "nominal A07 has not passed; PVT sweep was not launched")
         pvt = config.get("pvt")
+        if isinstance(pvt, dict) and pvt.get("kind") == "declared_testbench":
+            import analog_declared_pvt as declared
+            try:
+                record = declared.run(project, name, config, pvt, _attempt(project, step_id, name), run)
+            except (OSError, ValueError, TypeError) as exc:
+                return _result("NOT_MEASURED", str(exc))
+            result = _result(record["status"], record["detail"], outputs=record["outputs"],
+                             metrics=record["metrics"], executions=record["executions"])
+            result["native_inputs"] = record["native_inputs"]
+            return result
         incremental = isinstance(pvt, dict) and pvt.get("kind") == "incremental_capture"
         if isinstance(pvt, dict) and (incremental or "result" in pvt):
             reference = pvt.get("manifest") if incremental else pvt["result"]

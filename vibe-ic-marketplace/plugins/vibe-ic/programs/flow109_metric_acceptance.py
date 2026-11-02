@@ -10258,7 +10258,7 @@ def _a0708_rows(project, context, component, step):
     return invocation, rows
 
 
-def _a0708_transcript(project, executions, deck, invocation):
+def _a0708_transcript(project, executions, deck, invocation, *, temperature_c=None):
     import analog_native_sim as sim
     import analog_real_corner_sweep as sweep
     if not executions:
@@ -10283,6 +10283,10 @@ def _a0708_transcript(project, executions, deck, invocation):
     text = '\n'.join(texts)
     if any(sweep._scan_analysis_failures(text)):
         raise MetricRefusal('A0708_NATIVE_ANALYSIS_FAILED', str(deck))
+    if temperature_c is not None:
+        import analog_declared_pvt as declared
+        if not declared.temperature_matches(text, temperature_c):
+            raise MetricRefusal('A08_DECLARED_NATIVE_TEMPERATURE_MISMATCH', str(deck))
     parsed = {key.casefold(): value for key, value in sweep.native_meas_rows(text).items()}
     for match in sweep._MEAS_LINE_RE.finditer(text):
         for key, value in sweep._KV_RE.findall(match.group(1)):
@@ -10526,12 +10530,114 @@ def _a08_selected(project, name):
     """Use the A08 sidecar/config precedence of the existing native dispatcher."""
     import analog_native_flow as native
     import analog_native_sim as sim
-    sidecar = project / 'phase3/analog' / name / 'pvt_inputs.json'
-    defaults = native._read(sidecar, {})
-    if not isinstance(defaults, dict):
-        raise MetricRefusal('A08_PVT_INPUTS_INVALID', str(sidecar))
-    selected = sim._config({'config': native._read(project / 'input/analog_flow.json', {})}, {'name': name}, 'A08')
-    return {**defaults, **selected}
+    try:
+        return sim._selected_config(project, {'config': native._read(project / 'input/analog_flow.json', {})},
+                                    {'name': name}, 'A08')
+    except (OSError, ValueError) as exc:
+        raise MetricRefusal('A08_PVT_INPUTS_INVALID', str(exc)) from exc
+
+
+def _a08_declared_observation(project, row, selected, declaration, invocation):
+    """Read/re-render every corner without writes; trustworthy scalar FAIL survives gaps."""
+    import analog_declared_pvt as declared
+    import analog_bound_measurements as bound
+    import analog_native_flow as native
+    import analog_native_sim as sim
+    import analog_real_corner_sweep as sweep
+    name = row['block']
+    metrics = row.get('metrics') or {}
+    spec_path = sim._inputs(project, name, selected)[2]
+    required = sim._source_measurement_coverage(spec_path, [])['required']
+    if set(required) & {'enob', 'snr', 'sinad', 'sndr'}:
+        raise MetricRefusal('A08_COMPLETE_SAMPLED_DYNAMIC_METHOD_REQUIRED', name)
+    limits = sim._bounds(spec_path, selected, required)
+    spec = json.loads(spec_path.read_bytes())
+    units = {sweep.normalize_spec_label(v['name']) or v['name'].casefold(): v.get('unit', v.get('units'))
+             for v in spec.get('specs', []) if isinstance(v, dict) and v.get('name')}
+    answer = {'status': 'NOT_MEASURED', 'corners': [], 'gaps': [], 'required': required,
+              'units': {key: units.get(key) for key in required}}
+    recorded_corners = metrics.get('corners') or []
+    expected = declared.coordinates(declaration)
+    wanted = {declared.corner_label(section, temperature) for section, temperature in expected}
+    corners = {}
+    for recorded in recorded_corners:
+        if (not isinstance(recorded, dict) or not isinstance(recorded.get('name'), str)
+                or recorded['name'] in corners):
+            answer['gaps'].append('A08_DECLARED_CORNER_POPULATION_INCOMPLETE')
+            continue
+        corners[recorded.get('name')] = recorded
+    if (metrics.get('stage') != 'PRE' or metrics.get('kind') != 'declared_testbench'
+            or len(recorded_corners) != len(expected) or set(corners) != wanted
+            or metrics.get('total_corners') != len(expected) or metrics.get('corners_executed') != len(expected)
+            or metrics.get('required') != required):
+        answer['gaps'].append('A08_DECLARED_CORNER_POPULATION_INCOMPLETE')
+    for section, temperature in expected:
+        label = declared.corner_label(section, temperature)
+        recorded = corners.get(label)
+        corner = {'name': label, 'status': 'NOT_MEASURED', 'observations': {}, 'complete': False}
+        try:
+            if (not recorded or recorded.get('process') != section
+                    or isinstance(recorded.get('temperature_c'), bool) or recorded.get('temperature_c') != temperature):
+                raise MetricRefusal('A08_DECLARED_CORNER_ABSENT_OR_MISMATCHED', label)
+            deck = _a0708_file(project, recorded['deck'], row['output_views'][recorded['deck']], invocation)
+            dut = _a0708_file(project, recorded['netlist'], row['output_views'][recorded['netlist']], invocation)
+            if deck.name != 'tb_' + name + '.sp' or dut != deck.parent / (name + '.sp'):
+                raise MetricRefusal('A08_DECLARED_CORNER_DECK_CHANGED', label)
+            deck_text, dut_text, source_views = declared.render_corner(project, name, selected, deck.parent,
+                list(declaration['process_sections']), section, temperature)
+            if dut_text != dut.read_text() or deck_text != deck.read_text():
+                raise MetricRefusal('A08_DECLARED_CORNER_DECK_CHANGED', label)
+            # Source authorization precedes interpreting values. Rebuild the actual
+            # consumed closure instead of trusting the row's self-reported subset.
+            for view in source_views.values():
+                if invocation.get('inputs', {}).get(view['path']) != view['sha256']:
+                    raise MetricRefusal('A08_DECLARED_SOURCE_READSET_INCOMPLETE', view['path'])
+                _a0708_file(project, view['path'], view['sha256'], invocation)
+            expected_views = {**source_views, **bound.consumed_input_views(project, deck),
+                              'deck': {'path': str(deck), 'sha256': bound.sha(deck)}}
+            recorded_views = {key[len(label) + 1:]: value for key, value in (row.get('native_inputs') or {}).items()
+                              if key.startswith(label + ':')}
+            if recorded_views != expected_views:
+                raise MetricRefusal('A08_DECLARED_MODEL_READSET_INCOMPLETE', label)
+            for view in expected_views.values():
+                if row['input_views'].get(view['path']) != view['sha256']:
+                    raise MetricRefusal('A08_DECLARED_MODEL_READSET_INCOMPLETE', view['path'])
+                _a0708_file(project, view['path'], view['sha256'], invocation)
+            execution = recorded['execution']
+            if Path(execution.get('cwd') or '').resolve() != deck.parent:
+                raise MetricRefusal('A08_DECLARED_EXECUTION_CWD_MISMATCH', label)
+            _environment, startup = native._local_ngspice_startup(project, None, invocation['image'])
+            if execution.get('native_init') != startup:
+                raise MetricRefusal('A08_DECLARED_NATIVE_STARTUP_MISMATCH', label)
+            if startup:
+                if invocation['inputs'].get(startup['path']) != startup['sha256']:
+                    raise MetricRefusal('A08_DECLARED_NATIVE_STARTUP_UNBOUND', label)
+                _a0708_file(project, startup['path'], startup['sha256'], invocation)
+            parsed = _a0708_transcript(project, [execution], deck, invocation, temperature_c=temperature)
+            for key in required:
+                if recorded.get('measurements', {}).get(key) != parsed.get(key):
+                    answer['gaps'].append('A08_DECLARED_VALUE_UNBOUND: ' + label + ':' + key)
+                    continue
+                if key in parsed:
+                    try:
+                        corner['observations'][key] = {'value': _finite_number(parsed[key]), 'unit': units.get(key)}
+                    except (TypeError, ValueError) as exc:
+                        answer['gaps'].append(str(exc))
+            missing, malformed, breach = declared.measurement_state(required, limits,
+                {key: value['value'] for key, value in corner['observations'].items()})
+            corner['status'] = 'FAIL' if breach else 'NOT_MEASURED' if missing or malformed or not required else 'PASS'
+            corner['complete'] = bool(required) and not missing and not malformed
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            if getattr(exc, 'code', '') == 'A0708_NATIVE_ANALYSIS_FAILED':
+                corner['status'] = 'FAIL'
+            corner['detail'] = str(exc)
+            answer['gaps'].append(str(exc))
+        answer['corners'].append(corner)
+    if any(not corner['complete'] for corner in answer['corners']):
+        answer['gaps'].append('A08_COMPLETE_CURRENT_POINT_AND_CORNER_POPULATION_REQUIRED')
+    answer['status'] = ('FAIL' if any(corner['status'] == 'FAIL' for corner in answer['corners']) else
+                        'NOT_MEASURED' if answer['gaps'] else 'PASS')
+    return answer
 
 
 def _a08_incremental_observation(project, row, invocation):
@@ -10549,6 +10655,8 @@ def _a08_incremental_observation(project, row, invocation):
     name = row['block']
     selected = _a08_selected(project, name)
     declaration = selected.get('pvt') or {}
+    if declaration.get('kind') == 'declared_testbench':
+        return _a08_declared_observation(project, row, selected, declaration, invocation)
     if declaration.get('kind') != 'incremental_capture':
         raise MetricRefusal('A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT', name)
     reference = declaration['manifest']
@@ -10665,7 +10773,7 @@ def accept_a08(project: Path, context: Mapping, component: Mapping) -> dict:
     try:
         invocation, rows = _a0708_rows(project, context, component, 'A08')
         if not observations and all((_a08_selected(project, row['block']).get('pvt') or {}).get('kind')
-                                   != 'incremental_capture' for row in rows):
+                                   not in ('incremental_capture', 'declared_testbench') for row in rows):
             # Preserve the existing unselected legacy summary diagnostics;
             # the selected producer repair does not qualify that old route.
             required, _ = _approved_authority(project, 'requirements/base_A7/pvt_load_modes.json#/required_items', ('block', 'name'))
