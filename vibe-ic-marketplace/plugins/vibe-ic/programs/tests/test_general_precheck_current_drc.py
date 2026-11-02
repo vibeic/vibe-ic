@@ -33,6 +33,10 @@ def _fixture(project, violations=0):
          "VERSION 5.8 ;\nDESIGN chip_top ;\nEND DESIGN\n")
     _put(project, "phase3/stage3/pnr/chip_top_pnr.v",
          "module chip_top(); endmodule\n")
+    _put(project, "state_out.json", json.dumps({
+        "gds": gds.relative_to(project).as_posix(),
+        "def": "phase3/stage3/pnr/chip_top.def",
+        "nl": "phase3/stage3/pnr/chip_top_pnr.v"}))
     tech = _put(project, "input/pdk/tech.lef", "VERSION 5.8 ;\nEND LIBRARY\n")
     cells = _put(project, "input/pdk/cells.lef", "VERSION 5.8 ;\nEND LIBRARY\n")
     deck = _put(project, "input/pdk/deck.lydrc", "# neutral parser-control recipe\n")

@@ -34,6 +34,10 @@ def _project(tmp_path, monkeypatch, rule, *, deck_source=""):
     (pnr / "unit.def").write_text(
         "VERSION 5.8 ;\nDESIGN unit ;\n"
         "DIEAREA ( 0 0 ) ( 100000 100000 ) ;\nEND DESIGN\n")
+    (project / "state_out.json").write_text(json.dumps({
+        "gds": (pnr / "unit.gds").relative_to(project).as_posix(),
+        "def": (pnr / "unit.def").relative_to(project).as_posix(),
+    }))
     pdk = _Pdk(project)
     rdb = ("<report-database><items><item>"
            f"<category>'{rule}'</category>"

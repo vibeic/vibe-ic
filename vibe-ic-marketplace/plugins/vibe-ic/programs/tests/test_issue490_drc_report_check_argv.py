@@ -480,6 +480,10 @@ def _plant_signoff_evidence(proj: Path):
         for path, body in materials.values():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(body)
+        (proj / "state_out.json").write_text(json.dumps({
+            "gds": (gds / "chip_top.gds").relative_to(proj).as_posix(),
+            "def": materials["def"][0].relative_to(proj).as_posix(),
+            "nl": materials["netlist"][0].relative_to(proj).as_posix()}))
         deck = materials["pdk_deck"][0]
         # Name the same material deck in the RDB and the fixture invocation.
         # A dirty/plain report is left dirty/plain; no result body is replaced.

@@ -47,7 +47,11 @@ def final_state(project: Path, *, streamed: bool = False) -> Path | None:
     # its publisher, hashes and signatures are not admission requirements (#62).
     direct = project / 'state_out.json'
     if direct.is_file():
-        return direct.resolve()
+        state = load(direct)
+        if (streamed or 'route__drc_errors_final' in (state.get('metrics') or {}) or
+                state.get('odb') and state.get('def') and (state.get('spef') or
+                same_def(path(project, state['def']), project / 'phase3/stage3/pnr/routed.def'))):
+            return direct.resolve()
     if streamed:
         streams = []
         for candidate in sorted((project / 'phase3/librelane').glob('**/state_out.json')):

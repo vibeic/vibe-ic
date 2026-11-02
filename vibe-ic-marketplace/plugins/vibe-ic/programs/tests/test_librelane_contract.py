@@ -1241,8 +1241,19 @@ def test_chain_progressing_past_stall_grace_is_not_killed(tmp_path, monkeypatch)
 
 
 def test_step31_reports_chain_stall_as_unmeasured(tmp_path, monkeypatch):
+    import _gdsii
     runner = importlib.import_module('phase3_one_shot_runner')
     pv = importlib.import_module('librelane_pv_signoff')
+    _gdsii.write_gdsii(tmp_path / 'block.gds', cell='block')
+    inputs = {
+        'def': ('block.def', 'VERSION 5.8 ;\nDESIGN block ;\nEND DESIGN\n'),
+        'nl': ('block.v', 'module block(); endmodule\n'),
+        'sdc': ('block.sdc', '# Neutral stall-test timing view\n'),
+    }
+    for name, body in inputs.values():
+        (tmp_path / name).write_text(body)
+    put(tmp_path / 'state_out.json', {
+        'gds': 'block.gds', **{view: name for view, (name, _) in inputs.items()}})
     monkeypatch.setattr(contract, 'resolve_image', lambda project: 'candidate')
     monkeypatch.setattr(contract, 'resolve_pdk_root',
                         lambda project, pdk, image=None: str(tmp_path))
