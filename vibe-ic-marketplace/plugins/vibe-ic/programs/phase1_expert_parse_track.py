@@ -306,12 +306,14 @@ Never an oracle, a golden artefact or a harness.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import re
 import sys
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -1284,6 +1286,10 @@ _TOKEN_ELLIPSIS = re.compile(r"\.\.\.|\u2026")
 #: told nothing about what the comparator can represent, and the two shapes it
 #: cannot are exactly the two an author writes when the fact is awkward: a
 #: non-Latin token, and a pattern with an ellipsis in it.
+#:
+#: A NUMERIC token is decided by value, not by this matcher (`token_in_unit`,
+#: ruling #82(5)). This declaration is hashed into every expert input frame,
+#: so rewording it is a scheduled change of its own — see that block first.
 TOKEN_LANGUAGE = {
     "matcher": ("each token is compared with `phrase_present`: both the token "
                 "and the document are lower-cased and every run of "
@@ -1380,7 +1386,8 @@ def _layer_haystack(blob: Any) -> str:
     return " ".join(out)
 
 
-def _haystack_units(blob: Any) -> List[str]:
+def _haystack_units(blob: Any, key: Any = None,
+                    unit: Optional[Tuple[str, int]] = None) -> List[str]:
     """The layer's searchable text as INDEPENDENT UNITS — one per key, one per
     scalar — rather than as one joined document (#2127 addendum, #2128).
 
@@ -1400,27 +1407,309 @@ def _haystack_units(blob: Any) -> List[str]:
     Matching per UNIT keeps every property `phrase_present` was built for — a
     phrase still cannot match inside a token (`REF` does not match `REFHI`),
     and a separator difference is still not a disagreement (`1.8 V` matches
-    `1.8V` within one unit) — and removes only the cross-field assembly."""
+    `1.8V` within one unit) — and removes only the cross-field assembly.
+
+    A scalar unit is a `_ValueUnit`: the same text, plus the typed value a
+    NUMERIC token is compared with. `key` / `unit` are the context a scoped
+    subtree was reached under (`_scope_context`)."""
     out: List[str] = []
 
-    def walk(node: Any) -> None:
+    def walk(node: Any, key: Any, unit: Optional[Tuple[str, int]]) -> None:
         if isinstance(node, dict):
+            unit = _record_unit(node, unit)
             for k, v in node.items():
                 out.append(str(k))
-                walk(v)
+                walk(v, k, _key_unit(k) or unit)
         elif isinstance(node, list):
             for v in node:
-                walk(v)
+                walk(v, key, unit)
         elif node is not None:
-            out.append(str(node))
+            out.append(_ValueUnit(node, key, unit))
 
-    walk(blob)
+    walk(blob, key, unit)
     return out
 
 
+# ── a NUMERIC token is compared by VALUE, never by its digits (#82(5)) ──────
+#
+# `phrase_present` reduces both sides with `_norm`, which deletes the decimal
+# point and the sign along with every other separator. For a word that is the
+# separator tolerance it was built for; for a number it CHANGES the number.
+# `5.5` becomes the tokens `5 5`, which concatenate to `55`. MEASURED on the
+# ADC D1 root (8HD-d, case-r5c, `expert_parse_track.json`
+# /ai_subtrack/converged/40): `r5:pad_edge_spacing` expects `5.5`, and the
+# owning-layer answer named L8_RTL_CONSTANTS, L8_TIMING_WAVEFORM and
+# L9_INTEGRATION_SPEC on the strength of `reset_strategy.evidence.line: 55` —
+# a citation LINE NUMBER — and L22_VERIFICATION_PLAN on the string
+# `input/docs/…_OWNER_RULINGS_R2.md:55`. None of them carries 5.5. The
+# conclusion happened to be right (the fact is mis-scoped; its carrier is the
+# 0.5ic `pad_edge_spacing_um`); the evidence published for it was not. The
+# same reduction makes `1.0` equal `10`, `5.5` equal `5.55` and `v1.5.5`, and
+# `40` equal `-40`.
+#
+# So a token that IS a number, optionally with a unit, is asked a different
+# question: does the layer carry a TYPED VALUE equal to it? A typed value is
+# a JSON number, or a string that is WHOLLY one number with an optional unit
+# (`1.8 V`, `5.5um`, `-40`, `16-bit`). Never a key; never a number inside
+# prose, a citation, a version or a range (`…R2.md:55`, `v1.5.5`, `0–1.2`);
+# never a source position (`_SOURCE_POSITION_KEYS`); never a digest string.
+# Values compare after unit normalisation — `5.5 um` equals `5500 nm`, a
+# `pad_edge_spacing_um: 5.5` field and `{"value": 5.5, "unit": "µm"}` — and a
+# unitless token compares with the number as written, in whatever unit the
+# layer states it. Every other token is matched exactly as before.
+#
+# ONE predicate, `token_in_unit`, decides `met`, the owning-layer answer and
+# the carriage paths, so the three cannot disagree about a number.
+#
+# NOT restated in `TOKEN_LANGUAGE`, deliberately: `authoring_schema` carries
+# that declaration and `ic_expert_backup_pack.phase1_frame` hashes the schema
+# into every expert input frame, so rewording it re-binds every retained
+# expert answer and every signed D1. That is a change to schedule, not a side
+# effect to ship inside a comparator fix.
+
+#: SI prefixes as powers of ten. `K` is the common mis-capitalised kilo
+#: (`KHz`, `Kohm`); no unit below is spelled with a bare capital K otherwise.
+_SI_PREFIX_EXP = {"f": -15, "p": -12, "n": -9, "u": -6, "m": -3,
+                  "k": 3, "K": 3, "M": 6, "G": 9, "T": 12}
+#: Symbols a prefix may precede: symbol -> (dimension, power the prefix is
+#: raised to). SI capitalisation is load-bearing (`mA` is not `MA`). Area is
+#: its own dimension, so `5 mm2` can never equal `5 um`.
+_PREFIXABLE_UNITS = {"ohm": ("ohm", 1), "bit": ("bit", 1), "sps": ("sps", 1),
+                     "S/s": ("sps", 1), "Hz": ("Hz", 1), "m2": ("m2", 2),
+                     "V": ("V", 1), "A": ("A", 1), "W": ("W", 1),
+                     "s": ("s", 1), "F": ("F", 1), "H": ("H", 1),
+                     "m": ("m", 1)}
+_PREFIXABLE_LONGEST_FIRST = sorted(_PREFIXABLE_UNITS.items(),
+                                   key=lambda kv: -len(kv[0]))
+#: Symbols no prefix may precede.
+_PLAIN_UNITS = {"%": "%", "ppm": "ppm", "dB": "dB", "dBm": "dBm",
+                "dBc": "dBc", "dBFS": "dBFS", "C": "degC", "LSB": "LSB"}
+#: A unit carried by a field NAME (`pad_edge_spacing_um`, `freq_mhz`,
+#: `temperature_c`), lower-case as field names are written — so `mhz` is MHz,
+#: the only reading that spelling has in practice. The suffixes measured on
+#: emitted L-docs plus their unambiguous siblings; a suffix that also names
+#: something else (`_ff` is a process corner; a lone `_s`, `_a`, `_w` is as
+#: often a plural or a label) states no unit.
+_KEY_SUFFIX_UNITS = {
+    "v": ("V", 0), "mv": ("V", -3), "uv": ("V", -6),
+    "ma": ("A", -3), "ua": ("A", -6), "na": ("A", -9),
+    "mw": ("W", -3), "uw": ("W", -6), "nw": ("W", -9),
+    "hz": ("Hz", 0), "khz": ("Hz", 3), "mhz": ("Hz", 6), "ghz": ("Hz", 9),
+    "ms": ("s", -3), "us": ("s", -6), "ns": ("s", -9), "ps": ("s", -12),
+    "pf": ("F", -12), "nf": ("F", -9), "uf": ("F", -6),
+    "ohm": ("ohm", 0), "kohm": ("ohm", 3),
+    "nm": ("m", -9), "um": ("m", -6), "mm": ("m", -3),
+    "um2": ("m2", -12), "mm2": ("m2", -6),
+    "c": ("degC", 0), "degc": ("degC", 0),
+    "pct": ("%", 0), "percent": ("%", 0), "ppm": ("ppm", 0),
+    "db": ("dB", 0), "dbm": ("dBm", 0), "bit": ("bit", 0), "bits": ("bit", 0),
+    "sps": ("sps", 0), "ksps": ("sps", 3), "msps": ("sps", 6),
+}
+#: Fields that say WHERE in a source document something was read — a citation
+#: line, a clause position. Their numbers are positions, not values. MEASURED
+#: on 707 emitted L-docs: `line`, `header_line`, `alignment_line`, `row_line`
+#: and `clause_index` are the shapes that occur. `offset`, `index`, `column`,
+#: `page` and `lines` are deliberately NOT here: a register offset, a channel
+#: index, a ball-map column, a memory page or a display's line count is a
+#: design value.
+_SOURCE_POSITION_KEYS = frozenset({
+    "line", "lineno", "line_no", "line_number", "line_num", "char_offset",
+    "clause_index"})
+_SOURCE_POSITION_SUFFIXES = ("_line", "_lineno", "_line_no", "_line_number")
+#: Fields whose STRING value is a digest (`sha256`, `document_sha256`). A short
+#: hex prefix can be all digits (`91094619`) and would otherwise read as a
+#: number. The digest word must END the name: `digest_bits` is a width.
+_DIGEST_KEY = re.compile(r"(?:^|_)(?:sha\d*|digest|hash|checksum)$")
+_QUANTITY = re.compile(
+    r"([-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)"
+    r"(?:\s*-?\s*(\S.{0,15}))?", re.S)
+
+
+class Quantity(NamedTuple):
+    """A number AS WRITTEN, and the unit it is stated in.
+
+    `dimension` is None when no unit is stated or resolvable; `exp10` is the
+    unit's power of ten (`um` -> -6), so `value` stays exactly what was
+    written and the scale is applied only when two quantities are compared."""
+    value: Decimal
+    dimension: Optional[str] = None
+    exp10: int = 0
+
+    def matches(self, typed: "Quantity") -> bool:
+        """Is `typed` (a value a layer carries) equal to this expected one?
+
+        A unitless expectation compares with the number as written, in
+        whatever unit the layer states it. One with a unit needs the same
+        dimension and an equal value once both are normalised; a value whose
+        unit is unknown cannot establish that, so it does not match."""
+        if self.dimension is None:
+            return self.value == typed.value
+        if typed.dimension != self.dimension:
+            return False
+        try:
+            return self.value.scaleb(self.exp10 - typed.exp10) == typed.value
+        except ArithmeticError:
+            return False
+
+
+def parse_unit(text: str) -> Optional[Tuple[str, int]]:
+    """`(dimension, power of ten)` for one unit spelling, or None."""
+    u = str(text).strip()
+    for glyph, ascii_ in (("\u00b5", "u"), ("\u03bc", "u"), ("\u2126", "ohm"),
+                          ("\u03a9", "ohm"), ("\u00b2", "2"), ("^2", "2"),
+                          ("\u2103", "C"), ("\u00b0", "")):
+        u = u.replace(glyph, ascii_)
+    u = re.sub(r"(?i)ohms?$", "ohm", re.sub(r"^deg\s*C$", "C", u.strip()))
+    u = re.sub(r"bits$", "bit", u)
+    if u in _PLAIN_UNITS:
+        return _PLAIN_UNITS[u], 0
+    for symbol, (dimension, power) in _PREFIXABLE_LONGEST_FIRST:
+        if u.endswith(symbol):
+            prefix = u[:len(u) - len(symbol)]
+            if not prefix:
+                return dimension, 0
+            if prefix in _SI_PREFIX_EXP:
+                return dimension, _SI_PREFIX_EXP[prefix] * power
+            return None
+    return None
+
+
+def parse_quantity(text: Any) -> Optional[Quantity]:
+    """`text` read as ONE number with an optional unit — else None.
+
+    The WHOLE string must be the quantity: `1.8 V`, `5.5um`, `-40`, `16-bit`.
+    A number inside prose, a citation, a version or a range is not one:
+    `…R2.md:55`, `v1.5.5`, `0–1.2`, `pads 4/7/5/8` and `0xc` are all None, as
+    is a number followed by a word that is not a unit (`2 clocks`)."""
+    if not isinstance(text, str):
+        return None
+    s = text.strip().replace("\u2212", "-")
+    if not s or s[0] not in "0123456789+-.":
+        return None
+    m = _QUANTITY.fullmatch(s)
+    if m is None:
+        return None
+    dimension, exp10 = None, 0
+    if m.group(2):
+        unit = parse_unit(m.group(2))
+        if unit is None:
+            return None
+        dimension, exp10 = unit
+    value = Decimal(m.group(1))
+    return Quantity(value, dimension, exp10) if value.is_finite() else None
+
+
+@functools.lru_cache(maxsize=4096)
+def _token_quantity(token: str) -> Optional[Quantity]:
+    """The expected token as a number, or None when it is not one."""
+    return parse_quantity(token)
+
+
+def _key_unit(key: Any) -> Optional[Tuple[str, int]]:
+    """The unit a field NAME states (`pad_edge_spacing_um` -> um), or None."""
+    k = str(key).strip().lower()
+    return _KEY_SUFFIX_UNITS.get(k.rsplit("_", 1)[1]) if "_" in k else None
+
+
+def _record_unit(record: Dict[Any, Any],
+                 inherited: Optional[Tuple[str, int]]
+                 ) -> Optional[Tuple[str, int]]:
+    """The unit a record states for its own values (`{"target": 1.0,
+    "unit": "V"}`), else the one it inherits. The NEAREST statement wins,
+    including one that cannot be parsed: an unknown unit is unknown, never
+    permission to reach for an outer one."""
+    for k, v in record.items():
+        if isinstance(v, str) and str(k).strip().lower() in ("unit", "units"):
+            return parse_unit(v)
+    return inherited
+
+
+def _source_position_key(key: Any) -> bool:
+    """Does this field hold a position in a SOURCE document, not a value?"""
+    k = str(key).strip().lower()
+    return k in _SOURCE_POSITION_KEYS or k.endswith(_SOURCE_POSITION_SUFFIXES)
+
+
+def _typed_quantity(node: Any, key: Any,
+                    unit: Optional[Tuple[str, int]]) -> Optional[Quantity]:
+    """The typed numeric VALUE this scalar is, or None when it is not one."""
+    if key is not None and _source_position_key(key):
+        return None
+    if isinstance(node, bool):
+        return None
+    if isinstance(node, (int, float)):
+        # 15 significant digits is what a double carries, so emitter
+        # arithmetic noise (0.30000000000000004) is not a different value.
+        value = Decimal(node) if isinstance(node, int) \
+            else Decimal(format(node, ".15g"))
+        if not value.is_finite():
+            return None
+        return Quantity(value, *unit) if unit else Quantity(value)
+    if isinstance(node, str):
+        if key is not None and _DIGEST_KEY.search(str(key).strip().lower()):
+            return None
+        q = parse_quantity(node)
+        if q is not None and q.dimension is None and unit:
+            return Quantity(q.value, *unit)
+        return q
+    return None
+
+
+class _ValueUnit(str):
+    """A haystack unit that is a scalar VALUE: its text, plus the typed value
+    a numeric token is compared with (`quantity`, None when it is not one).
+    A key stays a plain `str`, so a key can never satisfy a number."""
+    quantity: Optional[Quantity]
+
+    def __new__(cls, node: Any, key: Any = None,
+                unit: Optional[Tuple[str, int]] = None) -> "_ValueUnit":
+        self = super().__new__(cls, str(node))
+        self.quantity = _typed_quantity(node, key, unit)
+        return self
+
+
+def token_in_unit(token: str, unit: str) -> bool:
+    """Does this ONE haystack unit carry the expected token?
+
+    A NUMERIC token (a number, optionally with a unit) is carried only by a
+    typed value equal to it; every other token by `phrase_present`, exactly
+    as before. The one predicate behind `met`, ownership and carriage."""
+    want = _token_quantity(token)
+    if want is None:
+        return phrase_present(token, unit)
+    have = getattr(unit, "quantity", None)
+    return have is not None and want.matches(have)
+
+
 def present_in_units(phrase: str, units: List[str]) -> bool:
-    """Is the phrase present WITHIN ONE unit? Never assembled across two."""
-    return any(phrase_present(phrase, u) for u in units)
+    """Is the token present WITHIN ONE unit? Never assembled across two.
+    A numeric token is present only as a typed value (`token_in_unit`)."""
+    return any(token_in_unit(phrase, u) for u in units)
+
+
+def _scope_context(blob: Any, field_path: Any, layer: Any = None
+                   ) -> Tuple[Any, Optional[Tuple[str, int]]]:
+    """The `(key, unit)` a RESOLVED field_path's nodes are reached under.
+
+    A value the expectation addresses directly keeps the unit its own field
+    name or its record states, and a position stays a position — exactly the
+    context the whole-layer walk would have given the same node."""
+    try:
+        if _is_json_pointer(field_path):
+            node, key, unit = blob, None, None
+            for raw in field_path[1:].split("/"):
+                token = raw.replace("~1", "/").replace("~0", "~")
+                if isinstance(node, dict):
+                    unit = _record_unit(node, unit)
+                    node, key = node[token], token
+                    unit = _key_unit(token) or unit
+                else:
+                    node = node[int(token)]
+            return key, unit
+        key = _normalise_field_path(field_path, layer).rsplit(".", 1)[-1]
+        return key, _key_unit(key)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None, None
 
 
 class _PointerObject(dict):
@@ -2111,8 +2400,10 @@ def _ownership_units(blob: Any) -> List[str]:
     envelope. See `_L_DOC_ENVELOPE_KEYS` for what is dropped and why."""
     out: List[str] = []
 
-    def walk(node: Any, path: List[str]) -> None:
+    def walk(node: Any, path: List[str], at: Any,
+             unit: Optional[Tuple[str, int]]) -> None:
         if isinstance(node, dict):
+            unit = _record_unit(node, unit)
             for key, value in node.items():
                 if not path and key in _L_DOC_ENVELOPE_KEYS:
                     continue
@@ -2125,14 +2416,14 @@ def _ownership_units(blob: Any) -> List[str]:
                         out.extend(_evidence_units(entry))
                     continue
                 out.append(str(key))
-                walk(value, path + [str(key)])
+                walk(value, path + [str(key)], key, _key_unit(key) or unit)
         elif isinstance(node, list):
             for value in node:
-                walk(value, path)
+                walk(value, path, at, unit)
         elif node is not None:
-            out.append(str(node))
+            out.append(_ValueUnit(node, at, unit))
 
-    walk(blob, [])
+    walk(blob, [], None, None)
     return out
 
 
@@ -2140,20 +2431,21 @@ def _evidence_units(node: Any) -> List[str]:
     """`_haystack_units` over one evidence entry, minus its `label`."""
     out: List[str] = []
 
-    def walk(cur: Any) -> None:
+    def walk(cur: Any, at: Any, unit: Optional[Tuple[str, int]]) -> None:
         if isinstance(cur, dict):
+            unit = _record_unit(cur, unit)
             for k, v in cur.items():
                 if k in _EVIDENCE_PROVENANCE_KEYS:
                     continue
                 out.append(str(k))
-                walk(v)
+                walk(v, k, _key_unit(k) or unit)
         elif isinstance(cur, list):
             for v in cur:
-                walk(v)
+                walk(v, at, unit)
         elif cur is not None:
-            out.append(str(cur))
+            out.append(_ValueUnit(cur, at, unit))
 
-    walk(node)
+    walk(node, None, None)
     return out
 
 
@@ -2244,8 +2536,9 @@ def owning_layers_answer(project: Path, tokens: List[str],
     for stem, units in searched:
         found = {}
         for t in wanted:
-            where = next((u for u in units if phrase_present(t, u)), None)
+            where = next((u for u in units if token_in_unit(t, u)), None)
             if where is not None:
+                where = str(where)
                 found[t] = where if len(where) <= 200 else where[:200] + "…"
         hits[stem] = found
     breadth = {t: sum(1 for f in hits.values() if t in f) for t in wanted}
@@ -2534,24 +2827,27 @@ def token_paths(blob: Any, token: str) -> List[str]:
     List indices are elided — `registers[7].reset_value` and
     `registers[8].reset_value` are one path, because the question is which
     FIELD carries the fact and not how many records do. Uses the same
-    `phrase_present` the comparator uses, so the two can never disagree about
+    `token_in_unit` the comparator uses, so the two can never disagree about
     whether a token is present.
     """
     hits: List[str] = []
 
-    def walk(node: Any, path: List[str]) -> None:
+    def walk(node: Any, path: List[str], at: Any,
+             unit: Optional[Tuple[str, int]]) -> None:
         if isinstance(node, dict):
+            unit = _record_unit(node, unit)
             for k, v in node.items():
                 if _negative_status_key(k):
                     continue
-                walk(v, path + [str(k)])
+                walk(v, path + [str(k)], k, _key_unit(k) or unit)
         elif isinstance(node, list):
             for v in node:
-                walk(v, path)
-        elif node is not None and phrase_present(token, str(node)):
+                walk(v, path, at, unit)
+        elif node is not None and token_in_unit(token,
+                                                _ValueUnit(node, at, unit)):
             hits.append(".".join(path))
 
-    walk(blob, [])
+    walk(blob, [], None, None)
     return sorted(set(hits))
 
 
@@ -3029,7 +3325,8 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
     else:
         base["scope"] = "json_pointer" if _is_json_pointer(base["field_path"]) \
             else "field_path"
-        units = [u for node in subtree for u in _haystack_units(node)]
+        at, unit = _scope_context(blob, base["field_path"], base["layer"])
+        units = [u for node in subtree for u in _haystack_units(node, at, unit)]
 
     missing = [t for t in base["expected_tokens"]
                if not present_in_units(t, units)]
