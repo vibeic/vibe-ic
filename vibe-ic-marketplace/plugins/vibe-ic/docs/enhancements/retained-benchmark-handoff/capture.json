@@ -1,0 +1,26 @@
+[
+  {
+    "step": "benchmark.retained_handoff",
+    "design": "neutral-worker-interruption",
+    "bucket": "A",
+    "rule_name": "commit_successful_workers_during_shutdown",
+    "docstring": "A coordinator interruption must still deliver successful running worker outcomes to the existing checkpoint callback exactly once.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "After cancellation and shutdown, deliver successful undelivered futures once, retain callback failures as exception causes, and rethrow the original interruption.",
+    "capture_kind": "FLOW_DIAGNOSTIC_ENHANCEMENT",
+    "recovered_rtl_case": false,
+    "benchmark_result_change": "NONE"
+  },
+  {
+    "step": "benchmark.retained_handoff",
+    "design": "neutral-orphaned-native-handoff",
+    "bucket": "A",
+    "rule_name": "recover_unique_original_native_handoff",
+    "docstring": "Ordinary resume may reconstruct an unaccepted handoff only from the unique native report owner and unchanged issued source, route, material, image and configuration.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Revalidate the original invocation and its native admission interval, retain a later duplicate refusal separately, use read-only argv derivation and the existing backup/review builders, and leave mismatched or missing evidence blocked.",
+    "capture_kind": "FLOW_DIAGNOSTIC_ENHANCEMENT",
+    "recovered_rtl_case": false,
+    "benchmark_result_change": "NONE"
+  }
+]

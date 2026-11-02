@@ -1,0 +1,14 @@
+[
+  {
+    "step": "benchmark.review_correction",
+    "design": "neutral-independent-review-corrections",
+    "bucket": "A",
+    "rule_name": "ordered_corrections_before_one_normal_resume",
+    "docstring": "Repeated canonical review correction flags apply each existing immutable transition in order under one coordinator lock before one normal resume.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Accept a nonempty ordered list while retaining the legacy string API, call the unchanged correction consumer for each request, stop on any refusal and resume once only after every request succeeds.",
+    "capture_kind": "FLOW_DIAGNOSTIC_ENHANCEMENT",
+    "recovered_rtl_case": false,
+    "benchmark_result_change": "NONE"
+  }
+]

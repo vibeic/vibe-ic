@@ -129,6 +129,38 @@ def test_historical_source_reader_rejects_integrity_or_receipt_drift(tmp_path, d
     assert accepted is False
 
 
+def test_retained_proof_refuses_a_foreign_consumer_with_unchanged_live_bytes(tmp_path):
+    import benchmark_dispatch as dispatch
+
+    _, receipt = _historical_fixture(tmp_path)
+    live = tmp_path / "foreign/programs/live.py"
+    live.parent.mkdir(parents=True)
+    live.write_text("# unchanged live bytes outside the retained tree\n")
+    receipt["source_before"] = dispatch._runner_source_snapshot(
+        receipt["argv"], consumer=str(live))
+    assert dispatch._historical_runner_sources_match(receipt) is False
+
+
+def test_retained_proof_still_accepts_the_running_consumer_outside_its_tree(tmp_path):
+    import benchmark_dispatch as dispatch
+
+    _, receipt = _historical_fixture(tmp_path)
+    receipt["source_before"] = dispatch._runner_source_snapshot(receipt["argv"])
+    assert dispatch._historical_runner_sources_match(receipt) is True
+
+
+def test_legacy_proof_without_a_retained_tree_keeps_live_source_check(tmp_path):
+    import benchmark_dispatch as dispatch
+
+    _, receipt = _historical_fixture(tmp_path)
+    binding = receipt["reports_after"]["phase2_one_shot.json"]["runner_binding"]
+    binding["producer"]["path"] = str(tmp_path / "source/programs/runner.py")
+    assert dispatch._historical_runner_sources_match(receipt) is True
+    runner = tmp_path / "source/programs/runner.py"
+    runner.write_text(runner.read_text() + "# drift\n")
+    assert dispatch._historical_runner_sources_match(receipt) is False
+
+
 @pytest.mark.parametrize("damage,expected", [
     ("unmanifested-asset", "RUNTIME_SOURCE_UNMANIFESTED"),
     ("missing-asset", "RUNTIME_COMPANION_MISSING"),

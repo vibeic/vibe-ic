@@ -1,0 +1,14 @@
+[
+  {
+    "step": "benchmark.reference_model_handoff",
+    "design": "neutral-unfilled-reference-model",
+    "bucket": "A",
+    "rule_name": "declared_reference_model_advisory",
+    "docstring": "Producer advisory names its persistent unfilled reference-model input without adding a completion or admission layer.",
+    "expected_signal": "WARN",
+    "fix_action": "Expose the existing model input path and testbench-gen skill in producer metadata; derive the model from the visible contract, then use ordinary native verification and fresh independent review.",
+    "capture_kind": "FLOW_DIAGNOSTIC_ENHANCEMENT",
+    "recovered_rtl_case": false,
+    "benchmark_result_change": "NONE; canonical source-component qualification only"
+  }
+]
