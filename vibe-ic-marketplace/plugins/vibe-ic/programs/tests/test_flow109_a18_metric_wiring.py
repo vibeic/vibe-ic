@@ -237,7 +237,7 @@ def test_ordered_window_a18_actual_consumer(carrier, monkeypatch, producer):
     features = next(p["features"] for p in flow109.load_registry()["reference_profiles"]
                     if p["name"] == "Analog IC external trim")
     manifest = put(root, "manifest.json", {"features": features})
-    monkeypatch.setattr(_delivery_route, "report_label", lambda project: {"delivery_route": "IC"})
+    monkeypatch.setattr(_delivery_route, "report_label", lambda project, **kwargs: {"delivery_route": "IC"})
     consumed = []
     def window(project, context):
         assert context["requested_step"] == "A18"
@@ -362,7 +362,7 @@ def completion_case(carrier, monkeypatch):
     monkeypatch.setattr(pads, "_d32_inputs", lambda project: {"top": "synthetic_top", "inputs": {str(material): digest(material)}})
     monkeypatch.setattr(packages, "run_audit", lambda project: SimpleNamespace(summary={"design_bound_blocks": ["core"]}))
     monkeypatch.setattr(launch, "resolve_image", lambda *args, **kwargs: image)
-    monkeypatch.setattr(_delivery_route, "report_label", lambda project: {"delivery_route": "IC"})
+    monkeypatch.setattr(_delivery_route, "report_label", lambda project, **kwargs: {"delivery_route": "IC"})
     def generate():
         observed = {**native_row("A18"), **run()}
         observed["input_views"].update({v["path"]: v["sha256"] for v in observed["native_inputs"].values()})
