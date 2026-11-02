@@ -24,6 +24,7 @@ import flow109_density_fill as density
 import librelane_fill_stream as files
 from librelane_contract import Refusal
 from spef_extraction_check import scan_spef
+import _final_fill_primary as primary
 
 SCHEMA = 'vibeic.flow109.final-extract.v1'
 INPUT = 'input/flow109/D69.json'
@@ -144,7 +145,7 @@ def operation_sources():
     paths = (Path(__file__), Path(files.__file__),
              Path(density.__file__), Path(__file__).with_name('spef_extraction_check.py'),
              Path(__file__).with_name('librelane_fill_dfm.py'),
-             Path(__file__).with_name('_physical_current.py'))
+             Path(__file__).with_name('_physical_current.py'), Path(primary.__file__))
     return {str(path.resolve()): _sha(path) for path in paths}
 
 
@@ -201,7 +202,7 @@ def _require_net_population(required, names, corner, artifact):
 def _native_outputs(project, receipt_ref, gds_ref, def_ref):
     """Block incomplete nets using the normal producer's already bound DEF."""
     native = _read(_bound(project, receipt_ref))
-    if (native.get('status') != 'PASS'
+    if (native.get('status') != 'PASS' or native.get('d69_credit') is False
             or native.get('geometry') != {'path': str(_bound(project, gds_ref)), 'sha256': gds_ref['sha256']}
             or native.get('routed_def') != {'path': str(_bound(project, def_ref)), 'sha256': def_ref['sha256']}
             or native.get('top') != files.fill_records(_bound(project, def_ref))['top']
@@ -215,7 +216,7 @@ def _native_outputs(project, receipt_ref, gds_ref, def_ref):
     _bound(project, native.get('fill_aware_tech'))
     spefs, scans = {}, {}
     for corner, reduction in native['corners'].items():
-        if (reduction.get('status') != 'PASS'
+        if (reduction.get('status') != 'PASS' or reduction.get('d69_credit') is False
                 or reduction.get('method') != 'exact-capacitance-matrix-schur-complement'
                 or reduction.get('floating_boundary_condition') != 'zero-net-charge'
                 or reduction.get('grounded_fill_approximation') is not False
@@ -290,15 +291,19 @@ def execute(project, context):
             raise AdmissionRefusal('D69_NATIVE_TOOL_ABSENT', 'released vibeic-final-fill-spef required')
         tool = files._record(project, Path(binary))
         top = files.fill_records(routed_def)['top']
+        launcher = primary.make_launcher(attempt / 'primary-extract', binary)
+        primary_executable = files._record(project, launcher)
 
         def launch(name, *bound):
             argv = [binary, 'extract', '--gds', str(final_gds), '--def', str(routed_def),
                     '--top', top, '--output-dir', str(attempt / name), *bound]
             started = time.monotonic()
-            completed = subprocess.run(argv, cwd=project, capture_output=True, text=True)
+            completed = subprocess.run(argv, executable=str(launcher), cwd=project,
+                                       capture_output=True, text=True)
             log = attempt / f'{name}.log'; log.write_text(completed.stdout + completed.stderr)
             return completed, log, {'argv': argv, 'returncode': completed.returncode,
-                'elapsed_seconds': time.monotonic() - started, 'log': files._record(project, log), 'tool': tool}
+                'elapsed_seconds': time.monotonic() - started, 'log': files._record(project, log),
+                'tool': tool, 'primary_executable': primary_executable}
         result['native_started'] = True
         native = 'native'
         completed, log, execution = launch(native)
