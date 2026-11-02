@@ -133,6 +133,10 @@ def _declared_testbench(project, name, config, destination):
         # Use the existing relocation path; the source circuit stays intact.
         text = relocation.post_layout_testbench(text, name,
             os.path.relpath(netlist.resolve(), destination), netlist.parent, destination)
+        deck = destination / ("tb_" + name + ".sp")
+        for path in sorted(_included_paths(deck, text=text) - {deck, netlist.resolve()}):
+            inputs["include:" + str(path)] = {
+                "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         return text, inputs
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         raise ValueError("declared testbench inputs are not renderable: " + str(exc)) from exc
@@ -173,12 +177,12 @@ def _deck_text(path):
                      if not line.lstrip().startswith(("*", ";")))
 
 
-def _included_paths(deck, seen=None):
+def _included_paths(deck, seen=None, *, text=None):
     seen = set() if seen is None else seen
-    if deck in seen or not deck.is_file():
+    if deck in seen or (text is None and not deck.is_file()):
         return seen
     seen.add(deck)
-    for match in _INCLUDE.finditer(_deck_text(deck)):
+    for match in _INCLUDE.finditer(_deck_text(deck) if text is None else text):
         try:
             parts = shlex.split(match.group(1))
         except ValueError:

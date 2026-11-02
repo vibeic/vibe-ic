@@ -118,7 +118,8 @@ def _input_views(project, name, step=None):
             paths.append(Path(selected["ngspice_bin"]))
     # A configured nominal/calibration deck can live outside the canonical
     # block directory. Retain the actual selected inputs, not only defaults.
-    from analog_native_sim import _config, _inputs, _included_paths, _testbench_inputs_path
+    from analog_native_sim import (_config, _inputs, _included_paths,
+                                   _testbench_inputs_path, _declared_testbench)
     config = _read(project / "input" / "analog_flow.json", {})
     for selected_step in STEPS[5:10]:
         selected = _config({"config": config}, {"name": name}, selected_step)
@@ -136,6 +137,11 @@ def _input_views(project, name, step=None):
                 declaration = None  # The producer reports the invalid declaration.
             if declaration is not None:
                 paths += [declaration, netlist.parent / "netlist_provenance.json"]
+                try:
+                    _text, views = _declared_testbench(project, name, selected, netlist.parent)
+                    paths.extend(Path(view["path"]) for view in views.values())
+                except ValueError:
+                    pass  # The producer reports the invalid declaration.
     if step in ("A06", "A07"):
         # The declaration names real study inputs outside input/. Changing
         # one of those inputs must invalidate its retained measurement too.

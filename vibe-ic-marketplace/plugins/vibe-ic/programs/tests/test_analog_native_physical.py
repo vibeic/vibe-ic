@@ -391,10 +391,12 @@ def test_a14_reuses_explicit_actual_canonical_inputs_without_legacy_argv(project
 def _declared_pre_state(project, source="sidecar"):
     import analog_native_sim as sim
     bdir, _ = physical._paths(project, "unit")
+    nested = put(bdir / "load_detail.sp", "* declared load model\n")
+    put(bdir / "load.sp", '.include "' + str(nested) + '"\n')
     declaration = bdir / "testbench_inputs.json" if source == "sidecar" else project / "declared/inputs.json"
     put(declaration, {"block": "unit", "ports": ["a", "b", "vss"],
         "rails": {"vss": "vss"}, "testbench": {"supply_exprs": ["1.8"],
-        "stimulus": ["v1 a 0 {supply}"], "cards": ["i_load b 0 PULSE(0 1m 2n 1p 1p 4n 10n)"],
+        "stimulus": ["v1 a 0 {supply}"], "cards": [".include load.sp", "i_load b 0 PULSE(0 1m 2n 1p 1p 4n 10n)"],
         "control": ["op", "let sensed = v(b)", 'echo "MEAS vout=" $&sensed',
             "tran 1p 10n", "meas tran rising_min MIN v(b) FROM=2n TO=5n",
             "meas tran falling_peak MAX v(b) FROM=6n TO=9n"]}})
@@ -440,7 +442,7 @@ def test_a14_reuses_declared_pre_and_substitutes_pex_without_new_pre_run(project
     assert result["metrics"]["corners"][0]["measurements"] == {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}
 
 
-@pytest.mark.parametrize("changed", ["declaration", "deck", "spec", "removed", "different_selection"])
+@pytest.mark.parametrize("changed", ["declaration", "deck", "spec", "removed", "different_selection", "include", "nested_include"])
 def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch, changed):
     import analog_real_corner_sweep as ars
     state = _declared_pre_state(project)
@@ -451,6 +453,9 @@ def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch,
     elif changed == "different_selection":
         other = put(project / "other.json", json.loads(declaration.read_text()))
         put(project / "input/analog_flow.json", {"blocks": {"unit": {"testbench_inputs": str(other)}}})
+    elif changed in ("include", "nested_include"):
+        path = bdir / ("load.sp" if changed == "include" else "load_detail.sp")
+        path.write_text(path.read_text() + "* changed dependency\n")
     else:
         path = declaration if changed == "declaration" else Path(state["native_inputs"]["testbench"]["path"]) if changed == "deck" else bdir / "spec.json"
         path.write_text(path.read_text() + "\n")
@@ -460,7 +465,7 @@ def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch,
     assert "no completed source-bound" in record["detail"]
 
 
-@pytest.mark.parametrize("changed", ["declaration", "pre_log"])
+@pytest.mark.parametrize("changed", ["declaration", "pre_log", "include", "nested_include"])
 def test_a14_declared_pre_change_during_post_keeps_unmeasured(project, monkeypatch, changed):
     import analog_real_corner_sweep as ars
     import _designs_root as dr
@@ -472,7 +477,9 @@ def test_a14_declared_pre_change_during_post_keeps_unmeasured(project, monkeypat
     monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
     monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
     def spice(*args, **kwargs):
-        path = bdir / "testbench_inputs.json" if changed == "declaration" else Path(state["executions"][0]["stdout_path"])
+        path = {"declaration": bdir / "testbench_inputs.json",
+                "pre_log": Path(state["executions"][0]["stdout_path"]),
+                "include": bdir / "load.sp", "nested_include": bdir / "load_detail.sp"}[changed]
         path.write_text(path.read_text() + "\n")
         return True, {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}, "MEAS vout=1.19\n", {}
     monkeypatch.setattr(ars, "_run_ngspice", spice)
