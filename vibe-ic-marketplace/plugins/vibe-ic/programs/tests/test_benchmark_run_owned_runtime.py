@@ -245,6 +245,7 @@ elif a[0] == 'inspect':
         for m in c['mounts'] if m['Destination'] != '/work'])
     fields = {'.Id':c['cid'], '.Image':c['image'], '.State.Running':True, '.Mounts':c['mounts'],
               '.HostConfig.Mounts':declarations, '.HostConfig.VolumesFrom':c.get('volumes_from'),
+              '.HostConfig.Binds':c.get('binds',[m['Source']+':/work:rw' for m in c['mounts'] if m['Destination']=='/work']),
               '.HostConfig.Tmpfs':None, '.HostConfig.Memory':c.get('memory',1073741824),
               '.HostConfig.MemorySwap':c.get('memory_swap',1073741824),
               '.Config.User':'1000', '.Config.WorkingDir':'/work',
@@ -287,6 +288,7 @@ elif a[0] == 'run':
         return sizes[value] if value in sizes else int(value)
     s['containers'][name]={'cid':'new-'+name,'image':s['image'],'mounts':mounts,
         'declarations':[], 'volumes_from':inherited,'effective_options':effective,
+        'binds':None if inherited else [a[i+1] for i,x in enumerate(a) if x=='-v'],
         'memory':amount('--memory'),'memory_swap':amount('--memory-swap')}
     p.write_text(json.dumps(s));print('new-'+name)
 elif a[0] == 'top': print('PID COMMAND\n123 sleep infinity')
@@ -413,3 +415,46 @@ def test_ensure_reuses_actual_anonymous_volume_name(docker_fixture, script):
     assert after["containers"]["template"] == before["containers"]["template"]
     target = next(m for m in after["containers"]["target"]["mounts"] if m["Type"] == "volume")
     assert target["Name"] == "original-volume"
+
+
+@pytest.mark.parametrize("script", COPIES, ids=["repository", "packaged"])
+def test_explicit_bind_cannot_claim_inherited_nonrecursive_options(docker_fixture, script):
+    invoke, template = docker_fixture
+    source = copy.deepcopy(template)
+    source["declarations"] = [{"Type": "bind", "Source": source["mounts"][1]["Source"],
+        "Target": "/plugin", "ReadOnly": True, "BindOptions": {"NonRecursive": True}}]
+    target = {**copy.deepcopy(template), "cid": "stable-target", "declarations": [],
+              "volumes_from": [source["cid"]], "binds": [source["mounts"][1]["Source"] + ":/plugin:ro"]}
+    cp, calls, after, before = invoke(script, existing=target, source_config=source)
+    assert cp.returncode != 0
+    assert after == before
+    assert not [c for c in calls if c[0] in {"rm", "rename", "stop", "start", "run"}]
+
+
+@pytest.mark.parametrize("script", COPIES, ids=["repository", "packaged"])
+def test_inherited_nonrecursive_without_override_reuses_exact_CID(docker_fixture, script):
+    invoke, template = docker_fixture
+    source = copy.deepcopy(template)
+    source["declarations"] = [{"Type": "bind", "Source": source["mounts"][1]["Source"],
+        "Target": "/plugin", "ReadOnly": True, "BindOptions": {"NonRecursive": True}}]
+    target = {**copy.deepcopy(template), "cid": "stable-target", "declarations": [],
+              "volumes_from": [source["cid"]], "binds": None}
+    cp, calls, after, before = invoke(script, existing=target, source_config=source)
+    assert cp.returncode == 0, (cp.stdout, cp.stderr)
+    assert after == before
+    assert not [c for c in calls if c[0] in {"rm", "rename", "stop", "start", "run"}]
+
+
+@pytest.mark.parametrize("script", COPIES, ids=["repository", "packaged"])
+def test_matching_legacy_volume_options_remain_legal(docker_fixture, script):
+    invoke, template = docker_fixture
+    source = copy.deepcopy(template)
+    source["mounts"].append({"Type": "volume", "Name": "original-volume", "Source": "/volumes/original-volume/_data",
+                             "Destination": "/cache", "RW": True, "Propagation": ""})
+    source["declarations"] = [{"Type": "volume", "Target": "/cache", "VolumeOptions": {"NoCopy": True}}]
+    target = {**copy.deepcopy(source), "cid": "stable-target", "declarations": [],
+              "volumes_from": [source["cid"]], "binds": ["original-volume:/cache:nocopy"]}
+    cp, calls, after, before = invoke(script, existing=target, source_config=source)
+    assert cp.returncode == 0, (cp.stdout, cp.stderr)
+    assert after == before
+    assert not [c for c in calls if c[0] in {"rm", "rename", "stop", "start", "run"}]
