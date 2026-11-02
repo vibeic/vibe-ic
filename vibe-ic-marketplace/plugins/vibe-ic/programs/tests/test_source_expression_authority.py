@@ -266,3 +266,14 @@ def test_frs_record_title_retains_its_authority(tmp_path, title, accepted):
     spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
     assert bool(spec) is accepted, (spec, reason)
     assert all((p / name).read_bytes() == value for name, value in before.items())
+
+
+@pytest.mark.parametrize('wrapper', ['document', 'fields'])
+def test_function_wrapper_cannot_restore_a_prohibited_record(tmp_path, wrapper):
+    p = project(tmp_path, 'result = left + right.')
+    fields = {'function': 'result = left + right.'}
+    doc = {'fields': fields}
+    (doc if wrapper == 'document' else fields)['title'] = 'Forbidden example: do not implement'
+    (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps(doc))
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert spec is None, (spec, reason)

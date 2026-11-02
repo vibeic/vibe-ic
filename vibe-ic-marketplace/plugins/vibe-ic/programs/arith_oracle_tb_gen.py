@@ -358,6 +358,14 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
     return None
 
 
+def _affirmative_function_context(record: dict) -> bool:
+    from _prose_polarity import is_denied
+    title = record.get('title', '')
+    return (isinstance(title, str) and not is_denied(title, ignore_bracketed=False)
+            and not re.search(r'\b(?:forbid\w*|prohibit\w*|negative[ -]+example|counterexample)\b',
+                              title, re.I))
+
+
 def _function_records(project: Path) -> List[str]:
     """Read affirmative function records, retaining their title's authority.
 
@@ -369,7 +377,8 @@ def _function_records(project: Path) -> List[str]:
         doc = _read_json(gd / name)
         if doc is not None:
             fields = doc.get('fields', doc)
-            if not isinstance(fields, dict):
+            if (not isinstance(fields, dict) or not _affirmative_function_context(doc)
+                    or not _affirmative_function_context(fields)):
                 return []
             rows = fields.get('frs_sections') or []
             if not rows and isinstance(fields.get('function'), str):
@@ -380,14 +389,8 @@ def _function_records(project: Path) -> List[str]:
                     not isinstance(row, dict) or not isinstance(row.get('content'), str)
                     for row in rows):
                 return []
-            from _prose_polarity import is_denied
-            for row in rows:
-                title = row.get('title', '')
-                if (not isinstance(title, str)
-                        or is_denied(title, ignore_bracketed=False)
-                        or re.search(r'\b(?:forbid\w*|prohibit\w*|negative[ -]+example|counterexample)\b',
-                                     title, re.I)):
-                    return []
+            if any(not _affirmative_function_context(row) for row in rows):
+                return []
             return [row['content'] for row in rows
                     if isinstance(row, dict) and isinstance(row.get('content'), str)
                     and row['content'].strip()]
