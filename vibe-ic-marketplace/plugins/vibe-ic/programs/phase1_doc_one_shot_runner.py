@@ -42228,6 +42228,29 @@ def _declared_clock_groups(extracted: Dict[str, str]) -> List[dict]:
     return groups
 
 
+def _structured_connectivity(extracted):
+    import phase1_declared_connectivity as declared
+    return declared.project(extracted, _issue3234_position_is_current)
+
+
+def _apply_structured_clock_groups(content, extracted):
+    _, groups, _, _, refusals = _structured_connectivity(extracted)
+    unresolved = {row["name"] for row in refusals if row.get("name")}
+    existing = {row["name"]: row for row in content.get("clock_groups", [])
+                if row["name"] not in unresolved}
+    for row in groups:
+        prior = existing.get(row["name"])
+        if prior and any(prior.get(k) != row[k] for k in ("clocks", "relationship")):
+            existing.pop(row["name"])
+            refusals.append({"name": row["name"], "reason": "L8_DECLARED_CLOCK_GROUP_CONFLICT",
+                             "evidence": row["evidence"]})
+        else:
+            existing[row["name"]] = row
+    content["clock_groups"] = list(existing.values())
+    if refusals:
+        content["declared_clock_group_refusals"] = refusals
+
+
 def _declared_por_reset_strategy(extracted: Dict[str, str]) -> Optional[dict]:
     """A stated absence of external reset plus stated POR initialization."""
     for fname, text in (extracted or {}).items():
@@ -46215,6 +46238,7 @@ def gen_l8_timing_waveform(project: Path,
         project, extracted, content, evidence)
 
     _apply_declared_por_reset_strategy(content, extracted)
+    _apply_structured_clock_groups(content, extracted)
     return _write_l_doc(project, "L8_RTL_CONSTANTS", content, evidence)
 
 
@@ -47626,6 +47650,7 @@ def gen_l8_timing_waveform_doc(project: Path,
         if sd is not None:
             content["symbol_directionality"] = sd
     _apply_declared_por_reset_strategy(content, extracted)
+    _apply_structured_clock_groups(content, extracted)
     return _write_l_doc(project, "L8_TIMING_WAVEFORM", content, evidence)
 
 
@@ -52940,9 +52965,12 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
         rf"(?:\(\s*or\s+`?({identifier})`?\s*\))?\s*(?:nets?\s+)?and\s+`?({identifier})`?\b", re.I)
     number = r"\d{1,3}|" + "|".join(_V1_6_402_NUMBER_WORDS)
     count_pattern = re.compile(rf"\b({number})\s+instances?\b", re.I)
+    structured, _, declared_nets, structured_refusals, _ = _structured_connectivity(extracted)
+    for net in declared_nets:
+        aliases.setdefault(net, set()).add(net)
     instances = l9.get("instances") or []
     existing = {row["name"]: row for row in instances if isinstance(row, dict) and row.get("name")}
-    refusals = []
+    refusals = list(structured_refusals)
 
     def capacitance(match):
         unit = match.group("unit").replace("µ", "u").replace("μ", "u").lower()
@@ -52960,6 +52988,8 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
                 return
             resolved.append({**port, "declared_net": net, "net": next(iter(targets))})
         if not resolved or len({p["name"] for p in resolved}) != len(resolved):
+            refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_PORT_UNRESOLVED",
+                             "evidence": evidence})
             return
         row = {"name": name, "block_type": block_type, "ports": resolved,
                "port_map": {p["name"]: p["net"] for p in resolved},
@@ -53097,12 +53127,59 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
                         {"doc": source, "line": index + 1, "quote": line}, True)
             offset += len(raw)
         finish()
+    for declared in structured:
+        name = declared["name"]
+        if any(len(aliases.get(p["net"], set())) != 1 for p in declared["ports"]):
+            refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_PORT_UNRESOLVED",
+                             "evidence": declared["evidence"]})
+            continue
+        prior = existing.get(name)
+        if prior and any(prior.get(k) != declared[k] for k in ("block_type", "port_map")):
+            refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_CONFLICT",
+                             "evidence": declared["evidence"]})
+            continue
+        if not prior:
+            emit(name, declared["block_type"], declared["ports"], declared["parameters"], declared["evidence"])
+        if name in existing:
+            row = existing[name]
+            row["connections"] = dict(row["port_map"])
+            for key in ("master", "placement"):
+                if key in declared:
+                    row[key] = declared[key]
+    unresolved = {row["name"] for row in refusals if row.get("name")}
+    instances = [row for row in instances if row.get("name") not in unresolved]
+    l9["internal_wires"] = [row for row in l9.get("internal_wires", [])
+                            if row.get("child_inst") not in unresolved]
     if instances:
         l9["instances"] = instances
         l9["no_instances_in_input"] = False
         l9["no_internal_wires_in_input"] = not bool(l9.get("internal_wires"))
     if refusals:
         l9["declared_instance_refusals"] = refusals
+
+
+def _record_unresolved_analog_instances(l9, l5):
+    """A declared analog block is not itself an instance identity or pin map."""
+    represented = {}
+    for row in l9.get("instances", []):
+        if isinstance(row, dict) and row.get("ports") and row.get("port_map"):
+            kind = row.get("block_type")
+            represented[kind] = represented.get(kind, 0) + 1
+    for index, block in enumerate((l5 or {}).get("analog_blocks") or []):
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        count = block.get("count")
+        covered = represented.get(kind, 0)
+        if covered and (type(count) is not int or covered >= count):
+            continue
+        l9.setdefault("declared_instance_refusals", []).append({
+            "reason": "L9_ANALOG_MACRO_INSTANCE_DECLARATION_UNRESOLVED",
+            "block": block.get("name"), "block_type": kind,
+            "declared_count": count, "represented_count": covered,
+            "source_field": f"L5_ADI_SPEC.json#/analog_blocks/{index}",
+            "evidence": block.get("multiplicity_evidence") or block.get("evidence"),
+        })
 
 
 def gen_l9_integration_spec(project: Path,
@@ -54823,6 +54900,7 @@ def gen_l9_integration_spec(project: Path,
     # instantiation template. Chip-AGNOSTIC.
     _v1_6_511_emit_instantiation_template(content, extracted)
     _emit_declared_document_instances(content, extracted, l1_doc or {}, evidence)
+    _record_unresolved_analog_instances(content, _try_load_l_doc(project, "L5_ADI_SPEC"))
     _apply_declared_por_reset_strategy(content, extracted)
     # v1.6.463 — for #328 R2 ORGANIC. Cascade L1.pin_table[].description
     # into L9.top_ports[].description by name match. v1.6.456 closed
