@@ -1,8 +1,3 @@
-"""#99: assignment intent is compared with a complete final-State ODB census.
-
-The producer fixture uses the actual emitter. These neutral local OpenROAD
-fixtures make no signoff claim about a product or canonical carrier.
-"""
 import hashlib
 import json
 import shlex
@@ -24,6 +19,10 @@ MANUFACTURINGGRID 0.001 ;
 '''
 for name, kind, width, height in [('EDGE_CELL', 'PAD', 8, 14),
                                   ('INPUT_CELL', 'PAD INPUT', 8, 14),
+                                  ('OUTPUT_CELL', 'PAD OUTPUT', 8, 14),
+                                  ('INOUT_CELL', 'PAD INOUT', 8, 14),
+                                  ('POWER_CELL', 'PAD POWER', 8, 14),
+                                  ('AREAIO_CELL', 'PAD AREAIO', 8, 14),
                                   ('CORNER_CELL', 'PAD', 14, 14),
                                   ('FILL_CELL', 'PAD SPACER', 2, 14),
                                   ('CORE_CELL', 'CORE', 4, 4)]:
@@ -39,7 +38,6 @@ LEF += 'END LIBRARY\n'
 
 @pytest.fixture
 def case(tmp_path, monkeypatch, request):
-    # Collection can reload the runner; transport and native reader must share it.
     monkeypatch.setitem(sys.modules, 'phase3_one_shot_runner', runner)
     pnr = runner._pl.pnr_dir(tmp_path)
     pnr.mkdir(parents=True)
@@ -69,7 +67,6 @@ def case(tmp_path, monkeypatch, request):
     cells = pads + [dict(instance='corner', master='CORNER_CELL', x=12000, y=22000, orient='N'),
                     dict(instance='filler', master='FILL_CELL', x=40000, y=22000, orient='N'),
                     dict(instance='core', master='CORE_CELL', x=60000, y=60000, orient='N')]
-    # Enumeration and name order differ from the geometric declaration order.
     cells.reverse()
     components = '\n'.join(f'- {p["instance"]} {p["master"]} + FIXED ( {p["x"]} {p["y"]} ) {p["orient"]} ;' for p in cells)
     final_def = ('VERSION 5.8 ;\nDESIGN neutral_top ;\nUNITS DISTANCE MICRONS 1000 ;\n'
@@ -216,6 +213,39 @@ $extra setPlacementStatus FIRM''')
     assert row.status == 'FAIL', doc
     assert any('rogue' in f for f in doc['native_pad_evidence']['failures']), doc
     assert_native_complete(case, doc)
+
+
+@pytest.mark.parametrize('master, native_type', [
+    ('INPUT_CELL', 'PAD_INPUT'), ('OUTPUT_CELL', 'PAD_OUTPUT'),
+    ('INOUT_CELL', 'PAD_INOUT'), ('POWER_CELL', 'PAD_POWER'),
+    ('AREAIO_CELL', 'PAD_AREAIO')])
+@pytest.mark.parametrize('auxiliary_field', ['PAD_FILLERS', 'PAD_CORNER'])
+def test_functional_native_pad_cannot_be_hidden_by_auxiliary_master(case, master, native_type, auxiliary_field):
+    project, odb, _ = case
+    mutate(case, f'''set m [[ord::get_db] findMaster {master}]
+set extra [odb::dbInst_create $b $m rogue]
+$extra setLocation 70000 22000
+$extra setPlacementStatus FIRM''')
+    before = hashlib.sha256(odb.read_bytes()).hexdigest()
+    row, baseline = run(case)
+    assert row.status == 'FAIL', baseline
+    assert 'PADRING_NATIVE_PAD_UNDECLARED:rogue' in baseline['native_pad_evidence']['failures']
+    assert baseline['native_pad_evidence']['native_pads'] == 5
+    assert_native_complete(case, baseline)
+    body = (project / 'reports/phase3/padring_final_state.log').read_text()
+    assert f'{master.encode().hex()} 1 {native_type} FIRM' in body
+    assignment_path = project / pr.ASSIGNMENT_REL
+    assignment = json.loads(assignment_path.read_text())
+    if auxiliary_field == 'PAD_FILLERS':
+        assignment[auxiliary_field].append(master)
+    else:
+        assignment[auxiliary_field] = master
+    assignment_path.write_text(json.dumps(assignment))
+    row, changed = run(case)
+    assert_native_complete(case, changed)
+    assert hashlib.sha256(odb.read_bytes()).hexdigest() == before
+    assert 'PADRING_NATIVE_PAD_UNDECLARED:rogue' in changed['native_pad_evidence']['failures'], changed
+    assert row.status == 'FAIL', changed
 
 
 @pytest.mark.parametrize('role', ['corner', 'filler', 'core'])
