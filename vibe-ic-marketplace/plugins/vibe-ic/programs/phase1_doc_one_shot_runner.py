@@ -42152,50 +42152,16 @@ def _declared_input_clock_names(project, l9):
     return names
 
 
-def _declared_clock_groups(extracted: Dict[str, str]) -> List[dict]:
-    """Explicit named-clock relationships in prose or a declaration table.
-
-    Separate pins or group memberships alone establish no relationship.
-    This preserves source intent; it does not authorize generated SDC cuts.
-    """
-    groups: List[dict] = []
-    seen = set()
-    ident = r"`?[A-Za-z_][\w]*`?"
+def _declared_clock_groups(extracted: Dict[str, str], refusals=None) -> List[dict]:
+    """Read named, structured clock-group tables; prose is unresolved evidence."""
+    groups = []
+    if refusals is None:
+        refusals = []
+    ident = r"`?[A-Za-z_][A-Za-z0-9_]*`?"
     clock_list = rf"{ident}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+){ident})+"
-    relationship = r"asynchronous|exclusive|synchronous"
-    declaration = re.compile(
-        r"(?:clock\s+group\s+`?(?P<name>[A-Za-z_][\w]*)`?\s*:\s*)?"
-        rf"(?:(?:the\s+)?clocks\s+)?(?P<clocks>{clock_list})\s+"
-        rf"(?:are|shall\s+be|must\s+be)\s+(?:mutually\s+)?(?P<relationship>{relationship})"
-        r"(?:\s+(?:with|to)\s+(?:each\s+other|one\s+another))?",
-        re.IGNORECASE)
-
-    def append(name, clocks_text, relation, fname, lineno, quote):
-        if (not re.fullmatch(clock_list, clocks_text.strip(), re.IGNORECASE)
-                or relation.lower() not in {"asynchronous", "exclusive", "synchronous"}):
-            return
-        clocks = list(dict.fromkeys(
-            clock.strip("`") for clock in re.findall(ident, clocks_text)
-            if clock.lower() != "and"))
-        if len(set(clocks)) < 2:
-            return
-        key = (name, tuple(clocks), relation.lower())
-        if key in seen:
-            return
-        seen.add(key)
-        groups.append({
-            "name": name or f"clock_group_{len(groups) + 1}",
-            "clocks": clocks, "relationship": relation.lower(),
-            "evidence": {
-                "doc": (str(fname) if str(fname).startswith("input/")
-                        else f"input/docs/{fname}"),
-                "line": lineno, "quote": quote,
-            },
-        })
-
     for fname, text in (extracted or {}).items():
         lines = (text or "").splitlines(keepends=True)
-        table_roles = {}
+        roles = {}
         offset = 0
         for index, raw in enumerate(lines):
             current = _issue3234_position_is_current(text, offset)
@@ -42203,29 +42169,71 @@ def _declared_clock_groups(extracted: Dict[str, str]) -> List[dict]:
             line = raw.strip()
             if not current:
                 continue
+            evidence = {"doc": str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}",
+                        "line": index + 1, "quote": line}
             if (index + 1 < len(lines) and _v0_3_2_is_pipe_row(line)
                     and _v0_3_2_is_sep_row(lines[index + 1])):
-                headers = [cell.strip(" *`").lower()
-                           for cell in _v0_3_2_split_pipe_cells(line)]
-                table_roles = {key: i for i, key in enumerate(headers)}
+                roles = {cell.strip(" *`").lower(): i for i, cell in
+                         enumerate(_v0_3_2_split_pipe_cells(line))}
                 continue
             if _v0_3_2_is_pipe_row(line):
-                if "clocks" in table_roles and "relationship" in table_roles:
-                    cells = _v0_3_2_split_pipe_cells(line)
-                    if len(cells) > max(table_roles.values()):
-                        group_i = table_roles.get("group", table_roles.get("name"))
-                        append(cells[group_i].strip(" *`") if group_i is not None else None,
-                               cells[table_roles["clocks"]].strip(),
-                               cells[table_roles["relationship"]].strip(" *`"),
-                               fname, index + 1, line)
+                if _v0_3_2_is_sep_row(line) or "clocks" not in roles:
+                    continue
+                cells = _v0_3_2_split_pipe_cells(line)
+                values = {key: cells[i].strip(" *`") if i < len(cells) else ""
+                          for key, i in roles.items()}
+                name = values.get("group", values.get("name"))
+                clocks_text = values.get("clocks", "")
+                relation = values.get("relationship", "").lower()
+                clocks = [clock.strip("`") for clock in re.findall(ident, clocks_text)
+                          if clock.lower() != "and"]
+                if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                        or not re.fullmatch(clock_list, clocks_text, re.I)
+                        or len(set(clocks)) != len(clocks)
+                        or relation not in ("asynchronous", "exclusive", "synchronous")):
+                    refusals.append({"name": name, "reason": "L8_DECLARED_CLOCK_GROUP_UNRESOLVED",
+                                     "evidence": evidence})
+                    continue
+                groups.append({"name": name, "clocks": clocks, "relationship": relation,
+                               "evidence": evidence})
                 continue
-            table_roles = {}
-            for sentence in re.split(r"\.(?:\s+|$)", line.lstrip("-* ")):
-                match = declaration.fullmatch(sentence.strip())
-                if match:
-                    append(match.group("name"), match.group("clocks"),
-                           match.group("relationship"), fname, index + 1, line)
+            roles = {}
+            # Recognizing an unresolved statement does not extract identities or
+            # a relationship. Only the structured rows above may populate L8.
+            if (not line.startswith("#") and re.search(
+                    r"\bclock\s+groups?\b|\bare\s+(?:mutually\s+)?(?:asynchronous|exclusive|synchronous)\b",
+                    line, re.I)):
+                refusals.append({"name": None, "reason": "L8_CLOCK_GROUP_PROSE_UNRESOLVED",
+                                 "evidence": evidence})
     return groups
+
+
+def _structured_connectivity(extracted):
+    import phase1_declared_connectivity as declared
+    return declared.project(extracted, _issue3234_position_is_current)
+
+
+def _apply_structured_clock_groups(content, extracted):
+    _, groups, _, _, refusals = _structured_connectivity(extracted)
+    tables = _declared_clock_groups(extracted, refusals)
+    blocked = {row["name"] for row in refusals if row.get("name")}
+    admitted = {}
+    for row in tables + groups:
+        name = row["name"]
+        if name in blocked:
+            continue
+        prior = admitted.get(name)
+        if prior and (set(prior["clocks"]) != set(row["clocks"])
+                      or prior["relationship"] != row["relationship"]):
+            admitted.pop(name)
+            blocked.add(name)
+            refusals.append({"name": name, "reason": "L8_DECLARED_CLOCK_GROUP_CONFLICT",
+                             "evidence": row["evidence"]})
+        else:
+            admitted.setdefault(name, row)
+    content["clock_groups"] = list(admitted.values())
+    if refusals:
+        content["declared_clock_group_refusals"] = refusals
 
 
 def _declared_por_reset_strategy(extracted: Dict[str, str]) -> Optional[dict]:
@@ -46111,7 +46119,7 @@ def gen_l8_timing_waveform(project: Path,
         "clock_mhz": clock_mhz,
         "no_clock_mhz_in_input": no_clock_mhz_in_input,
         "clock_domains": clock_domains,
-        "clock_groups": _declared_clock_groups(extracted),
+        "clock_groups": [],
         "no_clock_domains_in_input": no_clock_domains_in_input,
         # v1.6.510 — for #352 P3 ORGANIC. Synthesis-Fmax
         # device-fitting benchmark rows are routed here instead of
@@ -46215,6 +46223,7 @@ def gen_l8_timing_waveform(project: Path,
         project, extracted, content, evidence)
 
     _apply_declared_por_reset_strategy(content, extracted)
+    _apply_structured_clock_groups(content, extracted)
     return _write_l_doc(project, "L8_RTL_CONSTANTS", content, evidence)
 
 
@@ -47613,7 +47622,7 @@ def gen_l8_timing_waveform_doc(project: Path,
         "doc_class": "timing_waveform",
         "ic_name": ic_name,
         "timing_windows": windows,
-        "clock_groups": _declared_clock_groups(extracted),
+        "clock_groups": [],
         "timing_constants": timing_constants,
         # v1.6.322 — for #221 ORGANIC P3.
         "waveforms": waveforms,
@@ -47626,6 +47635,7 @@ def gen_l8_timing_waveform_doc(project: Path,
         if sd is not None:
             content["symbol_directionality"] = sd
     _apply_declared_por_reset_strategy(content, extracted)
+    _apply_structured_clock_groups(content, extracted)
     return _write_l_doc(project, "L8_TIMING_WAVEFORM", content, evidence)
 
 
@@ -52913,6 +52923,8 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
     Generic passive terminals and derived instance identities are disclosed;
     no PDK device or physical terminal mapping is selected here.
     """
+    from phase1_declared_connectivity import port_contract
+
     aliases: Dict[str, set] = {}
     for port in l9.get("top_ports", []):
         if isinstance(port, dict) and port.get("name"):
@@ -52940,9 +52952,12 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
         rf"(?:\(\s*or\s+`?({identifier})`?\s*\))?\s*(?:nets?\s+)?and\s+`?({identifier})`?\b", re.I)
     number = r"\d{1,3}|" + "|".join(_V1_6_402_NUMBER_WORDS)
     count_pattern = re.compile(rf"\b({number})\s+instances?\b", re.I)
+    structured, _, declared_nets, structured_refusals, _ = _structured_connectivity(extracted)
+    for net in declared_nets:
+        aliases.setdefault(net, set()).add(net)
     instances = l9.get("instances") or []
     existing = {row["name"]: row for row in instances if isinstance(row, dict) and row.get("name")}
-    refusals = []
+    refusals = list(structured_refusals)
 
     def capacitance(match):
         unit = match.group("unit").replace("µ", "u").replace("μ", "u").lower()
@@ -52950,6 +52965,10 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
                                               "uf": 1e6, "mf": 1e9, "f": 1e12}[unit]
 
     def emit(name, block_type, ports, parameters, evidence, derived=False):
+        if port_contract(ports) is None:
+            refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_PORT_UNRESOLVED",
+                             "evidence": evidence})
+            return
         resolved = []
         for port in ports:
             net = port.get("net", "")
@@ -52960,6 +52979,8 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
                 return
             resolved.append({**port, "declared_net": net, "net": next(iter(targets))})
         if not resolved or len({p["name"] for p in resolved}) != len(resolved):
+            refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_PORT_UNRESOLVED",
+                             "evidence": evidence})
             return
         row = {"name": name, "block_type": block_type, "ports": resolved,
                "port_map": {p["name"]: p["net"] for p in resolved},
@@ -52970,8 +52991,10 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
             row["terminal_naming"] = "generic_two_terminal_passive; PDK terminal mapping not declared"
         if name in existing:
             prior = existing[name]
-            if any(prior.get(k) != row.get(k) for k in ("block_type", "ports", "parameters")):
-                raise ValueError(f"L9_DECLARED_INSTANCE_CONFLICT: {name}")
+            if (any(prior.get(k) != row.get(k) for k in ("block_type", "parameters"))
+                    or port_contract(prior.get("ports")) != port_contract(row["ports"])):
+                refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_CONFLICT",
+                                 "evidence": evidence})
             return
         instances.append(row)
         existing[name] = row
@@ -53097,12 +53120,90 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
                         {"doc": source, "line": index + 1, "quote": line}, True)
             offset += len(raw)
         finish()
-    if instances:
+    for declared in structured:
+        name = declared["name"]
+        if any(len(aliases.get(p["net"], set())) != 1 for p in declared["ports"]):
+            refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_PORT_UNRESOLVED",
+                             "evidence": declared["evidence"]})
+            continue
+        ports = [{**port, "net": next(iter(aliases[port["net"]]))}
+                 for port in declared["ports"]]
+        prior = existing.get(name)
+        if prior and (any(prior.get(k) != declared[k] for k in ("block_type", "parameters"))
+                      or port_contract(prior.get("ports")) != port_contract(ports)):
+            refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_CONFLICT",
+                             "evidence": declared["evidence"]})
+            continue
+        if not prior:
+            emit(name, declared["block_type"], declared["ports"], declared["parameters"], declared["evidence"])
+        if name in existing:
+            row = existing[name]
+            row["connections"] = dict(row["port_map"])
+            for key in ("block", "master", "placement"):
+                if key in declared:
+                    row[key] = declared[key]
+    unresolved = {row["name"] for row in refusals if row.get("name")}
+    instances = [row for row in instances if row.get("name") not in unresolved]
+    l9["internal_wires"] = [row for row in l9.get("internal_wires", [])
+                            if row.get("child_inst") not in unresolved]
+    if instances or "instances" in l9 or refusals:
         l9["instances"] = instances
-        l9["no_instances_in_input"] = False
+        l9["no_instances_in_input"] = not bool(instances)
         l9["no_internal_wires_in_input"] = not bool(l9.get("internal_wires"))
     if refusals:
         l9["declared_instance_refusals"] = refusals
+
+
+def _record_unresolved_analog_instances(l9, l5):
+    """Cover declared instance identities through explicit block membership only."""
+    from phase1_declared_connectivity import port_contract
+
+    represented = {row["name"]: row for row in l9.get("instances", [])
+                   if isinstance(row, dict) and row.get("name")
+                   and port_contract(row.get("ports")) is not None}
+    blocks = [block for block in (l5 or {}).get("analog_blocks") or [] if isinstance(block, dict)]
+    # An identity explicitly requested by two blocks cannot cover either one.
+    owners = {}
+    for index, block in enumerate(blocks):
+        for item in block.get("instances", []) if isinstance(block.get("instances"), list) else []:
+            name = item.get("name") if isinstance(item, dict) else item
+            if isinstance(name, str):
+                owners.setdefault(name, set()).add(index)
+    claimed = set()
+    for index, block in enumerate(blocks):
+        name, kind, count = block.get("name"), block.get("type"), block.get("count")
+        declarations = block.get("instances")
+        expected = [item.get("name") if isinstance(item, dict) else item
+                    for item in declarations] if isinstance(declarations, list) else None
+        duplicate_block = sum(other.get("name") == name for other in blocks) != 1
+        covered = set()
+        for instance, row in represented.items():
+            explicit = instance in expected if expected is not None else row.get("block") == name
+            if (explicit and name and not duplicate_block and instance not in claimed
+                    and len(owners.get(instance, ())) <= 1
+                    and row.get("block", name) == name and row.get("block_type") == kind):
+                covered.add(instance)
+        claimed.update(covered)
+        valid_expected = (bool(expected) and all(isinstance(n, str) and n for n in expected)
+                          and len(set(expected)) == len(expected))
+        complete = (set(expected) == covered if valid_expected else bool(covered))
+        if expected is not None and not valid_expected:
+            complete = False
+        if type(count) is int:
+            complete = complete and len(covered) == count
+            if count == 0 and not expected and not covered and not duplicate_block:
+                complete = True
+        if complete:
+            continue
+        missing = sorted(set(expected) - covered) if valid_expected else []
+        for instance in missing or [None]:
+            l9.setdefault("declared_instance_refusals", []).append({
+                "reason": "L9_ANALOG_MACRO_INSTANCE_DECLARATION_UNRESOLVED",
+                "block": name, "block_type": kind, "instance": instance,
+                "declared_count": count, "represented_count": len(covered),
+                "source_field": f"L5_ADI_SPEC.json#/analog_blocks/{index}",
+                "evidence": block.get("multiplicity_evidence") or block.get("evidence"),
+            })
 
 
 def gen_l9_integration_spec(project: Path,
@@ -54823,6 +54924,7 @@ def gen_l9_integration_spec(project: Path,
     # instantiation template. Chip-AGNOSTIC.
     _v1_6_511_emit_instantiation_template(content, extracted)
     _emit_declared_document_instances(content, extracted, l1_doc or {}, evidence)
+    _record_unresolved_analog_instances(content, _try_load_l_doc(project, "L5_ADI_SPEC"))
     _apply_declared_por_reset_strategy(content, extracted)
     # v1.6.463 — for #328 R2 ORGANIC. Cascade L1.pin_table[].description
     # into L9.top_ports[].description by name match. v1.6.456 closed
