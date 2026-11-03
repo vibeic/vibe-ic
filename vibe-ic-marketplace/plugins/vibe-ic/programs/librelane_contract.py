@@ -1543,8 +1543,19 @@ def _declared_flow_settings(l19: dict, pdk: str) -> tuple[dict, dict]:
     return result, sources
 
 
+def _typed_clock_sdc(clocks: list[dict], groups: Any) -> str:
+    """The SDC stated by typed L8 periods and asynchronous clock groups."""
+    lines = [f"create_clock -name {c.get('source_pin')} -period {c.get('period_ns')} "
+             f"[get_ports {c.get('source_pin')}]" for c in clocks]
+    for group in groups if isinstance(groups, list) else []:
+        if isinstance(group, dict) and group.get('relationship') == 'asynchronous':
+            lines.append('set_clock_groups -asynchronous ' + ' '.join(
+                f"-group [get_clocks {clock}]" for clock in group.get('clocks') or []))
+    return '\n'.join(lines) + '\n'
+
+
 def _bound_primary_clocks(project: Path, l9: dict, clocks: list[dict],
-                          sdc: Path) -> tuple[list[str], str, str]:
+                          sdc: Path, clock_groups: Any = None) -> tuple[list[str], str, str]:
     """Bind multiple roots to declared inputs and an explicit asynchronous SDC.
 
     A binding alone does not license timing cuts. Retain the complete declared
@@ -1580,12 +1591,19 @@ def _bound_primary_clocks(project: Path, l9: dict, clocks: list[dict],
     roots = [resolve(c.get('source_pin')) for c in clocks]
     bindings = l9.get('clock_binding')
     if not isinstance(bindings, dict) or not bindings:
-        refuse('multiple primary clocks require explicit L9.clock_binding')
+        bindings = {f"{row.get('name')}.{port.get('name')}": port.get('net')
+                    for row in l9.get('instances') or [] if isinstance(row, dict)
+                    for port in row.get('ports') or []
+                    if isinstance(port, dict) and port.get('type') == 'clock'}
+    if not bindings:
+        refuse('multiple primary clocks require L9.clock_binding or typed instance clock ports')
     bound = {resolve(pin) for pin in bindings.values()}
     if len(set(roots)) != len(roots) or not set(roots) <= bound:
         refuse('duplicate or unbound primary clock pins')
     paths = [sdc] if sdc.is_file() else sdc_constraints.collect_sdc_files(project)
     texts = [path.read_text() for path in paths]
+    if not texts and clock_groups:
+        texts = [_typed_clock_sdc(clocks, clock_groups)]
     # This boundary supports literal clock objects. Complex Tcl remains an
     # explicit refusal; no user script is executed during config emission.
     active = '\n'.join(line.split('#', 1)[0]
@@ -1674,7 +1692,8 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
     clock_port = clocks[0].get('source_pin')
     clock_source = 'L8_TIMING_WAVEFORM.clock_domains[primary].source_pin'
     if len(clocks) > 1:
-        clock_port, text, sdc_source = _bound_primary_clocks(project, l9, clocks, sdc)
+        clock_port, text, sdc_source = _bound_primary_clocks(
+            project, l9, clocks, sdc, l8.get('clock_groups'))
         clock_source += ' + L9_INTEGRATION_SPEC.clock_binding + ' + sdc_source
         if not sdc.is_file():
             sdc = output.with_name('multi_clock.sdc')
