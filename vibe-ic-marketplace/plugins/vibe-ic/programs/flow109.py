@@ -2960,6 +2960,21 @@ def prepare_front_door(args, project: Path) -> int | None:
                 'default_row_status': status, 'completed': status == 'PASS', 'native_started': True,
                 'wall_seconds': native['wall_seconds'], 'native_result': native})
             return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[status]
+    if len(selected_rows) == 1 and selected_rows[0]['id'] == 'D59':
+        import _container_exec
+        if _container_exec.no_container_route():
+            current = component_context(context, requested_step='D59')
+            result = _retained_backend_result(project, current)
+            if result is None or result['component_status'] == 'NOT_MEASURED':
+                import phase3_one_shot_runner as backend
+                native = backend._cvc_from_native_state(project)
+                status = native['verdict']
+                result = {'step_id': 'D59', 'context_sha256': current['context_sha256'],
+                    'component_status': status, 'default_row_status': status,
+                    'completed': status == 'PASS', 'native_started': True, 'native_result': native,
+                    'wall_seconds': native['wall_seconds']}
+            _selected_step_result(project, current, result)
+            return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[result['component_status']]
     try:
         dft_preroute = (dft_preroute_admission(project, component_context(
             context, requested_step="D30"))
