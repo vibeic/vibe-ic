@@ -123,3 +123,14 @@ def test_existing_and_extended_backend_rows_resolve_in_the_same_project(tmp_path
     for step in ('D41', 'D43', 'D47', 'D48', 'D49', 'D56', 'D57', 'D58', 'D59'):
         current_args = fixture(tmp_path, step)
         assert flow109.prepare_front_door(current_args, tmp_path) == 0, step
+
+
+def test_report_cannot_supply_its_own_relaxed_ir_limit(tmp_path):
+    args = fixture(tmp_path, 'D57')
+    path = tmp_path / 'reports/phase3/ir_drop.json'
+    report = json.loads(path.read_text())
+    report.update(worst_ir_pct_vdd=7, budget_pct_vdd=10)
+    path.write_text(json.dumps(report))
+    assert flow109.prepare_front_door(args, tmp_path) == 1
+    result = json.loads((tmp_path / 'reports/flow109/default_rows/D57.json').read_text())
+    assert result['default_row_status'] == 'FAIL'

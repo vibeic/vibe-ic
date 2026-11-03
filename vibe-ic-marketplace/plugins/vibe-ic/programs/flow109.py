@@ -2511,6 +2511,7 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
 
 def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
     """Read native backend reports once; compare the original tool limits."""
+    from flow109_final_electrical import IR_LIMIT_PCT
     contracts = {
         **{step: {} for step in ('D31', 'D32', 'D35', 'D37', 'D38', 'D39', 'D40')},
         **{step: {'report': 'reports/phase3/sta_postpnr_signoff.json', 'state': 'sta_state',
@@ -2530,7 +2531,7 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
                 'observe': ('state.metrics.power__total__corner:*',),
                 'unmeasured': ['functional-activity power and undeclared owner power budgets']},
         'D57': {'report': 'reports/phase3/ir_drop.json', 'state': 'tool_state',
-                'limits': {'worst_ir_pct_vdd': ('lt_field', 'budget_pct_vdd')}},
+                'limits': {'worst_ir_pct_vdd': ('lt', IR_LIMIT_PCT)}},
         'D58': {'report': 'reports/phase3/em_openroad_density.json', 'limits': {
             'nets.*.violated': ('eq', 0)}, 'available': {'nets.*.no_limit': 0},
                 'unmeasured': ['signal EM']},
@@ -2577,9 +2578,8 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
                 values = values_at(native, field)
                 if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
                     raise ValueError('native measurement unavailable: ' + field)
-                limit = native[limit] if op == 'lt_field' else limit
                 measured[field] = values
-                failed |= any(not (v >= limit if op == 'ge' else v < limit if op == 'lt_field'
+                failed |= any(not (v >= limit if op == 'ge' else v < limit if op == 'lt'
                                    else v == limit) for v in values)
             for field, limit in entry.get('available', {}).items():
                 values = values_at(native, field)

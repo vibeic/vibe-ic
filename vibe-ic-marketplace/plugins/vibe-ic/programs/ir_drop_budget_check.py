@@ -56,10 +56,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Default budget: 10% of Vdd is the loosest commonly-cited static budget;
-# the skill says "typical 5-10% Vdd". 10% is the permissive default so the
-# gate never FAILs a design that a stricter house rule would also pass.
-_DEFAULT_BUDGET_PCT = 10.0
+# The owner limit shared with native final electrical analysis (ruling #62b).
+from flow109_final_electrical import IR_LIMIT_PCT
+_DEFAULT_BUDGET_PCT = IR_LIMIT_PCT
 
 _DROP_MV_KEYS = (
     "max_ir_drop_mv", "worst_ir_drop_mv", "max_drop_mv", "ir_drop_mv",
