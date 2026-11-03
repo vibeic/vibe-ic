@@ -1570,14 +1570,14 @@ def _entry_covers(entry: str, rel: str) -> bool:
 
 
 def upstream_blockage_is_about(project: Path, sid: str, rel: str) -> Tuple[bool, str]:
-    """`(is_about, why)` -- does step `sid`'s own record name `rel` as missing or unusable?
+    """`(is_about, why)` -- does the step's record name `rel` as missing, unusable or unresolved?
 
     R-0915-165, and it is the condition that was missing. The upstream step's VERDICT stays the
     authority (R-0915-149); this asks the separate question the verdict cannot answer, which is
     what that verdict is ABOUT.
 
     FAILS CLOSED, deliberately. No record, a record from another invocation, or a record naming
-    neither list -> NOT about this artefact, so no excuse. That is the direction
+    none of the lists -> NOT about this artefact, so no excuse. That is the direction
     `test_a_step_with_no_published_verdict_is_not_an_excuse` already rules: "no evidence" must
     never read as "blocked".
 
@@ -1604,7 +1604,9 @@ def upstream_blockage_is_about(project: Path, sid: str, rel: str) -> Tuple[bool,
         return False, (
             f"step {sid}'s output record was written by invocation {wrote}, not this one "
             f"({mine}), so it describes an earlier run")
-    for field_ in ("missing", "unusable"):
+    for field_ in ("missing", "unusable", "unresolved"):
+        if field_ == "unresolved" and mine and wrote != mine:
+            continue
         for entry in (rec.get(field_) or []):
             if isinstance(entry, str) and _entry_covers(entry, rel):
                 return True, (
@@ -1612,7 +1614,7 @@ def upstream_blockage_is_about(project: Path, sid: str, rel: str) -> Tuple[bool,
                     f"{rel}")
     return False, (
         f"step {sid} is blocked, but its own record names {rel} in neither `missing` nor "
-        f"`unusable` -- so its blockage is not about the artefact this release needed")
+        f"`unusable`, and not in `unresolved` -- so its blockage is not about the artefact this release needed")
 
 
 def step_verdict_now(project: Path, sid: str) -> Tuple[str, str]:

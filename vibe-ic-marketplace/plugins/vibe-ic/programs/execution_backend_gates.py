@@ -80,7 +80,7 @@ def canonical_family_row(step_id: str, *, adapters=None) -> dict | None:
     return None
 
 
-def evaluate(project: Path, row: dict) -> dict:
+def evaluate(project: Path, row: dict, *, parameters=None) -> dict:
     import flow_compliance_check as fcc
     # Capture the actual semantic consumer and its lossless gate ledger. No
     # custom parser substitutes for a declared gate or changes its thresholds.
@@ -99,7 +99,8 @@ def evaluate(project: Path, row: dict) -> dict:
             fcc._synthesise_fpga_skip_waivers(project, waivers)
     flags = {name: True for name in ('skip_analog', 'skip_hardware')
              if scope.get(name) is True}
-    verdict = fcc.check_step(project, row, waivers, **flags)
+    verdict = fcc.check_step(project, row, waivers, **flags,
+                             **({"parameters": parameters} if parameters is not None else {}))
     if str(row['id']) == '20':
         import hold_area_budget_check as area
         area_rc = area.main([str(project), '--json', str(project / 'reports/phase3/hold_area_budget.json')])
@@ -146,9 +147,10 @@ def evaluate(project: Path, row: dict) -> dict:
             'required_commands': required_commands(row)}
 
 
-def contracts(project: Path, row: dict) -> dict:
+def contracts(project: Path, row: dict, *, parameters=None) -> dict:
     """Resolve canonical any-of/glob contracts to substantive exact file hashes."""
     import flow_compliance_check as fcc
+    from flow_artifact_paths import resolve
     result = {}
     outputs = list(row.get('required_outputs', []))
     if str(row.get('id')) == 'D1':
@@ -161,7 +163,7 @@ def contracts(project: Path, row: dict) -> dict:
             continue
         files = []
         for pattern in spec.split(' OR '):
-            for p in sorted(project.glob(pattern.strip())):
+            for p in sorted(project.glob(resolve(project, pattern.strip(), parameters))):
                 if p.is_file() and not p.is_symlink() and p.stat().st_size:
                     files.append(str(p.relative_to(project)))
         if not files:

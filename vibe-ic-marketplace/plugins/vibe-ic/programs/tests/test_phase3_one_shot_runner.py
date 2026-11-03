@@ -486,7 +486,7 @@ def test_default_step15_direct_invocation_binds_backend_receipt_before_consumer(
     monkeypatch.setattr(producers, 'produce_pnr', bounded_producer)
     monkeypatch.setattr(producers, '_native_current_step_producer', lambda *_: None)
     monkeypatch.setattr(RUNNER, '_backend_parameter_values', lambda *_: {})
-    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *_: [])
+    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *_, parameters=None: [])
     monkeypatch.setattr(declared, "run_for_step", fake_declared)
     monkeypatch.setattr(worker, "evaluate", fake_consumer)
 
@@ -530,7 +530,7 @@ def test_default_step15_consumer_refusal_survives_headline_rollup(tmp_path, monk
     monkeypatch.setattr(producers, 'produce_pnr', bounded_producer)
     monkeypatch.setattr(producers, '_native_current_step_producer', lambda *_: None)
     monkeypatch.setattr(RUNNER, '_backend_parameter_values', lambda *_: {})
-    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *_: [])
+    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *_, parameters=None: [])
     monkeypatch.setattr(declared, "run_for_step", refused)
     monkeypatch.setattr(worker, "evaluate", lambda *_args, **_kwargs:
                         pytest.fail("refused producer cannot authorize consumer"))

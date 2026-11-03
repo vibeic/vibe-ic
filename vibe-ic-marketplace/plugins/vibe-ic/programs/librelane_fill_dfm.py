@@ -51,6 +51,7 @@ from metal_fill_config_gen import (build_metal_fill_config,
                                    density_rule_layer_identifiers)
 import die_level_deck_rule_attribution as _dla
 import step_preflight as _spf
+import flow_artifact_paths as _artifact_paths
 import librelane_contract as _lc
 from librelane_contract import (PDK_GUEST_ROOT, PROBE_DEADLINE_S, Refusal, _load, digest,  # noqa: E402
                                 DECLARATION_REL, declaration_config, resolve_step_configs,
@@ -1825,6 +1826,7 @@ def _validate_fill_stream_authority(project: Path, record: dict) -> None:
             raise Refusal('LL_FILL_STREAM_AUTHORITY_CHANGED', 'derived mapping recipe')
 
 
+@_artifact_paths.with_top
 @_spf.retained_step('37')
 def default_stream(project: Path, top: str, pdk: Any, container: str) -> dict:
     """One Default KLayout stream of the current filled DEF, then real fill.
@@ -1836,9 +1838,7 @@ def default_stream(project: Path, top: str, pdk: Any, container: str) -> dict:
     import phase3_one_shot_runner as runner
     import librelane_contract as contract
     project = project.resolve()
-    # Adopt a retained current primary result before starting another producer.
-    # Every ordinary consumer still rechecks its bytes and runs the per-layer
-    # judge; the receipt alone is never sufficient for reuse.
+    # Preserve the previous promotion before this invocation streams anew.
     reuse_refusal = None
     if (project / DEFAULT_STREAM_REL).is_file():
         try:
@@ -1847,11 +1847,8 @@ def default_stream(project: Path, top: str, pdk: Any, container: str) -> dict:
                 raise Refusal('LL_FINISHING_WRONG_DECLARATION', str(record))
             arm = _load(project / RECORD_REL)['gds']['librelane']
             judged = current_metal_density(project, arm, record)
-            if arm.get(DENSITY_METRIC) == 0 and judged.get('verdict') == 'PASS':
-                runner._step37_declare_streamout_gds_provenance(
-                    project, top, default_finishing=True)
-                return dict(record, receipt=str(project / DEFAULT_STREAM_REL))
-            reuse_refusal = 'retained density consumer did not pass: ' + str(judged)
+            if arm.get(DENSITY_METRIC) != 0 or judged.get('verdict') != 'PASS':
+                reuse_refusal = 'retained density consumer did not pass: ' + str(judged)
         except (Refusal, OSError, ValueError, KeyError, TypeError) as exc:
             reuse_refusal = f'{type(exc).__name__}: {exc}'
         # Keep the old promotion and its actual cited source closure in the

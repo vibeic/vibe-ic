@@ -280,7 +280,8 @@ def _split_alts(spec: str) -> List[str]:
 def _glob_existing(project: Path, pattern: str) -> List[Path]:
     """Existing paths under `project` matching `pattern` (a relative glob or a
     literal path). Sorted for determinism; tolerant of bad patterns."""
-    pattern = pattern.strip().lstrip("/")
+    from flow_artifact_paths import resolve
+    pattern = resolve(project, pattern.strip()).lstrip("/")
     if not pattern:
         return []
     try:
@@ -300,8 +301,13 @@ def _resolve_spec(project: Path, spec: str) -> Tuple[bool, Dict[str, Any]]:
     it is the FIRST literal alternative with exists=False so the UI can show the
     EXPECTED location before it is produced."""
     alts = _split_alts(spec)
+    resolution_error = None
     for alt in alts:
-        matches = _glob_existing(project, alt)
+        try:
+            matches = _glob_existing(project, alt)
+        except ValueError as exc:
+            resolution_error = str(exc)
+            break
         if matches:
             m = matches[0]
             try:
@@ -324,6 +330,7 @@ def _resolve_spec(project: Path, spec: str) -> Tuple[bool, Dict[str, Any]]:
         "exists": False,
         "size": 0,
         "mtime": 0,
+        **({"resolution_error": resolution_error} if resolution_error else {}),
     }
 
 
@@ -803,8 +810,9 @@ def _run_compliance(project: Path) -> Optional[List[dict]]:
         out_dir = project
     out_json = out_dir / ".dashboard_compliance.json"
     try:
+        from flow_artifact_paths import top_arguments
         subprocess.run(
-            [sys.executable, str(fc), str(project), "--json", str(out_json)],
+            [sys.executable, str(fc), str(project), "--json", str(out_json)] + top_arguments(project),
             timeout=600,
             capture_output=True,
         )

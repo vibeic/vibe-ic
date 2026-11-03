@@ -2039,6 +2039,8 @@ def _glob_first(project: Path, pattern: str) -> List[str]:
     generate sweep that moves flat reports/ artefacts into category
     subdirs (sourced by `_REPORTS_SUBDIR_FALLBACK`).
     """
+    from flow_artifact_paths import resolve
+    pattern = resolve(project, pattern)
     matches = _glob_real(project, pattern)
     if not matches and pattern.startswith("reports/"):
         rest = pattern[len("reports/"):]
@@ -2467,11 +2469,13 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
     `si_crosstalk.rpt OR .json`, step 34's `filled.def OR metal_fill.done`),
     so collapsing to one would have quietly reduced what gets scanned.
     """
-    alts = [a.strip() for a in str(spec).split(" OR ") if a.strip()]
+    from flow_artifact_paths import resolve
+    selected = resolve(project, spec)
+    alts = [a.strip() for a in str(selected).split(" OR ") if a.strip()]
     glob_ev: List[str] = []       # exactly what the pre-change loop collected
     glob_hits: List[str] = []     # every hit, for classification
     literal_hits: List[str] = []  # hits a NON-wildcard alternative NAMED
-    n_wild = 0
+    n_wild = int(selected != spec)
     for sp in alts:
         if _alt_is_wildcard(sp):
             n_wild += 1
@@ -2479,7 +2483,7 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
         if hits:
             glob_ev.append(hits[0])
             glob_hits.extend(hits)
-            if not _alt_is_wildcard(sp):
+            if selected == spec and not _alt_is_wildcard(sp):
                 literal_hits.extend(hits)
     glob_sat = bool(glob_hits)
 
@@ -2496,6 +2500,8 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
     #     one that survives is evidence, for the reason in the docstring.
     live_rec: List[str] = []
     for rel in rec["produced"]:
+        if selected != spec and rel != selected:
+            continue
         if _live_artefact_state(project / rel)[0] and rel not in live_rec:
             live_rec.append(rel)
     if live_rec:
@@ -2533,7 +2539,8 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
         # large SoC for a number nobody's verdict depends on.
         _seen_rec: set = set()
         _recorded = [r for r in rec["produced"]
-                     if not (r in _seen_rec or _seen_rec.add(r))]
+                     if (selected == spec or r == selected)
+                     and not (r in _seen_rec or _seen_rec.add(r))]
         _live_set = set(live_rec)
         _lost = [r for r in _recorded if r not in _live_set]
         if _lost:
@@ -2647,6 +2654,12 @@ def _disclose_output_binding(result: "StepResult") -> "StepResult":
     if any(r.startswith("OUTPUT ATTRIBUTION:") for r in result.reasons):
         return result                       # both exits can reach this helper
     n, k = b["n_specs"], b["n_step_attributed"]
+    if b.get("n_unresolved"):
+        result.reasons.append(
+            f"OUTPUT ATTRIBUTION: {b['n_unresolved']}/{n} declared output(s) "
+            f"unresolved (OUTPUT_TOP_UNBOUND); {k} step-attributed, "
+            f"{b['n_project_glob']} project-wide; no unresolved output credited")
+        return result
     # The typed codes go on the line in BOTH directions. `mixed` used to be a
     # word whose content lived only in prose; a reader (human or grep) now
     # gets the closed vocabulary that produced it.
@@ -2679,18 +2692,30 @@ def _disclose_output_binding(result: "StepResult") -> "StepResult":
 
 def _check_files_exist(project: Path, patterns: List[str], any_of: bool) -> tuple[bool, List[str], List[str]]:
     """Return (passed, found_paths, missing_patterns)."""
+    from flow_artifact_paths import OutputTopUnbound
     found: List[str] = []
     missing: List[str] = []
+    unresolved = []
     for pat in patterns:
         # Support "A OR B" syntax in YAML-level patterns by splitting
         sub_patterns = [p.strip() for p in pat.split(" OR ")]
         hits_for_this = []
+        unknown_for_this = []
         for sp in sub_patterns:
-            hits_for_this.extend(_glob_first(project, sp))
+            try:
+                hits_for_this.extend(_glob_first(project, sp))
+            except OutputTopUnbound as exc:
+                unknown_for_this.append(exc)
         if hits_for_this:
             found.extend(hits_for_this)
+        elif unknown_for_this:
+            unresolved.extend(unknown_for_this)
         else:
             missing.append(pat)
+    # OR has a decisive PASS; AND has a decisive FAIL. Otherwise an
+    # unbound selector leaves the file predicate unmeasured.
+    if unresolved and not (bool(found) if any_of else bool(missing)):
+        raise unresolved[0]
     if any_of:
         passed = len(found) > 0
     else:
@@ -3311,7 +3336,13 @@ def _expand_globs(args: List[str], cwd: Path) -> List[str]:
     multiple optional source globs like `phase2/stage1/rtl/*.sv
     phase2/stage1/rtl/*.v`. Non-glob args pass through unchanged."""
     out: List[str] = []
+    from flow_artifact_paths import resolve
     for a in args:
+        option, separator, value = a.partition("=")
+        if a.startswith("-") and separator:
+            a = option + "=" + resolve(cwd, value)
+        else:
+            a = resolve(cwd, a)
         if any(c in a for c in ["*", "?", "["]) and not a.startswith("-"):
             matches = sorted(str(p.relative_to(cwd)) for p in cwd.glob(a))
             if matches:
@@ -3340,6 +3371,17 @@ def _resolve_program_cmd(cmd_str: str, cwd: Path | None = None) -> List[str]:
     args = parts[1:]
     if cwd is not None:
         args = _expand_globs(args, cwd)
+        if prog_path.stem in ('flow_compliance_check', 'stage1_compliance',
+                              'stage2_compliance', 'stage3_compliance', 'stage4_compliance'):
+            from flow_artifact_paths import top_arguments
+            forwarded = top_arguments(cwd)
+            if forwarded:
+                explicit = [args[index + 1] for index, value in enumerate(args[:-1]) if value == '--top']
+                explicit.extend(value.partition('=')[2] for value in args if value.startswith('--top='))
+                if any(top != forwarded[1] for top in explicit):
+                    raise ValueError('OUTPUT_TOP_CONFLICT: nested audit top differs')
+                if not explicit:
+                    args.extend(forwarded)
     return [sys.executable, str(prog_path)] + args
 
 
@@ -12895,6 +12937,19 @@ def _declared_gate_summary(gate: Any) -> str:
     return ", ".join(parts)
 
 
+def _with_output_top_incomplete(fn):
+    @functools.wraps(fn)
+    def _judge(*args, **kwargs):
+        from flow_artifact_paths import OutputTopUnbound
+        try:
+            return fn(*args, **kwargs)
+        except OutputTopUnbound as exc:
+            return True, [f"{_INCOMPLETE_HINT_PREFIX}{exc}; "
+                          "rerun the audit with --top <logical top>"]
+    return _judge
+
+
+@_with_output_top_incomplete
 def _evaluate_gate(project: Path, gate: Dict[str, Any],
                    skip_analog: bool = False) -> tuple[bool, List[str]]:
     """Evaluate a gate spec, return (passed, reasons).
@@ -13569,6 +13624,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 
     # `any_of` - list of sub-gates, any one passes
     if "any_of" in gate and isinstance(gate["any_of"], list):
+        incomplete = []
         for sub in gate["any_of"]:
             if not isinstance(sub, dict):
                 continue
@@ -13584,6 +13640,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     "alongside them instead (#306).")
                 return False, reasons
             p, r = _evaluate_gate(project, sub, skip_analog=skip_analog)
+            unknown = [h for h in r if h.startswith(_INCOMPLETE_HINT_PREFIX)]
+            if p and unknown:
+                incomplete.extend(unknown)
+                continue
             if p:
                 # W4 — an `any_of` satisfied by a branch that DID NOT RUN is
                 # the group's whole verdict resting on a non-verdict. The
@@ -13599,6 +13659,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                         _EXECUTED_DECLARED_NA_HINT_PREFIX,
                     )))
                 return True, reasons
+        if incomplete:
+            return True, incomplete
         reasons.append(f"no sub-gate passed in any_of")
         return False, reasons
 
@@ -16348,9 +16410,24 @@ def _emit_step_output_record(project: Path, step: Dict[str, Any],
     reasons = " \n".join(str(r) for r in (getattr(result, "reasons", None) or []))
     missing: List[str] = []
     unusable: List[str] = []
+    unresolved: List[str] = []
+    from flow_artifact_paths import OutputTopUnbound
     for pat in outputs:
         try:
             _ok, _found, _miss = _check_files_exist(project, [pat], any_of=False)
+        except OutputTopUnbound:
+            if status == "NOT_MEASURED" and "OUTPUT_TOP_UNBOUND" in reasons:
+                unresolved.append(pat)
+            if status in _NOT_SATISFIED_STATUSES:
+                try:
+                    for alternative in pat.split(" OR "):
+                        if any(str(path.relative_to(project)) in reasons
+                               for path in project.glob(alternative.strip()) if path.is_file()):
+                            unusable.append(pat)
+                            break
+                except Exception:
+                    pass
+            continue
         except Exception:                                      # pragma: no cover
             continue
         if _miss:
@@ -16382,9 +16459,10 @@ def _emit_step_output_record(project: Path, step: Dict[str, Any],
             "declared": outputs,
             "missing": sorted(missing),
             "unusable": sorted(unusable),
+            "unresolved": sorted(unresolved),
             "note": ("what THIS step's own gate found wanting among its declared "
                      "outputs; a consumer asking whether an upstream blockage is about "
-                     "a given artefact reads these two lists and nothing else"),
+                     "a given artefact reads these lists and nothing else"),
         }, indent=1) + "\n", lock=False)
     # ONE handler, not two. r1 of this change left a duplicated `except OSError:` on this try --
     # the second clause is unreachable, so the effective behaviour was the first one's `pass`,
@@ -16570,7 +16648,9 @@ def _with_child_gate_step(fn):
     def _judge(project, step, *args, **kwargs):
         token = _CHILD_GATE_STEP.set(str((step or {}).get("id") or ""))
         try:
-            return fn(project, step, *args, **kwargs)
+            from flow_artifact_paths import gate_parameters
+            with gate_parameters(project, kwargs.pop("parameters", None)):
+                return fn(project, step, *args, **kwargs)
         finally:
             _CHILD_GATE_STEP.reset(token)
     return _judge
@@ -16923,6 +17003,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # `output_binding`, never taken silently.
     outputs = step.get("required_outputs", [])
     missing_entries: List[str] = []
+    unresolved_outputs: List[str] = []
     _binding = _load_step_binding(project) if outputs else None
     _bind_notes: List[str] = []
     _bind_modes: Dict[str, str] = {}
@@ -16930,6 +17011,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     _n_attr = 0
     _n_glob = 0
     _not_owed: List[str] = []
+    _output_obligations = []
     for pat in outputs:
         try:
             _why_not_owed = _output_not_owed(project, step, pat)
@@ -16937,12 +17019,23 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             result.reason_class = ""
             result.reasons.append(f"HARDMACRO_BOUGHT_SLOT_CONTRADICTION: {exc}")
             return result
+        _output_obligations.append((pat, _why_not_owed))
+    for pat, _why_not_owed in _output_obligations:
         if _why_not_owed:
             _not_owed.append(pat)
             result.reasons.append(_why_not_owed)
             continue
-        _sat, _ev, _mode, _note, _detail = _resolve_required_output(
-            project, sid, pat, _binding or {})
+        from flow_artifact_paths import OutputTopUnbound
+        try:
+            _sat, _ev, _mode, _note, _detail = _resolve_required_output(
+                project, sid, pat, _binding or {})
+        except OutputTopUnbound as exc:
+            unresolved_outputs.append(pat)
+            _bind_specs.append(dict(spec=pat, mode="unresolved",
+                                    code="output_top_unbound", satisfied=None))
+            result.reasons.append(
+                f"{exc}: {pat}; rerun the audit with --top <logical top>")
+            continue
         _bind_modes[pat] = _mode
         if _mode == "step_attributed":
             _n_attr += 1
@@ -16971,7 +17064,9 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # notes that ARE per-spec under a wall of the same sentence.
             _bind_notes = [f"whole run: {_binding.get('reason')}"]
         result.output_binding = {
-            "mode": ("step_attributed" if _n_glob == 0 else
+            "mode": ("unresolved" if unresolved_outputs and not (_n_attr + _n_glob) else
+                     "mixed" if unresolved_outputs else
+                     "step_attributed" if _n_glob == 0 else
                      "project_glob" if _n_attr == 0 else "mixed"),
             "n_specs": len(outputs) - len(_not_owed),
             "not_owed": _not_owed,
@@ -16993,6 +17088,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # predicate requires BOTH, so nothing is loosened by letting this
             # field mean what its name says.
             "n_satisfied": sum(1 for d in _bind_specs if d.get("satisfied")),
+            "n_unresolved": len(unresolved_outputs),
             "n_project_glob": _n_glob, "source": _src,
             # `codes` is the machine handle: a closed vocabulary (see
             # `_bind_detail`) that says WHICH degradation `mixed` is made of.
@@ -17997,7 +18093,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 f"enforcement={_clause_enforcement_label(rec)}")
     else:
         # No gate — just presence of outputs counts
-        result.status = (_T.Verdict.PASS.value if result.evidence
+        result.status = (_T.Verdict.NOT_MEASURED.value if unresolved_outputs
+                         else _T.Verdict.PASS.value if result.evidence
                          else _T.Verdict.FAIL.value)
         if result.status == _T.Verdict.FAIL.value:
             result.reason_class = _T.ReasonClass.MISSING_ARTEFACT.value
@@ -18326,6 +18423,10 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 f"(steps/<...>/written.json, or reports/write_ledger.json via "
                 f"step_write_ledger.emit); relaxing this check is not the "
                 f"remedy.")
+
+    if unresolved_outputs and result.status != _T.Verdict.FAIL.value:
+        result.status = _T.Verdict.NOT_MEASURED.value
+        result.reason_class = _T.ReasonClass.NOT_EXECUTED.value
 
     # natural verdict is FAIL or MISSING AND an ENV_UNAVAILABLE-tier
     # waiver matches this step, convert to WAIVED-DEFERRED. The
@@ -20447,6 +20548,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("project_dir", nargs="?",
                    help="Project directory to audit (omit when using "
                         "--list-structural-gates)")
+    p.add_argument("--top", help="Logical output top; defaults to the project's typed synthesis config")
     p.add_argument("--flow", default="phase1_phase2_phase3", help="Flow name (default: phase1_phase2_phase3)")
     p.add_argument("--flow-def", help="Override path to flow YAML")
     p.add_argument("--strict", action="store_true", help="Strict mode (default). Non-waived MISSING/FAIL → exit 1.")
@@ -20645,9 +20747,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     project = Path(args.project_dir).resolve()
+    from flow_artifact_paths import (
+        acceptance_parameters, current_parameters, gate_parameters, OutputTopUnbound)
     if not project.is_dir():
         print(f"flow_compliance_check: not a directory: {project}", file=sys.stderr)
         return 2
+    try:
+        parameters = acceptance_parameters(project, args.top)
+    except OutputTopUnbound:
+        # GDS selectors report this refusal only when their row is audited.
+        parameters = current_parameters(project)
 
     # ── --read-only: audit a COPY, never the tree the caller handed us ──────
     #
@@ -20721,6 +20830,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         import atexit as _atexit
         _atexit.register(_shutil.rmtree, str(_ro_scratch), True)
 
+    with gate_parameters(project, parameters):
+        return _audit_project(args, project)
+
+
+def _audit_project(args, project):
     # ── the design this verdict is about, measured BEFORE anything judges it ──
     #
     # The tally this program publishes carried no record of its own
@@ -21212,13 +21326,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         and not (suppress_yaml_step14 and step.get("id") == 14)
     ]
     _workers = _compliance_workers(len(_eval_steps))
+    from flow_artifact_paths import current_parameters
+    _parameters = current_parameters(project)
+    _parameter_args = ({'parameters': _parameters}
+                       if _parameters is not None and 'top' in _parameters else {})
     if _workers <= 1:
         for step in _eval_steps:
             _r = check_step(
                 project, step, waivers,
                 skip_analog=skip_analog, skip_hardware=skip_hardware,
                 strict_audit_evidence=strict_audit_evidence,
-                strict_step_binding=strict_step_binding)
+                strict_step_binding=strict_step_binding, **_parameter_args)
             _emit_step_metrics(project, step, _r)
             _emit_step_output_record(project, step, _r)
             results.append(_r)
@@ -21249,7 +21367,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                skip_analog=skip_analog,
                                skip_hardware=skip_hardware,
                                strict_audit_evidence=strict_audit_evidence,
-                               strict_step_binding=strict_step_binding)
+                               strict_step_binding=strict_step_binding, **_parameter_args)
                     for step in _wave
                 ]
                 # THE SAME EMIT ON BOTH BRANCHES. A metrics row that appears only

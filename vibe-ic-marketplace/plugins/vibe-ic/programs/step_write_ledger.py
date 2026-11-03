@@ -663,8 +663,10 @@ def _spec_candidates(project: Path, spec: str) -> List[str]:
     are usable. Uses Path.glob (which yields dangling symlinks) and does NOT
     filter on exists() — filtering here is what erases the very evidence this
     module is for. Classification is the ledger's job, not the glob's."""
+    from flow_artifact_paths import resolve
     rels: List[str] = []
     for alt in [a.strip() for a in _OR_RE.split(str(spec).strip()) if a.strip()]:
+        alt = resolve(project, alt)
         pat = alt.lstrip("/")
         if not pat:
             continue
@@ -754,7 +756,11 @@ def build(project: Path) -> Dict[str, Any]:
 
         for spec in s["required_outputs"]:
             claimed_patterns.extend(_spec_claimed_patterns(spec))
-            cands = _spec_candidates(project, spec)
+            try:
+                cands = _spec_candidates(project, spec)
+            except ValueError as exc:
+                undetermined.append(str(exc))
+                cands = []
             claimed_rels.update(cands)
             usable: List[Dict[str, Any]] = []
             rejected: List[Dict[str, Any]] = []

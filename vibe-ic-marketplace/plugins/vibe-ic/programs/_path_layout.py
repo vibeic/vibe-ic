@@ -1351,8 +1351,9 @@ def emit_final_summary(project, programs_dir=None) -> bool:
     if not final_gen.is_file():
         return False
     try:
+        from flow_artifact_paths import top_arguments
         r = _pr.run(
-            [sys.executable, str(final_gen), str(project)],
+            [sys.executable, str(final_gen), str(project)] + top_arguments(project),
             check=False,
             capture_output=True, text=True,
         )
@@ -1449,7 +1450,8 @@ def emit_steps_view(project, programs_dir=None, runner=None,
                 timeout = STEPS_VIEW_TIMEOUT_S
             proc = None
             try:
-                _cmd = [sys.executable, str(collector), str(project)]
+                from flow_artifact_paths import top_arguments
+                _cmd = [sys.executable, str(collector), str(project)] + top_arguments(project)
                 if only_steps:
                     # A run that declared a window refreshes only its own
                     # steps' folders; the collector CARRIES the rest of the

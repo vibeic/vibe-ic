@@ -20,6 +20,7 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent / "benchmark_evidence_publish.py"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _pdk_revision_fixture as _pdk_fixture  # noqa: E402
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 _GDS_BYTES = b"GDSII-FAKE-STREAM-" * 64
 _RESULT_PASS = "# RESULT\n\n## VERDICT\n\n**PASS_WITH_WAIVERS.** re-derived.\n"
@@ -91,6 +92,7 @@ _CANONICAL_PNR_STEPS = ("15", "18")
 def _publish_canonical_pnr_fixture(tmp_path, entry, variant="present"):
     import step_output_collector as collector
     run = _make_run(tmp_path)
+    bind_invocation_top(run, 'top')
     # Existing provenance pruning serializes JSON lines. Start this new
     # byte-preservation control in that existing canonical representation.
     (run / "provenance.jsonl").write_text(json.dumps({"tool": "yosys"}) + "\n")

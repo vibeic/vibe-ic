@@ -23,7 +23,7 @@ Why this gate exists:
   single PASS/FAIL with a clear `non-waived PASS = N/34` metric.
 
 Usage:
-  python3 phase23_completion_self_audit_check.py <project_dir> [--json [PATH]]
+  python3 phase23_completion_self_audit_check.py <project_dir> [--top TOP] [--json [PATH]]
 
 Exit codes:
   0  Overall PASS — Phase 2+3 may be claimed complete
@@ -70,11 +70,14 @@ def _find_flow_compliance_check() -> Path:
     raise FileNotFoundError(f"flow_compliance_check.py not found alongside {me}")
 
 
-def _run_compliance(project: Path, strict: bool = True) -> tuple[int, str]:
+def _run_compliance(project: Path, strict: bool = True,
+                    top: Optional[str] = None) -> tuple[int, str]:
     fcc = _find_flow_compliance_check()
     cmd = [sys.executable, str(fcc), str(project)]
     if strict:
         cmd.append("--strict")
+    if top is not None:
+        cmd.extend(["--top", top])
     # #525 — size-adaptive budget (shared resolver) instead of the old fixed
     # 300s, which a large SoC's legitimate 8-9 min --strict audit exceeded;
     # AND the TimeoutExpired no longer crashes the whole acceptance gate
@@ -142,6 +145,7 @@ def main():
         )
     )
     ap.add_argument("project_dir", help="Project directory (contains rtl/, fpga/, gds/, etc.)")
+    ap.add_argument("--top", help="Logical output top; defaults to the project's typed synthesis config")
     ap.add_argument("--json", nargs="?", const="-", default=None,
                     help="Emit machine-readable JSON. With PATH, writes to file; bare flag prints to stdout.")
     args = ap.parse_args()
@@ -151,7 +155,8 @@ def main():
         print(f"[ERROR] project_dir not found: {project}", file=sys.stderr)
         return 2
 
-    rc, output = _run_compliance(project, strict=True)
+    rc, output = (_run_compliance(project, strict=True, top=args.top)
+                  if args.top is not None else _run_compliance(project, strict=True))
 
     findings = []
     # BOTH CHANNELS, FROM THE ONE OWNER. `audit.word` is the audit's own word out of the

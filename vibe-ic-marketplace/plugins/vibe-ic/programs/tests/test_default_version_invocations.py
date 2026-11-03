@@ -134,7 +134,7 @@ def test_default_missing_input_is_retained_without_starting_producer(tmp_path, m
     import execution_backend_worker as worker
     import execution_backend_producers as producers
     monkeypatch.setattr(runner, '_backend_parameter_values', lambda *args: {})
-    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args: ['current CTS input absent'])
+    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args, parameters=None: ['current CTS input absent'])
     def forbidden(*args, **kwargs):
         raise AssertionError('native producer started with a missing input')
     monkeypatch.setattr(producers, 'produce', forbidden)

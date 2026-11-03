@@ -303,7 +303,11 @@ def check_one(project: Path, step: Dict[str, Any],
         for producer, spec in expand(e, by_id):
             hits: List[str] = []
             for alt in (p.strip() for p in spec.split(" OR ")):
-                hits = _glob_first(project, alt)
+                try:
+                    hits = _glob_first(project, alt)
+                except ValueError as exc:
+                    rec["reasons"].append(str(exc))
+                    break
                 if hits:
                     break
             item: Dict[str, Any] = {

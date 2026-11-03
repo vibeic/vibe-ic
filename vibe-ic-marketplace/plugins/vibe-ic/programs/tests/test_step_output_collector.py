@@ -20,6 +20,7 @@ PROG = Path(os.environ.get('VIBEIC_OUTPUT_RETENTION_PROGRAMS',
 sys.path.insert(0, str(PROG))
 import step_output_collector as SOC  # noqa: E402
 import flow_dashboard_data as FDD  # noqa: E402
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 
 def test_supported_python_without_file_digest_retains_exact_output(tmp_path, monkeypatch):
@@ -74,12 +75,15 @@ def test_sequential_child_does_not_interrupt_its_live_parent(tmp_path):
 @pytest.mark.parametrize('step', FDD._load_flow()[1], ids=lambda s: str(s['id']))
 def test_every_canonical_step_keeps_all_declared_previous_bytes(tmp_path, step):
     """All 70 declarations; synthetic file transport, not native IC execution."""
+    if str(step['id']) == '37':
+        bind_invocation_top(tmp_path, 'first')
     specs = list(step.get('required_outputs') or [])
     specs += [row['path'] for row in step.get('program_outputs', []) if row.get('path')]
     expected = {}
     for spec in specs:
         for alternative in spec.split(' OR '):
-            for label in ('first', 'second') if '*' in alternative else ('first',):
+            for label in (('first',) if alternative.strip() == 'phase3/stage4/gds/*.gds'
+                          else ('first', 'second') if '*' in alternative else ('first',)):
                 relative = alternative.strip().replace('**', 'nested/deep').replace('*', label)
                 path = tmp_path / relative
                 path.parent.mkdir(parents=True, exist_ok=True)

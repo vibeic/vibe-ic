@@ -67,6 +67,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import step_output_collector as soc          # noqa: E402  (exists both sides)
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 
 GDS_REL = "phase3/stage4/gds/chip.gds"       # matches step 37's required_outputs
@@ -120,6 +121,7 @@ def _mk_project(tmp_path: Path, *, zero_byte: bool,
     fixture proves it can still make a D3 appear — a fixture that always
     materialises everything the flow declares could never fail the `no D3`
     assertion, and then that assertion would be guarding nothing."""
+    bind_invocation_top(tmp_path / 'proj', 'chip')
     p = tmp_path / "proj"
     (p / "reports" / "orchestrator").mkdir(parents=True)
     (p / "phase3" / "stage3" / "pnr").mkdir(parents=True)

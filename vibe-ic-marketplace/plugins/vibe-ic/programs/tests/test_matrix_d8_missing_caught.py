@@ -206,6 +206,7 @@ from flow_matrix import waivers as W
 import flow_compliance_check as FCC
 import _tapeout_declaration as TD
 from _declared_design_inputs import consumes_declaration, declare_no_reuse
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 DIM = 8
 
@@ -559,6 +560,8 @@ def _materialize(project: Path, step: Dict[str, Any],
                       move would be a fact about two different trees rather
                       than about the bytes in one file.
     """
+    if str(step['id']) == '37':
+        bind_invocation_top(project, 'd8')
     (project / _GATE_DIR).mkdir(parents=True, exist_ok=True)
     if gate_ok:
         _write(project, _GATE_OK, "d8 gate control\n")

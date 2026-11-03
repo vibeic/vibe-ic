@@ -44,6 +44,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import step_write_ledger as swl            # noqa: E402
+from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
 
 
 # --------------------------------------------------------------------------- #
@@ -59,6 +60,7 @@ DEF_REL = "phase3/stage3/pnr/routed.def"
 
 def _mk_project(tmp_path: Path, *, gds: str, routed: str) -> Path:
     """gds/routed: "real" | "zero" | "dangling" | "absent"."""
+    bind_invocation_top(tmp_path / 'proj', 'chip')
     p = tmp_path / "proj"
     (p / "reports" / "orchestrator").mkdir(parents=True)
     (p / "phase3" / "stage4" / "gds").mkdir(parents=True)

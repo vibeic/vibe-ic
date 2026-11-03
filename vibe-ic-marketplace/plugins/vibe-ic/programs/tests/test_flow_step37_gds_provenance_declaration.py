@@ -47,8 +47,10 @@ on a project with no GDS the resolved argv becomes
 `['.', '--output', '--tool', 'klayout,...']`, argparse exits 2, and
 `_check_program_exit_zero` reads rc 2 as VACUOUS_PASS: silently green. The `=`
 form reaches provenance_check intact and its own glob branch FAILs
-"no file on disk matches pattern". `test_declaration_form_fails_closed_*`
-pins this.
+"no file on disk matches pattern". The canonical GDS selector now resolves
+to the invocation's literal filename before glob expansion, so both forms
+fail closed there. The ordinary-glob controls retain the argparse-collapse
+and reason-class assertions alongside that new literal-path control.
 """
 from __future__ import annotations
 
@@ -70,12 +72,19 @@ for _p in (str(_PROGRAMS), str(_PLUGIN)):
 
 import flow_compliance_check as _fcc                       # noqa: E402
 import phase3_one_shot_runner as _runner                   # noqa: E402
+from flow_artifact_paths import gate_parameters           # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 _COARSE = "provenance_check . --require-entries 1"
+
+
+@pytest.fixture(autouse=True)
+def _fixture_invocation_top(tmp_path):
+    with gate_parameters(tmp_path / "proj", {"top": "chip_top"}):
+        yield
 
 
 def _sha(data: bytes) -> str:
@@ -145,22 +154,22 @@ def test_declaration_form_fails_closed_when_no_gds_exists(tmp_path):
 
 
 def test_space_separated_form_still_cannot_reach_the_honest_fail(tmp_path):
-    """Why the `=` form: pin the measured failure of the obvious alternative,
-    so nobody 'tidies' the declaration back into it.
+    """Keep the nullglob refusal control after canonical selection became literal.
 
-    THE QUESTION WAS REWRITTEN, NOT THE BEHAVIOUR. This used to require the
-    space form to produce `__VACUOUS_HINT__` — vacuously GREEN — because that
-    was the only non-FAIL tier rc 2 could reach before `#1978`/`#1980`. The
-    nullglob collapse is unchanged and still measured here: argparse never
-    sees a value for `--output`, exits 2, and the step does NOT reach the
-    honest FAIL that the shipped `=` form reaches on this same project. What
-    changed is only the NAME of the tier it lands in instead — INCOMPLETE now,
-    a disclosed non-verdict rather than a vacuous pass. Either way the gate
-    concluded nothing, which is the whole reason the `=` form is required, so
-    the premise this test guards is intact and is now asserted as the
-    comparison it always was."""
+    The selected GDS command now reaches an honest missing-file FAIL in both
+    argument forms. An ordinary unmatched space-form glob still collapses
+    before argparse can read its output value and must remain a disclosed
+    non-verdict. It must never become skip-eligible or a substantive PASS.
+    """
     project = _no_gds_project(tmp_path)
-    space_form = ("provenance_check . --output phase3/stage4/gds/*.gds "
+    # The logical selector now becomes a literal filename before expansion.
+    canonical_space = ("provenance_check . --output phase3/stage4/gds/*.gds "
+                       "--tool klayout,magic,openroad")
+    selected_passed, selected_out = _fcc._check_program_exit_zero(project, canonical_space)
+    assert not selected_passed, selected_out
+    assert "file on disk missing: phase3/stage4/gds/chip_top.gds" in selected_out
+    # Keep the original nullglob control on an ordinary unmatched glob.
+    space_form = ("provenance_check . --output phase3/stage4/gds/chip_top*.gds "
                   "--tool klayout,magic,openroad")
     passed, out = _fcc._check_program_exit_zero(project, space_form)
     assert passed, (
@@ -199,7 +208,7 @@ def test_the_nullglob_collapse_is_not_laundered_by_a_relabel(tmp_path):
     for — so pin the class and the consequence together."""
     T = _reason_taxonomy()
     project = _no_gds_project(tmp_path)
-    space_form = ("provenance_check . --output phase3/stage4/gds/*.gds "
+    space_form = ("provenance_check . --output phase3/stage4/gds/chip_top*.gds "
                   "--tool klayout,magic,openroad")
     _, out = _fcc._check_program_exit_zero(project, space_form)
     cls = out.split("reason_class=", 1)[1].split(";", 1)[0].strip()

@@ -7391,6 +7391,8 @@ steps:
       # authorship note claims it. A document the run already produced is
       # left byte-for-byte alone.
       - gds_antenna_deck_check
+    required_output_selectors:
+      "phase3/stage4/gds/*.gds": invocation_top
     required_outputs:
       - "phase3/stage4/gds/*.gds"
       # THE STREAM-OUT TRANSCRIPT, declared because it is CONSUMED. This step
@@ -7495,7 +7497,7 @@ steps:
         # layout elements >= the design's OWN placed-instance count read
         # from phase3/stage3/pnr/routed.def — a derived floor, never a
         # per-design constant. Hard FAIL; VACUOUS_PASS before stream-out.
-        - program_exit_zero: "gds_substance_check . --json reports/phase3/gds_substance.json"
+        - program_exit_zero: "gds_substance_check . --gds-file phase3/stage4/gds/*.gds --def-file phase3/stage3/pnr/routed.def --json reports/phase3/gds_substance.json"
         # vibe-ic#613 — substance is not nameability. A structurally valid,
         # substance-carrying sign-off GDS whose TOP CELL has no text labels
         # cannot be pin-matched by any top-level LVS: extraction emits
@@ -7510,7 +7512,7 @@ steps:
         # `DESIGN <name> ;` — sha256's pnr dir holds DEFs for two designs.
         # VACUOUS_PASS (rc 2) when no DEF describes the layout; blocks only on a
         # PLACED port with no label. Flips 0 of the 4 real sign-off GDS here.
-        - program_exit_zero: "gds_port_label_check . --json reports/phase3/gds_port_labels.json"
+        - program_exit_zero: "gds_port_label_check . --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_port_labels.json"
         # ORPHANED, RE-HOMED (2026-08-25). Step 37 is where a design publishes
         # its numbers, so it is the step that can ask whether every figure in
         # the final report is backed by an artefact on disk rather than typed
@@ -7536,14 +7538,6 @@ steps:
         # disk=sha256:b8cb431c24d...` — the shipped GDS post-dates the only
         # log entry that claims to describe it.
         #
-        # `--output=`/`--tool=` (the `=` form) is deliberate: an argument
-        # starting with `-` is NOT touched by flow_compliance_check's
-        # `_expand_globs`, so the pattern reaches provenance_check intact and
-        # is expanded by ITS glob branch, which FAILs "no file on disk matches
-        # pattern" when nothing matches and checks EVERY match when several
-        # do. The space-separated form would be pre-expanded with nullglob
-        # semantics: zero matches drops the argument entirely and argparse
-        # then exits 2, which this runner reads as VACUOUS_PASS.
         - program_exit_zero: "provenance_check . --output=phase3/stage4/gds/*.gds --tool=klayout,magic,openroad --require-measured"
         # TWO ORPHANED FINAL-STAGE GATES, RE-HOMED (2026-08-25). Step 37 is
         # where a design claims it is done, which is the only place these two
@@ -7593,7 +7587,7 @@ steps:
         # clause cannot re-enter itself. It would recurse without bound if
         # wired onto any stage3 step, which is why it is not.
         - optional_program_exit_zero:
-            command: "gds_antenna_deck_check . --json reports/phase2/gates/gate_oxide_geom_deck.json"
+            command: "gds_antenna_deck_check . --gds phase3/stage4/gds/*.gds --json reports/phase2/gates/gate_oxide_geom_deck.json"
             condition_files_exist: ["signoff/gate_oxide_deck.json", "input/pdk/bridge/gate_oxide_deck.json", "phase3/librelane_pdk_root.provenance.json"]
             absent_condition_reason: >-
               Both triggers are PDK-PROVIDED sign-off decks -- inputs to this

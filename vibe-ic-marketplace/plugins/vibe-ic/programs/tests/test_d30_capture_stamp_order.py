@@ -3,6 +3,7 @@
 Neutral subject/upstream readsets are explicit doubles, never native LEC/STA
 qualification. The normal gate, capture, stamps, publishers, strict handoff
 reader, delivery producer and chain reader execute without substitutes.
+Native dispatch is forbidden during this module's fixture and test lifetime.
 """
 import ast
 import copy
@@ -11,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -23,9 +25,11 @@ import execution_backend_gates as gates
 import execution_policy
 import _path_layout as layout
 
+_native_guard_active = False
+
 
 def no_native(event, args):
-    if event != 'subprocess.Popen':
+    if event != 'subprocess.Popen' or not _native_guard_active:
         return
     argv = list(map(str, args[1]))
     if Path(argv[0]).name == 'yosys' and argv[1:4] == ['-Q', '-T', '-p']:
@@ -44,6 +48,16 @@ def no_native(event, args):
 
 
 sys.addaudithook(no_native)
+
+
+@pytest.fixture(scope='module', autouse=True)
+def _native_guard():
+    global _native_guard_active
+    _native_guard_active = True
+    try:
+        yield
+    finally:
+        _native_guard_active = False
 
 
 def write(path, value):
@@ -65,7 +79,7 @@ def site_node():
 
 
 @pytest.fixture(scope='module')
-def captured(tmp_path_factory):
+def captured(tmp_path_factory, _native_guard):
     mp = pytest.MonkeyPatch()
     project = tmp_path_factory.mktemp('neutral-handoff-order')
     synth = project / 'phase2/stage2/synth'
@@ -198,3 +212,9 @@ def test_other_owner_keeps_existing_noncanonical_dispatch(monkeypatch, tmp_path)
     assert len(seen) == 1
     assert not seen[0].get('_preflight_canonical_acceptance')
     assert not seen[0].get('owner_capture')
+
+
+def test_unapproved_dispatch_is_forbidden_during_this_module():
+    with pytest.raises(AssertionError, match='Native/proof/STA/global dispatch forbidden'):
+        subprocess.run([sys.executable, '-c', "print('must not execute')"],
+                       capture_output=True, text=True, timeout=10)

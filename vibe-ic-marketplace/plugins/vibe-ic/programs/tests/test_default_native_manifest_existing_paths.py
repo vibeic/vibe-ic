@@ -109,7 +109,7 @@ def test_all_backend_rows_use_the_same_receipt_closure(tmp_path):
     observed = {}
     for sid in BACKEND_IDS:
         params = {}
-        policy._fixed_inputs({"project": root}, sid, parameters=params)
+        policy._fixed_inputs({"project": root, "parameters": {"top": "neutral"}}, sid, parameters=params)
         manifest = params["resolved_input_manifest"]
         observed[sid] = manifest
         assert FSM not in manifest["files"] and LOCK not in manifest["files"]
