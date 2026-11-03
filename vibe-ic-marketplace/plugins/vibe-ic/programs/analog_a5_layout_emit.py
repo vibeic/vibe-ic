@@ -5079,9 +5079,21 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
             plates[item["name"]] = item
         overhead = route.um(stem["island_gap_um"] + stem["island_um"] + stem["top_via_enclosure_um"]
                             + stem["top_metal_space_um"] - stem["tab_overlap_um"])
-        heights = [(i["name"], builder.bbox(i["cell"]).height() + overhead) for i in plane]
-        columns = route.columns_by_height(heights, route.um(cfg["plane_height_um"]),
-                                          route.um(stem["column_start_um"]))
+        height_of = {i["name"]: builder.bbox(i["cell"]).height() + overhead for i in plane}
+        columns, matched, adjacent = [], [], []
+        for patterns in cfg.get("common_centroid", []):
+            sets = [[n for n in height_of if fnmatchcase(n, pattern)] for pattern in patterns]
+            matched.append(sets)
+            if max(map(len, sets)) > 1:
+                columns += route.common_centroid_columns(
+                    [[(n, height_of[n]) for n in group] for group in sets],
+                    route.um(cfg["plane_height_um"]), route.um(stem["column_start_um"]), route.GRID)
+            else:
+                adjacent += [n for group in sets for n in group]
+        arrayed = {n for column in columns for n, _ in column}
+        rest = adjacent + [n for n in height_of if n not in arrayed and n not in adjacent]
+        columns += route.columns_by_height([(n, height_of[n]) for n in rest],
+                                           route.um(cfg["plane_height_um"]), route.um(stem["column_start_um"]))
         column_w = max([builder.bbox(i["cell"]).width() for i in plane] + [0])
         step = column_w + route.um(cfg["plane_column_gap_um"])
         plane_y = band_top + route.um(cfg["plane_gap_um"])
@@ -5090,12 +5102,17 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
         strap_clear = route.um(rail_cfg["plate_clearance_um"])
         gaps = route.strap_gaps(len(columns), rail_cfg["strap_pairs"])
         strap_at = []
+        plate_centres = {}
         x = left
         for index, column in enumerate(columns):
             macro = builder.cap_column(f"plane_{index}", [(plates[n], y) for n, y in column],
                                        column_w, stem, levels)
             macro["x"], macro["y"] = x, plane_y
             macros.append(macro)
+            for name, y in column:
+                box = builder.bbox(plates[name]["cell"])
+                plate_centres[name] = ((x + column_w / 2) / route.DBU_PER_UM,
+                                       (plane_y + y + box.height() / 2) / route.DBU_PER_UM)
             x += column_w
             if index in gaps:
                 x += strap_clear
@@ -5128,6 +5145,15 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
                             "layers": supply, "stacks_per_net": {
                                 net: sum(r["stacks"] for r in rails if r["net"] == net) for net in rail_nets},
                             "straps": len(strap_at)}
+        report["common_centroid"] = [
+            {"devices": sets, "centroid_distance_um": route.centroid_distance_um(sets, plate_centres)}
+            for sets in matched]
+        net_classes = [{"name": "SUPPLY", "nets": rail_nets, "rule": supply}]
+        net_classes += [
+            {"name": item["name"], "nets": item["nets"],
+             "rule": route.spaced_rule(facts.tech_lef or [], routing, cfg["routing_layers"][0],
+                                       cfg["routing_layers"][1], item["spacing_factor"], supply_space)}
+            for item in cfg.get("net_classes", [])]
         signal = [p for p in ports if p not in rail_nets]
         pins_at = [(p, cfg["signal_pin_start_um"] + i * cfg["signal_pin_pitch_um"], 0.4)
                    for i, p in enumerate(signal)]
@@ -5136,7 +5162,7 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
         pin_layer = routing[pin_spec["ports"][signal[0]]["level"] - 1] if signal else routing[levels[0] - 1]
         (work / "route.tcl").write_text(route.route_tcl(
             blockname, lef_path, cell_lef, site, pitch, routing, (die_w / route.DBU_PER_UM, die_h / route.DBU_PER_UM),
-            macros, pins_at, pin_layer, cfg, rail_nets, supply))
+            macros, pins_at, pin_layer, cfg, net_classes))
         rc, out, err = stage.sh(f"cd {shlex.quote(stage.path)} && openroad -no_splash -no_init -exit "
                                 "-log route.log route.tcl", timeout=14400)
         log = (work / "route.log").read_text() if (work / "route.log").is_file() else ""

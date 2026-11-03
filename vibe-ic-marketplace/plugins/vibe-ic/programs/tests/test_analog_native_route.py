@@ -75,9 +75,51 @@ def test_the_route_script_assigns_the_supply_rule_to_supply_nets_only():
     supply = {"Metal1": {"width_um": .4, "space_um": .22}, "Metal2": {"width_um": .45, "space_um": .25}}
     cfg = {**ROUTING, "routing_layers": [1, 2]}
     text = route.route_tcl("top", "t.lef", "c.lef", "Site", {}, ["Metal1", "Metal2"], (10, 10), [], [], "Metal2",
-                           cfg, ["vdd", "vss"], supply)
+                           cfg, [{"name": "SUPPLY", "nets": ["vdd", "vss"], "rule": supply}])
     assert "create_ndr -name SUPPLY -spacing {Metal1 0.22 Metal2 0.25} -width {Metal1 0.4 Metal2 0.45}" in text
     assert text.count("assign_ndr") == 2 and "-net vdd" in text and "-net vss" in text
+
+
+def _centroids(columns, sets, column_pitch=20):
+    place = {n: (index * column_pitch, y) for index, column in enumerate(columns) for n, y in column}
+    return route.centroid_distance_um(sets, place), place
+
+
+def test_a_one_to_five_ratio_shares_a_centroid_within_a_fraction_of_a_unit():
+    small = [f"s{i}" for i in range(5)]
+    big = [f"b{i}" for i in range(25)]
+    columns = route.common_centroid_columns(
+        [[(n, 30) for n in small], [(n, 30) for n in big]], 180, 0, 5)
+    distance, place = _centroids(columns, [small, big])
+    assert set(place) == set(small + big)
+    assert len(set(place.values())) == 30
+    assert distance <= 30 / 5 + 30 / 25
+
+
+@pytest.mark.parametrize("counts", [(4, 4), (3, 5), (3, 3, 3), (2, 6), (1, 1, 1), (8, 16)])
+def test_every_unit_gets_its_own_slot(counts):
+    sets = [[f"d{k}_{i}" for i in range(c)] for k, c in enumerate(counts)]
+    columns = route.common_centroid_columns([[(n, 30) for n in g] for g in sets], 95, 5, 5)
+    _, place = _centroids(columns, sets)
+    assert sorted(place) == sorted(n for g in sets for n in g)
+    assert len(set(place.values())) == sum(counts)
+
+
+def test_even_devices_sit_exactly_on_one_centroid():
+    sets = [[f"a{i}" for i in range(4)], [f"b{i}" for i in range(12)]]
+    columns = route.common_centroid_columns([[(n, 30) for n in g] for g in sets], 120, 0, 5)
+    assert _centroids(columns, sets)[0] == 0.0
+
+
+def test_a_shorter_unit_is_centred_in_its_slot():
+    columns = route.common_centroid_columns([[("a", 30), ("b", 20)]], 100, 0, 5)
+    assert dict(n for c in columns for n in c)["b"] % 30 == 5
+
+
+def test_a_net_class_is_named_with_wider_spacing_at_minimum_width():
+    rule = route.spaced_rule([{"name": "M1", "width": .16}, {"name": "M2", "width": .2}], ["M1", "M2"], 1, 2, 2,
+                             lambda level, width: .21)
+    assert rule == {"M1": {"width_um": .16, "space_um": .42}, "M2": {"width_um": .2, "space_um": .42}}
 
 
 def test_a_rail_keeps_its_declared_position():

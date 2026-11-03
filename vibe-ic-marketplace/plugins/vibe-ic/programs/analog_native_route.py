@@ -124,6 +124,67 @@ def columns_by_height(heights: Sequence[Tuple[str, int]], limit: int, start: int
     return columns
 
 
+def common_centroid_columns(sets: Sequence[Sequence[Tuple[str, int]]], limit: int, start: int,
+                            grid: int) -> List[List[Tuple[str, int]]]:
+    """One array of identical pitch for units that define a ratio, as [(name, y)] columns.
+
+    `sets` holds one list of (name, height) per matched device. Opposite slots go to
+    the same device, so each device's centroid stays on the array centre. A device
+    with an odd unit count takes one slot alone, nearest the centre."""
+    units = [(index, name, height) for index, group in enumerate(sets) for name, height in group]
+    if not units:
+        return []
+    pitch = max(height for _, _, height in units)
+    pitch += -pitch % grid
+    rows = max((limit - start) // pitch, 1)
+    cols = -(-len(units) // rows)
+    rows = -(-len(units) // cols)
+    centre = ((cols - 1) / 2, (rows - 1) / 2)
+    slots = sorted(((c, r) for c in range(cols) for r in range(rows)),
+                   key=lambda s: ((s[0] - centre[0]) ** 2 + (s[1] - centre[1]) ** 2, s))
+    left = [list(group) for group in sets]
+    placed: Dict[Tuple[int, int], Tuple[str, int]] = {}
+    free = list(slots)
+    last = None
+    for group in sorted(left, key=len):
+        if len(group) % 2:
+            mirror = last and (cols - 1 - last[0], rows - 1 - last[1])
+            last = mirror if mirror in free else free[0]
+            free.remove(last)
+            placed[last] = group.pop(0)
+    pairs = []
+    while free:
+        slot = free.pop(0)
+        mirror = (cols - 1 - slot[0], rows - 1 - slot[1])
+        if mirror in free:
+            free.remove(mirror)
+            pairs.append((slot, mirror))
+    spare = [group for group in left if group]
+    totals = {id(group): len(group) for group in spare}
+    for pair in pairs:
+        spare = [group for group in spare if group]
+        if not spare:
+            break
+        group = max(spare, key=lambda g: len(g) / totals[id(g)])
+        for slot in pair:
+            if group:
+                placed[slot] = group.pop(0)
+    columns: List[List[Tuple[str, int]]] = [[] for _ in range(cols)]
+    for (c, r), (name, height) in sorted(placed.items()):
+        offset = (pitch - height) // 2
+        columns[c].append((name, start + r * pitch + offset - offset % grid))
+    return [column for column in columns if column]
+
+
+def centroid_distance_um(members: Sequence[Sequence[str]], place: Dict[str, Tuple[float, float]]) -> float:
+    """Largest distance between the centroids of matched devices, from placed plate centres."""
+    centres = []
+    for group in members:
+        points = [place[name] for name in group]
+        centres.append((sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points)))
+    return round(max((math.dist(a, b) for a in centres for b in centres), default=0.0), 3)
+
+
 def supply_rule(current_ma: float, lef_layers: Sequence[dict], routing: Sequence[str], low: int, high: int,
                 low_metal_width_um: float, space_um) -> dict:
     """Wire width per routed layer from the declared current and the LEF's current
@@ -137,6 +198,14 @@ def supply_rule(current_ma: float, lef_layers: Sequence[dict], routing: Sequence
         rule[name] = {"width_um": width, "needed_um": round(needed, 4),
                       "short_um": round(max(0.0, needed - width), 4), "space_um": space_um(index, width)}
     return rule
+
+
+def spaced_rule(lef_layers: Sequence[dict], routing: Sequence[str], low: int, high: int,
+                factor: float, space_um) -> dict:
+    """A net class at the LEF's minimum width, with `factor` times the layer's spacing."""
+    width = {layer["name"]: layer["width"] for layer in lef_layers}
+    return {name: {"width_um": width[name], "space_um": round(space_um(index, width[name]) * factor, 3)}
+            for index, name in enumerate(routing[low - 1:high], low)}
 
 
 def strap_gaps(columns: int, pairs: int) -> List[int]:
@@ -160,8 +229,7 @@ def site_name(lef_text: str) -> Optional[str]:
 def route_tcl(top: str, tech_lef: str, cell_lef: str, site: str,
               pitch: Dict[str, Tuple[float, float]], routing: Sequence[str],
               die: Tuple[float, float], macros: Sequence[dict], signal_pins: Sequence[Tuple[str, float, float]],
-              pin_layer: str, routing_cfg: dict, supply_nets: Sequence[str] = (),
-              supply: Optional[dict] = None) -> str:
+              pin_layer: str, routing_cfg: dict, net_classes: Sequence[dict] = ()) -> str:
     """The OpenROAD script: native floorplan, macro placement, global and detailed route."""
     low, high = routing_cfg["routing_layers"]
     margin = 8
@@ -187,11 +255,12 @@ def route_tcl(top: str, tech_lef: str, cell_lef: str, site: str,
         lines.append(f"place_pin -pin_name {name} -layer {pin_layer} -location [list {x} {y}] "
                      "-pin_size {0.3 0.8}")
     lines.append(f"set_routing_layers -signal {routing[low - 1]}-{routing[high - 1]}")
-    if supply:
-        widths = " ".join(f"{name} {spec['width_um']}" for name, spec in supply.items())
-        spaces = " ".join(f"{name} {spec['space_um']}" for name, spec in supply.items())
-        lines.append(f"create_ndr -name SUPPLY -spacing {{{spaces}}} -width {{{widths}}}")
-        lines += [f"assign_ndr -ndr SUPPLY -net {net}" for net in supply_nets]
+    for net_class in net_classes:
+        rule = net_class["rule"]
+        widths = " ".join(f"{name} {spec['width_um']}" for name, spec in rule.items())
+        spaces = " ".join(f"{name} {spec['space_um']}" for name, spec in rule.items())
+        lines.append(f"create_ndr -name {net_class['name']} -spacing {{{spaces}}} -width {{{widths}}}")
+        lines += [f"assign_ndr -ndr {net_class['name']} -net {net}" for net in net_class["nets"]]
     for index, adjustment in zip(range(low, high + 1), (0.7, 0.3, 0.2, 0.2)):
         lines.append(f"set_global_routing_layer_adjustment {routing[index - 1]} {adjustment}")
     lines += [
