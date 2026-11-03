@@ -2597,6 +2597,7 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
                 'limits': {'CVC_total': ('eq', 0)},
                 'unmeasured': ['latch-up spacing', 'ESD characterization']},
         'D54': {'report': 'reports/phase3/spice_correlation.json', 'status': 'verdict'},
+        'D55': {'report': 'reports/phase3/functional_activity.json', 'status': 'component_status'},
     }
     row = context.get('resolved_row', {})
     entry = contracts.get(row.get('id'))
