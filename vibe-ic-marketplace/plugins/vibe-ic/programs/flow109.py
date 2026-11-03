@@ -2510,15 +2510,101 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
 
 
 def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
-    """Read completed native physical steps without replaying unchanged tools.
-
-    LibreLane already owns these checks. This glue compares its native error
-    counts with the original zero-error limit; no backend receipt is needed.
-    Fresh cases without the native chain continue through the normal producer.
-    """
-    row = context.get("resolved_row", {})
-    if row.get("id") not in ("D31", "D32", "D35", "D37", "D38", "D39", "D40") or row.get("profile", {}).get("id") != "default":
+    """Read native backend reports once; compare the original tool limits."""
+    contracts = {
+        **{step: {} for step in ('D31', 'D32', 'D35', 'D37', 'D38', 'D39', 'D40')},
+        **{step: {'report': 'reports/phase3/sta_postpnr_signoff.json', 'state': 'sta_state',
+            'limits': {**{f'corners.*.{key}': ('ge', 0) for key in ('setup_ws', 'hold_ws')},
+                       **{f'corners.*.{key}': ('eq', 0) for key in ('setup_tns', 'hold_tns',
+                           'setup_vio', 'hold_vio', 'max_slew_vio', 'max_cap_vio', 'max_fanout_vio')},
+                       **{f'state.metrics.design__max_{key}_violation__count': ('eq', 0)
+                          for key in ('slew', 'cap', 'fanout')}}} for step in ('D41', 'D49')},
+        'D43': {'report': 'reports/phase3/antenna.json', 'state': 'tool_state',
+                'limits': {'net_violations': ('eq', 0), 'pin_violations': ('eq', 0)}},
+        'D47': {'report': 'reports/phase3/librelane_rcx_handoff.json', 'state': 'state',
+                'files': ('state.spef.*',)},
+        'D48': {'report': 'reports/phase3/si_mcf_sta.json', 'limits': {
+            'windows_rc': ('eq', 0), 'corners.*.sta_rc': ('eq', 0),
+            'corners.*.worst_slack_after_ns': ('ge', 0)}},
+        'D56': {'report': 'reports/phase3/sta_postpnr_signoff.json', 'state': 'sta_state',
+                'observe': ('state.metrics.power__total__corner:*',),
+                'unmeasured': ['functional-activity power and undeclared owner power budgets']},
+        'D57': {'report': 'reports/phase3/ir_drop.json', 'state': 'tool_state',
+                'limits': {'worst_ir_pct_vdd': ('lt_field', 'budget_pct_vdd')}},
+        'D58': {'report': 'reports/phase3/em_openroad_density.json', 'limits': {
+            'nets.*.violated': ('eq', 0)}, 'available': {'nets.*.no_limit': 0},
+                'unmeasured': ['signal EM']},
+        'D59': {'report': 'reports/phase3/perc_equivalent.json',
+                'limits': {'CVC_total': ('eq', 0)},
+                'unmeasured': ['latch-up spacing', 'ESD characterization']},
+    }
+    row = context.get('resolved_row', {})
+    entry = contracts.get(row.get('id'))
+    if entry is None or row.get('profile', {}).get('id') != 'default':
         return None
+    if entry.get('report'):
+        import fnmatch
+        def values_at(doc, field):
+            nodes = [doc]
+            for part in field.split('.'):
+                nodes = [value for node in nodes if isinstance(node, dict)
+                         for key, value in node.items() if fnmatch.fnmatchcase(key, part)]
+            return nodes
+        def local(raw):
+            path = Path(raw)
+            if path.is_absolute() and not path.is_relative_to(project):
+                path = Path(*path.parts[path.parts.index('phase3'):])
+            return project / path
+        path = project / entry['report']
+        if not path.is_file():
+            return None
+        measured, failed = {}, False
+        try:
+            text = path.read_text()
+            native = json.loads(text)
+            if entry.get('state'):
+                state = local(native[entry['state']])
+                fields = [*entry.get('limits', {}), *entry.get('files', ()), *entry.get('observe', ())]
+                if any(field.startswith('state.') for field in fields):
+                    native['state'] = json.loads(state.read_text())
+                fingerprint = state.parent / 'input_fingerprint.json'
+                if fingerprint.is_file():
+                    inputs = json.loads(fingerprint.read_text()).get('state_files', {})
+                    if any(_file_digest(local(name)) != sha for name, sha in inputs.items()
+                           if '/phase3/stage3/' in name or name.startswith('phase3/stage3/')):
+                        return None
+            for field, (op, limit) in entry.get('limits', {}).items():
+                values = values_at(native, field)
+                if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
+                    raise ValueError('native measurement unavailable: ' + field)
+                limit = native[limit] if op == 'lt_field' else limit
+                measured[field] = values
+                failed |= any(not (v >= limit if op == 'ge' else v < limit if op == 'lt_field'
+                                   else v == limit) for v in values)
+            for field, limit in entry.get('available', {}).items():
+                values = values_at(native, field)
+                if not values or any(v != limit for v in values):
+                    raise ValueError('native limit unavailable: ' + field)
+            for field in entry.get('files', ()):
+                values = values_at(native, field)
+                if not values or not all(local(v).is_file() for v in values):
+                    raise ValueError('native output absent: ' + field)
+                measured[field] = values
+            for field in entry.get('observe', ()):
+                values = values_at(native, field)
+                if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
+                    raise ValueError('native measurement unavailable: ' + field)
+                measured[field] = values
+            status = 'FAIL' if failed else 'PASS'
+            detail = None
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            status, detail = ('FAIL' if failed else 'NOT_MEASURED'), str(exc)
+        return {'step_id': row['id'], 'context_sha256': context['context_sha256'],
+            'component_status': status, 'default_row_status': status, 'completed': status == 'PASS',
+            'native_started': False, 'native_reports_reused': True, 'native_reports': [entry['report']],
+            'native_measurements': measured, 'reason': row['id'] + '_NATIVE_REPORT_' + status,
+            'detail': detail, 'unmeasured_obligations': entry.get('unmeasured', []),
+            'flow109_acceptance': status, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
     chain_path = project / "reports/phase3/execution-backend-15.json"
     if not chain_path.is_file():
         return None
