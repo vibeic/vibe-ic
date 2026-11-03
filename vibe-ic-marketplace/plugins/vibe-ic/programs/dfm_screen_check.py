@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -206,12 +207,47 @@ _MAX_LEF_BYTES = 64 * 1024 * 1024
 _MAX_LEF_CANDIDATES = 64
 
 
+def _run_tech_lefs(project: Path) -> list:
+    """TECH_LEFS of the run's newest LibreLane config that declares them."""
+    root = project / "phase3" / "librelane"
+    if not root.is_dir():
+        return []
+    configs = []
+    for path in root.rglob("config.json"):
+        if "attempts" in path.parts:
+            continue
+        try:
+            configs.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    pdk_root = os.environ.get("PDK_ROOT")
+    for _mtime, path in sorted(configs, reverse=True):
+        try:
+            doc = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        lefs = doc.get("TECH_LEFS") if isinstance(doc, dict) else None
+        if not isinstance(lefs, dict) or not lefs:
+            continue
+        out = []
+        pdk = doc.get("PDK")
+        for value in lefs.values():
+            lef = Path(str(value))
+            if not lef.is_file() and pdk_root and pdk in lef.parts:
+                lef = Path(pdk_root, *lef.parts[lef.parts.index(pdk):])
+            out.append(lef)
+        return out
+    return []
+
+
 def _locate_lef_files(project: Path) -> list:
     """Tech/cell LEFs this run can actually reach, most authoritative first.
 
     (a) the exact files the router itself read (`read_lef <path>` in the run's
         own pnr tcl) — when they still exist on this filesystem;
-    (b) any LEF shipped inside the project tree.
+    (b) the tech LEFs the run's newest LibreLane config names, found under
+        the current PDK_ROOT when the recorded root is not on this filesystem;
+    (c) any LEF shipped inside the project tree, tech LEFs first.
     """
     found: list = []
     seen: set = set()
@@ -242,12 +278,16 @@ def _locate_lef_files(project: Path) -> list:
                 raw = m.group(1).strip("\"'")
                 p = Path(raw)
                 _add(p if p.is_absolute() else (pnr / p))
+    for p in _run_tech_lefs(project):
+        _add(p)
     candidates: list = []
-    for p in project.rglob("*.lef"):
-        candidates.append(p)
-        if len(candidates) >= _MAX_LEF_CANDIDATES:
-            break
-    for p in sorted(candidates):   # sorted -> deterministic resolution order
+    for pattern in ("*.tlef", "*.lef"):
+        for p in project.rglob(pattern):
+            if len(candidates) >= _MAX_LEF_CANDIDATES:
+                break
+            candidates.append(p)
+    # Deterministic order; the file cap must not crowd out the tech LEF.
+    for p in sorted(candidates, key=lambda c: (c.suffix != ".tlef", c)):
         _add(p)
         if len(found) >= _MAX_LEF_FILES:
             break
@@ -343,7 +383,10 @@ RECORD_ADJUDICATION = _ra.declare(
     # verdict/findings preconditions of the vacuity rule remain unchanged.
     # This unreviewed digest predated the Step35 main authorship wiring;
     # main is outside the audit decision closure.
-    decision_digest="3f9eaf91c65602c7f8e6b6ced8a12cade8167e332cfb2d61f4de00f90142ad4e",
+    # Re-reviewed for #3791: tech LEF discovery changes which via cut counts
+    # resolve, and the density finding now states its reason. Neither emits or
+    # removes VIA_*_NOT_FOUND, so no published record changes adjudication.
+    decision_digest="75f24204d7c8c6dd7d1cf7b8520de235731c5378d96da1f57107944ff7cf585d",
     rules=(
         _ra.Rule(
             rule_id="dfm_screen_check.via-screen-did-not-run",
@@ -446,6 +489,7 @@ def audit(project: Path) -> dict:
         density_ref = {"source": tool_ref.get("source"),
                        "tool": "KLayout.Density / Checker.KLayoutDensity",
                        "status": tool_ref.get("status"),
+                       "reason": tool_ref.get("reason"),
                        "errors": tool_ref.get("errors"),
                        "rules": tool_ref.get("rules"),
                        "state_sha256": tool_ref.get("state_sha256"),
@@ -482,8 +526,9 @@ def audit(project: Path) -> dict:
         findings.append({
             "severity": "WARNING", "category": "DENSITY_REF",
             "message": (f"step 34 ran on the tool but its density count is "
-                        f"{density_ref.get('status')} ({density_ref.get('source')}) "
-                        f"— resolve at Step 34")})
+                        f"{density_ref.get('status')} ({density_ref.get('source')}"
+                        + (f": {density_ref['reason']}" if density_ref.get("reason") else "")
+                        + ") — resolve at Step 34")})
     elif density_ref.get("step34_pass"):
         findings.append({
             "severity": "INFO", "category": "DENSITY_REF",
