@@ -14300,13 +14300,59 @@ def _typed_block_multiplicity(project: Path) -> Dict[str, Dict[str, Any]]:
     return {name: {"count": count, "citation": citation} for name, count in value.items()}
 
 
+def _declared_analog_blocks(extracted: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+    """Block identities stated by name and type in a structured declaration."""
+    from phase1_declared_connectivity import documents
+
+    identifier = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+    blocks: Dict[str, Dict[str, Any]] = {}
+    for data, evidence, error in documents(extracted or {}, _issue3234_position_is_current):
+        declared = data.get("analog_blocks") if not error else None
+        for block in declared if isinstance(declared, list) else []:
+            if not isinstance(block, dict):
+                continue
+            name, kind, rows = block.get("name"), block.get("type"), block.get("instances")
+            if (not isinstance(name, str) or not identifier.match(name)
+                    or not isinstance(kind, str) or not identifier.match(kind)
+                    or not isinstance(rows, list) or not rows):
+                continue
+            names = [row.get("name") if isinstance(row, dict) else None for row in rows]
+            count = block.get("count")
+            row = {"name": name, "type": kind, "instances": names, "count": count,
+                   "spec": block.get("spec") if isinstance(block.get("spec"), dict) else None,
+                   "evidence": evidence}
+            if (any(not isinstance(item, str) or not identifier.match(item) for item in names)
+                    or len(set(map(str, names))) != len(names)):
+                row["invalid"] = "instance names must be unique identifiers"
+            elif count is not None and type(count) is not int:
+                row["invalid"] = f"count must be an integer, got {count!r}"
+            prior = blocks.get(name)
+            if prior and any(prior[k] != row[k] for k in ("type", "instances", "count", "spec")):
+                row["conflict"] = True
+            kept = blocks.setdefault(name, row)
+            kept.update({key: row[key] for key in ("conflict", "invalid") if key in row})
+    return blocks
+
+
 def _typed_block_multiplicity_refusal(typed: Dict[str, Dict[str, Any]],
                                       extracted: Dict[str, str]) -> Optional[str]:
     """Compare every Block heading; other prose retains the producer's count check."""
+    declared = _declared_analog_blocks(extracted) if typed else {}
     for name, answer in typed.items():
         pattern = _ANALOG_KEYWORDS.get(name)
-        if pattern is None:
+        block = declared.get(name)
+        if pattern is None and block is None:
             return f"L5_BLOCK_MULTIPLICITY_UNKNOWN_BLOCK: {name}"
+        if block is not None:
+            if block.get("invalid"):
+                return f"L5_BLOCK_MULTIPLICITY_INVALID: {name}: {block['invalid']}"
+            stated = len(block["instances"])
+            if (block.get("conflict") or stated != answer["count"]
+                    or block["count"] not in (None, answer["count"])):
+                return (f"L5_BLOCK_MULTIPLICITY_CONTRADICTION: {name}: typed answer "
+                        f"{answer['count']}, declared block {block['count']} with {stated} instances")
+        if pattern is None:
+            continue
         for fname, text in extracted.items():
             for line in text.split("\n"):
                 if not _V466_RE_BLOCK_HEADER_LINE.match(line):
@@ -14319,13 +14365,25 @@ def _typed_block_multiplicity_refusal(typed: Dict[str, Dict[str, Any]],
 
 
 def _apply_typed_block_multiplicity(blocks: List[Dict[str, Any]],
-                                    typed: Dict[str, Dict[str, Any]]) -> None:
+                                    typed: Dict[str, Dict[str, Any]],
+                                    extracted: Optional[Dict[str, str]] = None) -> None:
     """A typed count the document does not contradict is an explicit count."""
     by_name = {blk.get("name"): blk for blk in blocks if isinstance(blk, dict)}
+    declared = _declared_analog_blocks(extracted) if typed else {}
     for name, answer in typed.items():
         blk = by_name.get(name)
+        if blk is None and name in declared:
+            row = declared[name]
+            blk = {"name": name, "type": row["type"], "spec": row["spec"],
+                   "instances": row["instances"], "low_confidence": row["spec"] is None,
+                   "evidence": f"{row['evidence']['doc']}:{row['evidence']['line']}"}
+            blocks.append(blk)
         if blk is None:
             raise _BlockMultiplicityRefusal(f"L5_BLOCK_MULTIPLICITY_UNKNOWN_BLOCK: {name}")
+        if name in declared and blk.get("type") != declared[name]["type"]:
+            raise _BlockMultiplicityRefusal(
+                f"L5_BLOCK_MULTIPLICITY_CONTRADICTION: {name}: declared type "
+                f"{declared[name]['type']}, document type {blk.get('type')}")
         count = answer["count"]
         if blk.get("count") not in (None, count):
             raise _BlockMultiplicityRefusal(
@@ -37508,7 +37566,11 @@ def gen_l5_adi_spec(project: Path,
     # real spec table is never mistaken for a product-name hallucination.
     _v466_spurious = _v466_apply_spurious_block_guard(
         blocks, extracted, ic_name)
-    _apply_typed_block_multiplicity(blocks, typed)
+    _apply_typed_block_multiplicity(blocks, typed, extracted)
+    if typed:
+        _typed_names = {blk.get("name") for blk in blocks if isinstance(blk, dict)}
+        _v466_spurious = [blk for blk in _v466_spurious if blk.get("name") not in _typed_names]
+        _no_analog_flag = False
     # Strip the #466 private bookkeeping keys before serialisation.
     _v466_strip_internal_fields(blocks)
     _v466_strip_internal_fields(_v466_spurious)
@@ -53003,6 +53065,32 @@ def _admit_qualified_output_input(project: Path, content: dict) -> dict:
     return result
 
 
+def _typed_instance_supersedes(prior: dict, block_type: str, ports: list,
+                               parameters: dict, aliases: dict) -> bool:
+    """A partial derived row gives way unless both sides state something different."""
+    typed_nets = [port["net"] for port in ports]
+    known, stated_parameters = prior.get("parameters") or {}, parameters or {}
+    if any(known[key] != stated_parameters[key] for key in known.keys() & stated_parameters.keys()):
+        return False
+    if not prior.get("ports"):
+        if prior.get("block_type") != block_type:
+            return False
+        for field, kind in (("power_net", "power"), ("ground_net", "ground")):
+            stated = prior.get(field)
+            nets = {port["net"] for port in ports if port.get("type") == kind}
+            if stated and nets and not (aliases.get(stated) or {stated}) & nets:
+                return False
+        return True
+    if not str(prior.get("terminal_naming", "")).startswith("generic_two_terminal_passive"):
+        return False
+    # The emitter writes <material>_capacitor or capacitor. A typed row may name
+    # the same kind with or without the material, never another kind.
+    derived = str(prior.get("block_type", ""))
+    same_kind = (block_type == derived or block_type == derived.rsplit("_", 1)[-1]
+                 or derived == block_type.rsplit("_", 1)[-1])
+    return same_kind and sorted(port.get("net") for port in prior["ports"]) == sorted(typed_nets)
+
+
 def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
                                       evidence_out: Optional[dict] = None) -> None:
     """Project explicit typed instances and two-terminal passive declarations.
@@ -53218,12 +53306,30 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
         ports = [{**port, "net": next(iter(aliases[port["net"]]))}
                  for port in declared["ports"]]
         prior = existing.get(name)
+        if prior and _typed_instance_supersedes(prior, declared["block_type"], ports,
+                                                declared["parameters"], aliases):
+            position = instances.index(prior)
+            instances.remove(prior)
+            del existing[name]
+            l9["internal_wires"] = [row for row in l9.get("internal_wires", [])
+                                    if row.get("child_inst") != name]
+            emit(name, declared["block_type"], declared["ports"],
+                 {**(prior.get("parameters") or {}), **declared["parameters"]}, declared["evidence"])
+            row = existing.get(name)
+            if row is None:
+                continue
+            instances.remove(row)
+            instances.insert(position, row)
+            for field in ("power_net", "ground_net"):
+                if prior.get(field):
+                    row[field] = prior[field]
+            prior = None
         if prior and (any(prior.get(k) != declared[k] for k in ("block_type", "parameters"))
                       or port_contract(prior.get("ports")) != port_contract(ports)):
             refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_CONFLICT",
                              "evidence": declared["evidence"]})
             continue
-        if not prior:
+        if name not in existing:
             emit(name, declared["block_type"], declared["ports"], declared["parameters"], declared["evidence"])
         if name in existing:
             row = existing[name]
