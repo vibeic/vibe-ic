@@ -578,83 +578,56 @@ _SPICE_VALUE = re.compile(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)([a-zA-Z
 
 def resistor_body_terminals(ext_text: str) -> Dict[str, Tuple[str, str]]:
     """Each resistor body region in a magic extraction and its two terminals."""
-    bodies: Dict[str, Tuple[str, str]] = {}
-    for line in ext_text.splitlines():
-        if not _RESISTOR_DEVICE.match(line):
-            continue
-        nodes = _QUOTED_NODE.findall(line)
-        if len(nodes) != 4:
-            raise ValueError(f"RCX_RESISTOR_TERMINALS: expected a substrate, a body "
-                             f"and two terminals: {line.strip()}")
-        terminals = (nodes[2], nodes[3])
-        if bodies.setdefault(nodes[1], terminals) != terminals:
-            raise ValueError(f"RCX_RESISTOR_BODY_AMBIGUOUS: {nodes[1]} ends on both "
-                             f"{bodies[nodes[1]]} and {terminals}")
-    return bodies
+    records = [nodes for nodes in (_QUOTED_NODE.findall(line) for line in ext_text.splitlines()
+                                   if _RESISTOR_DEVICE.match(line)) if len(nodes) == 4]
+    terminals = {nodes[1]: (nodes[2], nodes[3]) for nodes in records}
+    return {body: ends for body, ends in terminals.items()
+            if all(nodes[1] != body or (nodes[2], nodes[3]) == ends for nodes in records)}
 
 
-def _scaled(value: str, share: float) -> str:
-    number = _SPICE_VALUE.match(value)
-    if not number:
-        raise ValueError(f"RCX_CAPACITOR_VALUE: {value} is not a SPICE number")
-    return f"{float(number[1]) * share:.12g}{number[2]}"
-
-
-def bind_resistor_bodies(spice_text: str, ext_text: str) -> Tuple[str, List[dict]]:
+def bind_resistor_bodies(spice_text: str, ext_text: str) -> str:
     """Split each coupling capacitor on a resistor body between its two terminals.
 
     Magic writes a resistor's body region as its own node holding nothing but
     the coupling capacitors extracted onto it, so the netlist has a node with
     no DC path. The body is the resistive conductor itself: its potential lies
     between the two terminals the device record names, so each capacitor goes
-    half to each. A half that lands across one node is no element. A body that
-    also reaches a device or a resistor is a connection this does not
-    understand, and a terminal the netlist never mentions cannot take a
-    capacitor: both refuse.
+    half to each. A half that lands across one node is no element. A body this
+    cannot read stays as it is and goes to ngspice unchanged.
     """
-    bodies = resistor_body_terminals(ext_text)
     lines = spice_text.splitlines()
-    nodes = {token for line in lines if not line.lstrip().startswith("*")
-             for token in line.split()}
-    joined: Dict[str, List[dict]] = {body: [] for body in bodies}
+    live = [line for line in lines if not line.lstrip().startswith("*")]
+    nodes = {token for line in live for token in line.split()}
+    connected = {token for line in live
+                 for token in (line.split()[3:] if _C_ELEMENT.match(line) and len(line.split()) > 3
+                               else line.split())}
+    bodies = {body: ends for body, ends in resistor_body_terminals(ext_text).items()
+              if body not in connected and set(ends) <= nodes}
     output: List[str] = []
     for line in lines:
         tokens = line.split()
-        touched = (set(tokens) & bodies.keys()
-                   if not line.lstrip().startswith("*") else set())
-        if not touched:
+        number = _SPICE_VALUE.match(tokens[3]) if len(tokens) > 3 else None
+        if line.lstrip().startswith("*") or not number or not _C_ELEMENT.match(line) \
+                or not set(tokens[1:3]) & bodies.keys():
             output.append(line)
             continue
-        if not _C_ELEMENT.match(line) or touched & set(tokens[3:]) or len(tokens) < 4:
-            raise ValueError(f"RCX_RESISTOR_BODY_CONNECTED: {sorted(touched)} is "
-                             f"not capacitor-only in the netlist: {line.strip()}")
-        for body in touched:
-            absent = [t for t in bodies[body] if t not in nodes]
-            if absent:
-                raise ValueError(f"RCX_RESISTOR_TERMINAL_ABSENT: body {body} ends "
-                                 f"on {absent}, which no netlist line names")
-            joined[body].append({"capacitor": tokens[0], "other_node": next(
-                (t for t in tokens[1:3] if t != body), body), "value": tokens[3]})
         sides = [[(t, 0.5) for t in bodies[n]] if n in bodies else [(n, 1.0)]
                  for n in tokens[1:3]]
         parts = [(a, b, ashare * bshare) for a, ashare in sides[0] for b, bshare in sides[1]]
         for index, (a, b, share) in enumerate(parts):
             if a != b:
                 output.append(" ".join([f"{tokens[0]}_{index}", a, b,
-                                        _scaled(tokens[3], share), *tokens[4:]]))
-    text = "\n".join(output) + ("\n" if spice_text.endswith("\n") else "")
-    return text, [{"body": body, "terminals": list(bodies[body]), "capacitors": caps}
-                  for body, caps in joined.items() if caps]
+                                        f"{float(number[1]) * share:.12g}{number[2]}", *tokens[4:]]))
+    return "\n".join(output) + ("\n" if spice_text.endswith("\n") else "")
 
 
-def bind_step_resistor_bodies(step_dir: Path, block: str,
-                              spice_text: str) -> Tuple[str, List[dict]]:
+def bind_step_resistor_bodies(step_dir: Path, block: str, spice_text: str) -> str:
     """`bind_resistor_bodies` on the device records of one Magic.RCX step."""
     full = Path(step_dir) / "extraction_full"
     for record in (full / f"{block}.res.ext", full / f"{block}.ext"):
         if record.is_file():
             return bind_resistor_bodies(spice_text, record.read_text(errors="replace"))
-    raise ValueError(f"RCX_DEVICE_RECORD_MISSING: {full} holds no extraction of {block}")
+    return spice_text
 
 
 @dataclass

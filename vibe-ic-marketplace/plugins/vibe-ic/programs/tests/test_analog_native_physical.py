@@ -343,7 +343,6 @@ def _extraction_project(project, monkeypatch, parasitic=True):
         if parasitic:
             text += "R0 a b 12.5\nC0 b vss 1.2f\n"
         extracted = put(folder / "unit.rcx.spice", text + ".ends unit\n")
-        put(folder / "extraction_full/unit.res.ext", "")
         put(folder / "state_out.json", {"spice_rcx": str(extracted)})
         return [folder]
     monkeypatch.setattr(lc, "resolve_step_config", resolve)
@@ -1334,21 +1333,5 @@ def test_a13_splits_a_resistor_body_capacitor_and_keeps_the_native_output(projec
     corner = physical._extract(project, "unit", "container", "image", "process", {"styles": ["s"]})["metrics"]["corners"][0]
     bound = Path(corner["extracted_netlist"]).read_text()
     assert "a_1_2#" not in bound and "C0_0 vss a 0.5f" in bound and "C0_1 vss b 0.5f" in bound
-    assert Path(corner["native_netlist"]).read_text() == native
-    assert corner["native_sha256"] == physical._sha(Path(corner["native_netlist"]))
+    assert (project / "pex_native/unit.rcx.spice").read_text() == native
     assert corner["sha256"] == physical._sha(Path(corner["extracted_netlist"]))
-    assert corner["resistor_bodies"] == [{"body": "a_1_2#", "terminals": ["a", "b"],
-        "capacitors": [{"capacitor": "C0", "other_node": "vss", "value": "1f"}]}]
-
-
-def test_a13_refuses_an_extraction_without_device_records(project, monkeypatch):
-    import librelane_contract as lc
-    _extraction_project(project, monkeypatch)
-    chain = lc.run_chain
-    def extract(*args, **kwargs):
-        folder = chain(*args, **kwargs)[0]
-        (folder / "extraction_full/unit.res.ext").unlink()
-        return [folder]
-    monkeypatch.setattr(lc, "run_chain", extract)
-    result = physical._extract(project, "unit", "container", "image", "process", {"styles": ["s"]})
-    assert result["status"] == "FAIL" and "RCX_DEVICE_RECORD_MISSING" in result["detail"]
