@@ -363,13 +363,31 @@ def analyze_liberty(text: str | _LibertySource) -> Tuple[bool, List[float], str]
     return has_timing, values, cell
 
 
-def _has_signal_output(text: str | _LibertySource) -> bool:
+def _has_signal_output(text: str | _LibertySource, *, analog_exempt: bool = False) -> bool:
     text = _lex_liberty(text)
     for match in re.finditer(r"\b(?:pin|bus|bundle)\s*\([^)]*\)\s*\{", text.syntax):
         body = _balanced_group_body(text, match.end() - 1)
+        if analog_exempt and (_attribute(body, "is_analog") or "").lower() == "true":
+            continue
         if (_attribute(body, "direction") or "").lower() in {"output", "inout"}:
             return True
     return False
+
+
+def _block_is_clockless(bdir: Path) -> bool:
+    """A declared block with no clock has no timing arc to characterize.
+
+    Clocked means a declared `fclk` spec or a `loop_probe.clock_port` in the
+    topology. An unreadable declaration is not evidence of no clock.
+    """
+    try:
+        spec = json.loads((bdir / "spec.json").read_text())
+        topology = json.loads((bdir / "topology.json").read_text())
+        names = [row["name"] for row in spec["specs"]]
+        probe = topology.get("loop_probe") or {}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+    return "fclk" not in names and not probe.get("clock_port")
 
 
 def _settling_kept_out_of_liberty(bdir: Path) -> bool:
@@ -487,7 +505,8 @@ def run_audit(project: Path) -> Result:
         has_arc = has_timing or bool(re.search(r"\btiming\s*\(", text.syntax))
         settling_external = _settling_kept_out_of_liberty(an_dir / block)
         if (not has_timing or not values) and (
-                has_arc or (_has_signal_output(text) and not settling_external)
+                has_arc or (_has_signal_output(text, analog_exempt=_block_is_clockless(an_dir / block))
+                            and not settling_external)
                 or (_attribute(text, "cell_leakage_power") is None
                     and _attribute(text, "leakage_power_unit") is None)):
             res.passed = False
