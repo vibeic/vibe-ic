@@ -221,8 +221,57 @@ def _stage_consumers(project, prepared, attempt, crossing):
     return cdc, exceptions, copied
 
 
+def _reuse_native_model(project, context):
+    """Read the existing final Yosys model; CDC has no separate EDA engine."""
+    lec_input = project / 'input/flow109/D44.json'
+    if not lec_input.is_file():
+        return None
+    manifest = _read(lec_input)
+    ref = manifest.get('adopted_netlist')
+    if not isinstance(ref, dict):
+        return None
+    netlist = _bound(project, ref)
+    for path in sorted((project / 'reports/flow109/D44').glob('*/component.json'),
+                       key=lambda path: path.stat().st_mtime_ns, reverse=True):
+        previous = _read(path)
+        if _sha(netlist) not in {value for name, value in previous.get('inputs', {}).items()
+                if name == ref['path'] or name.endswith('/' + ref['path'])}:
+            continue
+        model_path = path.parent / 'gate.model.json'
+        if not model_path.is_file():
+            continue
+        model = native.load(model_path, manifest.get('top'))
+        domains = native.clock_domains(model)
+        crossings = native.reg_crossing_findings(model)
+        resets = native.reset_dependency_findings(model)
+        # Reuse the existing consumer on the current constraints. It reports
+        # its own exceptions; no source/version/qualification gate is needed.
+        exceptions = sdc_exception_correlation_check.audit(project)
+        errors = [item for item in crossings + resets if item.get('severity') == 'ERROR']
+        status = ('FAIL' if errors or exceptions['verdict'] == 'FAIL' else
+                  'PASS' if len(domains) == 1 and not crossings and not resets
+                  and exceptions['verdict'] == 'PASS' else 'NOT_MEASURED')
+        return {'schema': SCHEMA, 'step_id': 'D45',
+            'context_sha256': context['context_sha256'], 'component_status': status,
+            'default_row_status': status, 'completed': status == 'PASS',
+            'flow109_acceptance': status, 'whole_flow_acceptance': 'NOT_MEASURED',
+            'delivery_accepted': False, 'native_started': False, 'native_model_reused': True,
+            'native_model': str(model_path.relative_to(project)),
+            'clock_domains': domains, 'decoded_flop_count': len(model.flops),
+            'crossings': crossings, 'reset_findings': resets,
+            'exception_reconciliation': exceptions,
+            'reason': 'D45_EXISTING_NATIVE_MODEL_' + status}
+    return None
+
+
 def execute(project, context):
     project = Path(project).resolve()
+    try:
+        reused = _reuse_native_model(project, context)
+    except (Refusal, OSError, ValueError, TypeError, KeyError, native.Refusal):
+        reused = None
+    if reused is not None:
+        return reused
     attempt = project / "reports/flow109/D45" / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
     record = {"schema": SCHEMA, "step_id": "D45", "component_status": "NOT_MEASURED",
