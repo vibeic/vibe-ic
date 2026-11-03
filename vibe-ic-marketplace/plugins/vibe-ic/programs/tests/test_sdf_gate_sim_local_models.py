@@ -139,3 +139,37 @@ def test_remote_model_reader_keeps_the_image_mismatch_refusal(monkeypatch, tmp_p
     files, why = fs.default_model_resolver(tmp_path, {'ordinary_cell'}, 'selected-container')
     assert files is None
     assert why == 'the EDA container cannot be attached: unit mismatched image'
+
+
+@pytest.mark.parametrize('kind', ['relocated', 'recorded_live', 'other_kit', 'missing_live'])
+def test_declared_io_models_follow_the_resolved_pdks_root(monkeypatch, tmp_path, kind):
+    import full_stack_functional_tb as fs
+    _route(monkeypatch, True)
+    root = tmp_path / 'active' / 'neutral_kit'
+    core = root / 'libs.ref/core/verilog/core.v'
+    core.parent.mkdir(parents=True)
+    core.write_text('module CORE(input A, output Y); assign Y=A; endmodule\n')
+    live = root / 'libs.ref/pads/verilog/pads.v'
+    live.parent.mkdir(parents=True)
+    if kind != 'missing_live':
+        live.write_text('module PAD(input A, output Y); assign Y=A; endmodule\n')
+    old = tmp_path / 'previous' / ('other_kit' if kind == 'other_kit' else 'neutral_kit')
+    recorded = old / 'libs.ref/pads/verilog/pads.v'
+    if kind == 'recorded_live':
+        recorded.parent.mkdir(parents=True)
+        recorded.write_text('module PAD(input A, output Y); assign Y=~A; endmodule\n')
+    report = tmp_path / sg.CHIP_TOP_RECORD_REL
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({'verdict': 'WROTE', 'io_library_liberty':
+        [str(old / 'libs.ref/pads/lib/pads.lib')]}))
+    models = sg.CellModels([str(core)], core.read_text(), 'synthetic PDK',
+                           files={str(core): core.read_text()})
+    monkeypatch.setattr(sg, 'resolve_cell_models', lambda *args: models)
+    staged, why = fs.stage_models(tmp_path, tmp_path / 'functional', {'CORE', 'PAD'}, None)
+    if kind in ('other_kit', 'missing_live'):
+        assert staged is None and 'PAD' in why
+        return
+    assert staged, why
+    chosen = recorded if kind == 'recorded_live' else live
+    pad = next(row for row in staged if row['source'] == str(chosen))
+    assert (tmp_path / pad['path']).read_bytes() == chosen.read_bytes()

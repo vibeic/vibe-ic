@@ -588,9 +588,17 @@ def declared_io_models(project: Path, container: str, used_cells: set,
     if not missing or rec.get("verdict") != "WROTE" or not isinstance(libs, list):
         return models
     dirs = sorted({str(Path(str(lib)).parent.parent / "verilog") for lib in libs})
+    roots = {Path(*parts[:parts.index('libs.ref')])
+             for p in models.paths if 'libs.ref' in (parts := Path(p).parts)}
     candidates: List[str] = []
     for d in dirs:
         listed = _docker(container, f"ls -1 {shlex.quote(d)}", budget_s=60)
+        if listed.returncode and len(roots) == 1:
+            root = next(iter(roots))
+            parts = Path(d).parts
+            if 'libs.ref' in parts and root.name == parts[parts.index('libs.ref') - 1]:
+                d = str(root.joinpath(*parts[parts.index('libs.ref'):]))
+                listed = _docker(container, f"ls -1 {shlex.quote(d)}", budget_s=60)
         candidates += [f"{d}/{name.strip()}" for name in (listed.stdout or "").splitlines()
                        if name.strip().endswith(".v")]
     texts = {c: _read_container_files(container, [c]) for c in candidates}
