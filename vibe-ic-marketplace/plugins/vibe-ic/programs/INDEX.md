@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1523
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1523)
+- **Total programs (excluding helpers / shims):** 1524
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1524)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1514 |
+| `any` | 1515 |
 
 ## Alphabetical listing
 
@@ -89,6 +89,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
 | `analog_existing_design_validate` | any | — | Read-validate an existing analog DUT against its current typed design. |
 | `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
+| `analog_gate_ties` | any | — | Antenna ties for nets that reach gates and capacitor plates but no diffusion. |
 | `analog_geometry_admission` | any | — | Portable, byte-bound drawing-grid admission and explicit legacy migration. |
 | `analog_hardmacro_check` | any | — | deterministic gate for analog hardmacro deliverables |
 | `analog_hardmacro_gds_emit` | any | — | the A8 GDS PRODUCER that was missing. |
@@ -1595,7 +1596,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1514 programs)
+### `any` (1515 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1660,6 +1661,7 @@ _(no programs in this group)_
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
 - `analog_existing_design_validate` — Read-validate an existing analog DUT against its current typed design.
 - `analog_flow_compliance_check` — analog track compliance gate (A1-A9)
+- `analog_gate_ties` — Antenna ties for nets that reach gates and capacitor plates but no diffusion.
 - `analog_geometry_admission` — Portable, byte-bound drawing-grid admission and explicit legacy migration.
 - `analog_hardmacro_check` — deterministic gate for analog hardmacro deliverables
 - `analog_hardmacro_gds_emit` — the A8 GDS PRODUCER that was missing.

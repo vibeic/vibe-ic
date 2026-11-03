@@ -124,19 +124,121 @@ def columns_by_height(heights: Sequence[Tuple[str, int]], limit: int, start: int
     return columns
 
 
+def common_centroid_columns(sets: Sequence[Sequence[Tuple[str, int]]], limit: int, start: int,
+                            grid: int) -> List[List[Tuple[str, int]]]:
+    """One array of identical pitch for units that define a ratio, as [(name, y)] columns.
+
+    `sets` holds one list of (name, height) per matched device. Opposite slots go to
+    the same device, so each device's centroid stays on the array centre. A device
+    with an odd unit count takes one slot alone, nearest the centre."""
+    units = [(index, name, height) for index, group in enumerate(sets) for name, height in group]
+    if not units:
+        return []
+    pitch = max(height for _, _, height in units)
+    pitch += -pitch % grid
+    rows = max((limit - start) // pitch, 1)
+    cols = -(-len(units) // rows)
+    rows = -(-len(units) // cols)
+    centre = ((cols - 1) / 2, (rows - 1) / 2)
+    slots = sorted(((c, r) for c in range(cols) for r in range(rows)),
+                   key=lambda s: ((s[0] - centre[0]) ** 2 + (s[1] - centre[1]) ** 2, s))
+    left = [list(group) for group in sets]
+    placed: Dict[Tuple[int, int], Tuple[str, int]] = {}
+    free = list(slots)
+    last = None
+    for group in sorted(left, key=len):
+        if len(group) % 2:
+            mirror = last and (cols - 1 - last[0], rows - 1 - last[1])
+            last = mirror if mirror in free else free[0]
+            free.remove(last)
+            placed[last] = group.pop(0)
+    pairs = []
+    while free:
+        slot = free.pop(0)
+        mirror = (cols - 1 - slot[0], rows - 1 - slot[1])
+        if mirror in free:
+            free.remove(mirror)
+            pairs.append((slot, mirror))
+    spare = [group for group in left if group]
+    totals = {id(group): len(group) for group in spare}
+    for pair in pairs:
+        spare = [group for group in spare if group]
+        if not spare:
+            break
+        group = max(spare, key=lambda g: len(g) / totals[id(g)])
+        for slot in pair:
+            if group:
+                placed[slot] = group.pop(0)
+    columns: List[List[Tuple[str, int]]] = [[] for _ in range(cols)]
+    for (c, r), (name, height) in sorted(placed.items()):
+        offset = (pitch - height) // 2
+        columns[c].append((name, start + r * pitch + offset - offset % grid))
+    return [column for column in columns if column]
+
+
+def centroid_distance_um(members: Sequence[Sequence[str]], place: Dict[str, Tuple[float, float]]) -> float:
+    """Largest distance between the centroids of matched devices, from placed plate centres."""
+    centres = []
+    for group in members:
+        points = [place[name] for name in group]
+        centres.append((sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points)))
+    return round(max((math.dist(a, b) for a in centres for b in centres), default=0.0), 3)
+
+
+def split_taps(instances: Sequence[Tuple[str, Dict[str, str]]], taps: Sequence[dict]) -> None:
+    """Move each declared device's pins on its rail onto the rail's own tap net."""
+    for tap in taps:
+        prefix = f"{tap['tap_device']}__"
+        moved = 0
+        for _, conn in instances:
+            for pin, net in conn.items():
+                if pin.startswith(prefix) and net == tap["rail"]:
+                    conn[pin] = tap_net(tap["rail"])
+                    moved += 1
+        if not moved:
+            raise RouteRefused("TAP_NOT_ON_RAIL", f"{tap['tap_device']} has no pin on {tap['rail']}")
+
+
+def tap_net(rail: str) -> str:
+    return f"{rail}_div"
+
+
+def tap_sites(taps: Sequence[dict], sites: Sequence[Tuple[str, float, float]], offset_um: float) -> List[dict]:
+    """Each tap pin beside its port, on the same edge."""
+    by_port = {name: (x, y) for name, x, y in sites}
+    rails = sorted({tap["rail"] for tap in taps})
+    return [{"net": tap_net(r), "port_x": by_port[r][0], "x": round(by_port[r][0] + offset_um, 3),
+             "y": by_port[r][1]} for r in rails]
+
+
+def signal_pin_sites(signal: Sequence[str], far_edge: Sequence[str], start: float, pitch: float,
+                     top: float) -> List[Tuple[str, float, float]]:
+    """(port, x, y) of each signal pin, on the bottom edge unless declared for the far edge."""
+    sites = []
+    for edge_ports, y in (([p for p in signal if p not in far_edge], 0.4),
+                          ([p for p in signal if p in far_edge], top - 0.4)):
+        sites += [(p, start + i * pitch, y) for i, p in enumerate(edge_ports)]
+    return sites
+
+
 def supply_rule(current_ma: float, lef_layers: Sequence[dict], routing: Sequence[str], low: int, high: int,
-                low_metal_width_um: float, space_um) -> dict:
-    """Wire width per routed layer from the declared current and the LEF's current
-    density. The lowest layer has to reach ring pins, so its width is declared and
-    any shortfall against the density is recorded for the native reliability step."""
+                space_um) -> dict:
+    """Wire width per routed layer from the declared current and the LEF's current density."""
     density = {layer["name"]: layer.get("dc_density") for layer in lef_layers}
+    minimum = {layer["name"]: layer.get("width") for layer in lef_layers}
     rule = {}
     for index, name in enumerate(routing[low - 1:high], low):
-        needed = current_ma / density[name]
-        width = low_metal_width_um if index == low else math.ceil(needed * 200) / 200
-        rule[name] = {"width_um": width, "needed_um": round(needed, 4),
-                      "short_um": round(max(0.0, needed - width), 4), "space_um": space_um(index, width)}
+        width = max(math.ceil(current_ma / density[name] * 200) / 200, minimum[name] or 0)
+        rule[name] = {"width_um": width, "space_um": space_um(index, width)}
     return rule
+
+
+def spaced_rule(lef_layers: Sequence[dict], routing: Sequence[str], low: int, high: int,
+                factor: float, space_um) -> dict:
+    """A net class at the LEF's minimum width, with `factor` times the layer's spacing."""
+    width = {layer["name"]: layer["width"] for layer in lef_layers}
+    return {name: {"width_um": width[name], "space_um": round(space_um(index, width[name]) * factor, 3)}
+            for index, name in enumerate(routing[low - 1:high], low)}
 
 
 def strap_gaps(columns: int, pairs: int) -> List[int]:
@@ -160,8 +262,8 @@ def site_name(lef_text: str) -> Optional[str]:
 def route_tcl(top: str, tech_lef: str, cell_lef: str, site: str,
               pitch: Dict[str, Tuple[float, float]], routing: Sequence[str],
               die: Tuple[float, float], macros: Sequence[dict], signal_pins: Sequence[Tuple[str, float, float]],
-              pin_layer: str, routing_cfg: dict, supply_nets: Sequence[str] = (),
-              supply: Optional[dict] = None) -> str:
+              pin_layer: str, routing_cfg: dict, net_classes: Sequence[dict] = (),
+              taps: Sequence[dict] = ()) -> str:
     """The OpenROAD script: native floorplan, macro placement, global and detailed route."""
     low, high = routing_cfg["routing_layers"]
     margin = 8
@@ -186,12 +288,18 @@ def route_tcl(top: str, tech_lef: str, cell_lef: str, site: str,
     for name, x, y in signal_pins:
         lines.append(f"place_pin -pin_name {name} -layer {pin_layer} -location [list {x} {y}] "
                      "-pin_size {0.3 0.8}")
+    for tap in taps:
+        lines.append(f"place_pin -pin_name {tap['net']} -layer {pin_layer} -location [list {tap['x']} {tap['y']}] "
+                     "-pin_size {0.3 0.8}")
+        lines.append(f"odb::dbObstruction_create $block [[ord::get_db_tech] findLayer {pin_layer}] "
+                     f"{um(tap['port_x'] + 0.15)} {um(tap['y'] - 0.4)} {um(tap['x'] - 0.15)} {um(tap['y'] - 0.1)}")
     lines.append(f"set_routing_layers -signal {routing[low - 1]}-{routing[high - 1]}")
-    if supply:
-        widths = " ".join(f"{name} {spec['width_um']}" for name, spec in supply.items())
-        spaces = " ".join(f"{name} {spec['space_um']}" for name, spec in supply.items())
-        lines.append(f"create_ndr -name SUPPLY -spacing {{{spaces}}} -width {{{widths}}}")
-        lines += [f"assign_ndr -ndr SUPPLY -net {net}" for net in supply_nets]
+    for net_class in net_classes:
+        rule = net_class["rule"]
+        widths = " ".join(f"{name} {spec['width_um']}" for name, spec in rule.items())
+        spaces = " ".join(f"{name} {spec['space_um']}" for name, spec in rule.items())
+        lines.append(f"create_ndr -name {net_class['name']} -spacing {{{spaces}}} -width {{{widths}}}")
+        lines += [f"assign_ndr -ndr {net_class['name']} -net {net}" for net in net_class["nets"]]
     for index, adjustment in zip(range(low, high + 1), (0.7, 0.3, 0.2, 0.2)):
         lines.append(f"set_global_routing_layer_adjustment {routing[index - 1]} {adjustment}")
     lines += [
@@ -491,7 +599,8 @@ class MacroBuilder:
 
 
 def merge_routed(kdb, directory: Path, tech_lef: str, map_file: str, top_name: str, output: Path,
-                 rails: Sequence[dict], pin_layer_for: str, die_top: int, numbers) -> dict:
+                 rails: Sequence[dict], pin_layer_for: str, die_top: int, numbers,
+                 taps: Sequence[dict] = (), signal_layer: str = "") -> dict:
     """Routed DEF plus macro GDS into one GDS, on the PDK's own layer map."""
     config = kdb.LEFDEFReaderConfiguration()
     config.map_file = map_file
@@ -510,6 +619,16 @@ def merge_routed(kdb, directory: Path, tech_lef: str, map_file: str, top_name: s
     top = layout.top_cell()
     if top.name != top_name:
         raise RouteRefused("MERGE_TOP_MISMATCH", f"routed DEF top {top.name}, expected {top_name}")
+    if taps:
+        metal = layout.layer(*numbers[signal_layer])
+        for tap in taps:
+            top.shapes(metal).insert(kdb.Box(um(tap["port_x"] - 0.15), um(tap["y"] - 0.4),
+                                             um(tap["x"] + 0.15), um(tap["y"] - 0.1)))
+        names = {tap["net"] for tap in taps}
+        for index in layout.layer_indexes():
+            for shape in list(top.shapes(index).each()):
+                if shape.is_text() and shape.text.string in names:
+                    top.shapes(index).erase(shape)
     number, _ = numbers[pin_layer_for]
     text = layout.layer(number, 25)
     pin = layout.layer(number, 2)

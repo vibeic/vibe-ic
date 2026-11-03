@@ -56,13 +56,38 @@ LEF_LAYERS = [{"name": "M1", "dc_density": 1.0}, {"name": "V1", "dc_density": .4
 
 
 def test_supply_width_comes_from_the_declared_current_and_the_lef_density():
-    rule = route.supply_rule(.9, LEF_LAYERS, ["M1", "M2"], 1, 2, .4, lambda level, width: .24)
-    assert rule["M2"] == {"width_um": .45, "needed_um": .45, "short_um": 0.0, "space_um": .24}
+    rule = route.supply_rule(.9, LEF_LAYERS, ["M1", "M2"], 1, 2, lambda level, width: .24)
+    assert rule["M2"] == {"width_um": .45, "space_um": .24}
 
 
-def test_a_declared_low_metal_width_records_its_shortfall():
-    rule = route.supply_rule(.9, LEF_LAYERS, ["M1", "M2"], 1, 2, .4, lambda level, width: .24)
-    assert rule["M1"]["width_um"] == .4 and rule["M1"]["short_um"] == .5
+def test_every_supply_layer_meets_the_lef_density():
+    rule = route.supply_rule(.9, LEF_LAYERS, ["M1", "M2"], 1, 2, lambda level, width: .24)
+    assert rule["M1"]["width_um"] == .9 and rule["M2"]["width_um"] == .45
+
+
+def test_a_tap_leaves_its_rail_for_its_own_net():
+    instances = [("bank", {"r0__t0": "vref", "r0__t1": "n1", "m0__t0": "vref"})]
+    route.split_taps(instances, [{"rail": "vref", "tap_device": "r0"}])
+    assert instances[0][1] == {"r0__t0": "vref_div", "r0__t1": "n1", "m0__t0": "vref"}
+
+
+def test_a_tap_not_on_its_rail_is_refused():
+    with pytest.raises(route.RouteRefused):
+        route.split_taps([("bank", {"r0__t0": "x"})], [{"rail": "vref", "tap_device": "r0"}])
+
+
+def test_a_tap_pin_sits_beside_its_port_with_the_gap_blocked():
+    taps = route.tap_sites([{"rail": "vref", "tap_device": "r0"}], [("vref", 16.8, .4)], .96)
+    assert taps == [{"net": "vref_div", "port_x": 16.8, "x": 17.76, "y": .4}]
+    text = route.route_tcl("top", "t.lef", "c.lef", "Site", {}, ["M1", "M2"], (10, 10), [], [], "M2",
+                           {**ROUTING, "routing_layers": [1, 2]}, [], taps)
+    assert "place_pin -pin_name vref_div -layer M2 -location [list 17.76 0.4]" in text
+    assert "findLayer M2] 16950 0 17610 300" in text
+
+
+def test_declared_ports_sit_on_the_far_edge():
+    sites = route.signal_pin_sites(["vin", "clk", "vref", "bit"], ["clk", "bit"], 12, 5, 100)
+    assert sites == [("vin", 12, .4), ("vref", 17, .4), ("clk", 12, 99.6), ("bit", 17, 99.6)]
 
 
 def test_strap_pairs_spread_through_the_columns():
@@ -75,9 +100,51 @@ def test_the_route_script_assigns_the_supply_rule_to_supply_nets_only():
     supply = {"Metal1": {"width_um": .4, "space_um": .22}, "Metal2": {"width_um": .45, "space_um": .25}}
     cfg = {**ROUTING, "routing_layers": [1, 2]}
     text = route.route_tcl("top", "t.lef", "c.lef", "Site", {}, ["Metal1", "Metal2"], (10, 10), [], [], "Metal2",
-                           cfg, ["vdd", "vss"], supply)
+                           cfg, [{"name": "SUPPLY", "nets": ["vdd", "vss"], "rule": supply}])
     assert "create_ndr -name SUPPLY -spacing {Metal1 0.22 Metal2 0.25} -width {Metal1 0.4 Metal2 0.45}" in text
     assert text.count("assign_ndr") == 2 and "-net vdd" in text and "-net vss" in text
+
+
+def _centroids(columns, sets, column_pitch=20):
+    place = {n: (index * column_pitch, y) for index, column in enumerate(columns) for n, y in column}
+    return route.centroid_distance_um(sets, place), place
+
+
+def test_a_one_to_five_ratio_shares_a_centroid_within_a_fraction_of_a_unit():
+    small = [f"s{i}" for i in range(5)]
+    big = [f"b{i}" for i in range(25)]
+    columns = route.common_centroid_columns(
+        [[(n, 30) for n in small], [(n, 30) for n in big]], 180, 0, 5)
+    distance, place = _centroids(columns, [small, big])
+    assert set(place) == set(small + big)
+    assert len(set(place.values())) == 30
+    assert distance <= 30 / 5 + 30 / 25
+
+
+@pytest.mark.parametrize("counts", [(4, 4), (3, 5), (3, 3, 3), (2, 6), (1, 1, 1), (8, 16)])
+def test_every_unit_gets_its_own_slot(counts):
+    sets = [[f"d{k}_{i}" for i in range(c)] for k, c in enumerate(counts)]
+    columns = route.common_centroid_columns([[(n, 30) for n in g] for g in sets], 95, 5, 5)
+    _, place = _centroids(columns, sets)
+    assert sorted(place) == sorted(n for g in sets for n in g)
+    assert len(set(place.values())) == sum(counts)
+
+
+def test_even_devices_sit_exactly_on_one_centroid():
+    sets = [[f"a{i}" for i in range(4)], [f"b{i}" for i in range(12)]]
+    columns = route.common_centroid_columns([[(n, 30) for n in g] for g in sets], 120, 0, 5)
+    assert _centroids(columns, sets)[0] == 0.0
+
+
+def test_a_shorter_unit_is_centred_in_its_slot():
+    columns = route.common_centroid_columns([[("a", 30), ("b", 20)]], 100, 0, 5)
+    assert dict(n for c in columns for n in c)["b"] % 30 == 5
+
+
+def test_a_net_class_is_named_with_wider_spacing_at_minimum_width():
+    rule = route.spaced_rule([{"name": "M1", "width": .16}, {"name": "M2", "width": .2}], ["M1", "M2"], 1, 2, 2,
+                             lambda level, width: .21)
+    assert rule == {"M1": {"width_um": .16, "space_um": .42}, "M2": {"width_um": .2, "space_um": .42}}
 
 
 def test_a_rail_keeps_its_declared_position():

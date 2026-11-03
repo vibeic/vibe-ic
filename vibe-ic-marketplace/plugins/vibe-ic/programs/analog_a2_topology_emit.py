@@ -148,6 +148,7 @@ import analog_ciff as _ciff  # noqa: E402
 import analog_incremental_startup as _startup  # noqa: E402
 import analog_ota1_options as _ota1  # noqa: E402
 import analog_ota_bias as _ota_bias  # noqa: E402
+import analog_gate_ties as _ties  # noqa: E402
 import analog_resistor_segments as _segments  # noqa: E402
 from _analog_producer_fingerprint import producer_fingerprint as _source_fingerprint
 
@@ -8124,6 +8125,10 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
     except _segments.SegmentRefused as exc:
         return _gap(exc.status, [{"requirement": _segments.FIELD, "detail": str(exc)}],
                     informational)
+    try:
+        ir = _ties.apply(ir, _ties.declared(_read_json(Path(spec_path)) if spec_path else None))
+    except _ties.TieRefused as exc:
+        return _gap(exc.status, [{"requirement": _ties.FIELD, "detail": str(exc)}], informational)
     informational = list(informational) + ir.get("derived_informational", [])
     ir["derived_informational"] = list(informational)
     nominal = lib.get("ota_bias_nominal_settling_requirement")
