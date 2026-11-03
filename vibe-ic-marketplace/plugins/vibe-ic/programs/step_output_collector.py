@@ -18,12 +18,14 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import datetime
+import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 
@@ -98,7 +100,7 @@ def _version_folder(steps_root: Path, phase: str, stage: str,
     return str(folder)
 
 
-def _copy_outputs(project: Path, sdir: Path, outputs) -> Tuple[list, list]:
+def _copy_outputs(project: Path, sdir: Path, outputs, *, keep_paths=False) -> Tuple[list, list]:
     """Copy bytes, never aliases to a mutable working file. Keep empty files too."""
     present, errors = [], []
     for output in outputs:
@@ -108,7 +110,12 @@ def _copy_outputs(project: Path, sdir: Path, outputs) -> Tuple[list, list]:
         src = Path(str(output.get('abs') or ''))
         if not output.get('exists') or not src.is_file():
             continue
-        target = sdir / src.name
+        if keep_paths:
+            from benchmark_evidence_publish import _excluded, _record, over_ceiling
+            if _excluded(src) or src.suffix.lower() == '.odb' and over_ceiling(src):
+                present.append(_record(src, project, 'ROUTED_AWAY', 'source-run-only'))
+                continue
+        target = sdir / output['rel'] if keep_paths else sdir / src.name
         if target.exists():
             target = sdir / f'{src.parent.name}__{src.name}'
         number = 0
@@ -117,10 +124,11 @@ def _copy_outputs(project: Path, sdir: Path, outputs) -> Tuple[list, list]:
             number += 1
             target = base.with_name(f'{base.name}__{number}')
         try:
+            target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, target)
             present.append({'rel': output.get('rel'), 'abs': str(src),
                             'size': target.stat().st_size,
-                            'snapshot': target.name, 'sha256': _sha(target)})
+                            'snapshot': str(target.relative_to(sdir)), 'sha256': _sha(target)})
         except OSError as exc:
             errors.append(f'{src}: {exc}')
     return present, errors
@@ -143,6 +151,185 @@ def _working_files(project: Path) -> dict:
             except OSError:
                 continue
     return records
+
+
+def flow109_step_folder(row) -> str:
+    slug = re.sub(r'[^a-z0-9]+', '-', row['name'].lower()).strip('-') or 'step'
+    return f"{row['position']:03d}_{slug}"
+
+
+def _known_files(project: Path, value, *, strings=True):
+    """Use paths already supplied by the row, without resolving new dependencies."""
+    if isinstance(value, dict):
+        if isinstance(value.get('path'), str) and isinstance(value.get('sha256'), str):
+            path = Path(value['path'])
+            try:
+                path = (path if path.is_absolute() else project / path).relative_to(project)
+                if '..' not in path.parts:
+                    yield str(path), value['sha256']
+            except ValueError:
+                pass
+        for key, child in value.items():
+            if key in ('path', 'sha256') and 'sha256' in value:
+                continue
+            yield from _known_files(project, child, strings=strings)
+    elif isinstance(value, (tuple, list)):
+        for child in value:
+            yield from _known_files(project, child, strings=strings)
+    elif strings and isinstance(value, str) and len(value) < 4096 and '\n' not in value:
+        path = Path(value)
+        if not path.is_absolute():
+            path = project / path
+        try:
+            if path.is_file() and path.resolve().is_relative_to(project):
+                yield str(path.relative_to(project)), _sha(path)
+        except (OSError, ValueError):
+            pass
+
+
+_FLOW109_ROW = None
+_FLOW109_LOCAL = threading.local()
+_FLOW109_HOOK = False
+_FLOW109_ENV = 'VIBEIC_FLOW109_ROW_OUTPUT'
+
+
+def note_flow109_input(path):
+    if (_FLOW109_ROW is None or getattr(_FLOW109_LOCAL, 'busy', False)
+            or not isinstance(path, (str, os.PathLike))):
+        return
+    _FLOW109_LOCAL.busy = True
+    project, folder, seen = _FLOW109_ROW
+    try:
+        path = Path(path).absolute()
+        resolved = path.resolve()
+        if not resolved.is_relative_to(project) or resolved.is_relative_to(folder) or not path.is_file():
+            return
+        rel = str(path.relative_to(project))
+        info = path.stat()
+        identity = (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if seen.get(rel) == identity:
+            return
+        sha = _sha(path)
+        with _flow109_listing_lock(folder):
+            if not json.loads((folder / 'result.json').read_text()).get('_capture_running'):
+                return
+            inputs_path = folder / 'inputs.json'
+            inputs = json.loads(inputs_path.read_text())
+            reference = {'path': rel, 'sha256': sha}
+            if reference not in inputs:
+                inputs.append(reference)
+                write_json(inputs_path, inputs)
+            manifest = folder / 'outputs.json'
+            listing = json.loads(manifest.read_text()) if manifest.exists() else {
+                'outputs': [], 'capture_errors': []}
+            if not any(r.get('rel', r.get('path')) == rel and r['sha256'] == sha
+                       for r in listing['outputs']):
+                copied, errors = _copy_outputs(project, folder / 'outputs',
+                    [{'rel': rel, 'abs': str(path), 'exists': True}], keep_paths=True)
+                listing['outputs'].extend(copied)
+                listing['capture_errors'].extend(errors)
+                write_json(manifest, listing)
+        seen[rel] = identity
+    except (OSError, ValueError):
+        pass
+    finally:
+        _FLOW109_LOCAL.busy = False
+
+
+@contextmanager
+def _flow109_listing_lock(folder):
+    descriptor = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _observe_flow109_reads(event, args):
+    if event != 'open' or _FLOW109_ROW is None or getattr(_FLOW109_LOCAL, 'busy', False):
+        return
+    path, mode, flags = args
+    readable = ('r' in mode or '+' in mode) if mode else flags & os.O_ACCMODE != os.O_WRONLY
+    if readable:
+        note_flow109_input(path)
+
+
+def _activate_flow109_reads(project, folder):
+    global _FLOW109_ROW, _FLOW109_HOOK
+    _FLOW109_ROW = (Path(project).resolve(), Path(folder).resolve(), {})
+    if not _FLOW109_HOOK:
+        sys.addaudithook(_observe_flow109_reads)
+        _FLOW109_HOOK = True
+
+
+@contextmanager
+def observe_flow109_row(project, attempt):
+    global _FLOW109_ROW
+    previous = _FLOW109_ROW
+    inherited = os.environ.get(_FLOW109_ENV)
+    _activate_flow109_reads(project, attempt['folder'])
+    os.environ[_FLOW109_ENV] = str(attempt['folder'])
+    try:
+        yield
+    finally:
+        _FLOW109_ROW = previous
+        if inherited is None:
+            os.environ.pop(_FLOW109_ENV, None)
+        else:
+            os.environ[_FLOW109_ENV] = inherited
+
+
+def begin_flow109_row(project: Path, row, context) -> dict:
+    """Retain a row directly by its Flow109 position, including an unfinished run."""
+    project = Path(project).resolve()
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
+    folder = project / 'steps' / flow109_step_folder(row) / stamp
+    folder.mkdir(parents=True)
+    (folder / 'outputs').mkdir()
+    write_json(folder / 'inputs.json', [])
+    write_json(folder / 'result.json', {
+        'step_id': row['id'], 'context_sha256': context['context_sha256'],
+        'component_status': 'NOT_MEASURED', 'default_row_status': 'NOT_MEASURED',
+        'completed': False, 'reason': 'row did not finish', '_capture_running': True})
+    return {'folder': folder, 'before': _working_files(project)}
+
+
+def finish_flow109_row(project: Path, row, context, result, attempt) -> None:
+    project = Path(project).resolve()
+    folder = attempt['folder']
+    with _flow109_listing_lock(folder):
+        current = _working_files(project)
+        changed = {rel for rel, info in current.items() if attempt['before'].get(rel) != info}
+        known = dict(_known_files(project, result))
+        inputs_path = folder / 'inputs.json'
+        inputs = json.loads(inputs_path.read_text())
+        for rel, sha in known.items():
+            reference = {'path': rel, 'sha256': sha}
+            if rel not in changed and reference not in inputs:
+                inputs.append(reference)
+        write_json(inputs_path, inputs)
+        manifest = folder / 'outputs.json'
+        listing = json.loads(manifest.read_text()) if manifest.exists() else {
+            'outputs': [], 'capture_errors': []}
+        retained = {(r.get('rel', r.get('path')), r['sha256']) for r in listing['outputs']}
+        files = changed | set(known)
+        outputs = []
+        for rel in sorted(files):
+            path = project / rel
+            if (path.is_file() and path.resolve().is_relative_to(project)
+                    and not (rel, _sha(path)) in retained):
+                outputs.append({'rel': rel, 'abs': str(path), 'exists': True})
+        present, errors = _copy_outputs(project, folder / 'outputs', outputs, keep_paths=True)
+        listing['outputs'].extend(present)
+        listing['capture_errors'].extend(errors)
+        write_json(manifest, listing)
+        write_json(folder / 'result.json', result)
+
+
+if os.environ.get(_FLOW109_ENV):
+    _inherited_folder = Path(os.environ[_FLOW109_ENV])
+    _activate_flow109_reads(_inherited_folder.parents[2], _inherited_folder)
 
 
 def _freeze_legacy(steps_root: Path, rows) -> None:

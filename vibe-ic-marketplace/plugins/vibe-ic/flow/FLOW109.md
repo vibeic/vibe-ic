@@ -28,6 +28,22 @@ D50 currently has no dispatch in `flow109.json`; the public entry therefore
 refuses that request before native work. Documentation must not substitute an
 older path-ATPG command.
 
+## Retained row outputs
+
+Each executed row retains `steps/<position>_<row-name-slug>/<UTC>/`, using
+the 1-based Flow109 position and current row name, for example
+`steps/066_final-adopted-netlist-equivalence/`.
+`result.json` holds the same row answer as the working `default_rows` file.
+`outputs/` holds independent copies of files written by the tool and native
+reports cited by the row. `inputs.json` lists paths and SHA-256 hashes already
+known to the row. Layout files over the existing publication size ceiling keep
+their path, bytes and SHA-256 in `outputs.json` instead of a copy. Each rerun
+creates a new UTC folder, including failures. Later rows preserve older folders.
+The whole-run verdict reads the newest `result.json` for each selected row.
+Working paths, including `default_rows` files read by downstream dependencies,
+remain available. Evidence publication copies these step folders with the
+existing private-evidence and size handling.
+
 ## Resolve a plan
 
 For a bounded RTL task, the public runner resolves the registry's standard

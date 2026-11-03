@@ -2146,8 +2146,9 @@ def whole_run_verdict(project: Path) -> dict:
     rows, fpga = [], []
     for spec in plan["rows"]:
         try:
-            record = json.loads((Path(project) / "reports/flow109/default_rows"
-                                 / (spec["id"] + ".json")).read_text())
+            from step_output_collector import flow109_step_folder
+            results = sorted((Path(project) / 'steps' / flow109_step_folder(spec)).glob('*/result.json'))
+            record = json.loads(results[-1].read_text()) if results else {}
         except (OSError, ValueError):
             record = {}
         status = record.get("default_row_status", "NOT_MEASURED")
@@ -2161,6 +2162,63 @@ def whole_run_verdict(project: Path) -> dict:
                        "PASS" if rows and set(statuses) == {"PASS"} else "NOT_MEASURED",
             "counts": {s: statuses.count(s) for s in ("PASS", "FAIL", "NOT_MEASURED")},
             "steps": rows, "fpga_rows": fpga}
+
+
+def _execution_manifest(args):
+    if not args.flow109_manifest:
+        raise Flow109Error('FLOW109_MANIFEST_REQUIRED', 'supply explicit resolved features')
+    try:
+        manifest = json.loads(Path(args.flow109_manifest).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise Flow109Error('FLOW109_MANIFEST_INVALID', str(exc)) from exc
+    if not isinstance(manifest, dict):
+        raise Flow109Error('FLOW109_MANIFEST_INVALID', 'expected object')
+    if 'tool_uses' in manifest and 'runtime_tool_uses' in manifest:
+        raise Flow109Error('FLOW109_MANIFEST_INVALID', 'duplicate runtime tool identity fields')
+    return manifest
+
+
+def run_rows(args, project: Path, run_row) -> int:
+    """Run the public entry once per selected row, retaining bytes before the next."""
+    import step_output_collector as outputs
+    manifest = _execution_manifest(args)
+    plan = resolve_plan(manifest.get('features'), manifest.get('step_profiles'))
+    window = resolve_execution_window(plan, args.entry_step, args.exit_step)
+    rows = window.get('resolved_rows') or [window['resolved_row']]
+    code = 0
+    for row in rows:
+        current = execution_context(plan, row['id'], row['id'],
+            runtime_tool_uses=manifest.get('runtime_tool_uses', manifest.get('tool_uses')),
+            qualification_registry=manifest.get('qualification_registry'))
+        attempt = outputs.begin_flow109_row(project, row, current)
+        result = {'step_id': row['id'], 'context_sha256': current['context_sha256'],
+                  'component_status': 'NOT_MEASURED', 'default_row_status': 'NOT_MEASURED',
+                  'completed': False, 'reason': 'not executed: an earlier row stopped'}
+        if code:
+            outputs.finish_flow109_row(project, row, current, result, attempt)
+            continue
+        selected = copy.copy(args)
+        selected.entry_step = selected.exit_step = row['id']
+        selected.resume_request = None
+        selected._flow109_row_active = True
+        working = project / 'reports/flow109/default_rows' / (row['id'] + '.json')
+        before = outputs._working_files(project).get(str(working.relative_to(project)))
+        try:
+            with outputs.observe_flow109_row(project, attempt):
+                # The selection was read before the row boundary was known.
+                outputs.note_flow109_input(Path(args.flow109_manifest))
+                code = run_row(selected)
+            after = outputs._working_files(project).get(str(working.relative_to(project)))
+            if after is not None and after != before:
+                result = json.loads(working.read_text())
+            else:
+                result['reason'] = f'row returned {code} without a row result'
+        except Exception as exc:
+            result['reason'] = str(exc)
+            raise
+        finally:
+            outputs.finish_flow109_row(project, row, current, result, attempt)
+    return code
 
 
 def _attempt_result(context: Mapping, components: list[dict]) -> dict:
@@ -2803,16 +2861,7 @@ def prepare_front_door(args, project: Path) -> int | None:
     if args.execution_mode not in (None, "default"):
         raise Flow109Error("FLOW109_MODE_UNIMPLEMENTED", "109 currently selects Default only")
     prepare_task_features(args, project)
-    if not args.flow109_manifest:
-        raise Flow109Error("FLOW109_MANIFEST_REQUIRED", "supply explicit resolved features")
-    try:
-        manifest = json.loads(Path(args.flow109_manifest).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise Flow109Error("FLOW109_MANIFEST_INVALID", str(exc)) from exc
-    if not isinstance(manifest, dict):
-        raise Flow109Error("FLOW109_MANIFEST_INVALID", "expected object")
-    if "tool_uses" in manifest and "runtime_tool_uses" in manifest:
-        raise Flow109Error("FLOW109_MANIFEST_INVALID", "duplicate runtime tool identity fields")
+    manifest = _execution_manifest(args)
     plan = resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
     context = execution_context(plan, args.entry_step, args.exit_step,
                                 runtime_tool_uses=manifest.get("runtime_tool_uses", manifest.get("tool_uses")),

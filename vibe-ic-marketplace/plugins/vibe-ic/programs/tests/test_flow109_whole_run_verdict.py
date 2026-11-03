@@ -11,14 +11,17 @@ import flow_compliance_check as audit
 
 
 def _carrier(tmp_path, statuses, fpga=None):
-    rows = [{"id": i, "position": n, "name": i, "when": "always"} for n, i in enumerate(statuses)]
+    rows = [{"id": i, "position": n, "name": i, "when": "always"} for n, i in enumerate(statuses, 1)]
     rows += [{"id": i, "position": 100, "name": i, "when": "fpga_early"} for i in fpga or {}]
     root = tmp_path / "reports/flow109"
     (root / "default_rows").mkdir(parents=True)
     (root / "plan.json").write_text(json.dumps({"rows": rows}))
     for row_id, status in {**statuses, **(fpga or {})}.items():
         if status:
-            (root / "default_rows" / (row_id + ".json")).write_text(json.dumps(
+            row = next(row for row in rows if row['id'] == row_id)
+            folder = tmp_path / 'steps' / f"{row['position']:03d}_{row_id.lower()}" / '20261104T000000_000000Z'
+            folder.mkdir(parents=True)
+            (folder / 'result.json').write_text(json.dumps(
                 {"default_row_status": status, "completed": status == "PASS"}))
     return tmp_path
 
@@ -56,3 +59,15 @@ def test_scoped_audit_keeps_the_scoped_path(tmp_path, monkeypatch):
     project = _carrier(tmp_path, {"D1": "PASS"})
     monkeypatch.setattr(flow109, "whole_run_verdict", lambda _: pytest.fail("scoped pass judged the run"))
     audit.main([str(project), "--stage", "4", "--lenient"])
+
+
+@pytest.mark.parametrize('newest,expected', [('FAIL', 'FAIL'), ('broken', 'NOT_MEASURED')])
+def test_newest_attempt_decides_even_when_old_result_and_flat_file_pass(tmp_path, newest, expected):
+    project = _carrier(tmp_path, {'D1': 'PASS'})
+    (project / 'reports/flow109/default_rows/D1.json').write_text(json.dumps(
+        {'default_row_status': 'PASS', 'completed': True}))
+    folder = project / 'steps/001_d1/20261104T000001_000000Z'
+    folder.mkdir()
+    (folder / 'result.json').write_text('{' if newest == 'broken' else json.dumps(
+        {'default_row_status': newest, 'completed': False}))
+    assert flow109.whole_run_verdict(project)['verdict'] == expected

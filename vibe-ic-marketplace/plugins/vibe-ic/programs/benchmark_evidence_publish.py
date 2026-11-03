@@ -753,7 +753,8 @@ def _copy_tree(src: Path, dst: Path, dry: bool,
                rel_base: Optional[Path] = None,
                route: str = "not-retained",
                residue_out: Optional[List[dict]] = None,
-               copied_out: Optional[List[Tuple[Path, str]]] = None
+               copied_out: Optional[List[Tuple[Path, str]]] = None,
+               public_only: bool = False
                ) -> Tuple[int, List[dict]]:
     """Copy every non-excluded regular file under src into dst (preserving
     relative layout).
@@ -782,6 +783,14 @@ def _copy_tree(src: Path, dst: Path, dry: bool,
         if not f.is_file():
             continue
         rel = f.relative_to(src)
+        if public_only and (f.is_symlink() or any(
+                part.startswith('.') or part.lower() in _PRIVATE_EVIDENCE_PARTS
+                for part in rel.parts)):
+            continue
+        if public_only and f.suffix.lower() == '.odb' and over_ceiling(f):
+            if rel_base is not None:
+                records.append(_record(f, rel_base, 'ROUTED_AWAY', route))
+            continue
         if is_build_residue(f):
             if residue_out is not None:
                 residue_out.append(_residue_record(
@@ -1936,6 +1945,8 @@ def collect_step_records(run_dir: Path, dest: Path) -> Tuple[List[dict], List[di
     sha_memo: Dict[Path, str] = {}
     for dirpath, _dirnames, filenames in os.walk(steps_root, followlinks=False):
         d = Path(dirpath)
+        if d == steps_root:
+            _dirnames[:] = [name for name in _dirnames if not re.match(r'^\d{3}_', name)]
         names = set(filenames)
         extra = sorted(
             n for n in names
@@ -1995,7 +2006,8 @@ def collect_step_records(run_dir: Path, dest: Path) -> Tuple[List[dict], List[di
     return steps, verbatim
 
 
-def publish_steps(run_dir: Path, dest: Path, dry: bool) -> Dict[str, object]:
+def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
+                  route='not-retained', layout_out=None) -> Dict[str, object]:
     """Stage the per-step evidence RECORD into the cell.
 
     Writes `steps/<folder>/STEP_RECORD.json` (self-contained: no host-absolute
@@ -2063,6 +2075,15 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool) -> Dict[str, object]:
             result["n_records_copied"] = int(result["n_records_copied"]) + 1
         except OSError:
             continue
+    for folder in sorted((run_dir / _STEPS_DIRNAME).glob('[0-9][0-9][0-9]_*')):
+        if not folder.is_dir() or folder.is_symlink():
+            continue
+        count, layouts = _copy_tree(folder, steps_dest / folder.name, dry,
+                                    rel_base=run_dir, route=route, public_only=True)
+        result['n_steps'] += len(list(folder.glob('*/result.json')))
+        result['n_records_copied'] += count
+        if layout_out is not None:
+            layout_out.extend(layouts)
     if steps:
         steps_dest.mkdir(parents=True, exist_ok=True)
         (steps_dest / _STEP_INDEX_FILENAME).write_text(
@@ -2743,7 +2764,7 @@ def publish(args: argparse.Namespace) -> dict:
     # output's decision is "can a reader of THIS cell find it", and that is not
     # answerable until the cell is populated. Publishes records only — no
     # symlink is created and none is copied.
-    steps_result = publish_steps(run_dir, dest, dry)
+    steps_result = publish_steps(run_dir, dest, dry, route=route, layout_out=layout_records)
     if steps_result["n_steps"]:
         staged.append(f"steps/ ({steps_result['n_steps']} "
                       f"{_STEP_RECORD_FILENAME}"
