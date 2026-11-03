@@ -37501,6 +37501,15 @@ def _recorded_run_path(project: Path, value: str) -> Path:
     return path
 
 
+def _pdk_relative(value: str, pdk_name: str) -> Optional[Tuple[str, ...]]:
+    """The library-relative name of a PDK view, whichever root spells it."""
+    parts = Path(str(value)).parts
+    if parts.count(pdk_name) != 1:
+        return None
+    view = parts[parts.index(pdk_name) + 1:]
+    return view if len(view) >= 2 and view[0] == "libs.ref" else None
+
+
 def _restore_recorded_physical_views(project: Path, pdk: PdkConfig,
                                      container: str) -> Dict[str, Any]:
     """Give a process that did NOT run place-and-route the physical views
@@ -37562,13 +37571,36 @@ def _restore_recorded_physical_views(project: Path, pdk: PdkConfig,
         recorded = []
     base = {str(pdk.tech_lef), str(pdk.cell_lef),
             str(pdk.tech_lef_source or "")}
+    base_views = {_pdk_relative(path, pdk.name) for path in base} - {None}
+    wanted = []
     for value in recorded:
         path = str(_recorded_run_path(project, str(value)))
         # The recorded tech LEF is never a macro LEF -- verified or not.
         if (path in base or path == derived
+                or _pdk_relative(path, pdk.name) in base_views
                 or Path(path).name == Path(str(pdk.tech_lef)).name):
             continue
-        if path not in pdk.macro_lefs:
+        wanted.append(path)
+    # Only a tool on this filesystem needs the current spelling; a container
+    # route can still read the recorded one.
+    unavailable = [path for path in wanted
+                   if _local_exec_mode() and _pdk_relative(path, pdk.name)
+                   and not Path(path).is_file()]
+    if unavailable:
+        import librelane_contract as contract
+        import librelane_postroute as postroute
+        try:
+            folder, _state = postroute.stapostpnr_state(project)
+            current = contract.resolve_io_lefs_through_pad_lefs(unavailable, folder)
+        except (contract.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+            done["refused"] = f"recorded LEF paths could not be rebound: {exc}"
+            return done
+        rebound = dict(zip(unavailable, map(str, current)))
+        wanted = [rebound.get(path, path) for path in wanted]
+    loaded = {_pdk_relative(path, pdk.name) for path in pdk.macro_lefs} - {None}
+    for path in wanted:
+        view = _pdk_relative(path, pdk.name)
+        if path not in pdk.macro_lefs and view not in loaded:
             pdk.macro_lefs.append(path)
             done["macro_lefs"].append(path)
     if _padring_chip_top_record(project) is not None:
