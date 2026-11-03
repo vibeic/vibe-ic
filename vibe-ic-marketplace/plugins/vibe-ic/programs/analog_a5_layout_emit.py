@@ -5157,12 +5157,15 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
         signal = [p for p in ports if p not in rail_nets]
         pins_at = route.signal_pin_sites(signal, cfg.get("far_edge_ports", []), cfg["signal_pin_start_um"],
                                          cfg["signal_pin_pitch_um"], die_h / route.DBU_PER_UM)
+        declared_taps = cfg.get("reference_taps", [])
+        route.split_taps(builder.instances, declared_taps)
+        taps = route.tap_sites(declared_taps, pins_at, cfg.get("tap_offset_um", 0.96))
         builder.write(work)
-        (work / "top.v").write_text(builder.verilog(blockname, signal))
+        (work / "top.v").write_text(builder.verilog(blockname, signal + [tap["net"] for tap in taps]))
         pin_layer = routing[pin_spec["ports"][signal[0]]["level"] - 1] if signal else routing[levels[0] - 1]
         (work / "route.tcl").write_text(route.route_tcl(
             blockname, lef_path, cell_lef, site, pitch, routing, (die_w / route.DBU_PER_UM, die_h / route.DBU_PER_UM),
-            macros, pins_at, pin_layer, cfg, net_classes))
+            macros, pins_at, pin_layer, cfg, net_classes, taps))
         rc, out, err = stage.sh(f"cd {shlex.quote(stage.path)} && openroad -no_splash -no_init -exit "
                                 "-log route.log route.tcl", timeout=14400)
         log = (work / "route.log").read_text() if (work / "route.log").is_file() else ""
@@ -5179,7 +5182,7 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
             raise route.RouteRefused("ROUTE_NOT_CONVERGED", f"{violations} detailed-route violations left")
         gds_path = work / f"{blockname}.gds"
         merged = route.merge_routed(kdb, work, lef_path, str(maps[0]), blockname, gds_path, rails,
-                                    routing[levels[2] - 1], die_h, numbers)
+                                    routing[levels[2] - 1], die_h, numbers, taps, pin_layer)
     except (route.RouteRefused, Refusal, KeyError) as exc:
         return refuse(getattr(exc, "code", "ROUTE_REFUSED"), str(exc), RC_REFUSED)
     report["bbox"] = merged

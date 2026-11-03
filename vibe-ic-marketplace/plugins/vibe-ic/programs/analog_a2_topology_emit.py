@@ -8126,11 +8126,9 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
         return _gap(exc.status, [{"requirement": _segments.FIELD, "detail": str(exc)}],
                     informational)
     try:
-        tie_size = _ties.declared_size(_read_json(Path(spec_path)) if spec_path else None)
+        ir = _ties.apply(ir, _ties.declared(_read_json(Path(spec_path)) if spec_path else None))
     except _ties.TieRefused as exc:
-        return _gap(exc.status, [{"requirement": "gate tie size", "detail": str(exc)}], informational)
-    if tie_size:
-        ir = _ties.apply(ir, *tie_size)
+        return _gap(exc.status, [{"requirement": _ties.FIELD, "detail": str(exc)}], informational)
     informational = list(informational) + ir.get("derived_informational", [])
     ir["derived_informational"] = list(informational)
     nominal = lib.get("ota_bias_nominal_settling_requirement")

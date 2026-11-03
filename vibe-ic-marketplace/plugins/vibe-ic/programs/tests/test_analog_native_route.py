@@ -65,6 +65,26 @@ def test_every_supply_layer_meets_the_lef_density():
     assert rule["M1"]["width_um"] == .9 and rule["M2"]["width_um"] == .45
 
 
+def test_a_tap_leaves_its_rail_for_its_own_net():
+    instances = [("bank", {"r0__t0": "vref", "r0__t1": "n1", "m0__t0": "vref"})]
+    route.split_taps(instances, [{"rail": "vref", "tap_device": "r0"}])
+    assert instances[0][1] == {"r0__t0": "vref_div", "r0__t1": "n1", "m0__t0": "vref"}
+
+
+def test_a_tap_not_on_its_rail_is_refused():
+    with pytest.raises(route.RouteRefused):
+        route.split_taps([("bank", {"r0__t0": "x"})], [{"rail": "vref", "tap_device": "r0"}])
+
+
+def test_a_tap_pin_sits_beside_its_port_with_the_gap_blocked():
+    taps = route.tap_sites([{"rail": "vref", "tap_device": "r0"}], [("vref", 16.8, .4)], .96)
+    assert taps == [{"net": "vref_div", "port_x": 16.8, "x": 17.76, "y": .4}]
+    text = route.route_tcl("top", "t.lef", "c.lef", "Site", {}, ["M1", "M2"], (10, 10), [], [], "M2",
+                           {**ROUTING, "routing_layers": [1, 2]}, [], taps)
+    assert "place_pin -pin_name vref_div -layer M2 -location [list 17.76 0.4]" in text
+    assert "findLayer M2] 16950 0 17610 300" in text
+
+
 def test_declared_ports_sit_on_the_far_edge():
     sites = route.signal_pin_sites(["vin", "clk", "vref", "bit"], ["clk", "bit"], 12, 5, 100)
     assert sites == [("vin", 12, .4), ("vref", 17, .4), ("clk", 12, 99.6), ("bit", 17, 99.6)]
