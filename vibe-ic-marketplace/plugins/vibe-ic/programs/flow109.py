@@ -2614,6 +2614,95 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
             "completed": status == "PASS", "flow109_acceptance": status}
 
 
+def _retained_frontend_result(project: Path, context: Mapping) -> dict | None:
+    """Read completed native frontend work; unchanged inputs need no producer rerun."""
+    row = context.get('resolved_row', {})
+    step = row.get('id')
+    if row.get('profile', {}).get('id') != 'default' or step not in ('D22', 'D25', 'D26'):
+        return None
+    measurements = {}
+    status = 'NOT_MEASURED'
+    result = {'step_id': step, 'context_sha256': context['context_sha256'],
+              'native_started': False, 'native_measurements': measurements}
+    try:
+        import _path_layout as layout
+        import _specrtl_common as sources
+        synthesis = json.loads((project / 'phase2/stage2/synth/synth_inputs.json').read_text())
+        rtl = layout.rtl_dir(project)
+        if synthesis['rtl_sha256'] != {
+                p.relative_to(rtl).as_posix(): _file_digest(p)
+                for p in sources.rtl_source_files(project)}:
+            return None
+        if step == 'D22':
+            folder = project / 'phase3/librelane/02-yosys-synthesis'
+            if not (folder / 'state_out.json').is_file():
+                return None
+            state = json.loads((folder / 'state_out.json').read_text())
+            measurements.update(report=str(folder / 'state_out.json'), **{
+                key: state['metrics'][key] for key in
+                ('design__instance_unmapped__count', 'synthesis__check_error__count')})
+            counts = [v for k, v in measurements.items() if k != 'report']
+            if any(type(v) not in (int, float) or not math.isfinite(v) or v < 0
+                   or v != int(v) for v in counts):
+                raise ValueError('invalid native synthesis error count')
+            status = 'FAIL' if any(counts) else 'PASS'
+        elif step == 'D25':
+            import librelane_eqy
+            execution = project / 'reports/lec_eqy_execution.json'
+            if not execution.is_file():
+                return None
+            native = json.loads(execution.read_text())
+            if any(_file_digest(project / item['path']) != item['sha256']
+                   for item in [*native['subject']['rtl'], native['subject']['gate_netlist']]):
+                return None
+            folder = project / native['native_directory']
+            proof = librelane_eqy.judge_eqy(folder,
+                project / 'reports/flow109/components/D25-native.json')
+            measurements.update(proof)
+            status = proof['verdict'] if proof['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
+        else:
+            import librelane_prelayout as sta
+            if context['features'].get('requires_scan'):
+                return None
+            folder = project / 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr'
+            if not (folder / 'state_out.json').is_file():
+                return None
+            before = json.loads((folder / 'state_in.json').read_text())
+            inputs = json.loads((folder / 'input_fingerprint.json').read_text())
+            netlist = layout.synth_dir(project) / Path(before['nl']).name
+            config = json.loads((folder / 'config.json').read_text())
+            sdc = layout.constraints_dir(project) / Path(config['PNR_SDC_FILE']).name
+            if (_file_digest(netlist) != inputs['state_files'][before['nl']]
+                    or _file_digest(sdc) != inputs['config_files'][config['PNR_SDC_FILE']]):
+                return None
+            timing = sta.judge_slack(folder,
+                project / 'reports/flow109/components/D26-native.json')
+            measurements.update(timing)
+            status = timing['verdict']
+            bounds = json.loads((project /
+                'requirements/base_13/prelayout_timing_targets.json').read_text())
+            for corner in sta._corners(folder):
+                counts = sta.check_setup_counts((corner / 'checks.rpt').read_text(),
+                                                sta.supply_names(config))
+                if counts is None:
+                    status = 'NOT_MEASURED' if status != 'FAIL' else status
+                elif any(counts.values()):
+                    status = 'FAIL'
+                for metric, limits in bounds['limits'].items():
+                    measured = timing['corners'][corner.name][metric]
+                    if bounds['units'][metric] != 'ns' or measured['status'] != 'MEASURED':
+                        status = 'NOT_MEASURED' if status != 'FAIL' else status
+                    elif ('min' in limits and measured['value'] < limits['min']
+                          or 'max' in limits and measured['value'] > limits['max']):
+                        status = 'FAIL'
+        result['reason'] = step + '_RETAINED_NATIVE_REPORT'
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+        result.update(reason=step + '_NATIVE_REPORT_UNAVAILABLE', detail=str(exc))
+    return {**result, 'component_status': status, 'default_row_status': status,
+            'completed': status == 'PASS', 'flow109_acceptance': status}
+
+
 def prepare_front_door(args, project: Path) -> int | None:
     """Return an exit code for planning/refusal, or continue the real front door."""
     if args.flow != "109":
@@ -2655,6 +2744,14 @@ def prepare_front_door(args, project: Path) -> int | None:
         expected = "IC" if plan["features"]["ic"] else "IP"
         if route != expected:
             raise Flow109Error("FLOW109_ROUTE_CONFLICT", f"manifest endpoint requires {expected}, owner declared {route}")
+    retained = _retained_frontend_result(project, context)
+    if retained is not None:
+        from _atomic_artefact import write_json
+        write_json(project / 'reports/flow109/plan.json', plan)
+        result = _selected_step_result(project, context, retained)
+        print(f"FLOW109 {context['requested_step']}: Default row {result['default_row_status']}; "
+              "read retained native report; no producer rerun")
+        return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[result['default_row_status']]
     dft_contract_rows = {"D22", "D23", "D24", "D25", "D26", "D30", "D50", "D51"}
     registry_rows = load_registry()["rows"]
     positions = {row["id"]: row["position"] for row in registry_rows}
