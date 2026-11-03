@@ -9,6 +9,7 @@ import ast
 import copy
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -2512,6 +2513,47 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
     return result
 
 
+def _retained_padring_result(project: Path, context: Mapping) -> dict | None:
+    """Read OpenROAD's completed pad-ring/PDN results, without rerunning placement.
+
+    LibreLane already owns these checks. This glue compares its native error
+    counts with the original zero-error limit; no backend receipt is needed.
+    Fresh cases without the native chain continue through the normal producer.
+    """
+    row = context.get("resolved_row", {})
+    if row.get("id") != "D32" or row.get("profile", {}).get("id") != "default":
+        return None
+    chain_path = project / "reports/phase3/execution-backend-15.json"
+    if not chain_path.is_file():
+        return None
+    measurements = {}
+    result = {"step_id": row["id"], "context_sha256": context["context_sha256"],
+              "reason": "D32_NATIVE_PADRING_PDN", "native_measurements": measurements}
+    try:
+        chain = json.loads(chain_path.read_text())
+        states = {item["step"]: project / item["state"] for item in chain["states"]}
+        for step in ("OpenROAD.PadRing", "OpenROAD.GeneratePDN"):
+            state_path = states[step]
+            state = json.loads(state_path.read_text())
+            values = state["metrics"]
+            measurements[step] = {"report": str(state_path),
+                                  "errors": values["flow__errors__count"]}
+            if step == "OpenROAD.GeneratePDN":
+                measurements[step]["connectivity_errors"] = values["design__power_grid_violation__count"]
+        counts = [value for observed in measurements.values()
+                  for key, value in observed.items() if key != "report"]
+        if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
+               or value != int(value) for value in counts):
+            raise ValueError("invalid native error count")
+        status = "FAIL" if any(counts) else "PASS"
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        status = "FAIL" if any(type(v) in (int, float) and math.isfinite(v) and v > 0
+            for observed in measurements.values() for k, v in observed.items() if k != "report") else "NOT_MEASURED"
+        result.update(reason="D32_NATIVE_REPORT_UNAVAILABLE", detail=str(exc))
+    return {**result, "component_status": status, "default_row_status": status,
+            "completed": status == "PASS", "flow109_acceptance": status}
+
+
 def prepare_front_door(args, project: Path) -> int | None:
     """Return an exit code for planning/refusal, or continue the real front door."""
     if args.flow != "109":
@@ -2811,6 +2853,13 @@ def prepare_front_door(args, project: Path) -> int | None:
     attempt = _new_attempt(project, context)
     os.environ[ATTEMPT_ENV] = str(attempt.resolve())
     adapter = context['resolved_row']['profile']['dispatch'].get('adapter')
+    retained = _retained_padring_result(project, context) if not adapter else None
+    if retained is not None:
+        result = _selected_step_result(project, context, retained)
+        write_json(destination / 'components' / (context['requested_step'] + '.json'), result)
+        _finish_attempt(attempt, _attempt_result(
+            {**context, "resolved_rows": [context["resolved_row"]]}, [result]))
+        return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[result['default_row_status']]
     if adapter:
         # Only source-owned dispatch data selects this bounded adapter. It
         # calls existing producers/consumers and retains their actual receipts.
