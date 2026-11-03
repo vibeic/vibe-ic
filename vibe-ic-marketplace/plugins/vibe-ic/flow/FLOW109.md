@@ -260,9 +260,13 @@ reducer run takes about 2.2 hours and 43 GiB and changes no verdict. When off,
 its per-net capacitance with OpenRCX. The tool's output holds net totals with no
 pins or resistance, so it is not STA input: it never enters `spefs` or
 `final_spefs`, and neither D70 nor M08 reads it. No comparison outcome changes
-the D69 status. The reducer's `--max-degree` is a computational guard on one
-elimination's clique fill-in (ruling #88 D2); when that guard alone refuses, the
-comparison relaunches once at twice the measured degree.
+the D69 status. The reducer in EDA 0.4.67 has `--max-degree`, a computational
+guard on one elimination's clique fill-in (ruling #88 D2); when that guard alone
+refuses, the comparison relaunches once at twice the measured degree. The
+`analog_die` path calls `reduce` and does not relaunch. The reducer from
+`vibeic/vibeic-eda#469` has no degree guard and never gives that refusal, so its
+first launch is the only one. The relaunch stays until no image in use carries
+the flag.
 
 The fill-sensitive correlation obligation stays NOT_MEASURED. No threshold or
 baseline changes.
