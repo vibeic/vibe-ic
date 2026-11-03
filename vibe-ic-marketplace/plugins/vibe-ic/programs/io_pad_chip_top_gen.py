@@ -2127,6 +2127,28 @@ def bind_io_timing_scenes(
     }
 
 
+def _declared_pad_masters(project: Path, nets: List[str]) -> Dict[str, str]:
+    """Port -> master from L1 tables stating "Signal" and "Required master"."""
+    path = project / "phase1/generated_docs/L1_DATASHEET.json"
+    try:
+        tables = json.loads(path.read_text()).get("comparison_tables") or []
+    except (OSError, ValueError):
+        return {}
+    rows = [row for table in tables if isinstance(table, dict)
+            and {"Signal", "Required master"} <= set(table.get("headers") or [])
+            for row in table.get("rows") or [] if isinstance(row, dict)]
+    masters: Dict[str, str] = {}
+    for row in rows:
+        signal, master = str(row.get("Signal", "")), str(row.get("Required master", ""))
+        net = _bind_side_names(project, {"": [signal]}, nets)[""][0]
+        if net not in nets or not master or masters.get(net, master) != master:
+            raise Refusal("DECLARED_PAD_MASTER_UNRESOLVED",
+                          f"L1 requires master {master!r} for signal {signal!r}, "
+                          "which does not resolve to one port and one master")
+        masters[net] = master
+    return masters
+
+
 def _bind_side_names(project: Path, side_ports: Dict[str, List[str]],
                      nets: List[str]) -> Dict[str, List[str]]:
     """Name each placed pad by its port: exact, declared pad_signal_map, then case."""
@@ -2374,6 +2396,7 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
 
     chosen: Dict[str, Dict[str, object]] = {}
     ordered: Dict[str, List[str]] = {}
+    declared_masters = _declared_pad_masters(project, nets)
     for side in SIDES:
         ordered[side] = []
         for net in side_ports.get(side, []):
@@ -2382,9 +2405,15 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
                 raise Refusal("INSTANCE_NAME_COLLISION",
                               f"two ports map to instance {inst!r}")
             declines: List[str] = []
-            master, cls, fallback = _select_master(
-                direction_of[net], classes, sizes, prefix,
-                terminals, declines)
+            if net in declared_masters:
+                master, cls, fallback = declared_masters[net], classes.get(declared_masters[net]), False
+                if cls is None:
+                    raise Refusal("DECLARED_PAD_MASTER_UNKNOWN",
+                                  f"{net} requires {master}, which the IO library does not define")
+            else:
+                master, cls, fallback = _select_master(
+                    direction_of[net], classes, sizes, prefix,
+                    terminals, declines)
             chosen[inst] = {"port": net, "master": master,
                             "chosen_for_class": cls,
                             "terminal": terminals.get(master, "PAD"),
