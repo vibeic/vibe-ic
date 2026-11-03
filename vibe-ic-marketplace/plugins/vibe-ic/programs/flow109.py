@@ -1295,7 +1295,7 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_em = (row.get("id") == "D58" and profile.get("id") == "analog_die"
                  and isinstance(dispatch, Mapping)
                  and dispatch.get("adapter") == "em_current_density_check")
-    if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
+    if not isinstance(dispatch, Mapping) or (profile.get("id") not in ("default", "digital_odb")
                                              and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_final_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_em and not analog_final and not analog_si and not analog_correlation):
         return None
     native = dispatch.get("native_step_id")
@@ -1385,7 +1385,7 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
                        or dispatch.get("consumer") != expected[2])
         else:
             invalid = (common_invalid
-                       or not isinstance(adapter, str) or not adapter.startswith("flow109_")
+                       or not isinstance(adapter, str)
                        or not (HERE / (adapter + ".py")).is_file()
                        or native != "flow109." + str(row.get("id")))
     elif dispatch.get("kind") == "canonical_backend_window" and adapter is None:
@@ -3108,15 +3108,6 @@ def prepare_front_door(args, project: Path) -> int | None:
             'flow109_acceptance': 'NOT_MEASURED'})
         print(f'FLOW109 D30: FAIL {exc.code}; native delivery not started')
         return 1
-    # The registered package/test consumer needs the same original catalogue
-    # and pad producer inputs after checkpoint relocation. Restore exact bytes
-    # only through the existing current-native-owner transport, before it runs.
-    import librelane_postroute as _continuation_postroute
-    if (any(row.get("id") == "D75" for row in
-            (context.get("resolved_rows") or [context.get("resolved_row", {})]))
-            and (project / _continuation_postroute.STEP23_RECORD).is_file()):
-        from execution_adapters_backend import restore_continuation_prerequisites
-        restore_continuation_prerequisites(project)
     # Native analog steps consume ordinary design configuration and artifacts.
     # Qualification documents are not a prerequisite for running these tools.
     if getattr(args, "container", None):

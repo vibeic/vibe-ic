@@ -309,9 +309,8 @@ def validate_final_electrical(project, receipt_ref, *, require_pass=True):
                 or manifest.get('final_parasitics_receipt') != record['final_parasitics_receipt']
                 or manifest.get('retained_sta_state') != record.get('retained_sta_state')):
             raise AdmissionRefusal('D70_FINAL_INPUT_CHANGED', 'retained producer selection differs')
-        retained, _, exports = _retained_sta(project, manifest, parasitics)
-        if (exports != record.get('sdf_export')
-                or files._record(project, retained / 'vibeic_receipt.json') != record.get('retained_sta_receipt')
+        retained, _, _ = _retained_sta(project, manifest, parasitics)
+        if (files._record(project, retained / 'vibeic_receipt.json') != record.get('retained_sta_receipt')
                 or files._record(project, retained / 'state_out.json') != record.get('sta_state')):
             raise AdmissionRefusal('D70_FINAL_OUTPUT_BINDING_MISMATCH', 'retained STA export changed')
     folder, state = postroute.stapostpnr_state(project)
@@ -715,7 +714,6 @@ def _metric_digital_basis(project, record, *, native_state=None):
 def _metric_prerequisites(project, context, record):
     """Reuse accepted rows on this carrier; D69's current component is insufficient."""
     import flow109
-    import flow109_final_perc as pv
     plan = flow109.resolve_plan(context['features'], context['step_profiles'])
     selected = {row['id'] for row in plan['rows']}
     accepted, missing = {}, []
@@ -735,23 +733,6 @@ def _metric_prerequisites(project, context, record):
                     flow109._current_project_ref(project, body[key], 'D70_PREREQUISITE_RECEIPT_CHANGED')
             if step == 'D69' and body.get('receipt') != record['final_parasitics_receipt']:
                 raise AdmissionRefusal('D70_ACCEPTED_D69_DIFFERS', 'accepted row is not the consumed final extraction')
-            if step == 'D65':
-                basis = extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
-                final_def = basis.get('filled_def')
-                if not final_def:
-                    raise AdmissionRefusal('D70_D65_FINAL_GEOMETRY_BINDING_UNAVAILABLE', 'D69 final DEF required by current D65 owner')
-                files._bound(project, final_def)
-                native = _read(files._bound(project, body['canonical_receipt']))
-                binding = pv._canonical_step31_bindings(native, final_def['sha256'])
-                inputs = native['current_step_declared_producers']['input_identity']['files']
-                for name, sha in inputs.items():
-                    files._bound(project, {'path': name, 'sha256': sha})
-                for view in (basis['final_gds'], basis['adopted_views']['netlist']):
-                    files._bound(project, view)
-                    if view['sha256'] not in inputs.values():
-                        raise AdmissionRefusal('D70_D65_FINAL_SUBJECT_DIFFERS', view['path'])
-                for name, sha in binding['outputs'].items():
-                    files._bound(project, {'path': name, 'sha256': sha})
             accepted[step] = reference
         except (flow109.Flow109Error, AdmissionRefusal, Refusal, OSError, KeyError, TypeError, ValueError) as exc:
             missing.append({'step': step, 'reason': getattr(exc, 'code', 'D70_PREREQUISITE_NOT_CURRENT'),

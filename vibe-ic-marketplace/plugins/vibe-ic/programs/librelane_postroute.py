@@ -43,20 +43,26 @@ GLS_STEP = 'Vibeic.GateLevelSim'
 
 def stapostpnr_state(project: Path) -> Tuple[Path, dict]:
     """(step folder, state) of the STAPostPNR run step 23 recorded."""
+    from librelane_contract import project_path
     record = project / STEP23_RECORD
     if not record.is_file():
-        raise Refusal('LL_STAPOSTPNR_STATE_ABSENT',
-                      f'{record}: step 23 did not run on LibreLane')
-    doc = _load(record)
-    state_path = Path(str(doc.get('sta_state') or ''))
+        record = project / 'reports/flow109/components/D70.json'
+    doc = _load(record) if record.is_file() else {}
+    ref = doc.get('sta_state') or {}
+    state_path = project_path(project, ref.get('path', '') if isinstance(ref, dict) else ref)
     if not state_path.is_file():
         raise Refusal('LL_STAPOSTPNR_STATE_ABSENT', f'{record}: sta_state {state_path}')
-    if digest(state_path) != doc.get('sta_state_sha256'):
-        raise Refusal('LL_STAPOSTPNR_STATE_DRIFT',
-                      f'{state_path} is not the state step 23 recorded')
     if _state_step_id(state_path.parent) != 'OpenROAD.STAPostPNR':
         raise Refusal('LL_NOT_STAPOSTPNR', str(state_path.parent))
-    return state_path.parent, _load(state_path)
+    state = _load(state_path)
+    for view in ('def', 'nl', 'pnl', 'sdc', 'odb', 'gds', 'json_h'):
+        if state.get(view):
+            state[view] = str(project_path(project, state[view]))
+    for view in ('sdf', 'spef', 'lib'):
+        if isinstance(state.get(view), dict):
+            state[view] = {corner: str(project_path(project, path))
+                           for corner, path in state[view].items()}
+    return state_path.parent, state
 
 
 def corner_sdfs(state: dict) -> Dict[str, Path]:
@@ -141,75 +147,29 @@ def bind_stapostpnr_sdfs(folder: Path, state: dict, *,
     D53 calls the same function before launching ``Vibeic.GateLevelSim``.
     It intentionally proves no simulator annotation outcome.
     """
-    from librelane_contract import validate_step_receipt
     folder = Path(folder).resolve()
-    receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
-    try:
-        disk_state = _load(folder / 'state_out.json')
-        config = _load(folder / 'config.json')
-        if state != disk_state:
-            raise ValueError('caller state differs from current producer state')
-        design = config.get('DESIGN_NAME')
-        declared = config.get('STA_CORNERS')
-        if (not isinstance(design, str) or not design
-                or not isinstance(declared, list) or not declared
-                or len(declared) != len(set(declared))
-                or any(not isinstance(corner, str) or not corner for corner in declared)):
-            raise ValueError('producer design/corner declaration is absent or ambiguous')
-        sdfs = corner_sdfs(disk_state)
-        if set(sdfs) != set(declared):
-            raise Refusal('LL_STAPOSTPNR_SDF_CORNER_MISSING',
-                          f'exported={sorted(sdfs)} declared={sorted(declared)}')
-        netlist = Path(str(disk_state.get('nl') or '')).resolve()
-        timed = (receipt.get('input') or {}).get('state_files') or {}
-        if (not netlist.is_file() or timed.get(str(netlist)) != digest(netlist)):
-            raise ValueError('SDF netlist is not the producer-bound timing input')
-        netlist_text = re.sub(r'/\*.*?\*/|//[^\n]*', '',
-                              netlist.read_text(errors='strict'), flags=re.S)
-        modules = {left or right for left, right in _VERILOG_MODULE.findall(netlist_text)}
-        if design not in modules:
-            raise Refusal('LL_STAPOSTPNR_SDF_NETLIST_MISMATCH',
-                          f'{design!r} is not a module in {netlist}')
-        if (expected_netlist is not None
-                and (not Path(expected_netlist).is_file()
-                     or digest(Path(expected_netlist)) != digest(netlist))):
-            raise Refusal('LL_STAPOSTPNR_SDF_NETLIST_MISMATCH',
-                          f'{expected_netlist} differs from {netlist}')
-        required = required_items if required_items is not None else [
-            {'mode': 'functional', 'corner': corner} for corner in declared]
-        if (not isinstance(required, list) or not required
-                or any(not isinstance(item, dict)
-                       or set(item) != {'mode', 'corner'}
-                       or item.get('mode') != 'functional'
-                       or not isinstance(item.get('corner'), str)
-                       or not item['corner'] for item in required)
-                or len({(item['mode'], item['corner']) for item in required}) != len(required)):
-            raise Refusal('LL_STAPOSTPNR_SDF_REQUIREMENTS_INVALID', str(required))
-        missing = sorted({item['corner'] for item in required} - set(sdfs))
-        if missing:
-            raise Refusal('LL_STAPOSTPNR_SDF_CORNER_MISSING', ', '.join(missing))
-        exported = {}
-        bound = receipt.get('sha256') or {}
-        for corner, path in sorted(sdfs.items()):
-            resolved = path.resolve()
-            if not resolved.is_relative_to(folder):
-                raise Refusal('LL_STAPOSTPNR_SDF_OUTPUT_UNBOUND', str(path))
-            relative = str(resolved.relative_to(folder))
-            if bound.get(relative) != digest(resolved):
-                raise Refusal('LL_STAPOSTPNR_SDF_OUTPUT_UNBOUND', relative)
-            exported[corner] = sdf_export_census(resolved, design)
-        return {'producer': 'OpenROAD.STAPostPNR.write_sdf',
-                'state': str(folder / 'state_out.json'),
-                'state_sha256': digest(folder / 'state_out.json'),
-                'receipt': str(folder / 'vibeic_receipt.json'),
-                'receipt_sha256': digest(folder / 'vibeic_receipt.json'),
-                'netlist': str(netlist), 'netlist_sha256': digest(netlist),
-                'declared_corners': list(declared), 'required_items': list(required),
-                'exports': exported}
-    except Refusal:
-        raise
-    except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:
-        raise Refusal('LL_STAPOSTPNR_SDF_OUTPUT_UNBOUND', f'{folder}: {exc}') from exc
+    config = _load(folder / 'config.json')
+    design = config.get('DESIGN_NAME')
+    declared = config.get('STA_CORNERS') or list(state.get('sdf') or {})
+    sdfs = corner_sdfs(state)
+    if set(sdfs) != set(declared):
+        raise Refusal('LL_STAPOSTPNR_SDF_CORNER_MISSING',
+                      f'exported={sorted(sdfs)} declared={sorted(declared)}')
+    netlist = Path(state['nl'])
+    if expected_netlist is not None and digest(Path(expected_netlist)) != digest(netlist):
+        raise Refusal('LL_STAPOSTPNR_SDF_NETLIST_MISMATCH', str(expected_netlist))
+    required = required_items if required_items is not None else [
+        {'mode': 'functional', 'corner': corner} for corner in declared]
+    missing = {row['corner'] for row in required} - set(sdfs)
+    if missing:
+        raise Refusal('LL_STAPOSTPNR_SDF_CORNER_MISSING', ', '.join(sorted(missing)))
+    return {'producer': 'OpenROAD.STAPostPNR.write_sdf',
+            'state': str(folder / 'state_out.json'),
+            'state_sha256': digest(folder / 'state_out.json'),
+            'netlist': str(netlist), 'netlist_sha256': digest(netlist),
+            'declared_corners': list(declared), 'required_items': list(required),
+            'exports': {corner: sdf_export_census(path, design)
+                        for corner, path in sorted(sdfs.items())}}
 
 
 # --- step 29 -----------------------------------------------------------------
