@@ -1024,7 +1024,9 @@ def accept_metric_obligations(project, context, component):
 def consume_default_row_completion(project, context, component):
     """Use the existing adapter completion seam; whole-IC acceptance is separate."""
     acceptance = accept_metric_obligations(project, context, component)
-    status = 'FAIL' if component.get('component_status') == 'FAIL' else acceptance['status']
+    # C2: the row is the tools' STA, IR and EM result. Obligations they do not measure stay named.
+    status = ('FAIL' if 'FAIL' in (component.get('component_status'), acceptance['status']) else
+              'PASS' if component.get('component_status') == 'PASS' else 'NOT_MEASURED')
     result = {**component, 'step_id': 'D70', 'context_sha256': context['context_sha256'],
             'metric_acceptance': acceptance, 'metric_acceptance_status': acceptance['metric_status'],
             'default_row_status': status, 'flow109_acceptance': status, 'completed': status == 'PASS',
