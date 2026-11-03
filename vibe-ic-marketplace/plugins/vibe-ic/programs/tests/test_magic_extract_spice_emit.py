@@ -562,31 +562,36 @@ class TestRthreshRendering:
 
 
 class TestResistorBodies:
-    RECORD = ('device rsubckt rmodel 10 20 11 21  "sub.t0" "a_10_20#" 200 0 "a" 7 8600,372 "b" 7 8600,372\n')
-    NET = (".subckt top a b sub.t0\nX1 a b sub.t0 rmodel l=1u w=1u\n"
-           "C1 b a_10_20# 0.12f\nC2 a_10_20# a 0.3f\nC3 a b 1f\n.ends\n")
+    RECORD = ('device rsubckt rmodel 10 20 11 21 w=1 l=1 "sub.t0" "a_10_20#" 200 0 "a" 7 8600,372 "b" 7 8600,372\n')
+    NET = (".subckt top a b c sub.t0\nX1 a b sub.t0 rmodel l=1u w=1u\n"
+           "C1 c a_10_20# 0.12f\nC2 a_10_20# a 0.3f\nC3 a b 1f\n.ends\n")
 
-    def test_body_capacitors_land_on_the_device_substrate(self):
+    def test_a_body_capacitor_lands_half_on_each_terminal(self):
         text, joined = mod.bind_resistor_bodies(self.NET, self.RECORD)
         assert "a_10_20#" not in text
-        assert "C1 b sub.t0 0.12f" in text and "C2 sub.t0 a 0.3f" in text
+        assert "C1_0 c a 0.06f" in text and "C1_1 c b 0.06f" in text
         assert "C3 a b 1f" in text and "X1 a b sub.t0 rmodel l=1u w=1u" in text
-        assert joined[0]["substrate"] == "sub.t0" and len(joined[0]["capacitors"]) == 2
+        assert joined[0]["terminals"] == ["a", "b"] and len(joined[0]["capacitors"]) == 2
 
-    def test_a_capacitor_between_a_body_and_its_substrate_disappears(self):
-        text, _ = mod.bind_resistor_bodies(
-            self.NET.replace("C3 a b 1f", "C3 a_10_20# sub.t0 1f"), self.RECORD)
-        assert "C3" not in text
+    def test_the_half_across_its_own_terminal_is_no_element(self):
+        text, _ = mod.bind_resistor_bodies(self.NET, self.RECORD)
+        assert "C2_1 b a 0.15f" in text and "C2_0" not in text
 
-    def test_two_bodies_join_their_own_substrates(self):
-        record = self.RECORD + self.RECORD.replace("a_10_20#", "a_30_20#").replace("sub.t0", "sub.t1")
-        net = self.NET.replace("C3 a b 1f", "C3 a_10_20# a_30_20# 1f\nX2 a b sub.t1 rmodel l=1u w=1u")
+    def test_the_capacitance_each_net_sees_from_outside_the_resistor_is_conserved(self):
+        text, _ = mod.bind_resistor_bodies(self.NET, self.RECORD)
+        total = sum(float(l.split()[3][:-1]) for l in text.splitlines() if l.startswith("C1_"))
+        assert total == pytest.approx(0.12)
+
+    def test_a_capacitor_between_two_bodies_splits_four_ways(self):
+        record = self.RECORD + self.RECORD.replace("a_10_20#", "a_30_20#").replace('"a"', '"c"').replace('"b"', '"d"')
+        net = self.NET.replace("C3 a b 1f", "C3 a_10_20# a_30_20# 1f\nX2 c d sub.t0 rmodel")
         text, joined = mod.bind_resistor_bodies(net, record)
-        assert "C3 sub.t0 sub.t1 1f" in text and len(joined) == 2
+        assert {"C3_0 a c 0.25f", "C3_1 a d 0.25f", "C3_2 b c 0.25f", "C3_3 b d 0.25f"} <= set(text.splitlines())
+        assert len(joined) == 2
 
     def test_nothing_changes_without_a_resistor_record_or_a_printed_body(self):
         assert mod.bind_resistor_bodies(self.NET, "") == (self.NET, [])
-        net = self.NET.replace("C1 b a_10_20# 0.12f\nC2 a_10_20# a 0.3f\n", "")
+        net = self.NET.replace("C1 c a_10_20# 0.12f\nC2 a_10_20# a 0.3f\n", "")
         assert mod.bind_resistor_bodies(net, self.RECORD) == (net, [])
 
     def test_a_comment_naming_a_body_is_left_alone(self):
@@ -594,29 +599,38 @@ class TestResistorBodies:
         assert mod.bind_resistor_bodies(net, self.RECORD)[0].startswith("* a_10_20#\n")
 
     @pytest.mark.parametrize("net", [
-        ".subckt top a b sub.t0\nX1 a a_10_20# sub.t0 rmodel\nC1 b a_10_20# 1f\n.ends\n",
-        ".subckt top a b sub.t0\nR1 a a_10_20# 5\n.ends\n",
-        ".subckt top a a_10_20# sub.t0\nC1 a a_10_20# 1f\n.ends\n",
-        ".subckt top a b sub.t0\nC1 a b a_10_20#\n.ends\n",
+        ".subckt top a b\nX1 a a_10_20# b rmodel\nC1 b a_10_20# 1f\n.ends\n",
+        ".subckt top a b\nR1 a a_10_20# 5\n.ends\n",
+        ".subckt top a a_10_20# b\nC1 a a_10_20# 1f\n.ends\n",
+        ".subckt top a b\nC1 a b a_10_20#\n.ends\n",
+        ".subckt top a b\nC1 a a_10_20#\n.ends\n",
     ])
     def test_a_body_with_any_other_connection_refuses(self, net):
         with pytest.raises(ValueError, match="RCX_RESISTOR_BODY_CONNECTED"):
             mod.bind_resistor_bodies(net, self.RECORD)
 
-    def test_a_substrate_the_netlist_never_names_refuses(self):
-        with pytest.raises(ValueError, match="RCX_RESISTOR_SUBSTRATE_ABSENT"):
-            mod.bind_resistor_bodies(".subckt top a b\nC1 a a_10_20# 1f\n.ends\n", self.RECORD)
+    def test_a_terminal_the_netlist_never_names_refuses(self):
+        with pytest.raises(ValueError, match="RCX_RESISTOR_TERMINAL_ABSENT"):
+            mod.bind_resistor_bodies(".subckt top a c\nC1 c a_10_20# 1f\n.ends\n", self.RECORD)
 
-    def test_a_body_on_two_substrates_refuses(self):
+    def test_an_unreadable_capacitor_value_refuses(self):
+        with pytest.raises(ValueError, match="RCX_CAPACITOR_VALUE"):
+            mod.bind_resistor_bodies(self.NET.replace("0.12f", "{cval}"), self.RECORD)
+
+    def test_a_record_without_two_terminals_refuses(self):
+        with pytest.raises(ValueError, match="RCX_RESISTOR_TERMINALS"):
+            mod.resistor_body_terminals('device rsubckt r 1 2 3 4 w=1 "s" "b" 0 0 "a" 7 0\n')
+
+    def test_a_body_with_two_terminal_sets_refuses(self):
         with pytest.raises(ValueError, match="RCX_RESISTOR_BODY_AMBIGUOUS"):
-            mod.resistor_body_substrates(self.RECORD + self.RECORD.replace("sub.t0", "other"))
+            mod.resistor_body_terminals(self.RECORD + self.RECORD.replace('"b"', '"c"'))
 
     def test_the_step_prefers_the_resistance_record_and_refuses_when_none_exists(self, tmp_path):
         full = tmp_path / "extraction_full"
         with pytest.raises(ValueError, match="RCX_DEVICE_RECORD_MISSING"):
             mod.bind_step_resistor_bodies(tmp_path, "top", self.NET)
         full.mkdir()
-        (full / "top.ext").write_text(self.RECORD.replace("sub.t0", "b"))
-        assert mod.bind_step_resistor_bodies(tmp_path, "top", self.NET)[1][0]["substrate"] == "b"
+        (full / "top.ext").write_text(self.RECORD.replace('"b"', '"c"'))
+        assert mod.bind_step_resistor_bodies(tmp_path, "top", self.NET)[1][0]["terminals"] == ["a", "c"]
         (full / "top.res.ext").write_text(self.RECORD)
-        assert mod.bind_step_resistor_bodies(tmp_path, "top", self.NET)[1][0]["substrate"] == "sub.t0"
+        assert mod.bind_step_resistor_bodies(tmp_path, "top", self.NET)[1][0]["terminals"] == ["a", "b"]
