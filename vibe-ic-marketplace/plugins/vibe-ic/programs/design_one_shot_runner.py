@@ -14730,21 +14730,6 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
     raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
     d11_context = None
     d11_admission = None
-    if raw_context:
-        import flow109
-        import flow109_metric_acceptance as metrics
-        selected = flow109.validate_execution_context(json.loads(Path(raw_context).read_bytes()))
-        if (selected.get('resolved_row', {}).get('id') == 'D11'
-                and not __import__('flow109_engineering').selected_original(project, selected)):
-            t0 = time.time()
-            accepted = metrics.accept_d11(project, selected)
-            if accepted['status'] in ('PASS', 'FAIL') or not metrics.d11_fresh_request(project, selected):
-                return StepResult('rtl_lint_tool', accepted['component_status'], time.time() - t0,
-                    accepted['reason'], extras={'step_id': '2', 'completed': False,
-                        'default_row_status': 'NOT_MEASURED', 'metric_acceptance': accepted,
-                        'native_reused': True, 'context_sha256': selected['context_sha256']},
-                    reason_class='inconclusive' if accepted['status'] == 'NOT_MEASURED' else '')
-            d11_context = selected
     try:
         mode = _ll.selected_mode(project, "2")
     except _ll.Refusal as exc:
@@ -25912,6 +25897,15 @@ def _publish_d14_owner(project: Path, context: Mapping[str, Any], *, invocation_
     if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
         print('REFUSED: D14_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
         return 2
+    formal = _pl.formal_dir(project)
+    if not (formal / 'results.json').is_file():
+        import formal_harness_gen as generator
+        import formal_property_run as producer
+        import p0_tool_frontend_check as frontend
+        generated = generator.generate(project=project, top=frontend._top(project))
+        if generated.get('verdict') == 'EMITTED':
+            producer.run(project, harness=Path(generated['harness_path']),
+                rtl=[Path(path) for path in generated['rtl_files']], top=generated['harness_module'])
     row = step_d14_formal_read(project, context)
     summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
         'declared_window': {'entry_step': '4', 'exit_step': '5', 'dispatched_step_ids': ['5']},
@@ -28714,8 +28708,15 @@ def main() -> int:
         # phase2/stage1/rtl/ already holds RTL, so the later dispatch of the
         # same step is a no-op rather than a second copy.
         if _d12_context:
+            import _cdc_netlist as native
             import flow109_metric_acceptance as metrics
             try:
+                path = project / native.NETLIST_REL
+                try:
+                    native.require_binding(project, path, native.load(path))
+                except native.Refusal:
+                    inputs = native.source_binding(project, args.top_name)
+                    native.build(project, [project / p for p in inputs['rtl_files']], args.top_name)
                 metrics.d12_subject(project)
                 _adm = {'admitted': True, 'site': 'cdc_rdc'}
             except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
@@ -28887,16 +28888,14 @@ def main() -> int:
 
     # D12 has no lint/D11 dependency. Its bounded owner reads the complete
     # retained current graph and publishes a fresh normal report of that read.
+    if _d14_context:
+        return _publish_d14_owner(project, _d14_context, invocation_context=_dispatch_invocation_context)
     if _d12_context:
         import flow109
         import flow109_metric_acceptance as metrics
         context = _d12_context
         if context['resolved_row']['id'] == 'D12':
             return _publish_d12_owner(project, context, invocation_context=_dispatch_invocation_context)
-    if _d13_context:
-        return _publish_d13_owner(project, _d13_context, invocation_context=_dispatch_invocation_context)
-    if _d14_context:
-        return _publish_d14_owner(project, _d14_context, invocation_context=_dispatch_invocation_context)
     if _d19_context:
         return _publish_d19_owner(project, _d19_context, args.top_name, args.container,
             getattr(args, 'ic_class', None), args.pdk, invocation_context=_dispatch_invocation_context)

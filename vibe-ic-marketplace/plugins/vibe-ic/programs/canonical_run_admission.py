@@ -507,6 +507,8 @@ def _selected_output_mount_access(project: Path, config: Dict[str, Any],
     entry, exit_step = config.get("entry_step"), config.get("exit_step")
     first = (step_preflight.site_for_step(plan.name, str(entry))
              if entry is not None else names[0])
+    if first is None:
+        first = next((name for name, span in plan.sites if str(entry) in span), None)
     if entry in names:
         first = entry
     pruned = step_preflight.exit_pruned_sites(plan.sites, exit_step) if exit_step else []

@@ -989,6 +989,16 @@ def test_phase2_local_runtime_condition_reopens_once(tmp_path, monkeypatch):
     assert not cra.admit_span(*args, config).admitted
 
 
+def test_step3_local_output_access_resolves_its_containing_site(tmp_path, monkeypatch):
+    import librelane_contract
+    attested = _mock_runtime_receipt(tmp_path, {})
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: attested)
+    access = cra._selected_output_mount_access(
+        tmp_path, {'entry_step': '3', 'exit_step': '3'}, attested)
+    assert access
+    assert all(access.values())
+
+
 def test_phase2_attested_image_change_reopens_only_once(tmp_path, monkeypatch):
     import librelane_contract
     project = _project(tmp_path / 'proj')

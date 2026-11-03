@@ -12,6 +12,7 @@ import pytest
 import flow109
 import flow109_metric_acceptance as metrics
 import flow109_analog as analog
+from test_flow109_selection import profile
 from programs.tests._hostpaths import require_repo
 from test_flow109_analog_a01 import _case, _run
 from test_flow109_analog_a01 import legacy_component_registry  # noqa: F401
@@ -305,3 +306,35 @@ def test_a01_observes_only_reviewed_source_bound_measurement_intent(tmp_path, da
         assert intent['measurement']['identity']['consumed_inputs'][source] == hashlib.sha256(
             (tmp_path / source).read_bytes()).hexdigest()
     assert report['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('rule,complete,expected', [
+    (None, True, 'PASS'),
+    ('RESET_ROLE_UNRESOLVED', False, 'NOT_MEASURED'),
+    ('RESET_CYCLE', True, 'FAIL'),
+    ('ASYNC_INPUT_UNSYNC', True, 'FAIL'),
+    ('CDC_UNSYNC_CROSSING', True, 'FAIL'),
+])
+def test_d12_current_native_findings_and_roles_decide_status(tmp_path, monkeypatch, rule, complete, expected):
+    import flow109_admission
+    context = flow109.execution_context(flow109.resolve_plan(profile()), 'D12', 'D12')
+    source = {'input_domains': {'clk': {'role': 'clock', 'clock': 'clk'}}}
+    observed = {'subject': {'graph': 'current'}, 'findings': [] if rule is None else [
+        {'rule': rule, 'severity': 'ERROR'}],
+        'reset_analysis': {'cycle_detection_complete': complete},
+        'population': {'clock_domains': ['clk'], 'crossings': []},
+        'input_domains': source['input_domains']}
+    monkeypatch.setattr(metrics, '_d12_source', lambda *a: (
+        {'status': 'APPROVED'}, {'required_items': []}, source))
+    monkeypatch.setattr(metrics, '_d12_observe', lambda *a: observed)
+    def census(*args):
+        if not complete:
+            raise metrics.MetricRefusal('D12_ROLES_UNPROVEN', 'reset role is unresolved')
+        return [{'kind': 'clock', 'name': 'clk'}]
+    monkeypatch.setattr(metrics, '_d12_census', census)
+    monkeypatch.setattr(flow109_admission, 'require_admission', lambda *a: pytest.fail(
+        'current native observation must not requalify a historical Python executable'))
+    result = metrics.accept_d12(tmp_path, context)
+    assert result['status'] == expected
+    assert result['component_status'] == expected
+    assert result['observed']['findings'] == observed['findings']
