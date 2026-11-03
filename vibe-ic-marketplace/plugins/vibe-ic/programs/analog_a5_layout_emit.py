@@ -4937,12 +4937,16 @@ def layout_tcl(block: str, plan: Plan, out_dir: str) -> str:
     # correction only: the repaired native extraction must still establish
     # whether any physical conductor remains open.  Keep the label path only
     # for a declared-port entry and never promote an undeclared anchor.
+    # An anchor shares its net's declared index. Magic numbers a bare `port make`
+    # itself and then refuses a declared index already taken, which leaves that
+    # pin's label without a port and the abstract without the pin.
+    declared_index = {pin["net"]: pin["index"] for pin in plan.pins}
     for net, x, y in plan.ports:
         if net not in plan.port_nets:
             continue
         L.append(f"box {x} {y} {x} {y}")
         L.append(f"label {net} FreeSans 40 0 0 0 c metal2")
-        L.append("port make")
+        L.append(f"port make {declared_index[net]}" if net in declared_index else "port make")
     # A DECLARED PORT IS A RECTANGLE ON PURE ROUTING METAL (see `_draw_pins`).
     # A point label does not survive the GDS the abstract is written from, and
     # a label on a via is moved by Magic onto the cut layer; both give an

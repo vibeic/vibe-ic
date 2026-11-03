@@ -352,3 +352,15 @@ def test_a_child_with_nothing_unrouted_gets_no_patch(tmp_path, monkeypatch):
     f = rep.get("floating_device_metal") or {}
     assert (f.get("examined"), f.get("below_min_area"), f.get("patches")) \
         == (2, 0, []), f
+
+
+def test_an_anchor_label_takes_its_nets_declared_port_index():
+    from types import SimpleNamespace
+    pin = lambda net, index: {"net": net, "index": index, "layer": "metal4",
+                              "label_box": (0, 0, 10, 10), "use": "signal"}
+    plan = SimpleNamespace(tcl=[], ports=[("vdd", 1, 1), ("vout", 2, 2)],
+                           port_nets={"vdd", "vout", "vss"},
+                           pins=[pin("vdd", 1), pin("vss", 2), pin("vout", 4)])
+    lines = A5E.layout_tcl("b", plan, "/o").splitlines()
+    made = [line for line in lines if line.startswith("port make")]
+    assert made == ["port make 1", "port make 4", "port make 1", "port make 2", "port make 4"]
