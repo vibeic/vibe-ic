@@ -2978,7 +2978,7 @@ def prepare_front_door(args, project: Path) -> int | None:
             raise Flow109Error("FLOW109_ROUTE_CONFLICT", f"manifest endpoint requires {expected}, owner declared {route}")
     import _container_exec
     retained = None if args.flow109_plan_only else _retained_native_result(project, context)
-    retry_native = (context.get('resolved_row', {}).get('id') in ('D53', 'D59')
+    retry_native = (context.get('resolved_row', {}).get('id') in ('D53', 'D55', 'D59')
                     and retained is not None and retained['component_status'] == 'NOT_MEASURED'
                     and _container_exec.no_container_route())
     if retained is not None and not retry_native:

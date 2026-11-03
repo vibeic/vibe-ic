@@ -149,21 +149,26 @@ def test_plan_only_does_not_complete_an_existing_native_report(tmp_path):
     assert not (tmp_path / 'reports/flow109/default_rows/D57.json').exists()
 
 
-@pytest.mark.parametrize('step', ['D53', 'D59'])
+@pytest.mark.parametrize('step', ['D53', 'D55', 'D59'])
 def test_unmeasured_retained_result_still_reaches_its_native_producer(tmp_path, monkeypatch, step):
     import _container_exec
     import librelane_postroute
     import phase3_one_shot_runner
+    import flow109_functional_activity
     args = fixture(tmp_path, step)
     args.top_name, args.pdk = 'neutral', 'neutral'
-    put(tmp_path, 'reports/phase3/gls_corners.json' if step == 'D53'
-        else 'reports/phase3/perc_equivalent.json', {})
+    report = {'D53': 'reports/phase3/gls_corners.json',
+              'D55': 'reports/phase3/functional_activity.json',
+              'D59': 'reports/phase3/perc_equivalent.json'}[step]
+    put(tmp_path, report, {'component_status': 'NOT_MEASURED',
+                          'reason': 'D55_SCENARIO_POPULATION_INCOMPLETE'} if step == 'D55' else {})
     monkeypatch.setattr(_container_exec, 'no_container_route', lambda: True)
     monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(tmp_path))
     def native(*a, **kw):
         raise RuntimeError('native producer reached')
     monkeypatch.setattr(librelane_postroute, 'gate_level_sim', native)
     monkeypatch.setattr(phase3_one_shot_runner, '_cvc_from_native_state', native)
+    monkeypatch.setattr(flow109_functional_activity, '_execute_native_cases', native)
     with pytest.raises(RuntimeError, match='^native producer reached$'):
         flow109.prepare_front_door(args, tmp_path)
 
