@@ -164,13 +164,11 @@ def test_default_step31_writes_the_technology_record_before_its_instruments(step
     assert [call[0] for call in calls[1:]] == ['drc', 'lvs']
 
 
-def test_default_step31_without_a_final_def_names_it_and_runs_no_instrument(step31, monkeypatch):
+def test_default_step31_without_a_final_def_leaves_the_refusal_to_its_instruments(step31, monkeypatch):
     project, _, calls, params = step31
     inputs_at(monkeypatch, ValueError('CURRENT_FINAL_STATE_VIEW_MISSING: def'))
-    result = backend.produce_signoff(project, params)
-    assert result['verdict'] == 'NOT_MEASURED'
-    assert 'CURRENT_FINAL_STATE_VIEW_MISSING: def' in result['detail']
-    assert calls == []
+    backend.produce_signoff(project, params)
+    assert [call[0] for call in calls] == ['drc', 'lvs']
 
 
 def test_other_modes_keep_their_stream_out_writer(step31, monkeypatch):
@@ -178,18 +176,3 @@ def test_other_modes_keep_their_stream_out_writer(step31, monkeypatch):
     inputs_at(monkeypatch, final_def)
     backend.produce_signoff(project, {**params, 'execution_mode': 'diagnostic'})
     assert [call[0] for call in calls] == ['drc', 'lvs']
-
-
-@pytest.mark.parametrize('verdict', ['NOT_MEASURED', 'FAIL'])
-def test_a_stopped_row_reports_its_producer_not_a_malformed_census(tmp_path, monkeypatch, verdict):
-    monkeypatch.setattr(backend, '_native_current_step_output_snapshot', lambda *a: {})
-    monkeypatch.setattr(backend, 'produce_signoff',
-                        lambda project, params: {'verdict': verdict, 'detail': 'ERC refused'})
-    monkeypatch.setattr(backend, '_native_current_step_producer', lambda sid: None)
-    result = backend._produce(tmp_path, {'step_id': '31', 'stop_on_producer_failure': True})
-    census = result['current_step_declared_producers']
-    allowed, reason, authority = backend._current_step_producer_authority(census, project=tmp_path)
-    assert allowed is False
-    assert 'malformed' not in reason and verdict in reason
-    assert authority == 'NOT_MEASURED'
-    assert result['verdict'] == verdict

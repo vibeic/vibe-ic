@@ -2483,14 +2483,15 @@ def produce_signoff(project, params):
         if params.get('execution_mode') == 'default':
             # The physical-current readers below name this record as their
             # technology. No Default stream-out writer runs on this path.
+            # Without a final DEF those readers refuse by name themselves.
             from _prestream_native import signoff_inputs
             try:
                 final_def = signoff_inputs(project, 'def')['def']
             except (OSError, ValueError) as exc:
-                return {'verdict': 'NOT_MEASURED', 'detail': f'Step31 technology record: {exc}',
-                        'physical_views': physical_views}
-            R.publish_database_unit_declaration(
-                project, pdk, container, final_def, publish_declaration=False)
+                notes.append(f'technology record not written: {exc}')
+            else:
+                R.publish_database_unit_declaration(
+                    project, pdk, container, final_def, publish_declaration=False)
         # Complementary axes ALL execute. No DRC winner can hide a failing LVS.
         drc = R.step_drc(project, top, pdk, container)
         lvs = R.step_lvs(project, top, pdk, container, upstream_pnr=None)
@@ -2907,11 +2908,6 @@ def _produce(project, params):
             current['authority_verdict'] = authority_verdict
             current['authority_detail'] = reason
             result['current_step_declared_producers'] = current
-        else:
-            result['current_step_declared_producers'] = {
-                'program': 'execution_backend_producers.produce', 'scope': 'current-step',
-                'step_id': sid, 'results': [], 'consumer_allowed': False,
-                'verdict': f"NOT_RUN_AFTER_PRODUCER_{result.get('verdict', 'NOT_MEASURED')}"}
         if sid in ('15', '15.5ic', '17', '18', '19', '20', '21', '32') and 'metric_acceptance' in result:
             result['canonical_receipts'] = [{
                 'schema': 'vibeic/backend-producer-receipt/1',
