@@ -1008,7 +1008,14 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         ok, stage_why = _stage_layout_subtree(layout, stage, block)
         if not ok:
             return None, stage_why
-        tcl = _mx.build_extraction_tcl(
+        # Extract one physical network; hierarchy can duplicate resistor nets.
+        tcl = "\n".join([
+            f"load {block}",
+            f"cellname rename {block} {block}__a8_hier",
+            "select top cell",
+            f"flatten -dotoplabels {block}",
+            "",
+        ]) + _mx.build_extraction_tcl(
             block, f"{block}_extracted.spice",
             _mx.MagicResimExtractOptions())
         (stage / "a8_extract.tcl").write_text(tcl)
