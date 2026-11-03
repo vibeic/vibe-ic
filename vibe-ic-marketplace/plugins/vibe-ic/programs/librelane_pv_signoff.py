@@ -31,6 +31,7 @@ both DRC engines must be clean, and one clean beside one dirty is recorded as
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -541,6 +542,39 @@ def execute(project: Path, context: dict) -> dict:
                                 if contract.project_path(project, name) == subject]
                     if previous != [digest(subject)]:
                         reusable = False
+            if half == 'drc' and not reusable:
+                from eda_report_audit import _drc_real_violation_count
+                import librelane_fill_dfm as fill
+                reports = {key: project / rel for key, rel in (
+                    ('magic__drc_error__count', 'reports/phase3/drc_signoff_magic.rpt'),
+                    ('klayout__drc_error__count', 'reports/phase3/drc_signoff.rpt'))}
+                log = project / 'reports/phase3/drc_signoff.log'
+                if log.is_file() and all(path.is_file() for path in reports.values()):
+                    texts = {key: path.read_text() for key, path in reports.items()}
+                    hashes = re.findall(r'(?im)^layout sha256:\s*([0-9a-f]{64})\s*$',
+                                        texts['magic__drc_error__count'])
+                    inputs = re.findall(r'(?im)^.*Input file:\s*(.+?)\s*$', log.read_text())
+                    counts = {key: _drc_real_violation_count(text) for key, text in texts.items()}
+                    if (hashes == [digest(gds)] and inputs
+                            and all(contract.project_path(project, path) == gds for path in inputs)
+                            and all(path.stat().st_mtime_ns >= gds.stat().st_mtime_ns
+                                    for path in (*reports.values(), log))
+                            and all(value is not None for value in counts.values())):
+                        density = fill.validate_density_result(project,
+                            _load(project / fill.RECORD_REL)['gds']['librelane'], layout=gds)
+                        metrics = {key: {'value': sum(value),
+                                         'status': 'MEASURED' if sum(value) == 0 else 'FAIL',
+                                         'report': str(reports[key])}
+                                   for key, value in counts.items()}
+                        metrics['klayout__density_error__count'] = density
+                        values = [row['value'] for row in metrics.values()]
+                        status = ('FAIL' if any(type(v) is int and v > 0 for v in values) else
+                                  'PASS' if all(type(v) is int and v == 0 for v in values)
+                                  else NOT_MEASURED)
+                        record = {'verdict': status, 'metrics': metrics,
+                                  'native_reports': [str(path) for path in reports.values()],
+                                  'native_log': str(log), 'scope': {'gds_sha256': digest(gds)}}
+                        reusable = True
             if not reusable:
                 result['native_started'] = True
                 record = run_half(project, image, root, pdk, half, gds=gds,
