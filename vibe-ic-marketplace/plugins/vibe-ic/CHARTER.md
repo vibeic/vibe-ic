@@ -20,8 +20,8 @@ gets a chip through them with the least effort and the shortest path.
 
 Proprietary means: natural-language requirements to L-documents, IC-expert
 knowledge, analog topology and sizing, analog layout generation where no open
-tool covers it, PPA improvement on top of tool results, and running the flow.
-Everything else is the tools' job.
+tool covers it, PPA improvement on top of tool results, running the flow, and AI review of every
+tool result (C9). Everything else is the tools' job.
 
 ## Rules
 
@@ -34,8 +34,8 @@ method. A stricter method needs the owner's approval.
 - PASS: the tool ran and its native report meets the limit.
 - FAIL: its native report violates the limit.
 - NOT_MEASURED: the tool did not run, or left no report.
-Nothing else can change a verdict. If the wrapper disagrees with a native result,
-the wrapper is the bug.
+AI review (C9) can hold a PASS open. Nothing can turn a FAIL into a PASS. If the
+wrapper disagrees with a native result, the wrapper is the bug.
 
 **C3. Glue stays thin.** Glue around a tool runs it, reads its report and compares
 the numbers. It does not rebuild what the tool knows.
@@ -60,6 +60,17 @@ signoff outcome, or it does not run.
 this architecture or edit this charter. If a task seems to need that, stop and ask
 the owner. Reviewers and the gatekeeper refuse a change that breaks a rule here,
 and cite the rule.
+
+**C9. AI is the backup: it runs the flow end to end, watches it, and reviews every
+result.** A tool's result is the first answer, not the last. When a tool finishes, the
+AI reads the native report and asks: did it run on the right design and the right
+limit, do the numbers make physical sense, does a silent report mean a real zero, and
+what did it leave out? A problem it finds gets a bug: an issue or a PR, fixed in our
+local fork of the tool, or in the plugin when the code is ours. The step stays open
+until the fix lands or the reviewer writes down why the problem does not affect the
+chip. Review never moves a limit and never passes what the tool failed. It is a
+reading and a bug report, not a new gate, receipt or lane (C4). These fixes are the
+extra value Vibe-IC adds on top of the tools.
 
 ## Before any change
 
