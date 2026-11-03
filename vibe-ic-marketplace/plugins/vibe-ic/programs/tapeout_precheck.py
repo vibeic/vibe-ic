@@ -1122,6 +1122,70 @@ def _write_non_run_record(out: Path, project: Path, pdk: Optional[str],
                       encoding="utf-8")
 
 
+def execute(project: Path, context: dict) -> dict:
+    """D80 measures the final stream and consumes completed native signoff."""
+    import tapeout_declaration_gen as declaration_gen
+    project = Path(project).resolve()
+    measured = declaration_gen.measure_final(project)
+    checks = [{"check": "final_gds_measurement", "status": measured["verdict"],
+               "report": declaration_gen.FINAL_REL}]
+    doc = measured.get("declared_contract") or {}
+    geometry = measured.get("measurement")
+    if geometry is not None:
+        geometry = {**geometry, "dbu_um": geometry["database_unit_um"],
+                    "top_cells": [geometry["top_cell"]], "bbox_complete": True}
+        expected, _ = _ours._chosen_floorplan_expectations(project)
+        for name in ("database_unit", "top_cell", "die_origin_and_size"):
+            evidence = _ours.StepEvidence(name, name, 0, "KLayout", "NOT_DETERMINED", "original contract")
+            if name == "database_unit":
+                _ours._step_database_unit(evidence, geometry, _decl.answer(doc, "database_unit_um"))
+            elif name == "top_cell":
+                _ours._step_top_level(evidence, geometry, _decl.answer(doc, "top_cell"),
+                                     _ours._recorded_physical_top(project), chosen_top=expected.get("top_cell"))
+            else:
+                _ours._step_size(evidence, geometry, _decl.answer(doc, "deliverable"),
+                                 _decl.answer(doc, "die_origin_um"), _decl.answer(doc, "die_area_um"),
+                                 _decl.answer(doc, "macro_origin_um"), _decl.answer(doc, "macro_area_um"),
+                                 chosen_origin=expected.get("die_origin_um"), chosen_area=expected.get("die_area_um"))
+            checks.append({"check": name, "status": evidence.verdict, "detail": evidence.as_dict()})
+    for step, label in (("D65", "final_physical_verification"),
+                        ("D75", "package_test_readiness")):
+        path = project / "reports/flow109/components" / f"{step}.json"
+        try:
+            result = json.loads(path.read_text())
+            status = result.get("default_row_status", result.get("component_status", "NOT_MEASURED"))
+        except (OSError, ValueError, TypeError):
+            status = "NOT_MEASURED"
+        checks.append({"check": label, "status": status,
+                       "report": str(path.relative_to(project))})
+    route, evidence = delivery_route(project)
+    operator = doc.get("operator_template") or {}
+    independent = (not template_was_fetched(project)
+                   and not (project / "input/submission_template/provider_target.json").exists()
+                   and _decl.answer(doc, "deliverable") == _decl.DELIVERABLE_DIE
+                   and isinstance(operator.get("absent_reason"), str)
+                   and bool(operator["absent_reason"].strip()))
+    if not independent:
+        operator = evaluate(project)
+        checks.append({"check": "operator_precheck", "status": operator.verdict,
+                       "detail": operator.as_dict()})
+    else:
+        checks.append({"check": "operator_precheck", "status": "NOT_APPLICABLE",
+                       "contract": operator["absent_reason"], "route": route})
+    statuses = [row["status"] for row in checks]
+    status = ("FAIL" if "FAIL" in statuses else "PASS"
+              if all(value in ("PASS", "NOT_APPLICABLE") for value in statuses) else "NOT_MEASURED")
+    result = {"program": "tapeout_precheck", "step_id": "D80",
+              "context_sha256": context.get("context_sha256"),
+              "verdict": status, "component_status": status,
+              "default_row_status": status, "completed": status == "PASS",
+              "checks": checks, "final_declaration": declaration_gen.FINAL_REL}
+    output = project / MERGED_ARTEFACT
+    output.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(output, json.dumps(result, indent=2) + "\n")
+    return result
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description="Step 37.5ic's gate: OUR general tape-out ladder on every "

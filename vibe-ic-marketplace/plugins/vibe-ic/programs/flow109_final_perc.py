@@ -21,7 +21,7 @@ import phase3_one_shot_runner as phase3_runner
 SCHEMA = "vibeic.flow109.final-perc.v1"
 INPUT = "input/flow109/D66.json"
 OUTPUTS = ("reports/phase3/perc_equivalent.json", "reports/phase3/perc_equivalent.rpt",
-           "reports/phase3/PERC_SIGNOFF_MEMO.md", "reports/phase2/gates/perc_signoff.json")
+           "reports/phase3/PERC_SIGNOFF_MEMO.md")
 REQUIRED_MANUAL = {"ESD protection presence", "io_supply_pad_sufficiency",
                    "Latch-up / well-tap (spacing + device-physics)"}
 
@@ -88,7 +88,7 @@ def execute(project, context):
             perc_summary=summary, reason="D66_NATIVE_CVC_" + status,
             manual_review_pending=sorted(REQUIRED_MANUAL),
             final_subjects={"netlist": str(netlist), "extracted_netlist": str(extracted)},
-            outputs=[_record(project, project / rel) for rel in OUTPUTS[:3]])
+            outputs=[_record(project, project / rel) for rel in OUTPUTS])
     except Exception as exc:
         result.update(reason="D66_NATIVE_CVC_UNAVAILABLE", detail=f"{type(exc).__name__}: {exc}")
     path = project / "reports/flow109/components/D66.json"

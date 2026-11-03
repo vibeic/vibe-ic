@@ -26,6 +26,7 @@ unavailable. A skeleton-emission exit is not a foundry acceptance verdict.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -43,6 +44,55 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 import _gds_admission as _ga  # noqa: E402
 import ate_pattern_gen as _ate  # noqa: E402  (U18: our own open item)
+
+RELEASE_APPROVAL_REL = "input/release_approval.json"
+
+
+def read_release_approval(project: Path, gds: Path) -> dict:
+    """Read D81's one accountable approval input for the actual released GDS.
+
+    JSON object: approved (boolean true), approved_by (nonempty string),
+    gds (project-relative file path), gds_sha256 (the GDS's SHA-256 hex string).
+    The accountable release owner supplies this input; the plugin never signs.
+    """
+    project, gds = Path(project).resolve(), Path(gds).resolve()
+    approval = json.loads((project / RELEASE_APPROVAL_REL).read_text())
+    if not isinstance(approval, dict):
+        raise ValueError("release approval must be a JSON object")
+    if approval.get("approved") is not True:
+        raise ValueError("accountable release owner has not approved this release")
+    if not isinstance(approval.get("approved_by"), str) or not approval["approved_by"].strip():
+        raise ValueError("release approval requires approved_by")
+    selected = Path(approval.get("gds", ""))
+    if selected.is_absolute() or ".." in selected.parts or project / selected != gds:
+        raise ValueError("release approval does not name the final project GDS")
+    if approval.get("gds_sha256") != hashlib.sha256(gds.read_bytes()).hexdigest():
+        raise ValueError("release approval does not approve the final GDS bytes")
+    return approval
+
+
+def execute(project: Path, context: dict) -> dict:
+    """D81's release entry. Its approval and invocation belong to the owner."""
+    from tapeout_declaration_gen import final_gds
+    project = Path(project).resolve()
+    result = {"step_id": "D81", "context_sha256": context.get("context_sha256"),
+              "program": "foundry_handoff_pack_gen", "approval_input": RELEASE_APPROVAL_REL}
+    try:
+        result["approval"] = read_release_approval(project, final_gds(project))
+        rc = main([str(project)])
+        if rc == 0:
+            import tapeout_checklist_gen as checklist
+            rc = checklist.main([str(project)])
+        if rc == 0:
+            rc = _fhpc.main([str(project)])
+        status = "PASS" if rc == 0 else "FAIL" if rc == 1 else "NOT_MEASURED"
+        result["exit_code"] = rc
+    except FileNotFoundError as exc:
+        status, result["reason"] = "NOT_MEASURED", str(exc)
+    except (OSError, ValueError, TypeError) as exc:
+        status, result["reason"] = "FAIL", str(exc)
+    return {**result, "component_status": status, "default_row_status": status,
+            "completed": status == "PASS"}
 
 
 def _read_text(p: Path) -> str:

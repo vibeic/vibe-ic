@@ -176,6 +176,22 @@ def _drc_for_tool(project: Path, tool: str) -> Cell:
     state. Two audits attributed to the same tool is a contradiction this
     program reports rather than resolves by picking.
     """
+    if tool == "openroad":
+        owner = _json(project, "reports/phase3/librelane_floorplan_handoff.json")
+        if owner is not None:
+            import librelane_contract as contract
+            import librelane_import as native
+            try:
+                root = contract.project_path(project, owner["state"]).parent.parent
+                routes = [row for row in native.run_index(root) if row.step == "OpenROAD.DetailedRouting"]
+                state_path = routes[-1].folder / "state_out.json"
+                count = json.loads(state_path.read_text())["metrics"].get("route__drc_errors")
+                if type(count) is int and count >= 0:
+                    return Cell(count, str(state_path.relative_to(project)),
+                                basis="OpenROAD.DetailedRouting final native DRC count from this run")
+                return unmeasured("native detailed route has no final DRC count", str(state_path.relative_to(project)))
+            except (OSError, ValueError, KeyError, IndexError, contract.Refusal) as exc:
+                return unmeasured(f"native detailed route DRC unavailable: {exc}")
     hits = []
     for rel in _DRC_AUDITS:
         d = _json(project, rel)
@@ -423,6 +439,14 @@ def _slack(project: Path, field: str) -> Cell:
     the number from the raw report instead would make this program a second
     corner-selection policy, and two policies is how one stops being enforced.
     """
+    rel = "reports/flow109/components/D70.json"
+    final = _json(project, rel)
+    if final is not None:
+        key = field.replace("_worst_slack_ns", "_ws")
+        values = [row.get(key) for row in (final.get("corners") or {}).values()]
+        if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
+            return unmeasured(f"{rel}: incomplete final electrical {key}", rel)
+        return Cell(min(values), rel, basis=f"minimum native {key} across final electrical scenes")
     rel = "reports/phase3/sta/post_route_signoff_corner.json"
     d = _json(project, rel)
     if not d:
@@ -474,6 +498,13 @@ def _tns(project: Path, want: str) -> Cell:
     the run states which report its verdict came from, and a second, differently
     named report on the same tree is a different corner.
     """
+    rel = "reports/flow109/components/D70.json"
+    final = _json(project, rel)
+    if final is not None:
+        values = [row.get(f"{want}_tns") for row in (final.get("corners") or {}).values()]
+        if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
+            return unmeasured(f"{rel}: incomplete final electrical {want} TNS", rel)
+        return Cell(min(values), rel, basis=f"minimum native {want} TNS across final electrical scenes")
     rec_rel = "reports/phase3/sta/post_route_signoff_corner.json"
     rec = _json(project, rec_rel)
     cited = (rec or {}).get("report") or ""
@@ -571,6 +602,14 @@ def _drv(project: Path, check: str) -> Cell:
     is what every already-published run carries, with the basis SAYING that the
     figure is not per-check.
     """
+    rel = "reports/flow109/components/D70.json"
+    final = _json(project, rel)
+    if final is not None:
+        key = check.replace("max_capacitance", "max_cap") + "_vio"
+        values = [row.get(key) for row in (final.get("corners") or {}).values()]
+        if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
+            return unmeasured(f"{rel}: incomplete final electrical {key}", rel)
+        return Cell(max(values), rel, basis=f"worst native {key} across final electrical scenes")
     rel = "reports/phase3/sta_spef_based.rpt"
     text = _text(project, rel)
     if text is None:
@@ -721,6 +760,14 @@ def _xor(project: Path) -> Cell:
     an unfaithful reference, a changed artefact, no runner), and absence. A
     refusal is NOT a zero, and that distinction is the whole value of the key.
     """
+    rel = "reports/phase3/librelane_finishing_xor.json"
+    native = _json(project, rel)
+    if native is not None:
+        row = (native.get("metrics") or {}).get("vibeic__finishing_xor__defect__count") or {}
+        count = row.get("value")
+        if type(count) in (int, float) and math.isfinite(count):
+            return Cell(count, rel, basis="native finishing XOR defect count")
+        return unmeasured(f"{rel}: native finishing XOR did not report a numeric defect count", rel)
     rec = _json(project, _XOR_REL)
     if not isinstance(rec, dict):
         return unmeasured(
@@ -769,6 +816,17 @@ def _ir_worst_drop_v(project: Path) -> Cell:
     documents that a PSM supply voltage of ZERO means PSM found no source on
     the net, and a drop derived from it is not a statement about the design.
     """
+    rel = "reports/flow109/components/D70.json"
+    final = _json(project, rel)
+    if final is not None:
+        scenes = (final.get("ir_em") or {}).get("corners") or {}
+        nets = [net for scene in scenes.values()
+                for net in (scene.get("nets") or {}).values()]
+        drops = [net.get("drop_v") for net in nets]
+        if not scenes or any(not scene.get("nets") for scene in scenes.values()) or not drops or any(not isinstance(v, (int, float)) or isinstance(v, bool)
+                            or not math.isfinite(v) for v in drops):
+            return unmeasured(f"{rel}: final electrical analysis has no complete IR result", rel)
+        return Cell(max(drops), rel, basis="worst native static IR drop across final electrical scenes and supply nets, in volts")
     rel = "reports/phase3/ir_drop.json"
     doc = _json(project, rel)
     if not isinstance(doc, dict):
@@ -795,6 +853,24 @@ def _em(project: Path, what: str) -> Cell:
     is the worst current density AS A FRACTION of Jmax, which is what a
     "worst ratio" is. A SKIPPED screen is NOT a zero.
     """
+    rel = "reports/flow109/components/D70.json"
+    final = _json(project, rel)
+    if final is not None:
+        scenes = (final.get("ir_em") or {}).get("corners") or {}
+        populations = [list((scene.get("nets") or {}).values())
+                       for scene in scenes.values()]
+        key = "em_violations" if what == "violations" else "em_utilization_pct"
+        values = [[net.get(key) for net in nets] for nets in populations]
+        if (not values or any(not row for row in values)
+                or any(not isinstance(v, (int, float)) or isinstance(v, bool)
+                       or not math.isfinite(v) for row in values for v in row)
+                or any(net.get("em_no_limit", 0) for nets in populations for net in nets)):
+            return unmeasured(f"{rel}: final electrical analysis has no complete power-grid EM result", rel)
+        if what == "violations":
+            return Cell(max(sum(row) for row in values), rel,
+                        basis="worst final electrical scene's native count of power-grid segments over PDK Jmax")
+        return Cell(max(v for row in values for v in row) / 100, rel,
+                    basis="worst final electrical native power-grid utilization, as a fraction of PDK Jmax")
     rel = "reports/phase3/em_current_authority.json"
     doc = _json(project, rel)
     if not isinstance(doc, dict):
@@ -1034,6 +1110,25 @@ def _librelane_state_cell(project: Path, key: str) -> Optional[Cell]:
     sha256, and from nothing else. None: the step is not on LibreLane in this
     run, so the direct rule below answers.
     """
+    rel = "reports/flow109/components/D65.json"
+    physical = _json(project, rel)
+    if physical is not None and key in (physical.get("metrics") or {}):
+        value = physical["metrics"][key]
+        if type(value) in (int, float) and math.isfinite(value):
+            return Cell(value, rel, basis="final native physical verification result")
+        return unmeasured(f"{rel}: native {key} was not measured", rel)
+    if key == "klayout__density_error__count":
+        import librelane_fill_dfm as fill
+        density = fill.tool_density(project)
+        if density is not None:
+            if density.get("status") == "MEASURED":
+                return Cell(density["errors"], fill.RECORD_REL, basis="native final density defect count")
+            return unmeasured(density.get("reason") or "native final density is unmeasured", fill.RECORD_REL)
+    if key == "antenna__violation__count" and (project / "reports/phase3/antenna.json").is_file():
+        return None
+    if ((project / "reports/flow109/components/D70.json").is_file()
+            and key.startswith(("timing__", "power__ir__", "reliability__em__", "design__max_"))):
+        return None
     import librelane_pv_signoff as _pv
     row = _pv.state_metric(project, key, current=True)
     if row is None:
@@ -1081,6 +1176,27 @@ def aggregate(project: Path) -> tuple[dict, dict]:
         "rows": rows,
     }
     return metrics, report
+
+
+def execute(project: Path, context: dict) -> dict:
+    """D77 writes its aggregate from the native producers' own results."""
+    project = Path(project).resolve()
+    metrics, report = aggregate(project)
+    out = _pl.phase3_final_dir(project) / "metrics.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    _atomic.write_json(out, metrics, indent=2, sort_keys=True)
+    (project / REPORT_REL).parent.mkdir(parents=True, exist_ok=True)
+    _atomic.write_json(project / REPORT_REL, report, indent=2)
+    sources = [_json(project, "reports/flow109/components/D65.json"),
+               _json(project, "reports/flow109/components/D70.json")]
+    statuses = [source.get("component_status") for source in sources if source is not None]
+    status = ("FAIL" if "FAIL" in statuses else "PASS"
+              if report["not_measured"] == 0 and all(s == "PASS" for s in statuses) else "NOT_MEASURED")
+    return {"step_id": "D77", "context_sha256": context.get("context_sha256"),
+            "component_status": status, "default_row_status": status,
+            "completed": status == "PASS", "program": "signoff_metrics_aggregate",
+            "report": REPORT_REL, "measured": report["measured"],
+            "not_measured": report["not_measured"], "metrics": metrics}
 
 
 def main(argv=None) -> int:

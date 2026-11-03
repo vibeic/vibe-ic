@@ -134,6 +134,53 @@ def _write(p: Path, obj):
                  encoding="utf-8")
 
 
+def test_final_electrical_own_output_supplies_ir_and_power_grid_em(tmp_path):
+    path = tmp_path / 'reports/flow109/components/D70.json'
+    _write(path, {'producer': 'flow109_final_electrical', 'ir_em': {'corners': {
+        'slow_rc': {'nets': {
+            'analog_supply': {'drop_v': .04, 'em_utilization_pct': 81., 'em_violations': 0},
+            'return': {'drop_v': .03, 'em_utilization_pct': 73., 'em_violations': 0}}},
+        'fast_rc': {'nets': {
+            'analog_supply': {'drop_v': .02, 'em_utilization_pct': 109., 'em_violations': 2},
+            'return': {'drop_v': .01, 'em_utilization_pct': 91., 'em_violations': 1}}}}}})
+    assert AGG._ir_worst_drop_v(tmp_path).value == .04
+    assert AGG._em(tmp_path, 'worst_ratio').value == 1.09
+    assert AGG._em(tmp_path, 'violations').value == 3
+    assert AGG._em(tmp_path, 'violations').source == str(path.relative_to(tmp_path))
+
+
+def test_incomplete_final_electrical_result_does_not_use_earlier_nominal_ir(tmp_path):
+    _write(tmp_path / 'reports/flow109/components/D70.json', {'ir_em': {'corners': {}}})
+    _write(tmp_path / 'reports/phase3/ir_drop.json', {'worst_ir_uv': 1, 'supply_measured': True})
+    assert not AGG._ir_worst_drop_v(tmp_path).measured
+    assert not AGG._em(tmp_path, 'violations').measured
+
+
+def test_final_electrical_timing_and_native_physical_counts_are_preserved(tmp_path):
+    _write(tmp_path / 'reports/flow109/components/D70.json', {'corners': {
+        'one': {'setup_ws': 2., 'hold_ws': .3, 'setup_tns': 0, 'hold_tns': 0, 'max_slew_vio': 0},
+        'two': {'setup_ws': -1., 'hold_ws': .4, 'setup_tns': -5, 'hold_tns': -.2, 'max_slew_vio': 3}}})
+    _write(tmp_path / 'reports/flow109/components/D65.json', {'metrics': {'magic__drc_error__count': 7}})
+    assert AGG._slack(tmp_path, 'setup_worst_slack_ns').value == -1
+    assert AGG._tns(tmp_path, 'setup').value == -5
+    assert AGG._tns(tmp_path, 'hold').value == -.2
+    assert AGG._drv(tmp_path, 'max_slew').value == 3
+    assert AGG._librelane_state_cell(tmp_path, 'magic__drc_error__count').value == 7
+
+
+def test_router_count_comes_from_the_run_named_by_its_own_handoff(tmp_path):
+    run = tmp_path / 'phase3/librelane/native-run'
+    route = run / '27-openroad-detailedrouting'
+    _write(route / 'config.json', {'meta': {'step': 'OpenROAD.DetailedRouting'}})
+    _write(route / 'state_out.json', {'metrics': {'route__drc_errors': 4}})
+    _write(run / 'flow.log', f"Running 'OpenROAD.DetailedRouting' at '{route}'…\n")
+    _write(tmp_path / 'reports/phase3/librelane_floorplan_handoff.json',
+           {'state': str(run / '03-openroad-floorplan/state_out.json')})
+    measured = AGG._drc_for_tool(tmp_path, 'openroad')
+    assert measured.value == 4
+    assert measured.source == str((route / 'state_out.json').relative_to(tmp_path))
+
+
 @pytest.fixture()
 def project(tmp_path: Path) -> Path:
     """A tree carrying one report of every kind the rules read.

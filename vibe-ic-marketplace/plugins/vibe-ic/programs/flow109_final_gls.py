@@ -201,12 +201,7 @@ def prepare(project, context):
         'sdf_census': {c: _sdf_census(p, top) for c, p in sdfs.items()},
         'requirements': {'required_corners': list(corners), 'required_scenarios': [c['id'] for c in cases]},
         'cases': cases, 'models': models, 'model_closure': closure,
-        'sources': operation_sources(), 'inputs': {},
-        'd44_baseline': None, 'd70_receipt': None, 'd69_receipt': None}
-
-
-def _before(project, context, prepared):
-    """The native runner consumes the prepared files directly."""
+        'sources': operation_sources(), 'inputs': {}}
 
 
 def engineering_transcript_readback(step_dir, judged):
@@ -277,8 +272,7 @@ def _publish(project, prepared, judged, attempt):
                       value.get('delays_applied', 0) > 0 for value in judged['corners'].values())}
     doc = {'schema': SCHEMA, 'program': 'flow109_final_gls', 'step_id': 'D71',
            'verdict': judged.get('verdict'), 'annotation_population': population,
-           'final_sdfs': copied, 'd44_baseline': prepared['d44_baseline'],
-           'd70_receipt': prepared['d70_receipt'], 'd69_receipt': prepared['d69_receipt'],
+           'final_sdfs': copied,
            'native_step': _record(project, attempt / 'native/gls_runs.json'),
            'limitations': LIMITATIONS, 'judge': judged,
            'execution_scope': ENGINEERING_SCOPE if prepared.get('engineering') else 'final_gls_component',
@@ -389,7 +383,6 @@ def execute(project, context):
                     'model_closure': prepared['model_closure']}
         manifest_path = manifest_dir / 'gls_manifest.json'
         write_json(manifest_path, manifest)
-        _before(project, context, prepared)
         record['native_started'] = True
         sys.path.insert(0, str(HERE / 'librelane_plugins'))
         from librelane.state import DesignFormat
@@ -407,10 +400,8 @@ def execute(project, context):
                                        'VIBEIC_GLS_TIMEOUT_S': 900},
                                step_dir=str(attempt / 'native'), _run=GateLevelSim._run)
         (attempt / 'native').mkdir()
-        _before(project, context, prepared)
         workers = prepared['manifest'].get('case_workers', 1)
         run_native_cases(step, state, manifest, workers=workers)
-        _before(project, context, prepared)
         judged = sgs.judge_tool_arm(attempt / 'native', manifest)
         judged = engineering_transcript_readback(attempt / 'native', judged)
         if any(row.get('sdf_errors', 0) for row in judged.get('corners', {}).values()):

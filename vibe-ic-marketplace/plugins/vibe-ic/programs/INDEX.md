@@ -537,7 +537,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_netlist_cdc` | any | — | D45 adopted-netlist CDC/RDC adapter over the existing native consumers. |
 | `flow109_package_electrical` | any | — | D67: BLOCKING checks of owner-provided, bounded passive package RLC models. |
 | `flow109_package_plan` | any | — | D06 Default adapter for the existing pad/package-interface producers. |
-| `flow109_package_ready` | any | — | Flow109 D75 Default package/test interface component. |
+| `flow109_package_ready` | any | — | D75 consumes the run's pad, package, CVC and test interface results. |
 | `flow109_route_check` | any | — | D42 Default routed-candidate checks on the adopted D41 database. |
 | `flow109_scan_physical` | any | — | D36 BLOCKING native leaf for the existing Phase-3 physical owner. |
 | `flow109_system_security` | any | — | D16/D17/D73 readers for existing full-stack and formal producers. |
@@ -996,7 +996,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3.... |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity checks in any module that dispatches on a received command. |
 | `pad_assignment_gen` | any | — | the AUTHOR of `phase3/stage3/pnr/pad_assignment.json`. |
-| `pad_bterm_coincidence_check` | any | — | is a chip-top port's BTerm ACTUALLY on its pad's bond terminal? Measured per net, never declared for a class of nets. |
+| `pad_bterm_coincidence_check` | any | — | is a chip-top signal BTerm ACTUALLY on its pad's bond terminal? Measured per net, never declared for a class of nets. |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
 | `pad_input_drive_check` | any | — | Step 23: the sign-off deck of a DIE top carries a resolved off-chip input drive. |
 | `pad_ring_check` | any | — | step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe... |
@@ -1436,7 +1436,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tap_row_coverage_check` | any | — | does every active cell have a well tie in ITS OWN WELL ISLAND within the distance the PDK's DRC deck requires? Judged on the TOOL's DEF. |
 | `tapeout_checklist_gen` | any | — | emit Step 36 (v2.3) reports/audit/tapeout_checklist.json. |
 | `tapeout_declaration_check` | any | — | judge the declaration step 0.5ic wrote. |
-| `tapeout_declaration_gen` | any | — | write the physical and implementation contract. |
+| `tapeout_declaration_gen` | any | — | Write the initial tapeout contract or measure the final GDS with KLayout. |
 | `tapeout_docs_gen` | any | — | emit the release documents for a tape-out candidate. |
 | `tapeout_precheck` | any | — | step 37.5ic's ONE gate over TWO independent arms. |
 | `tapeout_readiness_check` | any | — | the EXTERNAL refusal interface, pointed at a shuttle that still exists. |
@@ -2105,7 +2105,7 @@ _(no programs in this group)_
 - `flow109_netlist_cdc` — D45 adopted-netlist CDC/RDC adapter over the existing native consumers.
 - `flow109_package_electrical` — D67: BLOCKING checks of owner-provided, bounded passive package RLC models.
 - `flow109_package_plan` — D06 Default adapter for the existing pad/package-interface producers.
-- `flow109_package_ready` — Flow109 D75 Default package/test interface component.
+- `flow109_package_ready` — D75 consumes the run's pad, package, CVC and test interface results.
 - `flow109_route_check` — D42 Default routed-candidate checks on the adopted D41 database.
 - `flow109_scan_physical` — D36 BLOCKING native leaf for the existing Phase-3 physical owner.
 - `flow109_system_security` — D16/D17/D73 readers for existing full-stack and formal producers.
@@ -2563,7 +2563,7 @@ _(no programs in this group)_
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3....  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity checks in any module that dispatches on a received command.
 - `pad_assignment_gen` — the AUTHOR of `phase3/stage3/pnr/pad_assignment.json`.
-- `pad_bterm_coincidence_check` — is a chip-top port's BTerm ACTUALLY on its pad's bond terminal? Measured per net, never declared for a class of nets.
+- `pad_bterm_coincidence_check` — is a chip-top signal BTerm ACTUALLY on its pad's bond terminal? Measured per net, never declared for a class of nets.
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
 - `pad_input_drive_check` — Step 23: the sign-off deck of a DIE top carries a resolved off-chip input drive.
 - `pad_ring_check` — step 15.5ic's gate: the pad ring is re-measured from the artefacts, the ring is checked for ABUTMENT, and a skip must name what it skippe...
@@ -3001,7 +3001,7 @@ _(no programs in this group)_
 - `tap_row_coverage_check` — does every active cell have a well tie in ITS OWN WELL ISLAND within the distance the PDK's DRC deck requires? Judged on the TOOL's DEF.
 - `tapeout_checklist_gen` — emit Step 36 (v2.3) reports/audit/tapeout_checklist.json.
 - `tapeout_declaration_check` — judge the declaration step 0.5ic wrote.
-- `tapeout_declaration_gen` — write the physical and implementation contract.
+- `tapeout_declaration_gen` — Write the initial tapeout contract or measure the final GDS with KLayout.
 - `tapeout_docs_gen` — emit the release documents for a tape-out candidate.
 - `tapeout_precheck` — step 37.5ic's ONE gate over TWO independent arms.
 - `tapeout_readiness_check` — the EXTERNAL refusal interface, pointed at a shuttle that still exists.

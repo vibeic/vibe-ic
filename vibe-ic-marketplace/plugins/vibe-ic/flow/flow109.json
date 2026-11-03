@@ -18377,17 +18377,13 @@
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_backend_window",
-            "native_step_id": "37.4",
-            "producer": "execution_backend_producers.py:produce",
-            "producer_sites": [
-              "phase3_one_shot_runner.py:step_signoff_metrics_aggregate",
-              "signoff_metrics_aggregate.py:main"
-            ],
+            "kind": "native_adapter",
+            "native_step_id": "flow109.D77",
+            "producer": "signoff_metrics_aggregate.py:execute",
             "engine_families": [
               "python3"
             ],
-            "consumer": "execution_backend_gates.py:evaluate",
+            "consumer": "signoff_metrics_aggregate.py:execute native result",
             "native_required_outputs": [
               "phase3/final/metrics.json",
               "reports/phase3/signoff_metrics_aggregate.json"
@@ -18401,7 +18397,9 @@
               "python3": [
                 "signoff_metrics_aggregate"
               ]
-            }
+            },
+            "adapter": "signoff_metrics_aggregate",
+            "admission_policy": "source_owned_existing_native"
           }
         }
       ],
@@ -18499,22 +18497,17 @@
           "provider": "vibeic",
           "tools": "Python compliance/adopted-evidence checker",
           "native_steps": [
-            "flow_compliance_check",
-            "tapeout_signoff_check"
+            "final_adoption"
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_backend_window",
-            "native_step_id": "36",
-            "producer": "execution_backend_producers.py:produce",
-            "producer_sites": [
-              "phase3_one_shot_runner.py:_default_checklist_layout_receipts",
-              "flow_compliance_check.py:check_step"
-            ],
+            "kind": "native_adapter",
+            "native_step_id": "flow109.D78",
+            "producer": "execution_release_worker.py:execute",
             "engine_families": [
               "python3"
             ],
-            "consumer": "execution_backend_gates.py:evaluate",
+            "consumer": "execution_release_worker.py:execute native result",
             "native_required_outputs": [
               "reports/phase3/gates/stage3_compliance.json",
               "reports/phase3/layout_receipts.json"
@@ -18526,10 +18519,11 @@
             },
             "engine_steps": {
               "python3": [
-                "flow_compliance_check",
-                "tapeout_signoff_check"
+                "final_adoption"
               ]
-            }
+            },
+            "adapter": "execution_release_worker",
+            "admission_policy": "source_owned_existing_native"
           }
         }
       ],
@@ -18811,22 +18805,18 @@
           "tools": "wafer.space/provider precheck + Python design precheck",
           "native_steps": [
             "tapeout_precheck",
-            "ic_release_docs_gen"
+            "KLayout.ReadLayout"
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_backend_window",
-            "native_step_id": "37.5ic",
-            "producer": "execution_backend_producers.py:produce",
-            "producer_sites": [
-              "phase3_one_shot_runner.py:_default_ic_release_docs",
-              "phase3_one_shot_runner.py:step_ic_release_docs_gen",
-              "tapeout_precheck.py:main"
-            ],
+            "kind": "native_adapter",
+            "native_step_id": "flow109.D80",
+            "producer": "tapeout_precheck.py:execute",
             "engine_families": [
-              "python3"
+              "python3",
+              "klayout"
             ],
-            "consumer": "execution_backend_gates.py:evaluate",
+            "consumer": "tapeout_precheck.py:execute native result",
             "native_required_outputs": [
               "reports/phase3/tapeout_precheck.json",
               "reports/phase3/general_precheck.json",
@@ -18841,14 +18831,19 @@
             "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED",
             "engine_executables": {
-              "python3": "python3"
+              "python3": "python3",
+              "klayout": "klayout"
             },
             "engine_steps": {
               "python3": [
-                "tapeout_precheck",
-                "ic_release_docs_gen"
+                "tapeout_precheck"
+              ],
+              "klayout": [
+                "KLayout.ReadLayout"
               ]
-            }
+            },
+            "adapter": "tapeout_precheck",
+            "admission_policy": "source_owned_existing_native"
           }
         }
       ],
@@ -18965,17 +18960,13 @@
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_backend_window",
-            "native_step_id": "38",
-            "producer": "execution_backend_producers.py:produce",
-            "producer_sites": [
-              "phase3_one_shot_runner.py:_default_final_handoff",
-              "phase3_one_shot_runner.py:run_pre_audit_producers"
-            ],
+            "kind": "native_adapter",
+            "native_step_id": "flow109.D81",
+            "producer": "foundry_handoff_pack_gen.py:execute",
             "engine_families": [
               "python3"
             ],
-            "consumer": "execution_backend_gates.py:evaluate",
+            "consumer": "foundry_handoff_pack_gen.py:execute native result",
             "native_required_outputs": [
               "reports/audit/tapeout_checklist.json",
               "phase3/stage4/foundry_handoff/release_manifest.json",
@@ -18994,7 +18985,9 @@
                 "foundry_handoff_pack_gen",
                 "tapeout_checklist_gen"
               ]
-            }
+            },
+            "adapter": "foundry_handoff_pack_gen",
+            "admission_policy": "source_owned_existing_native"
           }
         }
       ],

@@ -191,24 +191,63 @@ def _def(orient, pin_rect):
             f"END DESIGN\n")
 
 
-def _shared_supply(tmp_path, section, connection, port_x, use='POWER', ambiguous=False,
-                   multiple_pins=False):
-    """Two supply pads share a rail; only geometry identifies the BTerm's pad."""
-    lef = tmp_path / "rail.lef"
-    lef.write_text(_io_macro("rail_bridge", 60.0, 100.0,
-                            [("RAIL", [("Metal5", (1, 1, 3, 3))])])
-                   .replace("CLASS PAD INOUT", "CLASS PAD POWER")
-                   .replace("USE SIGNAL", "USE " + use)
-                   .replace('RECT 1.000 1.000 3.000 3.000 ;',
-                            'RECT 1.000 1.000 3.000 3.000 ;\n RECT 4 4 6 6 ;'
-                            if ambiguous else 'RECT 1.000 1.000 3.000 3.000 ;'))
-    if multiple_pins:
-        lef.write_text(lef.read_text().replace(
-            'END rail_bridge',
-            'PIN SECOND\n DIRECTION INOUT ;\n USE ' + use + ' ;\n'
-            ' PORT\n LAYER Metal5 ;\n RECT 10 10 12 12 ;\n END\n'
-            'END SECOND\nEND rail_bridge'))
-        connection += ' ( * SECOND )'
+def _signal_with_supply(tmp_path, pin_use, net_use, signal_rect):
+    lef = tmp_path / 'io.lef'
+    lef.write_text(_io_macro('tl__bi', 60, 100,
+                            [('PAD', [('Metal5', (1, 1, 3, 3))])])
+                   + _io_macro('rail_bridge', 60, 100,
+                               [('RAIL', [('Metal5', (1, 1, 3, 3))])])
+                     .replace('CLASS PAD INOUT', 'CLASS PAD POWER')
+                     .replace('USE SIGNAL', 'USE ' + (pin_use or net_use)))
+    text = _def('N', signal_rect)
+    text = text.replace('COMPONENTS 1 ;', 'COMPONENTS 2 ;').replace(
+        'END COMPONENTS', '- power_pad rail_bridge + FIXED ( 120000 20000 ) N ;\nEND COMPONENTS')
+    use = f'+ USE {pin_use}' if pin_use else ''
+    text = text.replace('PINS 1 ;', 'PINS 2 ;').replace(
+        'END PINS', f'- supply_port + NET analog_rail {use}\n'
+        ' + LAYER Metal4 ( 0 0 ) ( 2000 2000 ) + FIXED ( 300000 300000 ) N ;\nEND PINS')
+    use = f'+ USE {net_use}' if net_use else ''
+    text = text.replace('END DESIGN', 'SPECIALNETS 1 ;\n'
+        f'- analog_rail ( PIN supply_port ) ( power_pad RAIL ) {use} ;\n'
+        'END SPECIALNETS\nEND DESIGN')
+    return C.run(text, _M5_TECH, [lef])
+
+
+@pytest.mark.parametrize('pin_use,net_use,source', [
+    ('POWER', None, 'DEF PINS USE'), ('GROUND', None, 'DEF PINS USE'),
+    (None, 'POWER', 'DEF net USE'), (None, 'GROUND', 'DEF net USE')])
+def test_routed_supply_strap_is_outside_signal_coincidence(tmp_path, pin_use, net_use, source):
+    rc, report = _signal_with_supply(tmp_path, pin_use, net_use, (2000, 2000, 6000, 6000))
+    assert rc == 0 and report['n_ports_on_a_pad'] == 1
+    assert report['connected_nets'] == ['sig']
+    assert report['not_connected_nets'] == report['undecided_nets'] == []
+    assert report['routed_supply_pins'] == [{
+        'pin': 'supply_port', 'net': 'analog_rail', 'use': pin_use or net_use, 'source': source,
+        'supply_pad_terminals': [{'instance': 'power_pad', 'terminal': 'RAIL', 'master': 'rail_bridge'}]}]
+
+
+def test_signal_disconnect_still_fails_beside_a_routed_supply(tmp_path):
+    rc, report = _signal_with_supply(tmp_path, 'POWER', 'POWER', (40000, 40000, 42000, 42000))
+    assert rc == 0 and report['connected_nets'] == []
+    assert report['not_connected_nets'] == ['sig']
+    assert report['routed_supply_pins'][0]['net'] == 'analog_rail'
+
+
+def test_a_supply_name_does_not_remove_a_signal_from_the_check(tmp_path):
+    lef = tmp_path / 'signal.lef'
+    lef.write_text(_io_macro('tl__bi', 60, 100, [('PAD', [('Metal5', (1, 1, 3, 3))])]))
+    text = _def('N', (40000, 40000, 42000, 42000)).replace('sig', 'VDD')
+    rc, report = C.run(text, _M5_TECH, [lef])
+    assert rc == 0 and report['not_connected_nets'] == ['VDD']
+    assert report['routed_supply_pins'] == []
+
+
+def _shared_supply(tmp_path, section, connection, port_x, use='POWER'):
+    lef = tmp_path / 'rail.lef'
+    lef.write_text(_io_macro('rail_bridge', 60, 100,
+                            [('RAIL', [('Metal5', (1, 1, 3, 3))])])
+                   .replace('CLASS PAD INOUT', 'CLASS PAD ' + use)
+                   .replace('USE SIGNAL', 'USE ' + use))
     text = f"""VERSION 5.8 ;
 DESIGN neutral_top ;
 UNITS DISTANCE MICRONS {UNITS} ;
@@ -218,8 +257,8 @@ COMPONENTS 2 ;
 - rail_right rail_bridge + FIXED ( 120000 20000 ) N ;
 END COMPONENTS
 PINS 1 ;
-- supply_port + NET supply + USE POWER
-  + LAYER Metal5 ( 2000 2000 ) ( 6000 6000 )
+- supply_port + NET supply + USE {use}
+  + LAYER Metal4 ( 2000 2000 ) ( 6000 6000 )
   + PLACED ( {port_x} 20000 ) N ;
 END PINS
 {section} 1 ;
@@ -227,78 +266,62 @@ END PINS
 END {section}
 END DESIGN
 """
-    return C.run(text, _M5_TECH, [lef])
-
-
-@pytest.mark.parametrize("section", ["NETS", "SPECIALNETS"])
-@pytest.mark.parametrize("port_x,instance", [(20000, "rail_left"),
-                                           (120000, "rail_right")])
-def test_wildcard_supply_joins_every_matching_pin_and_measures_the_pad(
-        tmp_path, section, port_x, instance):
-    rc, report = _shared_supply(tmp_path, section, "( * RAIL )", port_x)
-    assert report["n_ports_on_a_pad"] == 1
-    assert rc == 0 and report["connected_nets"] == ["supply"]
-    assert report["nets"][0]["instance"] == instance
-    assert report["nets"][0]["terminal"] == "RAIL"
-
-
-@pytest.mark.parametrize("section", ["NETS", "SPECIALNETS"])
-def test_explicit_supply_joins_choose_the_coincident_pad(tmp_path, section):
-    rc, report = _shared_supply(
-        tmp_path, section, "( rail_left RAIL ) ( rail_right RAIL )", 120000)
-    assert rc == 0 and report["connected_nets"] == ["supply"]
-    assert report["n_ports_on_a_pad"] == 1
-    assert report["nets"][0]["instance"] == "rail_right"
-
-
-@pytest.mark.parametrize("connection", ["( * RAIL )",
-                                       "( rail_left RAIL ) ( rail_right RAIL )"])
-@pytest.mark.parametrize('use', ['POWER', 'GROUND'])
-def test_supply_connectivity_without_a_coincident_pad_still_refuses(
-        tmp_path, connection, use):
-    rc, report = _shared_supply(tmp_path, "SPECIALNETS", connection, 220000, use)
-    assert report["connected_nets"] == []
-    assert rc == 2 or report["not_connected_nets"] == ["supply"]
-    assert all(r["verdict"] == "NOT_CONNECTED" for r in report["nets"])
-
-
-@pytest.mark.parametrize('use', ['POWER', 'GROUND'])
-@pytest.mark.parametrize('port_x', [20000, 120000, 220000, 23900])
-@pytest.mark.parametrize('multiple_pins', [False, True])
-def test_ambiguous_supply_lef_remains_undecided_even_with_coincidence(
-        tmp_path, use, port_x, multiple_pins):
-    rc, report = _shared_supply(tmp_path, 'SPECIALNETS', '( * RAIL )', port_x,
-                                use, ambiguous=True, multiple_pins=multiple_pins)
-    assert report['connected_nets'] == []
-    if port_x == 220000:
-        assert rc == 0
-        assert report['not_connected_nets'] == ['supply']
-        assert report['undecided_nets'] == []
-    else:
-        assert rc == 1
-        assert report['undecided_nets'] == ['supply']
-        assert report['not_connected_nets'] == []
+    return text, lef
 
 
 @pytest.mark.parametrize('use', ['POWER', 'GROUND'])
 def test_supply_pad_not_on_net_is_not_connected(tmp_path, use):
-    rc, report = _shared_supply(tmp_path, 'SPECIALNETS', '', 20000, use)
-    assert rc == 0
+    text, lef = _shared_supply(tmp_path, 'SPECIALNETS', '', 20000, use)
+    rc, report = C.run(text, _M5_TECH, [lef])
     assert report['not_connected_nets'] == ['supply']
+    assert rc == 0
+    assert report['nets'][0]['verdict'] == 'NOT_CONNECTED'
+    assert report['nets'][0]['reason'] == 'DEF connects no declared supply-pad terminal to this net'
+    assert report['routed_supply_pins'][0]['supply_pad_terminals'] == []
+
+
+@pytest.mark.parametrize('section', ['NETS', 'SPECIALNETS'])
+@pytest.mark.parametrize('use', ['POWER', 'GROUND'])
+def test_wildcard_supply_joins_every_matching_pin_and_measures_the_pad(tmp_path, section, use):
+    text, lef = _shared_supply(tmp_path, section, '( * RAIL )', 220000, use)
+    rc, report = C.run(text, _M5_TECH, [lef])
+    assert rc == 2 and report['nets'] == []
+    assert report['connected_nets'] == report['not_connected_nets'] == []
+    assert report['routed_supply_pins'][0]['supply_pad_terminals'] == [
+        {'instance': 'rail_left', 'terminal': 'RAIL', 'master': 'rail_bridge'},
+        {'instance': 'rail_right', 'terminal': 'RAIL', 'master': 'rail_bridge'}]
 
 
 @pytest.mark.parametrize('use', ['POWER', 'GROUND'])
-def test_positive_supply_overlap_below_minimum_width_keeps_existing_rejection(tmp_path, use):
-    # #58 Q1's literal positive-overlap reading conflicts with decide's width
-    # rule here. Preserve the existing rule and report the conflict to the owner.
-    rc, report = _shared_supply(tmp_path, 'SPECIALNETS', '( * RAIL )', 23900, use)
-    assert rc == 0
-    assert report['connected_nets'] == []
+def test_supply_pin_on_strap_away_from_its_pad_is_not_a_failure(tmp_path, use):
+    text, lef = _shared_supply(tmp_path, 'SPECIALNETS', '( rail_left RAIL )', 220000, use)
+    rc, report = C.run(text, _M5_TECH, [lef])
+    assert rc == 2 and report['nets'] == []
+    assert report['not_connected_nets'] == report['undecided_nets'] == []
+    assert report['routed_supply_pins'][0]['supply_pad_terminals'] == [
+        {'instance': 'rail_left', 'terminal': 'RAIL', 'master': 'rail_bridge'}]
+
+
+@pytest.mark.parametrize('macro_class,pin_use', [
+    ('PAD INOUT', 'POWER'), ('ENDCAP BOTTOMLEFT', 'POWER'),
+    ('PAD POWER', 'GROUND'), ('PAD POWER', 'SIGNAL')])
+def test_supply_interface_requires_supply_pad_class_and_matching_pin_use(tmp_path, macro_class, pin_use):
+    text, lef = _shared_supply(tmp_path, 'SPECIALNETS', '( * RAIL )', 220000)
+    lef.write_text(lef.read_text().replace('CLASS PAD POWER', 'CLASS ' + macro_class)
+                   .replace('USE POWER', 'USE ' + pin_use))
+    _rc, report = C.run(text, _M5_TECH, [lef])
     assert report['not_connected_nets'] == ['supply']
-    assert report['undecided_nets'] == []
-    row = report['nets'][0]
-    assert row['overlap'] == [25900, 22000, 26000, 26000]
-    assert 'minimum width' in row['reason']
+    assert report['routed_supply_pins'][0]['supply_pad_terminals'] == []
+
+
+def test_supply_interface_refuses_a_master_class_conflict(tmp_path):
+    text, lef = _shared_supply(tmp_path, 'SPECIALNETS', '( * RAIL )', 220000)
+    other = tmp_path / 'conflicting.lef'
+    other.write_text(lef.read_text().replace('CLASS PAD POWER', 'CLASS PAD INOUT'))
+    for lefs in ([lef, other], [other, lef]):
+        _rc, report = C.run(text, _M5_TECH, lefs)
+        assert report['not_connected_nets'] == ['supply']
+        assert report['routed_supply_pins'][0]['supply_pad_terminals'] == []
 
 
 def test_signal_off_pad_still_refuses(tmp_path):
@@ -393,8 +416,12 @@ END DESIGN
         assert rc == 0 and report["connected_nets"] == ["rail"]
         assert report["nets"][0]["instance"] == "second_pad"
     else:
-        # This stored outline is PAD INOUT, not a declared supply pad.
-        assert rc == 0 and report['not_connected_nets'] == ['rail']
+        assert rc == 0 and report['n_ports_on_a_pad'] == 1
+        assert report['connected_nets'] == []
+        assert report['not_connected_nets'] == ['rail']
+        assert report['routed_supply_pins'] == [{
+            'pin': 'port', 'net': 'rail', 'use': 'POWER', 'source': 'DEF net USE',
+            'supply_pad_terminals': []}]
 
 
 def _both_orders(tmp_path, def_text, lef_a, lef_b):

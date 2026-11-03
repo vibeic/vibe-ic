@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""pad_bterm_coincidence_check — is a chip-top port's BTerm ACTUALLY on its
+"""pad_bterm_coincidence_check — is a chip-top signal BTerm ACTUALLY on its
 pad's bond terminal? Measured per net, never declared for a class of nets.
+
+DEF pins declared USE POWER or GROUND belong to the routed power grid. Their
+BTerms can land on straps away from the pad, so direct bond-terminal overlap
+does not establish their connectivity. They are outside this signal-routing
+check and are never added to its connected-net exclusions.
 
 WHY THIS PROGRAM EXISTS
 =======================
@@ -107,14 +112,16 @@ def layer_min_widths(text: str, units: int) -> Dict[str, int]:
 
 
 def def_pins(text: str) -> Dict[str, Dict[str, Any]]:
-    """`{pin: {net, layer, rect}}` in ABSOLUTE DEF units, or no rect at all."""
+    """`{pin: {net, use, layer, rect}}` in absolute DEF units."""
     out: Dict[str, Dict[str, Any]] = {}
     for entry in PR._section(text, "PINS").split(";"):
         entry = entry.strip()
         m = _PIN_RE.match(entry)
         if not m:
             continue
-        rec: Dict[str, Any] = {"net": m.group("net"), "layer": None,
+        use = re.search(r"\+\s+USE\s+(\w+)\b", m.group("tail"))
+        rec: Dict[str, Any] = {"net": m.group("net"),
+                               "use": use.group(1).upper() if use else None, "layer": None,
                                "rect": None, "placement": None}
         lay = _LAYER_RE.search(m.group("tail"))
         pl = _PLACE_RE.search(m.group("tail"))
@@ -165,7 +172,7 @@ def def_net_uses(text: str) -> Dict[str, str]:
             if m:
                 use = re.search(r'\+\s+USE\s+(\w+)\b', m.group('tail'))
                 if use:
-                    out[m.group('name')] = use.group(1)
+                    out[m.group('name')] = use.group(1).upper()
     return out
 
 
@@ -215,11 +222,6 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
     nets = def_net_terminals(def_text)
     widths = layer_min_widths(tech_text, dfn.units)
     uses = def_net_uses(def_text)
-    layers = list(_TECH_LAYER_RE.finditer(tech_text))
-    routing = [m.group(1) for i, m in enumerate(layers)
-               if re.search(r'^\s*TYPE\s+ROUTING\s*;', tech_text[m.end():
-                            layers[i + 1].start() if i + 1 < len(layers) else len(tech_text)], re.M)]
-    top_layer = routing[-1] if routing else None
 
     # Grouped, not folded in arrival order. `dict.update` over the discovered
     # LEFs is a last-wins merge: a library that names a macro but lists no
@@ -236,30 +238,18 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                 out.append(None)
         return out
 
-    # The two geometry folds preserve richer records. `parse_lef_pin_roles` was
-    # merged into a local `roles` that this function never read -- dead from
-    # the commit that introduced it, where it was a `dict.update`, and carried
-    # through the rewrite to `merge_source_records` unchanged.
-    # `policy_direction_pin_check` is what surfaced it: the site argued a
-    # direction, and no test at the call site could ever have died when the
-    # literal was flipped, because a value nothing reads has no observable
-    # direction to pin. The terminal this program measures is the one the
-    # DEF's own NETS section names, not one chosen from a pin's DIRECTION, so
-    # the fold is removed rather than wired into a decision nobody asked for.
     pin_ports, _pp_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_pin_ports), on_conflict="richer")
     sizes, _sz_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_macros), on_conflict="richer")
     classes, _cl_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_macro_classes), on_conflict="richer")
-    conflicting_classes = {conflict["key"] for conflict in _cl_conf}
-    roles, role_conflicts = _srm.merge_source_records(
+    pin_roles, _pr_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_pin_roles), on_conflict="richer")
-    conflicting_roles = {conflict['key'] for conflict in role_conflicts}
+    conflicting_classes = {conflict["key"] for conflict in _cl_conf}
 
-    def terminal_row(pin_name, rec, inst, tpin, comp, rects=None):
-        if rects is None:
-            rects = pin_ports[comp.master][tpin]
+    def terminal_row(pin_name, rec, inst, tpin, comp):
+        rects = pin_ports[comp.master][tpin]
         size = sizes.get(comp.master)
         if size is None or comp.x is None or comp.orient is None:
             return {"pin": pin_name, "net": rec["net"], "instance": inst,
@@ -269,7 +259,6 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                               "absolute position is unknown"}
         best: Tuple[str, str, Optional[List[int]], Optional[List[int]]] = (
             "NOT_CONNECTED", "no rectangle of the terminal matched", None, None)
-        face_overlaps = []
         for layer, r in rects:
             try:
                 x1, y1, x2, y2 = PR.orient_rect(r, comp.orient, size)
@@ -282,9 +271,6 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                         comp.y + int(round(y1 * dfn.units)),
                         comp.x + int(round(x2 * dfn.units)),
                         comp.y + int(round(y2 * dfn.units))]
-            face_overlaps.append(
-                rec.get("rect") is not None and rec["layer"] == layer
-                and _overlap(rec["rect"], abs_rect) is not None)
             verdict, reason, ov = decide(rec, layer, abs_rect,
                                          widths.get(layer))
             if best[0] == "CONNECTED":
@@ -296,7 +282,6 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
             "terminal": tpin, "master": comp.master, "orient": comp.orient,
             "pin_layer": rec["layer"], "pin_rect": rec["rect"],
             "terminal_rect": best[3], "overlap": best[2],
-            "candidate_face_overlaps": face_overlaps,
             "verdict": best[0], "reason": best[1]}
 
     # DEF wildcard connectivity is instance-pin connectivity, independent of
@@ -307,13 +292,32 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
             component_pins.setdefault(pin, []).append((inst, pin))
 
     rows: List[Dict[str, Any]] = []
+    routed_supply_pins = []
     rank = {"NOT_CONNECTED": 0, "UNDECIDED": 1, "CONNECTED": 2}
     for pin_name, rec in sorted(pins.items()):
-        supply = uses.get(rec['net']) in ('POWER', 'GROUND')
+        use = rec["use"] or uses.get(rec["net"])
         candidates = []
         for inst, pin in nets.get(rec["net"], []):
             candidates.extend(component_pins.get(pin, []) if inst == "*"
                               else [(inst, pin)])
+        if use in ("POWER", "GROUND"):
+            supply_pad_terminals = []
+            for inst, pin in dict.fromkeys(candidates):
+                comp = dfn.components.get(inst)
+                if (comp is not None and comp.master not in conflicting_classes
+                        and classes.get(comp.master) in ("PAD POWER", "PAD GROUND")
+                        and pin_roles.get(comp.master, {}).get(pin, ("", ""))[1] == use):
+                    supply_pad_terminals.append({"instance": inst, "terminal": pin,
+                                                 "master": comp.master})
+            routed_supply_pins.append({
+                "pin": pin_name, "net": rec["net"], "use": use,
+                "source": "DEF PINS USE" if rec["use"] else "DEF net USE",
+                "supply_pad_terminals": supply_pad_terminals})
+            if not supply_pad_terminals:
+                rows.append({"pin": pin_name, "net": rec["net"],
+                             "verdict": "NOT_CONNECTED",
+                             "reason": "DEF connects no declared supply-pad terminal to this net"})
+            continue
         chosen = None
         for inst, pin in dict.fromkeys(candidates):
             comp = dfn.components.get(inst)
@@ -322,46 +326,15 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
             if (comp.master in conflicting_classes
                     or classes.get(comp.master, "").partition(" ")[0] != "PAD"):
                 continue
-            if supply:
-                if classes[comp.master].split()[1:] not in (['POWER'], ['GROUND']):
-                    continue
-                declared = roles.get(comp.master, {})
-                terminals = [p for p, role in declared.items() if role[1] == uses[rec['net']]]
-                if terminals and pin not in terminals:
-                    continue
-                faces = list(dict.fromkeys((layer, tuple(rect)) for layer, rect in
-                             pin_ports[comp.master][pin] if layer == top_layer))
-                row = terminal_row(pin_name, rec, inst, pin, comp, faces or None)
-                # Q1 uses geometric overlap, independently of the minimum-width
-                # verdict: a narrow positive overlap still touches this face.
-                # Unknown geometry cannot establish an all-faces miss.
-                ambiguous = (comp.master in conflicting_roles
-                             or terminals != [pin] or len(faces) != 1)
-                measured_miss = (faces and rec.get("rect") is not None
-                                 and len(row.get("candidate_face_overlaps", [])) == len(faces)
-                                 and not any(row["candidate_face_overlaps"]))
-                if ambiguous and not measured_miss:
-                    row.update(verdict='UNDECIDED', reason=
-                        'LEF does not unambiguously declare one supply terminal and one '
-                        f'PORT rectangle on top routing layer {top_layer!r}: '
-                        f'USE {uses[rec["net"]]} pins={terminals}, top-layer shapes={len(faces)}')
-            else:
-                row = terminal_row(pin_name, rec, inst, pin, comp)
-            # Per-face bookkeeping is internal; keep the native report schema.
-            row.pop("candidate_face_overlaps", None)
+            row = terminal_row(pin_name, rec, inst, pin, comp)
             if chosen is None or rank[row["verdict"]] > rank[chosen["verdict"]]:
                 chosen = row
             # Connectivity only supplies candidates. Coincidence decides which
-            # pad actually carries this BTerm, including shared supply nets.
+            # pad actually carries this signal BTerm.
             if row["verdict"] == "CONNECTED":
                 break
         if chosen is not None:
             rows.append(chosen)
-        elif supply:
-            rows.append({'pin': pin_name, 'net': rec['net'], 'instance': None,
-                         'terminal': None, 'master': None, 'pin_layer': rec['layer'],
-                         'pin_rect': rec['rect'], 'verdict': 'NOT_CONNECTED',
-                         'reason': 'DEF connects no declared supply-pad terminal to this net'})
 
     connected = [r["net"] for r in rows if r["verdict"] == "CONNECTED"]
     undecided = [r for r in rows if r["verdict"] == "UNDECIDED"]
@@ -375,7 +348,12 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                                      if r["verdict"] == "NOT_CONNECTED"),
         "undecided_nets": sorted(r["net"] for r in undecided),
         "nets": rows,
+        "routed_supply_pins": routed_supply_pins,
         "consumer_contract": (
+            "This check measures signal bond-terminal coincidence. Declared "
+            "POWER/GROUND pins list their DEF-connected, LEF-declared supply "
+            "pad terminals in routed_supply_pins without a geometry verdict. "
+            "Physical grid connectivity is outside this check. "
             "A consumer may exclude a net from signal routing ONLY if it "
             "appears in `connected_nets`. `not_connected_nets` and "
             "`undecided_nets` must stay in the router, and a consumer that "
