@@ -740,7 +740,10 @@ def consume_default_row_completion(project, context, component):
             or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
         accepted['status'] = 'FAIL'
         accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
+    # C2: the row is OpenRCX's result. Obligations no tool measures stay named in the record.
+    status = ('FAIL' if accepted['status'] == 'FAIL' else
+              'PASS' if component.get('component_status') == 'PASS' else 'NOT_MEASURED')
     return {**component, 'step_id': 'D69', 'context_sha256': context['context_sha256'],
         'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
-        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
-        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
+        'default_row_status': status, 'flow109_acceptance': status,
+        'completed': status == 'PASS', 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
