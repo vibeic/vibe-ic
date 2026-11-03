@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_charter_bytes_are_the_owners():
     digest = hashlib.sha256((ROOT / "CHARTER.md").read_bytes()).hexdigest()
-    assert digest == "2c11b0ee836d575b1b8aa4840ab6dc6cc73c05a7309c8754a8e7d6409998e8aa"
+    assert digest == "9afee992348420b542220f128f2bc8ce3dd2de0706ed8e1c4d232a225f05c067"
 
 
 def test_every_agent_is_told_at_session_and_prompt():

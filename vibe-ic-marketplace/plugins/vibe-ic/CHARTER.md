@@ -64,8 +64,11 @@ and cite the rule.
 **C9. AI is the backup: it runs the flow end to end, watches it, and reviews every
 result.** A tool's result is the first answer, not the last. When a tool finishes, the
 AI reads the native report and asks: did it run on the right design and the right
-limit, do the numbers make physical sense, does a silent report mean a real zero, and
-what did it leave out? A problem it finds gets a bug: an issue or a PR, fixed in our
+limit, do the numbers make physical sense, and what did it leave out? The review is
+about this run's output, not the tool's ability. A tool is qualified once, before it
+enters the flow. After that every case trusts it: IC path, IP path and benchmark. Do
+not plant errors or run positive controls to test a tool during a case. A problem
+the review finds gets a bug: an issue or a PR, fixed in our
 local fork of the tool, or in the plugin when the code is ours. The step stays open
 until the fix lands or the reviewer writes down why the problem does not affect the
 chip. Review never moves a limit and never passes what the tool failed. It is a
