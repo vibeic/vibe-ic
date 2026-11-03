@@ -931,3 +931,45 @@ def test_conflicting_pdk_bus_declarations_refuse_instead_of_taking_file_order():
             "module neutral_pad(input [0:2] DM); endmodule\n",
         ])
     assert exc.value.rule == "PAD_BUS_DECLARATION_CONFLICT"
+
+
+def _declare_masters(proj: Path, *rows) -> None:
+    (proj / "phase1" / "generated_docs" / "L1_DATASHEET.json").write_text(json.dumps({
+        "comparison_tables": [
+            {"headers": ["Name", "Value"], "rows": [{"Name": "q", "Value": "nothing"}]},
+            {"headers": ["Signal", "Required master"], "rows": [
+                {"Signal": signal, "Required master": master} for signal, master in rows]}]}))
+
+
+def test_declared_pad_master_outranks_the_class_choice(tmp_path):
+    proj = _project(tmp_path)
+    _declare_masters(proj, ("Q", "testlib_io__in"), ("CLK", "testlib_io__bi"))
+    res = _run(GEN, proj, _pdk(tmp_path / "pdk"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    pads = {r["port"]: r for r in _record(proj)["pad_instances"].values()}
+    assert pads["q"]["master"] == "testlib_io__in"
+    assert pads["clk"]["master"] == "testlib_io__bi"
+    assert pads["q"]["class_fallback"] is False
+    # An undeclared pad keeps the class choice.
+    assert pads["rst"]["master"] == "testlib_io__in"
+
+
+def test_declared_pad_master_the_library_lacks_is_refused(tmp_path):
+    proj = _project(tmp_path)
+    _declare_masters(proj, ("q", "testlib_io__absent"))
+    res = _run(GEN, proj, _pdk(tmp_path / "pdk"))
+    assert res.returncode == 1
+    assert _record(proj)["rule"] == "DECLARED_PAD_MASTER_UNKNOWN"
+
+
+@pytest.mark.parametrize("rows", [
+    [("ghost", "testlib_io__in")],
+    [("q", "testlib_io__in"), ("Q", "testlib_io__bi")],
+    [("q", "")],
+])
+def test_unresolved_declared_pad_master_is_refused(tmp_path, rows):
+    proj = _project(tmp_path)
+    _declare_masters(proj, *rows)
+    res = _run(GEN, proj, _pdk(tmp_path / "pdk"))
+    assert res.returncode == 1
+    assert _record(proj)["rule"] == "DECLARED_PAD_MASTER_UNRESOLVED"
