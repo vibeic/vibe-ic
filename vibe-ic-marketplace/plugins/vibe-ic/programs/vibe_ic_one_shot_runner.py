@@ -4885,7 +4885,7 @@ def main() -> int:
         return 2
 
 
-def _main() -> int:
+def _main(args=None) -> int:
     _line_buffer_own_stream()
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
@@ -5020,7 +5020,7 @@ def _main() -> int:
     p.add_argument('--route-authority-only', action='store_true', help='Verify the live route and emit its receipt without running producers.')
     p.add_argument('--receipt-channel-fd', type=int, help=argparse.SUPPRESS)
     _execution.add_arguments(p)
-    args = p.parse_args()
+    args = p.parse_args() if args is None else args
     if args.resume_request and (args.entry_step or args.exit_step):
         p.error("--resume-request cannot be combined with explicit --entry-step/--exit-step")
     if bool(args.area_receipt) != bool(args.area_run_manifest):
@@ -5102,6 +5102,9 @@ def _main() -> int:
         if _resume_plan["status"] != "READY":
             return 0 if _resume_plan["status"] == "NO_ACTION" else 2
     try:
+        if (args.flow == '109' and not args.flow109_plan_only
+                and not getattr(args, '_flow109_row_active', False)):
+            return flow109.run_rows(args, project, _main)
         flow_result = flow109.prepare_front_door(args, project)
     except flow109.Flow109Error as exc:
         if exc.code == "FLOW109_DFT_INTENT_MISSING":

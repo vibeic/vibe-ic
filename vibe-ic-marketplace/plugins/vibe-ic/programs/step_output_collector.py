@@ -98,7 +98,7 @@ def _version_folder(steps_root: Path, phase: str, stage: str,
     return str(folder)
 
 
-def _copy_outputs(project: Path, sdir: Path, outputs) -> Tuple[list, list]:
+def _copy_outputs(project: Path, sdir: Path, outputs, *, keep_paths=False) -> Tuple[list, list]:
     """Copy bytes, never aliases to a mutable working file. Keep empty files too."""
     present, errors = [], []
     for output in outputs:
@@ -108,7 +108,12 @@ def _copy_outputs(project: Path, sdir: Path, outputs) -> Tuple[list, list]:
         src = Path(str(output.get('abs') or ''))
         if not output.get('exists') or not src.is_file():
             continue
-        target = sdir / src.name
+        if keep_paths:
+            from benchmark_evidence_publish import _excluded, _record, over_ceiling
+            if _excluded(src) or src.suffix.lower() == '.odb' and over_ceiling(src):
+                present.append(_record(src, project, 'ROUTED_AWAY', 'source-run-only'))
+                continue
+        target = sdir / output['rel'] if keep_paths else sdir / src.name
         if target.exists():
             target = sdir / f'{src.parent.name}__{src.name}'
         number = 0
@@ -117,10 +122,11 @@ def _copy_outputs(project: Path, sdir: Path, outputs) -> Tuple[list, list]:
             number += 1
             target = base.with_name(f'{base.name}__{number}')
         try:
+            target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, target)
             present.append({'rel': output.get('rel'), 'abs': str(src),
                             'size': target.stat().st_size,
-                            'snapshot': target.name, 'sha256': _sha(target)})
+                            'snapshot': str(target.relative_to(sdir)), 'sha256': _sha(target)})
         except OSError as exc:
             errors.append(f'{src}: {exc}')
     return present, errors
@@ -143,6 +149,73 @@ def _working_files(project: Path) -> dict:
             except OSError:
                 continue
     return records
+
+
+def flow109_step_folder(row) -> str:
+    slug = re.sub(r'[^a-z0-9]+', '-', row['name'].lower()).strip('-') or 'step'
+    return f"{row['position']:03d}_{slug}"
+
+
+def _known_files(project: Path, value):
+    """Use paths already supplied by the row, without resolving new dependencies."""
+    if isinstance(value, dict):
+        if isinstance(value.get('path'), str) and isinstance(value.get('sha256'), str):
+            path = Path(value['path'])
+            try:
+                path = (path if path.is_absolute() else project / path).relative_to(project)
+                if '..' not in path.parts:
+                    yield str(path), value['sha256']
+            except ValueError:
+                pass
+        for key, child in value.items():
+            if key in ('path', 'sha256') and 'sha256' in value:
+                continue
+            yield from _known_files(project, child)
+    elif isinstance(value, (tuple, list)):
+        for child in value:
+            yield from _known_files(project, child)
+    elif isinstance(value, str) and len(value) < 4096 and '\n' not in value:
+        path = Path(value)
+        if not path.is_absolute():
+            path = project / path
+        try:
+            if path.is_file() and path.resolve().is_relative_to(project):
+                yield str(path.relative_to(project)), _sha(path)
+        except (OSError, ValueError):
+            pass
+
+
+def begin_flow109_row(project: Path, row, context) -> dict:
+    """Retain a row directly by its Flow109 position, including an unfinished run."""
+    project = Path(project).resolve()
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
+    folder = project / 'steps' / flow109_step_folder(row) / stamp
+    folder.mkdir(parents=True)
+    (folder / 'outputs').mkdir()
+    write_json(folder / 'inputs.json', [])
+    write_json(folder / 'result.json', {
+        'step_id': row['id'], 'context_sha256': context['context_sha256'],
+        'component_status': 'NOT_MEASURED', 'default_row_status': 'NOT_MEASURED',
+        'completed': False, 'reason': 'row did not finish'})
+    return {'folder': folder, 'before': _working_files(project)}
+
+
+def finish_flow109_row(project: Path, row, context, result, attempt) -> None:
+    project = Path(project).resolve()
+    folder = attempt['folder']
+    current = _working_files(project)
+    changed = {rel for rel, info in current.items() if attempt['before'].get(rel) != info}
+    known = dict(_known_files(project, result))
+    write_json(folder / 'inputs.json', [{'path': rel, 'sha256': sha}
+                                      for rel, sha in sorted(known.items())])
+    outputs = []
+    for rel in sorted(changed | set(known)):
+        path = project / rel
+        if path.is_file() and path.resolve().is_relative_to(project):
+            outputs.append({'rel': rel, 'abs': str(path), 'exists': True})
+    present, errors = _copy_outputs(project, folder / 'outputs', outputs, keep_paths=True)
+    write_json(folder / 'outputs.json', {'outputs': present, 'capture_errors': errors})
+    write_json(folder / 'result.json', result)
 
 
 def _freeze_legacy(steps_root: Path, rows) -> None:
