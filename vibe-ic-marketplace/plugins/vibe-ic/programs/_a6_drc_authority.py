@@ -53,6 +53,12 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 #: to the directory holding the main deck. A GLOB: the file is named after the
 #: PDK (`sg13g2_maximal.drc`, `sg13cmos5l_maximal.drc`).
 EXTRA_RUNSET_GLOB = "rule_decks/*_maximal.drc"
+#: The PDK's antenna deck, relative to the main deck's dir. The default DRC run
+#: leaves it out on both PDKs that ship one (#3798). `antenna.drc` is a complete
+#: runset (ihp-sg13g2); `antenna.rb` is a fragment of the main deck, selected
+#: with `decks=antenna` (gf180mcuD).
+ANTENNA_RUNSET = "rule_decks/antenna.drc"
+ANTENNA_FRAGMENT = "rule_decks/antenna.rb"
 #: The PDK's per-table DRC unit testcases, relative to the main deck's dir.
 UNIT_TESTCASE_DIR = "testing/testcases/unit"
 
@@ -71,6 +77,31 @@ ENGINE_ARTEFACT = "ENGINE_ARTEFACT"
 def extra_runsets(drc_dir: Path) -> List[Path]:
     """The extra-rules runsets beside a main KLayout deck, on THIS host."""
     return sorted(Path(drc_dir).glob(EXTRA_RUNSET_GLOB))
+
+
+def antenna_decks(drc_dir: Path) -> List[Path]:
+    """The antenna deck files beside a main KLayout deck, on THIS host."""
+    return [Path(drc_dir) / rel for rel in (ANTENNA_RUNSET, ANTENNA_FRAGMENT)
+            if (Path(drc_dir) / rel).is_file()]
+
+
+def is_antenna_fragment(deck: object) -> bool:
+    return Path(str(deck)).name == Path(ANTENNA_FRAGMENT).name
+
+
+def is_antenna_deck(deck: object) -> bool:
+    return Path(str(deck)).name in (Path(ANTENNA_RUNSET).name,
+                                    Path(ANTENNA_FRAGMENT).name)
+
+
+def antenna_record(decks: Iterable[object]) -> Dict[str, object]:
+    """Say whether this DRC result covers antenna. A PDK that ships no antenna
+    deck leaves it out, and the record says so."""
+    found = [str(d) for d in decks]
+    if found:
+        return {"result": "MEASURED", "decks": found}
+    return {"result": "NOT_MEASURED",
+            "reason": "the PDK ships no antenna deck beside its main KLayout deck"}
 
 
 def _name(raw: Optional[str]) -> str:

@@ -552,3 +552,200 @@ def test_the_round_trip_reproduces_only_when_every_block_rectangle_is_placed(
     rt = ATT.gds_roundtrip(project, "blk", FakeStage(), "rc", ["MIM.e"],
                            ["/d/main.drc"])
     assert rt["rules"]["MIM.e"]["reproduced"] is True
+
+
+# -- #3798: A12 runs the PDK antenna deck and counts it ---------------------
+_DECK_DIR = "/pdk/tpdk/klayout/drc/rule_decks/"
+_ANT = ["Ant.a", "Ant.b_TopMetal1", "Ant.b_TopMetal2"]
+
+
+_MAIN = "/pdk/tpdk/klayout/drc/main.drc"
+
+
+def _antenna_arm(tmp_path, monkeypatch, name, antenna, main=(), magic=()):
+    """The A12 LibreLane arm with its tool steps answered here: each step
+    writes the report its deck would. Returns the project and each step's
+    config."""
+    import librelane_contract as lc
+    project, cfgs = _ll_project(tmp_path), {}
+    monkeypatch.setattr(LL, "image_extra_runsets",
+                        lambda image, runset: [_DECK_DIR + name] if name else [])
+    monkeypatch.setattr(LL._Arm, "config", lambda self, step, block: {
+        "KLAYOUT_DRC_RUNSET": _MAIN, "KLAYOUT_DRC_OPTIONS": {"no_recommended": True}})
+
+    def run(self, step, cfg, state, namespace, cfg_name, retries=0):
+        cfgs[cfg_name] = cfg
+        folder = project / "runs" / cfg_name
+        (folder / "reports").mkdir(parents=True, exist_ok=True)
+        if step == "Magic.DRC":
+            report, body = "drc.magic.lyrdb", _lyrdb([], list(magic))
+        elif cfg_name == "klayout_drc":
+            report, body = "drc.klayout.lyrdb", _lyrdb(["A.1", *main], [])
+        else:
+            report, body = "drc.klayout.lyrdb", antenna
+        (folder / "reports" / report).write_text(body)
+        return folder
+
+    def judge(folder, metrics, out, required_reports, scope):
+        text = next((folder / "reports").iterdir()).read_text()
+        return {"verdict": "PASS", "metrics": {metrics[0]: {
+            "status": "MEASURED", "value": text.count("<item>")}}}
+    monkeypatch.setattr(LL._Arm, "run", run)
+    monkeypatch.setattr(lc, "judge_step", judge)
+    return project, cfgs
+
+
+def test_a12_librelane_arm_lists_every_antenna_deck_form(monkeypatch):
+    seen = []
+
+    def image_run(image, entrypoint, args, docker="docker"):
+        seen.append(args[-1])
+        return type("CP", (), {"returncode": 0, "stdout": ""})()
+    monkeypatch.setattr(LL, "_image_run", image_run)
+    assert LL.image_extra_runsets(IMAGE, "/pdk/drc/main.drc") == []
+    assert "/pdk/drc/rule_decks/antenna.drc" in seen[0]
+    assert "/pdk/drc/rule_decks/antenna.rb" in seen[0]
+    assert "/pdk/drc/rule_decks/*_maximal.drc" in seen[0]
+
+
+def test_a12_librelane_arm_blocks_on_an_antenna_runset_hit(
+        tmp_path, monkeypatch):
+    project, cfgs = _antenna_arm(
+        tmp_path, monkeypatch, "antenna.drc", _lyrdb(
+            _ANT, ["Ant.b_TopMetal1"] * 2 + ["Ant.b_TopMetal2"] * 2))
+    assert LL.run(project, "blk", IMAGE) == 1
+    rec = _rec(project)
+    assert rec["result"] == "BLOCKING"
+    assert rec["authority"]["blocking"] == {"Ant.b_TopMetal1": 2,
+                                            "Ant.b_TopMetal2": 2}
+    assert rec["antenna_deck"] == {"result": "MEASURED",
+                                   "decks": [_DECK_DIR + "antenna.drc"]}
+    cfg = cfgs["klayout_drc_extra_antenna"]
+    assert cfg["KLAYOUT_DRC_RUNSET"] == _DECK_DIR + "antenna.drc"
+    assert "decks" not in cfg["KLAYOUT_DRC_OPTIONS"]
+
+
+def test_a12_librelane_arm_is_clean_when_the_antenna_deck_grades_clean(
+        tmp_path, monkeypatch):
+    project, _ = _antenna_arm(tmp_path, monkeypatch, "antenna.drc",
+                              _lyrdb(_ANT, []))
+    assert LL.run(project, "blk", IMAGE) == 0
+    assert _rec(project)["result"] == "CLEAN"
+
+
+def test_a12_librelane_arm_selects_an_antenna_fragment_through_the_main_deck(
+        tmp_path, monkeypatch):
+    project, cfgs = _antenna_arm(tmp_path, monkeypatch, "antenna.rb",
+                                 _lyrdb(_ANT, ["Ant.a"]))
+    assert LL.run(project, "blk", IMAGE) == 1
+    assert _rec(project)["authority"]["blocking"] == {"Ant.a": 1}
+    cfg = cfgs["klayout_drc_extra_antenna"]
+    assert cfg["KLAYOUT_DRC_RUNSET"] == _MAIN
+    assert cfg["KLAYOUT_DRC_OPTIONS"]["decks"] == "antenna"
+
+
+def test_a12_librelane_arm_keeps_a_silent_antenna_deck_not_measured(
+        tmp_path, monkeypatch):
+    project, _ = _antenna_arm(tmp_path, monkeypatch, "antenna.drc",
+                              _lyrdb([], []))
+    assert LL.run(project, "blk", IMAGE) == 1
+    assert _rec(project)["result"] == "NOT_MEASURED"
+
+
+def test_a12_librelane_arm_says_when_the_pdk_ships_no_antenna_deck(
+        tmp_path, monkeypatch):
+    project, _ = _antenna_arm(tmp_path, monkeypatch, "", "")
+    assert LL.run(project, "blk", IMAGE) == 0
+    assert _rec(project)["antenna_deck"]["result"] == "NOT_MEASURED"
+
+
+def test_a12_librelane_arm_keeps_antenna_decks_out_of_the_magic_round_trip(
+        tmp_path, monkeypatch):
+    project, _ = _antenna_arm(tmp_path, monkeypatch, "antenna.rb",
+                              _lyrdb(_ANT, []), main=["M.x"], magic=["M.x"])
+    monkeypatch.setattr(LL, "_capability_controls",
+                        lambda arm, block, image, main, cfgs, rules:
+                        seen.update(cfgs) or {})
+    decks, seen = [], {}
+
+    def roundtrip(project, block, container, rules, runsets):
+        decks.extend(runsets)
+        return {"result": "NOT_MEASURED", "reason": "test"}
+    assert LL.run(project, "blk", IMAGE, roundtrip_runner=roundtrip) == 1
+    assert decks == [_MAIN] and list(seen) == [_MAIN]
+
+
+def _antenna_native(tmp_path, monkeypatch, name, items):
+    deck = _staged_deck(tmp_path)
+    (deck.parent / "rule_decks" / name).write_text("#")
+    return deck, _fake_klayout(monkeypatch, {
+        "main.drc": _lyrdb(["A.1"], []),
+        "tpdk_maximal.drc": _lyrdb(["M2.d"], []),
+        "antenna.drc": _lyrdb(_ANT, items),
+        "antenna.drc:flat": _lyrdb(_ANT, items)})
+
+
+def test_a12_native_arm_counts_the_antenna_runset(tmp_path, monkeypatch):
+    deck, calls = _antenna_native(tmp_path, monkeypatch, "antenna.drc",
+                                  ["Ant.b_TopMetal1"] * 2)
+    violations, meta = PV._default_drc_runner(str(deck), "/x.gds", "blk", "c",
+                                              tmp_path / "drc.lyrdb")
+    assert violations == 2
+    assert calls == ["main.drc", "tpdk_maximal.drc", "antenna.drc",
+                     "antenna.drc:flat"]
+    assert meta["authoritative"]["violations"] == {"Ant.b_TopMetal1": 2}
+    assert meta["antenna_deck"]["result"] == "MEASURED"
+    text = PV._write_drc_report(tmp_path, "blk", 2, meta).read_text()
+    assert "extra_runset: antenna.drc graded 3 violations 2" in text
+    assert "antenna_deck: MEASURED" in text
+
+
+def test_a12_native_arm_leaves_a_fragment_to_the_main_deck(
+        tmp_path, monkeypatch):
+    deck, calls = _antenna_native(tmp_path, monkeypatch, "antenna.rb", [])
+    _, meta = PV._default_drc_runner(str(deck), "/x.gds", "blk", "c",
+                                     tmp_path / "drc.lyrdb")
+    assert calls == ["main.drc", "tpdk_maximal.drc"]
+    assert meta["antenna_deck"]["result"] == "MEASURED"
+
+
+def test_a12_native_arm_says_when_the_pdk_ships_no_antenna_deck(
+        tmp_path, monkeypatch):
+    deck = _staged_deck(tmp_path)
+    _fake_klayout(monkeypatch, {"main.drc": _lyrdb(["A.1"], []),
+                                "tpdk_maximal.drc": _lyrdb(["M2.d"], [])})
+    _, meta = PV._default_drc_runner(str(deck), "/x.gds", "blk", "c",
+                                     tmp_path / "drc.lyrdb")
+    assert meta["antenna_deck"]["result"] == "NOT_MEASURED"
+
+
+def test_the_die_drc_runner_stays_without_the_antenna_deck(
+        tmp_path, monkeypatch):
+    deck, calls = _antenna_native(tmp_path, monkeypatch, "antenna.drc",
+                                  ["Ant.a"])
+    violations, meta = PV._klayout_drc_runner(str(deck), "/x.gds", "blk", "c",
+                                              tmp_path / "drc.lyrdb")
+    assert violations == 0 and "antenna.drc" not in calls
+    assert "antenna_deck" not in meta
+
+
+def test_a12_fails_on_a_blocking_antenna_record(tmp_path, monkeypatch):
+    import analog_native_physical as NP
+    import analog_pdk_availability as AV
+    bdir = tmp_path / "phase3/analog/blk"
+    bdir.mkdir(parents=True)
+    (bdir / "blk.gds").write_bytes(b"gds")
+
+    def ll_run(project, block, image, container=""):
+        (bdir / "a6_librelane_drc.json").write_text(json.dumps(
+            {"result": "BLOCKING", "engines": {"KLayout.DRC": {}},
+             "authority": {"blocking": {"Ant.b_TopMetal1": 2}}}))
+        return 1
+    monkeypatch.setattr(AV, "resolve_pdk", lambda *a, **k: {"available": True})
+    monkeypatch.setattr(LL, "run", ll_run)
+    monkeypatch.setattr(PV, "run_block_pv",
+                        lambda *a, **k: {"lvs": {"verdict": "match"}})
+    result = NP._pv(tmp_path, "blk", "ctn", IMAGE, "tpdk", {})
+    assert result["status"] == "FAIL"
+    assert (result["metrics"]["drc"]["native"]["authority"]["blocking"]
+            == {"Ant.b_TopMetal1": 2})

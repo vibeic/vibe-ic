@@ -97,8 +97,8 @@ def test_the_klayout_path_is_selected_for_an_open_pdk_deck(monkeypatch,
     intercepting it, so a future refactor that drops the branch is caught."""
     seen = {}
 
-    def fake_klayout(deck, gds, block, container, report_host):
-        seen.update(deck=deck, block=block)
+    def fake_klayout(deck, gds, block, container, report_host, *, antenna):
+        seen.update(deck=deck, block=block, antenna=antenna)
         return 7, {"method": "klayout_runset", "rc": 0}
 
     monkeypatch.setattr(PV, "_klayout_drc_runner", fake_klayout)
@@ -107,6 +107,7 @@ def test_the_klayout_path_is_selected_for_an_open_pdk_deck(monkeypatch,
         tmp_path / "drc.report")
     assert viol == 7 and meta["method"] == "klayout_runset"
     assert seen["deck"].endswith(".drc") and seen["block"] == BLOCK
+    assert seen["antenna"] is True
 
 
 # ── (1) tool path ─────────────────────────────────────────────────────────

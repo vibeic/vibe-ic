@@ -34,6 +34,10 @@ with 0 is deferred only when a CAPABILITY CONTROL shows the same deck firing
 it on the PDK's unit FAIL testcase; `ENGINE_ARTEFACT` is reported when the
 bare-device GDS round trip also reproduces it.
 
+THE ANTENNA DECK (#3798). The PDK's antenna deck is one more authoritative pass,
+so a hit there blocks like any other deck rule. LibreLane's default run leaves
+it out. `record["antenna_deck"]` says when a PDK ships none.
+
 MEASURED on vibeic-eda 0.3.79 / u_hawaii_adc: Magic.DRC on the GDS reports
 M2.d (60 / 816 rectangles) and MIM.e (4 / 92). MIM.e is a Magic-engine
 artefact of GDS read-back — IHP's extra deck grades MIM.e and reports 0 on
@@ -130,9 +134,11 @@ def _image_run(image: str, entrypoint: str, args: List[str],
 
 
 def image_extra_runsets(image: str, main_runset: str) -> List[str]:
-    """The extra-rules runsets beside `main_runset` INSIDE the image, by the
-    authority module's glob (never by a literal file name)."""
-    pattern = str(Path(main_runset).parent / _auth.EXTRA_RUNSET_GLOB)
+    """The extra-rules and antenna decks beside `main_runset` INSIDE the
+    image, by the authority module's patterns."""
+    parent = Path(main_runset).parent
+    pattern = " ".join(str(parent / rel) for rel in (
+        _auth.EXTRA_RUNSET_GLOB, _auth.ANTENNA_RUNSET, _auth.ANTENNA_FRAGMENT))
     cp = _image_run(image, "sh", ["-c", f'for f in {pattern}; do '
                                         f'[ -f "$f" ] && echo "A6EXTRA $f"; '
                                         f'done; true'])
@@ -303,10 +309,15 @@ def run(project: Path, block: str, image: str,
     extra_cfgs: Dict[str, dict] = {}
     for runset in extras:
         stem = _slug(Path(runset).stem)
-        cfg = dict(kcfg, KLAYOUT_DRC_RUNSET=runset,
+        fragment = _auth.is_antenna_fragment(runset)
+        cfg = dict(kcfg,
+                   KLAYOUT_DRC_RUNSET=main_runset if fragment else runset,
                    KLAYOUT_DRC_OPTIONS={**opts, "run_mode": "deep",
-                                        "threads": threads})
-        extra_cfgs[runset] = cfg
+                                        "threads": threads,
+                                        **({"decks": "antenna"} if fragment
+                                           else {})})
+        if not _auth.is_antenna_deck(runset):
+            extra_cfgs[runset] = cfg
         ns = (f"analog/{block}/a6_klayout_drc_extra" if len(extras) == 1
               else f"analog/{block}/a6_klayout_drc_extra_{stem}")
         try:
@@ -363,7 +374,8 @@ def run(project: Path, block: str, image: str,
     if dis:
         roundtrip = (roundtrip_runner or _default_roundtrip)(
             project, block, container, sorted(dis),
-            [r for r in [main_runset, *extras] if r])
+            [r for r in [main_runset, *extras]
+             if r and not _auth.is_antenna_deck(r)])
     auth = _auth.authority(klayout, m["violations"],
                            native_device_cell_rules(attribution),
                            capability, roundtrip)
@@ -374,6 +386,8 @@ def run(project: Path, block: str, image: str,
                                for s, e in engines.items()},
                    "authoritative_runsets": [r for r in [main_runset, *extras]
                                              if r],
+                   "antenna_deck": _auth.antenna_record(
+                       r for r in extras if _auth.is_antenna_deck(r)),
                    "union": u, "authority": auth,
                    "result": "BLOCKING" if auth["blocking"] else "CLEAN"})
     write_json(out, record)
