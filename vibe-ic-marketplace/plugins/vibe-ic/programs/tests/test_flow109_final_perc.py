@@ -513,3 +513,41 @@ def test_native_cvc_reaches_actual_perc_consumer(
         assert result["reason"] == "D66_AUTOMATED_PERC_FAILED"
         assert result["consumer_result"]["audit"]["automated_failed"] == [
             "Native CVC electrical rules"]
+
+
+@pytest.mark.parametrize(('native_status', 'count', 'expected'),
+                         [('PASS', 0, 'PASS'), ('FAIL', 2, 'FAIL'), ('INCOMPLETE', None, 'NOT_MEASURED')])
+def test_cvc_selects_this_runs_lvs_state(tmp_path, monkeypatch, native_status, count, expected):
+    import phase3_one_shot_runner as runner
+    folder = tmp_path / 'phase3/librelane/native-lvs'
+    root = tmp_path / 'pdk-store'
+    kit = root / 'test-kit'
+    assets = {}
+    for role, rel in {'tech': 'libs.ref/test-cells/techlef/nom.tlef',
+                      'cell': 'libs.ref/test-cells/lef/cells.lef',
+                      'liberty': 'libs.ref/test-cells/lib/cells.lib'}.items():
+        path = kit / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('neutral software fixture')
+        assets[role] = str(path)
+    state = {'spice': str(tmp_path / 'native-final.spice'),
+             'nl': str(tmp_path / 'native-final.v'), 'gds': str(tmp_path / 'delivered.gds')}
+    _put(tmp_path, 'phase3/librelane/native-lvs/state_out.json', state)
+    _put(tmp_path, 'phase3/librelane/native-lvs/config.json',
+         {'DESIGN_NAME': 'selected_chip', 'PDK': 'test-kit',
+          'LIB': {'*': [assets['liberty']]}, 'TECH_LEFS': {'*': assets['tech']},
+          'CELL_LEFS': [assets['cell']]})
+    _put(tmp_path, 'reports/phase3/librelane_pv_lvs.json',
+         {'metrics': {'design__lvs_error__count': {'folder': str(folder)}}})
+    monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(root))
+    observed = []
+    def native(project, top, pdk, image, **kwargs):
+        observed.append((top, kwargs))
+        return {'result': native_status, 'counts': {'Total': count}}
+    monkeypatch.setattr(runner, '_native_cvc_category', native)
+    result = runner._cvc_from_native_state(tmp_path)
+    assert result['verdict'] == expected
+    assert result['gds'] == state['gds']
+    assert result['unmeasured_obligations'] == ['latch-up spacing', 'ESD characterization']
+    assert observed == [('selected_chip', {'extracted_netlist': Path(state['spice']),
+                                          'adopted_netlist': Path(state['nl'])})]

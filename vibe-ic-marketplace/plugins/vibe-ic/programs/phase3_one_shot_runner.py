@@ -78242,7 +78242,8 @@ def _parse_native_cvc_report(text: str) -> Dict[str, Any]:
 
 
 def _native_cvc_category(project: Path, top: str, pdk: PdkConfig,
-                         image: Optional[str]) -> Dict[str, Any]:
+                         image: Optional[str], *, extracted_netlist: Optional[Path] = None,
+                         adopted_netlist: Optional[Path] = None) -> Dict[str, Any]:
     """Run only a PDK-declared CVC recipe and publish byte-bound evidence."""
     base = {"category": "Native CVC electrical rules", "status": "AUTOMATED",
             "tool": "cvc_rv + PDK-declared libs.tech/librelane/cvc"}
@@ -78253,10 +78254,10 @@ def _native_cvc_category(project: Path, top: str, pdk: PdkConfig,
     library = _pdk_std_cell_library(pdk)
     power_nets, ground_nets = _design_supply_nets(pdk)
     extracted_dir = _pl.extracted_dir(project)
-    extracted = next((path for pattern in ("*.spice", "*.cir", "*.sp", "*_pex.v")
+    extracted = extracted_netlist or next((path for pattern in ("*.spice", "*.cir", "*.sp", "*_pex.v")
                       for path in sorted(extracted_dir.glob(pattern))
                       if path.is_file()), None)
-    adopted = _pl.pnr_dir(project) / f"{top}_pnr.v"
+    adopted = adopted_netlist or _pl.pnr_dir(project) / f"{top}_pnr.v"
     if (not pdk_dir or not library or extracted is None or not adopted.is_file()
             or len(power_nets) != 1 or len(ground_nets) != 1):
         return {**base, "result": "INCOMPLETE",
@@ -78302,7 +78303,12 @@ cvc_rv cvcrc > cvc.stdout 2> cvc.stderr
     report.unlink(missing_ok=True)
     receipt_path.unlink(missing_ok=True)
     try:
-        proc = _ll.run_container(argv, supervised=True, log=out / "docker.log")
+        import _container_exec
+        if _container_exec.no_container_route():
+            proc = subprocess.run(['bash', '-lc', shell], capture_output=True, text=True)
+            (out / 'docker.log').write_text(proc.stdout + proc.stderr)
+        else:
+            proc = _ll.run_container(argv, supervised=True, log=out / "docker.log")
     except Exception as exc:
         return {**base, "result": "INCOMPLETE",
                 "note": f"native CVC launch failed: {exc}"}
@@ -78330,6 +78336,38 @@ cvc_rv cvcrc > cvc.stdout 2> cvc.stderr
     _aa.write_text(receipt_path, json.dumps(receipt, indent=2) + "\n")
     return {**base, **parsed, "native_rc": proc.returncode,
             "evidence": ref(report), "producer_receipt": ref(receipt_path)}
+
+
+def _cvc_from_native_state(project: Path) -> dict:
+    """The existing PDK CVC recipe on this run's native LVS State."""
+    import time
+    started = time.monotonic()
+    selected = json.loads((_pl.reports_phase3_dir(project) / 'librelane_pv_lvs.json').read_text())
+    folder = Path(selected['metrics']['design__lvs_error__count']['folder'])
+    state = json.loads((folder / 'state_out.json').read_text())
+    config = json.loads((folder / 'config.json').read_text())
+    root = Path(os.environ['VIBEIC_LIBRELANE_PDK_ROOT'])
+    def material(raw):
+        path = Path(raw)
+        if path.is_file():
+            return str(path)
+        parts = path.parts
+        return str(root.joinpath(*parts[parts.index(config['PDK']):]))
+    liberty = next(f for files in config['LIB'].values() for f in files)
+    pdk = PdkConfig(name=config['PDK'], liberty=material(liberty),
+        tech_lef=material(next(iter(config['TECH_LEFS'].values()))),
+        cell_lef=material(config['CELL_LEFS'][0]), cell_gds=None, site='', drc_deck=None)
+    native = _native_cvc_category(project, config['DESIGN_NAME'], pdk,
+        os.environ.get('VIBEIC_EDA_IMAGE'), extracted_netlist=Path(state['spice']),
+        adopted_netlist=Path(state['nl']))
+    status = native['result'] if native['result'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
+    report = {'verdict': status, 'CVC_total': native.get('counts', {}).get('Total'),
+        'native': native, 'lvs_state': str(folder / 'state_out.json'),
+        'gds': state.get('gds'), 'scope': 'CVC electrical rules',
+        'unmeasured_obligations': ['latch-up spacing', 'ESD characterization'],
+        'wall_seconds': time.monotonic() - started}
+    _aa.write_text(_pl.reports_phase3_dir(project) / 'perc_equivalent.json', json.dumps(report, indent=2) + '\n')
+    return report
 
 
 def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
