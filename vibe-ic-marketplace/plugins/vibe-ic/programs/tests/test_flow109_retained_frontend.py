@@ -197,3 +197,27 @@ def test_missing_lint_result_reaches_the_native_route(tmp_path, monkeypatch):
     monkeypatch.setattr(native, 'selected_mode', route)
     with pytest.raises(RuntimeError, match='^native lint route reached$'):
         owner.step_rtl_lint_tool(tmp_path)
+
+
+@pytest.mark.parametrize(('step', 'native_step'), [('D11', '2'), ('D13', '4'), ('D14', '5')])
+@pytest.mark.parametrize('status', ['PASS', 'FAIL', 'NOT_MEASURED'])
+def test_completed_native_owner_uses_the_single_reader(tmp_path, monkeypatch, step, native_step, status):
+    import vibe_ic_one_shot_runner as runner
+    context = flow109.execution_context(flow109.resolve_plan(profile()), step, step)
+    path = tmp_path / 'context.json'
+    path.write_text(json.dumps(context))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(path))
+    seen = []
+    def read(project, current):
+        assert project == tmp_path and current == context
+        return {'component_status': status, 'reason': 'native report read'}
+    def finish(project, result):
+        seen.append(result['steps'][0])
+        return {'default_row_status': status}
+    monkeypatch.setattr(flow109, '_retained_native_result', read)
+    monkeypatch.setattr(flow109, 'finish_native_window', finish)
+    result = getattr(runner, f'_finish_{step.lower()}_selected_owner')(
+        tmp_path, {}, {}, published_current=True)
+    assert result['verdict'] == status
+    assert seen == [{'status': status, 'extras': {
+        'component_status': status, 'reason': 'native report read', 'step_id': native_step}}]

@@ -990,3 +990,18 @@ def test_native_activity_requires_a_measured_simulator_result(tmp_path, monkeypa
     result = activity._execute_native_cases(tmp_path, {})
     assert result['component_status'] == expected
     assert result['modes'] == {}
+
+
+def test_native_execution_uses_the_single_retained_reader(tmp_path, monkeypatch):
+    import _container_exec
+    import flow109
+    monkeypatch.setattr(_container_exec, 'no_container_route', lambda: True)
+    context = {'requested_step': 'D55'}
+    result = {'component_status': 'PASS', 'native_started': False}
+    seen = []
+    def read(project, current):
+        seen.append((project, current))
+        return result
+    monkeypatch.setattr(flow109, '_retained_native_result', read)
+    assert activity.execute(tmp_path, context) == result
+    assert seen == [(tmp_path, context)]
