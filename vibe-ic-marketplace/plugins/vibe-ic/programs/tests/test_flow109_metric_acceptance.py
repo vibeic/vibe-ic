@@ -51,6 +51,26 @@ def _approved_case(tmp_path: Path):
     return manifest, registry
 
 
+@pytest.mark.parametrize('reader', ['required_items', 'document'])
+def test_requirement_reader_does_not_require_a_person_name(tmp_path, reader):
+    path = _authority(tmp_path, 'limits', ('name',), [{'name': 'setup'}])
+    body = json.loads(path.read_text())
+    del body['approval']['approver']
+    body['limits'] = {'min': 0}
+    path.write_text(json.dumps(body))
+    relative = path.relative_to(tmp_path).as_posix()
+    if reader == 'required_items':
+        authority, observed = metrics._approved_authority(
+            tmp_path, relative + '#/required_items', ('name',))
+        assert authority['required_items'] == [{'name': 'setup'}]
+    else:
+        authority, observed = metrics._approved_document(
+            tmp_path, relative, authority='requirements_owner',
+            schema=metrics.AUTHORITY_SCHEMA)
+    assert authority['status'] == 'APPROVED'
+    assert observed['limits'] == {'min': 0}
+
+
 def _report_and_context(project: Path):
     report = json.loads((project / "reports/flow109/components/A01.json").read_text())
     # These retained component fixtures have no completed native row owner.

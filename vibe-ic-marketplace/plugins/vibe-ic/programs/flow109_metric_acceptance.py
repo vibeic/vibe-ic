@@ -376,8 +376,6 @@ def _approved_authority(project: Path, reference: str,
             or not isinstance(approval, dict)
             or approval.get("status") != "APPROVED"
             or approval.get("authority") != "requirements_owner"
-            or not isinstance(approval.get("approver"), str)
-            or not approval["approver"].strip()
             or not isinstance(source, dict)
             or not isinstance(source.get("path"), str)
             or not _HEX.fullmatch(str(source.get("sha256", "")))):
@@ -433,9 +431,6 @@ def _approved_document(project: Path, relative: str, *, authority: str,
             or not isinstance(approval, dict)
             or approval.get("status") != "APPROVED"
             or approval.get("authority") != authority
-            or (authority == "requirements_owner" and (
-                not isinstance(approval.get("approver"), str)
-                or not approval["approver"].strip()))
             or not isinstance(source, dict)
             or not isinstance(source.get("path"), str)
             or not _HEX.fullmatch(str(source.get("sha256", "")))):
