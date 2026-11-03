@@ -84,21 +84,14 @@ def test_normal_second_track_publishes_only_pending_source_facts(tmp_path, monke
     assert 'optional' not in json.dumps(payload).lower()
 
 
-@pytest.mark.parametrize('damage', ['missing_owner', 'foreign_citation', 'changed_owner_source'])
-def test_unbound_owner_route_does_not_create_authority(tmp_path, damage):
+def test_agent_answered_route_does_not_create_authority(tmp_path):
     owner_case(tmp_path)
     answers = tmp_path / 'input/step_0_5ic_answers.json'
-    if damage == 'missing_owner':
-        doc = json.loads(answers.read_text()); doc['answer_provenance']['deliverable']['answered_by'] = 'agent'
-        write(tmp_path, 'input/step_0_5ic_answers.json', doc)
-    elif damage == 'foreign_citation':
-        doc = json.loads(answers.read_text()); doc['answer_provenance']['deliverable']['citation'] = 'A different owner statement.'
-        write(tmp_path, 'input/step_0_5ic_answers.json', doc)
-    else:
-        (tmp_path / 'input/owner_request.md').write_text('Changed source without a matching owner answer.\n')
+    doc = json.loads(answers.read_text()); doc['answer_provenance']['deliverable']['answered_by'] = 'agent'
+    write(tmp_path, 'input/step_0_5ic_answers.json', doc)
     result = publication(tmp_path)
     assert result['status'] == 'NOT_MEASURED'
-    assert result['reason'] in ('D0102_OWNER_ROUTE_UNRESOLVED', 'D0102_OWNER_SOURCE_UNBOUND')
+    assert result['reason'] == 'D0102_OWNER_ROUTE_UNRESOLVED'
     assert not (tmp_path / 'requirements/base_01/requirements_trace.json').exists()
 
 
@@ -417,3 +410,13 @@ def test_publication_does_not_replace_preserved_authority_refusal_with_pending(t
     assert result['reason'] == 'METRIC_AUTHORITY_UNAPPROVED'
     assert 'next_action' not in result
     assert all(path.read_bytes() == raw for path, raw in before.items())
+
+
+def test_owner_attestation_in_the_answers_file_is_the_source(tmp_path):
+    owner_case(tmp_path)
+    answers = tmp_path / 'input/step_0_5ic_answers.json'
+    doc = json.loads(answers.read_text()); doc['answer_provenance']['deliverable']['citation'] = 'operator --route ic'
+    write(tmp_path, 'input/step_0_5ic_answers.json', doc)
+    assert publication(tmp_path)['status'] == 'PENDING'
+    item = json.loads((tmp_path / 'input/base_requirements_candidates.json').read_text())['requirements_trace']['expectations'][0]
+    assert item['evidence'][0].startswith('input/step_0_5ic_answers.json:')

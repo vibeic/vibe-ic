@@ -7116,7 +7116,10 @@ def _d0102_population(project: Path, key: str, metric: str, reads: dict) -> tupl
             relative, line, digest, literal = match.groups()
             if relative.startswith('docs/'):
                 relative = 'input/' + relative
-            if documents.get(relative) != digest:
+            # The owner's answers file is a source too: it holds the attested delivery route.
+            current = (_sha(_safe_project_file(project, relative).read_bytes())
+                       if relative == 'input/step_0_5ic_answers.json' else documents.get(relative))
+            if current != digest:
                 raise MetricRefusal('D0102_REQUIREMENT_SOURCE_STALE', exp['id'])
             lines = (project / relative).read_text().splitlines()
             if not 1 <= int(line) <= len(lines) or literal not in lines[int(line) - 1]:
