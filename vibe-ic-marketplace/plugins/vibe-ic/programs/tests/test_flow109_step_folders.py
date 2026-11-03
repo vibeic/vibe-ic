@@ -88,7 +88,7 @@ def test_unavailable_tool_leaves_its_reason(tmp_path, monkeypatch, failure):
         return {'step_id': 'D31', 'component_status': 'NOT_MEASURED',
                 'default_row_status': 'NOT_MEASURED', 'completed': False,
                 'reason': 'native report absent'}
-    monkeypatch.setattr(flow109, '_retained_backend_result', failed)
+    monkeypatch.setattr(flow109, '_retained_native_result', failed)
     if failure == 'exception':
         with pytest.raises(OSError, match='native executable absent'):
             run(tmp_path, args)
@@ -151,7 +151,7 @@ elif (p/'extra.log').exists(): (p/'extra.log').unlink()
                 'default_row_status': 'PASS', 'completed': True,
                 'native_report': str(project / 'shared/native.rpt'),
                 'inputs': [{'path': 'input/neutral.json', 'sha256': source_sha}]}
-    monkeypatch.setattr(flow109, '_retained_backend_result', tool)
+    monkeypatch.setattr(flow109, '_retained_native_result', tool)
     assert run(tmp_path, args) == 0
     results = versions(tmp_path, 'D31')
     assert len(results) == 1
@@ -177,7 +177,7 @@ def test_oversize_layout_is_listed_without_a_copy(tmp_path, monkeypatch):
             stream.truncate(publish._SIZE_CEILING + 1)
         return {'step_id': 'D31', 'context_sha256': context['context_sha256'], 'component_status': 'PASS',
                 'default_row_status': 'PASS', 'completed': True}
-    monkeypatch.setattr(flow109, '_retained_backend_result', tool)
+    monkeypatch.setattr(flow109, '_retained_native_result', tool)
     assert run(tmp_path, args) == 0
     results = versions(tmp_path, 'D31')
     assert len(results) == 1
@@ -228,7 +228,7 @@ def test_inputs_are_only_paths_already_exposed_in_row_result(tmp_path, monkeypat
                 'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True,
                 'native_report': str(report),
                 'inputs': [{'path': 'input/neutral.json', 'sha256': original_source}]}
-    monkeypatch.setattr(flow109, '_retained_backend_result', native)
+    monkeypatch.setattr(flow109, '_retained_native_result', native)
     assert run(tmp_path, args) == 0
     result = versions(tmp_path, 'D31')[0]
     folder = result.parent
@@ -288,7 +288,7 @@ Path(sys.argv[3]).read_text()
             str(Path(collector.__file__).parent), str(trigger), str(source)]))
         return {'step_id': 'D31', 'context_sha256': context['context_sha256'],
                 'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True}
-    monkeypatch.setattr(flow109, '_retained_backend_result', native)
+    monkeypatch.setattr(flow109, '_retained_native_result', native)
     try:
         assert run(tmp_path, args) == 0
         results = versions(tmp_path, 'D31')

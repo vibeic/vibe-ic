@@ -149,7 +149,7 @@ def test_d12_uses_existing_role_aware_acceptance(tmp_path, monkeypatch, status):
     context = flow109.execution_context(flow109.resolve_plan(profile()), 'D12', 'D12')
     for name in ('cdc_reg_crossing', 'cdc_async_input', 'cdc_reset_dep'):
         put(tmp_path / f'reports/phase2/gates/{name}.json', {'passed': False})
-    assert flow109._retained_frontend_result(tmp_path, context) is None
+    assert flow109._retained_native_result(tmp_path, context) is None
     accepted = {'status': status, 'reason': 'current role-aware observation',
                 'observed': {'findings': [] if status == 'PASS' else [{'rule': 'blocking finding'}]}}
     monkeypatch.setattr(native, 'local_image_attestation', lambda: {})
