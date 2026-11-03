@@ -493,6 +493,8 @@ def _power_script(prepared, vcd, scope, output, done):
     text = ''.join('read_liberty ' + _word(liberty) + '\n' for liberty in liberties)
     text += 'read_verilog ' + _word(paths['adopted_netlist'])
     text += '\nlink_design ' + prepared['manifest']['top'] + '\nread_sdc ' + _word(paths['sdc']) + '\n'
+    if paths.get('spef'):
+        text += 'read_spef ' + _word(paths['spef']) + '\n'
     text += 'foreach p [all_inputs] { puts "D55_PORT [get_full_name $p] input" }\n'
     text += 'foreach p [all_outputs] { puts "D55_PORT [get_full_name $p] output" }\n'
     for port, load in prepared['loads']['ports'].items():
@@ -972,8 +974,120 @@ def _execute_row_invocation(project, context):
     return result
 
 
+def _execute_native_cases(project, context):
+    """Run this State's authored GLS benches, then consume VCD in OpenSTA."""
+    import time
+    import librelane_contract as ll
+    import sdf_gate_sim as sgs
+    started = time.monotonic()
+    result = {'step_id': 'D55', 'context_sha256': context.get('context_sha256'),
+              'component_status': 'NOT_MEASURED', 'default_row_status': 'NOT_MEASURED',
+              'flow109_acceptance': 'NOT_MEASURED', 'native_started': False, 'modes': {},
+              'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
+    output = project / 'reports/phase3/functional_activity.json'
+    try:
+        selected = _read(project / 'reports/phase3/sta_postpnr_signoff.json')
+        state_path = Path(selected['sta_state'])
+        state, config = _read(state_path), _read(state_path.with_name('config.json'))
+        manifest = _read(project / 'phase3/librelane/29-config/gls/gls_manifest.json')
+        if manifest.get('not_a_subject'):
+            result['unmeasured_obligations'] = manifest['not_a_subject']
+        corner = config['DEFAULT_CORNER']
+        timed = ll.post_pnr_timing_inputs(project, state_path, corner)
+        pdk_root = Path(__import__('os').environ['VIBEIC_LIBRELANE_PDK_ROOT'])
+        def material(raw):
+            path = Path(raw)
+            if path.exists():
+                return path
+            parts = path.parts
+            index = parts.index(config['PDK'])
+            return pdk_root.joinpath(*parts[index:])
+        liberties = [material(f) for f in timed['liberties']]
+        ports = dump.module_ports(Path(state['nl']), config['DESIGN_NAME'])
+        wrapper = _read(project / sgs.CHIP_TOP_RECORD_REL)
+        paths = {'adopted_netlist': Path(state['nl']), 'sdc': Path(config.get('SIGNOFF_SDC_FILE') or state['sdc']),
+                 'spef': project / timed['spef'],
+                 'liberty': liberties[0], 'liberties': liberties,
+                 'pad_liberty': liberties[-1],
+                 'io_connectivity': project / wrapper['chip_top_verilog']}
+        authority = _derive_scenario_authority(paths, ports)
+        prepared = {'paths': paths, 'loads': authority['external_loads'],
+                    'manifest': {'top': config['DESIGN_NAME']}}
+        folder = project / 'phase3/librelane/functional-activity'
+        folder.mkdir(parents=True, exist_ok=True)
+        for case in manifest['cases']:
+            work = folder / case['id']
+            work.mkdir(parents=True, exist_ok=True)
+            bench = work / 'bench.v'
+            bench_text = Path(case['testbench']).read_text().replace(
+                manifest['sdf_placeholder'], str(state['sdf'][corner]))
+            unchanged_bench = bench.is_file() and bench.read_text() == bench_text
+            if not unchanged_bench:
+                bench.write_text(bench_text)
+            transcripts = []
+            def native(argv, cwd):
+                if argv[0] == 'iverilog':
+                    argv = [argv[0], *sgs._IVERILOG_FLAGS.split(), *argv[2:]]
+                elif argv[0] == 'vvp':
+                    argv = [argv[0], *argv[1:], '-sdf-info']
+                proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+                (work / (Path(argv[0]).name + '.log')).write_text(proc.stdout + proc.stderr)
+                transcripts.append(proc.stdout + proc.stderr)
+                return proc.returncode, proc.stdout, proc.stderr
+            result['native_started'] = True
+            retained = work / dump.MANIFEST
+            inputs = [Path(state['nl']), *map(Path, manifest['models']), Path(manifest['stubs']),
+                      Path(state['sdf'][corner])]
+            if (unchanged_bench and retained.is_file()
+                    and all(p.stat().st_mtime_ns <= retained.stat().st_mtime_ns for p in inputs)):
+                activity = _read(retained)
+                simulation_text = (work / 'vvp.log').read_text()
+            else:
+                activity = dump.dump([state['nl'], *manifest['models'], manifest['stubs']],
+                                     [str(bench)], config['DESIGN_NAME'], work, native)
+                simulation_text = transcripts[-1] if transcripts else ''
+            parsed = sgs.parse_l10_case_stdout(simulation_text)
+            if activity.get('status') != 'PASS' or activity.get('vvp_rc') != 0 or parsed.get('verdict') != 'PASS':
+                raise AdmissionRefusal('D55_GLS_FAILED', str(activity),
+                    status='FAIL' if parsed.get('verdict') == 'FAIL' else 'NOT_MEASURED')
+            script, report = work / 'power.tcl', work / 'power.rpt'
+            done = case['id']
+            script.write_text(_power_script(prepared, Path(activity['vcd']), activity['scope'], report, done))
+            proc = subprocess.run([shutil.which('sta') or shutil.which('opensta'),
+                                   '-no_splash', '-exit', str(script)], capture_output=True, text=True)
+            report.write_text(proc.stdout + proc.stderr)
+            if proc.returncode:
+                raise AdmissionRefusal('D55_POWER_TOOL_FAILED', str(report))
+            measured = consume_power(report, {'required_ports': _native_port_names(ports),
+                                      'clock_port': authority['clock']}, prepared['loads'], done)
+            groups = power.parse_power_report(report.read_text())['rows']
+            pad = sum(g['total_w'] for g in groups if g['group'].lower() == 'pad')
+            result['modes'][case['id']] = {**measured, 'activity': activity,
+                'vector_non_pad_mw': (measured['power']['total_w'] - pad) * 1000,
+                'report': str(report)}
+            write_json(output, result)
+        if not result['modes'] or manifest.get('not_a_subject'):
+            raise AdmissionRefusal('D55_SCENARIO_POPULATION_INCOMPLETE', str(manifest.get('not_a_subject')))
+        result.update(component_status='PASS', default_row_status='PASS', flow109_acceptance='PASS',
+                      completed=True)
+    except (AdmissionRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        status = getattr(exc, 'status', 'NOT_MEASURED')
+        result.update(component_status=status, default_row_status=status, flow109_acceptance=status,
+                      reason=getattr(exc, 'code', 'D55_NATIVE_INPUT_UNAVAILABLE'), detail=str(exc))
+    result['wall_seconds'] = time.monotonic() - started
+    write_json(output, result)
+    return result
+
+
 def execute(project, context):
     project = Path(project).resolve()
+    import _container_exec as ce
+    if ce.no_container_route() and not (project / INPUT).is_file() and not (project / ROW_INPUT).is_file():
+        import flow109
+        retained = flow109._retained_backend_result(project, context)
+        if retained and retained['component_status'] != 'NOT_MEASURED':
+            return retained
+        return _execute_native_cases(project, context)
     if (project / ROW_INPUT).is_file():
         return _execute_row_invocation(project, context)
     (project / FREEZE).unlink(missing_ok=True)

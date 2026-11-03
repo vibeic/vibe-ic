@@ -946,3 +946,47 @@ def test_d55_waveform_proposal_reads_netlist_ports_for_every_approved_mode(tmp_p
     assert reference['mission'] == {**_WAVE, 'netlist_sha256': _sha_of(netlist)}
     with pytest.raises(ValueError, match='D55_WAVEFORM_SOURCE_EXISTS'):
         activity.propose_waveform_reference(tmp_path, netlist, 'activity_beta', 'tb/dut', '1ps')
+
+
+def test_native_vector_power_reads_the_selected_spef(tmp_path):
+    paths = {key: tmp_path / (key + '.native') for key in
+             ('liberty', 'sdc', 'adopted_netlist', 'spef')}
+    prepared = {'paths': paths, 'manifest': {'top': 'selected_chip'}, 'loads': {'ports': {}}}
+    script = activity._power_script(prepared, tmp_path / 'current.vcd', 'tb/chip',
+                                     tmp_path / 'power.rpt', 'native-done')
+    assert str(paths['spef']) in script
+    assert script.index('read_spef ') < script.index('read_vcd ')
+
+
+@pytest.mark.parametrize(('transcript', 'expected'), [('', 'NOT_MEASURED'),
+                         ('[TB probe] FAIL: comparator\n', 'FAIL')])
+def test_native_activity_requires_a_measured_simulator_result(tmp_path, monkeypatch, transcript, expected):
+    import librelane_contract as ll
+    import sdf_gate_sim as sgs
+    state_path = tmp_path / 'native/state_out.json'
+    state_path.parent.mkdir()
+    state = {'nl': str(tmp_path / 'chip.v'), 'sdc': str(tmp_path / 'chip.sdc'),
+             'sdf': {'tt': str(tmp_path / 'chip.sdf')}}
+    _put(tmp_path, 'native/state_out.json', state)
+    _put(tmp_path, 'native/config.json', {'DESIGN_NAME': 'chip', 'PDK': 'neutral', 'DEFAULT_CORNER': 'tt'})
+    _put(tmp_path, 'reports/phase3/sta_postpnr_signoff.json', {'sta_state': str(state_path)})
+    bench = tmp_path / 'authored.v'; bench.write_text('authored software fixture')
+    _put(tmp_path, 'phase3/librelane/29-config/gls/gls_manifest.json',
+         {'cases': [{'id': 'probe', 'testbench': str(bench)}], 'models': [],
+          'stubs': str(tmp_path / 'stubs.v'), 'sdf_placeholder': 'SDF'})
+    _put(tmp_path, sgs.CHIP_TOP_RECORD_REL, {'chip_top_verilog': 'wrapper.v'})
+    monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(tmp_path))
+    monkeypatch.setattr(ll, 'post_pnr_timing_inputs', lambda *a, **kw:
+                        {'liberties': [str(bench)], 'spef': 'chip.spef'})
+    monkeypatch.setattr(activity.dump, 'module_ports', lambda *a: [])
+    monkeypatch.setattr(activity, '_derive_scenario_authority', lambda *a:
+                        {'external_loads': {'ports': {}}, 'clock': 'clk'})
+    monkeypatch.setattr(activity.subprocess, 'run', lambda argv, **kw:
+                        subprocess.CompletedProcess(argv, 1, transcript, ''))
+    def incomplete(rtl, tbs, top, folder, native):
+        native(['vvp', 'software-fixture'], str(folder))
+        return {'status': 'FAIL', 'vvp_rc': 1}
+    monkeypatch.setattr(activity.dump, 'dump', incomplete)
+    result = activity._execute_native_cases(tmp_path, {})
+    assert result['component_status'] == expected
+    assert result['modes'] == {}
