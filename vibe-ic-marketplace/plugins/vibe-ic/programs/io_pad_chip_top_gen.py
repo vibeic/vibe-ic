@@ -2127,6 +2127,37 @@ def bind_io_timing_scenes(
     }
 
 
+def _bind_side_names(project: Path, side_ports: Dict[str, List[str]],
+                     nets: List[str]) -> Dict[str, List[str]]:
+    """Name each placed pad by its port: exact, declared pad_signal_map, then case."""
+    import _submission_template as st
+    import _tapeout_declaration as declaration
+
+    declared: Dict[str, str] = {}
+    path = project / st.DESIGN_ANSWERS_REL
+    if path.is_file():
+        doc, error = declaration.load(path)
+        value = declaration.answer(doc, "pad_signal_map") if doc and not error else None
+        declared = value if isinstance(value, dict) else {}
+    folded: Dict[str, List[str]] = {}
+    for net in nets:
+        folded.setdefault(net.casefold(), []).append(net)
+
+    def bind(name: str) -> str:
+        if name in nets:
+            return name
+        if name in declared:
+            if declared[name] not in nets:
+                raise Refusal("SIDE_NAMES_UNKNOWN_PORT",
+                              f"answers.pad_signal_map binds {name} to "
+                              f"{declared[name]!r}, which the port list does not declare")
+            return declared[name]
+        same = folded.get(name.casefold(), [])
+        return same[0] if len(same) == 1 else name
+
+    return {side: [bind(name) for name in names] for side, names in side_ports.items()}
+
+
 def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
         power_net: Optional[str] = None, ground_net: Optional[str] = None,
         tie_high_cell: Optional[str] = None,
@@ -2253,6 +2284,7 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
             nets.append(net)
             direction_of[net] = d
 
+    side_ports = _bind_side_names(project, side_ports, nets)
     placed = [n for side in side_ports.values() for n in side]
     dupes = sorted({n for n in placed if placed.count(n) > 1})
     if dupes:
