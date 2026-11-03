@@ -59,19 +59,21 @@ def pending_review_action(project: Path, step_id: str) -> str | None:
     return None
 
 
-def _owner_fact(project: Path, documents: dict) -> tuple[dict, str]:
+def _owner_fact(project: Path) -> tuple[dict, str]:
+    """The delivery route is owner-attested in the answers file; that file is its source."""
     doc, endpoint = declaration.read_owner_delivery(project, submission.DESIGN_ANSWERS_REL)
     citation = declaration.attestation_of(doc, 'deliverable')['citation'].strip()
-    for relative, digest in documents.items():
-        for number, text in enumerate((project / relative).read_text().splitlines(), 1):
-            if citation and citation in text:
-                return {
-                    'id': 'delivery-route', 'layer': 'L19_CONSTRAINTS_PDK',
-                    'field_path': '/constraints/tapeout_geometry/deliverable',
-                    'requirement': 'Preserve the explicit owner delivery route.',
-                    'expected_tokens': [endpoint],
-                    'evidence': [f'{relative}:{number} sha256:{digest} — {citation}'],
-                }, endpoint
+    raw = (project / submission.DESIGN_ANSWERS_REL).read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    for number, text in enumerate(raw.decode().splitlines(), 1):
+        if citation and citation in text:
+            return {
+                'id': 'delivery-route', 'layer': 'L19_CONSTRAINTS_PDK',
+                'field_path': '/constraints/tapeout_geometry/deliverable',
+                'requirement': 'Preserve the explicit owner delivery route.',
+                'expected_tokens': [endpoint],
+                'evidence': [f'{submission.DESIGN_ANSWERS_REL}:{number} sha256:{digest} — {citation}'],
+            }, endpoint
     raise ValueError('D0102_OWNER_SOURCE_UNBOUND')
 
 
@@ -95,7 +97,7 @@ def publish(project: Path) -> dict:
             return result
         documents = metrics._d0102_documents(project, {}, include_owner_request=True)
         try:
-            fact, endpoint = _owner_fact(project, documents)
+            fact, endpoint = _owner_fact(project)
         except ValueError as exc:
             if str(exc) == 'D0102_OWNER_SOURCE_UNBOUND':
                 result['reason'] = str(exc)
