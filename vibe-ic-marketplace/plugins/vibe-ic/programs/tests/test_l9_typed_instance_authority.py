@@ -246,4 +246,3 @@ def test_declared_block_is_not_also_listed_as_spurious(tmp_path):
     doc = json.loads(Path(runner.gen_l5_adi_spec(tmp_path, {"spec.md": text}).path).read_text())
     assert "adc" in [b["name"] for b in doc["analog_blocks"]]
     assert "adc" not in [b["name"] for b in doc.get("spurious_analog_blocks", [])]
-
