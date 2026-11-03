@@ -2480,18 +2480,6 @@ def produce_signoff(project, params):
             return {'verdict': 'NOT_MEASURED',
                     'detail': 'Step31 refused unadmitted routed GDS: ' + str(error or basis),
                     'physical_views': physical_views}
-        if params.get('execution_mode') == 'default':
-            # The physical-current readers below name this record as their
-            # technology. No Default stream-out writer runs on this path.
-            # Without a final DEF those readers refuse by name themselves.
-            from _prestream_native import signoff_inputs
-            try:
-                final_def = signoff_inputs(project, 'def')['def']
-            except (OSError, ValueError) as exc:
-                notes.append(f'technology record not written: {exc}')
-            else:
-                R.publish_database_unit_declaration(
-                    project, pdk, container, final_def, publish_declaration=False)
         # Complementary axes ALL execute. No DRC winner can hide a failing LVS.
         drc = R.step_drc(project, top, pdk, container)
         lvs = R.step_lvs(project, top, pdk, container, upstream_pnr=None)

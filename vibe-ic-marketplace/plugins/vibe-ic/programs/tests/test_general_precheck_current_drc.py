@@ -42,7 +42,6 @@ def _fixture(project, violations=0):
     tech = _put(project, "input/pdk/tech.lef", "VERSION 5.8 ;\nEND LIBRARY\n")
     cells = _put(project, "input/pdk/cells.lef", "VERSION 5.8 ;\nEND LIBRARY\n")
     deck = _put(project, "input/pdk/deck.lydrc", "# neutral parser-control recipe\n")
-    _put(project, "reports/phase3/technology_units.json", json.dumps({"pdk": "neutral"}))
     native = project / "phase3/reports/drc.rpt"
     native.parent.mkdir(parents=True, exist_ok=True)
     log = native.with_suffix(".log")

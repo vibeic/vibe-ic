@@ -37510,6 +37510,17 @@ def _pdk_relative(value: str, pdk_name: str) -> Optional[Tuple[str, ...]]:
     return view if len(view) >= 2 and view[0] == "libs.ref" else None
 
 
+def _current_pdk_view(path: str, pdk: PdkConfig) -> str:
+    """The same library file under the PDK root this run reads its cell LEF from.
+
+    Without one the recorded path stands and the tool reports the missing file."""
+    view, cell = _pdk_relative(path, pdk.name), _pdk_relative(pdk.cell_lef, pdk.name)
+    if not view or not cell or Path(path).is_file():
+        return path
+    current = Path(*Path(pdk.cell_lef).parts[:-len(cell)]).joinpath(*view)
+    return str(current) if current.is_file() else path
+
+
 def _restore_recorded_physical_views(project: Path, pdk: PdkConfig,
                                      container: str) -> Dict[str, Any]:
     """Give a process that did NOT run place-and-route the physical views
@@ -37572,34 +37583,15 @@ def _restore_recorded_physical_views(project: Path, pdk: PdkConfig,
     base = {str(pdk.tech_lef), str(pdk.cell_lef),
             str(pdk.tech_lef_source or "")}
     base_views = {_pdk_relative(path, pdk.name) for path in base} - {None}
-    wanted = []
+    loaded = {_pdk_relative(path, pdk.name) for path in pdk.macro_lefs} - {None}
     for value in recorded:
         path = str(_recorded_run_path(project, str(value)))
+        view = _pdk_relative(path, pdk.name)
         # The recorded tech LEF is never a macro LEF -- verified or not.
-        if (path in base or path == derived
-                or _pdk_relative(path, pdk.name) in base_views
+        if (path in base or path == derived or view in base_views
                 or Path(path).name == Path(str(pdk.tech_lef)).name):
             continue
-        wanted.append(path)
-    # Only a tool on this filesystem needs the current spelling; a container
-    # route can still read the recorded one.
-    unavailable = [path for path in wanted
-                   if _local_exec_mode() and _pdk_relative(path, pdk.name)
-                   and not Path(path).is_file()]
-    if unavailable:
-        import librelane_contract as contract
-        import librelane_postroute as postroute
-        try:
-            folder, _state = postroute.stapostpnr_state(project)
-            current = contract.resolve_io_lefs_through_pad_lefs(unavailable, folder)
-        except (contract.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
-            done["refused"] = f"recorded LEF paths could not be rebound: {exc}"
-            return done
-        rebound = dict(zip(unavailable, map(str, current)))
-        wanted = [rebound.get(path, path) for path in wanted]
-    loaded = {_pdk_relative(path, pdk.name) for path in pdk.macro_lefs} - {None}
-    for path in wanted:
-        view = _pdk_relative(path, pdk.name)
+        path = _current_pdk_view(path, pdk)
         if path not in pdk.macro_lefs and view not in loaded:
             pdk.macro_lefs.append(path)
             done["macro_lefs"].append(path)
