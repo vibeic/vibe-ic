@@ -502,3 +502,17 @@ def test_missing_lef_resistance_is_refused_not_assumed():
     data["pin_spec"].pop("resistance_ohm")
     with pytest.raises(a5.Refusal, match="ROUTING_INTENT_RESISTANCE_UNDECLARED"):
         plan_for(data, facts, cells, geo)
+
+
+def test_a_join_extension_is_as_wide_as_the_pin(monkeypatch):
+    painted = []
+    pin = {"net": "out", "layer": "metal4", "strip_box": (0, 0, 1000, 100), "width_lam": 1000}
+    plan = SimpleNamespace(pins=[pin], paint=lambda *args: painted.append(args))
+    geo = SimpleNamespace(rules={"metal_width_um": {4: .2, 5: 1.}}, intent_cuts={},
+                          metal_space=lambda layer: 10)
+    a5 = SimpleNamespace(_pin_stack_boxes=lambda *args: (None, {4: (-24, -24, 24, 24), 5: (-24, -24, 24, 24)}))
+    monkeypatch.setattr(ri, "_safe", lambda *args: True)
+    ri._join_port(plan, "out", 2, 0, SimpleNamespace(canonical={"out": "out"}), geo, a5)
+    x1, _, x2, _ = painted[0][2:]
+    assert x2 - x1 == 1000
+    assert pin["label_box"][2] - pin["label_box"][0] == 1000

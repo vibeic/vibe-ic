@@ -533,7 +533,9 @@ def _join_port(plan, owner, count, band, compiled, geo, a5):
     top = level + 1
     cuts = geo.intent_cuts.get(owner, 1)
     _, bars = a5._pin_stack_boxes(0, 0, level, top, geo, cuts)
-    bx = max(abs(bars[level][0]), abs(bars[level][2]))
+    # The extension carries the pin's whole current, so it is as wide as the pin.
+    strip = pin["strip_box"]
+    bx = max(abs(bars[level][0]), abs(bars[level][2]), math.ceil((strip[2] - strip[0]) / 2))
     by = max(abs(bars[level][1]), abs(bars[level][3]), abs(bars[top][1]), abs(bars[top][3]))
     pitch = 2 * by + max(geo.metal_space(f"metal{top}"), geo.metal_space(f"metal{level}"))
     x = (pin["strip_box"][0] + pin["strip_box"][2]) // 2
