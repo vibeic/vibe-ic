@@ -1,155 +1,78 @@
-"""D64 actual new-geometry component; no benchmark PASS/PDK qualification."""
-from __future__ import annotations
-import copy
+"""Native finishing XOR owns D64 for both IC and hard-IP streams."""
 import json
 from pathlib import Path
-import shutil
-import subprocess
-import sys
+from types import SimpleNamespace
 
 import pytest
-import flow109
-import flow109_admission as admission
+import librelane_contract as contract
+import librelane_fill_dfm as fill
 import flow109_final_geometry as geometry
-import librelane_fill_stream as stream
-from librelane_contract import Refusal
-from test_librelane_fill_stream import _native_case, _put
+import librelane_pv_signoff as pv
+import phase3_one_shot_runner as runner
 
 
-def _case(project, *, ic=False, fill_width=1.0):
-    d62, native = _native_case(project, fill_width=fill_width)
-    native.pop('seal_gds')
-    views = {'netlist': _put(project, 'inputs/adopted.v', 'module fill_smoke(input a,output y);assign y=a;endmodule\n'),
-             'sdc': _put(project, 'inputs/adopted.sdc', 'create_clock -period 10 [get_ports a]\n')}
-    core = [0, 0, 20, 20]
-    config = _put(project, 'inputs/D64-operation.json', {'schema': geometry.SCHEMA,
-        'basis': 'D62_native_odb_and_def', 'seal_policy': 'hard_ip_no_seal', 'core_area_um': core})
-    bundle = _put(project, 'inputs/D64-model-bundle.json', {'native_stream_inputs': native, 'adopted_views': views})
-    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
-                    if p['name'] == ('Small digital IC without DFT' if ic else 'Digital hard-IP'))
-    plan = flow109.resolve_plan(features)
-    manifest = {'schema': geometry.SCHEMA, 'd62_receipt': d62,
-        'native_stream_inputs': native, 'adopted_views': views, 'seal_policy': 'hard_ip_no_seal',
-        'core_area_um': core, 'operation_config': config, 'model_bundle': bundle,
-        'librelane': {'PDK': 'gf180mcuD', 'STD_CELL_LIBRARY': 'gf180mcu_fd_sc_mcu7t5v0', 'pdk_root': '/foss/pdks'}}
-    _put(project, geometry.INPUT, manifest)
-    uses, qualified = [], []
-    for use in flow109.resolve_step(plan, 'D64')['tool_uses']:
-        executable = stream._record(project, Path(shutil.which(use['executable_name'])).resolve())
-        identity = {'use_id': use['use_id'], 'tool_id': use['tool_id'],
-            'version': 'developer native component control; not PDK qualification',
-            'build_sha256': executable['sha256'], 'executable': executable,
-            'config': config, 'pdk': bundle, 'deck': bundle, 'corner': 'synthetic_geometry',
-            'semantics': {'purpose': use['purpose'], 'native_steps': use['native_steps'],
-                          'operation_sources': geometry.operation_sources()}}
-        record = {'use_id': use['use_id'], 'status': 'QUALIFIED', 'identity': identity,
-            'reference_evidence': [_put(project, 'inputs/D64-qualification-control.json',
-                {'scope': 'developer contract controls, not production qualification'})]}
-        qualified.append(record)
-        uses.append({**identity, 'qualification_sha256': admission.canonical_sha(record)})
-    _put(project, 'D64-qualifications.json', {'schema': 'vibeic.flow109.qualifications.v1', 'uses': qualified})
-    _put(project, 'D64-manifest.json', {'features': features, 'runtime_tool_uses': uses,
-        'qualification_registry': 'D64-qualifications.json'})
-    return flow109.execution_context(plan, 'D64', 'D64', runtime_tool_uses=uses,
-        qualification_registry='D64-qualifications.json')
+def put(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value) if isinstance(value, dict) else value)
+    return path
 
 
-def test_actual_general_frontdoor_consumes_new_d62_geometry_and_native_finishing_xor(tmp_path):
-    _case(tmp_path)
-    old = _put(tmp_path, 'reports/phase3/gds_xor.json', {'verdict': 'PASS', 'scope': 'old geometry not adopted'})
-    before = (tmp_path / old['path']).read_bytes()
-    proc = subprocess.run([sys.executable, str(geometry.HERE / 'vibe_ic_one_shot_runner.py'),
-        str(tmp_path), '--flow', '109', '--flow109-manifest', str(tmp_path / 'D64-manifest.json'),
-        '--entry-step', 'D64', '--exit-step', 'D64', '--route', 'ip', '--no-dashboard'],
-        capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    record = json.loads((tmp_path / 'reports/flow109/components/D64.json').read_text())
-    assert record['component_status'] == 'PASS', record
-    current = geometry.validate_final_geometry(tmp_path, record['receipt'])
-    assert current['component_geometry_current'] is True
-    assert current['flow109_acceptance'] == current['final_geometry_adoption'] == 'NOT_MEASURED'
-    assert record['geometry_proof']['fill_count'] > 0
-    assert record['finishing_xor']['defect_count'] == 0
-    assert record['finishing_xor']['design_pair_count'] > 0
-    assert (tmp_path / old['path']).read_bytes() == before
-    assert current['d62_receipt'] == record['d62_receipt']
-    # Reuse checks the actual current qualification, not merely its old PASS.
-    qualification = tmp_path / 'D64-qualifications.json'
-    original_qualification = qualification.read_bytes()
-    bad = json.loads(original_qualification); bad['uses'][0]['status'] = 'UNSUPPORTED'
-    qualification.write_text(json.dumps(bad))
-    with pytest.raises(admission.AdmissionRefusal, match='QUALIFICATION_UNSUPPORTED'):
-        geometry.validate_final_geometry(tmp_path, record['receipt'])
-    qualification.write_bytes(original_qualification)
-    # A missing final GDS must not inherit the recorded geometry verdict.
-    gds = stream._bound(tmp_path, record['gds']); saved_gds = gds.with_suffix('.saved')
-    gds.rename(saved_gds)
-    try:
-        with pytest.raises(Refusal, match='FILL_STREAM_INPUT_CHANGED'):
-            geometry.validate_final_geometry(tmp_path, record['receipt'])
-    finally:
-        saved_gds.rename(gds)
-    # Even self-consistent hashes and zero JSON counters cannot launder an
-    # actual native RDB that contains a difference.
-    import klayout.rdb as rdb
-    xml = stream._bound(tmp_path, record['finishing_xor']['report']); original_xml = xml.read_bytes()
-    database = rdb.ReportDatabase('negative finishing control')
-    cell = database.create_cell('fill_smoke'); category = database.create_category('changed-core')
-    database.create_item(cell.rdb_id(), category.rdb_id())
-    database.save(str(xml))
-    forged = json.loads(stream._bound(tmp_path, record['receipt']).read_text())
-    forged['finishing_xor']['report'] = stream._record(tmp_path, xml)
-    forged_ref = _put(tmp_path, 'inputs/forged-zero-counter-component.json', forged)
-    try:
-        with pytest.raises(admission.AdmissionRefusal, match='D64_FINISHING_XOR_NOT_CLEAN'):
-            geometry.validate_final_geometry(tmp_path, forged_ref)
-    finally:
-        xml.write_bytes(original_xml)
-    assert geometry.validate_final_geometry(tmp_path, record['receipt'])['component_geometry_current']
+@pytest.mark.parametrize('status', ['PASS', 'FAIL'])
+def test_d64_runs_native_finishing_on_ic_streams(tmp_path, monkeypatch, status):
+    streams = {key: put(tmp_path / 'phase3' / (key + '.gds'), key)
+               for key in ('stream', 'sealed', 'canonical')}
+    monkeypatch.setattr(fill, 'validate_default_stream', lambda project: {
+        **{key: str(value) for key, value in streams.items()}, 'finishing_status': 'PASS', 'pdk': 'stream_kit'})
+    core = [2, 2, 18, 18]
+    monkeypatch.setattr(contract, '_runner_floorplan', lambda project:
+                        ([0, 0, 20, 20], core, {'CORE_AREA': 'native floorplan'}, '', {}))
+    monkeypatch.setattr(runner, '_detect_pdk', lambda project: SimpleNamespace(name='host_available_kit'))
+    monkeypatch.setattr(runner, '_librelane_step_ctx', lambda *args: ('wrong_image', tmp_path))
+    monkeypatch.setattr(contract, 'resolve_image', lambda project, **kwargs: 'stream_image')
+    resolved = []
+    def root(project, pdk, *, image):
+        resolved.append((pdk, image))
+        return str(tmp_path)
+    monkeypatch.setattr(contract, 'resolve_pdk_root', root)
+    observed = []
+    def native(project, image, root, pdk, **kwargs):
+        observed.append((image, root, pdk, kwargs))
+        return {'verdict': status, 'metrics': {'native-defects': 0 if status == 'PASS' else 1}}
+    monkeypatch.setattr(pv, 'run_finishing_xor', native)
+    result = geometry.execute(tmp_path, {'requested_step': 'D64'})
+    assert resolved == [('stream_kit', 'stream_image')]
+    assert observed == [('stream_image', tmp_path, 'stream_kit',
+                         {'pre': streams['stream'], 'sealed': streams['sealed'],
+                          'final': streams['canonical'], 'core': core,
+                          'core_source': 'native floorplan'})]
+    assert result['default_row_status'] == status
+    assert geometry.consume_default_row_completion(tmp_path, {}, result)['completed'] == (status == 'PASS')
 
 
-@pytest.mark.parametrize('damage', ['qualification', 'source', 'd62_rules', 'ic_no_seal'])
-def test_invalid_geometry_or_ic_seal_requirement_never_launches_native_stream(tmp_path, monkeypatch, damage):
-    context = _case(tmp_path, ic=damage == 'ic_no_seal')
-    if damage == 'qualification':
-        path = tmp_path / 'D64-qualifications.json'
-        doc = json.loads(path.read_text());doc['uses'][0]['status'] = 'UNSUPPORTED';path.write_text(json.dumps(doc))
-    elif damage == 'source':
-        monkeypatch.setattr(geometry, 'operation_sources', lambda: {'changed': 'native API'})
-    elif damage == 'd62_rules':
-        (tmp_path / 'inputs/rules.json').write_text('{}')
-    calls = []
-    monkeypatch.setattr(stream, 'stream_d62', lambda *a, **k: calls.append('native'))
-    result = geometry.execute(tmp_path, context)
-    assert result['component_status'] == 'NOT_MEASURED', result
-    assert result['native_started'] is False and calls == []
-    if damage == 'ic_no_seal':
-        assert result['reason'] == 'D64_D61_SEAL_REENTRY_NOT_IMPLEMENTED'
-
-
-def test_two_valid_native_components_cannot_borrow_another_admitted_manifest(tmp_path, monkeypatch):
-    import flow109_density_fill as density
-    absolute = lambda project, path: {'path': str(Path(path).resolve()), 'sha256': stream._sha(path)}
-    monkeypatch.setattr(stream, '_record', absolute)
-    monkeypatch.setattr(density, '_record', absolute)
-    components = []
-    for name, width in [('a', 1.0), ('b', 2.0)]:
-        project = tmp_path / name; project.mkdir()
-        context = _case(project, fill_width=width)
-        result = geometry.execute(project, context)
-        assert result['component_status'] == 'PASS', result
-        assert geometry.validate_final_geometry(project, result['receipt'])['component_geometry_current']
-        components.append((project, result, json.loads(stream._bound(project, result['receipt']).read_text())))
-    a, b = components
-    assert a[1]['geometry_proof']['fill_count'] != b[1]['geometry_proof']['fill_count']
-    assert a[1]['gds']['sha256'] != b[1]['gds']['sha256']
-    # B's GDS/DEF/ODB/native XOR/bridge remain independently valid. Borrow
-    # only A's admitted context and input envelope; the join must reject.
-    forged = copy.deepcopy(b[2])
-    for name in ('execution_context', 'context_sha256', 'inputs'):
-        forged[name] = a[2][name]
-    ref = _put(a[0], 'inputs/foreign-valid-component.json', forged)
-    with pytest.raises(admission.AdmissionRefusal, match='D64_ADMITTED_SOURCE_MISMATCH'):
-        geometry.validate_final_geometry(a[0], ref)
-    assert geometry.validate_final_geometry(a[0], a[1]['receipt'])['component_geometry_current']
-    assert geometry.validate_final_geometry(b[0], b[1]['receipt'])['component_geometry_current']
+@pytest.mark.parametrize('count,status', [(0, 'PASS'), (1, 'FAIL')])
+def test_retained_native_finishing_preserves_its_verdict(tmp_path, monkeypatch, count, status):
+    streams = {key: put(tmp_path / 'phase3' / (key + '.gds'), key)
+               for key in ('stream', 'sealed', 'canonical')}
+    monkeypatch.setattr(fill, 'validate_default_stream', lambda project: {
+        **{key: str(value) for key, value in streams.items()}, 'finishing_status': 'PASS', 'pdk': 'stream_kit'})
+    core = [2, 2, 18, 18]
+    monkeypatch.setattr(contract, '_runner_floorplan', lambda project:
+                        ([0, 0, 20, 20], core, {'CORE_AREA': 'native floorplan'}, '', {}))
+    folder = tmp_path / 'phase3/librelane/37.3-finishing/01-vibeic-finishingxor'
+    put(folder / 'state_in.json', {'gds': str(streams['canonical'])})
+    metrics = {key: count if key.endswith('__defect__count') else 0
+               for key in pv.PRODUCED['Vibeic.FinishingXOR']}
+    put(folder / 'state_out.json', {'gds': str(streams['canonical']), 'metrics': metrics})
+    put(folder / 'input_fingerprint.json', {'state_files': {
+        str(streams['canonical']): contract.digest(streams['canonical'])}})
+    put(folder / 'config.json', {'meta': {'step': 'Vibeic.FinishingXOR'},
+                                'VIBEIC_FINISHING_CORE_AREA': core})
+    report = tmp_path / 'reports/phase3/librelane_finishing_xor.json'
+    put(report, {'scope': {'pre_sha256': contract.digest(streams['stream']),
+                          'sealed_sha256': contract.digest(streams['sealed']),
+                          'final_sha256': contract.digest(streams['canonical'])},
+                 'metrics': {key: {'folder': str(folder)} for key in metrics}})
+    result = geometry.execute(tmp_path, {'requested_step': 'D64'})
+    assert result['default_row_status'] == status
+    assert result['native_started'] is False
+    assert result['metrics']['vibeic__finishing_xor__defect__count']['value'] == count

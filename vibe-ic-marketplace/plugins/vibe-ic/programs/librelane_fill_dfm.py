@@ -1378,9 +1378,8 @@ def update_record(project: Path, section: str, value: Dict[str, Any]) -> Path:
 def tool_density(project: Path) -> Optional[Dict[str, Any]]:
     """Step 35's CMP half: the density count step 34 recorded from the tool.
 
-    None when step 34 did not run on the tool (no record, or a record with no
-    measured GDS arm).  A record whose tool state no longer hashes to what it
-    names is refused: a cross-reference to evidence that moved is not one."""
+    None when step 34 has no measured GDS arm. The native State supplies the
+    count; a changed measured GDS needs a new run."""
     project = project.resolve()
     path = project / RECORD_REL
     if not path.is_file():
@@ -1398,19 +1397,18 @@ def tool_density(project: Path) -> Optional[Dict[str, Any]]:
     arm = arms.get(shipped) if shipped else None
     if not isinstance(arm, dict):
         return step37_density(project) if not arms else None
-    state = Path(str(arm.get('state') or ''))
-    if not state.is_file() or digest(state) != arm.get('state_sha256'):
+    state = _lc.project_path(project, arm.get('state') or '')
+    if not state.is_file():
         return {'status': 'STALE', 'source': RECORD_REL, 'state': str(state)}
-    count = _count(arm.get(DENSITY_METRIC))
+    row = validate_density_result(project, arm,
+        layout=_lc.project_path(project, promotion['canonical']) if promotion else None)
+    count = _count(row.get('value'))
     if count is None:
-        return {'status': 'NOT_MEASURED', 'source': RECORD_REL}
-    row = validate_density_result(project, arm)
-    if row.get('value') != count or row.get('value') == 'NOT_MEASURED':
         return {'status': 'NOT_MEASURED', 'source': RECORD_REL,
                 'reason': row.get('reason') or 'density record differs from tool output'}
     result = {'status': 'MEASURED', 'errors': count, 'arm': shipped,
             'rules': arm.get('rules'), 'runset': arm.get('runset'),
-            'source': RECORD_REL, 'state': str(state), 'state_sha256': arm.get('state_sha256'),
+            'source': RECORD_REL, 'state': str(state), 'state_sha256': digest(state),
             'subject_sha256': arm.get('subject_sha256')}
     if promotion is not None:
         try:
@@ -1425,258 +1423,58 @@ DEFAULT_STREAM_REL = 'phase3/librelane/37-default-promotion.json'
 
 
 def current_metal_density(project: Path, arm: dict, promotion: dict) -> dict:
-    """Run the existing per-layer consumer on the adopted current stream.
-
-    The native count, executed rules and per-rule area report remain separate
-    facts. Neither a zero count nor a report's own GDS claim supplies adoption.
-    No generic bounds or local-window results are passed to the consumer.
-    """
-    import metal_layer_density_check as mld
-    import librelane_signoff_evidence as native
-    canonical = Path(promotion['canonical'])
-    sha = digest(canonical)
-    ratios = arm['ratios']
-    ratio_report = Path(ratios['report'])
-    measured = _load(ratio_report)
-    report = project / METAL_DENSITY_REL
-    published = _load(report)
-    if (sha != arm['subject_sha256'] or sha != ratios['subject_sha256']
-            or digest(Path(measured['gds'])) != sha
-            or digest(ratio_report) != ratios['report_sha256']
-            or measured.get('status') != 'MEASURED'
-            or measured.get('layers') != ratios['layers']
-            or published.get('gds_sha256') != sha
-            or (project / published['gds']).resolve() != canonical.resolve()
-            or published.get('source') != {'report': str(ratio_report),
-                                           'report_sha256': digest(ratio_report)}):
-        raise Refusal('LL_METAL_DENSITY_SUBJECT_UNBOUND', str(report))
-    state = Path(arm['state'])
-    image = resolve_image(project, record=False)
-    # Default finishing needs no step switch; the PDK declaration and root
-    # receipt still bind its materials in _pdk_mounts, as at _current_stage.
-    switch_path = project / 'phase3/librelane_switch.json'
-    switch = _load(switch_path) if switch_path.is_file() else {}
-    mounts = native._pdk_mounts(project, switch, state.parent, image)
-    pdk = _load(project / 'phase3/librelane' / CONFIG_FOLDER / 'KLayout.Density.json')['PDK']
-    root = next((Path(host) if guest == '/pdk' else Path(host).parent
-                 for host, guest in mounts if guest in ('/pdk', f'/pdk/{pdk}')), None)
-    if root is None:
-        raise Refusal('LL_METAL_DENSITY_PDK_UNBOUND', str(mounts))
-    cfg, map_text, lef_text, deck_text = _density_source(
-        root, pdk, project / 'phase3/librelane' / CONFIG_FOLDER / 'KLayout.Density.json')
-    if (published.get('pdk') != pdk or not measured.get('extent_from_deck')
-            or not re.search(r'\bchip_area\s*=\s*extent(?:\.sized\(0(?:\.0)?\))?\.area\b',
-                             _dla.deck_code_only(deck_text))):
-        raise Refusal('LL_METAL_DENSITY_SCOPE_UNBOUND', str(report))
-    specs = _density_ratio_specs(deck_text, build_metal_fill_config(map_text, lef_text, deck_text))
-    required = {rule: row for rule, row in specs.items()
-                if mld._METAL_RE.fullmatch(str(row.get('identifier') or ''))}
-    executed = set(re.findall(r'\bExecuting rule\s+(\S+)',
-                             (state.parent / 'invocation.log').read_text()))
-    if not required or not set(required) <= executed:
-        raise Refusal('LL_METAL_DENSITY_RULES_NOT_EXECUTED', str(sorted(set(required) - executed)))
-    layers, rules = {}, {}
-    for rule, spec in required.items():
-        row = measured['layers'][rule]
-        if (row.get('status') != 'MEASURED' or row.get('identifier') != spec['identifier']
-                or row.get('layers') != spec['layers'] or not spec.get('layers')
-                or type(row.get('ratio')) not in (int, float)
-                or not math.isfinite(row['ratio']) or not 0 <= row['ratio'] <= 1):
-            raise Refusal('LL_METAL_DENSITY_LAYER_NOT_MEASURED', rule)
-        name = spec['identifier'].lower()
-        if name in layers and layers[name] != row['ratio']:
-            raise Refusal('LL_METAL_DENSITY_LAYER_CONFLICT', name)
-        layers[name], rules[name] = row['ratio'], rule
-    area = measured.get('die_area_um2')
-    region = measured.get('die')
-    if (type(area) not in (int, float) or not math.isfinite(area) or area <= 0
-            or not isinstance(region, list) or len(region) != 4
-            or not all(type(x) in (int, float) and math.isfinite(x) for x in region)
-            or not (region[0] < region[2] and region[1] < region[3])
-            or not math.isclose(area, (region[2] - region[0]) * (region[3] - region[1]))
-            or published.get('die_area_um2') != area
-            or published.get('layers') != layers or published.get('layer_rules') != rules
-            or published.get('measurement') != 'per_rule_drawn_plus_dummy_area_over_die_extent'
-            or any(k in published for k in ('windows', 'limits'))):
-        raise Refusal('LL_METAL_DENSITY_POPULATION_UNBOUND', str(report))
-    windows, provenance = mld.pdk_windows_for(pdk)
-    if not str(provenance.get('scope', '')).lower().startswith(('whole-die', 'global (whole-die)')):
-        raise Refusal('LL_METAL_DENSITY_WINDOW_SCOPE_UNBOUND', str(provenance))
-    judged = mld.check(report, windows, None, None, provenance, set(windows))
-    if set(judged.get('per_layer') or {}) != set(layers):
-        raise Refusal('LL_METAL_DENSITY_CONSUMER_COVERAGE', str(judged))
-    return dict(judged, consumer='metal_layer_density_check.check',
-                generic_bounds={'minimum': None, 'maximum': None},
-                report_sha256=digest(report), subject_sha256=sha,
-                measurement_scope='whole-die extent', region_um=region,
-                denominator_um2=area, executed_rules=sorted(executed),
-                layer_rules=rules, layer_gds_map={r: required[r]['layers'] for r in required})
+    """The PDK deck checks each density rule against its own original limit."""
+    row = validate_density_result(project, arm,
+        layout=_lc.project_path(project, promotion['canonical']))
+    count = _count(row.get('value'))
+    return {'verdict': 'NOT_MEASURED' if count is None else 'PASS' if count == 0 else 'FAIL',
+            'errors': count, 'source': row.get('source'), 'reason': row.get('reason'),
+            'consumer': 'KLayout.Density / Checker.KLayoutDensity'}
 
 
 def _current_stage(project: Path, state: Path, step: str) -> tuple[dict, dict]:
-    """Check the existing native packet against its current material inputs."""
-    import librelane_signoff_evidence as native
-    folder = state.resolve().parent
-    if state.name != 'state_out.json' or not folder.is_relative_to(
-            (project / 'phase3/librelane').resolve()) or 'attempts' in folder.parts:
-        raise Refusal('LL_FINISHING_WRONG_STAGE', str(state))
-    receipt = validate_step_receipt(folder, step)
-    fp = receipt['input']
-    image = _record_provider_binding(project, fp)
-    switch_path = project / 'phase3/librelane_switch.json'
-    switch = _load(switch_path) if switch_path.is_file() else {}
-    mounts = native._pdk_mounts(project, switch, folder, image)
-    config = project / 'phase3/librelane' / CONFIG_FOLDER / f'{step}.json'
-    before = _load(folder / 'state_in.json')
-    raw = _load(config)
-    if (fp.get('image') != image or fp.get('config') != digest(config)
-            or raw.get('meta', {}).get('step') != step
-            or fp.get('config_files') != config_file_hashes(raw, mounts, fingerprint=fp)
-            or fp.get('state_files') != {str(p): digest(p) for p in _walk_input_views(before)}):
-        raise Refusal('LL_FINISHING_INPUT_CHANGED', str(state))
-    candidates = (project / 'phase3/librelane').rglob('*.json')
-    if not any(p.name.endswith(('state.json', 'state_in.json', 'state_out.json'))
-               and digest(p) == fp.get('state') for p in candidates):
-        raise Refusal('LL_FINISHING_INPUT_STATE_MISSING', f"{project / 'phase3/librelane'}: recursive *.json search for state.json/state_in.json/state_out.json found no file with input.state={fp.get('state')!r}; consuming {state}")
-    return before, _load(state)
-
-
-def _retained_stream_step(record: dict) -> str:
-    """An old self-consistent receipt cannot certify a lossy FILLS stream."""
-    from librelane_fill_stream import fill_records
-    step = record.get('stream_step', 'KLayout.StreamOut')
-    if step not in ('KLayout.StreamOut', FILL_STREAM_STEP):
-        raise Refusal('LL_STREAM_STEP_UNSUPPORTED', str(step))
-    if fill_records(Path(record['filled_def']))['shapes'] and step != FILL_STREAM_STEP:
-        raise Refusal('LL_FILL_STREAM_LEGACY_LOSSY_RECEIPT', str(record['filled_def']))
-    return step
+    """Read the native step and reuse it only while its input views are unchanged."""
+    state = _lc.project_path(project, state)
+    before = _load(state.parent / 'state_in.json')
+    after = _load(state)
+    fingerprint = _load(state.parent / 'input_fingerprint.json')
+    root = project / 'phase3/librelane'
+    configs = (root / (state.parent.parent.name + '-config') / (step + '.json'),
+               root / CONFIG_FOLDER / (step + '.json'))
+    config = next((path for path in configs if path.is_file()), None)
+    if config is not None and digest(config) != fingerprint['config']:
+        raise Refusal('LL_FINISHING_INPUT_CHANGED', str(config))
+    for value, expected in fingerprint['state_files'].items():
+        if digest(_lc.project_path(project, value)) != expected:
+            raise Refusal('LL_FINISHING_INPUT_CHANGED', value)
+    if after.get('metrics', {}).get('flow__errors__count', 0):
+        raise Refusal('LL_STEP_FAILED', step)
+    return before, after
 
 
 def validate_default_stream(project: Path) -> dict:
-    """Bind the filled DEF, actual stream/filler, density and both publications.
-
-    Called by the existing Step-34 gate and Step-35 CMP reader. A valid scalar
-    density result from a different stream cannot replace this chain.
-    """
-    validate_fill_consumption(project)
+    """Reuse the native stream when its filled DEF and publications are current."""
     doc = _load(project / RECORD_REL)
-    record = doc['default_stream']
-    if _load(project / DEFAULT_STREAM_REL) != record:
-        raise Refusal('LL_FINISHING_PROMOTION_CHANGED', DEFAULT_STREAM_REL)
-    stream_step = _retained_stream_step(record)
-    stream_fp = validate_step_receipt(
-        Path(record['stream_state']).parent, stream_step)['input']
-    if (record.get('image') != stream_fp.get('image')
-            or record.get('image') != _record_provider_binding(project, stream_fp)):
-        raise Refusal('LL_FINISHING_IMAGE_CHANGED', str(record.get('image')))
-    gates = record['gates']
-    if set(gates) != {'substance', 'port_labels'} or any(
-            row.get('rc') != 0 or digest(Path(row['report'])) != row.get('sha256')
-            or _load(Path(row['report'])).get('verdict') != 'PASS' for row in gates.values()):
-        raise Refusal('LL_FINISHING_OUTPUT_GATE_CHANGED', str(gates))
-    for key in ('filled_def', 'stream', 'sealed', 'prefill', 'source', 'pnr_gds', 'canonical'):
-        path, sha = Path(record[key]), record[key + '_sha256']
-        if not re.fullmatch('[0-9a-f]{64}', str(sha)) or digest(path) != sha:
-            raise Refusal('LL_FINISHING_BYTES_CHANGED', key)
-    pnr = project / 'phase3/stage3/pnr'
-    filled = pnr / 'filled.def'
-    top = record['file_top']
-    if (Path(record['filled_def']).resolve() != filled.resolve()
-            or record['filled_def_sha256'] != doc['odb']['tool']['filled_def_sha256']
-            or Path(record['pnr_gds']).resolve() != (pnr / f'{top}.gds').resolve()
-            or Path(record['canonical']).resolve() !=
-            (project / 'phase3/stage4/gds' / f'{top}.gds').resolve()):
-        raise Refusal('LL_FINISHING_WRONG_PUBLICATION', str(record))
-    stream_state = Path(record['stream_state'])
-    if digest(stream_state) != record['stream_state_sha256']:
-        raise Refusal('LL_FINISHING_STATE_CHANGED', str(stream_state))
-    before, after = _current_stage(project, stream_state, stream_step)
-    config = _load(project / 'phase3/librelane' / CONFIG_FOLDER / (stream_step + '.json'))
-    if (Path(before['def']).resolve() != filled.resolve()
-            or _def_design_name(filled) != config.get('DESIGN_NAME')
-            or config.get('DESIGN_NAME') != record['design_name']
-            or Path(after['klayout_gds']).resolve() != Path(record['stream']).resolve()):
-        raise Refusal('LL_FILLED_DEF_GDS_MISMATCH', str(stream_state))
-    arm = doc['gds']['librelane']
-    filler = arm['filler']
-    filler_state = Path(filler['state'])
-    if digest(filler_state) != filler['state_sha256']:
-        raise Refusal('LL_FILLER_STATE_CHANGED', str(filler_state))
-    fin, fout = _current_stage(project, filler_state, 'KLayout.Filler')
-    if (Path(fin['gds']).resolve() != Path(record['prefill']).resolve()
-            or record['prefill_sha256'] != record['sealed_sha256']
-            or digest(Path(fin['gds'])) != filler['gds_in_sha256']
-            or Path(fout['gds']).resolve() != Path(filler['filled_gds']).resolve()
-            or digest(Path(fout['gds'])) != filler['filled_sha256']
-            or doc['gds'].get('shipped') != 'librelane'
-            or doc['gds'].get('shipped_sha256') != record['source_sha256']
-            or record['source_sha256'] != arm['subject_sha256']
-            or record['source_sha256'] != record['canonical_sha256']
-            or record['source_sha256'] != record['pnr_gds_sha256']):
-        raise Refusal('LL_FILLER_GDS_NOT_CONSUMED', str(filler_state))
-    topup = arm.get('density_topup')
-    if topup:
-        for key in ('gds', 'config', 'report'):
-            if digest(Path(topup[key])) != topup[key + '_sha256']:
-                raise Refusal('LL_DENSITY_TOPUP_CHANGED', key)
-        if topup['input_sha256'] != filler['filled_sha256']:
-            raise Refusal('LL_DENSITY_TOPUP_WRONG_INPUT', str(topup))
-    elif arm['subject_sha256'] != filler['filled_sha256']:
-        raise Refusal('LL_DENSITY_NOT_FILLED_SUBJECT', str(arm))
-    if record.get('finishing_status') == 'NOT_APPLICABLE':
-        import _flow_yaml
-        import flow_compliance_check as compliance
-        row = next(row for row in _flow_yaml.load()['steps'] if str(row['id']) == '26.5ic')
-        if (not compliance._delivery_declares_absence(project, row['condition']['delivery_declares'])
-                or record['sealed_sha256'] != record['stream_sha256']):
-            raise Refusal('LL_FINISHING_WRONG_APPLICABILITY', str(record))
-    else:
-        import die_finishing_check
-        report = Path(record['finishing_report'])
-        finishing = die_finishing_check._unwrap(_load(report))
-        if (report.resolve() != (project / 'reports/phase3/die_finishing.json').resolve()
-                or digest(report) != record['finishing_report_sha256']
-                or record['finishing_stream_sha256'] != record['stream_sha256']
-                or not finishing):
-            raise Refusal('LL_SEAL_WRONG_STREAM', str(finishing))
-        seal = finishing.get('seal_ring') or {}
-        if (seal.get('state') != 'PASS'
-                or seal.get('consumed_into') != str(Path(record['sealed']).relative_to(project))
-                or seal.get('staged_sha256') != record['sealed_sha256']):
-            raise Refusal('LL_SEAL_NOT_CONSUMED', str(seal))
-    import _stream_input_record as sir
-    inputs = sir.record_path(pnr / f'{top}.gds')
-    if digest(inputs) != record['stream_inputs_sha256']:
-        raise Refusal('LL_STREAM_INPUTS_CHANGED', str(inputs))
-    readset, why = sir.read(inputs)
-    if (readset is None or readset['engine'] != 'klayout'
-            or readset['def'] != {'project_rel': str(filled.relative_to(project)),
-                                  'sha256': digest(filled)}
-            or readset['recipe']['sha256'] != digest(project / readset['recipe']['project_rel'])):
-        raise Refusal('LL_STREAM_READSET_CHANGED', why or str(inputs))
-    cli = readset.get('native_cli') or {}
-    commands = Path(cli.get('commands') or '')
-    argv = cli.get('argv') or []
-    if (not commands.is_file() or digest(commands) != cli.get('commands_sha256')
-            or argv not in [shlex.split(line) for line in commands.read_text().splitlines() if line.strip()]
-            or len(argv) < 3 or Path(argv[2]).resolve() != filled.resolve()
-            or not cli.get('inputs')):
-        raise Refusal('LL_STREAM_COMMAND_UNBOUND', str(cli))
-    native_receipt = validate_step_receipt(stream_state.parent, stream_step)
-    if stream_step == FILL_STREAM_STEP:
-        from librelane_fill_stream import validate_native_stage
-        validate_native_stage(stream_state.parent, Path(record['filled_def']), Path(record['stream']))
-        _validate_fill_stream_authority(project, record)
-    # _current_stage already re-hashed these guest-side configuration paths
-    # through its declared mounts; the CLI must name exactly those materials.
-    for entry in cli['inputs']:
-        if (not entry.get('sha256') or entry['argv_index'] >= len(argv)
-                or argv[entry['argv_index']] != entry['path']
-                or native_receipt['input']['config_files'].get(entry['path']) != entry['sha256']):
-            raise Refusal('LL_STREAM_NATIVE_MATERIAL_CHANGED', entry['path'])
-    current = validate_density_result(project, arm, layout=Path(record['canonical']))
-    if current.get('value') != _count(arm.get(DENSITY_METRIC)) or current.get('value') == 'NOT_MEASURED':
-        raise Refusal('LL_FINISHING_DENSITY_NOT_MEASURED', str(current))
+    record = dict(doc['default_stream'])
+    for key in ('stream_state', 'filled_def', 'stream', 'sealed', 'prefill',
+                'source', 'pnr_gds', 'canonical', 'finishing_report'):
+        if record.get(key):
+            record[key] = str(_lc.project_path(project, record[key]))
+    filled = project / 'phase3/stage3/pnr/filled.def'
+    tool = doc['odb']['tool']
+    subject = _lc.project_path(project, tool['subject'])
+    if (digest(subject) != tool['subject_sha256']
+            or digest(filled) != record['filled_def_sha256']):
+        raise Refusal('LL_FINISHING_INPUT_CHANGED', str(filled))
+    before, after = _current_stage(project, Path(record['stream_state']),
+                                   record.get('stream_step', 'KLayout.StreamOut'))
+    if (_lc.project_path(project, before['def']) != filled
+            or _lc.project_path(project, after['klayout_gds']) != Path(record['stream'])
+            or not Path(record['stream']).is_file()):
+        raise Refusal('LL_FILLED_DEF_GDS_MISMATCH', record['stream_state'])
+    source = Path(record['source'])
+    if any(digest(Path(record[key])) != digest(source) for key in ('pnr_gds', 'canonical')):
+        raise Refusal('LL_FINISHING_WRONG_PUBLICATION', record['canonical'])
     return record
 
 
@@ -1845,50 +1643,9 @@ def default_stream(project: Path, top: str, pdk: Any, container: str) -> dict:
             record = validate_default_stream(project)
             if record['file_top'] != top or record.get('pdk') != pdk.name:
                 raise Refusal('LL_FINISHING_WRONG_DECLARATION', str(record))
-            arm = _load(project / RECORD_REL)['gds']['librelane']
-            judged = current_metal_density(project, arm, record)
-            if arm.get(DENSITY_METRIC) != 0 or judged.get('verdict') != 'PASS':
-                reuse_refusal = 'retained density consumer did not pass: ' + str(judged)
+            return dict(record, receipt=str(project / DEFAULT_STREAM_REL))
         except (Refusal, OSError, ValueError, KeyError, TypeError) as exc:
             reuse_refusal = f'{type(exc).__name__}: {exc}'
-        # Keep the old promotion and its actual cited source closure in the
-        # existing step-version snapshot before a new epoch changes any byte.
-        import step_output_collector as versions
-        pending = [project / DEFAULT_STREAM_REL, project / RECORD_REL,
-                   project / f'phase3/stage3/pnr/{top}.stream_inputs.json',
-                   project / 'reports/phase3/die_finishing.json']
-        retained = set()
-        while pending:
-            path = pending.pop().resolve()
-            try:
-                present = path.is_file()
-            except OSError:
-                present = False
-            if path in retained or not path.is_relative_to(project) or not present:
-                continue
-            retained.add(path)
-            if path.name == 'state_out.json':
-                pending.extend(path.parent / name for name in
-                               ('vibeic_receipt.json', 'input_fingerprint.json', 'COMMANDS', 'invocation.log'))
-            if path.suffix != '.json':
-                continue
-            try:
-                doc = json.loads(path.read_text())
-            except (OSError, ValueError):
-                continue
-            def cite(node):
-                if isinstance(node, dict):
-                    for value in node.values():
-                        cite(value)
-                elif isinstance(node, list):
-                    for value in node:
-                        cite(value)
-                elif isinstance(node, str):
-                    pending.append(Path(node) if Path(node).is_absolute() else project / node)
-            cite(doc)
-            if path.name == 'vibeic_receipt.json':
-                pending.extend(path.parent / name for name in doc.get('sha256', {}))
-        versions.retain_before(project, '37', sorted(retained))
     pnr = project / 'phase3/stage3/pnr'
     filled = pnr / 'filled.def'
     try:
@@ -1989,42 +1746,31 @@ STEP37_PROMOTION_REL = 'phase3/librelane/37-promotion.json'
 
 
 def validate_density_result(project: Path, arm: dict, *, layout: Path | None = None) -> dict:
-    """Bind a density result before publication and at its existing consumers."""
+    """Read the PDK deck's own density count on its unchanged GDS."""
     try:
-        state = Path(arm['state'])
-        subject = Path(arm['subject'])
-        if digest(state) != arm['state_sha256'] or digest(subject) != arm['subject_sha256']:
-            raise ValueError('density state or measured stream changed')
-        row = _current_density_row(project, state, CONFIG_FOLDER, layout=layout)
-        import librelane_signoff_evidence as native
-        receipt = validate_step_receipt(state.parent, 'KLayout.Density')
-        switch_path = project / 'phase3/librelane_switch.json'
-        switch = _load(switch_path) if switch_path.is_file() else {}
-        mounts = native._pdk_mounts(project, switch, state.parent, resolve_image(project, record=False))
-        config = _load(project / 'phase3/librelane' / CONFIG_FOLDER / 'KLayout.Density.json')
-        if receipt['input'].get('config_files') != config_file_hashes(config, mounts, fingerprint=receipt['input']):
-            raise ValueError('density PDK material population changed')
-        if row.get('value') != _count(arm.get(DENSITY_METRIC)):
-            raise ValueError(row.get('reason') or 'density record differs from tool output')
-        return row
+        state = _lc.project_path(project, arm['state'])
+        subject = _lc.project_path(project, arm['subject'])
+        if digest(subject) != arm['subject_sha256']:
+            raise ValueError('density input GDS changed')
+        return _current_density_row(project, state, CONFIG_FOLDER,
+                                    layout=layout if layout is not None else subject)
     except (OSError, ValueError, TypeError, KeyError, Refusal) as exc:
         return {'value': 'NOT_MEASURED', 'reason': str(exc)}
 
 
 def _current_density_row(project: Path, state: Path, config_folder: str, *,
                          layout: Path | None = None) -> dict:
-    """Reuse the current native signoff reader at the fill/DFM boundary."""
+    """The native density State is shared by fill and the DFM consumer."""
     try:
-        import librelane_signoff_evidence as native
-        folder = state.resolve().parent
-        if not folder.is_relative_to((project / 'phase3/librelane').resolve()) \
-                or 'attempts' in folder.relative_to(project.resolve()).parts \
-                or state.name != 'state_out.json':
-            raise ValueError('wrong density producer stage/path')
-        validate_step_receipt(state.parent, 'KLayout.Density')
-        return native.count_row(project, state.parent, 'KLayout.Density', DENSITY_METRIC,
-                                layout if layout is not None else native.finished_layout(project),
-                                project / 'phase3/librelane' / config_folder)
+        before, after = _current_stage(project, state, 'KLayout.Density')
+        subject = _lc.project_path(project, before['gds'])
+        if layout is not None and digest(subject) != digest(layout):
+            raise ValueError('density measured a different GDS')
+        value = _count(after.get('metrics', {}).get(DENSITY_METRIC))
+        if value is None:
+            raise ValueError('native density count absent')
+        return {'value': value, 'status': 'MEASURED' if value == 0 else 'FAIL',
+                'source': str(state), 'subject': str(subject)}
     except (OSError, ValueError, TypeError, KeyError, Refusal) as exc:
         return {'value': 'NOT_MEASURED', 'reason': str(exc)}
 
@@ -2095,3 +1841,106 @@ def via_agreement(def_single: int, def_resolved: int,
         out['reason'] = (f"router single-cut {router['singlecut']} != DEF recount "
                          f'{def_single} on the same {total} vias')
     return out
+
+
+def execute(project: Path, context: dict) -> dict:
+    """Public stream, seal-ring and DFM rows use their existing native owners."""
+    import phase3_one_shot_runner as runner
+    project = Path(project).resolve()
+    step = context['requested_step']
+    result = {'step_id': step, 'component_status': 'NOT_MEASURED',
+              'default_row_status': 'NOT_MEASURED', 'completed': False,
+              'native_started': False, 'context_sha256': context.get('context_sha256')}
+    try:
+        if step == 'D60':
+            try:
+                record = validate_default_stream(project)
+            except (Refusal, OSError, ValueError, KeyError, TypeError):
+                pdk = runner._detect_pdk(project)
+                if pdk is None:
+                    raise ValueError('project PDK not available')
+                parameters = _artifact_paths.acceptance_parameters(project) or {}
+                top = parameters.get('top')
+                if not top:
+                    raise ValueError('project output top unavailable')
+                result['native_started'] = True
+                record = default_stream(project, top, pdk, '')
+            result.update(component_status='PASS', native_step=record.get('stream_step', 'KLayout.StreamOut'),
+                          native_report=record['stream_state'])
+        elif step == 'D61':
+            import librelane_ir_antenna as seal
+            promotion = validate_default_stream(project)
+            report = project / 'reports/phase3/die_finishing_librelane.json'
+            record = (_load(report).get('tool') or {}) if report.is_file() else {}
+            die, _, sources, why, _ = _lc._runner_floorplan(project)
+            if die is None:
+                raise ValueError('native seal-ring die unavailable: ' + why)
+            pre = _lc.project_path(project, promotion['stream'])
+            current = False
+            if record.get('state'):
+                try:
+                    before, after = _current_stage(project, _lc.project_path(project, record['state']),
+                                                    'KLayout.SealRing')
+                    output = _lc.project_path(project, after['gds'])
+                    current = (digest(_lc.project_path(project, before['gds'])) == digest(pre)
+                               and output.is_file() and record.get('die_area') == die
+                               and digest(output) == digest(Path(promotion['sealed'])))
+                except (Refusal, OSError, ValueError, KeyError, TypeError):
+                    current = False
+            if not current:
+                pdk = runner._detect_pdk(project)
+                if pdk is None:
+                    raise ValueError('project PDK not available')
+                image, root = runner._librelane_step_ctx(project, '26.5ic', pdk.name)
+                result['native_started'] = True
+                record = seal.run_sealring(project, image, root, pdk.name, gds_in=pre,
+                                           die_rect=die, die_source=sources['DIE_AREA'])
+                write_json(report, {'step': '26.5ic', 'mode': 'librelane',
+                                    'tool': record, 'image': image})
+                output = Path(record['sealed_gds'])
+                for key in ('sealed', 'prefill'):
+                    target = _lc.project_path(project, promotion[key])
+                    if target != output:
+                        shutil.copyfile(output, target)
+                    promotion[key + '_sha256'] = digest(target)
+                write_json(project / DEFAULT_STREAM_REL, promotion)
+                update_record(project, 'default_stream', promotion)
+            result.update(component_status='PASS', native_step='KLayout.SealRing',
+                          native_report=str(_lc.project_path(project, record['state'])))
+        elif step == 'D63':
+            import dfm_screen_check
+            report = project / 'reports/phase3/dfm_screen.json'
+            prior = _load(report) if report.is_file() else {}
+            arm = prior.get('density_native')
+            density = tool_density(project) or {}
+            count = density.get('errors') if density.get('status') == 'MEASURED' else None
+            if _count(count) is None:
+                promotion = validate_default_stream(project)
+                final = _lc.project_path(project, promotion['canonical'])
+                row = validate_density_result(project, arm, layout=final) if arm else {}
+                count = _count(row.get('value'))
+                if count is None:
+                    pdk = runner._detect_pdk(project)
+                    if pdk is None:
+                        raise ValueError('project PDK not available')
+                    image, root = runner._librelane_step_ctx(project, '35', pdk.name)
+                    result['native_started'] = True
+                    arm = run_density(project, image, root, pdk.name, gds=final, lane='35-dfm')
+                    count = _count(arm.get(DENSITY_METRIC))
+                density = {'state': arm['state']}
+            record = dfm_screen_check.audit(project)
+            if arm:
+                record['density_native'] = arm
+            write_json(report, record)
+            status = 'NOT_MEASURED' if _count(count) is None else 'PASS' if count == 0 else 'FAIL'
+            result.update(component_status=status, native_step='KLayout.Density',
+                          native_report=density.get('state'), advisory_report=str(report),
+                          metrics={DENSITY_METRIC: count}, advisories=record.get('findings', []))
+        else:
+            raise ValueError('unsupported finishing owner row: ' + step)
+        status = result['component_status']
+        result.update(default_row_status=status, flow109_acceptance=status, completed=status == 'PASS')
+    except (Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+        result.update(reason='NATIVE_FINISHING_UNAVAILABLE', detail=str(exc))
+    write_json(project / 'reports/flow109' / step / 'result.json', result)
+    return result
