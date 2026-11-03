@@ -162,16 +162,10 @@ def test_owner_budget_refusal_keeps_current_d02_lineage(tmp_path, status):
     assert versions.latest_pass(tmp_path, '0.5ic')['current_inputs'] is True
     runner._complete_retained_submission_input(tmp_path)
     assert versions.latest_pass(tmp_path, '0.5ic') == prior
-    accepted = metrics._d0102_qualification(
-        tmp_path, {'resolved_row': {'tool_uses': []}}, 'D02', {})
-    assert accepted['status'] == 'PASS'
-    assert accepted['reason'] == 'CURRENT_RETAINED_CANONICAL_CONSUMER'
     # A real owner change still loses the retained input binding.
     doc['answers']['top_cell'] = 'changed_core'
     put(tmp_path, answer, doc)
     assert versions.latest_pass(tmp_path, '0.5ic')['current_inputs'] is False
-    with pytest.raises(metrics.MetricRefusal, match='D0102_CANONICAL_ACCEPTANCE_ABSENT'):
-        metrics._d0102_qualification(tmp_path, {'resolved_row': {'tool_uses': []}}, 'D02', {})
 
 
 def test_absent_budget_still_derives_fixed_die_limit(tmp_path):

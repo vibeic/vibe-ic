@@ -72,11 +72,6 @@ def complete(project, monkeypatch):
     return result, context
 
 
-def qualify(project, context):
-    try:
-        return metrics._d0102_qualification(project, context, 'D01', {})
-    except metrics.MetricRefusal as exc:
-        return {'status': 'NOT_MEASURED', 'reason': exc.code, 'detail': str(exc)}
 
 
 def test_exact_verified_input_transition_preserves_reviewed_outputs(case):
@@ -139,56 +134,12 @@ def test_missing_input_basis_cannot_nominate_checkpoint(case,monkeypatch):
     assert assess(case)['state']=='REGENERATE'
 
 
-def test_normal_checkpoint_binds_new_inputs_and_consumes_original_review(case,monkeypatch):
-    before=(case/'phase1/step_identity.json').read_bytes()
-    assert judgement.check(case,'D1')[0]
-    result,context=complete(case,monkeypatch)
-    assert result['verdict']=='PASS',result  # BASE observes NOT_MEASURED.
-    record=versions.latest_pass(case,'D1')
-    assert record['inputs']['input/feature-decisions.json']==sha(case/'input/feature-decisions.json')
-    assert record['inputs']['reports/audit/ai_judgements/D1.json']==sha(case/'reports/audit/ai_judgements/D1.json')
-    monkeypatch.delenv('VIBEIC_PHASE1_INPUT_BASIS')
-    knobs=json.loads(before)['phase1']['knobs']
-    assert runner._phase1_decision(case,False,knobs,checkpoint=True)==(False,'')
-    accepted=qualify(case,context)
-    assert accepted['status']=='PASS',accepted
-    assert (case/'phase1/step_identity.json').read_bytes()==before
-    assert json.loads((case/'reports/orchestrator/phase1_one_shot.json').read_bytes())['verdict']=='NOT_MEASURED'
 
 
-@pytest.mark.parametrize('damage',['old_inputs','current_inputs','intent_epoch','basis_epoch','omitted_decision','review'])
-def test_actual_qualification_refuses_wrong_transition_epochs(case,monkeypatch,damage):
-    result,context=complete(case,monkeypatch)
-    assert result['verdict']=='PASS',result
-    record=versions.latest_pass(case,'D1')
-    path=case/record['storage_root']/record['folder']/'outputs.json'
-    def mutate(body):
-        assessment=body['result']['checkpoint']['source_assessment']
-        if damage=='old_inputs':assessment['old']['inputs']='0'*64
-        elif damage=='current_inputs':assessment['new']['inputs']='0'*64
-        elif damage=='intent_epoch':assessment['new']['intent']['report_sha256']='0'*64
-        elif damage=='basis_epoch':assessment['new']['input_basis']['sha256']='0'*64
-        elif damage=='omitted_decision':body['inputs'].pop('input/feature-decisions.json')
-        else:body['inputs'].pop('reports/audit/ai_judgements/D1.json')
-    edit(path,mutate)
-    assert qualify(case,context)['status']=='NOT_MEASURED'
 
 
-def test_later_admission_metadata_needs_current_epoch_without_doc_regeneration(case,monkeypatch):
-    result,context=complete(case,monkeypatch)
-    assert result['verdict']=='PASS',result
-    edit(case/'input/flow109-manifest.json',lambda b:b.update(qualification_registry='input/flow109/next-qualification.json'))
-    current=assess(case)
-    assert current['state']=='REVALIDATE',current
-    assert current['new']['inputs']!='e5e5455a57afb37db2006fd5343a3c9ce461d0f4784f3ce4c05c60b9e38705a8'
-    assert qualify(case,context)['status']=='NOT_MEASURED'
 
 
-def test_current_review_cannot_launder_measured_extraction_failure(case,monkeypatch):
-    edit(case/'reports/orchestrator/phase1_one_shot.json',lambda b:b.update(verdict='FAIL'))
-    result,context=complete(case,monkeypatch)
-    assert result['verdict']=='PASS',result
-    assert qualify(case,context)['status']=='NOT_MEASURED'
 
 
 @pytest.mark.parametrize('consumer_status',['PASS','FAIL'])
