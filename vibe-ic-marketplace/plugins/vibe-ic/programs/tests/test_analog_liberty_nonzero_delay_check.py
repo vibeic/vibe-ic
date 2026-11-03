@@ -674,3 +674,40 @@ def test_r77_driving_pins_need_arcs_unless_settling_is_external(tmp_path, direct
     assert ("LIB_NO_TIMING" in {f.rule for f in res.findings}) is (settling is not True)
     if res.passed:
         assert "no signal output" not in res.findings[0].message
+
+
+@pytest.mark.parametrize("clock", [None, "fclk", "loop_probe"])
+def test_an_analog_pin_on_a_clockless_block_needs_no_arc(tmp_path, clock):
+    b, lib = _native_passive_case(tmp_path, roles=("nmos",), power=1e-6)
+    text = lib.read_text().replace("cell_leakage_power : 0;", "cell_leakage_power : 1;")
+    lib.write_text(text.replace(
+        "    pg_pin (TOP)", "    pin(vout) { direction : inout; is_analog : true; }\n    pg_pin (TOP)"))
+    spec = json.loads((b / "spec.json").read_text()) if (b / "spec.json").is_file() else {}
+    spec["specs"] = [{"name": "fclk"}] if clock == "fclk" else []
+    (b / "spec.json").write_text(json.dumps(spec))
+    topology = json.loads((b / "topology.json").read_text())
+    if clock == "loop_probe":
+        topology["loop_probe"] = {"clock_port": "clk"}
+        (b / "topology.json").write_text(json.dumps(topology))
+    res = mod.run_audit(tmp_path)
+    assert ("LIB_NO_TIMING" in {f.rule for f in res.findings}) is (clock is not None)
+
+
+def test_a_digital_output_on_a_clockless_block_still_needs_an_arc(tmp_path):
+    b, lib = _native_passive_case(tmp_path, roles=("nmos",), power=1e-6)
+    text = lib.read_text().replace("cell_leakage_power : 0;", "cell_leakage_power : 1;")
+    lib.write_text(text.replace(
+        "    pg_pin (TOP)", "    pin(q) { direction : output; }\n    pg_pin (TOP)"))
+    (b / "spec.json").write_text(json.dumps({"specs": []}))
+    res = mod.run_audit(tmp_path)
+    assert "LIB_NO_TIMING" in {f.rule for f in res.findings}
+
+
+def test_an_unreadable_spec_keeps_the_analog_pin_refusal(tmp_path):
+    b, lib = _native_passive_case(tmp_path, roles=("nmos",), power=1e-6)
+    text = lib.read_text().replace("cell_leakage_power : 0;", "cell_leakage_power : 1;")
+    lib.write_text(text.replace(
+        "    pg_pin (TOP)", "    pin(vout) { direction : inout; is_analog : true; }\n    pg_pin (TOP)"))
+    (b / "spec.json").write_text("{")
+    res = mod.run_audit(tmp_path)
+    assert "LIB_NO_TIMING" in {f.rule for f in res.findings}
