@@ -2564,11 +2564,13 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
     return result
 
 
-def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
-    """Read native backend reports once; compare the original tool limits."""
+def _retained_native_result(project: Path, context: Mapping) -> dict | None:
+    """Read one row's completed native result against its original limits."""
     from flow109_final_electrical import IR_LIMIT_PCT
     contracts = {
-        **{step: {} for step in ('D31', 'D32', 'D35', 'D37', 'D38', 'D39', 'D40')},
+        **{step: {} for step in ('D31', 'D35', 'D37', 'D40')},
+        'D32': {'native_steps': ('OpenROAD.PadRing', 'OpenROAD.GeneratePDN')},
+        'D38': {'method': 'cts'}, 'D39': {'method': 'repair'},
         'D42': {'steps': {'Checker.TrDRC': 'route__drc_errors',
                          'Checker.DisconnectedPins': 'design__critical_disconnected_pin__count',
                          'Checker.WireLength': None}},
@@ -2599,29 +2601,52 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
         'D54': {'report': 'reports/phase3/spice_correlation.json', 'status': 'verdict'},
         'D55': {'report': 'reports/phase3/functional_activity.json', 'status': 'component_status'},
         'D53': {'report': 'reports/phase3/gls_corners.json', 'status': 'verdict'},
+        'D03': {'method': 'config', 'report': 'phase3/librelane/02-yosys-synthesis/config.json'},
+        'D06': {'method': 'verdict', 'report': 'reports/phase3/io_pad_chip_top.json'},
+        'D09': {'method': 'p0', 'report': 'reports/flow109/default_rows/D10.json'},
+        'D10': {'method': 'p0', 'report': 'reports/flow109/default_rows/D10.json'},
+        'D11': {'method': 'verdict', 'report': 'reports/phase2/lint/verilator_lint_gate.json'},
+        'D13': {'method': 'simulation', 'report': 'reports/phase2/sim/l10_execution.json'},
+        'D14': {'method': 'formal', 'report': 'phase2/stage1/formal/results.json'},
+        'D19': {'method': 'sdc_copy', 'report': 'phase2/stage2/constraints/asic_sdc.json'},
+        'D20': {'method': 'verdict', 'report': 'reports/sdc_validator.json'},
+        'D22': {'method': 'synthesis', 'report': 'phase3/librelane/02-yosys-synthesis/state_out.json'},
+        'D25': {'method': 'equivalence', 'report': 'reports/lec_eqy_execution.json'},
+        'D26': {'method': 'sta', 'report': 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr/state_out.json'},
+        'D30': {'method': 'verdict', 'report': 'phase3/librelane/02-yosys-synthesis/handoff_netlist_gate.json'},
     }
     row = context.get('resolved_row', {})
-    entry = contracts.get(row.get('id'))
+    step = row.get('id')
+    entry = contracts.get(step)
     if entry is None or row.get('profile', {}).get('id') != 'default':
         return None
-    if entry.get('report'):
-        import fnmatch
-        def values_at(doc, field):
-            nodes = [doc]
-            for part in field.split('.'):
-                nodes = [value for node in nodes if isinstance(node, dict)
-                         for key, value in node.items() if fnmatch.fnmatchcase(key, part)]
-            return nodes
-        def local(raw):
-            path = Path(raw)
-            if path.is_absolute() and not path.is_relative_to(project):
-                path = Path(*path.parts[path.parts.index('phase3'):])
-            return project / path
-        path = project / entry['report']
-        if not path.is_file():
-            return None
-        measured, failed = {}, False
-        try:
+    method = entry.get('method', 'report' if entry.get('report') else 'physical')
+    physical = method in ('physical', 'cts', 'repair')
+    measurements = {}
+    error_counts = None
+    status = 'NOT_MEASURED'
+    timing_failed = failed = False
+    result = {'step_id': step, 'context_sha256': context['context_sha256'],
+        'native_started': False, 'native_measurements': measurements}
+    try:
+        if method == 'report':
+            result.update(native_reports_reused=True, native_reports=[entry['report']],
+                          unmeasured_obligations=entry.get('unmeasured', []))
+            import fnmatch
+            def values_at(doc, field):
+                nodes = [doc]
+                for part in field.split('.'):
+                    nodes = [value for node in nodes if isinstance(node, dict)
+                             for key, value in node.items() if fnmatch.fnmatchcase(key, part)]
+                return nodes
+            def local(raw):
+                path = Path(raw)
+                if path.is_absolute() and not path.is_relative_to(project):
+                    path = Path(*path.parts[path.parts.index('phase3'):])
+                return project / path
+            path = project / entry['report']
+            if not path.is_file():
+                return None
             text = path.read_text()
             native = json.loads(text)
             if entry.get('state'):
@@ -2639,7 +2664,7 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
                 values = values_at(native, field)
                 if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
                     raise ValueError('native measurement unavailable: ' + field)
-                measured[field] = values
+                measurements[field] = values
                 failed |= any(not (v >= limit if op == 'ge' else v < limit if op == 'lt'
                                    else v == limit) for v in values)
             for field, limit in entry.get('available', {}).items():
@@ -2650,315 +2675,271 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
                 values = values_at(native, field)
                 if not values or not all(local(v).is_file() for v in values):
                     raise ValueError('native output absent: ' + field)
-                measured[field] = values
+                measurements[field] = values
             for field in entry.get('observe', ()):
                 values = values_at(native, field)
                 if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
                     raise ValueError('native measurement unavailable: ' + field)
-                measured[field] = values
+                measurements[field] = values
             if entry.get('status'):
                 verdict = native.get(entry['status'])
                 if verdict not in ('PASS', 'FAIL'):
-                    raise ValueError('native result not measured: ' + str(verdict))
+                    raise ValueError('native result not measurements: ' + str(verdict))
                 failed |= verdict == 'FAIL'
-                measured[entry['status']] = verdict
+                measurements[entry['status']] = verdict
             status = 'FAIL' if failed else 'PASS'
             detail = None
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            status, detail = ('FAIL' if failed else 'NOT_MEASURED'), str(exc)
-        return {'step_id': row['id'], 'context_sha256': context['context_sha256'],
-            'component_status': status, 'default_row_status': status, 'completed': status == 'PASS',
-            'native_started': False, 'native_reports_reused': True, 'native_reports': [entry['report']],
-            'native_measurements': measured, 'reason': row['id'] + '_NATIVE_REPORT_' + status,
-            'detail': detail, 'unmeasured_obligations': entry.get('unmeasured', []),
-            'flow109_acceptance': status, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
-    chain_path = project / "reports/phase3/execution-backend-15.json"
-    if not chain_path.is_file():
-        return None
-    measurements = {}
-    result = {"step_id": row["id"], "context_sha256": context["context_sha256"],
-              "reason": row["id"] + "_NATIVE_PHYSICAL_RESULT", "native_measurements": measurements}
-    timing_failed = False
-    try:
-        chain = json.loads(chain_path.read_text())
-        states = {item["step"]: project / item["state"] for item in chain["states"]}
-        steps = (tuple(entry['steps']) if entry.get('steps') else
-                 ("OpenROAD.PadRing", "OpenROAD.GeneratePDN") if row["id"] == "D32"
-                 else row["profile"]["native_steps"])
-        if any(step not in states for step in steps):
-            root = next(iter(states.values())).parent.parent
-            ordered = []
-            for config_path in root.glob("*/config.json"):
-                step = json.loads(config_path.read_text()).get("meta", {}).get("step")
-                ordinal = config_path.parent.name.split("-", 1)[0]
-                if ordinal.isdigit():
-                    ordered.append((int(ordinal), step, config_path.parent / "state_out.json"))
-                if row["id"] in ("D38", "D39"):
-                    continue
-                if step not in steps:
-                    continue
-                state = config_path.parent / "state_out.json"
-                if step in states and states[step] != state:
-                    raise ValueError("ambiguous native step: " + step)
-                states[step] = state
-            if row["id"] in ("D38", "D39"):
-                ordered.sort()
-                anchors = [i for i, item in enumerate(ordered) if item[1] == steps[0]]
-                if not anchors:
+        elif physical:
+            chain_path = project / 'reports/phase3/execution-backend-15.json'
+            if not chain_path.is_file():
+                return None
+            result['reason'] = step + '_NATIVE_PHYSICAL_RESULT'
+            chain = json.loads(chain_path.read_text())
+            states = {item["step"]: project / item["state"] for item in chain["states"]}
+            steps = (entry.get("native_steps") or tuple(entry.get("steps", ()))
+                     or row["profile"]["native_steps"])
+            if any(step not in states for step in steps):
+                root = next(iter(states.values())).parent.parent
+                ordered = []
+                for config_path in root.glob("*/config.json"):
+                    step = json.loads(config_path.read_text()).get("meta", {}).get("step")
+                    ordinal = config_path.parent.name.split("-", 1)[0]
+                    if ordinal.isdigit():
+                        ordered.append((int(ordinal), step, config_path.parent / "state_out.json"))
+                    if method in ("cts", "repair"):
+                        continue
+                    if step not in steps:
+                        continue
+                    state = config_path.parent / "state_out.json"
+                    if step in states and states[step] != state:
+                        raise ValueError("ambiguous native step: " + step)
+                    states[step] = state
+                if method in ("cts", "repair"):
+                    ordered.sort()
+                    anchors = [i for i, item in enumerate(ordered) if item[1] == steps[0]]
+                    if not anchors:
+                        return None
+                    if len(anchors) != 1 or anchors[0] + 1 >= len(ordered):
+                        raise ValueError("native CTS/repair State unavailable")
+                    own, sta = ordered[anchors[0]:anchors[0] + 2]
+                    if sta[1] != "OpenROAD.STAMidPNR":
+                        raise ValueError("STA does not follow the selected native State")
+                    states.update({own[1]: own[2], sta[1]: sta[2]})
+                elif steps[0] not in states:
                     return None
-                if len(anchors) != 1 or anchors[0] + 1 >= len(ordered):
-                    raise ValueError("native CTS/repair State unavailable")
-                own, sta = ordered[anchors[0]:anchors[0] + 2]
-                if sta[1] != "OpenROAD.STAMidPNR":
-                    raise ValueError("STA does not follow the selected native State")
-                states.update({own[1]: own[2], sta[1]: sta[2]})
-            elif steps[0] not in states:
-                return None
-        for step in steps:
-            state_path = states[step]
-            state = json.loads(state_path.read_text())
-            values = state["metrics"]
-            measurements[step] = {"report": str(state_path)}
-            if step != "Yosys.JsonHeader":
-                measurements[step]["errors"] = values["flow__errors__count"]
-            if entry.get('steps', {}).get(step):
-                metric = entry['steps'][step]
-                measurements[step][metric] = values[metric]
-            if step == 'Checker.WireLength':
-                config = json.loads((state_path.parent / 'config.json').read_text())
-                if config.get('WIRE_LENGTH_THRESHOLD') is None:
-                    result['unmeasured_obligations'] = ['wire-length limit absent from PDK']
-                elif values['route__wirelength__max'] > config['WIRE_LENGTH_THRESHOLD']:
-                    measurements[step]['wire_length_violations'] = 1
-            if step == "OpenROAD.GeneratePDN":
-                measurements[step]["connectivity_errors"] = values["design__power_grid_violation__count"]
-            if step == "OpenROAD.DetailedPlacement":
-                measurements[step]["placement_errors"] = values["design__violations"]
-            if step == "Vibeic.InsertSpareCells":
-                for key in ("vibeic__spare__pg__unconnected", "vibeic__spare__check_placement__violations"):
-                    measurements[step][key] = values[key]
-                for wanted, actual in (("planned", "inserted"), ("tieoff__candidates", "tieoff__connected")):
-                    pair = [values["vibeic__spare__" + key] for key in (wanted, actual)]
-                    if any(type(v) not in (int, float) or not math.isfinite(v)
-                           or v < 0 or v != int(v) for v in pair):
-                        raise ValueError("invalid native spare count")
-                    measurements[step][wanted + "_mismatch"] = abs(pair[0] - pair[1])
-            if step == "OpenROAD.FillInsertion":
-                measurements[step]["routing_errors"] = values["route__drc_errors_final"]
-                measurements[step]["disconnected_required_pins"] = values["design__critical_disconnected_pin__count"]
-            if step == "OpenROAD.CTS":
-                report = state_path.parent / "cts.rpt"
-                text = report.read_text()
-                result["cts"] = {"report": str(report), **{
-                    key: int(re.search(pattern + r"\s*(\d+)", text).group(1))
-                    for key, pattern in (("sinks", "Total number of Sinks:"),
-                                         ("buffers", "Total number of Buffers Inserted:"))}}
-            if step == "OpenROAD.STAMidPNR":
-                timing = {key: values["timing__" + key + "__ws"] for key in ("setup", "hold")}
-                if any(type(v) not in (int, float) or not math.isfinite(v) for v in timing.values()):
-                    raise ValueError("native setup/hold slack unavailable")
-                timing_failed = any(v < 0 for v in timing.values())
-                result["timing"] = {"report": str(state_path), "worst_slack_ns": timing, "limit_ns": 0}
-                result["intermediate_drv"] = {
-                    "scope": "reported, not limits here; post-route signoff owns closure",
-                    **{key: values.get("design__max_" + key + "_violation__count")
-                       for key in ("slew", "cap", "fanout")}}
-        counts = [value for observed in measurements.values()
-                  for key, value in observed.items() if key != "report"]
-        if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
-               or value != int(value) for value in counts):
-            raise ValueError("invalid native error count")
-        status = "FAIL" if any(counts) or timing_failed else "PASS"
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        status = "FAIL" if timing_failed or any(type(v) in (int, float) and math.isfinite(v) and v > 0
-            for observed in measurements.values() for k, v in observed.items() if k != "report") else "NOT_MEASURED"
-        result.update(reason=row["id"] + "_NATIVE_REPORT_UNAVAILABLE", detail=str(exc))
-    return {**result, "component_status": status, "default_row_status": status,
-            "completed": status == "PASS", "flow109_acceptance": status}
-
-
-def _retained_frontend_result(project: Path, context: Mapping) -> dict | None:
-    """Read completed native frontend work; unchanged inputs need no producer rerun."""
-    row = context.get('resolved_row', {})
-    step = row.get('id')
-    reports = {
-        'D03': ('config', 'phase3/librelane/02-yosys-synthesis/config.json'),
-        'D06': ('verdict', 'reports/phase3/io_pad_chip_top.json'),
-        'D09': ('p0', 'reports/flow109/default_rows/D10.json'),
-        'D10': ('p0', 'reports/flow109/default_rows/D10.json'),
-        'D11': ('verdict', 'reports/phase2/lint/verilator_lint_gate.json'),
-        'D13': ('simulation', 'reports/phase2/sim/l10_execution.json'),
-        'D14': ('formal', 'phase2/stage1/formal/results.json'),
-        'D19': ('sdc_copy', 'phase2/stage2/constraints/asic_sdc.json'),
-        'D20': ('verdict', 'reports/sdc_validator.json'),
-        'D22': ('synthesis', 'phase3/librelane/02-yosys-synthesis/state_out.json'),
-        'D25': ('equivalence', 'reports/lec_eqy_execution.json'),
-        'D26': ('sta', 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr/state_out.json'),
-        'D30': ('verdict', 'phase3/librelane/02-yosys-synthesis/handoff_netlist_gate.json'),
-    }
-    if row.get('profile', {}).get('id') != 'default' or step not in reports:
-        return None
-    kind, report = reports[step]
-    report = project / report
-    if not report.exists():
-        return None
-    measurements = {}
-    status = 'NOT_MEASURED'
-    result = {'step_id': step, 'context_sha256': context['context_sha256'],
-              'native_started': False, 'native_measurements': measurements}
-    try:
-        import _path_layout as layout
-        import _specrtl_common as sources
-        synthesis = json.loads((project / 'phase2/stage2/synth/synth_inputs.json').read_text())
-        rtl = layout.rtl_dir(project)
-        if synthesis['rtl_sha256'] != {
-                p.relative_to(rtl).as_posix(): _file_digest(p)
-                for p in sources.rtl_source_files(project)}:
-            return None
-        if kind == 'config':
-            from declared_pdk_is_the_pdk_used_check import declared_distribution
-            config = json.loads(report.read_text())
-            declared, _ = declared_distribution(project)
-            measurements.update(report=str(report), pdk=config['PDK'],
-                                library=config['STD_CELL_LIBRARY'])
-            status = 'PASS' if config['PDK'] == declared else 'FAIL'
-        elif kind == 'verdict':
-            native = json.loads(report.read_text())
-            if step == 'D06':
-                owner = json.loads((project / 'input/submission_template/tapeout_declaration.json').read_text())
-                if owner.get('answers', {}).get('deliverable') != 'DIE':
-                    return None
-                result['scope'] = 'bare-die interface; owner input/submission_template/tapeout_declaration.json'
-                assignment = project / 'phase3/stage3/pnr/pad_assignment.json'
-                measurements['pad_assignment'] = json.loads(assignment.read_text())['SIGNAL_MAP']
-            measurements.update(report=str(report), native=native)
-            status = {'WROTE': 'PASS', 'PASS': 'PASS', 'FAIL': 'FAIL'}.get(native['verdict'], 'NOT_MEASURED')
-        elif kind == 'p0':
-            prior = json.loads(report.read_text())
-            p0 = prior.get('p0_native') or prior['evidence']['p0_native']
-            native = json.loads((project / p0['producer_result']['path']).read_text())
-            measurements.update(report=p0['producer_result']['path'], tools=native['tools'])
-            failed = any(native['tools'][name]['exit_code'] != 0
-                         for name in ('Yosys.JsonHeader', 'Verilator.Lint'))
-            if failed or native['passed'] is False:
-                status = 'FAIL'
-            else:
-                import flow109_metric_acceptance as metrics
-                graph = json.loads((project / p0['elaboration_path']).read_text())
-                measured = metrics._d10_feature_inventory(graph, p0['top'])
-                measurements['interface'] = measured
-                status = 'PASS'
-            result['p0_native'] = p0
-        elif kind == 'simulation':
-            native = json.loads(report.read_text())
-            required = json.loads((project / 'requirements/base_07/required_function_scenarios.json').read_text())
-            cases = {case['id']: case for case in native['cases']}
-            selected = [cases[item['name']] for item in required['required_items']]
-            measurements.update(report=str(report), cases=selected)
-            status = 'FAIL' if any(case['verdict'] == 'FAIL' for case in selected) else 'PASS'
-            if not selected or any(not case['sim_executed'] or case['verdict'] != 'PASS' for case in selected):
-                status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
-            coverage = json.loads((project / 'reports/phase2/coverage/coverage_verilator.json').read_text())
-            targets = json.loads((project / 'requirements/base_07/coverage_targets.json').read_text())
-            measurements['coverage'] = coverage['totals']
-            if set(coverage['scope_files']) != {str(p) for p in sources.rtl_source_files(project)}:
-                status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
-            for category, limits in targets['limits'].items():
-                observed = coverage['totals'][category]
-                if observed['total'] <= 0 or not math.isfinite(observed['pct']):
-                    status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
-                elif targets['acceptance_applicable'] and (
-                        'min' in limits and observed['pct'] < limits['min']
-                        or 'max' in limits and observed['pct'] > limits['max']):
-                    status = 'FAIL'
-            result['coverage_scope'] = targets['reason']
-        elif kind == 'formal':
-            native = json.loads(report.read_text())
-            required = json.loads((project / 'requirements/base_08/proof_partition_coverage.json').read_text())
-            tasks = {item['task']: item for item in native['properties']}
-            selected = [tasks[item['task']] for item in required['required_items']]
-            measurements.update(report=str(report), tasks=selected,
-                                completion=native.get('formal_completion'),
-                                unresolved=native.get('unresolved_obligations', []))
-            states = [item['status'] for item in selected]
-            status = 'FAIL' if 'FAIL' in states else 'PASS' if states and set(states) == {'PASS'} else 'NOT_MEASURED'
-        elif kind == 'sdc_copy':
-            native = json.loads(report.read_text())
-            deck = project / native.get('staged_sdc', native['path'])
-            copies = []
-            for state in (project / 'reports/flow109/attempts').glob('*/load_base_sdc/*/state_out.json'):
-                copied = state.with_name(Path(json.loads(state.read_text())['sdc']).name)
-                if copied.read_bytes() == deck.read_bytes():
-                    copies.append(str(copied))
-            measurements.update(report=str(report), native_copies=copies,
-                                clock_period_source=str(deck))
-            status = 'PASS' if copies else 'NOT_MEASURED'
-        elif step == 'D22':
-            folder = project / 'phase3/librelane/02-yosys-synthesis'
-            if not (folder / 'state_out.json').is_file():
-                return None
-            state = json.loads((folder / 'state_out.json').read_text())
-            measurements.update(report=str(folder / 'state_out.json'), **{
-                key: state['metrics'][key] for key in
-                ('design__instance_unmapped__count', 'synthesis__check_error__count')})
-            counts = [v for k, v in measurements.items() if k != 'report']
-            if any(type(v) not in (int, float) or not math.isfinite(v) or v < 0
-                   or v != int(v) for v in counts):
-                raise ValueError('invalid native synthesis error count')
-            status = 'FAIL' if any(counts) else 'PASS'
-        elif step == 'D25':
-            import librelane_eqy
-            execution = project / 'reports/lec_eqy_execution.json'
-            if not execution.is_file():
-                return None
-            native = json.loads(execution.read_text())
-            if any(_file_digest(project / item['path']) != item['sha256']
-                   for item in [*native['subject']['rtl'], native['subject']['gate_netlist']]):
-                return None
-            folder = project / native['native_directory']
-            proof = librelane_eqy.judge_eqy(folder,
-                project / 'reports/flow109/components/D25-native.json')
-            measurements.update(proof)
-            status = proof['verdict'] if proof['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
+            for step in steps:
+                state_path = states[step]
+                state = json.loads(state_path.read_text())
+                values = state["metrics"]
+                measurements[step] = {"report": str(state_path)}
+                if step != "Yosys.JsonHeader":
+                    measurements[step]["errors"] = values["flow__errors__count"]
+                if entry.get('steps', {}).get(step):
+                    metric = entry['steps'][step]
+                    measurements[step][metric] = values[metric]
+                if step == 'Checker.WireLength':
+                    config = json.loads((state_path.parent / 'config.json').read_text())
+                    if config.get('WIRE_LENGTH_THRESHOLD') is None:
+                        result['unmeasured_obligations'] = ['wire-length limit absent from PDK']
+                    elif values['route__wirelength__max'] > config['WIRE_LENGTH_THRESHOLD']:
+                        measurements[step]['wire_length_violations'] = 1
+                if step == "OpenROAD.GeneratePDN":
+                    measurements[step]["connectivity_errors"] = values["design__power_grid_violation__count"]
+                if step == "OpenROAD.DetailedPlacement":
+                    measurements[step]["placement_errors"] = values["design__violations"]
+                if step == "Vibeic.InsertSpareCells":
+                    for key in ("vibeic__spare__pg__unconnected", "vibeic__spare__check_placement__violations"):
+                        measurements[step][key] = values[key]
+                    for wanted, actual in (("planned", "inserted"), ("tieoff__candidates", "tieoff__connected")):
+                        pair = [values["vibeic__spare__" + key] for key in (wanted, actual)]
+                        if any(type(v) not in (int, float) or not math.isfinite(v)
+                               or v < 0 or v != int(v) for v in pair):
+                            raise ValueError("invalid native spare count")
+                        measurements[step][wanted + "_mismatch"] = abs(pair[0] - pair[1])
+                if step == "OpenROAD.FillInsertion":
+                    measurements[step]["routing_errors"] = values["route__drc_errors_final"]
+                    measurements[step]["disconnected_required_pins"] = values["design__critical_disconnected_pin__count"]
+                if step == "OpenROAD.CTS":
+                    report = state_path.parent / "cts.rpt"
+                    text = report.read_text()
+                    result["cts"] = {"report": str(report), **{
+                        key: int(re.search(pattern + r"\s*(\d+)", text).group(1))
+                        for key, pattern in (("sinks", "Total number of Sinks:"),
+                                             ("buffers", "Total number of Buffers Inserted:"))}}
+                if step == "OpenROAD.STAMidPNR":
+                    timing = {key: values["timing__" + key + "__ws"] for key in ("setup", "hold")}
+                    if any(type(v) not in (int, float) or not math.isfinite(v) for v in timing.values()):
+                        raise ValueError("native setup/hold slack unavailable")
+                    timing_failed = any(v < 0 for v in timing.values())
+                    result["timing"] = {"report": str(state_path), "worst_slack_ns": timing, "limit_ns": 0}
+                    result["intermediate_drv"] = {
+                        "scope": "reported, not limits here; post-route signoff owns closure",
+                        **{key: values.get("design__max_" + key + "_violation__count")
+                           for key in ("slew", "cap", "fanout")}}
+            error_counts = [value for observed in measurements.values()
+                      for key, value in observed.items() if key != "report"]
         else:
-            import librelane_prelayout as sta
-            if context['features'].get('requires_scan'):
+            report = project / entry['report']
+            if not report.exists():
                 return None
-            folder = project / 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr'
-            if not (folder / 'state_out.json').is_file():
+            import _path_layout as layout
+            import _specrtl_common as sources
+            synthesis = json.loads((project / 'phase2/stage2/synth/synth_inputs.json').read_text())
+            rtl = layout.rtl_dir(project)
+            if synthesis['rtl_sha256'] != {
+                    p.relative_to(rtl).as_posix(): _file_digest(p)
+                    for p in sources.rtl_source_files(project)}:
                 return None
-            before = json.loads((folder / 'state_in.json').read_text())
-            inputs = json.loads((folder / 'input_fingerprint.json').read_text())
-            netlist = layout.synth_dir(project) / Path(before['nl']).name
-            config = json.loads((folder / 'config.json').read_text())
-            sdc = layout.constraints_dir(project) / Path(config['PNR_SDC_FILE']).name
-            if (_file_digest(netlist) != inputs['state_files'][before['nl']]
-                    or _file_digest(sdc) != inputs['config_files'][config['PNR_SDC_FILE']]):
-                return None
-            timing = sta.judge_slack(folder,
-                project / 'reports/flow109/components/D26-native.json')
-            measurements.update(timing)
-            status = timing['verdict']
-            bounds = json.loads((project /
-                'requirements/base_13/prelayout_timing_targets.json').read_text())
-            for corner in sta._corners(folder):
-                counts = sta.check_setup_counts((corner / 'checks.rpt').read_text(),
-                                                sta.supply_names(config))
-                if counts is None:
-                    status = 'NOT_MEASURED' if status != 'FAIL' else status
-                elif any(counts.values()):
+            if method == 'config':
+                from declared_pdk_is_the_pdk_used_check import declared_distribution
+                config = json.loads(report.read_text())
+                declared, _ = declared_distribution(project)
+                measurements.update(report=str(report), pdk=config['PDK'],
+                                    library=config['STD_CELL_LIBRARY'])
+                status = 'PASS' if config['PDK'] == declared else 'FAIL'
+            elif method == 'verdict':
+                native = json.loads(report.read_text())
+                if step == 'D06':
+                    owner = json.loads((project / 'input/submission_template/tapeout_declaration.json').read_text())
+                    if owner.get('answers', {}).get('deliverable') != 'DIE':
+                        return None
+                    result['scope'] = 'bare-die interface; owner input/submission_template/tapeout_declaration.json'
+                    assignment = project / 'phase3/stage3/pnr/pad_assignment.json'
+                    measurements['pad_assignment'] = json.loads(assignment.read_text())['SIGNAL_MAP']
+                measurements.update(report=str(report), native=native)
+                status = {'WROTE': 'PASS', 'PASS': 'PASS', 'FAIL': 'FAIL'}.get(native['verdict'], 'NOT_MEASURED')
+            elif method == 'p0':
+                prior = json.loads(report.read_text())
+                p0 = prior.get('p0_native') or prior['evidence']['p0_native']
+                native = json.loads((project / p0['producer_result']['path']).read_text())
+                measurements.update(report=p0['producer_result']['path'], tools=native['tools'])
+                failed = any(native['tools'][name]['exit_code'] != 0
+                             for name in ('Yosys.JsonHeader', 'Verilator.Lint'))
+                if failed or native['passed'] is False:
                     status = 'FAIL'
-                for metric, limits in bounds['limits'].items():
-                    measured = timing['corners'][corner.name][metric]
-                    if bounds['units'][metric] != 'ns' or measured['status'] != 'MEASURED':
-                        status = 'NOT_MEASURED' if status != 'FAIL' else status
-                    elif ('min' in limits and measured['value'] < limits['min']
-                          or 'max' in limits and measured['value'] > limits['max']):
+                else:
+                    import flow109_metric_acceptance as metrics
+                    graph = json.loads((project / p0['elaboration_path']).read_text())
+                    measured = metrics._d10_feature_inventory(graph, p0['top'])
+                    measurements['interface'] = measured
+                    status = 'PASS'
+                result['p0_native'] = p0
+            elif method == 'simulation':
+                native = json.loads(report.read_text())
+                required = json.loads((project / 'requirements/base_07/required_function_scenarios.json').read_text())
+                cases = {case['id']: case for case in native['cases']}
+                selected = [cases[item['name']] for item in required['required_items']]
+                measurements.update(report=str(report), cases=selected)
+                status = 'FAIL' if any(case['verdict'] == 'FAIL' for case in selected) else 'PASS'
+                if not selected or any(not case['sim_executed'] or case['verdict'] != 'PASS' for case in selected):
+                    status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+                coverage = json.loads((project / 'reports/phase2/coverage/coverage_verilator.json').read_text())
+                targets = json.loads((project / 'requirements/base_07/coverage_targets.json').read_text())
+                measurements['coverage'] = coverage['totals']
+                if set(coverage['scope_files']) != {str(p) for p in sources.rtl_source_files(project)}:
+                    status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+                for category, limits in targets['limits'].items():
+                    observed = coverage['totals'][category]
+                    if observed['total'] <= 0 or not math.isfinite(observed['pct']):
+                        status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+                    elif targets['acceptance_applicable'] and (
+                            'min' in limits and observed['pct'] < limits['min']
+                            or 'max' in limits and observed['pct'] > limits['max']):
                         status = 'FAIL'
-        result['reason'] = step + '_RETAINED_NATIVE_REPORT'
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+                result['coverage_scope'] = targets['reason']
+            elif method == 'formal':
+                native = json.loads(report.read_text())
+                required = json.loads((project / 'requirements/base_08/proof_partition_coverage.json').read_text())
+                tasks = {item['task']: item for item in native['properties']}
+                selected = [tasks[item['task']] for item in required['required_items']]
+                measurements.update(report=str(report), tasks=selected,
+                                    completion=native.get('formal_completion'),
+                                    unresolved=native.get('unresolved_obligations', []))
+                states = [item['status'] for item in selected]
+                status = 'FAIL' if 'FAIL' in states else 'PASS' if states and set(states) == {'PASS'} else 'NOT_MEASURED'
+            elif method == 'sdc_copy':
+                native = json.loads(report.read_text())
+                deck = project / native.get('staged_sdc', native['path'])
+                copies = []
+                for state in (project / 'reports/flow109/attempts').glob('*/load_base_sdc/*/state_out.json'):
+                    copied = state.with_name(Path(json.loads(state.read_text())['sdc']).name)
+                    if copied.read_bytes() == deck.read_bytes():
+                        copies.append(str(copied))
+                measurements.update(report=str(report), native_copies=copies,
+                                    clock_period_source=str(deck))
+                status = 'PASS' if copies else 'NOT_MEASURED'
+            elif method == 'synthesis':
+                folder = project / 'phase3/librelane/02-yosys-synthesis'
+                if not (folder / 'state_out.json').is_file():
+                    return None
+                state = json.loads((folder / 'state_out.json').read_text())
+                measurements.update(report=str(folder / 'state_out.json'), **{
+                    key: state['metrics'][key] for key in
+                    ('design__instance_unmapped__count', 'synthesis__check_error__count')})
+                error_counts = [v for k, v in measurements.items() if k != 'report']
+            elif method == 'equivalence':
+                import librelane_eqy
+                execution = project / 'reports/lec_eqy_execution.json'
+                if not execution.is_file():
+                    return None
+                native = json.loads(execution.read_text())
+                if any(_file_digest(project / item['path']) != item['sha256']
+                       for item in [*native['subject']['rtl'], native['subject']['gate_netlist']]):
+                    return None
+                folder = project / native['native_directory']
+                proof = librelane_eqy.judge_eqy(folder,
+                    project / 'reports/flow109/components/D25-native.json')
+                measurements.update(proof)
+                status = proof['verdict'] if proof['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
+            else:
+                import librelane_prelayout as sta
+                if context['features'].get('requires_scan'):
+                    return None
+                folder = project / 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr'
+                if not (folder / 'state_out.json').is_file():
+                    return None
+                before = json.loads((folder / 'state_in.json').read_text())
+                inputs = json.loads((folder / 'input_fingerprint.json').read_text())
+                netlist = layout.synth_dir(project) / Path(before['nl']).name
+                config = json.loads((folder / 'config.json').read_text())
+                sdc = layout.constraints_dir(project) / Path(config['PNR_SDC_FILE']).name
+                if (_file_digest(netlist) != inputs['state_files'][before['nl']]
+                        or _file_digest(sdc) != inputs['config_files'][config['PNR_SDC_FILE']]):
+                    return None
+                timing = sta.judge_slack(folder,
+                    project / 'reports/flow109/components/D26-native.json')
+                measurements.update(timing)
+                status = timing['verdict']
+                bounds = json.loads((project /
+                    'requirements/base_13/prelayout_timing_targets.json').read_text())
+                for corner in sta._corners(folder):
+                    counts = sta.check_setup_counts((corner / 'checks.rpt').read_text(),
+                                                    sta.supply_names(config))
+                    if counts is None:
+                        status = 'NOT_MEASURED' if status != 'FAIL' else status
+                    elif any(counts.values()):
+                        status = 'FAIL'
+                    for metric, limits in bounds['limits'].items():
+                        measured = timing['corners'][corner.name][metric]
+                        if bounds['units'][metric] != 'ns' or measured['status'] != 'MEASURED':
+                            status = 'NOT_MEASURED' if status != 'FAIL' else status
+                        elif ('min' in limits and measured['value'] < limits['min']
+                              or 'max' in limits and measured['value'] > limits['max']):
+                            status = 'FAIL'
+            result['reason'] = step + '_RETAINED_NATIVE_REPORT'
+        if error_counts is not None:
+            if any(type(v) not in (int, float) or not math.isfinite(v) or v < 0
+                   or v != int(v) for v in error_counts):
+                raise ValueError('invalid native error count')
+            status = 'FAIL' if any(error_counts) or timing_failed else 'PASS'
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        failed = status == 'FAIL' or failed or timing_failed or physical and any(
+            type(v) in (int, float) and math.isfinite(v) and v > 0
+            for observed in measurements.values() for k, v in observed.items() if k != 'report')
+        status = 'FAIL' if failed else 'NOT_MEASURED'
         result.update(reason=step + '_NATIVE_REPORT_UNAVAILABLE', detail=str(exc))
+    if method == 'report':
+        result.update(reason=step + '_NATIVE_REPORT_' + status, detail=result.get('detail'))
     return {**result, 'component_status': status, 'default_row_status': status,
             'completed': status == 'PASS', 'flow109_acceptance': status}
 
@@ -2995,8 +2976,12 @@ def prepare_front_door(args, project: Path) -> int | None:
         expected = "IC" if plan["features"]["ic"] else "IP"
         if route != expected:
             raise Flow109Error("FLOW109_ROUTE_CONFLICT", f"manifest endpoint requires {expected}, owner declared {route}")
-    retained = _retained_frontend_result(project, context)
-    if retained is not None:
+    import _container_exec
+    retained = None if args.flow109_plan_only else _retained_native_result(project, context)
+    retry_native = (context.get('resolved_row', {}).get('id') in ('D53', 'D59')
+                    and retained is not None and retained['component_status'] == 'NOT_MEASURED'
+                    and _container_exec.no_container_route())
+    if retained is not None and not retry_native:
         from _atomic_artefact import write_json
         write_json(project / 'reports/flow109/plan.json', plan)
         result = _selected_step_result(project, context, retained)
@@ -3045,10 +3030,6 @@ def prepare_front_door(args, project: Path) -> int | None:
         if _container_exec.no_container_route():
             import path_spice_tool
             current = component_context(context, requested_step='D54')
-            retained = _retained_backend_result(project, current)
-            if retained is not None:
-                _selected_step_result(project, current, retained)
-                return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[retained['component_status']]
             selected = json.loads((project / 'reports/phase3/sta_postpnr_signoff.json').read_text())
             native = path_spice_tool.run_case_correlation(project,
                 os.environ.get('VIBEIC_EDA_IMAGE'), Path(os.environ['VIBEIC_LIBRELANE_PDK_ROOT']),
@@ -3063,7 +3044,7 @@ def prepare_front_door(args, project: Path) -> int | None:
         import _container_exec
         if _container_exec.no_container_route():
             current = component_context(context, requested_step='D59')
-            result = _retained_backend_result(project, current)
+            result = retained
             if result is None or result['component_status'] == 'NOT_MEASURED':
                 import phase3_one_shot_runner as backend
                 native = backend._cvc_from_native_state(project)
@@ -3078,10 +3059,6 @@ def prepare_front_door(args, project: Path) -> int | None:
         import _container_exec
         if _container_exec.no_container_route():
             current = component_context(context, requested_step='D53')
-            retained = _retained_backend_result(project, current)
-            if retained and retained['component_status'] != 'NOT_MEASURED':
-                _selected_step_result(project, current, retained)
-                return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[retained['component_status']]
             import librelane_postroute
             native = librelane_postroute.gate_level_sim(project, args.top_name,
                 os.environ.get('VIBEIC_EDA_IMAGE'),
@@ -3305,13 +3282,6 @@ def prepare_front_door(args, project: Path) -> int | None:
     attempt = _new_attempt(project, context)
     os.environ[ATTEMPT_ENV] = str(attempt.resolve())
     adapter = context['resolved_row']['profile']['dispatch'].get('adapter')
-    retained = _retained_backend_result(project, context)
-    if retained is not None:
-        result = _selected_step_result(project, context, retained)
-        write_json(destination / 'components' / (context['requested_step'] + '.json'), result)
-        _finish_attempt(attempt, _attempt_result(
-            {**context, "resolved_rows": [context["resolved_row"]]}, [result]))
-        return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[result['default_row_status']]
     if adapter:
         # Only source-owned dispatch data selects this bounded adapter. It
         # calls existing producers/consumers and retains their actual receipts.

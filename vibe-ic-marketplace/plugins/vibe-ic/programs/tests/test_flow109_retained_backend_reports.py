@@ -122,7 +122,7 @@ def test_existing_and_extended_backend_rows_resolve_in_the_same_project(tmp_path
     observed = []
     for row in cohort:
         context = flow109.execution_context(plan, row['id'], row['id'])
-        result = flow109._retained_backend_result(tmp_path, context)
+        result = flow109._retained_native_result(tmp_path, context)
         assert result is not None and result['default_row_status'] == 'PASS', (row['id'], result)
         observed.append(row['position'])
     assert set(observed) == {51, 52, 56, 58, 59, 60, 61}
@@ -140,6 +140,32 @@ def test_report_cannot_supply_its_own_relaxed_ir_limit(tmp_path):
     assert flow109.prepare_front_door(args, tmp_path) == 1
     result = json.loads((tmp_path / 'reports/flow109/default_rows/D57.json').read_text())
     assert result['default_row_status'] == 'FAIL'
+
+
+def test_plan_only_does_not_complete_an_existing_native_report(tmp_path):
+    args = fixture(tmp_path, 'D57')
+    args.flow109_plan_only = True
+    assert flow109.prepare_front_door(args, tmp_path) == 0
+    assert not (tmp_path / 'reports/flow109/default_rows/D57.json').exists()
+
+
+@pytest.mark.parametrize('step', ['D53', 'D59'])
+def test_unmeasured_retained_result_still_reaches_its_native_producer(tmp_path, monkeypatch, step):
+    import _container_exec
+    import librelane_postroute
+    import phase3_one_shot_runner
+    args = fixture(tmp_path, step)
+    args.top_name, args.pdk = 'neutral', 'neutral'
+    put(tmp_path, 'reports/phase3/gls_corners.json' if step == 'D53'
+        else 'reports/phase3/perc_equivalent.json', {})
+    monkeypatch.setattr(_container_exec, 'no_container_route', lambda: True)
+    monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(tmp_path))
+    def native(*a, **kw):
+        raise RuntimeError('native producer reached')
+    monkeypatch.setattr(librelane_postroute, 'gate_level_sim', native)
+    monkeypatch.setattr(phase3_one_shot_runner, '_cvc_from_native_state', native)
+    with pytest.raises(RuntimeError, match='^native producer reached$'):
+        flow109.prepare_front_door(args, tmp_path)
 
 
 @pytest.mark.parametrize(('errors', 'rc'), [(0, 0), (1, 1)])
