@@ -1292,6 +1292,10 @@ def run(project: Path, block: str, container: str, image: str,
             return _refuse(record, record_path, "A7_RCX_PARASITIC_FREE",
                            f"{rcx.name}: depth {audit.depth} — a re-simulation "
                            f"of it is the pre-layout circuit again", 1)
+        rcx_text = mx.bind_step_resistor_bodies(folder, block, rcx_text)
+        bound = work / f"{block}_rcx_{slug}.spice"
+        write_text(bound, rcx_text)
+        corner["extracted_netlist"] = str(bound.relative_to(project))
         try:
             lambda_per_um = float(lay_doc.get("lambda_per_um") or 0)
         except (TypeError, ValueError):

@@ -114,7 +114,7 @@ import re
 import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +566,68 @@ def _order_findings(cmds: List[Command]) -> List[Finding]:
 _R_ELEMENT = re.compile(r"^[Rr]\S*\s+\S+\s+\S+")
 _C_ELEMENT = re.compile(r"^[Cc]\S*\s+\S+\s+\S+")
 _SUBCKT = re.compile(r"^\s*\.subckt\s+(\S+)(.*)$", re.IGNORECASE)
+
+
+#: Magic's record of a subcircuit resistor: `device rsubckt <model> llx lly urx
+#: ury [params] "substrate" "body" <gate attrs> "terminal" <attrs> "terminal"
+#: <attrs>`. Its quoted fields are nodes, in that order.
+_RESISTOR_DEVICE = re.compile(r'^device\s+rsubckt\s+\S+(?:\s+-?\d+){4}\s')
+_QUOTED_NODE = re.compile(r'"([^"]+)"')
+_SPICE_VALUE = re.compile(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)([a-zA-Z]*)$")
+
+
+def resistor_body_terminals(ext_text: str) -> Dict[str, Tuple[str, str]]:
+    """Each resistor body region in a magic extraction and its two terminals."""
+    records = [nodes for nodes in (_QUOTED_NODE.findall(line) for line in ext_text.splitlines()
+                                   if _RESISTOR_DEVICE.match(line)) if len(nodes) == 4]
+    terminals = {nodes[1]: (nodes[2], nodes[3]) for nodes in records}
+    return {body: ends for body, ends in terminals.items()
+            if all(nodes[1] != body or (nodes[2], nodes[3]) == ends for nodes in records)}
+
+
+def bind_resistor_bodies(spice_text: str, ext_text: str) -> str:
+    """Split each coupling capacitor on a resistor body between its two terminals.
+
+    Magic writes a resistor's body region as its own node holding nothing but
+    the coupling capacitors extracted onto it, so the netlist has a node with
+    no DC path. The body is the resistive conductor itself: its potential lies
+    between the two terminals the device record names, so each capacitor goes
+    half to each. A half that lands across one node is no element. A body this
+    cannot read stays as it is and goes to ngspice unchanged.
+    """
+    lines = spice_text.splitlines()
+    live = [line for line in lines if not line.lstrip().startswith("*")]
+    nodes = {token for line in live for token in line.split()}
+    connected = {token for line in live
+                 for token in (line.split()[3:] if _C_ELEMENT.match(line) and len(line.split()) > 3
+                               else line.split())}
+    bodies = {body: ends for body, ends in resistor_body_terminals(ext_text).items()
+              if body not in connected and set(ends) <= nodes}
+    output: List[str] = []
+    for line in lines:
+        tokens = line.split()
+        number = _SPICE_VALUE.match(tokens[3]) if len(tokens) > 3 else None
+        if line.lstrip().startswith("*") or not number or not _C_ELEMENT.match(line) \
+                or not set(tokens[1:3]) & bodies.keys():
+            output.append(line)
+            continue
+        sides = [[(t, 0.5) for t in bodies[n]] if n in bodies else [(n, 1.0)]
+                 for n in tokens[1:3]]
+        parts = [(a, b, ashare * bshare) for a, ashare in sides[0] for b, bshare in sides[1]]
+        for index, (a, b, share) in enumerate(parts):
+            if a != b:
+                output.append(" ".join([f"{tokens[0]}_{index}", a, b,
+                                        f"{float(number[1]) * share:.12g}{number[2]}", *tokens[4:]]))
+    return "\n".join(output) + ("\n" if spice_text.endswith("\n") else "")
+
+
+def bind_step_resistor_bodies(step_dir: Path, block: str, spice_text: str) -> str:
+    """`bind_resistor_bodies` on the device records of one Magic.RCX step."""
+    full = Path(step_dir) / "extraction_full"
+    for record in (full / f"{block}.res.ext", full / f"{block}.ext"):
+        if record.is_file():
+            return bind_resistor_bodies(spice_text, record.read_text(errors="replace"))
+    return spice_text
 
 
 @dataclass

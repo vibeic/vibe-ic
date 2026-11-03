@@ -391,6 +391,9 @@ def _extract(project: Path, name: str, container: str, image: str, pdk: str,
         if not audit.passed:
             return _result("FAIL", "Magic.RCX output has no usable parasitics", [extracted],
                            metrics={"extraction_depth": audit.depth, "audit": audit.summary})
+        text = mx.bind_step_resistor_bodies(folder, name, text)
+        extracted = work / f"pex_{slug}.bound.spice"
+        atomic_write_text(extracted, text)
         # Reuse the same device-accounting consumer as the existing A7
         # producer; parasitics on an extraction of a different circuit do
         # not qualify this block's PEX.

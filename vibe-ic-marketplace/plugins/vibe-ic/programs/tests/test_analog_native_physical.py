@@ -1316,3 +1316,22 @@ def test_refused_structural_lvs_does_not_run_erc_or_report_acceptance(project, m
     result = physical._pv(project, 'unit', 'host', 'image', 'process', {'drc_engine': 'native'})
     assert result['status'] == 'NOT_MEASURED'
     assert result['detail'] == 'structural source changed'
+
+
+def test_a13_splits_a_resistor_body_capacitor_and_keeps_the_native_output(project, monkeypatch):
+    import librelane_contract as lc
+    _extraction_project(project, monkeypatch)
+    native = ".subckt unit a b vss\nX0 a b vss vss nfet w=1u l=1u\nC0 vss a_1_2# 1f\nC1 b vss 2f\n.ends unit\n"
+    record = 'device rsubckt rmodel 1 2 3 4 w=1 l=1 "vss" "a_1_2#" 200 0 "a" 1 0 "b" 1 0\n'
+    chain = lc.run_chain
+    def extract(*args, **kwargs):
+        folder = chain(*args, **kwargs)[0]
+        put(folder / "unit.rcx.spice", native)
+        put(folder / "extraction_full/unit.res.ext", record)
+        return [folder]
+    monkeypatch.setattr(lc, "run_chain", extract)
+    corner = physical._extract(project, "unit", "container", "image", "process", {"styles": ["s"]})["metrics"]["corners"][0]
+    bound = Path(corner["extracted_netlist"]).read_text()
+    assert "a_1_2#" not in bound and "C0_0 vss a 0.5f" in bound and "C0_1 vss b 0.5f" in bound
+    assert (project / "pex_native/unit.rcx.spice").read_text() == native
+    assert corner["sha256"] == physical._sha(Path(corner["extracted_netlist"]))
