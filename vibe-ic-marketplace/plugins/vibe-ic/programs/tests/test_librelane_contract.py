@@ -1814,3 +1814,29 @@ def test_config_hashes_rebinds_only_missing_mapped_pdk_asset(tmp_path, monkeypat
     assert contract.config_file_hashes(config, mounts, fingerprint=fingerprint) == {
         str(recorded): contract.digest(mounted)}
     assert contract.digest(mounted) != contract.digest(asset)
+
+
+def test_native_runtime_runs_command_without_launch_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(container_exec, 'no_container_route', lambda: True)
+    monkeypatch.delenv(contract.LOCAL_PROVIDER_ROUTE_ENV, raising=False)
+    monkeypatch.delenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', raising=False)
+    image = 'runtime-already-entered'
+    monkeypatch.setenv('VIBEIC_LIBRELANE_IMAGE', image)
+    assert contract.resolve_image(tmp_path) == image
+    result = contract.run_container(
+        ['docker', 'run', '--rm', '--entrypoint', sys.executable,
+         image, '-c', 'print(6 * 7)'], probe_deadline_s=10)
+    assert result.returncode == 0
+    assert result.stdout.strip() == '42'
+
+
+def test_native_runtime_resolves_its_declared_pdk_tree(tmp_path, monkeypatch):
+    monkeypatch.setattr(container_exec, 'no_container_route', lambda: True)
+    monkeypatch.delenv(contract.LOCAL_PROVIDER_ROUTE_ENV, raising=False)
+    monkeypatch.delenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', raising=False)
+    root = tmp_path / 'pdks'
+    (root / 'processA').mkdir(parents=True)
+    monkeypatch.setenv('PDK_ROOT', str(root))
+    found = contract.image_pdk_root('runtime-already-entered')
+    assert contract._materialise_image_pdk(
+        'runtime-already-entered', found, 'processA', 'docker') == (root, 'native')

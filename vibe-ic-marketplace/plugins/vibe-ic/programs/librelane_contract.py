@@ -539,7 +539,6 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
                           f'LOCAL provider {provider} cannot run on a Docker-backed route')
         image = str(image)
         argv[at] = image
-    attestation = None if provider is not None else local_image_attestation(image)
     if provider is not None:
         if _local_network_namespace() != provider.network_namespace:
             raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
@@ -569,28 +568,6 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
         if not auto_remove:
             raise Refusal('LL_LOCAL_AUTOREMOVE_UNATTESTED',
                           'LOCAL execution requires Docker-equivalent --rm process lifetime')
-    if attestation is not None and network is not None and attestation['network_mode'] != network:
-        raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
-                      f"requested --network {network}; current CID {attestation['cid']} "
-                      f"has NetworkMode={attestation['network_mode']!r}")
-    for requested, key, code in ((memory, 'memory', 'LL_LOCAL_MEMORY_UNATTESTED'),
-                                (memory_swap, 'memory_swap', 'LL_LOCAL_SWAP_UNATTESTED')):
-        if attestation is None:
-            continue
-        if requested is None:
-            continue
-        actual = attestation[key] if attestation is not None else None
-        # Zero memory is unlimited; zero swap is an unspecified Docker default.
-        unbounded_request = requested == 0 if key == 'memory' else requested == -1
-        valid = type(actual) is int and (actual >= 0 if key == 'memory' else actual == -1 or actual > 0)
-        if (not valid or (key == 'memory' and requested < 0)
-                or (not unbounded_request and not (0 < actual <= requested))):
-            raise Refusal(code, f"current CID {attestation['cid']} has {key}={actual!r}; "
-                          f'requested {requested} bytes; a finite outer limit may be stricter')
-    if attestation is not None and auto_remove and attestation['auto_remove'] is not True:
-        raise Refusal('LL_LOCAL_AUTOREMOVE_UNATTESTED',
-                      f"requested --rm; current CID {attestation['cid']} "
-                      f"has AutoRemove={attestation['auto_remove']!r}")
     command = argv[at + 1:]
     if entrypoint:
         command = [entrypoint, *command]
@@ -703,8 +680,6 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
                 result.stderr = (result.stderr or '') + f'\n{detail}\n'
             else:
                 raise Refusal('LL_LOCAL_SOURCE_CHANGED', detail)
-    if attestation is not None and local_image_attestation(image) != attestation:
-        raise Refusal('LL_LOCAL_ATTESTATION_CHANGED', attestation['attestation_path'])
     return result
 
 
@@ -1063,6 +1038,21 @@ def _load(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise Refusal('LL_INVALID_JSON_OBJECT', str(path))
     return value
+
+
+def project_path(project: Path, value: str | Path) -> Path:
+    """Resolve a State's project view after moving a run; leave PDK assets alone."""
+    project, path = Path(project).resolve(), Path(value)
+    if not path.is_absolute():
+        return project / path
+    if path.is_relative_to(project):
+        return path
+    for index, part in enumerate(path.parts):
+        if part in ("phase1", "phase2", "phase3", "reports", "input", "requirements", "adopted"):
+            local = project.joinpath(*path.parts[index:])
+            if local.exists():
+                return local
+    return path
 
 
 def postroute_repair_adoption(project: Path, layout: Path) -> dict:
@@ -2854,11 +2844,10 @@ def image_pdk_root(image: str, docker: str = 'docker') -> dict[str, str]:
     An image not on this host, or one declaring no absolute `PDK_ROOT`, refuses.
     """
     if _ce.no_container_route():
-        identity = local_image_attestation(image)
         root = os.environ.get('PDK_ROOT', '')
         if not root.startswith('/') or not Path(root).is_dir():
             raise Refusal('LL_IMAGE_PDK_ROOT_UNDECLARED', f'{image}: PDK_ROOT={root!r}')
-        return {'image_id': identity['image_id'], 'pdk_root': root.rstrip('/') or '/'}
+        return {'image_id': str(image), 'pdk_root': root.rstrip('/') or '/'}
     def _inspect(ref: str) -> subprocess.CompletedProcess:
         try:
             return subprocess.run([docker, 'image', 'inspect', '--format',
@@ -2910,7 +2899,6 @@ def _materialise_image_pdk(image: str, found: dict[str, str], pdk: str,
     root (which holds `<pdk>/`) and whether it was `copied` or `reused`.
     """
     if _ce.no_container_route():
-        local_image_attestation(image)
         root = Path(found['pdk_root'])
         if not (root / pdk).is_dir():
             raise Refusal('LL_IMAGE_PDK_ABSENT', str(root / pdk))
@@ -3154,12 +3142,6 @@ def resolve_image(project: Path | None = None, *, record: bool = True) -> str:
                        {'image': str(provider), 'source': 'host-owned LOCAL provider',
                         'provider': provider.as_record()})
         return provider
-    if _ce.no_container_route():
-        identity = local_image_attestation(declared or os.environ.get('VIBEIC_LIBRELANE_IMAGE'))
-        if record and project is not None and (project / 'phase3').is_dir():
-            write_json(project / 'phase3/librelane_image.provenance.json',
-                       {**identity, 'source': 'host-CID attested LOCAL image'})
-        return identity['image']
     if declared or os.environ.get('VIBEIC_LIBRELANE_IMAGE'):
         return str(declared or os.environ['VIBEIC_LIBRELANE_IMAGE'])
     import _eda_pin
@@ -3232,8 +3214,6 @@ def image_capability(image: str, docker: str = 'docker') -> dict:
                 'provider': provider.as_record(), 'openroad_aliases': {},
                 'tcl_probe': 'NOT_MEASURED: host-owned LOCAL provider'}
         return _CAPABILITY[key]
-    if _ce.no_container_route():
-        local_image_attestation(image)
     key = (str(image), docker)
     if key in _CAPABILITY:
         return _CAPABILITY[key]
@@ -4587,8 +4567,6 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
                 fingerprint['synthesis_levers'] = declared_synthesis
         if provider is not None:
             fingerprint['local_provider'] = provider.as_record()
-        elif _ce.no_container_route():
-            fingerprint['local_image'] = local_image_attestation(image)
         if lane in ('37.3-magic', '37.3-compare'):
             fingerprint['config_files'] = _current_config_material(
                 _load(config), mounts or [])
