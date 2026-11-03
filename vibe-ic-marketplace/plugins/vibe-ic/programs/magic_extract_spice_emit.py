@@ -114,7 +114,7 @@ import re
 import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +566,77 @@ def _order_findings(cmds: List[Command]) -> List[Finding]:
 _R_ELEMENT = re.compile(r"^[Rr]\S*\s+\S+\s+\S+")
 _C_ELEMENT = re.compile(r"^[Cc]\S*\s+\S+\s+\S+")
 _SUBCKT = re.compile(r"^\s*\.subckt\s+(\S+)(.*)$", re.IGNORECASE)
+
+
+#: Magic's record of a subcircuit resistor, followed by its parameters and then
+#: its typed substrate and body nodes: `device rsubckt <model> llx lly urx ury
+#: [params] "substrate" "body" ...`.
+_RESISTOR_DEVICE = re.compile(
+    r'^device\s+rsubckt\s+\S+(?:\s+-?\d+){4}\s[^"]*"([^"]+)"\s+"([^"]+)"')
+
+
+def resistor_body_substrates(ext_text: str) -> Dict[str, str]:
+    """Each resistor body region in a magic extraction and its substrate node."""
+    bodies: Dict[str, str] = {}
+    for line in ext_text.splitlines():
+        record = _RESISTOR_DEVICE.match(line)
+        if not record:
+            continue
+        substrate, body = record.groups()
+        if bodies.setdefault(body, substrate) != substrate:
+            raise ValueError(f"RCX_RESISTOR_BODY_AMBIGUOUS: {body} sits on both "
+                             f"{bodies[body]} and {substrate}")
+    return bodies
+
+
+def bind_resistor_bodies(spice_text: str, ext_text: str) -> Tuple[str, List[dict]]:
+    """Join each extracted resistor body to the substrate node of its device.
+
+    Magic writes a resistor's body region as its own node holding nothing but
+    the coupling capacitors extracted onto it, so the netlist has a node with
+    no DC path. The device record names the substrate that region sits on, the
+    terminal LVS compares, and those capacitors move there. A body that also
+    reaches a device or a resistor is a connection this does not understand,
+    and a substrate the netlist never mentions cannot be joined: both refuse.
+    """
+    bodies = resistor_body_substrates(ext_text)
+    lines = spice_text.splitlines()
+    nodes = {token for line in lines if not line.lstrip().startswith("*")
+             for token in line.split()}
+    joined: Dict[str, List[dict]] = {body: [] for body in bodies}
+    output: List[str] = []
+    for line in lines:
+        tokens = line.split()
+        touched = (set(tokens) & bodies.keys()
+                   if not line.lstrip().startswith("*") else set())
+        if not touched:
+            output.append(line)
+            continue
+        if not _C_ELEMENT.match(line) or touched & set(tokens[3:]):
+            raise ValueError(f"RCX_RESISTOR_BODY_CONNECTED: {sorted(touched)} is "
+                             f"not capacitor-only in the netlist: {line.strip()}")
+        for body in touched:
+            if bodies[body] not in nodes:
+                raise ValueError(f"RCX_RESISTOR_SUBSTRATE_ABSENT: body {body} "
+                                 f"sits on {bodies[body]}, which no netlist line names")
+            joined[body].append({"capacitor": tokens[0], "other_node": next(
+                t for t in tokens[1:3] if t != body), "value": tokens[3]})
+        first, second = (bodies.get(t, t) for t in tokens[1:3])
+        if first != second:
+            output.append(" ".join([tokens[0], first, second, *tokens[3:]]))
+    text = "\n".join(output) + ("\n" if spice_text.endswith("\n") else "")
+    return text, [{"body": body, "substrate": bodies[body], "capacitors": caps}
+                  for body, caps in joined.items() if caps]
+
+
+def bind_step_resistor_bodies(step_dir: Path, block: str,
+                              spice_text: str) -> Tuple[str, List[dict]]:
+    """`bind_resistor_bodies` on the device records of one Magic.RCX step."""
+    full = Path(step_dir) / "extraction_full"
+    for record in (full / f"{block}.res.ext", full / f"{block}.ext"):
+        if record.is_file():
+            return bind_resistor_bodies(spice_text, record.read_text(errors="replace"))
+    raise ValueError(f"RCX_DEVICE_RECORD_MISSING: {full} holds no extraction of {block}")
 
 
 @dataclass

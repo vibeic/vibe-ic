@@ -139,6 +139,8 @@ if a[0] == "run":
         os.makedirs(folder, exist_ok=True)
         rcx = os.path.join(folder, "blk.rcx.spice")
         open(rcx, "w").write(open(os.environ["STUB_RCX"]).read())
+        os.makedirs(os.path.join(folder, "extraction_full"), exist_ok=True)
+        open(os.path.join(folder, "extraction_full", "blk.res.ext"), "w").write("")
         state_in["spice_rcx"] = rcx
         open(os.path.join(folder, "state_out.json"), "w").write(
             json.dumps(state_in))
@@ -377,6 +379,8 @@ def metrics_mock_project(tmp_path, monkeypatch):
         folder.mkdir(parents=True, exist_ok=True)
         rcx = folder / "view.sp"
         rcx.write_text(RCX_RC)
+        (folder / "extraction_full").mkdir(exist_ok=True)
+        (folder / "extraction_full" / "blk.res.ext").write_text("")
         (folder / "state_out.json").write_text(json.dumps({"spice_rcx": str(rcx)}))
         return [folder]
     monkeypatch.setattr(lc, "resolve_step_config", resolve)

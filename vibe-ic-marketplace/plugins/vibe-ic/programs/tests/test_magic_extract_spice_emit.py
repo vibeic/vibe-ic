@@ -559,3 +559,64 @@ class TestRthreshRendering:
         tcl = mod.build_extraction_tcl(
             "b", "/o.spice", mod.MagicResimExtractOptions(rthresh=good))
         assert f"ext2spice rthresh {want}" in tcl
+
+
+class TestResistorBodies:
+    RECORD = ('device rsubckt rmodel 10 20 11 21  "sub.t0" "a_10_20#" 200 0 "a" 7 8600,372 "b" 7 8600,372\n')
+    NET = (".subckt top a b sub.t0\nX1 a b sub.t0 rmodel l=1u w=1u\n"
+           "C1 b a_10_20# 0.12f\nC2 a_10_20# a 0.3f\nC3 a b 1f\n.ends\n")
+
+    def test_body_capacitors_land_on_the_device_substrate(self):
+        text, joined = mod.bind_resistor_bodies(self.NET, self.RECORD)
+        assert "a_10_20#" not in text
+        assert "C1 b sub.t0 0.12f" in text and "C2 sub.t0 a 0.3f" in text
+        assert "C3 a b 1f" in text and "X1 a b sub.t0 rmodel l=1u w=1u" in text
+        assert joined[0]["substrate"] == "sub.t0" and len(joined[0]["capacitors"]) == 2
+
+    def test_a_capacitor_between_a_body_and_its_substrate_disappears(self):
+        text, _ = mod.bind_resistor_bodies(
+            self.NET.replace("C3 a b 1f", "C3 a_10_20# sub.t0 1f"), self.RECORD)
+        assert "C3" not in text
+
+    def test_two_bodies_join_their_own_substrates(self):
+        record = self.RECORD + self.RECORD.replace("a_10_20#", "a_30_20#").replace("sub.t0", "sub.t1")
+        net = self.NET.replace("C3 a b 1f", "C3 a_10_20# a_30_20# 1f\nX2 a b sub.t1 rmodel l=1u w=1u")
+        text, joined = mod.bind_resistor_bodies(net, record)
+        assert "C3 sub.t0 sub.t1 1f" in text and len(joined) == 2
+
+    def test_nothing_changes_without_a_resistor_record_or_a_printed_body(self):
+        assert mod.bind_resistor_bodies(self.NET, "") == (self.NET, [])
+        net = self.NET.replace("C1 b a_10_20# 0.12f\nC2 a_10_20# a 0.3f\n", "")
+        assert mod.bind_resistor_bodies(net, self.RECORD) == (net, [])
+
+    def test_a_comment_naming_a_body_is_left_alone(self):
+        net = "* a_10_20#\n" + self.NET
+        assert mod.bind_resistor_bodies(net, self.RECORD)[0].startswith("* a_10_20#\n")
+
+    @pytest.mark.parametrize("net", [
+        ".subckt top a b sub.t0\nX1 a a_10_20# sub.t0 rmodel\nC1 b a_10_20# 1f\n.ends\n",
+        ".subckt top a b sub.t0\nR1 a a_10_20# 5\n.ends\n",
+        ".subckt top a a_10_20# sub.t0\nC1 a a_10_20# 1f\n.ends\n",
+        ".subckt top a b sub.t0\nC1 a b a_10_20#\n.ends\n",
+    ])
+    def test_a_body_with_any_other_connection_refuses(self, net):
+        with pytest.raises(ValueError, match="RCX_RESISTOR_BODY_CONNECTED"):
+            mod.bind_resistor_bodies(net, self.RECORD)
+
+    def test_a_substrate_the_netlist_never_names_refuses(self):
+        with pytest.raises(ValueError, match="RCX_RESISTOR_SUBSTRATE_ABSENT"):
+            mod.bind_resistor_bodies(".subckt top a b\nC1 a a_10_20# 1f\n.ends\n", self.RECORD)
+
+    def test_a_body_on_two_substrates_refuses(self):
+        with pytest.raises(ValueError, match="RCX_RESISTOR_BODY_AMBIGUOUS"):
+            mod.resistor_body_substrates(self.RECORD + self.RECORD.replace("sub.t0", "other"))
+
+    def test_the_step_prefers_the_resistance_record_and_refuses_when_none_exists(self, tmp_path):
+        full = tmp_path / "extraction_full"
+        with pytest.raises(ValueError, match="RCX_DEVICE_RECORD_MISSING"):
+            mod.bind_step_resistor_bodies(tmp_path, "top", self.NET)
+        full.mkdir()
+        (full / "top.ext").write_text(self.RECORD.replace("sub.t0", "b"))
+        assert mod.bind_step_resistor_bodies(tmp_path, "top", self.NET)[1][0]["substrate"] == "b"
+        (full / "top.res.ext").write_text(self.RECORD)
+        assert mod.bind_step_resistor_bodies(tmp_path, "top", self.NET)[1][0]["substrate"] == "sub.t0"

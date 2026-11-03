@@ -1293,6 +1293,16 @@ def run(project: Path, block: str, container: str, image: str,
                            f"{rcx.name}: depth {audit.depth} — a re-simulation "
                            f"of it is the pre-layout circuit again", 1)
         try:
+            rcx_text, corner["resistor_bodies"] = mx.bind_step_resistor_bodies(
+                folder, block, rcx_text)
+        except ValueError as exc:
+            record["corners"] = corners
+            return _refuse(record, record_path, str(exc).split(":", 1)[0], str(exc), 1)
+        bound = work / f"{block}_rcx_{slug}.spice"
+        write_text(bound, rcx_text)
+        corner["native_netlist"] = corner["extracted_netlist"]
+        corner["extracted_netlist"] = str(bound.relative_to(project))
+        try:
             lambda_per_um = float(lay_doc.get("lambda_per_um") or 0)
         except (TypeError, ValueError):
             lambda_per_um = 0.0
