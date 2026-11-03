@@ -132,7 +132,7 @@ def _roll_up(statuses):
             'PASS' if statuses and set(statuses) == {'PASS'} else 'NOT_MEASURED')
 
 
-def _native_ir_em(project, native, odb, sdc, spef, sta_folder, corners, folder):
+def _native_ir_em(project, native, odb, sdc, spefs, sta_folder, corners, folder):
     """OpenROAD PSM IR and power-grid EM on the final State, at each max-RC corner."""
     config = _load(sta_folder / 'config.json')
     vdd, gnd = list(config.get('VDD_NETS') or []), list(config.get('GND_NETS') or [])
@@ -157,7 +157,7 @@ def _native_ir_em(project, native, odb, sdc, spef, sta_folder, corners, folder):
         vsrc = (ir_tool.write_vsrc(sources, {net: voltage if net in vdd else 0.0 for net in sources},
                                    folder / corner) if sources else {})
         tcl = [f'read_liberty {lib}' for lib in libs] + [
-            f'read_db {odb}', f'read_sdc {sdc}', f'read_spef {spef}', 'set_propagated_clock [all_clocks]',
+            f'read_db {odb}', f'read_sdc {sdc}', f"read_spef {spefs['max']}", 'set_propagated_clock [all_clocks]',
             'report_power']
         tcl += [f'set_pdnsim_net_voltage -net {net} -voltage {voltage if net in vdd else 0}' for net in vdd + gnd]
         for net in vdd + gnd:
@@ -247,7 +247,7 @@ def execute(project, context):
                       'sta_state': state_record,
                       'declared_corners': required_corners,
                       'spef_by_rc_scene': parasitics['final_spefs']}
-        ir_em = _native_ir_em(project, native, odb, sdc, spefs['max'], Path(sta['sta']), corners,
+        ir_em = _native_ir_em(project, native, odb, sdc, spefs, Path(sta['sta']), corners,
                               attempt / 'ir_em')
         status = _roll_up((timing['verdict'], ir_em['ir_status'], ir_em['em_status']))
         scan_required = (context.get('features') or {}).get('requires_scan') is True
@@ -917,9 +917,15 @@ def accept_metric_obligations(project, context, component):
 def consume_default_row_completion(project, context, component):
     """Use the existing adapter completion seam; whole-IC acceptance is separate."""
     acceptance = accept_metric_obligations(project, context, component)
-    # C2: the row is the tools' STA, IR and EM result. Obligations they do not measure stay named.
-    status = ('FAIL' if 'FAIL' in (component.get('component_status'), acceptance['status']) else
-              'PASS' if component.get('component_status') == 'PASS' else 'NOT_MEASURED')
+    status = 'FAIL' if 'FAIL' in (component.get('component_status'), acceptance['status']) else acceptance['status']
+    if status != 'FAIL' and component.get('profile') != 'analog_die' and component.get('component_status') == 'PASS':
+        # C2: the digital row is STA, IR and EM on the final State, reopened against current inputs.
+        # Obligations those tools do not measure stay named in the record.
+        try:
+            validate_final_electrical(project, component['receipt'])
+            status = 'PASS'
+        except (AdmissionRefusal, Refusal, OSError, KeyError, TypeError, ValueError) as exc:
+            status, acceptance = 'NOT_MEASURED', {**acceptance, 'reopen_refusal': str(exc)}
     result = {**component, 'step_id': 'D70', 'context_sha256': context['context_sha256'],
             'metric_acceptance': acceptance, 'metric_acceptance_status': acceptance['metric_status'],
             'default_row_status': status, 'flow109_acceptance': status, 'completed': status == 'PASS',
