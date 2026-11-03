@@ -244,6 +244,8 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
         _parsed(PR.parse_lef_macros), on_conflict="richer")
     classes, _cl_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_macro_classes), on_conflict="richer")
+    pin_roles, _pr_conf = _srm.merge_source_records(
+        _parsed(PR.parse_lef_pin_roles), on_conflict="richer")
     conflicting_classes = {conflict["key"] for conflict in _cl_conf}
 
     def terminal_row(pin_name, rec, inst, tpin, comp):
@@ -294,14 +296,28 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
     rank = {"NOT_CONNECTED": 0, "UNDECIDED": 1, "CONNECTED": 2}
     for pin_name, rec in sorted(pins.items()):
         use = rec["use"] or uses.get(rec["net"])
-        if use in ("POWER", "GROUND"):
-            routed_supply_pins.append({"pin": pin_name, "net": rec["net"], "use": use,
-                                       "source": "DEF PINS USE" if rec["use"] else "DEF net USE"})
-            continue
         candidates = []
         for inst, pin in nets.get(rec["net"], []):
             candidates.extend(component_pins.get(pin, []) if inst == "*"
                               else [(inst, pin)])
+        if use in ("POWER", "GROUND"):
+            supply_pad_terminals = []
+            for inst, pin in dict.fromkeys(candidates):
+                comp = dfn.components.get(inst)
+                if (comp is not None and comp.master not in conflicting_classes
+                        and classes.get(comp.master) in ("PAD POWER", "PAD GROUND")
+                        and pin_roles.get(comp.master, {}).get(pin, ("", ""))[1] == use):
+                    supply_pad_terminals.append({"instance": inst, "terminal": pin,
+                                                 "master": comp.master})
+            routed_supply_pins.append({
+                "pin": pin_name, "net": rec["net"], "use": use,
+                "source": "DEF PINS USE" if rec["use"] else "DEF net USE",
+                "supply_pad_terminals": supply_pad_terminals})
+            if not supply_pad_terminals:
+                rows.append({"pin": pin_name, "net": rec["net"],
+                             "verdict": "NOT_CONNECTED",
+                             "reason": "DEF connects no declared supply-pad terminal to this net"})
+            continue
         chosen = None
         for inst, pin in dict.fromkeys(candidates):
             comp = dfn.components.get(inst)
@@ -335,8 +351,9 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
         "routed_supply_pins": routed_supply_pins,
         "consumer_contract": (
             "This check measures signal bond-terminal coincidence. Declared "
-            "POWER/GROUND pins are listed in routed_supply_pins; their routed "
-            "grid connectivity is outside this check. "
+            "POWER/GROUND pins list their DEF-connected, LEF-declared supply "
+            "pad terminals in routed_supply_pins without a geometry verdict. "
+            "Physical grid connectivity is outside this check. "
             "A consumer may exclude a net from signal routing ONLY if it "
             "appears in `connected_nets`. `not_connected_nets` and "
             "`undecided_nets` must stay in the router, and a consumer that "
