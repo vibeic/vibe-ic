@@ -47,6 +47,8 @@ def test_public_padring_row_uses_native_error_limit(tmp_path, counts, rc, status
     assert flow109.prepare_front_door(args, tmp_path) == rc
     row = json.loads((tmp_path / "reports/flow109/default_rows/D32.json").read_text())
     assert row["default_row_status"] == status
+    if status == 'NOT_MEASURED':
+        assert row['reason'] == 'D32_NATIVE_REPORT_UNAVAILABLE'
     assert row["completed"] is (status == "PASS")
     assert not (tmp_path / "reports/phase3/default_steps/15.5ic/backend_result.json").exists()
 

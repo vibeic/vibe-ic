@@ -2698,22 +2698,22 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
             states = {item["step"]: project / item["state"] for item in chain["states"]}
             steps = (entry.get("native_steps") or tuple(entry.get("steps", ()))
                      or row["profile"]["native_steps"])
-            if any(step not in states for step in steps):
+            if any(native_step not in states for native_step in steps):
                 root = next(iter(states.values())).parent.parent
                 ordered = []
                 for config_path in root.glob("*/config.json"):
-                    step = json.loads(config_path.read_text()).get("meta", {}).get("step")
+                    native_step = json.loads(config_path.read_text()).get("meta", {}).get("step")
                     ordinal = config_path.parent.name.split("-", 1)[0]
                     if ordinal.isdigit():
-                        ordered.append((int(ordinal), step, config_path.parent / "state_out.json"))
+                        ordered.append((int(ordinal), native_step, config_path.parent / "state_out.json"))
                     if method in ("cts", "repair"):
                         continue
-                    if step not in steps:
+                    if native_step not in steps:
                         continue
                     state = config_path.parent / "state_out.json"
-                    if step in states and states[step] != state:
-                        raise ValueError("ambiguous native step: " + step)
-                    states[step] = state
+                    if native_step in states and states[native_step] != state:
+                        raise ValueError("ambiguous native step: " + native_step)
+                    states[native_step] = state
                 if method in ("cts", "repair"):
                     ordered.sort()
                     anchors = [i for i, item in enumerate(ordered) if item[1] == steps[0]]
@@ -2727,46 +2727,46 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
                     states.update({own[1]: own[2], sta[1]: sta[2]})
                 elif steps[0] not in states:
                     return None
-            for step in steps:
-                state_path = states[step]
+            for native_step in steps:
+                state_path = states[native_step]
                 state = json.loads(state_path.read_text())
                 values = state["metrics"]
-                measurements[step] = {"report": str(state_path)}
-                if step != "Yosys.JsonHeader":
-                    measurements[step]["errors"] = values["flow__errors__count"]
-                if entry.get('steps', {}).get(step):
-                    metric = entry['steps'][step]
-                    measurements[step][metric] = values[metric]
-                if step == 'Checker.WireLength':
+                measurements[native_step] = {"report": str(state_path)}
+                if native_step != "Yosys.JsonHeader":
+                    measurements[native_step]["errors"] = values["flow__errors__count"]
+                if entry.get('steps', {}).get(native_step):
+                    metric = entry['steps'][native_step]
+                    measurements[native_step][metric] = values[metric]
+                if native_step == 'Checker.WireLength':
                     config = json.loads((state_path.parent / 'config.json').read_text())
                     if config.get('WIRE_LENGTH_THRESHOLD') is None:
                         result['unmeasured_obligations'] = ['wire-length limit absent from PDK']
                     elif values['route__wirelength__max'] > config['WIRE_LENGTH_THRESHOLD']:
-                        measurements[step]['wire_length_violations'] = 1
-                if step == "OpenROAD.GeneratePDN":
-                    measurements[step]["connectivity_errors"] = values["design__power_grid_violation__count"]
-                if step == "OpenROAD.DetailedPlacement":
-                    measurements[step]["placement_errors"] = values["design__violations"]
-                if step == "Vibeic.InsertSpareCells":
+                        measurements[native_step]['wire_length_violations'] = 1
+                if native_step == "OpenROAD.GeneratePDN":
+                    measurements[native_step]["connectivity_errors"] = values["design__power_grid_violation__count"]
+                if native_step == "OpenROAD.DetailedPlacement":
+                    measurements[native_step]["placement_errors"] = values["design__violations"]
+                if native_step == "Vibeic.InsertSpareCells":
                     for key in ("vibeic__spare__pg__unconnected", "vibeic__spare__check_placement__violations"):
-                        measurements[step][key] = values[key]
+                        measurements[native_step][key] = values[key]
                     for wanted, actual in (("planned", "inserted"), ("tieoff__candidates", "tieoff__connected")):
                         pair = [values["vibeic__spare__" + key] for key in (wanted, actual)]
                         if any(type(v) not in (int, float) or not math.isfinite(v)
                                or v < 0 or v != int(v) for v in pair):
                             raise ValueError("invalid native spare count")
-                        measurements[step][wanted + "_mismatch"] = abs(pair[0] - pair[1])
-                if step == "OpenROAD.FillInsertion":
-                    measurements[step]["routing_errors"] = values["route__drc_errors_final"]
-                    measurements[step]["disconnected_required_pins"] = values["design__critical_disconnected_pin__count"]
-                if step == "OpenROAD.CTS":
+                        measurements[native_step][wanted + "_mismatch"] = abs(pair[0] - pair[1])
+                if native_step == "OpenROAD.FillInsertion":
+                    measurements[native_step]["routing_errors"] = values["route__drc_errors_final"]
+                    measurements[native_step]["disconnected_required_pins"] = values["design__critical_disconnected_pin__count"]
+                if native_step == "OpenROAD.CTS":
                     report = state_path.parent / "cts.rpt"
                     text = report.read_text()
                     result["cts"] = {"report": str(report), **{
                         key: int(re.search(pattern + r"\s*(\d+)", text).group(1))
                         for key, pattern in (("sinks", "Total number of Sinks:"),
                                              ("buffers", "Total number of Buffers Inserted:"))}}
-                if step == "OpenROAD.STAMidPNR":
+                if native_step == "OpenROAD.STAMidPNR":
                     timing = {key: values["timing__" + key + "__ws"] for key in ("setup", "hold")}
                     if any(type(v) not in (int, float) or not math.isfinite(v) for v in timing.values()):
                         raise ValueError("native setup/hold slack unavailable")

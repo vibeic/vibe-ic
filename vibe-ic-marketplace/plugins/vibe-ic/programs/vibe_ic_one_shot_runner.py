@@ -2160,7 +2160,7 @@ def _finish_d11_selected_owner(project: Path, report: Mapping, invocation: Mappi
     import flow109
     context = flow109.validate_execution_context(json.loads(
         Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
-    native = flow109._retained_frontend_result(project, context)
+    native = flow109._retained_native_result(project, context)
     if native is None:
         return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
                 'detail': 'native report is unavailable'}
@@ -2176,7 +2176,7 @@ def _finish_d13_selected_owner(project: Path, report: Mapping, invocation: Mappi
     import flow109
     context = flow109.validate_execution_context(json.loads(
         Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
-    native = flow109._retained_frontend_result(project, context)
+    native = flow109._retained_native_result(project, context)
     if native is None:
         return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
                 'detail': 'native report is unavailable'}
@@ -2192,7 +2192,7 @@ def _finish_d14_selected_owner(project: Path, report: Mapping, invocation: Mappi
     import flow109
     context = flow109.validate_execution_context(json.loads(
         Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
-    native = flow109._retained_frontend_result(project, context)
+    native = flow109._retained_native_result(project, context)
     if native is None:
         return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
                 'detail': 'native report is unavailable'}

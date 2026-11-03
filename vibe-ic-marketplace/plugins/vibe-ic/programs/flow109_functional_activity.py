@@ -1084,7 +1084,7 @@ def execute(project, context):
     import _container_exec as ce
     if ce.no_container_route() and not (project / INPUT).is_file() and not (project / ROW_INPUT).is_file():
         import flow109
-        retained = flow109._retained_backend_result(project, context)
+        retained = flow109._retained_native_result(project, context)
         if retained and retained['component_status'] != 'NOT_MEASURED':
             return retained
         return _execute_native_cases(project, context)
