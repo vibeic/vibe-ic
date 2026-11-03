@@ -203,6 +203,8 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             except (TypeError, ValueError) as exc:
                 return _result("FAIL", f"ROUTING_INTENT_SCHEMA: {exc}")
             argv += ["--routing-intent", encoded_intent]
+        if "floorplan" in cfg:
+            argv += ["--floorplan", json.dumps(cfg["floorplan"], separators=(",", ":"))]
         if cfg.get("shared_capacitor_escapes") is True:
             argv.append("--shared-capacitor-escapes")
         if cfg.get("left_right_regions") is True:

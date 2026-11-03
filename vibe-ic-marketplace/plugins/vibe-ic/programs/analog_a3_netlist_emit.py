@@ -1038,11 +1038,13 @@ def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     warning = _a2._ota_bias.legacy_shared_warning(ir)
     if warning:
         print("WARNING: " + warning, file=sys.stderr)
-    problems: List[str] = _a2._ota_bias.problems(ir, project)
-    problems.extend(_a2.input_drain_cascode_problems(ir, project))
-    problems.extend(_a2.matched_gain_length_problems(ir, project))
-    problems.extend(_a2.folded_first_stage_problems(ir, project))
-    problems.extend(_a2.miller_nulling_problems(ir, project))
+    unsegmented = _a2._segments.without_segments(ir)
+    problems: List[str] = _a2._segments.problems(ir)
+    problems.extend(_a2._ota_bias.problems(unsegmented, project))
+    problems.extend(_a2.input_drain_cascode_problems(unsegmented, project))
+    problems.extend(_a2.matched_gain_length_problems(unsegmented, project))
+    problems.extend(_a2.folded_first_stage_problems(unsegmented, project))
+    problems.extend(_a2.miller_nulling_problems(unsegmented, project))
     role_terms = ir.get("role_terminals") or {}
     ports = set(ir.get("ports") or [])
     rails = set((ir.get("rails") or {}).values())
