@@ -256,11 +256,14 @@ and every DEF signal net present. Bindings a caller supplies through
 owner consumes the same SPEFs; an old pre-fill SPEF cannot substitute for them.
 The `analog_die` profile remains `Magic.RCX`; this does not claim stock IHP
 fill-aware extraction.
-The reducer's `--max-degree` is our own computational guard on one
-elimination's clique fill-in, not a signoff threshold (ruling #88 D2). When
-that guard alone refuses, D69 relaunches the tool once with `--max-degree` at
-twice the degree the refusal measured; any other refusal, or a second guard
-refusal, stays a FAIL.
+The reducer in EDA 0.4.67 has `--max-degree`, our own computational guard on
+one elimination's clique fill-in, not a signoff threshold (ruling #88 D2). When
+that guard alone refuses `extract`, D69 relaunches the tool once with
+`--max-degree` at twice the degree the refusal measured; any other refusal, or
+a second guard refusal, stays a FAIL. The `analog_die` path calls `reduce` and
+does not relaunch. The reducer from `vibeic/vibeic-eda#469` has no degree guard
+and never gives that refusal, so its first launch is the only one. The relaunch
+stays until no image in use carries the flag.
 
 In EDA 0.4.29, OpenROAD `d4d1c6987aa8a1c4bdf99cf8166130549c981b03`
 produced identical SPEF bytes (excluding DATE) before and after adding 41,549
