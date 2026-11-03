@@ -282,7 +282,7 @@ def clock_plan_receipt_lef_refusal(record, pdk, *, io_context=None):
     return ""
 
 
-def clock_plan_liberty_paths(pdk):
+def clock_plan_liberty_paths(pdk, *, io_context=None):
     """The resolved active standard-cell and declared macro timing views.
 
     Geometry cannot supply SDC library-cell semantics. Do not guess a corner
@@ -292,14 +292,30 @@ def clock_plan_liberty_paths(pdk):
     paths = list(primary) if isinstance(primary, (list, tuple)) else [primary]
     if not paths or any(not isinstance(path, str) or not path.strip() for path in paths):
         raise ValueError("CLOCK_PLAN_LIBERTY_MISSING")
+    io_libs = []
+    if io_context:
+        from _pad_ring import discover_io_lefs, discover_pad_liberty_rosters, pad_liberty_pattern_matches
+        libraries = {path.parent.parent.name for path in discover_io_lefs(*io_context)}
+        rows = [row for row in discover_pad_liberty_rosters(*io_context)
+                if Path(row["config"]).parent.name in libraries]
+        for core in paths:
+            matches = [row for row in rows
+                       if pad_liberty_pattern_matches(row["pattern"], core)]
+            if rows and not matches:
+                raise ValueError(f"CLOCK_PLAN_IO_CORNER_UNAVAILABLE: {core}")
+            for row in matches:
+                if row.get("refusal"):
+                    raise ValueError(f"CLOCK_PLAN_IO_LIBERTY_UNAVAILABLE: {row['refusal']}")
+                io_libs.extend(row["paths"])
     return list(dict.fromkeys([*paths, *(str(path) for path in
-                               (getattr(pdk, "macro_libs", []) or []))]))
+                               (getattr(pdk, "macro_libs", []) or [])), *io_libs]))
 
 
-def clock_plan_receipt_liberty_refusal(record, pdk):
+def clock_plan_receipt_liberty_refusal(record, pdk, *, io_context=None):
     """The producer's complete timing-view set must still be selected on reuse."""
     try:
-        expected = [str(Path(path).resolve()) for path in clock_plan_liberty_paths(pdk)]
+        expected = [str(Path(path).resolve()) for path in clock_plan_liberty_paths(
+            pdk, io_context=io_context)]
         inputs = record.get("inputs") if isinstance(record, dict) else None
         if not isinstance(inputs, dict):
             raise ValueError("CURRENT_INPUTS_MISSING")
@@ -318,7 +334,7 @@ def clock_plan_receipt_liberty_refusal(record, pdk):
     return ""
 
 
-def clock_plan(project, plan, floorplan, sdcs, pdk):
+def clock_plan(project, plan, floorplan, sdcs, pdk, *, io_context=None):
     """OpenROAD reads the current floorplan and evaluates the declared SDC."""
     from _atomic_artefact import write_json
     project, plan, floorplan = map(Path, (project, plan, floorplan))
@@ -333,7 +349,7 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
     # The runner already supplied any required IO views in macro_lefs. Use
     # the same normalized load set that validates reuse of this measurement.
     lefs = clock_plan_lef_paths(pdk)
-    liberties = clock_plan_liberty_paths(pdk)
+    liberties = clock_plan_liberty_paths(pdk, io_context=io_context)
     image = native_image(project, "openroad")
     for i, row in enumerate(lef_entries(project, lefs, image=image)):
         inputs[f"pdk_lef_{i}"] = row

@@ -334,3 +334,38 @@ def test_invalid_reuse_never_returns_success_when_native_refresh_fails(
     assert plan.read_bytes() == before
     assert any("NOT written" in note for note in notes)
     assert gate.main([str(project)]) == 1
+
+
+def test_declared_pad_timing_connects_the_clock_sink_census(setup, monkeypatch):
+    project, floor, plan, io, pdk, calls = setup
+    root = io.parents[4]
+    model = put(io.parent.parent, "lib/active_pad.lib",
+                "library(pads) { cell(input_pad) {} }\n")
+    other = put(io.parent.parent, "lib/other_pad.lib",
+                "library(other) { cell(input_pad) {} }\n")
+    put(root, f"{pdk.name}/libs.tech/openlane/fixture_io/config.tcl",
+        f'dict set ::env(PAD_LIBS) "*active" "{model}"\n'
+        f'dict set ::env(PAD_LIBS) "*other" "{other}"\n')
+    put(root, f"{pdk.name}/libs.tech/openlane/unselected_io/config.tcl",
+        'dict set ::env(PAD_LIBS) "*active" "[glob /uninstalled/*.lib]"\n')
+    native = current.run_native
+
+    def clock_graph(*args):
+        rc, execution = native(*args)
+        recipe = Path(args[-2][-1]).read_text()
+        loaded = re.findall(r"(?m)^read_liberty \{([^}]+)\}$", recipe)
+        assert str(other) not in loaded
+        sinks = ["u_a/CK", "u_b/CK"] if str(model) in loaded else []
+        log = Path(args[-1])
+        text = log.read_text().replace("CLOCK_PLAN_SINK_COUNT system|0",
+            "\n".join([*(f"CLOCK_PLAN_SINK system|{pin}" for pin in sinks),
+                        f"CLOCK_PLAN_SINK_COUNT system|{len(sinks)}"]))
+        log.write_text(text)
+        return rc, execution
+
+    monkeypatch.setattr(current, "run_native", clock_graph)
+    result, notes = emit(setup)
+    assert result == str(plan), notes
+    measured = json.loads(plan.read_text())
+    assert measured["sink_census"]["counts"] == {"system": 2}
+    assert measured["sinks"]["system"] == ["u_a/CK", "u_b/CK"]
