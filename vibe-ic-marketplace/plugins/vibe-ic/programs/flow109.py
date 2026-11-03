@@ -2598,6 +2598,7 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
                 'unmeasured': ['latch-up spacing', 'ESD characterization']},
         'D54': {'report': 'reports/phase3/spice_correlation.json', 'status': 'verdict'},
         'D55': {'report': 'reports/phase3/functional_activity.json', 'status': 'component_status'},
+        'D53': {'report': 'reports/phase3/gls_corners.json', 'status': 'verdict'},
     }
     row = context.get('resolved_row', {})
     entry = contracts.get(row.get('id'))
@@ -2976,6 +2977,25 @@ def prepare_front_door(args, project: Path) -> int | None:
                     'wall_seconds': native['wall_seconds']}
             _selected_step_result(project, current, result)
             return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[result['component_status']]
+    if len(selected_rows) == 1 and selected_rows[0]['id'] == 'D53':
+        import _container_exec
+        if _container_exec.no_container_route():
+            current = component_context(context, requested_step='D53')
+            retained = _retained_backend_result(project, current)
+            if retained and retained['component_status'] != 'NOT_MEASURED':
+                _selected_step_result(project, current, retained)
+                return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[retained['component_status']]
+            import librelane_postroute
+            native = librelane_postroute.gate_level_sim(project, args.top_name,
+                os.environ.get('VIBEIC_EDA_IMAGE'),
+                Path(os.environ['VIBEIC_LIBRELANE_PDK_ROOT']), args.pdk)
+            status = native['verdict'] if native['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
+            _selected_step_result(project, current, {'step_id': 'D53',
+                'context_sha256': current['context_sha256'],
+                'component_status': status, 'default_row_status': status, 'completed': status == 'PASS',
+                'native_started': True, 'reason': 'NATIVE_DEADLINE_GLS_' + status,
+                'wall_seconds': native.get('wall_seconds'), 'native_result': native})
+            return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[status]
     try:
         dft_preroute = (dft_preroute_admission(project, component_context(
             context, requested_step="D30"))

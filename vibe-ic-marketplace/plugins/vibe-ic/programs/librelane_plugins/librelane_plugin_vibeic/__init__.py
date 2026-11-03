@@ -218,6 +218,9 @@ class GateLevelSim(Step):
         if not isinstance(sdfs, dict):
             sdfs = {"default": sdfs}
         limit = int(self.config["VIBEIC_GLS_TIMEOUT_S"])
+        previous_path = FilePath(self.step_dir) / 'gls_runs.json'
+        previous = json.loads(previous_path.read_text()) if previous_path.is_file() else {}
+        completed = {(r['corner'], r['case']): r for r in previous.get('runs', [])}
         runs = []
         for corner in sorted(sdfs):
             folder = os.path.join(self.step_dir, corner)
@@ -227,9 +230,19 @@ class GateLevelSim(Step):
                 with open(case["testbench"]) as stream:
                     tb_text = stream.read()
                 tb = os.path.join(folder, f"{cid}_tb.v")
+                rendered = tb_text.replace(manifest["sdf_placeholder"], str(sdfs[corner]))
+                prior = completed.get((corner, cid))
+                inputs = [netlist, manifest['stubs'], *manifest['models'], str(sdfs[corner])]
+                if (prior and prior.get('compile_rc') == 0 and prior.get('sim_rc') == 0
+                        and previous.get('netlist') == netlist and prior.get('sdf') == str(sdfs[corner])
+                        and FilePath(tb).is_file() and FilePath(tb).read_text() == rendered
+                        and FilePath(prior['stdout']).is_file()
+                        and all(FilePath(p).stat().st_mtime_ns <= FilePath(prior['stdout']).stat().st_mtime_ns
+                                for p in inputs)):
+                    runs.append(prior)
+                    continue
                 with open(tb, "w") as stream:
-                    stream.write(tb_text.replace(manifest["sdf_placeholder"],
-                                                 str(sdfs[corner])))
+                    stream.write(rendered)
                 vvp = os.path.join(folder, f"{cid}.vvp")
                 compile_log = os.path.join(folder, f"{cid}.compile.log")
                 stdout = os.path.join(folder, f"{cid}.stdout.log")
