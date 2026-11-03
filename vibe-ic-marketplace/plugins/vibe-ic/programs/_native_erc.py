@@ -1,10 +1,4 @@
-"""Default31 native ERC publication, using the original P3 execution owner.
-
-Extracted from phase3_one_shot_runner._emit_erc_report. Native Tcl, input
-bindings, parsing and current-report schema retain that contract; the sealed
-tee transcript is not rewritten after the invocation records its digest.
-The generic and Ultra P3 emitter remains unchanged.
-"""
+"""Publish native OpenROAD ERC using the final DEF and resolved PDK views."""
 from pathlib import Path
 import json
 import re
@@ -18,25 +12,23 @@ import phase3_one_shot_runner as R  # noqa: E402
 
 
 def emit(project: Path, top: str, pdk: R.PdkConfig,
-                     container: str, erc_rpt: Path, notes: list[str]) -> bool:
+                     container: str, erc_rpt: Path, notes: list[str], *,
+                     def_file: Path | None = None, image=None,
+                     pdk_root: Path | None = None) -> bool:
     """ERC (Electrical Rule Check) — Step 31 sub-item, open-source path.
 
     sky130 ships only a Calibre PERC deck; the open-source path uses
     OpenROAD report_erc_metrics (floating-net / unconnected-pin electrical
     checks) on the routed DEF. Writes reports/phase3/erc.{rpt,json}.
     chip-AGNOSTIC. Best-effort."""
-    import _physical_current as _pc
-    try:
-        _erc_inputs = {role: _pc.entry(project, path, external=role.startswith("pdk_"))
-                       for role, path in (("def", R._pl.pnr_dir(project) / f"{top}.def"),
-                                          ("pdk_tech_lef", pdk.tech_lef),
-                                          ("pdk_cell_lef", pdk.cell_lef),
-                                          ("pdk_liberty", R._liberty_model_path(pdk.liberty, container, project)))}
-    except (OSError, ValueError) as exc:
-        notes.append(f"ERC NOT_MEASURED: {exc}")
-        return False
-    pnr_out = R._pl.pnr_dir(project)
-    def_file = pnr_out / f"{top}.def"
+    if def_file is None:
+        try:
+            import librelane_postroute
+            _, state = librelane_postroute.stapostpnr_state(project)
+            def_file = Path(state['def'])
+        except (OSError, ValueError, KeyError):
+            def_file = R._pl.pnr_dir(project) / 'filled.def'
+    def_file = Path(def_file)
     if not def_file.is_file():
         return False
     def_c = R._to_container_path(str(def_file), container)
@@ -72,18 +64,24 @@ exit
         f"{R.TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/erc.log"
     )
-    rc, out, err = R._docker_exec(container, cmd, marker=tcl_c, outputs=[out_dir / "erc.log"])
+    if image is None:
+        rc, out, err = R._docker_exec(container, cmd, marker=tcl_c, outputs=[out_dir / "erc.log"])
+    else:
+        import librelane_contract as ll
+        network, command = ll.native_tool_command(image, ['openroad', '-no_init', '-exit', str(tcl_path)])
+        mounts = ['-v', f'{project.resolve()}:{project.resolve()}']
+        if pdk_root:
+            mounts += ['-v', f'{pdk_root.resolve()}:{pdk_root.resolve()}:ro']
+        result = ll.run_container(['docker', 'run', '--rm', '--network', network,
+            '--cpus', '4', '--memory', '16g', *mounts, image, '--skip', *command],
+            supervised=True, log=out_dir / 'erc.log')
+        rc, out, err = result.returncode, result.stdout, result.stderr
     log = (out or "") + "\n" + (err or "")
+    if image is not None:
+        (out_dir / 'erc.log').write_text(log)
     if rc or "ERC_NATIVE_DONE" not in log or "NONFATAL:" in log or "[ERROR" in log:
         notes.append(f"ERC NOT_MEASURED: native tool did not complete (rc={rc})")
         return False
-    _erc_inputs["recipe"] = _pc.entry(project, tcl_path)
-    for _role, _expected in _erc_inputs.items():
-        if _pc.entry(project, project / _expected["path"], external=_role.startswith("pdk_")) != _expected:
-            notes.append(f"ERC NOT_MEASURED: input changed during native tool: {_role}")
-            return False
-    # The native tee transcript is already sealed by the invocation logger.
-
     # v0.3.16 #514: also capture the -verbose floating net/pin NAME lines
     # (e.g. " spare_aoi_0/A1") so erc.rpt carries them for the by-owner
     # classifier, not just the summary counts.
@@ -139,16 +137,11 @@ exit
         "floating_pins": floating_pins,
         "clean": _erc_clean,
         "source": str(erc_rpt.relative_to(project)),
+        "def": str(def_file),
         "verdict": _erc_verdict,
         # v0.3.16 #514 — by-owner classification of the floats.
         "float_classification": erc_classification,
         "note": ("open-source ERC screen; full Calibre PERC "
                  "(latch-up/ESD) deferred"),
     }, indent=2) + "\n")
-    _pc_record = _pc.build(project, "31", "stage4", _pc.design_of(def_file),
-                           pdk.name, "openroad", _erc_inputs,
-                           {"report": _pc.entry(project, erc_rpt),
-                            "log": _pc.entry(project, out_dir / "erc.log")},
-                           {"rc": rc, "argv": ["openroad", "-no_init", "-exit", str(tcl_path)]})
-    R._aa.write_json(out_dir / "erc_current.json", _pc_record)
     return True

@@ -482,7 +482,8 @@ def state_metrics(project: Path, records: list[Path]) -> dict[str, dict[str, Any
             continue
         record = _load(record_path)
         for key, row in (record.get('metrics') or {}).items():
-            folder = Path(row['folder']) if row.get('folder') else None
+            from librelane_contract import project_path
+            folder = project_path(project, row['folder']) if row.get('folder') else None
             state_out = folder / 'state_out.json' if folder else None
             out: dict[str, Any] = {'record': str(_rel(project, record_path))}
             if row.get('status') in ('MEASURED', 'FAIL') and state_out and state_out.is_file():
@@ -497,6 +498,98 @@ def state_metrics(project: Path, records: list[Path]) -> dict[str, dict[str, Any
                            reason=row.get('reason') or f'{key}: {row.get("status")}')
             rows[key] = out
     return rows
+
+
+def execute(project: Path, context: dict) -> dict:
+    """Final PV reuses unchanged native PV and runs ERC on the filled DEF."""
+    import fnmatch
+    import librelane_contract as contract
+    import librelane_postroute as postroute
+    import phase3_one_shot_runner as runner
+    import _native_erc
+    project = Path(project).resolve()
+    result = {'step_id': 'D65', 'context_sha256': context.get('context_sha256'),
+              'component_status': NOT_MEASURED, 'default_row_status': NOT_MEASURED,
+              'completed': False, 'native_started': False}
+    try:
+        folder, state = postroute.stapostpnr_state(project)
+        config = _load(folder / 'config.json')
+        promotion = project / 'reports/phase3/fill_librelane.json'
+        selected = _load(promotion).get('default_stream', {}) if promotion.is_file() else {}
+        if not selected.get('canonical'):
+            promotion = project / 'phase3/librelane/37-default-promotion.json'
+            selected = _load(promotion) if promotion.is_file() else {}
+        gds = contract.project_path(project, selected['canonical'])
+        filled, netlist, sdc = (Path(state[key]) for key in ('def', 'nl', 'sdc'))
+        image = contract.resolve_image(project)
+        pdk = config['PDK']
+        root = Path(contract.pdk_root_resolution(project, pdk, image=image)['path'])
+        native = {}
+        for half in ('drc', 'lvs'):
+            path = project / RECORD_REL.format(half=half)
+            record = _load(path) if path.is_file() else {}
+            reusable = (record.get('scope', {}).get('gds_sha256') == digest(gds)
+                        and record.get('scope', {}).get('def_sha256') == digest(filled))
+            rows = state_metrics(project, [path]) if reusable else {}
+            reusable = reusable and bool(rows) and all(row.get('value') != NOT_MEASURED for row in rows.values())
+            for measured in record.get('metrics', {}).values() if reusable else []:
+                native_folder = contract.project_path(project, measured['folder'])
+                fingerprint = _load(native_folder / 'input_fingerprint.json')
+                inputs = fingerprint.get('input', fingerprint).get('state_files', {})
+                for subject in (netlist, sdc):
+                    previous = [value for name, value in inputs.items()
+                                if contract.project_path(project, name) == subject]
+                    if previous != [digest(subject)]:
+                        reusable = False
+            if not reusable:
+                result['native_started'] = True
+                record = run_half(project, image, root, pdk, half, gds=gds,
+                    routed_def=filled, netlist=netlist, sdc=sdc,
+                    physical_top=config['DESIGN_NAME'])
+            native[half] = record
+            result[half] = record
+        corner = config.get('DEFAULT_CORNER') or config['STA_CORNERS'][0]
+        def selected_assets(key):
+            values = config.get(key) or []
+            if isinstance(values, dict):
+                values = [item for pattern, entries in values.items()
+                          if fnmatch.fnmatchcase(corner, pattern)
+                          for item in (entries if isinstance(entries, list) else [entries])]
+            paths = []
+            for value in values:
+                path = contract.resolve_state_pdk_asset(value, pdk=pdk,
+                    mounts=[(root / pdk, '/pdk/' + pdk),
+                            (root / pdk, str(Path(config['PDK_ROOT']) / pdk))])
+                if path is None:
+                    raise ValueError('Native ERC technology view unavailable: ' + str(value))
+                paths.append(str(path))
+            return paths
+        tech, cells, libs = (selected_assets(key) for key in ('TECH_LEFS', 'CELL_LEFS', 'LIB'))
+        pdk_config = runner.PdkConfig(name=pdk, tech_lef=tech[0], cell_lef=cells[0],
+            liberty=libs + selected_assets('PAD_LIBS'), cell_gds=None,
+            site=config.get('PLACE_SITE', ''), drc_deck=None,
+            macro_lefs=cells[1:] + selected_assets('EXTRA_LEFS') + selected_assets('PAD_LEFS'))
+        notes = []
+        result['native_started'] = True
+        erc_rpt = project / 'reports/phase3/erc.rpt'
+        erc_ok = _native_erc.emit(project, config['DESIGN_NAME'], pdk_config, '', erc_rpt,
+                                  notes, def_file=filled, image=image, pdk_root=root)
+        erc = _load(erc_rpt.with_suffix('.json')) if erc_ok else {'verdict': NOT_MEASURED, 'notes': notes}
+        result['erc'] = erc
+        statuses = [native[half].get('verdict', NOT_MEASURED) for half in native] + [erc['verdict']]
+        status = 'FAIL' if any(s in ('FAIL', 'REVIEW') for s in statuses) else 'PASS' if all(s == 'PASS' for s in statuses) else NOT_MEASURED
+        result.update(component_status=status, default_row_status=status, completed=status == 'PASS',
+                      reason='D65_NATIVE_FINAL_PV_' + status, drc=native['drc'], lvs=native['lvs'], erc=erc,
+                      metrics={key: row.get('value') for half in native.values()
+                               for key, row in half.get('metrics', {}).items()
+                               if row.get('status') in ('MEASURED', 'FAIL')})
+    except Exception as exc:
+        result.update(reason='D65_NATIVE_FINAL_PV_UNAVAILABLE', detail=f'{type(exc).__name__}: {exc}')
+        if any(result.get(half, {}).get('verdict') in ('FAIL', 'REVIEW')
+               for half in ('drc', 'lvs', 'erc')):
+            result.update(component_status='FAIL', default_row_status='FAIL')
+    write_json(project / 'reports/flow109/components/D65.json', result)
+    return result
 
 
 def _rel(project: Path, path: Path) -> Path:
