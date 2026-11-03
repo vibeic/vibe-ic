@@ -74153,21 +74153,11 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         # the PSM log itself (fallback 1.8 V). The numbers AND the budget
         # travel with the verdict so any reader re-derives it.
         #
-        # v1.3.93 — budget reconciled to the plugin's OWN authoritative gate
-        # `ir_drop_budget_check._DEFAULT_BUDGET_PCT` (10 % of VDD — "the loosest
-        # commonly-cited static budget; typical 5-10 % Vdd"). The previous 5 %
-        # hardcode here was STRICTER than, and inconsistent with, that gate (a
-        # design at 8 % passed the gate but FAILed this secondary verdict). The
-        # budget is now configurable per-PDK/design (`pdk.ir_budget_pct`) so a
-        # stricter house rule can override; the default matches the gate. The
-        # PSM number is a CONSERVATIVE upper bound — a padless core is modelled
-        # with PSM's default single-bump supply (PSM-0073), so the real
-        # multi-bump/pad power-delivery IR is lower.
-        # See `_ir_supply_from_psm_log`: a parsed ZERO is the absence of a
-        # measurement, not a 0 V supply, and everything derived from it (a
-        # percentage, a budget, a PASS) would be a number about nothing.
+        # Use the same owner limit as the native final electrical checker.
+        from flow109_final_electrical import IR_LIMIT_PCT
         _vdd_v, _supply_measured = _ir_supply_from_psm_log(log)
-        _budget_pct = float(getattr(pdk, "ir_budget_pct", None) or 10.0)
+        declared_budget = getattr(pdk, "ir_budget_pct", None)
+        _budget_pct = float(declared_budget if declared_budget is not None else IR_LIMIT_PCT)
         _ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6
         _worst_ir_uv = worst_ir_v * 1e6
         # ONE implementation of this rule, in `psm_analysis_coverage`, so the
@@ -74198,9 +74188,8 @@ catch {{set_wire_rc -clock -layer {mp}5}}
                 if _supply_measured else None),
             "budget_uv": _ir_budget_uv if _supply_measured else None,
             "budget_pct_vdd": _budget_pct if _supply_measured else None,
-            "budget_basis": ("plugin ir_drop_budget_check default (10% VDD, the "
-                             "loosest commonly-cited static budget; typical "
-                             "5-10%); override via pdk.ir_budget_pct"),
+            "budget_basis": ("pdk.ir_budget_pct" if declared_budget is not None else
+                             "owner IR_LIMIT_PCT (5% VDD, ruling #62b)"),
             "supply_model": ("PSM default single-bump (PSM-0073) on a padless "
                              "core -> CONSERVATIVE upper bound; real multi-bump "
                              "power delivery is lower" if _bump_m else

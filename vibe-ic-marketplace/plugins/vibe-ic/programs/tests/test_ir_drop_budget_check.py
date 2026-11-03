@@ -32,12 +32,12 @@ def _write(path: Path, data) -> Path:
 
 def test_pass_under_budget_json_mv(tmp_path):
     rpt = _write(tmp_path / "ir.json",
-                 {"max_ir_drop_mv": 50.0, "vdd_v": 1.8})  # 50/1800 = 2.78% < 10%
+                 {"max_ir_drop_mv": 50.0, "vdd_v": 1.8})  # 50/1800 = 2.78% < 5%
     r = _run(rpt, "--json", tmp_path / "out.json")
     assert r.returncode == 0
     rep = json.loads((tmp_path / "out.json").read_text())
     assert rep["pass"] is True
-    assert rep["measured"]["drop_pct_vdd"] < 10.0
+    assert rep["measured"]["drop_pct_vdd"] < 5.0
 
 
 def test_pass_under_budget_pct_key(tmp_path):
@@ -50,12 +50,12 @@ def test_pass_rpt_text(tmp_path):
     rpt = _write(tmp_path / "ir.rpt",
                  "Power grid sign-off\nWorst static IR drop: 30 mV\nVdd = 1.2 V\n")
     r = _run(rpt)
-    assert r.returncode == 0  # 30/1200 = 2.5% < 10%
+    assert r.returncode == 0  # 30/1200 = 2.5% < 5%
 
 
 def test_pass_cli_vdd_overrides(tmp_path):
     rpt = _write(tmp_path / "ir.json", {"max_ir_drop_mv": 80.0})
-    r = _run(rpt, "--vdd", "1.8")  # 80/1800 = 4.4% < 10%
+    r = _run(rpt, "--vdd", "1.8")  # 80/1800 = 4.4% < 5%
     assert r.returncode == 0
 
 
@@ -70,7 +70,7 @@ def test_pass_directory_discovery(tmp_path):
 
 def test_fail_over_budget_mv(tmp_path):
     rpt = _write(tmp_path / "ir.json",
-                 {"max_ir_drop_mv": 250.0, "vdd_v": 1.8})  # 13.9% > 10%
+                 {"max_ir_drop_mv": 250.0, "vdd_v": 1.8})  # 13.9% > 5%
     r = _run(rpt)
     assert r.returncode == 1
 
@@ -82,10 +82,11 @@ def test_fail_over_budget_pct(tmp_path):
 
 
 def test_fail_tight_custom_budget(tmp_path):
-    # 6% drop passes default 10% but fails a strict 5% house rule.
+    # The owner default is 5%; an explicitly requested budget stays explicit.
     rpt = _write(tmp_path / "ir.json", {"max_ir_drop_pct": 6.0})
-    assert _run(rpt).returncode == 0
+    assert _run(rpt).returncode == 1
     assert _run(rpt, "--budget-pct", "5").returncode == 1
+    assert _run(rpt, "--budget-pct", "8").returncode == 0
 
 
 # ----------------------------------------------------- HONEST FAILURE / edge

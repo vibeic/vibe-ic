@@ -103,6 +103,30 @@ def test_nonfinal_ir_retains_source_refusal(tmp_path, monkeypatch):
     assert result['reason'] == 'LibreLane IR primary was not adopted by current source'
 
 
+@pytest.mark.parametrize('mode', ['librelane', 'direct'])
+def test_ir_writer_defaults_to_owner_limit(tmp_path, monkeypatch, mode):
+    from flow109_final_electrical import IR_LIMIT_PCT
+    if mode == 'direct':
+        project, _, _ = build(tmp_path, monkeypatch, direct=True)
+        report = json.loads((project / 'reports/phase3/ir_drop.json').read_text())
+        assert report['budget_pct_vdd'] == IR_LIMIT_PCT
+        return
+    project, pdk, _, _, instrument = _current_ir(tmp_path, monkeypatch)
+    observed = []
+    def transport(*args, **kwargs):
+        observed.append(kwargs['budget_pct'])
+        record = instrument(*args, **kwargs)
+        record['budget_pct'] = kwargs['budget_pct']
+        return record
+    monkeypatch.setattr(ir, 'run_ir', transport)
+    runner._librelane_step24_record(project, 'unit', pdk, 'librelane',
+        runner._pl.extracted_dir(project) / 'unit.spef', [])
+    runner._step24_adopt_primary(project, None, [])
+    report = json.loads((project / 'reports/phase3/ir_drop.json').read_text())
+    assert observed == [IR_LIMIT_PCT]
+    assert report['budget_pct_vdd'] == IR_LIMIT_PCT
+
+
 @pytest.mark.parametrize('stress,expected', [(False, 'PASS'), (True, 'FAIL')])
 @pytest.mark.parametrize('identity', ['stale', 'absent'])
 def test_final_em_native_currents_use_pdk_limits(tmp_path, monkeypatch, stress, expected, identity):
