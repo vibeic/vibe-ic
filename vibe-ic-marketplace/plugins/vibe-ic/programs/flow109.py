@@ -2143,6 +2143,29 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
     return answer
 
 
+def whole_run_verdict(project: Path) -> dict:
+    """The run's verdict: every row the manifest selected PASS. FPGA board rows report apart."""
+    plan = json.loads((Path(project) / "reports/flow109/plan.json").read_text())
+    rows, fpga = [], []
+    for spec in plan["rows"]:
+        try:
+            record = json.loads((Path(project) / "reports/flow109/default_rows"
+                                 / (spec["id"] + ".json")).read_text())
+        except (OSError, ValueError):
+            record = {}
+        status = record.get("default_row_status", "NOT_MEASURED")
+        if status == "PASS" and record.get("completed") is not True:
+            status = "NOT_MEASURED"
+        row = {"id": spec["id"], "position": spec["position"], "name": spec["name"],
+               "status": status, "reason": record.get("reason")}
+        (fpga if "fpga" in spec["when"] else rows).append(row)
+    statuses = [row["status"] for row in rows]
+    return {"verdict": "FAIL" if "FAIL" in statuses else
+                       "PASS" if rows and set(statuses) == {"PASS"} else "NOT_MEASURED",
+            "counts": {s: statuses.count(s) for s in ("PASS", "FAIL", "NOT_MEASURED")},
+            "steps": rows, "fpga_rows": fpga}
+
+
 def _attempt_result(context: Mapping, components: list[dict]) -> dict:
     aggregate = ("FAIL" if any(item["component_status"] == "FAIL" for item in components)
                  else "PASS" if len(components) == len(context["resolved_rows"])

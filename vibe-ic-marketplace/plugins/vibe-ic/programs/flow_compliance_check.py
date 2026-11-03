@@ -20539,6 +20539,28 @@ _STAGE_PHASE = {
 }
 
 
+def _flow109_whole_run_audit(project: Path, args) -> int:
+    """A Flow109 run is judged on its selected rows, not on the legacy 70."""
+    import flow109
+    audit = flow109.whole_run_verdict(project)
+    audit.update(program="flow_compliance_check", flow="109", project=str(project),
+                 overall=audit["verdict"],
+                 scope={"phase": "all", "stage": None, "stage_id": None,
+                        "step_count": len(audit["steps"]),
+                        "flow_step_total": len(audit["steps"]), "whole_flow": True})
+    text = json.dumps(audit, indent=2, ensure_ascii=False)
+    if not args.read_only:
+        path = project / "reports/audit/phase23_completion_audit.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    if args.json:
+        Path(args.json).write_text(text)
+    for row in audit["steps"]:
+        print(f"{row['position']:>3} {row['id']} {row['status']:<12} {row['name']}")
+    print(f"Overall: {audit['verdict']} {audit['counts']} of {len(audit['steps'])} selected rows")
+    return 0 if audit["verdict"] == "PASS" else 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     # One invocation owns one denominator.  Orchestrators and tests call this
     # entry point repeatedly in-process, so retaining prior rows would publish
@@ -20752,6 +20774,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not project.is_dir():
         print(f"flow_compliance_check: not a directory: {project}", file=sys.stderr)
         return 2
+    if ((project / "reports/flow109/plan.json").is_file() and args.phase == "all"
+            and not (args.stage or args.stage_id or args.exclude_step)):
+        return _flow109_whole_run_audit(project, args)
     try:
         parameters = acceptance_parameters(project, args.top)
     except OutputTopUnbound:
