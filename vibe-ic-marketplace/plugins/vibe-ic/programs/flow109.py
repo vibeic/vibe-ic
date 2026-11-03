@@ -1443,13 +1443,8 @@ def _selected_native_sequence(rows) -> dict | None:
 
 def source_owned_native_admission(context: Mapping) -> dict | None:
     """Record engineering-native ownership without asserting qualification."""
-    # An explicit runtime/registry request is a qualification claim and stays
-    # on the strict generic path.  The Default engineering route is selected
-    # only by omitting both; callers cannot use this policy to rescue bad,
-    # stale or unsupported qualification evidence.
-    if (context.get("runtime_tool_uses") is not None
-            or context.get("qualification_registry") is not None):
-        return None
+    # Default runs the registered tool owner. Retained qualification metadata
+    # in a shared manifest does not turn a chip run into tool qualification.
     if context.get("schema") == "vibeic.flow109.execution-window.v1":
         if context.get("dispatch_kind") not in (
                 "canonical_backend_window", "selected_native_sequence"):
