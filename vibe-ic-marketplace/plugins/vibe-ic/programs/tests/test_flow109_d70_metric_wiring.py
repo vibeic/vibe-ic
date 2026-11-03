@@ -181,10 +181,8 @@ def test_final_scan_modes_feed_the_canonical_metric_consumer(software, monkeypat
     if damage == 'changed-library': paths['cells.lib'].write_text('SOFTWARE_ONLY changed library')
     if damage == 'changed-functional-sdc': paths['functional.sdc'].write_text('SOFTWARE_ONLY changed SDC')
     if damage == 'ir-fail':
-        put(project, final.OWNER_INPUT, {'schema': final.OWNER_INPUT_SCHEMA, 'd70_component': result['receipt']})
-        monkeypatch.setattr(final, '_activity_binding', lambda *a: {'scope': 'SOFTWARE_ONLY D55 double'})
-        monkeypatch.setattr(final, '_power_binding', lambda *a: {'verdict': 'PASS', 'scope': 'SOFTWARE_ONLY D56 double'})
-        monkeypatch.setattr(final, '_ir_binding', lambda *a: {'verdict': 'FAIL', 'scope': 'SOFTWARE_ONLY D57 double'})
+        result['ir_status'] = 'FAIL'
+        result['receipt'] = put(project, 'SOFTWARE_ONLY-ir-fail.json', result)
     # A claimed functional PASS must not hide retained shift/capture violations.
     result = completion(project, ctx, {**result, 'component_status': 'PASS'})
     expected = 'FAIL' if damage in ('shift-hold', 'capture-setup', 'ir-fail') else 'NOT_MEASURED'
