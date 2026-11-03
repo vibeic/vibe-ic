@@ -2145,6 +2145,11 @@ def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
     ("D03", "flow109_technology_qualification", "native config resolution and installed PDK pin"),
     ("D06", "flow109_package_plan", "bare-die pad, external-load and functional-test-access feasibility"),
     ("D45", "flow109_netlist_cdc", None),
+    ("D60", "librelane_fill_dfm", None),
+    ("D61", "librelane_fill_dfm", None),
+    ("D62", "flow109_density_fill", None),
+    ("D63", "librelane_fill_dfm", None),
+    ("D64", "flow109_final_geometry", None),
     ("D69", "flow109_final_extract", "final_filled_odb_rcx_component_only"),
     ("D70", "flow109_final_electrical", "final_sta_native_component_only"),
     ("D71", "flow109_final_gls", "final_sdf_gls_component_only"),
@@ -2169,7 +2174,6 @@ def test_registered_native_component_route_does_not_claim_generic_qualification(
                                         qualification_registry="input/qualifications.json")
     retained = flow109.source_owned_native_admission(claimed)
     assert retained == {**admission, 'context_sha256': claimed['context_sha256']}
-    assert flow109.source_owned_native_dispatch(flow109.resolve_step(plan, "D62")) is None
 
 
 def test_final_native_window_reaches_real_missing_input_refusal_without_generic_claim(
@@ -2303,16 +2307,17 @@ def test_d44_retained_lec_registers_only_existing_native_admission_fields():
         flow109.source_owned_native_dispatch(row)
 
 
-def test_d63_routes_only_to_current_canonical_default35_owner():
+def test_d63_routes_to_existing_native_dfm_owner():
     plan = flow109.resolve_plan(profile())
     row = flow109.resolve_step(plan, "D63")
     dispatch = flow109.source_owned_native_dispatch(row)
 
     assert row["profile"]["execution_status"] == "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED"
-    assert dispatch["kind"] == "canonical_backend_window"
-    assert dispatch["native_step_id"] == "35"
-    assert dispatch["producer"] == "execution_backend_producers.py:produce"
-    assert dispatch["consumer"] == "execution_backend_gates.py:evaluate"
+    assert dispatch["kind"] == "native_adapter"
+    assert dispatch["adapter"] == "librelane_fill_dfm"
+    assert dispatch["native_step_id"] == "flow109.D63"
+    assert dispatch["producer"] == "librelane_fill_dfm.py:execute"
+    assert dispatch["consumer"] == "librelane_fill_dfm.py:execute native result"
     assert dispatch["native_required_outputs"] == ["reports/phase3/dfm_screen.json"]
     assert dispatch["acceptance_scope"] == "existing_native_component_only"
     assert dispatch["flow109_metrics_status"] == "UNIMPLEMENTED"

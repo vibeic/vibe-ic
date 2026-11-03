@@ -1,13 +1,4 @@
-"""Blocking D62 density-fill component, not a density/tapeout signoff.
-
-A PDK-native filler takes precedence, using an explicit bound GDS stream.
-Without one, retain the generic GDS and qualified OpenROAD ODB adapters.
-The native tool's successful transformation never claims density acceptance.
-
-The ODB fallback uses OpenROAD density_fill directly. A trusted, previously qualified per-use
-record must bind the actual rules/PDK/config/tool and this operation's sources.
-No rules or qualifications are generated here. Every attempt is retained.
-"""
+"""D62: the native PDK filler and its density-deck result."""
 from __future__ import annotations
 
 from collections import Counter
@@ -547,73 +538,58 @@ def _execute_gds(project, context):
 
 
 def execute(project, context):
+    """Run the native PDK filler, or reuse its unchanged native density result."""
     if context.get('resolved_row', {}).get('profile', {}).get('id') == 'gds_only_analog':
         return _execute_gds(project, context)
+    import librelane_contract as contract
+    import librelane_fill_dfm as native
+    import phase3_one_shot_runner as runner
     project = Path(project).resolve()
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8]
-    attempt = project / 'phase3/flow109/D62' / stamp
-    result = {'schema': SCHEMA, 'step': 'D62', 'component_status': 'NOT_MEASURED',
-              'step_id': 'D62', 'context_sha256': context.get('context_sha256'),
-              'flow109_acceptance': 'NOT_MEASURED', 'native_started': False}
+    result = {'schema': SCHEMA, 'step_id': 'D62', 'component_status': 'NOT_MEASURED',
+              'default_row_status': 'NOT_MEASURED', 'completed': False,
+              'native_started': False, 'context_sha256': context.get('context_sha256')}
     try:
-        # A kit with a native GDS filler must not silently use the ODB-only
-        # generic engine instead. The GDS path keeps its explicit stream/SHA
-        # requirement and cannot issue an accepted ODB handoff.
-        if (project / INPUT).is_file():
-            manifest = _read(project / INPUT)
-            if _discover_pdk_filler(project, manifest) is not None:
-                return _execute_gds(project, context)
-        prepared = prepare(project, context)
-        admission = require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
-        result.update(inputs=prepared['inputs'], manifest=prepared['manifest'],
-                      tool=prepared['tool'], operation_sources=prepared['operation_sources'],
-                      qualification=admission, authorities=prepared['authorities'],
-                      authority_inputs=prepared['authority_inputs'])
-        def before_launch():
-            require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
-            # Input binding is checked again before each native process.
-            for entry in prepared['inputs'].values():
-                _bound(project, entry)
-            for entry in prepared['authority_inputs'].values():
-                _bound(project, entry)
+        doc = (native._load(project / native.RECORD_REL)
+               if (project / native.RECORD_REL).is_file() else {})
+        arm = (doc.get('gds') or {}).get('librelane')
+        row = native.validate_density_result(project, arm) if arm else {}
+        if arm:
+            try:
+                native._current_stage(project, contract.project_path(project, arm['filler']['state']),
+                                      'KLayout.Filler')
+            except (OSError, ValueError, KeyError, TypeError, contract.Refusal):
+                row = {}
+        if native._count(row.get('value')) is None:
+            promotion = native._load(project / native.DEFAULT_STREAM_REL)
+            gds = contract.project_path(project, promotion['sealed'])
+            pdk = runner._detect_pdk(project)
+            if pdk is None:
+                raise ValueError('project PDK not available')
+            image, root = runner._librelane_step_ctx(project, '34', pdk.name)
             result['native_started'] = True
-        measurements = _native_fill(project, prepared, attempt, before_launch)
-        if prepared['authorities']:
-            _native_checks(prepared, attempt, before_launch)
-        outputs = {p.name: _record(project, p) for p in attempt.iterdir() if p.is_file()}
-        result.update(component_status='PASS', measurements=measurements, outputs=outputs,
-                      executions=prepared.get('executions', []))
-    except AdmissionRefusal as exc:
-        result.update(component_status='FAIL' if exc.status == 'FAIL' else 'NOT_MEASURED',
-                      reason=exc.code, detail=str(exc))
-        if 'qualification' not in result:
-            result['qualification_status'] = 'NOT_VERIFIED'
-    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
-        result.update(reason='D62_EXECUTION_INCOMPLETE', detail=f'{type(exc).__name__}: {exc}')
-    receipt = attempt / 'receipt.json'
-    _write(receipt, result)
-    result['receipt'] = _record(project, receipt)
-    if result['component_status'] == 'PASS':
-        try:
-            result['handoff'] = validate_filled_odb(project, result['receipt'])
-        except (AdmissionRefusal, OSError, ValueError, KeyError, TypeError) as exc:
-            result.pop('receipt', None)
-            failed = isinstance(exc, AdmissionRefusal) and exc.status == 'FAIL'
-            result.update(component_status='FAIL' if failed else 'NOT_MEASURED',
-                          reason=exc.code if failed else 'D62_HANDOFF_REFUSED', detail=str(exc))
-            _write(receipt, result)
-            result['receipt'] = _record(project, receipt)
-    if result['component_status'] == 'PASS':
-        try:
-            require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
-        except AdmissionRefusal as exc:
-            result.update(component_status='NOT_MEASURED', reason=exc.code, detail=str(exc))
-        else:
-            _write(project / 'reports/flow109/D62/accepted.json', result['receipt'])
-    result['metric_acceptance'] = accept_d62(project, context, result)
-    result['metric_acceptance_status'] = result['metric_acceptance']['status']
-    result['default_row_status'] = result['metric_acceptance_status']
-    result['completed'] = (
-        result['component_status'] == 'PASS'
-        and result['default_row_status'] == 'PASS')
+            arm = native.run_density(project, image, root, pdk.name, gds=gds,
+                                      lane='34-fill', steps=native.GDS_FILL_STEPS)
+            if arm[native.DENSITY_METRIC] == 0:
+                subject = contract.project_path(project, arm['subject'])
+                promotion['source'] = str(subject)
+                promotion['source_sha256'] = contract.digest(subject)
+                for key in ('canonical', 'pnr_gds'):
+                    target = contract.project_path(project, promotion[key])
+                    shutil.copyfile(subject, target)
+                    promotion[key + '_sha256'] = contract.digest(target)
+                native.write_json(project / native.DEFAULT_STREAM_REL, promotion)
+                native.update_record(project, 'default_stream', promotion)
+            native.update_record(project, 'gds', {'mode': 'librelane',
+                'librelane': arm, 'shipped': 'librelane' if arm[native.DENSITY_METRIC] == 0 else None})
+            row = native.validate_density_result(project, arm)
+        count = native._count(row.get('value'))
+        status = 'NOT_MEASURED' if count is None else 'PASS' if count == 0 else 'FAIL'
+        result.update(component_status=status, default_row_status=status,
+            flow109_acceptance=status, completed=status == 'PASS',
+            native_step='KLayout.Filler / KLayout.Density / Checker.KLayoutDensity',
+            native_report=str(contract.project_path(project, arm['state'])),
+            metrics={native.DENSITY_METRIC: count}, reason=row.get('reason'))
+    except (OSError, ValueError, KeyError, TypeError, contract.Refusal) as exc:
+        result.update(reason='D62_NATIVE_FILL_UNAVAILABLE', detail=str(exc))
+    _write(project / 'reports/flow109/D62/result.json', result)
     return result
