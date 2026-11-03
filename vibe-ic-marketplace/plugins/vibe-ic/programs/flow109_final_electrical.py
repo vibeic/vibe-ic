@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
+import re
 import uuid
 
 import sys
@@ -13,8 +14,10 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from _atomic_artefact import write_json
+import em_current_density_check as em_check
 from flow109_admission import AdmissionRefusal, require_launch_admission
 import flow109_final_extract as extract
+import librelane_ir_antenna as ir_tool
 import librelane_fill_stream as files
 import librelane_postroute as postroute
 import librelane_signoff as signoff
@@ -22,9 +25,7 @@ from librelane_contract import Refusal, _load, digest
 
 SCHEMA = 'vibeic.flow109.final-electrical.v1'
 INPUT = 'input/flow109/D70.json'
-OWNER_INPUT_SCHEMA = 'vibeic.flow109.final-electrical-owner-input.v1'
-OWNER_RECORD_SCHEMA = 'vibeic.flow109.final-electrical-owner-binding.v1'
-OWNER_INPUT = 'input/flow109/D70-power-ir.json'
+IR_LIMIT_PCT = 5.0  # original checker limit, 5 percent of VDD (ruling #62b)
 
 
 def _native_refusal_status(code):
@@ -33,7 +34,7 @@ def _native_refusal_status(code):
 
 def operation_sources():
     paths = (Path(__file__), Path(signoff.__file__), Path(postroute.__file__), Path(extract.__file__),
-             HERE / 'flow109_final_perc.py')
+             Path(ir_tool.__file__), Path(em_check.__file__), HERE / 'flow109_final_perc.py')
     return {str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
@@ -105,6 +106,80 @@ def _retained_sta(project, manifest, parasitics):
     return folder, state, exports
 
 
+def judge_ir_em(text, nets):
+    """One corner's native PSM report per net, against 5 percent VDD and PDK Jmax."""
+    rows = {}
+    for net in nets:
+        match = re.search(rf'=== PSM_NET {re.escape(net)} ===(.*?)(?:=== PSM_NET|\Z)', text, re.S)
+        body = match.group(1) if match else ''
+        found = {key: re.search(pattern, body) for key, pattern in (
+            ('drop_v', r'Worstcase IR drop: *(\S+) V'), ('drop_pct', r'Percentage drop *: *(\S+) %'),
+            ('em_utilization_pct', r'Worst utilization *: *(\S+) %'), ('em_violations', r'Violations *: *(\d+)'),
+            ('em_no_limit', r'No J-limit \(skipped\): *(\d+)'), ('em_verdict', r'Verdict *: *(\S+)'))}
+        row = {key: (value.group(1) if key == 'em_verdict' else float(value.group(1))) if value else None
+               for key, value in found.items()}
+        row['ir_status'] = ('NOT_MEASURED' if row['drop_pct'] is None else
+                            'FAIL' if row['drop_pct'] > IR_LIMIT_PCT else 'PASS')
+        row['em_status'] = ('FAIL' if row['em_verdict'] == 'FAIL' or (row['em_violations'] or 0) > 0 else
+                            'PASS' if row['em_verdict'] == 'PASS' and row['em_no_limit'] == 0 else 'NOT_MEASURED')
+        rows[net] = row
+    return rows
+
+
+def _roll_up(statuses):
+    statuses = list(statuses)
+    return ('FAIL' if 'FAIL' in statuses else
+            'PASS' if statuses and set(statuses) == {'PASS'} else 'NOT_MEASURED')
+
+
+def _native_ir_em(project, native, odb, sdc, spef, sta_folder, corners, folder):
+    """OpenROAD PSM IR and power-grid EM on the final State, at each max-RC corner."""
+    config = _load(sta_folder / 'config.json')
+    vdd, gnd = list(config.get('VDD_NETS') or []), list(config.get('GND_NETS') or [])
+    mounts = [(Path(native['pdk_root']).resolve(), ir_tool.PDK_GUEST_ROOT)]
+    folder.mkdir(parents=True, exist_ok=True)
+    tech_lef = ir_tool._host_path(config['TECH_LEFS'][ir_tool._pattern_for('nom_', config['TECH_LEFS'])], mounts)
+    limits = folder / 'em_limits_pdk.txt'
+    limits.write_text(em_check.native_limits(tech_lef.read_text(), 0.0, native['pdk']))
+    pads = ir_tool.declared_supply_pads(project)
+    sources = (ir_tool.declared_sources(ir_tool.supply_geometry(
+        project, native['image'], odb, vdd + gnd, pads['instances'], folder, mounts), vdd, gnd)['sources']
+        if pads['declared'] else None)
+    result = {'scope': 'static IR and power-grid EM, max RC scene', 'ir_limit_pct': IR_LIMIT_PCT,
+              'em_limit': 'PDK Jmax', 'em_limits_file': files._record(project, limits), 'corners': {}}
+    for corner in sorted(c for c in corners if c.startswith('max_')):
+        volts = re.search(r'(\d+)v(\d+)$', corner)
+        if volts is None:
+            raise AdmissionRefusal('D70_CORNER_VOLTAGE_UNREADABLE', corner)
+        voltage = float(f'{volts.group(1)}.{volts.group(2)}')
+        libs = [lib for key in ('LIB', 'PAD_LIBS') if config.get(key)
+                for lib in config[key].get(ir_tool._pattern_for(corner, config[key]), [])]
+        vsrc = (ir_tool.write_vsrc(sources, {net: voltage if net in vdd else 0.0 for net in sources},
+                                   folder / corner) if sources else {})
+        tcl = [f'read_liberty {lib}' for lib in libs] + [
+            f'read_db {odb}', f'read_sdc {sdc}', f'read_spef {spef}', 'set_propagated_clock [all_clocks]',
+            'report_power']
+        tcl += [f'set_pdnsim_net_voltage -net {net} -voltage {voltage if net in vdd else 0}' for net in vdd + gnd]
+        for net in vdd + gnd:
+            source = f' -vsrc {vsrc[net]}' if net in vsrc else ''
+            tcl += [f'puts "=== PSM_NET {net} ==="', f'analyze_power_grid -net {net}{source}',
+                    f'check_current_density -net {net} -em_limits_file {limits} '
+                    f'-em_report {folder}/em_{corner}_{net}.csv{source} -allow_reuse']
+        script, log = folder / f'ir_em_{corner}.tcl', folder / f'ir_em_{corner}.log'
+        script.write_text('\n'.join(tcl) + '\nexit\n')
+        rc = ir_tool._run_openroad(project, native['image'], script, log, mounts)
+        nets = judge_ir_em(log.read_text(errors='replace'), vdd + gnd)
+        if rc:
+            nets = {net: {**row, 'ir_status': 'NOT_MEASURED' if row['ir_status'] == 'PASS' else row['ir_status'],
+                          'em_status': 'NOT_MEASURED' if row['em_status'] == 'PASS' else row['em_status']}
+                    for net, row in nets.items()}
+        result['corners'][corner] = {'rc': rc, 'voltage_v': voltage, 'log': files._record(project, log), 'nets': nets}
+    rows = [row for corner in result['corners'].values() for row in corner['nets'].values()]
+    result.update(ir_status=_roll_up(row['ir_status'] for row in rows),
+                  em_status=_roll_up(row['em_status'] for row in rows))
+    return result
+
+
 def execute(project, context):
     if context.get("resolved_row", {}).get("profile", {}).get("id") == "analog_die":
         return _execute_analog(project, context)
@@ -172,7 +247,9 @@ def execute(project, context):
                       'sta_state': state_record,
                       'declared_corners': required_corners,
                       'spef_by_rc_scene': parasitics['final_spefs']}
-        status = timing['verdict']
+        ir_em = _native_ir_em(project, native, odb, sdc, spefs['max'], Path(sta['sta']), corners,
+                              attempt / 'ir_em')
+        status = _roll_up((timing['verdict'], ir_em['ir_status'], ir_em['em_status']))
         scan_required = (context.get('features') or {}).get('requires_scan') is True
         if scan_required:
             coverage = (manifest.get('scan_timing_coverage') or {
@@ -201,7 +278,9 @@ def execute(project, context):
                       corners=corners, timing_judgment=timing,
                       sdfs=final_sdfs, final_sdfs=final_sdfs,
                       sdf_provenance=provenance,
-                      ir_status='NOT_MEASURED', execution_context=context)
+                      ir_em=ir_em, ir_status=ir_em['ir_status'], em_status=ir_em['em_status'],
+                      dynamic_ir_status='NOT_MEASURED', signal_em_status='NOT_MEASURED',
+                      thermal_status='NOT_MEASURED', execution_context=context)
         result['operation_sources'] = sources
     except AdmissionRefusal as exc: result.update(component_status=exc.status, reason=exc.code, detail=str(exc))
     except Refusal as exc: result.update(
@@ -287,180 +366,6 @@ def _same_record(project, observed, expected, code, label):
     # the owners' transport seam; byte identity remains mandatory.
     if observed.get('sha256') != expected.get('sha256'):
         raise AdmissionRefusal(code, label)
-
-
-def _owner_component(project, ref, step):
-    path = files._bound(project, ref)
-    value = _read(path)
-    if (value.get('schema') != 'vibeic/backend-result/2'
-            or value.get('step_id') != step
-            or value.get('verdict') not in ('PASS', 'FAIL')):
-        raise AdmissionRefusal('D70_OWNER_COMPONENT_INVALID', f'{step}: {path}')
-    return value
-
-
-def _activity_binding(project, manifest, expected_netlist):
-    """Reopen D55's approved scenario/load/rail freeze without upgrading it.
-
-    D55 power is vector annotated, but the final STAPostPNR and PDNSim owners
-    do not consume that VCD.  The returned binding therefore proves the
-    applicable activity authority exists; it never labels final power/IR as
-    dynamic or mission complete.
-    """
-    import flow109_functional_activity as activity
-    component_ref = manifest.get('d55_activity_component')
-    freeze_ref = manifest.get('d55_activity_freeze')
-    component = _read(files._bound(project, component_ref))
-    freeze = _read(files._bound(project, freeze_ref))
-    if (component.get('schema') != activity.SCHEMA or component.get('step_id') != 'D55'
-            or component.get('component_status') != 'PASS'
-            or component.get('freeze') != freeze_ref
-            or freeze.get('schema') != activity.SCHEMA):
-        raise AdmissionRefusal('D70_D55_ACTIVITY_INVALID', 'current PASS component/freeze required')
-    _same_record(project, freeze.get('adopted_netlist'), expected_netlist,
-                 'D70_D55_ACTIVITY_BASIS_MISMATCH', 'adopted netlist')
-    modes = freeze.get('modes')
-    authority = freeze.get('authority')
-    loads = freeze.get('external_loads')
-    if (not isinstance(modes, dict) or not modes
-            or not isinstance(authority, dict)
-            or not isinstance(loads, dict) or not loads.get('rails') or not loads.get('ports')):
-        raise AdmissionRefusal('D70_D55_ACTIVITY_AUTHORITY_MISSING',
-                               'scenarios, rail mapping and external loads required')
-    if any(not isinstance(row, dict) or not row.get('activity') or not row.get('consumption')
-           for row in modes.values()):
-        raise AdmissionRefusal('D70_D55_ACTIVITY_AUTHORITY_MISSING',
-                               'each scenario requires activity and consumption records')
-    return {'component': component_ref, 'freeze': freeze_ref,
-            'modes': sorted(modes), 'authority': authority,
-            'external_loads': loads,
-            'scope': ('approved D55 functional scenarios/load/rail mapping; '
-                      'not consumed by final vectorless STAPostPNR or quasistatic IR')}
-
-
-def _power_binding(project, record, parasitics, manifest):
-    """Consume the existing D56 current-power owner on the final STA state."""
-    import _opensta_current as current
-    component = _owner_component(project, manifest.get('d56_power_component'), '33')
-    try:
-        receipt = current.power_binding(project)
-    except (OSError, ValueError, KeyError, TypeError, Refusal) as exc:
-        raise AdmissionRefusal('D70_D56_POWER_INVALID', str(exc)) from exc
-    inputs = {row.get('role'): row for row in receipt.get('inputs') or []
-              if isinstance(row, dict)}
-    for role, expected in (('netlist', record['netlist']), ('sdc', record['sdc']),
-                           ('tool_state', record['sta_state'])):
-        row = inputs.get(role)
-        observed = ({'path': row.get('path'), 'sha256': row.get('sha256')}
-                    if isinstance(row, dict) else None)
-        _same_record(project, observed, expected, 'D70_D56_POWER_BASIS_MISMATCH', role)
-    spef = inputs.get('spef')
-    observed_spef = ({'path': spef.get('path'), 'sha256': spef.get('sha256')}
-                     if isinstance(spef, dict) else None)
-    if observed_spef not in list(parasitics['final_spefs'].values()):
-        raise AdmissionRefusal('D70_D56_POWER_BASIS_MISMATCH', 'final SPEF scene')
-    return {'component': manifest['d56_power_component'],
-            'receipt': files._record(project, project / 'reports/phase3/power.current.json'),
-            'verdict': component['verdict'], 'scope': 'vectorless static STAPostPNR power',
-            'activity_consumed': False, 'dynamic_power_status': 'NOT_MEASURED'}
-
-
-def _ir_binding(project, parasitics, manifest):
-    """Consume D57 only when its native solve used the exact final basis."""
-    import em_current_density_check as current
-    component = _owner_component(project, manifest.get('d57_ir_component'), '24')
-    checked = current.validate_primary_ir(project)
-    if not checked.get('valid'):
-        raise AdmissionRefusal('D70_D57_IR_INVALID', str(checked.get('reason')))
-    doc_path = project / 'reports/phase3/ir_drop_librelane.json'
-    doc = _read(doc_path)
-    native_record = doc.get('record') or {}
-    inputs = (native_record.get('selected_inputs')
-              if native_record.get('input_mode') == 'current_stapostpnr_odb'
-              else doc.get('inputs')) or {}
-    expected = {'def': parasitics['filled_def'],
-                'netlist': parasitics['adopted_views']['netlist'],
-                'sdc': parasitics['adopted_views']['sdc']}
-    for role, value in expected.items():
-        _same_record(project, inputs.get(role), value,
-                     'D70_D57_IR_BASIS_MISMATCH', role)
-    if inputs.get('spef') not in list(parasitics['final_spefs'].values()):
-        raise AdmissionRefusal('D70_D57_IR_BASIS_MISMATCH', 'final SPEF scene')
-    odb = inputs.get('odb')
-    final_odb = parasitics['odb']
-    try:
-        files._bound(project, final_odb)
-        odb_matches = (isinstance(odb, dict)
-                       and odb.get('sha256') == final_odb.get('sha256'))
-    except (KeyError, TypeError, OSError, Refusal):
-        odb_matches = False
-    if not odb_matches:
-        raise AdmissionRefusal('D70_D57_FINAL_ODB_NOT_CONSUMED',
-                               'D57 bridge/native basis is not the adopted D69 final ODB')
-    return {'component': manifest['d57_ir_component'],
-            'receipt': files._record(project, doc_path),
-            'verdict': checked['verdict'], 'scope': 'static IR only',
-            'dynamic_ir_status': 'NOT_MEASURED',
-            'dynamic_ir_reason': ('Vibeic.TransientIR is quasistatic without a bound '
-                                  'D55 waveform/current trace; it is not dynamic IR'),
-            'signal_em_status': 'NOT_MEASURED'}
-
-
-def bind_power_ir_owners(project, receipt_ref, input_path=OWNER_INPUT):
-    """Publish additive final-basis owner evidence after D70/D56/D57 finish.
-
-    The original D70 receipt is immutable.  Measured owner FAIL dominates;
-    otherwise missing dynamic IR, signal EM and mission-limit consumption keep
-    the combined D70 obligation NOT_MEASURED even when static evidence is
-    current.
-    """
-    project = Path(project).resolve()
-    attempt = project / 'reports/flow109/D70-power-ir' / uuid.uuid4().hex
-    attempt.mkdir(parents=True, exist_ok=False)
-    result = {'schema': OWNER_RECORD_SCHEMA, 'step_id': 'D70',
-              'component_status': 'NOT_MEASURED', 'binding_status': 'NOT_MEASURED',
-              'flow109_acceptance': 'NOT_MEASURED', 'whole_flow_acceptance': 'NOT_MEASURED',
-              'whole_ic_acceptance': 'NOT_MEASURED',
-              'full_final_geometry_qualification': 'NOT_MEASURED',
-              'dynamic_power_status': 'NOT_MEASURED', 'dynamic_ir_status': 'NOT_MEASURED',
-              'signal_em_status': 'NOT_MEASURED', 'thermal_status': 'NOT_MEASURED',
-              'aging_status': 'NOT_MEASURED'}
-    try:
-        validate_final_electrical(project, receipt_ref)
-        record = _read(files._bound(project, receipt_ref))
-        manifest = _read(project / input_path)
-        if manifest.get('schema') != OWNER_INPUT_SCHEMA or manifest.get('d70_component') != receipt_ref:
-            raise AdmissionRefusal('D70_OWNER_INPUT_INVALID', 'schema/current D70 component')
-        features = (record.get('execution_context') or {}).get('features') or {}
-        for name in ('thermal', 'aging'):
-            if features.get('requires_' + name) is False:
-                result[name + '_status'] = 'NOT_APPLICABLE'
-        if not features.get('requires_ir') and not features.get('requires_em'):
-            raise AdmissionRefusal('D70_POWER_IR_NOT_APPLICABLE',
-                                   'selected profile requires neither IR nor EM')
-        parasitics = extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
-        activity = _activity_binding(project, manifest, record['netlist'])
-        power = _power_binding(project, record, parasitics, manifest)
-        ir = _ir_binding(project, parasitics, manifest)
-        measured_fail = any(row.get('verdict') == 'FAIL' for row in (power, ir))
-        result.update(binding_status='CURRENT', activity=activity, power=power, ir=ir,
-                      static_power_status=('FAIL' if power['verdict'] == 'FAIL' else 'MEASURED'),
-                      static_ir_status=ir['verdict'],
-                      component_status='FAIL' if measured_fail else 'NOT_MEASURED',
-                      reason=('D70_APPLICABLE_OWNER_MEASURED_FAIL' if measured_fail else
-                              'D70_STATIC_POWER_IR_CURRENT_DYNAMIC_EM_UNMEASURED'),
-                      d70_component=receipt_ref,
-                      unmeasured_obligations=['final_mission_scenario_coverage',
-                          'final_ir_em_thermal_aging_targets', 'dynamic_power',
-                          'dynamic_ir', 'signal_em'])
-    except AdmissionRefusal as exc:
-        result.update(component_status=exc.status, reason=exc.code, detail=str(exc))
-    except (OSError, ValueError, KeyError, TypeError, Refusal) as exc:
-        result.update(reason='D70_OWNER_EVIDENCE_INVALID', detail=str(exc))
-    path = attempt / 'owner-binding.json'
-    write_json(path, result)
-    result['receipt'] = files._record(project, path)
-    return result
 
 
 def _analog_basis(project, reference):
@@ -968,23 +873,11 @@ def accept_metric_obligations(project, context, component):
             except (metrics.MetricRefusal, AdmissionRefusal, Refusal, OSError, KeyError, TypeError, ValueError) as exc:
                 item.update(reason=getattr(exc, 'code', 'D70_METRIC_AUTHORITY_INVALID'), detail=str(exc))
         elif name == 'final_ir_em_thermal_aging_targets' and not analog:
-            try:
-                manifest = _read(project / OWNER_INPUT)
-                if (manifest.get('schema') != OWNER_INPUT_SCHEMA
-                        or manifest.get('d70_component') != component['receipt']):
-                    raise AdmissionRefusal('D70_OWNER_INPUT_INVALID', 'current final component required')
-                basis = extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
-                activity = _activity_binding(project, manifest, record['netlist'])
-                power = _power_binding(project, record, basis, manifest)
-                ir = _ir_binding(project, basis, manifest)
-                failed = any(owner.get('verdict') == 'FAIL' for owner in (power, ir))
-                item.update(status='FAIL' if failed else 'NOT_MEASURED',
-                            reason='D70_APPLICABLE_OWNER_MEASURED_FAIL' if failed
-                                   else 'D70_COUPLED_RELIABILITY_PRODUCER_UNAVAILABLE',
-                            static_owners={'activity': activity, 'power': power, 'ir': ir},
-                            dynamic_ir_status='NOT_MEASURED', signal_em_status='NOT_MEASURED')
-            except (AdmissionRefusal, Refusal, OSError, KeyError, TypeError, ValueError) as exc:
-                item.update(reason=getattr(exc, 'code', 'D70_OWNER_EVIDENCE_INVALID'), detail=str(exc))
+            failed = 'FAIL' in (record.get('ir_status'), record.get('em_status'))
+            item.update(status='FAIL' if failed else 'NOT_MEASURED',
+                        reason='D70_NATIVE_IR_EM_FAIL' if failed else 'D70_COUPLED_RELIABILITY_PRODUCER_UNAVAILABLE',
+                        ir_em=record.get('ir_em'), dynamic_ir_status='NOT_MEASURED',
+                        signal_em_status='NOT_MEASURED', thermal_status='NOT_MEASURED')
         else:
             reasons = {'final_mission_scenario_coverage': 'D70_FINAL_ACTIVITY_MISSION_NOT_CONSUMED',
                        'final_sdf_annotation': 'D70_SDF_GENERATION_IS_NOT_ANNOTATION',
