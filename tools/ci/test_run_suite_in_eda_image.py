@@ -192,7 +192,7 @@ def test_a_volatile_scratch_root_is_not_refused_for_that_reason():
     """THE NEGATIVE CONTROL. A rule that refuses every root is a ban, not a
     rule. The engine is deliberately named as absent so the run stops right
     after the scratch question with no daemon involved."""
-    r = _run("--scratch", "/var/tmp/vibeic-harness-selftest", "--", "-q", "x.py",
+    r = _run("--scratch", "/tmp/vibeic-harness-selftest", "--", "-q", "x.py",
              env_extra={"VIBEIC_SUITE_DOCKER_BIN": "/no/such/docker"})
     assert r.returncode == 2, r.stdout + r.stderr
     assert "not under a volatile root" not in r.stderr, r.stderr
@@ -200,7 +200,7 @@ def test_a_volatile_scratch_root_is_not_refused_for_that_reason():
 
 
 def test_an_engine_that_is_named_and_absent_is_a_refusal_not_a_skip():
-    r = _run("--scratch", "/var/tmp/vibeic-harness-selftest", "--", "-q", "x.py",
+    r = _run("--scratch", "/tmp/vibeic-harness-selftest", "--", "-q", "x.py",
              env_extra={"VIBEIC_SUITE_DOCKER_BIN": "/no/such/docker"})
     assert r.returncode == 2, r.stdout + r.stderr
     assert "REFUSED" in r.stderr
@@ -398,12 +398,14 @@ if __name__ == "__main__":
 _NO_ENGINE_AT_ALL = {"VIBEIC_SUITE_DOCKER_BIN": "/no/such/docker"}
 
 _STUB = """#!/bin/sh
-# A stand-in for the Docker CLI. Serves the two files the harness reads out of
-# the image, and exits with $VIBEIC_STUB_RC for the run that would be the suite.
+# A stand-in for the Docker CLI on the native image: /etc/passwd is served, and
+# /headless and --skip fail as they do there. Exits with $VIBEIC_STUB_RC for the
+# run that would be the suite.
 for a in "$@"; do
   case "$a" in
     /etc/passwd) echo "root:x:0:0:root:/root:/bin/sh"; exit 0 ;;
-    /headless/.bashrc) echo "# stub"; exit 0 ;;
+    /headless/*) exit 1 ;;
+    --skip) exit 127 ;;
   esac
 done
 exit ${VIBEIC_STUB_RC:-0}
@@ -440,7 +442,7 @@ def test_a_relative_selector_that_names_nothing_here_is_refused_by_name():
     """THE DEFECT. `tools/ci/...` is a real path from the repository root and
     nothing at all from the plugin directory the harness runs in."""
     sel = "tools/ci/test_gatekeeper_status_poller.py"
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", sel, env_extra=_NO_ENGINE_AT_ALL)
     assert r.returncode == 2, r.stdout + r.stderr
     assert "REFUSED" in r.stderr, r.stderr
@@ -457,7 +459,7 @@ def test_the_selector_is_refused_and_never_silently_remapped():
     two meanings; the caller never learns which one ran. The harness refuses for
     the same reason it refuses a remapped bind."""
     sel = "tools/ci/test_gatekeeper_status_poller.py"
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", sel, env_extra=_NO_ENGINE_AT_ALL)
     assert "REMAPS NOTHING" in r.stderr, r.stderr
     # It stopped. A remap would have gone on to start a container.
@@ -477,7 +479,7 @@ def test_a_relative_selector_that_does_exist_here_is_not_refused():
     assert (_REPO / "vibe-ic-marketplace/plugins/vibe-ic" / sel).is_dir(), (
         "this control needs a selector that really does exist under the plugin "
         "directory; it proves nothing otherwise")
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", sel,
              env_extra={"VIBEIC_SUITE_DOCKER_BIN": "/no/such/docker"})
     assert "names nothing this run could collect" not in r.stderr, r.stderr
@@ -511,7 +513,7 @@ def test_an_output_path_the_container_cannot_write_is_refused_by_name(opt, val):
           in pytest_sessionfinish -> os.makedirs
 
     The run's entire report is destroyed. This refuses before the tests run."""
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", opt, val, "programs/tests",
              env_extra=_NO_ENGINE_AT_ALL)
     assert r.returncode == 2, r.stdout + r.stderr
@@ -526,7 +528,7 @@ def test_an_output_path_the_container_cannot_write_is_refused_by_name(opt, val):
 def test_the_attached_form_of_an_output_option_is_refused_too():
     """`--junitxml=PATH` never reaches the separate-value branch. A guard that
     only sees `--junitxml PATH` is one spelling away from being switched off."""
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", f"--junitxml={_UNMOUNTED}", "programs/tests",
              env_extra=_NO_ENGINE_AT_ALL)
     assert r.returncode == 2, r.stdout + r.stderr
@@ -545,11 +547,11 @@ def test_an_output_path_under_a_mount_is_not_refused(where, tmp_path):
     at the first thing AFTER the output-path question -- reading /etc/passwd
     out of the image -- and that refusal is the evidence it let this by."""
     target = {
-        "scratch": "/var/tmp/vibeic-harness-selftest/out.xml",
+        "scratch": "/tmp/vibeic-harness-selftest/out.xml",
         "repo": str(_REPO / "out-selftest.xml"),
         "tmp": "/tmp/vibeic-harness-selftest-out.xml",
     }[where]
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", f"--junitxml={target}", "programs/tests",
              env_extra=_NO_ENGINE_AT_ALL)
     assert "is not writable from inside the container" not in r.stderr, r.stderr
@@ -560,7 +562,7 @@ def test_a_non_output_attached_option_is_not_read_as_an_output_path():
     """THE FALSE-REFUSAL CONTROL for the attached-form branch. `--tb=line` and
     friends take the same `--name=value` shape and must pass straight through;
     the branch asks the OPTION first and only then the path."""
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", "--tb=line", "--maxfail=1", "programs/tests",
              env_extra=_NO_ENGINE_AT_ALL)
     assert "is not writable from inside the container" not in r.stderr, r.stderr
@@ -707,7 +709,7 @@ def test_a_pattern_valued_option_is_not_read_as_a_selector():
     """THE FALSE-REFUSAL CONTROL. `--ignore-glob` takes a PATTERN, and a pattern
     that looks like a path must not be adjudicated as one — a check that refuses
     a legal invocation is a worse harness than the one it replaced."""
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", "--ignore-glob", "tools/ci/*.py", "programs/tests",
              env_extra={"VIBEIC_SUITE_DOCKER_BIN": "/no/such/docker"})
     assert "names nothing this run could collect" not in r.stderr, r.stderr
@@ -718,7 +720,7 @@ def test_a_deselect_that_names_nothing_here_is_refused_like_any_selector():
     """`--ignore` and `--deselect` take SELECTORS, and one that names nothing
     removes nothing — silently. They are checked, not skipped, and the refusal
     says so when the path is nowhere at all rather than pointing at a root."""
-    r = _run("--no-engine", "--scratch", "/var/tmp/vibeic-harness-selftest",
+    r = _run("--no-engine", "--scratch", "/tmp/vibeic-harness-selftest",
              "--", "-q", "--deselect", "tools/ci/test_no_such_file.py::test_x",
              "programs/tests/test_covered_by.py", env_extra=_NO_ENGINE_AT_ALL)
     assert r.returncode == 2, r.stdout + r.stderr
@@ -869,7 +871,8 @@ esac
 for a in "$@"; do
   case "$a" in
     /etc/passwd) echo "root:x:0:0:root:/root:/bin/sh"; exit 0 ;;
-    /headless/.bashrc) echo "# stub"; exit 0 ;;
+    /headless/*) exit 1 ;;
+    --skip) exit 127 ;;
   esac
 done
 exit ${VIBEIC_STUB_RC:-0}
