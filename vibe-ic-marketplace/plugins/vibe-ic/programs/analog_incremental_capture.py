@@ -103,7 +103,17 @@ def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = No
     prefix = reset_node.rsplit(".", 1)[0] if "." in reset_node else ""
     if not prefix:
         raise ValueError("native transfer attribution requires the DUT instance path")
-    branches = sc_branch_polarities(devices)
+    if topology.get("incremental_startup"):
+        from analog_incremental_startup import _charge_paths
+
+        branches = {}
+        for capacitor, summing, transfer, _reference, _kind in _charge_paths(
+                devices, topology.get("stage_expansion") or {}):
+            top = next(net for net in capacitor["nets"]
+                       if net != summing and net in transfer[0]["nets"][::2])
+            branches[capacitor["name"]] = {"top_plate": top, "summing_node": summing}
+    else:
+        branches = sc_branch_polarities(devices)
     declared_paths = {}
     if model is not None:
         arrays = ((topology.get("_provenance") or {}).get("layout_maxima") or {}).get("capacitor_arrays") or []
