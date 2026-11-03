@@ -698,6 +698,10 @@ def run(project: Path, container: str, pdk_root: str,
                 {"block": b, "status": "UNAVAILABLE", "rule": "A8GDS_NO_MAGIC",
                  "detail": report["reason"]} for b in blocks]
             return report, 2
+        if pdk_root is None:
+            rc, declared = stage.sh('printf %s "${PDK_ROOT:-}"', timeout=60)[:2]
+            pdk_root = declared.strip() if rc == 0 and declared.strip() else DEFAULT_PDK_ROOT
+        report["pdk_root"] = pdk_root
         for block in blocks:
             report["results"].append(
                 emit_block(project, block, stage, pdk_root))
@@ -730,7 +734,7 @@ def main(argv=None) -> int:
     ap.add_argument("project", type=Path)
     ap.add_argument("--json", default=None)
     ap.add_argument("--container", default=DEFAULT_CONTAINER)
-    ap.add_argument("--pdk-root", default=DEFAULT_PDK_ROOT)
+    ap.add_argument("--pdk-root", default=None)
     ap.add_argument("--block", default=None)
     args = ap.parse_args(argv)
 
