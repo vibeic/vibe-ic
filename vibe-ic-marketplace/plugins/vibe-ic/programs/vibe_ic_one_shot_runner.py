@@ -5403,7 +5403,6 @@ def _main() -> int:
         # complete checkpoint needs its existing metric consumer, not another
         # checkpoint invocation or an unrelated Phase2 admission.
         import flow109
-        import step_output_collector as versions
         _p1_context = flow109.validate_execution_context(json.loads(
             Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
         _p1_rows = _p1_context.get('resolved_rows') or [_p1_context['resolved_row']]
@@ -5418,12 +5417,7 @@ def _main() -> int:
             _p1_result_path = _p1_attempt / 'result.json'
             if _p1_result_path.exists():
                 raise flow109.Flow109Error('FLOW109_ATTEMPT_COMPLETED', str(_p1_attempt))
-            _p1_current = next((r for r in versions.current_acceptance(project, 0)
-                                if str(r['id']) == 'D1'), {})
-            _p1_retained = (_p1_current.get('canonical_pass') is True
-                            and _p1_current.get('status') == 'PASS'
-                            and _p1_current.get('current_inputs') is True
-                            and not _p1_current.get('capture_errors'))
+            _p1_retained = any(_pl.generated_docs_dir(project).glob('L*.json'))
             _p1_args = [str(project), '--ic-name', args.ic_name, '--pdk', args.pdk]
             if args.route:
                 _p1_args += ['--route', args.route]

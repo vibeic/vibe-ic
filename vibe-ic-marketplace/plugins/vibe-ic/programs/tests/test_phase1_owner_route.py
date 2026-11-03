@@ -42,7 +42,7 @@ def route_statements():
     return selected + [observe(physical.test, 'phase3'), observe(phase2.test, 'phase2')]
 
 
-def exercise(tmp_path, monkeypatch, *, first='D01', last='D02', retained=True, result='PASS', route='ic'):
+def exercise(tmp_path, monkeypatch, *, first='D01', last='D02', retained=True, result='PASS', route='ic', legacy_retained=None):
     manifest = json.loads(Path(os.environ['PHASE1_ROUTE_MANIFEST']).read_text())
     context = flow109.execution_context(flow109.resolve_plan(manifest['features']), first, last)
     native = context.get('native_entry_step', context.get('entry_step'))
@@ -58,8 +58,12 @@ def exercise(tmp_path, monkeypatch, *, first='D01', last='D02', retained=True, r
     monkeypatch.setenv(flow109.CONTEXT_ENV, str(path))
     attempt = flow109._new_attempt(tmp_path, context)
     monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    if retained:
+        docs = runner._pl.generated_docs_dir(tmp_path)
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / 'L1_PRODUCT.json').write_text('{}')
     monkeypatch.setattr(versions, 'current_acceptance', lambda *_: [
-        {'id': 'D1', 'status': 'PASS', 'canonical_pass': retained,
+        {'id': 'D1', 'status': 'PASS', 'canonical_pass': retained if legacy_retained is None else legacy_retained,
          'current_inputs': True, 'capture_errors': []}])
     calls = []
     # Route admission already precedes this hunk in the real front door.
@@ -124,6 +128,12 @@ def test_unretained_phase1_still_routes_to_original_owner(tmp_path, monkeypatch)
     calls, _, rc = exercise(tmp_path, monkeypatch, retained=False)
     assert [x[0] for x in calls] == ['phase1'] and rc == 0
     assert '--complete-retained-metrics' not in calls[0][1]
+
+
+def test_existing_documents_do_not_need_legacy_phase1_approval(tmp_path, monkeypatch):
+    calls, _, rc = exercise(tmp_path, monkeypatch, legacy_retained=False)
+    assert rc == 0
+    assert '--complete-retained-metrics' in calls[0][1]
 
 
 @pytest.mark.parametrize('row,expected', [('D30', 'phase2'), ('D31', 'phase3')])
