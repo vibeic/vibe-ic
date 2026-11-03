@@ -448,6 +448,7 @@ def test_step_29_runs_every_corner_sdf_through_the_custom_step(tmp_path, monkeyp
     original_manifest = sgs.tool_arm_manifest
     def current_state_manifest(*args, **kwargs):
         assert kwargs.get('sta_step_dir') == postroute.stapostpnr_state(project)[0]
+        assert (root / 'x', '/pdk/x') in kwargs.get('pdk_mounts', [])
         return original_manifest(*args, **kwargs)
     monkeypatch.setattr(sgs, 'tool_arm_manifest', current_state_manifest)
     fake, calls = _gls_edge(declared, lambda corner: VVP_PASS)
@@ -1569,7 +1570,8 @@ def test_native_state_gls_observation_deadline(tmp_path, case):
 
 @pytest.mark.parametrize('case', ['reference', 'mapped', 'wrong_reset', 'missing_alias', 'wrong_width',
                                  'observation_equivalent', 'wrong_pr_alias',
-                                 'removed_nonconstant', 'wrong_constant'])
+                                 'removed_nonconstant', 'wrong_constant',
+                                 'mounted_native_header', 'mounted_wrong_constant'])
 def test_reset_monitors_compile_through_normal_mapped_manifest(tmp_path, case):
     import arith_oracle_tb_gen as arith
     import subprocess
@@ -1583,7 +1585,8 @@ def test_reset_monitors_compile_through_normal_mapped_manifest(tmp_path, case):
     put(path, rows)
     rtl = project / 'phase2/stage1/rtl/public_serial_product.v'
     equivalent = case in ('observation_equivalent', 'wrong_pr_alias',
-                          'removed_nonconstant', 'wrong_constant')
+                          'removed_nonconstant', 'wrong_constant',
+                          'mounted_native_header', 'mounted_wrong_constant')
     if equivalent:
         source = rtl.read_text().replace('output reg result_bit=0', 'output wire result_bit')
         source = source.replace('reg [8:0] carry=0;',
@@ -1600,7 +1603,7 @@ def test_reset_monitors_compile_through_normal_mapped_manifest(tmp_path, case):
                 'required_observations': [{'state': 'carry', 'width': 9, 'expected_value': 0}]}
     if equivalent:
         required['required_observations'].append({'state': 'product_state', 'width': 1, 'expected_value': 0})
-        if case == 'wrong_constant':
+        if case in ('wrong_constant', 'mounted_wrong_constant'):
             required['required_observations'][0]['expected_value'] = 256
     put(project / 'input/flow109/D13/source.json', {'scenario_requirements': {
         'transaction_sequence': {'reset_observation': required}}})
@@ -1649,6 +1652,17 @@ module PUBLIC_BUF(input I, output Z); buf (Z,I); endmodule
         config = json.loads((folder / 'config.json').read_text())
         config['LIB'] = {'typical': [str(library)]}
         put(folder / 'config.json', config)
+        if case.startswith('mounted_'):
+            write(root / 'x/libs.ref/cells/lib/reset.lib', library.read_text())
+            config.update(PDK='x', PDK_ROOT='/previous-pdk',
+                          LIB={'typical': ['/previous-pdk/x/libs.ref/cells/lib/reset.lib']})
+            put(folder / 'config.json', config)
+            state.pop('json_h')
+            put(folder / 'state_out.json', state)
+            producer = project / 'phase3/librelane/native-header'
+            put(producer / 'config.json', {'meta': {'step': 'Yosys.JsonHeader'},
+                                          'DESIGN_NAME': 'public_surface'})
+            put(producer / 'state_out.json', {'json_h': str(header)})
     if case == 'wrong_reset':
         physical = physical.replace('carry<=0;', 'carry<=1;')
     elif case == 'wrong_width':
@@ -1657,10 +1671,23 @@ module PUBLIC_BUF(input I, output Z); buf (Z,I); endmodule
     target = r'\other/carry ' if case == 'missing_alias' else r'\core/carry '
     physical = re.sub(r'\bcarry\b', lambda _: target, physical)
     netlist.write_text(physical)
+    if case.startswith('mounted_'):
+        input_plan = arith._scenario_header(bench)
+        input_plan['reset_observation'] = required
+        bench.write_text(arith.emit_arithmetic_scenario_module(
+            'transaction_sequence', input_plan, dut_module='public_serial_product'))
+    if case == 'mounted_native_header':
+        unresolved = sgs.tool_arm_manifest(project, 'public_serial_product', netlist,
+            [model], tmp_path / 'without-mount', sdc=sdc,
+            sdfs=[Path(f) for f in state['sdf'].values()], sta_step_dir=folder)
+        assert unresolved['cases'] == []
+        assert 'selected synthesis/library evidence unavailable' in unresolved['not_a_subject'][0]['detail']
     manifest = sgs.tool_arm_manifest(project, 'public_serial_product', netlist,
         [model], tmp_path / 'manifest', sdc=sdc,
-        sdfs=[Path(f) for f in state['sdf'].values()], sta_step_dir=folder)
-    if case in ('missing_alias', 'wrong_width', 'wrong_pr_alias', 'removed_nonconstant', 'wrong_constant'):
+        sdfs=[Path(f) for f in state['sdf'].values()], sta_step_dir=folder,
+        **({'pdk_mounts': [(root / 'x', '/previous-pdk/x')]} if case.startswith('mounted_') else {}))
+    if case in ('missing_alias', 'wrong_width', 'wrong_pr_alias', 'removed_nonconstant',
+                'wrong_constant', 'mounted_wrong_constant'):
         assert manifest['cases'] == []
         state_name = 'product_state' if case == 'wrong_pr_alias' else 'carry'
         detail = manifest['not_a_subject'][0]['detail']
