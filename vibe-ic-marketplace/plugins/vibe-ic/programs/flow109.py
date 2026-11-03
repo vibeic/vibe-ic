@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import sys
 from typing import Mapping
@@ -2513,43 +2514,107 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
     return result
 
 
-def _retained_padring_result(project: Path, context: Mapping) -> dict | None:
-    """Read OpenROAD's completed pad-ring/PDN results, without rerunning placement.
+def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
+    """Read completed native physical steps without replaying unchanged tools.
 
     LibreLane already owns these checks. This glue compares its native error
     counts with the original zero-error limit; no backend receipt is needed.
     Fresh cases without the native chain continue through the normal producer.
     """
     row = context.get("resolved_row", {})
-    if row.get("id") != "D32" or row.get("profile", {}).get("id") != "default":
+    if row.get("id") not in ("D31", "D32", "D35", "D37", "D38", "D39", "D40") or row.get("profile", {}).get("id") != "default":
         return None
     chain_path = project / "reports/phase3/execution-backend-15.json"
     if not chain_path.is_file():
         return None
     measurements = {}
     result = {"step_id": row["id"], "context_sha256": context["context_sha256"],
-              "reason": "D32_NATIVE_PADRING_PDN", "native_measurements": measurements}
+              "reason": row["id"] + "_NATIVE_PHYSICAL_RESULT", "native_measurements": measurements}
+    timing_failed = False
     try:
         chain = json.loads(chain_path.read_text())
         states = {item["step"]: project / item["state"] for item in chain["states"]}
-        for step in ("OpenROAD.PadRing", "OpenROAD.GeneratePDN"):
+        steps = (("OpenROAD.PadRing", "OpenROAD.GeneratePDN") if row["id"] == "D32"
+                 else row["profile"]["native_steps"])
+        if any(step not in states for step in steps):
+            root = next(iter(states.values())).parent.parent
+            ordered = []
+            for config_path in root.glob("*/config.json"):
+                step = json.loads(config_path.read_text()).get("meta", {}).get("step")
+                ordinal = config_path.parent.name.split("-", 1)[0]
+                if ordinal.isdigit():
+                    ordered.append((int(ordinal), step, config_path.parent / "state_out.json"))
+                if row["id"] in ("D38", "D39"):
+                    continue
+                if step not in steps:
+                    continue
+                state = config_path.parent / "state_out.json"
+                if step in states and states[step] != state:
+                    raise ValueError("ambiguous native step: " + step)
+                states[step] = state
+            if row["id"] in ("D38", "D39"):
+                ordered.sort()
+                anchors = [i for i, item in enumerate(ordered) if item[1] == steps[0]]
+                if not anchors:
+                    return None
+                if len(anchors) != 1 or anchors[0] + 1 >= len(ordered):
+                    raise ValueError("native CTS/repair State unavailable")
+                own, sta = ordered[anchors[0]:anchors[0] + 2]
+                if sta[1] != "OpenROAD.STAMidPNR":
+                    raise ValueError("STA does not follow the selected native State")
+                states.update({own[1]: own[2], sta[1]: sta[2]})
+            elif steps[0] not in states:
+                return None
+        for step in steps:
             state_path = states[step]
             state = json.loads(state_path.read_text())
             values = state["metrics"]
-            measurements[step] = {"report": str(state_path),
-                                  "errors": values["flow__errors__count"]}
+            measurements[step] = {"report": str(state_path)}
+            if step != "Yosys.JsonHeader":
+                measurements[step]["errors"] = values["flow__errors__count"]
             if step == "OpenROAD.GeneratePDN":
                 measurements[step]["connectivity_errors"] = values["design__power_grid_violation__count"]
+            if step == "OpenROAD.DetailedPlacement":
+                measurements[step]["placement_errors"] = values["design__violations"]
+            if step == "Vibeic.InsertSpareCells":
+                for key in ("vibeic__spare__pg__unconnected", "vibeic__spare__check_placement__violations"):
+                    measurements[step][key] = values[key]
+                for wanted, actual in (("planned", "inserted"), ("tieoff__candidates", "tieoff__connected")):
+                    pair = [values["vibeic__spare__" + key] for key in (wanted, actual)]
+                    if any(type(v) not in (int, float) or not math.isfinite(v)
+                           or v < 0 or v != int(v) for v in pair):
+                        raise ValueError("invalid native spare count")
+                    measurements[step][wanted + "_mismatch"] = abs(pair[0] - pair[1])
+            if step == "OpenROAD.FillInsertion":
+                measurements[step]["routing_errors"] = values["route__drc_errors_final"]
+                measurements[step]["disconnected_required_pins"] = values["design__critical_disconnected_pin__count"]
+            if step == "OpenROAD.CTS":
+                report = state_path.parent / "cts.rpt"
+                text = report.read_text()
+                result["cts"] = {"report": str(report), **{
+                    key: int(re.search(pattern + r"\s*(\d+)", text).group(1))
+                    for key, pattern in (("sinks", "Total number of Sinks:"),
+                                         ("buffers", "Total number of Buffers Inserted:"))}}
+            if step == "OpenROAD.STAMidPNR":
+                timing = {key: values["timing__" + key + "__ws"] for key in ("setup", "hold")}
+                if any(type(v) not in (int, float) or not math.isfinite(v) for v in timing.values()):
+                    raise ValueError("native setup/hold slack unavailable")
+                timing_failed = any(v < 0 for v in timing.values())
+                result["timing"] = {"report": str(state_path), "worst_slack_ns": timing, "limit_ns": 0}
+                result["intermediate_drv"] = {
+                    "scope": "reported, not limits here; post-route signoff owns closure",
+                    **{key: values.get("design__max_" + key + "_violation__count")
+                       for key in ("slew", "cap", "fanout")}}
         counts = [value for observed in measurements.values()
                   for key, value in observed.items() if key != "report"]
         if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
                or value != int(value) for value in counts):
             raise ValueError("invalid native error count")
-        status = "FAIL" if any(counts) else "PASS"
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        status = "FAIL" if any(type(v) in (int, float) and math.isfinite(v) and v > 0
+        status = "FAIL" if any(counts) or timing_failed else "PASS"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        status = "FAIL" if timing_failed or any(type(v) in (int, float) and math.isfinite(v) and v > 0
             for observed in measurements.values() for k, v in observed.items() if k != "report") else "NOT_MEASURED"
-        result.update(reason="D32_NATIVE_REPORT_UNAVAILABLE", detail=str(exc))
+        result.update(reason=row["id"] + "_NATIVE_REPORT_UNAVAILABLE", detail=str(exc))
     return {**result, "component_status": status, "default_row_status": status,
             "completed": status == "PASS", "flow109_acceptance": status}
 
@@ -2853,7 +2918,7 @@ def prepare_front_door(args, project: Path) -> int | None:
     attempt = _new_attempt(project, context)
     os.environ[ATTEMPT_ENV] = str(attempt.resolve())
     adapter = context['resolved_row']['profile']['dispatch'].get('adapter')
-    retained = _retained_padring_result(project, context) if not adapter else None
+    retained = _retained_backend_result(project, context) if not adapter else None
     if retained is not None:
         result = _selected_step_result(project, context, retained)
         write_json(destination / 'components' / (context['requested_step'] + '.json'), result)
