@@ -364,7 +364,8 @@ def _klayout_run(binc: str, deck: str, gds: str, block: str, container: str,
 
 
 def _klayout_drc_runner(deck: str, gds: str, block: str, container: str,
-                        report_host: Path) -> Tuple[Optional[int], Dict[str, Any]]:
+                        report_host: Path, *, antenna: bool = False
+                        ) -> Tuple[Optional[int], Dict[str, Any]]:
     """Run an open-PDK KLayout DRC runset on the block GDS — the main runset
     AND every extra-rules runset the PDK ships beside it (q1).
 
@@ -378,6 +379,10 @@ def _klayout_drc_runner(deck: str, gds: str, block: str, container: str,
     deck). The PDK's own DRC driver runs it by default; this runner did not,
     so a rule only it grades (MEASURED on ihp-sg13g2: `MIM.e`, `M2.d`) was
     graded by no deck in A6 at all. Present but silent is no evidence.
+
+    THE ANTENNA DECK (`antenna=True`, the block path, #3798) is one more such
+    runset. A fragment needs no pass here: this run names no `decks`, so the
+    main deck already selects all of its own.
     """
     binc = _tool_on_path(container, "klayout")
     if binc is None:
@@ -411,7 +416,10 @@ def _klayout_drc_runner(deck: str, gds: str, block: str, container: str,
     passes = {str(deck): _auth.lyrdb_text_rules(text)}
     extra_meta: List[Dict[str, Any]] = []
     threads = max(1, min(8, os.cpu_count() or 1))
-    for ex in _auth.extra_runsets(Path(deck).parent):
+    antenna_decks = _auth.antenna_decks(Path(deck).parent) if antenna else []
+    for ex in [*_auth.extra_runsets(Path(deck).parent),
+               *(d for d in antenna_decks
+                 if not _auth.is_antenna_fragment(d))]:
         rpt = report_host.parent / f"drc.{ex.stem}.lyrdb"
         erc, etail = _klayout_run(
             binc, str(ex), gds, block, container, rpt,
@@ -454,6 +462,8 @@ def _klayout_drc_runner(deck: str, gds: str, block: str, container: str,
     if extra_meta:
         meta["extra_runsets"] = extra_meta
     meta["authoritative"] = authoritative
+    if antenna:
+        meta["antenna_deck"] = _auth.antenna_record(antenna_decks)
     return violations, meta
 
 
@@ -472,7 +482,8 @@ def _default_drc_runner(deck: str, gds: str, block: str, container: str,
     leaves the existing waiver/stub path). NUMBERS ONLY."""
     kind = deck_kind(deck)
     if kind == "klayout":
-        return _klayout_drc_runner(deck, gds, block, container, report_host)
+        return _klayout_drc_runner(deck, gds, block, container, report_host,
+                                   antenna=True)
     if kind == "unknown":
         return None, {"reason": (
             "staged DRC deck is neither an SVRF (.rule/.svrf) nor a KLayout "
@@ -842,6 +853,8 @@ def _write_drc_report(bdir: Path, block: str, violations: int,
               if isinstance(ex.get("flat_counts"), dict) else []),
             "",
         ]
+    if meta.get("antenna_deck"):
+        lines[-1:] = [f"antenna_deck: {meta['antenna_deck']['result']}", ""]
     rpt.write_text("\n".join(lines))
     return rpt
 
