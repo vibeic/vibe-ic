@@ -186,8 +186,15 @@ def _d34_case(tmp_path, monkeypatch, *, measured=DOMAINS, reference=None, skew=2
 
 def _complete(tmp_path, monkeypatch, **case):
     project, context, component = _d34_case(tmp_path, monkeypatch, **case)
-    result = clock.consume_default_row_completion(project, context, component)
+    result = _legacy_metric_result(project, context, component)
     return result, {o["id"]: o for o in result.get("metric_acceptance", {}).get("obligations", [])}
+
+
+def _legacy_metric_result(project, context, component):
+    # Keep the optional legacy API's controls; it no longer admits the public row.
+    accepted = clock.accept_d34(project, context, component)
+    return {"default_row_status": accepted["status"], "metric_acceptance": accepted,
+            "completed": accepted["status"] == "PASS"}
 
 
 def test_clock_plan_sinks_closes_the_census_or_refuses():
@@ -289,7 +296,7 @@ def test_d34_refuses_a_plan_changed_after_the_component(tmp_path, monkeypatch):
     project, context, component = _d34_case(tmp_path, monkeypatch)
     plan = project / clock.OUTPUT
     plan.write_text(plan.read_text().replace('"period_ns": 24.0', '"period_ns": 25.0', 1))
-    result = clock.consume_default_row_completion(project, context, component)
+    result = _legacy_metric_result(project, context, component)
     assert result["default_row_status"] == "NOT_MEASURED"
     assert result["metric_acceptance"]["reason"] == "D34_PLAN_STALE"
 
@@ -297,7 +304,7 @@ def test_d34_refuses_a_plan_changed_after_the_component(tmp_path, monkeypatch):
 def test_d34_measurement_is_the_native_log_not_the_json_summary(tmp_path, monkeypatch):
     project, context, component = _d34_case(tmp_path, monkeypatch)
     (project / "phase3/stage3/cts/clock_plan.log").write_text(_log({"clka": ["u_core/r[0]/CLK"], "clkb": []}))
-    result = clock.consume_default_row_completion(project, context, component)
+    result = _legacy_metric_result(project, context, component)
     assert result["default_row_status"] == "NOT_MEASURED"
     assert result["metric_acceptance"]["reason"] == "D34_SINK_CENSUS_DIFFERS_FROM_LOG"
 
@@ -315,3 +322,17 @@ def test_d34_a_cts_authority_missing_a_limit_is_not_consumption(tmp_path, monkey
     result, obligations = _complete(tmp_path, monkeypatch, consumer="incomplete")
     assert obligations["base_22.skew_insertion_targets"]["reason"] == "D34_TARGET_CONSUMER_INCOMPLETE"
     assert result["default_row_status"] == "NOT_MEASURED"
+
+
+@pytest.mark.parametrize("native,consumer,expected", [
+    ({"rc": 0}, "PASS", "PASS"), ({}, "PASS", "NOT_MEASURED"),
+    ({"rc": 0}, "FAIL", "FAIL"), ({"rc": 0}, "NOT_MEASURED", "NOT_MEASURED"),
+])
+def test_public_clock_row_reads_the_native_plan_without_adoption(tmp_path, native, consumer, expected):
+    context = flow109.execution_context(flow109.resolve_plan(_profile()), "D34", "D34")
+    result = {"step_id": "D34", "context_sha256": context["context_sha256"],
+              "component_status": "PASS", "native_execution": native,
+              "consumer_result": {"status": consumer}}
+    completed = flow109._selected_step_result(tmp_path, context, result, clock)
+    assert completed["default_row_status"] == expected
+    assert completed["completed"] is (expected == "PASS")
