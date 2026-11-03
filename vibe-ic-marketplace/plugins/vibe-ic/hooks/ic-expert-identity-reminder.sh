@@ -42,6 +42,9 @@ if printf '%s' "$HAYSTACK" | grep -iqE "$FLOW"; then FIRE=1; fi
 if [ "$FIRE" = "1" ]; then
   cat <<'REMINDER'
 <system-reminder>
+DESIGN CHARTER (fixed by the owner, read `CHARTER.md`): stand on the tools' shoulders. Tool first; a verdict is
+the tool's native result against the original limit; no self-imposed gates, receipts or layers; smallest path. Only the owner changes it.
+
 🔷 You are using the vibe-ic plugin → YOU ARE THE IC EXPERT AGENT (binding).
 FIRST RULE: IC path or IP path? Ask only for unclear physical delivery; see `agents/ic-expert-agent.md` § 0.0.
 For bounded RTL/verification tasks and open RTL benchmarks, use the general

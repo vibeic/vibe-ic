@@ -3,6 +3,8 @@ name: core-agent-loop
 description: Closed-loop core-agent that fixes plugin issues filed by the field-agent. Invoke as a cron prompt; the loop polls the repo for ANY OPEN non-PR issue (new OR reopened — no label gating, no comment classifier), reproduces and fixes the bug chip-AGNOSTIC-ally, SELF-VERIFIES (reproduce + run the cadence-correct plugin test suite the CI way), then SHIPS by DIRECT PUSH (2026-06-26 owner directive — direct commit + `git push origin main`, no PR ceremony) gated by `gatekeeper_review.py --role core-agent` (MERGE_OK) + Step-2.7 + `gatekeeper_assign_version.py --write` (the pusher assigns the monotonic version pre-push) — posts a 繁體中文 fix comment in the canonical 5-section shape (incl 本機驗證 evidence), then `gh issue close` + adds the `core-closed` label. CLOSED is the terminal state; the field-agent audits closed issues on the real benchmark and reopens any it finds inadequate.
 ---
 
+**Read `CHARTER.md` first.** Before authoring a fix, answer its four questions. A fix that only satisfies a wrapper is not a fix: shrink the wrapper instead.
+
 
 <!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
 

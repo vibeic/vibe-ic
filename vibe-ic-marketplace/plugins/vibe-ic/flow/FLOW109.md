@@ -1,5 +1,7 @@
 # 109-flow implementation entry
 
+Design rules: `../CHARTER.md`. It is fixed by the owner and overrides anything here that conflicts with it, including the acceptance text below.
+
 The sole public entry is `programs/vibe_ic_one_shot_runner.py` with explicit
 `--flow 109`, `--flow109-manifest`, stable-ID window, and Default execution.
 `flow109.json` owns the stable responsibility IDs, four phases, seven stages,

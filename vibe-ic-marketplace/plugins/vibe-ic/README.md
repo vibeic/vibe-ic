@@ -1,5 +1,7 @@
 # vibe-ic — AI-Native IC Design plugin (**v1.35.88**)
 
+**Design rules: [CHARTER.md](CHARTER.md).** Fixed by the owner: use the tools, judge on their native results, add no self-imposed gates.
+
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
 The plugin is no longer "compliance regexes over agent prose". It is **1694 top-level Python

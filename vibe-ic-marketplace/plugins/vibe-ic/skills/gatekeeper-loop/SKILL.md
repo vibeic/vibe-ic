@@ -409,6 +409,8 @@ overlap names the affected paths and requests only their impacted checks.
 
 ## Hard rules (non-negotiable)
 
+- **`CHARTER.md` comes first.** Refuse a change that breaks it, cite the rule (C1-C8), and do not offer a way around it. It overrides any conflicting step in this file.
+
 > **The gatekeeper MAY self-merge.** A single identity may both author and
 > merge its own PRs — there is NO author≠approver requirement. The gates
 > (machine required checks + Step-2.7), independently pinned receipt, genuine
