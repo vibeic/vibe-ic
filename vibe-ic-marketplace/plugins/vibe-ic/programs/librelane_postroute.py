@@ -220,6 +220,42 @@ def gate_level_sim(project: Path, top: str, image: str, pdk_root: Path, pdk: str
     judge it, and write `reports/phase3/gls_corners.json`."""
     import sdf_gate_sim as sgs
     import librelane_contract as contract
+    import _container_exec
+    if _container_exec.no_container_route():
+        import time
+        from librelane.config import Config
+        from librelane.state import State
+        from librelane.steps import StepError
+        sys.path.insert(0, str(Path(__file__).parent / 'librelane_plugins'))
+        from librelane_plugin_vibeic import GateLevelSim
+        started = time.monotonic()
+        selected = _load(project / 'reports/phase3/sta_postpnr_signoff.json')
+        sta_folder = Path(selected['sta_state']).parent
+        state = _load(sta_folder / 'state_out.json')
+        native_config = _load(sta_folder / 'config.json')
+        models = sorted((project / 'phase2/stage1/sim_full_stack/functional/models').glob('*.v'))
+        out = project / 'phase3/librelane/29-config/gls'
+        manifest = sgs.tool_arm_manifest(project, top, Path(state['nl']), models, out,
+            sdc=Path(state['sdc']), sdfs=[Path(p) for p in state['sdf'].values()],
+            sta_step_dir=sta_folder)
+        config, _ = Config.load({'DESIGN_NAME': native_config['DESIGN_NAME'],
+            'PDK': pdk, 'STD_CELL_LIBRARY': native_config['STD_CELL_LIBRARY'],
+            'VIBEIC_GLS_MANIFEST': str(out / 'gls_manifest.json')},
+            GateLevelSim.get_all_config_variables(), design_dir=str(project), pdk_root=str(pdk_root))
+        folder = project / 'phase3/librelane/29-native'
+        (folder / 'gls_results.json').unlink(missing_ok=True)
+        try:
+            GateLevelSim(config=config, state_in=State.loads(json.dumps(state))).start(step_dir=str(folder))
+        except StepError:
+            if not (folder / 'gls_results.json').is_file():
+                raise
+        judged = _load(folder / 'gls_results.json')
+        if judged.get('not_a_subject'):
+            judged['verdict'] = 'NOT_MEASURED'
+        judged['wall_seconds'] = time.monotonic() - started
+        judged['native_manifest'] = str(out / 'gls_manifest.json')
+        write_json(project / 'reports/phase3/gls_corners.json', judged)
+        return judged
     sta_folder, state = stapostpnr_state(project)
     sdf_binding = bind_stapostpnr_sdfs(sta_folder, state)
     sdfs = {corner: Path(row['path'])

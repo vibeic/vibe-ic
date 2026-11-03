@@ -2535,23 +2535,12 @@ def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
     import arith_oracle_tb_gen as arith
     if not declared.get('rebound') or arith._scenario_header(Path(case['path'])) is None:
         return str(case['text']), None
-    import hashlib
-    import testbench_gen as tbg
-    rows = [r for r in (tbg.load_l10_cases(project) or [])
-            if str(r.get('name') or r.get('id')) == str(case['id'])]
-    if len(rows) != 1:
-        raise ValueError('MISSING_OBSERVATION_CONTRACT: no unique current L10 row')
+    # The executed scenario already carries the INPUT-derived comparator,
+    # population and framing. Reuse it rather than requiring a second typed
+    # declaration to reconstruct that same contract.
+    plan = arith._scenario_header(Path(case['path']))
     record = json.loads((project / CHIP_TOP_RECORD_REL).read_text())
     wrapper = project / str(record['chip_top_verilog'])
-    sources = {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest()
-               for p in [wrapper, *(Path(f) for f in model_files)]}
-    request: Dict[str, object] = {}
-    plan = arith.arithmetic_scenario_plan(
-        project, tbg._detect_ic_class(project), rows[0], request=request,
-        observation_top=str(declared['dut_module']), observation_sources=sources)
-    if plan is None:
-        raise ValueError('MISSING_OBSERVATION_CONTRACT: ' + '; '.join(
-            request.get('unsupported_requirements') or ['unsupported selected observation']))
     deadline = _postlayout_output_deadline(project, plan, declared, netlist, sdc, sdfs,
                                            sta_step_dir=sta_step_dir)
     plan['observation'] = {**plan['observation'],
@@ -2562,25 +2551,35 @@ def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
                  if master == top]
         if len(cores) != 1:
             raise ValueError('RESET_STATE_MAPPING_UNMEASURED: core instance is not unique')
+        mapping = {**plan, 'observation': {**plan['observation'],
+                                          'top': declared['dut_module']}}
         try:
-            targets = arith.mapped_reset_state_targets(plan, netlist.read_text(), cores[0])
-        except ValueError as mapping_error:
-            # The selected native State already carries its elaborated JsonHeader
-            # and libraries. Missing evidence retains the original refusal.
-            if sta_step_dir is None:
-                raise
-            try:
-                state = json.loads((sta_step_dir / 'state_out.json').read_text())
-                config = json.loads((sta_step_dir / 'config.json').read_text())
-                synthesis = json.loads(Path(state['json_h']).read_text())
-                libraries = [Path(f) for files in config.get('LIB', {}).values() for f in files]
-                liberty = '\n'.join(p.read_text() for p in sorted(set(libraries)))
-            except (OSError, KeyError, ValueError, TypeError) as exc:
-                raise ValueError(f'{mapping_error}; selected synthesis/library evidence unavailable') from exc
+            targets = arith.mapped_reset_state_targets(mapping, netlist.read_text(), cores[0])
+        except ValueError:
+            # Synthesis can remove constant bits and rename output registers.
+            # Yosys already knows those source-state cones; elaborate the same
+            # INPUT RTL with the wrapper instead of weakening reset coverage.
+            import subprocess
+            source = project / plan['reset_observation']['source_reference']['path']
+            folder = project / 'phase3/librelane/29-config/reset-state'
+            folder.mkdir(parents=True, exist_ok=True)
+            output = folder / 'state.json'
+            word = lambda p: '"' + str(p).replace('\\', '\\\\').replace('"', '\\"') + '"'
+            script = ('read_verilog -sv ' + word(source) + ' ' + word(wrapper) + '\n'
+                      + 'hierarchy -top ' + declared['dut_module']
+                      + '\nproc\nflatten\nwrite_json ' + word(output) + '\n')
+            proc = subprocess.run(['yosys', '-Q', '-T', '-p', script], capture_output=True, text=True)
+            (folder / 'yosys.log').write_text(proc.stdout + proc.stderr)
+            if proc.returncode:
+                raise ValueError('RESET_STATE_MAPPING_UNMEASURED: Yosys elaboration failed')
+            config = json.loads((sta_step_dir / 'config.json').read_text())
+            import librelane_contract as contract
+            timed = contract.post_pnr_timing_inputs(project, sta_step_dir / 'state_out.json',
+                                                    config['DEFAULT_CORNER'])
+            liberty = '\n'.join(Path(p).read_text() for p in timed['liberties'])
             targets = arith.mapped_reset_state_targets(
-                plan, netlist.read_text(), cores[0], synthesis=synthesis,
-                source_text=(project / plan['reset_observation']['source_reference']['path']).read_text(),
-                liberty_text=liberty, wrapper_text=wrapper.read_text(),
+                mapping, netlist.read_text(), cores[0], synthesis=json.loads(output.read_text()),
+                source_text=source.read_text(), liberty_text=liberty, wrapper_text=wrapper.read_text(),
                 pad_instances=record.get('pad_instances'), port_map=declared.get('port_map'))
         plan['observation']['reset_state_targets'] = targets
     # Keep the physical subject in the plan; the normal binder below owns
@@ -2616,9 +2615,11 @@ def tool_arm_manifest(project: Path, top: str, netlist: Path,
     stubs = missing_empty_cell_stubs(ntext, used, models_text)
     out.mkdir(parents=True, exist_ok=True)
     stub_path = out / "phys_cell_stubs.v"
-    _aa.write_text(stub_path, "// Physical-only cells no declared model defines.\n"
-                   "`timescale 1ns/1ps\n"
-                   + "".join(f"module {cell} (); endmodule\n" for cell in stubs))
+    stub_text = ("// Physical-only cells no declared model defines.\n"
+                 "`timescale 1ns/1ps\n"
+                 + "".join(f"module {cell} (); endmodule\n" for cell in stubs))
+    if not stub_path.is_file() or stub_path.read_text() != stub_text:
+        _aa.write_text(stub_path, stub_text)
     cases, refused = [], list(suite.get("skipped") or [])
     for case in suite["cases"]:
         cid = str(case["id"])
