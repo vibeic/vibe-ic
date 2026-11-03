@@ -630,11 +630,10 @@ def accept_d34(project, context, component):
 
 
 def consume_default_row_completion(project, context, result):
-    """Existing completion ABI: the fresh D34 component plus current metrics.
+    """Complete from the native clock plan and its existing SDC consumer.
 
-    Metrics only ever complete a passing component. A component that did not
-    pass, or an owner that already reported FAIL, keeps its own verdict and
-    reason; an absent metric must not soften a FAIL or hide why nothing ran.
+    OpenSTA owns the sink census. A second adopted inventory and duplicate
+    CTS authority are not prerequisites for reading its answer (Charter C5).
     """
     answer = {"step_id": "D34", "context_sha256": context["context_sha256"],
               "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False}
@@ -643,10 +642,12 @@ def consume_default_row_completion(project, context, result):
                   else "NOT_MEASURED")
         return {**answer, "default_row_status": status, "completed": False,
                 "flow109_acceptance": status, "reason": result.get("reason")}
-    accepted = accept_d34(Path(project).resolve(), context, result)
-    return {**answer, "default_row_status": accepted["status"],
-            "completed": accepted["status"] == "PASS", "flow109_acceptance": accepted["status"],
-            "metric_acceptance": accepted, "reason": accepted.get("reason")}
+    consumer = (result.get("consumer_result") or {}).get("status")
+    measured = (result.get("native_execution") or {}).get("rc") == 0 and consumer == "PASS"
+    status = "FAIL" if consumer == "FAIL" else "PASS" if measured else "NOT_MEASURED"
+    return {**answer, "default_row_status": status, "completed": status == "PASS",
+            "flow109_acceptance": status,
+            "reason": "D34_NATIVE_CLOCK_PLAN" if measured else "D34_NATIVE_PLAN_NOT_ACCEPTED"}
 
 
 def propose_sink_reference(project: Path, liberties: list[Path]) -> dict:
