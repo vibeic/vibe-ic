@@ -1,0 +1,25 @@
+library (ngspice_hrhc_tt_tm40_v2_r1p01) {
+  delay_model : table_lookup;
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  capacitive_load_unit (1, pf);
+  leakage_power_unit : "1uW";
+  nom_process : 1;
+  nom_voltage : 2;
+  nom_temperature : -40;
+  operating_conditions (ngspice_hrhc_tt_tm40_v2_r1p01) {
+    process : 1;
+    voltage : 2;
+    temperature : -40;
+  }
+  default_operating_conditions : ngspice_hrhc_tt_tm40_v2_r1p01;
+  cell (ldo) {
+    is_macro_cell : true;
+    cell_leakage_power : 86.41035;
+    pg_pin (vdd) { pg_type : primary_power; voltage_name : vdd; }
+    pg_pin (vss) { pg_type : primary_ground; voltage_name : vss; }
+    pin (vref) { direction : input; is_analog : true; }
+    pin (vout) { direction : output; is_analog : true; }
+  }
+}

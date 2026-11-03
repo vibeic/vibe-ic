@@ -1,0 +1,12 @@
+{
+  "rc": 0,
+  "errors": [],
+  "edge_count": 1,
+  "reported_delay_ns": {
+    "rise": 8.401569366,
+    "fall": 7.879297256
+  },
+  "matches_measured_delay": true,
+  "native_log": "/mnt/ssd2/codex_tasks/out/a4pilot/cx-a4/dsm-liberty/bootstrap-em/ffm40/sta.log",
+  "read_link_timing": true
+}

@@ -1,0 +1,25 @@
+{
+  "corners": 405,
+  "native_op_measured": 405,
+  "iq_pass": 405,
+  "vout_pass": 405,
+  "opensta_read_link_power": 405,
+  "opensta_same_power": 405,
+  "iq_ua": [
+    30.75744,
+    47.534729999999996
+  ],
+  "power_uw": [
+    49.2119,
+    95.06947
+  ],
+  "vout_v": [
+    1.187202,
+    1.216568
+  ],
+  "warning_corners": [
+    "ngspice_hrhc_ss_tm40_v1p8_r0p99",
+    "ngspice_hrlc_tt_t27_v1p8_r0p99",
+    "ngspice_lrlc_ss_t125_v1p6_r0p99"
+  ]
+}

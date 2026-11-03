@@ -1,0 +1,45 @@
+library (ff125) {
+  delay_model : table_lookup;
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  capacitive_load_unit (1, pf);
+  input_threshold_pct_rise : 50;
+  input_threshold_pct_fall : 50;
+  output_threshold_pct_rise : 50;
+  output_threshold_pct_fall : 50;
+  slew_lower_threshold_pct_rise : 20;
+  slew_upper_threshold_pct_rise : 80;
+  slew_lower_threshold_pct_fall : 20;
+  slew_upper_threshold_pct_fall : 80;
+  nom_process : 1;
+  nom_voltage : 1.3;
+  nom_temperature : 125;
+  operating_conditions (ff125) {
+    process : 1;
+    voltage : 1.3;
+    temperature : 125;
+  }
+  default_operating_conditions : ff125;
+  cell (delta_sigma) {
+    is_macro_cell : true;
+    pg_pin (vdd) { pg_type : primary_power; voltage_name : vdd; }
+    pg_pin (vss) { pg_type : primary_ground; voltage_name : vss; }
+    pin (vin) { direction : input; is_analog : true; }
+    pin (vrefp) { direction : input; is_analog : true; }
+    pin (vrefn) { direction : input; is_analog : true; }
+    pin (clk) { direction : input; clock : true; }
+    pin (bit_out) {
+      direction : output;
+      timing () {
+        related_pin : "clk";
+        timing_type : rising_edge;
+        timing_sense : non_unate;
+        cell_rise (scalar) { values ("12.7043489633492"); }
+        cell_fall (scalar) { values ("11.7880782754422"); }
+        rise_transition (scalar) { values ("1.22537188993846"); }
+        fall_transition (scalar) { values ("0.694401199852519"); }
+      }
+    }
+  }
+}

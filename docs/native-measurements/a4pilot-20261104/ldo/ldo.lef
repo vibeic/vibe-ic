@@ -1,0 +1,84 @@
+VERSION 5.7 ;
+  NOWIREEXTENSIONATPIN ON ;
+  DIVIDERCHAR "/" ;
+  BUSBITCHARS "[]" ;
+MACRO ldo
+  CLASS BLOCK ;
+  FOREIGN ldo ;
+  ORIGIN -0.690 32.000 ;
+  SIZE 222.290 BY 609.250 ;
+  PIN vdd
+    DIRECTION INOUT ;
+    USE POWER ;
+    ANTENNADIFFAREA 392.347992 ;
+    PORT
+      LAYER TopMetal1 ;
+        RECT 79.860 -32.000 81.780 -20.000 ;
+    END
+  END vdd
+  PIN vss
+    DIRECTION INOUT ;
+    USE GROUND ;
+    ANTENNADIFFAREA 498.437988 ;
+    PORT
+      LAYER TopMetal1 ;
+        RECT 2.780 6.980 4.420 577.250 ;
+    END
+  END vss
+  PIN vref
+    DIRECTION INOUT ;
+    USE SIGNAL ;
+    ANTENNAGATEAREA 17.927999 ;
+    PORT
+      LAYER Metal4 ;
+        RECT 37.920 0.000 38.420 7.260 ;
+    END
+  END vref
+  PIN vout
+    DIRECTION INOUT ;
+    USE SIGNAL ;
+    ANTENNADIFFAREA 119.000000 ;
+    PORT
+      LAYER Metal4 ;
+        RECT 169.350 -2.070 183.730 -0.690 ;
+    END
+  END vout
+  OBS
+      LAYER GatPoly ;
+        RECT 3.300 39.660 222.850 576.940 ;
+      LAYER Metal1 ;
+        RECT 3.370 39.620 222.780 576.870 ;
+      LAYER Metal2 ;
+        RECT 0.690 1.060 222.130 576.225 ;
+      LAYER Metal3 ;
+        RECT 1.140 -28.240 222.130 576.230 ;
+      LAYER Metal4 ;
+        RECT 2.520 7.860 213.260 52.680 ;
+        RECT 2.520 7.470 37.320 7.860 ;
+        RECT 39.020 7.470 213.260 7.860 ;
+        RECT 2.520 -0.210 37.320 7.470 ;
+        RECT 39.020 -0.090 213.260 7.470 ;
+        RECT 39.020 -0.210 168.750 -0.090 ;
+        RECT 184.330 -0.210 213.260 -0.090 ;
+        RECT 2.520 -0.480 37.320 -0.210 ;
+        RECT 39.020 -0.480 168.750 -0.210 ;
+        RECT 184.330 -0.480 213.260 -0.210 ;
+        RECT 2.520 -2.280 168.750 -0.600 ;
+        RECT 2.520 -0.600 37.320 -0.480 ;
+        RECT 39.020 -0.600 168.750 -0.480 ;
+        RECT 184.330 -2.280 213.260 -0.480 ;
+        RECT 2.520 -28.240 213.260 -2.670 ;
+        RECT 2.520 -2.670 168.750 -2.280 ;
+        RECT 184.330 -2.670 213.260 -2.280 ;
+      LAYER Metal5 ;
+        RECT 2.130 -28.630 213.260 63.010 ;
+      LAYER TopMetal1 ;
+        RECT 6.060 5.340 198.290 577.250 ;
+        RECT 1.940 -18.360 198.290 5.340 ;
+        RECT 1.940 -28.960 78.220 -18.360 ;
+        RECT 83.420 -28.960 198.290 -18.360 ;
+      LAYER TopMetal2 ;
+        RECT 8.840 -29.000 188.490 52.680 ;
+  END
+END ldo
+END LIBRARY

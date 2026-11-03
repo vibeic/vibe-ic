@@ -1,0 +1,64 @@
+OpenSTA 3.1.0 6ccc1f0f68 Copyright (c) 2026, Parallax Software, Inc.
+License GPLv3: GNU GPL version 3 <http://gnu.org/licenses/gpl.html>
+
+This is free software, and you are free to change and redistribute it
+under certain conditions; type `show_copying' for details. 
+This program comes with ABSOLUTELY NO WARRANTY; for details type `show_warranty'.
+EDGE_COUNT 1
+BEGIN_RISE
+Startpoint: dut (rising edge-triggered flip-flop clocked by modclk)
+Endpoint: bit_out (output port clocked by modclk)
+Path Group: modclk
+Path Type: max
+
+         Delay           Time   Description
+-----------------------------------------------------------------------
+   0.000000000    0.000000000   clock modclk (rise edge)
+   0.000000000    0.000000000   clock network delay (ideal)
+   0.000000000    0.000000000 ^ dut/clk (delta_sigma)
+  12.726795197   12.726795197 ^ dut/bit_out (delta_sigma)
+   0.000000000   12.726795197 ^ bit_out (out)
+                 12.726795197   data arrival time
+
+1000.000000000 1000.000000000   clock modclk (rise edge)
+   0.000000000 1000.000000000   clock network delay (ideal)
+   0.000000000 1000.000000000   clock reconvergence pessimism
+   0.000000000 1000.000000000   output external delay
+               1000.000000000   data required time
+-----------------------------------------------------------------------
+               1000.000000000   data required time
+                -12.726795197   data arrival time
+-----------------------------------------------------------------------
+                987.273254395   slack (MET)
+
+
+END_RISE
+BEGIN_FALL
+Startpoint: dut (rising edge-triggered flip-flop clocked by modclk)
+Endpoint: bit_out (output port clocked by modclk)
+Path Group: modclk
+Path Type: max
+
+         Delay           Time   Description
+-----------------------------------------------------------------------
+   0.000000000    0.000000000   clock modclk (rise edge)
+   0.000000000    0.000000000   clock network delay (ideal)
+   0.000000000    0.000000000 ^ dut/clk (delta_sigma)
+  11.877502441   11.877502441 v dut/bit_out (delta_sigma)
+   0.000000000   11.877502441 v bit_out (out)
+                 11.877502441   data arrival time
+
+1000.000000000 1000.000000000   clock modclk (rise edge)
+   0.000000000 1000.000000000   clock network delay (ideal)
+   0.000000000 1000.000000000   clock reconvergence pessimism
+   0.000000000 1000.000000000   output external delay
+               1000.000000000   data required time
+-----------------------------------------------------------------------
+               1000.000000000   data required time
+                -11.877502441   data arrival time
+-----------------------------------------------------------------------
+                988.122497559   slack (MET)
+
+
+END_FALL
+READ_LINK_TIMING_DONE

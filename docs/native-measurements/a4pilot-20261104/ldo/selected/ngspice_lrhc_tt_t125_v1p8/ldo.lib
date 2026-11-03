@@ -1,0 +1,25 @@
+library (ngspice_lrhc_tt_t125_v1p8_r1p01) {
+  delay_model : table_lookup;
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  capacitive_load_unit (1, pf);
+  leakage_power_unit : "1uW";
+  nom_process : 1;
+  nom_voltage : 1.8;
+  nom_temperature : 125;
+  operating_conditions (ngspice_lrhc_tt_t125_v1p8_r1p01) {
+    process : 1;
+    voltage : 1.8;
+    temperature : 125;
+  }
+  default_operating_conditions : ngspice_lrhc_tt_t125_v1p8_r1p01;
+  cell (ldo) {
+    is_macro_cell : true;
+    cell_leakage_power : 72.85811;
+    pg_pin (vdd) { pg_type : primary_power; voltage_name : vdd; }
+    pg_pin (vss) { pg_type : primary_ground; voltage_name : vss; }
+    pin (vref) { direction : input; is_analog : true; }
+    pin (vout) { direction : output; is_analog : true; }
+  }
+}

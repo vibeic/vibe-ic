@@ -1,0 +1,12 @@
+{
+  "rc": 0,
+  "errors": [],
+  "edge_count": 1,
+  "reported_delay_ns": {
+    "rise": 12.726795197,
+    "fall": 11.877502441
+  },
+  "matches_measured_delay": true,
+  "native_log": "/mnt/ssd2/codex_tasks/out/a4pilot/cx-a4/dsm-liberty/bootstrap-em/tt27/sta.log",
+  "read_link_timing": true
+}

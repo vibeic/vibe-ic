@@ -1,0 +1,13 @@
+{
+  "ldo_original_native_op": 405,
+  "ldo_portable_native_sta_reads": 405,
+  "ldo_portable_sta_same_power": 405,
+  "ldo_parameterized_runner_nominal_matches_original": true,
+  "dsm_historical_native_sta_reads": 3,
+  "dsm_regenerated_libraries_byte_equal": true,
+  "new_dsm_matrix_completed": 0,
+  "new_dsm_long_runs": "HOLD by leader",
+  "script_first_nominal_reproduction": "failed: OSDI model types unknown without PDK .spiceinit; preserved under cx-a4-snapshot-check/nominal",
+  "script_corrected_nominal_reproduction": "native rc=0, exact original scalars and Liberty bytes with PDK init loaded in private working directory",
+  "NEW_FAILED": []
+}
