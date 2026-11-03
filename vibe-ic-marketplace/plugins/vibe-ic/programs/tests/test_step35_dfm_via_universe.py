@@ -329,3 +329,52 @@ def test_advisory_trailer_is_printed_last_and_names_the_finding(
     assert json.loads(
         (p / "reports" / "phase3" / "dfm_screen.json").read_text()
     )["verdict"] == "PASS_WITH_ADVISORIES"
+
+
+def _project_with_router_def(tmp_path):
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed.def").write_text(_ROUTER_DEFAULT_DEF)
+    return tmp_path
+
+
+def _single_cut_fraction(project):
+    return DFM.audit(project)["via_redundancy"]
+
+
+def test_tlef_in_the_project_resolves_router_vias(tmp_path):
+    project = _project_with_router_def(tmp_path)
+    (project / "tech.tlef").write_text(_TECH_LEF)
+    assert _single_cut_fraction(project)["unresolved_via_uses"] == 0
+
+
+def test_tech_lef_is_not_crowded_out_by_the_lef_file_cap(tmp_path):
+    project = _project_with_router_def(tmp_path)
+    for index in range(DFM._MAX_LEF_FILES + 2):
+        (project / f"a{index}.lef").write_text("VERSION 5.8 ;\n")
+    (project / "z.tlef").write_text(_TECH_LEF)
+    assert _single_cut_fraction(project)["unresolved_via_uses"] == 0
+
+
+def test_config_tech_lef_is_found_under_the_current_pdk_root(tmp_path, monkeypatch):
+    project = _project_with_router_def(tmp_path / "run")
+    current = tmp_path / "kit" / "pdkX" / "libs.ref" / "lib" / "techlef"
+    current.mkdir(parents=True)
+    (current / "nom.tlef").write_text(_TECH_LEF)
+    config = project / "phase3" / "librelane" / "34" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({
+        "PDK": "pdkX",
+        "TECH_LEFS": {"nom_*": "/gone/root/pdkX/libs.ref/lib/techlef/nom.tlef"}}))
+    monkeypatch.setenv("PDK_ROOT", str(tmp_path / "kit"))
+    assert _single_cut_fraction(project)["unresolved_via_uses"] == 0
+
+
+def test_density_refusal_reason_is_reported(tmp_path, monkeypatch):
+    project = _project_with_router_def(tmp_path)
+    monkeypatch.setattr(DFM, "_step34_tool_density", lambda _p: {
+        "status": "NOT_MEASURED", "source": "fill.json", "reason": "WHY_REFUSED"})
+    result = DFM.audit(project)
+    assert result["density_ref"]["reason"] == "WHY_REFUSED"
+    assert any("WHY_REFUSED" in row["message"] for row in result["findings"]
+               if row["category"] == "DENSITY_REF")
