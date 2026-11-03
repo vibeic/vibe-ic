@@ -181,6 +181,39 @@ def _target_is_informational(ars: Any, btype: str) -> bool:
 # L5 loading / normalisation
 # ---------------------------------------------------------------------------
 
+def _declared_testbench_problem(project: Path, name: str) -> Optional[str]:
+    """None when analog_flow declares this block a usable testbench input.
+
+    Only `blocks.<name>.testbench_inputs` counts, and the file must state this
+    block, its ports and a measurement control. Nothing is inferred from a
+    missing declaration. Returns why the declaration cannot be used.
+    """
+    try:
+        flow = json.loads((project / "input/analog_flow.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "input/analog_flow.json is absent or not JSON"
+    blocks = flow.get("blocks") if isinstance(flow, dict) else None
+    config = blocks.get(name) if isinstance(blocks, dict) else None
+    value = config.get("testbench_inputs") if isinstance(config, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return f"analog_flow blocks.{name}.testbench_inputs is not declared"
+    root = project.resolve()
+    path = (root / value).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        return f"declared testbench input {value!r} is not a file in the project"
+    try:
+        bench = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"declared testbench input {value!r} is not JSON"
+    testbench = bench.get("testbench") if isinstance(bench, dict) else None
+    if (not isinstance(testbench, dict) or bench.get("block") != name
+            or not isinstance(bench.get("ports"), list) or not bench["ports"]
+            or not isinstance(testbench.get("control"), list) or not testbench["control"]):
+        return (f"declared testbench input {value!r} must state block {name!r}, "
+                "its ports and a testbench control")
+    return None
+
+
 def _find_l5(project: Path) -> Optional[Path]:
     cand = _pl.generated_docs_dir(project) / "L5_ADI_SPEC.json"
     if cand.is_file():
@@ -336,13 +369,15 @@ def evaluate(project: Path) -> Dict[str, Any]:
                 "deck for it, so the block is listed but never simulated")
             continue
         if known_types and btype.lower() not in known_types:
-            failures.append(
-                f"{label}: type='{btype}' has no deck in the consumer's "
-                f"own table (known: {len(known_types)} types) — "
-                "_pick_block_type returns it but analog_real_corner_sweep "
-                "cannot build a testbench, so A4 silently produces no "
-                "graded measurement")
-            continue
+            problem = _declared_testbench_problem(project, name)
+            if problem is not None:
+                failures.append(
+                    f"{label}: type='{btype}' has no deck in the consumer's "
+                    f"own table (known: {len(known_types)} types) and no usable "
+                    f"declared testbench ({problem}) — _pick_block_type returns "
+                    "it but analog_real_corner_sweep cannot build a testbench, "
+                    "so A4 silently produces no graded measurement")
+                continue
 
         # R3 — actionable spec, decided by the CONSUMER'S OWN parser.
         try:
