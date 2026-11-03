@@ -56,13 +56,18 @@ LEF_LAYERS = [{"name": "M1", "dc_density": 1.0}, {"name": "V1", "dc_density": .4
 
 
 def test_supply_width_comes_from_the_declared_current_and_the_lef_density():
-    rule = route.supply_rule(.9, LEF_LAYERS, ["M1", "M2"], 1, 2, .4, lambda level, width: .24)
-    assert rule["M2"] == {"width_um": .45, "needed_um": .45, "short_um": 0.0, "space_um": .24}
+    rule = route.supply_rule(.9, LEF_LAYERS, ["M1", "M2"], 1, 2, lambda level, width: .24)
+    assert rule["M2"] == {"width_um": .45, "space_um": .24}
 
 
-def test_a_declared_low_metal_width_records_its_shortfall():
-    rule = route.supply_rule(.9, LEF_LAYERS, ["M1", "M2"], 1, 2, .4, lambda level, width: .24)
-    assert rule["M1"]["width_um"] == .4 and rule["M1"]["short_um"] == .5
+def test_every_supply_layer_meets_the_lef_density():
+    rule = route.supply_rule(.9, LEF_LAYERS, ["M1", "M2"], 1, 2, lambda level, width: .24)
+    assert rule["M1"]["width_um"] == .9 and rule["M2"]["width_um"] == .45
+
+
+def test_declared_ports_sit_on_the_far_edge():
+    sites = route.signal_pin_sites(["vin", "clk", "vref", "bit"], ["clk", "bit"], 12, 5, 100)
+    assert sites == [("vin", 12, .4), ("vref", 17, .4), ("clk", 12, 99.6), ("bit", 17, 99.6)]
 
 
 def test_strap_pairs_spread_through_the_columns():

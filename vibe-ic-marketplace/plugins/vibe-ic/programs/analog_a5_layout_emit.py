@@ -5140,7 +5140,7 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
             box = (0, 0, round(width * lam), 10 * lam)
             return geo.metal_space(layer, box, (0, 0, 10 * lam, 10 * lam)) / lam + 0.01
         supply = route.supply_rule(current, facts.tech_lef or [], routing, cfg["routing_layers"][0],
-                                   cfg["routing_layers"][1], rail_cfg["low_metal_width_um"], supply_space)
+                                   cfg["routing_layers"][1], supply_space)
         report["supply"] = {"current_ma": current, "source": "block spec" if declared else "floorplan.routing.rail",
                             "layers": supply, "stacks_per_net": {
                                 net: sum(r["stacks"] for r in rails if r["net"] == net) for net in rail_nets},
@@ -5155,8 +5155,8 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
                                        cfg["routing_layers"][1], item["spacing_factor"], supply_space)}
             for item in cfg.get("net_classes", [])]
         signal = [p for p in ports if p not in rail_nets]
-        pins_at = [(p, cfg["signal_pin_start_um"] + i * cfg["signal_pin_pitch_um"], 0.4)
-                   for i, p in enumerate(signal)]
+        pins_at = route.signal_pin_sites(signal, cfg.get("far_edge_ports", []), cfg["signal_pin_start_um"],
+                                         cfg["signal_pin_pitch_um"], die_h / route.DBU_PER_UM)
         builder.write(work)
         (work / "top.v").write_text(builder.verilog(blockname, signal))
         pin_layer = routing[pin_spec["ports"][signal[0]]["level"] - 1] if signal else routing[levels[0] - 1]
@@ -5210,9 +5210,9 @@ def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage,
                      "lef_layer": routing[levels[2] - 1], "use": spec["use"], "rail": True,
                      "box_um": box, "strip_um": box, "width_um": rail_cfg["width_um"],
                      "cuts_per_via": 1, "em": spec.get("em")})
-    for name, x, _y in pins_at:
+    for name, x, y in pins_at:
         spec = pin_spec["ports"][name]
-        box = [x - 0.15, 0.0, x + 0.15, 0.8]
+        box = [x - 0.15, y - 0.4, x + 0.15, y + 0.4]
         pins.append({"net": name, "index": spec["index"], "layer": f"metal{spec['level']}",
                      "lef_layer": pin_layer, "use": spec["use"], "rail": False,
                      "box_um": box, "strip_um": box, "width_um": 0.3, "cuts_per_via": 1,

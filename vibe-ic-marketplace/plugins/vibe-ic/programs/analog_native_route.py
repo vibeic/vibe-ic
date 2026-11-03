@@ -185,18 +185,24 @@ def centroid_distance_um(members: Sequence[Sequence[str]], place: Dict[str, Tupl
     return round(max((math.dist(a, b) for a in centres for b in centres), default=0.0), 3)
 
 
+def signal_pin_sites(signal: Sequence[str], far_edge: Sequence[str], start: float, pitch: float,
+                     top: float) -> List[Tuple[str, float, float]]:
+    """(port, x, y) of each signal pin, on the bottom edge unless declared for the far edge."""
+    sites = []
+    for edge_ports, y in (([p for p in signal if p not in far_edge], 0.4),
+                          ([p for p in signal if p in far_edge], top - 0.4)):
+        sites += [(p, start + i * pitch, y) for i, p in enumerate(edge_ports)]
+    return sites
+
+
 def supply_rule(current_ma: float, lef_layers: Sequence[dict], routing: Sequence[str], low: int, high: int,
-                low_metal_width_um: float, space_um) -> dict:
-    """Wire width per routed layer from the declared current and the LEF's current
-    density. The lowest layer has to reach ring pins, so its width is declared and
-    any shortfall against the density is recorded for the native reliability step."""
+                space_um) -> dict:
+    """Wire width per routed layer from the declared current and the LEF's current density."""
     density = {layer["name"]: layer.get("dc_density") for layer in lef_layers}
     rule = {}
     for index, name in enumerate(routing[low - 1:high], low):
-        needed = current_ma / density[name]
-        width = low_metal_width_um if index == low else math.ceil(needed * 200) / 200
-        rule[name] = {"width_um": width, "needed_um": round(needed, 4),
-                      "short_um": round(max(0.0, needed - width), 4), "space_um": space_um(index, width)}
+        width = math.ceil(current_ma / density[name] * 200) / 200
+        rule[name] = {"width_um": width, "space_um": space_um(index, width)}
     return rule
 
 
