@@ -26,6 +26,48 @@ def _put(project, rel, value):
     return {"path": rel, "sha256": _sha(path)}
 
 
+@pytest.mark.parametrize('native_status,expected',
+                         [('PASS', 'PASS'), ('FAIL', 'FAIL'), ('INCOMPLETE', 'NOT_MEASURED')])
+def test_native_references_survive_dispatch_publication(tmp_path, monkeypatch, native_status, expected):
+    import flow109
+    import flow109_final_perc as perc
+    from _atomic_artefact import write_json
+    netlist = tmp_path / 'final.v'
+    netlist.write_text('module selected_chip; endmodule\n')
+    state = {'nl': str(netlist), 'spice': str(tmp_path / 'final.spice')}
+    folder = tmp_path / 'native'
+    _put(tmp_path, 'native/config.json', {'DESIGN_NAME': 'selected_chip', 'PDK': 'test-kit',
+        'STD_CELL_LIBRARY': 'test-cells'})
+    _put(tmp_path, 'native/state_out.json', state)
+    _put(tmp_path, 'reports/phase3/librelane_pv_lvs.json',
+         {'metrics': {'magic__illegal_overlap__count': {'folder': str(folder)}}})
+    report = _put(tmp_path, 'reports/phase3/cvc_native/report.rpt', 'synthetic native report\n')
+    monkeypatch.setattr(perc.librelane_postroute, 'stapostpnr_state', lambda _: (folder, state))
+    monkeypatch.setattr(perc.librelane_contract, 'resolve_image', lambda _: TEST_IMAGE)
+    monkeypatch.setattr(perc.librelane_contract, 'resolve_pdk_root', lambda *a, **kw: tmp_path)
+    monkeypatch.setattr(perc.phase3_runner, '_native_cvc_category',
+        lambda *a, **kw: {'result': native_status, 'category': 'Native CVC electrical rules',
+                         'evidence': report})
+    context = {'context_sha256': 'synthetic-context', 'resolved_row': {'id': 'D66'}}
+    result = perc.execute(tmp_path, context)
+    answer = flow109._selected_step_result(tmp_path, context, result, perc)
+    write_json(tmp_path / 'reports/flow109/components/D66.json', answer)
+    assert answer['default_row_status'] == expected
+    def references(value):
+        if isinstance(value, dict):
+            if 'path' in value and 'sha256' in value:
+                yield value
+            for child in value.values():
+                yield from references(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from references(child)
+    bound = list(references(answer))
+    assert bound
+    for ref in bound:
+        assert _sha(tmp_path / ref['path']) == ref['sha256'], ref['path']
+
+
 def _summary(*, automated_fail=False, omit_manual=None):
     manual = [
         "ESD protection presence",

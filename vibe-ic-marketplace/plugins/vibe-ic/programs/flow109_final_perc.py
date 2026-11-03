@@ -93,7 +93,6 @@ def execute(project, context):
         result.update(reason="D66_NATIVE_CVC_UNAVAILABLE", detail=f"{type(exc).__name__}: {exc}")
     path = project / "reports/flow109/components/D66.json"
     write_json(path, result)
-    result["receipt"] = _record(project, path)
     return result
 
 
