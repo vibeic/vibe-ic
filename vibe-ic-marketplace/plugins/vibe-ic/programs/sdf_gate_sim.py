@@ -888,7 +888,8 @@ def find_l10_executed_cases(project: Path, top: str) -> Optional[Dict[str, objec
                               or case.get("verdict") or "")[:240]})
             continue
         tb = case.get("tb_file")
-        tb_path = Path(str(tb)) if tb else None
+        from librelane_contract import project_path
+        tb_path = project_path(project, str(tb)) if tb else None
         if tb_path is None or not tb_path.is_file():
             skipped.append({"id": cid, "disposition": "TB_ABSENT",
                             "detail": str(tb)})
@@ -2451,6 +2452,10 @@ def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
             # Consume its actual scenes; do not synthesize a legacy receipt.
             folder = Path(sta_step_dir).resolve(strict=True)
         state = json.loads((folder / 'state_out.json').read_text())
+        for view in ('nl', 'sdc'):
+            state[view] = str(contract.project_path(project, state[view]))
+        state['sdf'] = {corner: str(contract.project_path(project, path))
+                        for corner, path in state.get('sdf', {}).items()}
         if (Path(state['nl']).resolve() != netlist.resolve() or
                 Path(state['sdc']).resolve() != sdc.resolve() or
                 {Path(f).resolve() for f in state['sdf'].values()} !=
@@ -2477,8 +2482,9 @@ def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
                      'corners': {name: {'max.rpt': str(folder / name / 'max.rpt')}
                                  for name in corners}}
         clocks = declared_sdc_clocks(sdc, [f.read_text() for f in sdfs])
-        port = declared['port_map'][plan['spec']['serial_out']]
-        clock_port = declared['port_map'][plan['spec']['clk']]
+        port_map = declared.get('port_map') or {}
+        port = port_map.get(plan['spec']['serial_out'], plan['spec']['serial_out'])
+        clock_port = port_map.get(plan['spec']['clk'], plan['spec']['clk'])
         named = [c for c in sdc_constraints.create_clocks_in_text(sdc.read_text())
                  if c['port_name'] == clock_port]
         if len(named) != 1 or not named[0]['name']:
@@ -2523,7 +2529,8 @@ def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
 def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
                            declared: Dict[str, object], model_files: List[str],
                            *, netlist: Path, sdc: Path, sdfs: List[Path],
-                           sta_step_dir: Optional[Path] = None
+                           sta_step_dir: Optional[Path] = None, pdk_mounts: Optional[list] = None,
+                           existing_plan: Optional[dict] = None
                            ) -> Tuple[str, Optional[Dict[str, object]]]:
     """Prepare a generated arithmetic case for its declared physical surface.
 
@@ -2535,12 +2542,14 @@ def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
     import arith_oracle_tb_gen as arith
     if not declared.get('rebound') or arith._scenario_header(Path(case['path'])) is None:
         return str(case['text']), None
-    # The executed scenario already carries the INPUT-derived comparator,
-    # population and framing. Reuse it rather than requiring a second typed
-    # declaration to reconstruct that same contract.
-    plan = arith._scenario_header(Path(case['path']))
     record = json.loads((project / CHIP_TOP_RECORD_REL).read_text())
     wrapper = project / str(record['chip_top_verilog'])
+    plan = json.loads(json.dumps(existing_plan if existing_plan is not None
+                                 else arith._scenario_header(Path(case['path']))))
+    plan['observation']['top'] = declared['dut_module']
+    for field in ('clock', 'output'):
+        name = plan['observation'].get(field)
+        plan['observation'][field] = (declared.get('port_map') or {}).get(name, name)
     deadline = _postlayout_output_deadline(project, plan, declared, netlist, sdc, sdfs,
                                            sta_step_dir=sta_step_dir)
     plan['observation'] = {**plan['observation'],
@@ -2551,35 +2560,54 @@ def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
                  if master == top]
         if len(cores) != 1:
             raise ValueError('RESET_STATE_MAPPING_UNMEASURED: core instance is not unique')
-        mapping = {**plan, 'observation': {**plan['observation'],
-                                          'top': declared['dut_module']}}
         try:
-            targets = arith.mapped_reset_state_targets(mapping, netlist.read_text(), cores[0])
-        except ValueError:
-            # Synthesis can remove constant bits and rename output registers.
-            # Yosys already knows those source-state cones; elaborate the same
-            # INPUT RTL with the wrapper instead of weakening reset coverage.
-            import subprocess
-            source = project / plan['reset_observation']['source_reference']['path']
-            folder = project / 'phase3/librelane/29-config/reset-state'
-            folder.mkdir(parents=True, exist_ok=True)
-            output = folder / 'state.json'
-            word = lambda p: '"' + str(p).replace('\\', '\\\\').replace('"', '\\"') + '"'
-            script = ('read_verilog -sv ' + word(source) + ' ' + word(wrapper) + '\n'
-                      + 'hierarchy -top ' + declared['dut_module']
-                      + '\nproc\nflatten\nwrite_json ' + word(output) + '\n')
-            proc = subprocess.run(['yosys', '-Q', '-T', '-p', script], capture_output=True, text=True)
-            (folder / 'yosys.log').write_text(proc.stdout + proc.stderr)
-            if proc.returncode:
-                raise ValueError('RESET_STATE_MAPPING_UNMEASURED: Yosys elaboration failed')
-            config = json.loads((sta_step_dir / 'config.json').read_text())
-            import librelane_contract as contract
-            timed = contract.post_pnr_timing_inputs(project, sta_step_dir / 'state_out.json',
-                                                    config['DEFAULT_CORNER'])
-            liberty = '\n'.join(Path(p).read_text() for p in timed['liberties'])
+            targets = arith.mapped_reset_state_targets(plan, netlist.read_text(), cores[0])
+        except ValueError as mapping_error:
+            if sta_step_dir is None:
+                raise
+            try:
+                state = json.loads((sta_step_dir / 'state_out.json').read_text())
+                config = json.loads((sta_step_dir / 'config.json').read_text())
+                import librelane_contract as contract
+                header = state.get('json_h')
+                if not header:
+                    import librelane_postroute as postroute
+                    for candidate in postroute._librelane_states(project):
+                        if contract._state_step_id(candidate.parent) != 'Yosys.JsonHeader':
+                            continue
+                        native_config = json.loads((candidate.parent / 'config.json').read_text())
+                        if native_config.get('DESIGN_NAME') == declared['dut_module']:
+                            header = json.loads(candidate.read_text()).get('json_h')
+                if header:
+                    synthesis = json.loads(contract.project_path(project, header).read_text())
+                else:
+                    import subprocess
+                    source = contract.project_path(project, plan['reset_observation']['source_reference']['path'])
+                    folder = project / 'phase3/librelane/29-config/reset-state'
+                    folder.mkdir(parents=True, exist_ok=True)
+                    output = folder / 'state.json'
+                    word = lambda p: '"' + str(p).replace('\\', '\\\\').replace('"', '\\"') + '"'
+                    script = ('read_verilog -sv ' + word(source) + ' ' + word(wrapper) + '\n'
+                              + 'hierarchy -top ' + declared['dut_module']
+                              + '\nproc\nflatten\nwrite_json ' + word(output) + '\n')
+                    proc = subprocess.run(['yosys', '-Q', '-T', '-p', script], capture_output=True, text=True)
+                    (folder / 'yosys.log').write_text(proc.stdout + proc.stderr)
+                    if proc.returncode:
+                        raise ValueError('RESET_STATE_MAPPING_UNMEASURED: Yosys elaboration failed')
+                    synthesis = json.loads(output.read_text())
+                libraries = [contract.resolve_state_pdk_asset(f, pdk=config.get('PDK'), mounts=pdk_mounts or [])
+                             for files in config.get('LIB', {}).values() for f in files]
+                if any(path is None for path in libraries):
+                    timed = contract.post_pnr_timing_inputs(project, sta_step_dir / 'state_out.json',
+                                                           config['DEFAULT_CORNER'])
+                    libraries = [Path(path) for path in timed['liberties']]
+                liberty = '\n'.join(p.read_text() for p in sorted(set(libraries)))
+            except (OSError, KeyError, ValueError, TypeError) as exc:
+                raise ValueError(f'{mapping_error}; selected synthesis/library evidence unavailable') from exc
             targets = arith.mapped_reset_state_targets(
-                mapping, netlist.read_text(), cores[0], synthesis=json.loads(output.read_text()),
-                source_text=source.read_text(), liberty_text=liberty, wrapper_text=wrapper.read_text(),
+                plan, netlist.read_text(), cores[0], synthesis=synthesis,
+                source_text=contract.project_path(project, plan['reset_observation']['source_reference']['path']).read_text(),
+                liberty_text=liberty, wrapper_text=wrapper.read_text(),
                 pad_instances=record.get('pad_instances'), port_map=declared.get('port_map'))
         plan['observation']['reset_state_targets'] = targets
     # Keep the physical subject in the plan; the normal binder below owns

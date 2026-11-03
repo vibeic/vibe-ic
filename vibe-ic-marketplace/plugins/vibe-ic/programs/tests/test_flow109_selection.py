@@ -2150,6 +2150,7 @@ def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
     ("D62", "flow109_density_fill", None),
     ("D63", "librelane_fill_dfm", None),
     ("D64", "flow109_final_geometry", None),
+    ("D65", "librelane_pv_signoff", None),
     ("D69", "flow109_final_extract", "final_filled_odb_rcx_component_only"),
     ("D70", "flow109_final_electrical", "final_sta_native_component_only"),
     ("D71", "flow109_final_gls", "final_sdf_gls_component_only"),

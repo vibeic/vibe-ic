@@ -521,10 +521,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_final_electrical` | any | — | D70 Default bounded component: final RCX SPEFs -> STAPostPNR and SDF. |
 | `flow109_final_extract` | any | — | D69 native owner: final State -> OpenROAD.RCX min/nom/max SPEFs for STA. |
 | `flow109_final_geometry` | any | — | D64: native finishing XOR on the run's delivered geometry. |
-| `flow109_final_gls` | any | — | D71 final-SDF gate replay on the adopted D44 netlist. |
+| `flow109_final_gls` | any | — | Replay the declared L10 scenarios against every final native STA SDF. |
 | `flow109_final_lec` | any | — | Blocking D44 component: native LibreLane EQY on the adopted final netlist. |
 | `flow109_final_lec_physical` | any | — | Blocking, source-bound physical-chip proof-view preparation for D44. |
-| `flow109_final_perc` | any | — | D66 thin binding to the existing Step-28 PERC-equivalent owner. |
+| `flow109_final_perc` | any | — | Final native CVC electrical screen using this run's LibreLane views. |
 | `flow109_frontend` | any | — | D22 uses the existing Default synthesis owner and its complete consumer. |
 | `flow109_functional_activity` | any | — | D55 component: adopted-netlist GLS activity and a real vector-power consumer. |
 | `flow109_ip_release` | any | — | D79 exports owner-selected IP endpoints and consumes their existing audits. |
@@ -2089,10 +2089,10 @@ _(no programs in this group)_
 - `flow109_final_electrical` — D70 Default bounded component: final RCX SPEFs -> STAPostPNR and SDF.
 - `flow109_final_extract` — D69 native owner: final State -> OpenROAD.RCX min/nom/max SPEFs for STA.
 - `flow109_final_geometry` — D64: native finishing XOR on the run's delivered geometry.
-- `flow109_final_gls` — D71 final-SDF gate replay on the adopted D44 netlist.
+- `flow109_final_gls` — Replay the declared L10 scenarios against every final native STA SDF.
 - `flow109_final_lec` — Blocking D44 component: native LibreLane EQY on the adopted final netlist.
 - `flow109_final_lec_physical` — Blocking, source-bound physical-chip proof-view preparation for D44.
-- `flow109_final_perc` — D66 thin binding to the existing Step-28 PERC-equivalent owner.
+- `flow109_final_perc` — Final native CVC electrical screen using this run's LibreLane views.
 - `flow109_frontend` — D22 uses the existing Default synthesis owner and its complete consumer.
 - `flow109_functional_activity` — D55 component: adopted-netlist GLS activity and a real vector-power consumer.
 - `flow109_ip_release` — D79 exports owner-selected IP endpoints and consumes their existing audits.

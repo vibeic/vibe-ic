@@ -78243,16 +78243,19 @@ def _parse_native_cvc_report(text: str) -> Dict[str, Any]:
 
 def _native_cvc_category(project: Path, top: str, pdk: PdkConfig,
                          image: Optional[str], *, extracted_netlist: Optional[Path] = None,
-                         adopted_netlist: Optional[Path] = None) -> Dict[str, Any]:
+                         adopted_netlist: Optional[Path] = None, pdk_dir: Optional[str] = None,
+                         library: Optional[str] = None, power_nets=None,
+                         ground_nets=None) -> Dict[str, Any]:
     """Run only a PDK-declared CVC recipe and publish byte-bound evidence."""
     base = {"category": "Native CVC electrical rules", "status": "AUTOMATED",
             "tool": "cvc_rv + PDK-declared libs.tech/librelane/cvc"}
     if not image:
         return {**base, "result": "INCOMPLETE",
                 "note": "selected native image absent"}
-    pdk_dir = _pdk_dir_of(pdk)
-    library = _pdk_std_cell_library(pdk)
-    power_nets, ground_nets = _design_supply_nets(pdk)
+    pdk_dir = pdk_dir or _pdk_dir_of(pdk)
+    library = library or _pdk_std_cell_library(pdk)
+    if power_nets is None or ground_nets is None:
+        power_nets, ground_nets = _design_supply_nets(pdk)
     extracted_dir = _pl.extracted_dir(project)
     extracted = extracted_netlist or next((path for pattern in ("*.spice", "*.cir", "*.sp", "*_pex.v")
                       for path in sorted(extracted_dir.glob(pattern))
@@ -78293,8 +78296,9 @@ cvc_rv cvcrc > cvc.stdout 2> cvc.stderr
     network, command = _ll.native_tool_command(image, ["bash", "-lc", shell])
     argv = ["docker", "run", *_dmem.docker_memory_flags(
             {"VIBEIC_DOCKER_MEMORY": "16g"}), "--rm", "--network", network,
-            "--cpus", "4", "--pids-limit", "512",
+            "--cpus", "4",
             "-v", f"{Path(project).resolve()}:{Path(project).resolve()}",
+            "-v", f"{Path(pdk_dir).resolve()}:{Path(pdk_dir).resolve()}:ro",
             image, "--skip", *command]
     # A fixed output name is part of the Step-28 contract, so invalidate both
     # prior authority files before this invocation.  cvc_rv can return without

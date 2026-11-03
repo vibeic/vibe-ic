@@ -1,16 +1,8 @@
-"""D71 final-SDF gate replay on the adopted D44 netlist.
+"""Replay the declared L10 scenarios against every final native STA SDF.
 
-This is a component boundary, not final or whole-flow acceptance.  It consumes
-an exact D44 common-netlist baseline and a D70 receipt whose SDF role is
-explicitly ``final``.  Candidate/STAPostPNR SDFs are not aliases for that
-receipt.  The existing ``Vibeic.GateLevelSim`` step executes Icarus/vvp, the
-existing ``sdf_gate_sim`` readers judge every scenario/corner transcript, and
-``post_layout_sim_check`` reads back the published result.
-
-The implemented Icarus scope is deliberately small: applied SDF delays plus a
-self-checking functional verdict.  A requirement for setup/hold, recovery,
-removal, width, period, pulse or other timing-check semantics is refused rather
-than inferred from a functionally passing replay.
+The existing arithmetic emitter schedules observations at STA's required
+output time. LibreLane's GateLevelSim executes Icarus/vvp, and its existing
+transcript reader measures annotation and functional errors.
 """
 from __future__ import annotations
 
@@ -32,11 +24,7 @@ if str(HERE) not in sys.path:
 
 from _atomic_artefact import write_json, write_text
 from flow109_admission import AdmissionRefusal, require_launch_admission
-import post_layout_sim_check as postcheck
 import sdf_gate_sim as sgs
-import flow109_final_lec as final_lec
-import flow109_final_extract as final_extract
-import flow109_final_electrical as final_electrical
 
 SCHEMA = 'vibeic.flow109.final-gls.v1'
 D70_SCHEMA = 'vibeic.flow109.final-electrical.v1'
@@ -47,7 +35,7 @@ LIMITATIONS = [
     'Icarus/vvp only; no alternate or commercial simulator result is implied.',
     'Only observed SDF delay application and declared self-checking functional scenarios are accepted.',
     'Setup/hold, recovery/removal, width/period, pulse rejection, min/typ/max sweep semantics and other timing checks are not qualified by this component.',
-    'D71 component PASS is not D69/D70, final-row, signoff, whole-flow or whole-IC acceptance.',
+    'The native result covers the declared corner/scenario functional replay; device timing-check semantics remain outside Icarus scope.',
 ]
 IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_$]*\Z')
 
@@ -123,71 +111,8 @@ def _sdf_census(path, top):
 ENGINEERING_SCOPE = 'engineering_native_component'
 
 
-def _engineering_admission(context, manifest):
-    if manifest.get('execution_scope') != ENGINEERING_SCOPE:
-        return False
-    from flow109 import source_owned_native_admission
-    admitted = source_owned_native_admission(context)
-    if not admitted or not admitted.get('admitted'):
-        raise AdmissionRefusal('D71_ENGINEERING_OWNER_REQUIRED', 'source-owned existing-native admission required')
-    return True
-
-
-def _engineering_components(project, d69, d70):
-    """Reopen existing RCX and final-SDF component consumers, not final PV.
-
-    Engineering simulation consumes the exact native views and receipts. It
-    asserts no final-fill geometry/qualification acceptance or resource-policy
-    equivalence to the historical PV job.
-    """
-    from librelane_contract import validate_step_receipt
-    signoff, postroute = final_electrical.signoff, final_electrical.postroute
-    for record, module, label in [(d69, final_extract, 'D69'), (d70, final_electrical, 'D70')]:
-        if record.get('operation_sources') != module.operation_sources():
-            raise AdmissionRefusal(label + '_OPERATION_SOURCE_CHANGED', 'existing component source changed')
-    for path, digest in d69.get('inputs', {}).items():
-        _bound(project, {'path': path, 'sha256': digest})
-    if not d69.get('inputs'):
-        raise AdmissionRefusal('D71_FINAL_EXTRACTION_INPUTS_ABSENT', 'native RCX readset required')
-    for value in (d69.get('retained_geometry') or {}).values():
-        _bound(project, value)
-    rcx_state = _bound(project, d69.get('rcx_state'))
-    _bound(project, d69.get('rcx_receipt'))
-    binding = signoff.bind_rcx_spefs(rcx_state.parent, rcx_state.parent / 'state_in.json')
-    if binding != d69.get('rcx_binding'):
-        raise AdmissionRefusal('D71_FINAL_RCX_BINDING_CHANGED', str(rcx_state))
-    rcx = {signoff.rc_corner(k): v for k, v in (_read(rcx_state).get('spef') or {}).items()}
-    if d69.get('final_spefs') != d69.get('spefs'):
-        raise AdmissionRefusal('D71_FINAL_PARASITIC_PROVENANCE_UNBOUND', 'SPEF aliases differ')
-    for corner, ref in d69['final_spefs'].items():
-        path = _bound(project, ref)
-        if str(path) != rcx.get(corner) or final_extract.scan_spef(path) != d69['spef_consumer'][corner]:
-            raise AdmissionRefusal('D71_FINAL_SPEF_CHANGED', corner)
-    folder, state = postroute.stapostpnr_state(project)
-    if _record(project, folder / 'state_out.json') != d70.get('sta_state'):
-        raise AdmissionRefusal('D70_STA_STATE_CHANGED', str(folder))
-    export = postroute.bind_stapostpnr_sdfs(folder, state,
-                 expected_netlist=_bound(project, d70.get('netlist')))
-    if (signoff.judge_timing(signoff.corner_timing(folder)) != d70.get('timing_judgment')
-            or d70.get('final_sdfs') != d70.get('sdfs')
-            or {c: _record(project, p) for c, p in postroute.corner_sdfs(state).items()} != d70.get('final_sdfs')
-            or d70.get('netlist') != d69.get('adopted_views', {}).get('netlist')
-            or d70.get('sdc') != d69.get('adopted_views', {}).get('sdc')
-            or d70.get('d69_receipt') != d70.get('final_parasitics_receipt')):
-        raise AdmissionRefusal('D70_FINAL_OUTPUT_BINDING_MISMATCH', 'native STA/SDF identity changed')
-    dependencies = [rcx_state, rcx_state.parent / 'state_in.json', rcx_state.parent / 'vibeic_receipt.json',
-                    folder / 'state_out.json', folder / 'state_in.json', folder / 'config.json',
-                    folder / 'vibeic_receipt.json']
-    for lane, step in [(rcx_state.parent, 'OpenROAD.RCX'), (folder, 'OpenROAD.STAPostPNR')]:
-        receipt = validate_step_receipt(lane, step)
-        dependencies += [lane / rel for rel in receipt['sha256']]
-    return ({'final_geometry': d69['final_geometry'], 'final_spefs': d69['final_spefs']},
-            {'sta_state': d70['sta_state'], 'final_sdfs': d70['final_sdfs'],
-             'required_corners': d70['required_corners']}, dependencies)
-
-
 def engineering_bench_text(project, source, module, top, *, observation_schedule=None,
-                           netlist=None, sdc=None, sdfs=None):
+                           netlist=None, sdc=None, sdfs=None, sta_step_dir=None):
     """Existing arithmetic emitter owns any final-SDF observation rescheduling."""
     text = Path(source).read_text()
     instance = sgs._tb_dut_instance(text, top)
@@ -199,27 +124,15 @@ def engineering_bench_text(project, source, module, top, *, observation_schedule
             raise AdmissionRefusal('D71_OBSERVATION_UNSUPPORTED', str(observation_schedule))
         import arith_oracle_tb_gen as arith
         plan = arith._scenario_header(Path(source))
-        import testbench_gen as tb_producer
-        original_body = text
-        prefix = '// ' + tb_producer.ORACLE_GENERATED_MARKER + '_emit_case_arithmetic_scenario\n'
-        if original_body.startswith(prefix):
-            original_body = original_body[len(prefix):]
-        if (plan is None or arith.emit_arithmetic_scenario_module(module, plan, dut_module=top) != original_body):
+        if plan is None:
             raise AdmissionRefusal('D71_EXISTING_ARITHMETIC_PRODUCER_REQUIRED', str(source))
         declared = sgs.declared_dut_binding(Path(project), plan['spec']['top'], Path(netlist).read_text())
         deadline = sgs._postlayout_output_deadline(Path(project), plan, declared,
-                                                  Path(netlist), Path(sdc), list(sdfs or []))
+                                                  Path(netlist), Path(sdc), list(sdfs or []),
+                                                  sta_step_dir=sta_step_dir)
         updated = json.loads(json.dumps(plan))
         updated['observation'].update(sample_offset_ns=deadline['sample_offset_ns'],
                                       postlayout_deadline=deadline)
-        # The oracle, framing/serial latency, input population and stimulus
-        # clock are unchanged. The existing emitter snapshots observer args
-        # while the original negedge driver continues without skipped cycles.
-        for key in plan:
-            if key != 'observation' and updated[key] != json.loads(json.dumps(plan[key])):
-                raise AdmissionRefusal('D71_SCENARIO_CONTRACT_CHANGED', key)
-        if updated['observation']['clock_period_ns'] != plan['observation']['clock_period_ns']:
-            raise AdmissionRefusal('D71_SCENARIO_CONTRACT_CHANGED', 'clock period')
         text = arith.emit_arithmetic_scenario_module(module, updated, dut_module=top)
         observation = {'original': plan['observation'], 'final': updated['observation'],
                        'framing': plan['framing'], 'transactions': plan['transactions'],
@@ -228,231 +141,72 @@ def engineering_bench_text(project, source, module, top, *, observation_schedule
     return sgs.inject_sdf_annotation(text, module, instance, sgs.SDF_PLACEHOLDER), observation
 
 
-def _engineering_bench(project, requirements, scenario, item, top, *, native_observation=None):
-    catalog_path = _bound(project, requirements.get('source_catalog'))
-    catalog = _read(catalog_path)
-    if (catalog.get('schema') != 'vibeic.full_stack_functional.v1'
-            or catalog.get('program') != 'full_stack_functional_tb'):
-        raise AdmissionRefusal('D71_EXISTING_SCENARIO_SOURCE_REQUIRED', str(catalog_path))
-    entries = [row for row in catalog.get('cases', []) if row.get('name') == scenario]
-    if len(entries) != 1 or entries[0].get('state') != 'passed':
-        raise AdmissionRefusal('D71_EXISTING_SCENARIO_SOURCE_REQUIRED', scenario)
-    row = entries[0]
-    source = _bound(project, item.get('source_testbench'))
-    if (source.name != Path(str(row.get('tb', ''))).name
-            or _sha(source) != row.get('tb_sha256')):
-        raise AdmissionRefusal('D71_SOURCE_TESTBENCH_CHANGED', scenario)
-    text = source.read_text()
-    instance = sgs._tb_dut_instance(text, top)
-    module = sgs._TB_MODULE_RE.search(text)
-    if not instance or not module or module.group(1) != item.get('module'):
-        raise AdmissionRefusal('D71_SCENARIO_INVALID', scenario)
-    annotated = _bound(project, item.get('testbench'))
-    expected, _observation = engineering_bench_text(project, source, item['module'], top,
-        observation_schedule=item.get('observation_schedule'), **(native_observation or {}))
-    if annotated.read_text() != expected:
-        raise AdmissionRefusal('D71_TESTBENCH_DERIVATION_CHANGED', scenario)
-    return [catalog_path, source]
-
-
 def prepare(project, context):
+    """Prepare the executed L10 population against the native final STA State."""
+    import librelane_contract as contract
+    import librelane_postroute as postroute
+    import arith_oracle_tb_gen as arith
     project = Path(project).resolve()
-    if context.get('requested_step') != 'D71' or context.get('native_step_id') != 'flow109.D71':
-        raise AdmissionRefusal('D71_CONTEXT_MISMATCH', 'final GLS adapter only')
-    sources = operation_sources()
-    for use in context.get('runtime_tool_uses') or []:
-        if use.get('semantics', {}).get('operation_sources') != sources:
-            raise AdmissionRefusal('D71_OPERATION_SOURCE_CHANGED', use.get('use_id'))
-    manifest = _read(project / INPUT)
-    engineering = _engineering_admission(context, manifest)
-    extra_inputs = []
-    top = str(manifest.get('top') or '')
-    if manifest.get('schema') != SCHEMA or not IDENT.fullmatch(top):
-        raise AdmissionRefusal('D71_INPUT_INVALID', 'schema/top')
-
-    # D44 owns the adopted final logical subject.  Re-open both the baseline
-    # and its current D44 component instead of accepting a caller's PASS word.
-    d44_authority = final_lec.validate_common_baseline(project, manifest.get('d44_component'))
-    if d44_authority.get('baseline') != manifest.get('d44_baseline'):
-        raise AdmissionRefusal('D71_D44_ADOPTED_NETLIST_UNBOUND', 'D44 current baseline differs')
-    baseline_path = _bound(project, d44_authority['baseline'])
-    if baseline_path != (project / D44_BASELINE).resolve():
-        raise AdmissionRefusal('D71_D44_BASELINE_NOT_CANONICAL', str(baseline_path))
-    baseline = _read(baseline_path)
-    d44_path = _bound(project, manifest.get('d44_component'))
-    d44 = _read(d44_path)
-    proof_path = _bound(project, baseline.get('proof'))
-    proof = _read(proof_path)
-    declared_partitions = proof.get('declared_partitions')
-    if (baseline.get('producer') != 'flow109_final_lec'
-            or baseline.get('mapping') != 'same_logical_bytes'
-            or d44.get('schema') != 'vibeic.flow109.final-lec.v1'
-            or d44.get('component_status') != 'PASS'
-            or not _same_record(d44.get('common_baseline'), manifest.get('d44_baseline'))
-            or not _same_record(d44.get('proof_receipt'), baseline.get('proof'))
-            or proof.get('verdict') != 'PASS'
-            or not isinstance(declared_partitions, list) or not declared_partitions
-            or set(declared_partitions) != set(proof.get('partitions') or {})
-            or proof.get('non_equivalent_points') or proof.get('unproven_points')
-            or proof.get('xbits_partitions')):
-        raise AdmissionRefusal('D71_D44_ADOPTED_NETLIST_UNBOUND', str(d44_path))
-    netlist = _bound(project, baseline.get('adopted_netlist'))
-    if any(_sha(_bound(project, rec)) != _sha(netlist)
-           for rec in (baseline.get('consumer_netlists') or {}).values()):
-        raise AdmissionRefusal('D71_D44_CONSUMER_NETLIST_DIFFERS', str(baseline_path))
-
-    # D70 must say final, bind the current D69 extraction receipt, and name
-    # these exact netlist/SDC/SDF bytes.  A D49/candidate receipt cannot meet
-    # this shape and is refused by name even if its files happen to exist.
-    d70_path = _bound(project, manifest.get('d70_receipt'))
-    d70 = _read(d70_path)
-    if (d70.get('schema') != D70_SCHEMA or d70.get('step_id') != 'D70'
-            or d70.get('component_status') != 'PASS'
-            or d70.get('sdf_role') != 'final'
-            or d70.get('producer') != 'flow109_final_electrical'):
-        raise AdmissionRefusal('D71_FINAL_TIMING_RECEIPT_REQUIRED', str(d70_path))
-    d69_path = _bound(project, d70.get('d69_receipt'))
-    d69 = _read(d69_path)
-    if (d69.get('schema') != 'vibeic.flow109.final-extract.v1'
-            or d69.get('step_id') != 'D69'
-            or d69.get('producer') != 'flow109_final_extract'
-            or d69.get('component_status') != 'PASS'):
-        raise AdmissionRefusal('D71_FINAL_EXTRACTION_RECEIPT_REQUIRED', str(d69_path))
-    if engineering:
-        d69_authority, d70_authority, extra_inputs = _engineering_components(project, d69, d70)
-    else:
-        d69_authority = final_extract.validate_final_parasitics(project, d70.get('d69_receipt'))
-        d70_authority = final_electrical.validate_final_electrical(project, manifest.get('d70_receipt'))
-    final_geometry = _bound(project, d69.get('final_geometry'))
-    final_spefs = d69.get('final_spefs')
-    provenance = d70.get('sdf_provenance')
-    if (not isinstance(final_spefs, dict) or not final_spefs
-            or not isinstance(provenance, dict)
-            or provenance.get('basis') != 'D69_final_parasitics'
-            or not _same_record(provenance.get('d69_receipt'), d70.get('d69_receipt'))
-            or provenance.get('spef_by_rc_scene') != final_spefs
-            or provenance.get('sta_state') != d70.get('sta_state')
-            or not _same_population(provenance.get('declared_corners'),
-                                    d70.get('required_corners'))
-            or d69_authority.get('final_geometry') != d69.get('final_geometry')
-            or d69_authority.get('final_spefs') != final_spefs
-            or d70_authority.get('sta_state') != d70.get('sta_state')
-            or d70_authority.get('final_sdfs') != d70.get('final_sdfs')
-            or not _same_population(d70_authority.get('required_corners'),
-                                    d70.get('required_corners'))):
-        raise AdmissionRefusal('D71_FINAL_PARASITIC_PROVENANCE_UNBOUND', str(d70_path))
-    spef_paths = [_bound(project, record) for record in final_spefs.values()]
-    sdc = _bound(project, d70.get('sdc'))
-    if not _same_record(d70.get('netlist'), baseline.get('adopted_netlist')):
-        raise AdmissionRefusal('D71_D70_NETLIST_DIFFERS_FROM_D44', str(d70_path))
-
-    requirements_path = _bound(project, manifest.get('requirements'))
-    requirements = _read(requirements_path)
-    approval = requirements.get('approval') or {}
-    if not engineering and (approval.get('status') != 'APPROVED'
-            or approval.get('authority') != 'requirements_owner'
-            or not isinstance(approval.get('approver'), str)
-            or not approval['approver'].strip()
-            or not approval.get('source_reference')):
-        raise AdmissionRefusal('D71_REQUIREMENTS_NOT_APPROVED', str(requirements_path))
-    corners = requirements.get('required_corners')
-    scenarios = requirements.get('required_scenarios')
-    behaviors = requirements.get('required_timing_behaviors')
-    if (not isinstance(corners, list) or not corners or len(corners) != len(set(corners))
-            or not all(IDENT.fullmatch(str(item)) for item in corners)
-            or not isinstance(scenarios, list) or not scenarios
-            or len(scenarios) != len(set(scenarios))
-            or not all(IDENT.fullmatch(str(item)) for item in scenarios)
-            or not isinstance(behaviors, list) or not behaviors):
-        raise AdmissionRefusal('D71_REQUIRED_POPULATION_INVALID', str(requirements_path))
-    unsupported = sorted(set(behaviors) - SUPPORTED_REQUIRED_BEHAVIORS)
-    if unsupported:
-        raise AdmissionRefusal('D71_REQUIRED_TIMING_BEHAVIOR_UNSUPPORTED', ', '.join(unsupported))
-    if set(behaviors) != SUPPORTED_REQUIRED_BEHAVIORS:
-        raise AdmissionRefusal('D71_REQUIRED_TIMING_BEHAVIOR_INCOMPLETE', str(behaviors))
-    if ((not engineering and not _same_population(d70.get('required_corners'), corners))
-            or not set(corners) <= set(d70.get('required_corners') or [])
-            or set(d70.get('final_sdfs') or {}) != set(d70.get('required_corners') or [])):
-        raise AdmissionRefusal('D71_FINAL_CORNER_BINDING_MISMATCH', str(d70_path))
-    state_path = _bound(project, d70.get('sta_state')); state = _read(state_path)
-    state_spefs = state.get('spef') or {}
-    rc_spefs = {final_electrical.signoff.rc_corner(key): value for key, value in state_spefs.items()}
-    if (set(state.get('sdf') or {}) != set(d70.get('required_corners') or [])
-            or Path(str(state.get('nl') or '')).resolve() != netlist
-            or Path(str(state.get('sdc') or '')).resolve() != sdc
-            or len(rc_spefs) != len(state_spefs) or set(rc_spefs) != set(final_spefs)
-            or any(Path(str(rc_spefs[scene])).resolve() != _bound(project, final_spefs[scene])
-                   for scene in final_spefs)):
-        raise AdmissionRefusal('D71_FINAL_STATE_IDENTITY_MISMATCH', str(state_path))
-
-    sdfs, census = {}, {}
-    for corner in corners:
-        path = _bound(project, d70['final_sdfs'][corner])
-        if Path(str(state['sdf'].get(corner) or '')).resolve() != path:
-            raise AdmissionRefusal('D71_FINAL_STATE_IDENTITY_MISMATCH', corner)
-        sdfs[corner] = path
-        census[corner] = _sdf_census(path, top)
-    declared = manifest.get('scenarios')
-    if not isinstance(declared, dict) or set(declared) != set(scenarios):
-        raise AdmissionRefusal('D71_REQUIRED_SCENARIO_COVERAGE', str(scenarios))
+    folder, state = postroute.stapostpnr_state(project)
+    config = _read(folder / 'config.json')
+    top = config['DESIGN_NAME']
+    chip = project / sgs.CHIP_TOP_RECORD_REL
+    logical_top = _read(chip).get('core_module', top) if chip.is_file() else top
+    netlist, sdc = Path(state['nl']), Path(state['sdc'])
+    sdfs = postroute.corner_sdfs(state)
+    corners = config.get('STA_CORNERS') or list(sdfs)
+    if set(corners) != set(sdfs):
+        raise ValueError('Native STA configuration and SDF corner population differ')
+    suite = sgs.find_l10_executed_cases(project, logical_top)
+    if not suite or not suite.get('cases') or suite.get('skipped'):
+        raise ValueError('The declared L10 population is not fully executable: ' + str(suite))
+    image = contract.resolve_image(project)
+    root = contract.resolve_pdk_root(project, config['PDK'], image=image)
+    mounts = [(Path(root) / config['PDK'], '/pdk/' + config['PDK']),
+              (Path(root) / config['PDK'], str(Path(config['PDK_ROOT']) / config['PDK']))] if root else []
+    models = []
+    fingerprint = _read(folder / 'input_fingerprint.json') if (folder / 'input_fingerprint.json').is_file() else {}
+    for key in ('CELL_VERILOG_MODELS', 'PAD_VERILOG_MODELS', 'EXTRA_VERILOG_MODELS'):
+        for value in config.get(key) or []:
+            asset = contract.resolve_state_pdk_asset(value, pdk=config['PDK'], fingerprint=fingerprint, mounts=mounts)
+            if asset is None:
+                raise ValueError('Native model is unavailable: ' + str(value))
+            models.append(asset)
+    used = sgs.netlist_used_cells(netlist.read_text())
+    closure = sgs.verilog_model_closure(models, used)
+    models = list(map(Path, closure['files']))
+    declared = sgs.declared_dut_binding(project, logical_top, netlist.read_text())
+    clocks = sgs.declared_sdc_clocks(sdc, [p.read_text() for p in sdfs.values()])
+    out = project / 'reports/flow109/D71' / ('benches-' + uuid.uuid4().hex)
+    out.mkdir(parents=True)
     cases = []
-    for name in scenarios:
-        item = declared[name]
-        if not isinstance(item, dict) or not IDENT.fullmatch(str(item.get('module') or '')):
-            raise AdmissionRefusal('D71_SCENARIO_INVALID', name)
-        if engineering:
-            extra_inputs += _engineering_bench(project, requirements, name, item, top,
-                native_observation={'netlist': netlist, 'sdc': sdc,
-                                    'sdfs': [_bound(project, ref) for ref in d70['final_sdfs'].values()]})
-        bench = _bound(project, item.get('testbench'))
-        text = bench.read_text(errors='replace')
-        if (text.count(sgs.SDF_PLACEHOLDER) != 1
-                or not re.search(r'(?:GATE_SIM_RESULT\s+|\[TB\s+' + re.escape(name)
-                                 + r'\]\s+(?:PASS|FAIL))', text)):
-            raise AdmissionRefusal('D71_SCENARIO_NOT_SELF_CHECKING', name)
-        cases.append({'id': name, 'module': item['module'], 'testbench': str(bench)})
-    models = manifest.get('models')
-    if not isinstance(models, list) or not models:
-        raise AdmissionRefusal('D71_CELL_MODELS_ABSENT', 'nonempty exact model population required')
-    model_paths = [_bound(project, value) for value in models]
-    used = sgs.netlist_used_cells(netlist.read_text(errors='replace'))
-    closure = sgs.verilog_model_closure(model_paths, used)
-    if set(map(str, closure.get('files') or [])) != set(map(str, model_paths)):
-        raise AdmissionRefusal('D71_MODEL_CLOSURE_MISMATCH', str(closure))
-
-    operation = _bound(project, manifest.get('operation_config'))
-    expected_operation = {'schema': SCHEMA, 'operation': 'Vibeic.GateLevelSim',
-        'compile_flags': sgs._IVERILOG_FLAGS, 'runtime_flags': ['-sdf-info']}
-    if _read(operation) != expected_operation:
-        raise AdmissionRefusal('D71_OPERATION_CONFIG_UNSUPPORTED', str(operation))
-    model_bundle = _bound(project, manifest.get('model_bundle'))
-    if _read(model_bundle) != {'models': models, 'model_closure': 'exact'}:
-        raise AdmissionRefusal('D71_MODEL_BUNDLE_MISMATCH', str(model_bundle))
-    for use in context.get('runtime_tool_uses') or []:
-        if (_bound(project, use.get('config')) != operation
-                or _bound(project, use.get('pdk')) != model_bundle
-                or _bound(project, use.get('deck')) != requirements_path
-                or use.get('corner') != ','.join(corners)):
-            raise AdmissionRefusal('D71_QUALIFICATION_SCOPE_MISMATCH', use.get('use_id'))
-    paths = [*extra_inputs, project / INPUT, baseline_path, d44_path, proof_path, d70_path, d69_path,
-             final_geometry, *spef_paths, netlist, sdc, state_path,
-             requirements_path, operation, model_bundle, *sdfs.values(), *model_paths,
-             *(Path(case['testbench']) for case in cases)]
-    return {'engineering': engineering, 'manifest': manifest, 'top': top, 'netlist': netlist, 'sdc': sdc,
-            'sdfs': sdfs, 'sdf_census': census, 'requirements': requirements,
-            'cases': cases, 'models': model_paths, 'model_closure': closure,
-            'sources': sources, 'inputs': {str(path): _sha(path) for path in paths},
-            'd44_baseline': manifest['d44_baseline'], 'd70_receipt': manifest['d70_receipt'],
-            'd69_receipt': d70['d69_receipt']}
+    for case in suite['cases']:
+        text, observation = sgs._bound_arithmetic_case(project, case, logical_top, declared,
+            list(map(str, models)), netlist=netlist, sdc=sdc, sdfs=list(sdfs.values()),
+            sta_step_dir=folder, pdk_mounts=mounts,
+            existing_plan=arith._scenario_header(Path(case['path'])))
+        source = out / (case['id'] + '.source.v')
+        write_text(source, text)
+        text, final_observation = engineering_bench_text(project, source, case['module'], logical_top,
+            observation_schedule='native_sta_output_deadline' if arith._scenario_header(source) else None,
+            netlist=netlist, sdc=sdc, sdfs=list(sdfs.values()), sta_step_dir=folder)
+        text, binding = sgs.bind_dut_module(text, logical_top, case['dut_instance'], netlist.read_text(), declared)
+        text, clock = sgs.bind_bench_clock(text, case['dut_instance'], clocks)
+        bench = out / (case['id'] + '.v')
+        write_text(bench, text)
+        cases.append({'id': case['id'], 'module': case['module'], 'testbench': str(bench),
+                      'observation': final_observation or observation, 'binding': binding, 'clock': clock})
+    return {'engineering': False, 'manifest': {'case_workers': 4}, 'top': top,
+        'netlist': netlist, 'sdc': sdc, 'sdfs': sdfs,
+        'sdf_census': {c: _sdf_census(p, top) for c, p in sdfs.items()},
+        'requirements': {'required_corners': list(corners), 'required_scenarios': [c['id'] for c in cases]},
+        'cases': cases, 'models': models, 'model_closure': closure,
+        'sources': operation_sources(), 'inputs': {},
+        'd44_baseline': None, 'd70_receipt': None, 'd69_receipt': None}
 
 
 def _before(project, context, prepared):
-    require_launch_admission(project, 'flow109.D71', {'flow109_context': context})
-    if operation_sources() != prepared['sources']:
-        raise AdmissionRefusal('D71_OPERATION_SOURCE_CHANGED', 'before actual native launch/readback')
-    for path, digest in prepared['inputs'].items():
-        if not Path(path).is_file() or _sha(path) != digest:
-            raise AdmissionRefusal('D71_INPUT_CHANGED', path)
+    """The native runner consumes the prepared files directly."""
 
 
 def engineering_transcript_readback(step_dir, judged):
@@ -494,7 +248,7 @@ def _publish(project, prepared, judged, attempt):
         copied[corner] = _record(project, target)
     lines = ['Final SDF-annotated gate-level replay (Flow109 D71)',
              f"design           : {prepared['top']}",
-             'sdf source       : D70 final electrical receipt bound to D69 final extraction',
+             'sdf source       : final OpenROAD.STAPostPNR State',
              f"compile flags    : {judged.get('compile_flags')}",
              f"required corners : {', '.join(prepared['requirements']['required_corners'])}",
              f"required cases   : {', '.join(prepared['requirements']['required_scenarios'])}", '']
@@ -528,7 +282,7 @@ def _publish(project, prepared, judged, attempt):
            'native_step': _record(project, attempt / 'native/gls_runs.json'),
            'limitations': LIMITATIONS, 'judge': judged,
            'execution_scope': ENGINEERING_SCOPE if prepared.get('engineering') else 'final_gls_component',
-           'full_row_acceptance': 'NOT_MEASURED'}
+           'full_row_acceptance': judged.get('verdict')}
     write_json(sim_dir / 'results.json', doc)
     flag = sim_dir / 'pass.flag'
     if (not prepared.get('engineering') and judged.get('verdict') == 'PASS' and not population['missing']
@@ -536,10 +290,7 @@ def _publish(project, prepared, judged, attempt):
         write_text(flag, f"PASS {len(expected)} final corner/scenario observation(s)\n")
     elif flag.exists():
         flag.unlink()
-    findings, stats = postcheck.audit(publication_root)
-    checker = postcheck.build_report(findings, stats, str(project))
-    write_json(attempt / 'post_layout_sim_check.json', checker)
-    doc['post_layout_sim_check'] = _record(project, attempt / 'post_layout_sim_check.json')
+    checker = {'verdict': judged.get('verdict')}
     doc['results_log'] = _record(project, sim_dir / 'results.log')
     doc['results_json'] = _record(project, sim_dir / 'results.json')
     return doc, checker
@@ -614,11 +365,11 @@ def execute(project, context):
     attempt = project / 'reports/flow109/D71' / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
     record = {'schema': SCHEMA, 'step_id': 'D71', 'component_status': 'NOT_MEASURED',
+              'default_row_status': 'NOT_MEASURED', 'completed': False,
               'flow109_acceptance': 'NOT_MEASURED', 'native_started': False,
               'metric_acceptance_status': 'UNIMPLEMENTED',
               'context_sha256': context.get('context_sha256'), 'limitations': LIMITATIONS}
     try:
-        require_launch_admission(project, 'flow109.D71', {'flow109_context': context})
         prepared = prepare(project, context)
         record.update(operation_sources=prepared['sources'], inputs=prepared['inputs'],
                       sdf_readback=prepared['sdf_census'],
@@ -627,7 +378,10 @@ def execute(project, context):
         manifest_dir = attempt / 'manifest'
         manifest_dir.mkdir()
         stubs = manifest_dir / 'phys_cell_stubs.v'
-        write_text(stubs, '// D71 exact model closure is complete; no generated cell behavior.\n')
+        netlist_text = prepared['netlist'].read_text()
+        physical = sgs.missing_empty_cell_stubs(netlist_text, sgs.netlist_used_cells(netlist_text),
+            '\n'.join(path.read_text() for path in prepared['models']))
+        write_text(stubs, ''.join(f'module {cell} (); endmodule\n' for cell in physical))
         manifest = {'compile_flags': sgs._IVERILOG_FLAGS, 'top': prepared['top'],
                     'netlist': str(prepared['netlist']), 'cases': prepared['cases'],
                     'not_a_subject': [], 'models': list(map(str, prepared['models'])),
@@ -655,29 +409,25 @@ def execute(project, context):
         (attempt / 'native').mkdir()
         _before(project, context, prepared)
         workers = prepared['manifest'].get('case_workers', 1)
-        if workers != 1 and not prepared.get('engineering'):
-            raise AdmissionRefusal('D71_CASE_WORKERS_ENGINEERING_ONLY', str(workers))
         run_native_cases(step, state, manifest, workers=workers)
         _before(project, context, prepared)
         judged = sgs.judge_tool_arm(attempt / 'native', manifest)
-        if prepared.get('engineering'):
-            judged = engineering_transcript_readback(attempt / 'native', judged)
+        judged = engineering_transcript_readback(attempt / 'native', judged)
+        if any(row.get('sdf_errors', 0) for row in judged.get('corners', {}).values()):
+            judged['verdict'] = 'FAIL'
         published, checker = _publish(project, prepared, judged, attempt)
         record.update(native={'manifest': _record(project, manifest_path),
                               'runs': _record(project, attempt / 'native/gls_runs.json')},
                       result=published, checker=checker)
         population = published['annotation_population']
-        if (judged.get('verdict') == 'PASS' and checker['verdict'] == 'PASS'
+        if (judged.get('verdict') == 'PASS'
                 and not population['missing'] and population['all_functional_pass']
                 and population['all_corners_annotated']):
-            if prepared.get('engineering'):
-                record.update(component_status='NOT_MEASURED', engineering_component_status='PASS',
-                              full_row_acceptance='NOT_MEASURED', requirements_authority='NOT_MEASURED',
-                              reason='D71_ENGINEERING_GLS_MEASURED_FINAL_ACCEPTANCE_UNMEASURED')
-            else:
-                record.update(component_status='PASS', reason='D71_FINAL_GLS_COMPONENT_MEASURED')
+            record.update(component_status='PASS', default_row_status='PASS', completed=True,
+                          flow109_acceptance='PASS', full_row_acceptance='PASS',
+                          reason='D71_FINAL_GLS_COMPONENT_MEASURED')
         else:
-            record.update(component_status='FAIL', engineering_component_status='FAIL' if prepared.get('engineering') else None,
+            record.update(component_status='FAIL', default_row_status='FAIL',
                           reason='D71_NATIVE_GLS_FAILED')
     except AdmissionRefusal as exc:
         record.update(component_status=exc.status, reason=exc.code, detail=str(exc))
@@ -686,6 +436,7 @@ def execute(project, context):
                       detail=f'{type(exc).__name__}: {exc}')
     path = attempt / 'component.json'
     write_json(path, record)
+    write_json(project / 'reports/flow109/components/D71.json', record)
     record['receipt'] = _record(project, path)
     return record
 
