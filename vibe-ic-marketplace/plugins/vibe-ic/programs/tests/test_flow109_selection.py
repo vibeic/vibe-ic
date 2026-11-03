@@ -2142,6 +2142,8 @@ def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
 
 
 @pytest.mark.parametrize("step, adapter, component_scope", [
+    ("D03", "flow109_technology_qualification", "native config resolution and installed PDK pin"),
+    ("D06", "flow109_package_plan", "bare-die pad, external-load and functional-test-access feasibility"),
     ("D45", "flow109_netlist_cdc", None),
     ("D69", "flow109_final_extract", "final_filled_odb_rcx_component_only"),
     ("D70", "flow109_final_electrical", "final_sta_native_component_only"),
@@ -2165,7 +2167,8 @@ def test_registered_native_component_route_does_not_claim_generic_qualification(
     assert admission["flow109_acceptance"] == "NOT_MEASURED"
     claimed = flow109.execution_context(plan, step, step, runtime_tool_uses=[],
                                         qualification_registry="input/qualifications.json")
-    assert flow109.source_owned_native_admission(claimed) is None
+    retained = flow109.source_owned_native_admission(claimed)
+    assert retained == {**admission, 'context_sha256': claimed['context_sha256']}
     assert flow109.source_owned_native_dispatch(flow109.resolve_step(plan, "D62")) is None
 
 
