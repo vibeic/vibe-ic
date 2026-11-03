@@ -254,3 +254,19 @@ def test_native_reader_refuses_unmeasured_setup_corner(tmp_path, value):
     with pytest.raises(LC.Refusal):
         PST.current_context(project, BF.IMAGE, project / 'fixture_pdk', 'neutral',
                             sta_step_dir=folder)
+
+
+def test_native_case_runs_without_requalifying_the_tool(tmp_path, monkeypatch):
+    project, folder, _ = native_project(tmp_path)
+    monkeypatch.setattr(PST, 'prepare_arm', lambda *a, **kw: {'prepared': 'native inputs'})
+    seen = []
+    def simulate(arm, **kwargs):
+        seen.append(kwargs)
+        return {'paths': [{'status': 'MEASURED', 'verdict': 'CORRELATED'}]}
+    monkeypatch.setattr(PST, 'simulate_arm', simulate)
+    result = PST.run_case_correlation(project, BF.IMAGE, project / 'fixture_pdk',
+                                       'neutral', sta_step_dir=folder)
+    assert result['verdict'] == 'PASS'
+    assert result['corner'] == 'slow_scene'
+    assert seen == [{'workers': 3, 'characterize': False}]
+    assert (project / 'reports/phase3/spice_correlation.json').is_file()

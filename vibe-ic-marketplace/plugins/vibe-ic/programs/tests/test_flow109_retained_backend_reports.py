@@ -17,7 +17,7 @@ def put(project, name, value):
 def fixture(project, step, bad=False):
     features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
                     if p['name'] == 'Small digital IC without DFT')
-    features = {**features, 'requires_si': True}
+    features = {**features, 'requires_si': True, 'requires_spice': True}
     manifest = put(project, 'input/selection.json', {'features': features})
     put(project, 'input/step_0_5ic_answers.json', {'answers': {'deliverable': 'DIE'},
         'answer_provenance': {'deliverable': {'answered_by': 'owner', 'citation': 'neutral IC fixture'}}})
@@ -56,13 +56,15 @@ def fixture(project, step, bad=False):
             'signal_em': 'NOT_MEASURED', 'inputs': {'netlist': {
                 'project_path': str(design.relative_to(project)), 'sha256': sha}},
             'nets': {'supply': {'no_limit': 0, 'violated': int(bad)}}})
+    elif step == 'D54':
+        put(project, 'reports/phase3/spice_correlation.json', {'verdict': 'FAIL' if bad else 'PASS'})
     elif step == 'D59':
         put(project, 'reports/phase3/perc_equivalent.json', {'CVC_total': int(bad)})
     return SimpleNamespace(flow='109', flow109_manifest=manifest,
         flow109_plan_only=False, execution_mode='default', entry_step=step, exit_step=step)
 
 
-@pytest.mark.parametrize('step', ['D41', 'D43', 'D47', 'D48', 'D49', 'D56', 'D57', 'D58', 'D59'])
+@pytest.mark.parametrize('step', ['D41', 'D43', 'D47', 'D48', 'D49', 'D56', 'D57', 'D58', 'D59', 'D54'])
 def test_native_report_reaches_default_rows_without_rerun(tmp_path, step):
     args = fixture(tmp_path, step)
     assert flow109.prepare_front_door(args, tmp_path) == 0
@@ -72,7 +74,7 @@ def test_native_report_reaches_default_rows_without_rerun(tmp_path, step):
     assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
 
 
-@pytest.mark.parametrize('step', ['D41', 'D43', 'D48', 'D49', 'D57', 'D58', 'D59'])
+@pytest.mark.parametrize('step', ['D41', 'D43', 'D48', 'D49', 'D57', 'D58', 'D59', 'D54'])
 def test_native_violation_keeps_its_original_limit_and_fails(tmp_path, step):
     args = fixture(tmp_path, step, bad=True)
     assert flow109.prepare_front_door(args, tmp_path) == 1

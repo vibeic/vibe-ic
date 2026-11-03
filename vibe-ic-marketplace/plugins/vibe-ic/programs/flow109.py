@@ -2538,6 +2538,7 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
         'D59': {'report': 'reports/phase3/perc_equivalent.json',
                 'limits': {'CVC_total': ('eq', 0)},
                 'unmeasured': ['latch-up spacing', 'ESD characterization']},
+        'D54': {'report': 'reports/phase3/spice_correlation.json', 'status': 'verdict'},
     }
     row = context.get('resolved_row', {})
     entry = contracts.get(row.get('id'))
@@ -2595,6 +2596,12 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
                 if not values or any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
                     raise ValueError('native measurement unavailable: ' + field)
                 measured[field] = values
+            if entry.get('status'):
+                verdict = native.get(entry['status'])
+                if verdict not in ('PASS', 'FAIL'):
+                    raise ValueError('native result not measured: ' + str(verdict))
+                failed |= verdict == 'FAIL'
+                measured[entry['status']] = verdict
             status = 'FAIL' if failed else 'PASS'
             detail = None
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -2875,6 +2882,25 @@ def prepare_front_door(args, project: Path) -> int | None:
     if args.flow109_plan_only:
         return 0
     selected_rows = context.get("resolved_rows") or [context.get("resolved_row", {})]
+    if len(selected_rows) == 1 and selected_rows[0]['id'] == 'D54':
+        import _container_exec
+        if _container_exec.no_container_route():
+            import path_spice_tool
+            current = component_context(context, requested_step='D54')
+            retained = _retained_backend_result(project, current)
+            if retained is not None:
+                _selected_step_result(project, current, retained)
+                return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[retained['component_status']]
+            selected = json.loads((project / 'reports/phase3/sta_postpnr_signoff.json').read_text())
+            native = path_spice_tool.run_case_correlation(project,
+                os.environ.get('VIBEIC_EDA_IMAGE'), Path(os.environ['VIBEIC_LIBRELANE_PDK_ROOT']),
+                args.pdk, sta_step_dir=Path(selected['sta_state']).parent)
+            status = native['verdict']
+            _selected_step_result(project, current, {'step_id': 'D54', 'component_status': status,
+                'context_sha256': current['context_sha256'],
+                'default_row_status': status, 'completed': status == 'PASS', 'native_started': True,
+                'wall_seconds': native['wall_seconds'], 'native_result': native})
+            return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[status]
     try:
         dft_preroute = (dft_preroute_admission(project, component_context(
             context, requested_step="D30"))

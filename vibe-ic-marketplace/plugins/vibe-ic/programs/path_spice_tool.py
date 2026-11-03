@@ -422,6 +422,15 @@ def arm_tcl(inputs: Dict[str, Any], project: Path, top: str, spef: str,
 def _docker(image: str, project: Path, mounts: List[Tuple[Path, str]], argv: List[str],
             cwd: Path, docker: str = 'docker', env: Optional[Dict[str, str]] = None
             ) -> subprocess.CompletedProcess:
+    import shutil
+    if shutil.which(docker) is None:
+        import _container_exec as ce
+        mapping = [(guest, str(host.resolve())) for host, guest in mounts]
+        command = [ce.localise_mounted_paths(str(arg), mapping) for arg in argv]
+        environment = {**os.environ, **(env or {})}
+        environment = {key: ce.localise_mounted_paths(value, mapping)
+                       for key, value in environment.items()}
+        return subprocess.run(command, cwd=cwd, env=environment, capture_output=True, text=True)
     volumes = ['-v', f'{project.resolve()}:{project.resolve()}']
     for host, guest in mounts:
         volumes += ['-v', f'{Path(host).resolve()}:{guest}:ro']
@@ -1079,7 +1088,22 @@ def prepare_arm(project: Path, image: str, state_path: Path, corner: str, *,
     if not (top and power and ground):
         raise Refusal('LL_STA_CONFIG_UNREAD', str(state_path.parent / 'config.json'))
     guest = f'/pdk/{pdk}'
-    host = lambda p: Path(str(p).replace(guest, str(pdk_root / pdk), 1))  # noqa: E731
+    def host(value):
+        text = str(value)
+        marker = '/' + pdk + '/'
+        if marker in text:
+            return pdk_root / pdk / text.split(marker, 1)[1]
+        return Path(text)
+    def materials(value):
+        if isinstance(value, str) and '/' + pdk + '/' in value:
+            return str(host(value))
+        if isinstance(value, list):
+            return [materials(item) for item in value]
+        if isinstance(value, dict):
+            return {key: materials(item) for key, item in value.items()}
+        return value
+    config = materials(config)
+    inputs['liberties'] = [str(host(path)) for path in inputs['liberties']]
     lib_texts = [host(p).read_text(errors='replace') for p in inputs['liberties']]
     header = _scc.parse_liberty_header(lib_texts[0])
     opc, libname = _OPCOND_RE.search(lib_texts[0]), _LIBRARY_RE.search(lib_texts[0])
@@ -1170,7 +1194,7 @@ def prepare_arm(project: Path, image: str, state_path: Path, corner: str, *,
             'liberty_text': '\n'.join(lib_texts)}
 
 
-def simulate_arm(arm: Dict[str, Any], *, workers: int = 1) -> Dict[str, Any]:
+def simulate_arm(arm: Dict[str, Any], *, workers: int = 1, characterize: bool = True) -> Dict[str, Any]:
     """Every prepared deck through the simulator (concurrently), measured
     and compared with its STA path."""
     from concurrent.futures import ThreadPoolExecutor
@@ -1221,7 +1245,7 @@ def simulate_arm(arm: Dict[str, Any], *, workers: int = 1) -> Dict[str, Any]:
                        tolerance_pct=tol['tolerance_pct'] if tol else None,
                        verdict=(_scc.path_correlation_verdict(err, tol['tolerance_pct'])
                                 if tol and err is not None else 'TOLERANCE_UNDERIVABLE'))
-            if tol and sta_ns:
+            if characterize and tol and sta_ns:
                 sources = _reference_sources(reference_arm, stages, deck)
                 refs = deck.parent / 'refs' / f"path_{item['path']}"
                 characterisation = _scc.measure_pdk_characterisation(
@@ -1445,6 +1469,28 @@ def worst_setup_corner(folder: Path) -> str:
                    for value in setup.values())):
         raise Refusal('LL_STEP30_CORNER_UNDECLARED', str(folder))
     return min(setup, key=lambda name: (setup[name], name))
+
+
+def run_case_correlation(project, image, pdk_root, pdk, *, sta_step_dir):
+    """Native path correlation. C9 does not requalify tools during a case."""
+    started = time.monotonic()
+    folder = native_sta_folder(project, sta_step_dir)
+    corner = worst_setup_corner(folder)
+    prepared = prepare_arm(project, image, folder / 'state_out.json', corner,
+        pdk_root=pdk_root, pdk=pdk, out_dir=project / 'phase3/tool_arms/30/ngspice/current',
+        simulator='ngspice', paths=3)
+    native = simulate_arm(prepared, workers=3, characterize=False)
+    rows = native['paths']
+    verdict = ('PASS' if rows and all(row.get('status') == 'MEASURED'
+               and row.get('verdict') == 'CORRELATED' for row in rows) else
+               'FAIL' if any(row.get('verdict') in ('MISMATCH', 'CRITICAL_MISMATCH')
+                             for row in rows) else 'NOT_MEASURED')
+    result = {'verdict': verdict, 'corner': corner, 'simulator': 'ngspice',
+              'paths': rows, 'sta_state': str(folder / 'state_out.json'),
+              'wall_seconds': time.monotonic() - started,
+              'scope': 'native extracted path SPICE vs STA at the original Liberty-grid tolerance'}
+    write_json(project / 'reports/phase3/spice_correlation.json', result)
+    return result
 
 
 def run_step30(project: Path, image: str, pdk_root: Path, pdk: str, *,
