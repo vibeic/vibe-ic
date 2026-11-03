@@ -148,6 +148,7 @@ import analog_ciff as _ciff  # noqa: E402
 import analog_incremental_startup as _startup  # noqa: E402
 import analog_ota1_options as _ota1  # noqa: E402
 import analog_ota_bias as _ota_bias  # noqa: E402
+import analog_resistor_segments as _segments  # noqa: E402
 from _analog_producer_fingerprint import producer_fingerprint as _source_fingerprint
 
 PRODUCER = "analog_a2_topology_emit"
@@ -8111,6 +8112,18 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                     [{"requirement": "capacitor drawable at the library "
                                      "drawn width", "detail": r}
                      for r in exc.refusals], informational)
+    try:
+        max_segment_um = _segments.declared_max_um(
+            _read_json(Path(spec_path)) if spec_path else None)
+        if max_segment_um is not None:
+            ir = _segments.apply(
+                ir, max_segment_um,
+                rendering_env(ir.get("pdk_measured_params"), ir.get("constants"),
+                              ir.get("knobs"), spec_values, ir.get(EFFECTIVE_SPEC_KEY)),
+                _safe_eval, _minima.min_length_um(role_minima, "res"))
+    except _segments.SegmentRefused as exc:
+        return _gap(exc.status, [{"requirement": _segments.FIELD, "detail": str(exc)}],
+                    informational)
     informational = list(informational) + ir.get("derived_informational", [])
     ir["derived_informational"] = list(informational)
     nominal = lib.get("ota_bias_nominal_settling_requirement")

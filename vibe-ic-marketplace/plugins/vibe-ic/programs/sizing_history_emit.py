@@ -163,7 +163,7 @@ def validate_history(data: dict) -> List[dict]:
                 ir = json.loads(raw)
                 if ir.get("block") != view["block"]:
                     raise ValueError("normal topology block disagrees with its history binding")
-                problems = a2.matched_gain_length_problems(ir, project)
+                problems = a2.matched_gain_length_problems(a2._segments.without_segments(ir), project)
                 if problems:
                     raise ValueError("; ".join(problems))
                 audit = ir["matched_gain_length"]

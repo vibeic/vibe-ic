@@ -22,6 +22,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -783,6 +784,8 @@ def gencell_call(dev: dict, inst: str, facts: PdkFacts) -> str:
     if fingers:
         for key, count in fingers.items():
             args += [key, str(count)]
+        if dev.get("join_gates"):
+            args += ["conn_gates", "1"]
         converter = f"{rec['namespace']}::{dev['model']}_convert"
         # The PDK owns whether source width is total or per finger.
         return (f"if {{![llength [info procs {converter}]]}} {{error "
@@ -839,8 +842,8 @@ def read_scale(blob: str) -> int:
     return (internal_per_1000um * la) // (lb * 1000)
 
 
-def probe(stage: Stage, magicrc: str, devs: Sequence[dict], facts: PdkFacts
-          ) -> Tuple[int, Dict[tuple, dict]]:
+def probe(stage: Stage, magicrc: str, devs: Sequence[dict], facts: PdkFacts,
+          tag: str = "a5probe") -> Tuple[int, Dict[tuple, dict]]:
     """Pass 1. Generate every unique device configuration once, save the
     children, and read back their real geometry. Also asks Magic for its own
     lambda-per-micron, so no scale constant lives in this file.
@@ -863,7 +866,7 @@ def probe(stage: Stage, magicrc: str, devs: Sequence[dict], facts: PdkFacts
     # same run is about to measure.
     pitch_um = 400
     lines = ["drc off",
-             "cellname create a5probe", "load a5probe",
+             f"cellname create {tag}", f"load {tag}",
              "box 0um 0um 1000um 1000um",
              'puts "A5SCALE [lindex [box values] 2] [lindex [tech lambda] 0]'
              ' [lindex [tech lambda] 1]"']
@@ -871,19 +874,19 @@ def probe(stage: Stage, magicrc: str, devs: Sequence[dict], facts: PdkFacts
         x = i * pitch_um
         lines.append(f"box {x}um 0um {x}um 0um")
         lines.append(gencell_call(by_key[key], f"p{i}", facts))
-    lines += ["set cl [cellname list children a5probe]",
+    lines += [f"set cl [cellname list children {tag}]",
               "foreach c $cl { load $c ; save $c.mag }",
-              "load a5probe", "save a5probe.mag",
+              f"load {tag}", f"save {tag}.mag",
               'puts "A5_PROBE_OK"', "quit -noprompt"]
-    blob = magic_run(stage, magicrc, "\n".join(lines), "a5probe",
+    blob = magic_run(stage, magicrc, "\n".join(lines), tag,
                      "A5_PROBE_OK")
     lam = read_scale(blob)
 
     host = Path(stage.host_tmp)
-    ok, err = stage.get("a5probe.mag", host / "a5probe.mag")
+    ok, err = stage.get(f"{tag}.mag", host / f"{tag}.mag")
     if not ok:
         raise MagicError(f"the probe block did not come back: {err}")
-    ptext = (host / "a5probe.mag").read_text(errors="replace")
+    ptext = (host / f"{tag}.mag").read_text(errors="replace")
     # The probe block carries its OWN `magscale`, and whether Magic writes
     # one at all depends on the cells inside it — a block of MOS children
     # gets `magscale 1 2` and a block of capacitor children gets none. That
@@ -1636,6 +1639,66 @@ def device_planes(cell: dict) -> Dict[str, List[Tuple[int, ...]]]:
                 continue
             planes.setdefault(layer, []).extend(rects)
     return planes
+
+
+def own_metal_spacing_shortfalls(cell: dict, geo: "Geo") -> int:
+    """Pairs of separate same-layer metal polygons a gencell drew closer than
+    the deck's spacing. Polygons, not rectangles: Magic writes one polygon as
+    many abutting tiles."""
+    polygon = cell_components(cell)
+    pairs = set()
+    for layer, rects in device_planes(cell).items():
+        if not _METAL_RE.match(layer):
+            continue
+        for i, a in enumerate(rects):
+            for j, b in enumerate(rects[:i]):
+                first, second = polygon[(layer, i)][1], polygon[(layer, j)][1]
+                if first == second:
+                    continue
+                dx = max(a[0] - b[2], b[0] - a[2], 0)
+                dy = max(a[1] - b[3], b[1] - a[3], 0)
+                if dx * dx + dy * dy < geo.metal_space(layer, a, b) ** 2:
+                    pairs.add((layer, min(first, second), max(first, second)))
+    return len(pairs)
+
+
+def join_gates_that_need_it(stage: Stage, magicrc: str, devs: Sequence[dict],
+                            cells: Dict[tuple, dict], facts: PdkFacts,
+                            geo: "Geo") -> List[dict]:
+    """Draw a multi-finger device with its gates joined only where its own
+    gate contacts break the deck and the joined drawing has fewer shortfalls.
+
+    The gencell decides per configuration which metal joins the gates, and on
+    that metal the join can itself be too close to the source and drain, so
+    the two drawings are measured instead of assuming one is better."""
+    candidates: Dict[tuple, dict] = {}
+    for dev in devs:
+        key = config_key(dev)
+        fingered = dev["pars"].get("ng", 1) > 1 or dev["pars"].get("nf", 1) > 1
+        if (fingered and key not in candidates
+                and "conn_gates" in facts.gencells[dev["model"]]["params"]
+                and own_metal_spacing_shortfalls(cells[key], geo)):
+            candidates[key] = {**dev, "join_gates": True}
+    if not candidates:
+        return []
+    _, joined = probe(stage, magicrc, list(candidates.values()), facts,
+                      tag="a5probe_join")
+    decisions = []
+    for key, dev in candidates.items():
+        separate = own_metal_spacing_shortfalls(cells[key], geo)
+        together = own_metal_spacing_shortfalls(joined[key], geo)
+        decisions.append({"model": dev["model"], "w": dev["pars"].get("w"),
+                          "l": dev["pars"].get("l"),
+                          "fingers": max(dev["pars"].get("ng", 1), dev["pars"].get("nf", 1)),
+                          "shortfalls_separate": separate,
+                          "shortfalls_joined": together,
+                          "joined": together < separate})
+        if together < separate:
+            cells[key] = joined[key]
+            for other in devs:
+                if config_key(other) == key:
+                    other["join_gates"] = True
+    return decisions
 
 
 def _linked(a: str, b: str) -> bool:
@@ -4922,6 +4985,216 @@ def _read_json(path: Path) -> Optional[dict]:
     return doc if isinstance(doc, dict) else None
 
 
+def floorplan_banks(raw: dict, names: Sequence[str]) -> List[dict]:
+    """Declared banks with their devices. A device belongs to the first bank
+    whose patterns match it. One no bank claims has nowhere to be placed."""
+    banks, claimed = [], set()
+    for bank in raw["banks"]:
+        members = [name for name in names if name not in claimed
+                   and any(fnmatchcase(name, pattern) for pattern in bank["devices"])]
+        claimed.update(members)
+        banks.append({"name": bank["name"], "members": members, "plane": bank.get("plane", "base")})
+    unclaimed = [name for name in names if name not in claimed]
+    if unclaimed:
+        raise Refusal("FLOORPLAN_UNCLAIMED_DEVICES: " + ", ".join(unclaimed[:20]))
+    return banks
+
+
+def _emit_native_routed(project: Path, block: str, blockname: str, stage: Stage, magicrc: str,
+                        facts: PdkFacts, args, devs: Sequence[dict], ports: Sequence[str],
+                        cells: Dict[tuple, dict], pin_spec: dict, floorplan: dict,
+                        report: dict, bdir: Path, lam: int, geo: "Geo",
+                        refuse) -> Tuple[int, dict]:
+    """A11 through declared banks as macros and OpenROAD's native routers."""
+    import analog_native_route as route
+    if stage.in_container:
+        return refuse("ROUTE_NEEDS_LOCAL_TOOLS", "native routing runs inside the EDA image", RC_REFUSED)
+    try:
+        import klayout.db as kdb
+    except ImportError as exc:
+        return refuse("ENV_UNAVAILABLE", f"klayout.db is unavailable: {exc}", RC_ENV_UNAVAILABLE)
+    try:
+        cfg = floorplan["routing"]
+        by_name = {d["name"]: d for d in devs}
+        banks = floorplan_banks(floorplan, list(by_name))
+        groups, above = route.group_devices(banks, floorplan.get("keepout", []))
+        lef_path = facts.sources.get("tech_lef")
+        maps = sorted((Path(args.pdk_root) / args.family / "libs.tech/klayout/tech").glob("*.map"))
+        cell_lef = facts.sources.get("cell_lef")
+        if not lef_path or not cell_lef or len(maps) != 1:
+            raise route.RouteRefused("ROUTE_PDK_INPUTS",
+                                     f"tech LEF {lef_path!r}, cell LEF {cell_lef!r}, layer maps {maps}")
+        lef_text = Path(lef_path).read_text()
+        site = route.site_name(Path(cell_lef).read_text()) or route.site_name(lef_text)
+        if site is None:
+            raise route.RouteRefused("ROUTE_PDK_INPUTS", f"no SITE in {cell_lef} or {lef_path}")
+        routing, cuts, pitch = route.lef_stack(lef_text)
+        numbers = route.layer_numbers(maps[0].read_text())
+        work = Path(stage.path)
+        probes = [tag for tag in ("a5probe", "a5probe_join") if (work / f"{tag}.mag").is_file()]
+        magic_run(stage, magicrc, "\n".join(
+            ["drc off"] + [line for tag in probes for line in (f"load {tag}", f"gds write {tag}.gds")]
+            + ['puts "A5_DEVICES_OK"', "quit -noprompt"]), "a5devices", "A5_DEVICES_OK")
+        rules = {"min_area_dbu2": int(geo.area_lam2[2] * (1000 // lam) ** 2 * 1.05),
+                 "space_dbu": geo.metal_space("metal2") * (1000 // lam) + 10}
+        builder = route.MacroBuilder(kdb, [str(work / f"{tag}.gds") for tag in probes], numbers, routing, cuts, rules)
+
+        def member(name):
+            dev = by_name[name]
+            cell = cells[config_key(dev)]
+            tmap, _ring, unmapped = terminal_map(dev, cell)
+            missing = [t for t in unmapped
+                       if not (dev.get("guard_off") and t.endswith("->" + dev["nets"][-1]))]
+            if missing:
+                raise route.RouteRefused("TERMINAL_UNMAPPED", f"{name}: {missing}")
+            return {"name": name, "cell": cell["cell"], "labels": tmap, "sections": cell["sections"]}
+
+        gap = route.um(cfg["macro_gap_um"])
+        macros = []
+        for index, names in enumerate(groups):
+            runs = route.wrap_by_width(names, lambda n: builder.bbox(cells[config_key(by_name[n])]["cell"]).width(),
+                                       route.um(cfg["macro_width_um"]), gap)
+            for part, run in enumerate(runs):
+                macros.append(builder.device_macro(f"bank{index}_{part}", [member(n) for n in run], gap))
+        rail_cfg = cfg["rail"]
+        rail_nets = [net for net, spec in pin_spec["ports"].items() if spec.get("rail")]
+        if len(rail_nets) != 2:
+            raise route.RouteRefused("ROUTE_RAILS", f"expected two supply rails, got {rail_nets}")
+        left = route.um(rail_cfg["width_um"] + rail_cfg["space_um"] + cfg["inset_um"])
+        edge = route.um(cfg["edge_um"])
+        held = len(route.wrap_by_width(groups[0], lambda n: builder.bbox(
+            cells[config_key(by_name[n])]["cell"]).width(), route.um(cfg["macro_width_um"]), gap)) \
+            if floorplan.get("keepout") else 0
+        right, dev_top = route.shelf_pack(macros, left, edge, route.um(cfg["shelf_width_um"]),
+                                          route.um(cfg["shelf_gap_um"]))
+        band_top = max([m["y"] + m["h"] for m in macros[:held]] + [0])
+        stem = cfg["cap_stem"]
+        plane = [member(n) for n in above]
+        plates = {}
+        for item in plane:
+            levels = sorted((label["level"], net) for net, labels in item["labels"].items() for label in labels)
+            if len({net for _, net in levels}) != 2:
+                raise route.RouteRefused("CAP_TERMINALS", f"{item['name']}: {levels}")
+            item["plate_nets"] = [levels[-1][1], levels[0][1]]
+            plates[item["name"]] = item
+        overhead = route.um(stem["island_gap_um"] + stem["island_um"] + stem["top_via_enclosure_um"]
+                            + stem["top_metal_space_um"] - stem["tab_overlap_um"])
+        heights = [(i["name"], builder.bbox(i["cell"]).height() + overhead) for i in plane]
+        columns = route.columns_by_height(heights, route.um(cfg["plane_height_um"]),
+                                          route.um(stem["column_start_um"]))
+        column_w = max([builder.bbox(i["cell"]).width() for i in plane] + [0])
+        step = column_w + route.um(cfg["plane_column_gap_um"])
+        plane_y = band_top + route.um(cfg["plane_gap_um"])
+        levels = tuple(cfg["plane_levels"])
+        strap_w = route.um(rail_cfg["width_um"])
+        strap_clear = route.um(rail_cfg["plate_clearance_um"])
+        gaps = route.strap_gaps(len(columns), rail_cfg["strap_pairs"])
+        strap_at = []
+        x = left
+        for index, column in enumerate(columns):
+            macro = builder.cap_column(f"plane_{index}", [(plates[n], y) for n, y in column],
+                                       column_w, stem, levels)
+            macro["x"], macro["y"] = x, plane_y
+            macros.append(macro)
+            x += column_w
+            if index in gaps:
+                x += strap_clear
+                strap_at.append((x, x + strap_w + route.um(rail_cfg["space_um"])))
+                x += 2 * strap_w + route.um(rail_cfg["space_um"]) + strap_clear
+            else:
+                x += route.um(cfg["plane_column_gap_um"])
+            right = max(right, macro["x"] + macro["w"])
+            dev_top = max(dev_top, macro["y"] + macro["h"])
+        die_w = right + route.um(cfg["inset_um"] + rail_cfg["space_um"] + rail_cfg["width_um"])
+        die_h = dev_top + edge
+        rails = []
+        for net, x in zip(rail_nets, (0, die_w - route.um(rail_cfg["width_um"]))):
+            rails.append(builder.rail(net, x, die_h, rail_cfg, stem, levels))
+        for pair, xs in enumerate(strap_at):
+            for net, x in zip(rail_nets, xs):
+                rails.append(builder.rail(net, x, die_h - plane_y, rail_cfg, stem, levels,
+                                          suffix=f"_strap{pair}", y=plane_y))
+        macros.extend(rails)
+        declared = pin_spec["ports"][rail_nets[0]].get("em", {}).get("current_mA")
+        current = declared if declared else rail_cfg["current_ma"]
+
+        def supply_space(level, width):
+            layer = f"metal{level}"
+            box = (0, 0, round(width * lam), 10 * lam)
+            return geo.metal_space(layer, box, (0, 0, 10 * lam, 10 * lam)) / lam + 0.01
+        supply = route.supply_rule(current, facts.tech_lef or [], routing, cfg["routing_layers"][0],
+                                   cfg["routing_layers"][1], rail_cfg["low_metal_width_um"], supply_space)
+        report["supply"] = {"current_ma": current, "source": "block spec" if declared else "floorplan.routing.rail",
+                            "layers": supply, "stacks_per_net": {
+                                net: sum(r["stacks"] for r in rails if r["net"] == net) for net in rail_nets},
+                            "straps": len(strap_at)}
+        signal = [p for p in ports if p not in rail_nets]
+        pins_at = [(p, cfg["signal_pin_start_um"] + i * cfg["signal_pin_pitch_um"], 0.4)
+                   for i, p in enumerate(signal)]
+        builder.write(work)
+        (work / "top.v").write_text(builder.verilog(blockname, signal))
+        pin_layer = routing[pin_spec["ports"][signal[0]]["level"] - 1] if signal else routing[levels[0] - 1]
+        (work / "route.tcl").write_text(route.route_tcl(
+            blockname, lef_path, cell_lef, site, pitch, routing, (die_w / route.DBU_PER_UM, die_h / route.DBU_PER_UM),
+            macros, pins_at, pin_layer, cfg, rail_nets, supply))
+        rc, out, err = stage.sh(f"cd {shlex.quote(stage.path)} && openroad -no_splash -no_init -exit "
+                                "-log route.log route.tcl", timeout=14400)
+        log = (work / "route.log").read_text() if (work / "route.log").is_file() else ""
+        bdir.mkdir(parents=True, exist_ok=True)
+        (bdir / "native_route.log").write_text(log)
+        if rc != 0 or "A11_ROUTE_DONE" not in out + log:
+            errors = [line for line in log.splitlines() if line.startswith("[ERROR")]
+            raise route.RouteRefused("ROUTE_FAILED", f"openroad rc={rc}: {errors[:3] or (err or out)[-400:]}")
+        violations = route.route_violations((work / "drt_drc.rpt").read_text())
+        report["native_route"] = {"tool": "openroad", "detailed_route_violations": violations,
+                                  "macros": [{k: m.get(k) for k in ("name", "x", "y", "w", "h", "plane", "devices", "net")}
+                                             for m in macros]}
+        if violations:
+            raise route.RouteRefused("ROUTE_NOT_CONVERGED", f"{violations} detailed-route violations left")
+        gds_path = work / f"{blockname}.gds"
+        merged = route.merge_routed(kdb, work, lef_path, str(maps[0]), blockname, gds_path, rails,
+                                    routing[levels[2] - 1], die_h, numbers)
+    except (route.RouteRefused, Refusal, KeyError) as exc:
+        return refuse(getattr(exc, "code", "ROUTE_REFUSED"), str(exc), RC_REFUSED)
+    report["bbox"] = merged
+    magic_run(stage, magicrc, "\n".join([
+        "drc off", f"gds read {blockname}.gds", f"load {blockname}", "writeall force",
+        'puts "A5_ROUTED_MAG_OK"', "quit -noprompt"]), "a5routedmag", "A5_ROUTED_MAG_OK")
+    bdir.mkdir(parents=True, exist_ok=True)
+    for mag in sorted(work.glob("*.mag")):
+        if mag.stem in ("a5probe", "a5probe_join"):
+            continue
+        target = "layout.mag" if mag.stem == blockname else mag.name
+        ok, detail = stage.get(mag.name, bdir / target)
+        if not ok:
+            return refuse("NO_ARTEFACT", f"{mag.name} did not come back: {detail}", RC_REFUSED)
+    ok, detail = stage.get(gds_path.name, bdir / gds_path.name)
+    if not ok:
+        return refuse("NO_ARTEFACT", f"{gds_path.name} did not come back: {detail}", RC_REFUSED)
+    report.update(result="OK", deviations=[], layout_mag=str(bdir / "layout.mag"),
+                  layout_gds=str(bdir / gds_path.name))
+    pins = []
+    for rail in rails:
+        if rail["y"]:
+            continue
+        spec = pin_spec["ports"][rail["net"]]
+        box = [rail["x"] / route.DBU_PER_UM, 0.0, (rail["x"] + rail["w"]) / route.DBU_PER_UM,
+               die_h / route.DBU_PER_UM]
+        pins.append({"net": rail["net"], "index": spec["index"], "layer": f"metal{levels[2]}",
+                     "lef_layer": routing[levels[2] - 1], "use": spec["use"], "rail": True,
+                     "box_um": box, "strip_um": box, "width_um": rail_cfg["width_um"],
+                     "cuts_per_via": 1, "em": spec.get("em")})
+    for name, x, _y in pins_at:
+        spec = pin_spec["ports"][name]
+        box = [x - 0.15, 0.0, x + 0.15, 0.8]
+        pins.append({"net": name, "index": spec["index"], "layer": f"metal{spec['level']}",
+                     "lef_layer": pin_layer, "use": spec["use"], "rail": False,
+                     "box_um": box, "strip_um": box, "width_um": 0.3, "cuts_per_via": 1,
+                     "em": spec.get("em")})
+    report["pins"] = sorted(pins, key=lambda p: p["index"])
+    return RC_OK, report
+
+
 def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
                facts: PdkFacts, args) -> Tuple[int, dict]:
     bdir = _pl.analog_dir(project) / block
@@ -5013,6 +5286,7 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
 
     geo = Geo(facts.deck, facts.m1_space_um, lam,
               args.wire_width_um, args.via_pad_half_um)
+    report["gate_contact_joins"] = join_gates_that_need_it(stage, magicrc, devs, cells, facts, geo)
     pad_half_um = geo.via_pad[1] / lam
     tap_clear_um = facts.m1_space_um + 2 * pad_half_um
     tap_clear = max(1, round(tap_clear_um * lam))
@@ -5051,6 +5325,10 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
         snapshot.write_text(facts.cell_lef_text, encoding="utf-8")
         pins_basis["core_pg"]["snapshot"] = str(snapshot.relative_to(project))
     report["max_row_width_um"] = args.max_row_width_um
+    if args.floorplan:
+        return _emit_native_routed(project, block, blockname, stage, magicrc, facts, args, devs,
+                                   ports, cells, pin_spec, json.loads(args.floorplan), report, bdir,
+                                   lam, geo, refuse)
     placement_groups = []
     if args.shared_capacitor_escapes:
         placement_groups = list((topo.get("folded_first_stage") or {}).get(
@@ -5109,7 +5387,7 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
         # path from that banner, and joining it to the block directory
         # escapes the project entirely.
         for name in sorted(_MAG_NAME_RE.findall(listing)):
-            if name in ("layout.mag", "a5probe.mag"):
+            if name in ("layout.mag", "a5probe.mag", "a5probe_join.mag"):
                 continue
             got, _ = stage.get(name, bdir / name)
             if got:
@@ -5399,6 +5677,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--via-pad-half-um", type=float,
                     default=DEFAULT_VIA_PAD_HALF_UM)
     ap.add_argument("--max-row-width-um", type=float, default=1000.0)
+    ap.add_argument("--floorplan", help="declared banks and native routing, as JSON")
     ap.add_argument("--shared-capacitor-escapes", action="store_true",
                     help="share identical same-net capacitor escapes and allocate local rail tracks")
     ap.add_argument("--left-right-regions", action="store_true",

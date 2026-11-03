@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1521
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1521)
+- **Total programs (excluding helpers / shims):** 1523
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1523)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1512 |
+| `any` | 1514 |
 
 ## Alphabetical listing
 
@@ -125,6 +125,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_native_front` | any | — | A01--A05 Default execution using the existing analog producers and consumers. |
 | `analog_native_interconnect_run` | any | — | Native unmerged geometry extraction and source-testbench OP/TRAN capture. |
 | `analog_native_physical` | any | — | Default analog A11--A16: call the existing native producers. |
+| `analog_native_route` | any | — | A11 placement of declared banks as macros, routed by native OpenROAD. |
 | `analog_native_sim` | any | — | Default analog simulation steps A06--A10 using delivered DUT testbenches. |
 | `analog_native_waveform` | any | — | Read native ngspice real raw captures and integrate their actual time grid. |
 | `analog_netlist_connectivity_check` | any | — | deterministic floating-node / dangling-pin graph check for SPICE subcircuits. |
@@ -141,6 +142,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_poweron_sequence` | any | — | bring a CLOCKED analog block up through a power-on sequence instead of demanding a DC operating point at full rail. |
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
+| `analog_resistor_segments` | any | — | Series segmentation of long resistors from a declared maximum segment length. |
 | `analog_resolution_stimulus` | any | — | the A4 corner deck's RESOLUTION stimulus. |
 | `analog_routing_intent` | any | — | Typed physical routing declarations, private branch compilation and proof. |
 | `analog_sc_loop_probe` | any | — | MEASURE a switched-capacitor loop's coefficients on the netlist A3 emitted, and (with --validate) check the swing A2 sized for. |
@@ -1593,7 +1595,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1512 programs)
+### `any` (1514 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1694,6 +1696,7 @@ _(no programs in this group)_
 - `analog_native_front` — A01--A05 Default execution using the existing analog producers and consumers.
 - `analog_native_interconnect_run` — Native unmerged geometry extraction and source-testbench OP/TRAN capture.
 - `analog_native_physical` — Default analog A11--A16: call the existing native producers.
+- `analog_native_route` — A11 placement of declared banks as macros, routed by native OpenROAD.
 - `analog_native_sim` — Default analog simulation steps A06--A10 using delivered DUT testbenches.
 - `analog_native_waveform` — Read native ngspice real raw captures and integrate their actual time grid.
 - `analog_netlist_connectivity_check` — deterministic floating-node / dangling-pin graph check for SPICE subcircuits.
@@ -1710,6 +1713,7 @@ _(no programs in this group)_
 - `analog_poweron_sequence` — bring a CLOCKED analog block up through a power-on sequence instead of demanding a DC operating point at full rail.
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
+- `analog_resistor_segments` — Series segmentation of long resistors from a declared maximum segment length.
 - `analog_resolution_stimulus` — the A4 corner deck's RESOLUTION stimulus.
 - `analog_routing_intent` — Typed physical routing declarations, private branch compilation and proof.
 - `analog_sc_loop_probe` — MEASURE a switched-capacitor loop's coefficients on the netlist A3 emitted, and (with --validate) check the swing A2 sized for.

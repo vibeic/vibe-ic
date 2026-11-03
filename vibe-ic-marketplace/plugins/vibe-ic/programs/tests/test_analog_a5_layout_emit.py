@@ -1432,3 +1432,46 @@ def test_optional_matching_groups_reach_placement(tmp_path, monkeypatch,
     assert rc == A5E.RC_OK, doc
     assert doc["blocks"]["blk"]["devices"] == 4
     assert (project / "phase3/analog/blk/layout.mag").is_file()
+
+
+def test_a_device_goes_to_the_first_bank_that_matches():
+    plan = {"banks": [{"name": "caps", "devices": ["c_*"], "plane": "above"}, {"name": "rest", "devices": ["*"]}]}
+    banks = A5E.floorplan_banks(plan, ["m1", "c_a", "r1"])
+    assert [(b["name"], b["members"], b["plane"]) for b in banks] == [
+        ("caps", ["c_a"], "above"), ("rest", ["m1", "r1"], "base")]
+
+
+def test_a_device_no_bank_claims_is_refused():
+    with pytest.raises(A5E.Refusal, match="FLOORPLAN_UNCLAIMED_DEVICES: c1"):
+        A5E.floorplan_banks({"banks": [{"name": "a", "devices": ["m*"]}]}, ["m1", "c1"])
+
+
+def _gate_join_fixture(monkeypatch, separate, joined):
+    facts = A5E.PdkFacts()
+    facts.gencells['unit'] = {'namespace': 'pdk', 'params': ['w', 'l', 'm', 'ng', 'conn_gates']}
+    devs = [{'model': 'unit', 'pars': {'w': 12.0, 'l': 0.5, 'ng': 2.0}} for _ in range(2)]
+    key = A5E.config_key(devs[0])
+    cells = {key: {'sections': {'metal2': separate}, 'layers': None}}
+
+    def fake_probe(stage, magicrc, wanted, pdk, tag='a5probe'):
+        return 100, {key: {'sections': {'metal2': joined}, 'layers': None}}
+
+    monkeypatch.setattr(A5E, 'probe', fake_probe)
+    geo = SimpleNamespace(metal_space=lambda layer, a, b: 21)
+    A5E.join_gates_that_need_it(None, '', devs, cells, facts, geo)
+    return devs, cells[key]['sections']['metal2']
+
+
+CLOSE_PADS = [(0, 0, 20, 20), (28, 0, 48, 20)]
+ONE_BAR = [(0, 0, 48, 20)]
+
+
+def test_gates_join_when_that_repairs_their_contacts(monkeypatch):
+    devs, drawn = _gate_join_fixture(monkeypatch, CLOSE_PADS, ONE_BAR)
+    assert drawn == ONE_BAR and all(dev['join_gates'] for dev in devs)
+
+
+def test_gates_stay_separate_when_they_already_meet_the_deck(monkeypatch):
+    clear = [(0, 0, 20, 20), (41, 0, 61, 20)]
+    devs, drawn = _gate_join_fixture(monkeypatch, clear, ONE_BAR)
+    assert drawn == clear and not any(dev.get('join_gates') for dev in devs)
