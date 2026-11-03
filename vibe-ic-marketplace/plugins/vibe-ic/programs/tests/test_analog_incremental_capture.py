@@ -646,6 +646,47 @@ def test_wrong_source_switch_endpoint_cannot_vouch_for_a_phase_probe(tmp_path):
         capture._transfer_timing(topology, 'xdut.reset_b')
 
 
+def test_shared_dac_chopped_ota_observes_every_physical_transfer(tmp_path):
+    import analog_a2_topology_emit as a2
+    from _analog_producer_fixture import A2, bdir, read_json, run_prog
+    from test_analog_ciff import _project
+
+    project = _project(tmp_path, 2, designed_coefficients=1, feedback_delay=0,
+        b1=.25, b2=0., c0=1., c1=1., c2=1., k0=0.,
+        shared_input_dac=1, ciff_dac_ratio=1.4, cs1_ff=2100.,
+        ota1_folded_cascode=1, ota1_chopper=1, ota1_chop_ratio=2,
+        ota1_chop_sc_phase=1, ota1_chop_stages=3, ota1_folded_remove_cc=1,
+        ota1_chop_nmos_w_um=2., ota1_chop_pmos_w_um=4., ota1_chop_l_um=.5)
+    library = a2.LIBRARY['delta_sigma']
+    rows = library['stage'][0]['folded_first_stage']['devices'] + library['folded_first_stage']['devices']
+    parameters = {'ota1_' + row['name'].format(i=1): {'w': 2., 'l': .5} for row in rows}
+    (bdir(project, 'mod_alpha') / 'sizing_inputs.json').write_text(
+        json.dumps({'device_parameters': parameters}))
+    run = run_prog(A2, project)
+    assert run.returncode == 0, run.stdout + run.stderr
+    topology = read_json(bdir(project, 'mod_alpha') / 'topology.json')
+    assert topology['incremental_startup']['mode'] == 0
+    assert topology['ota1_options']['chopper']['switch_locations']['CH1']
+    timing = capture._transfer_timing(topology, 'xdut.nrstb')
+    capacitors = {group['capacitor'] for group in timing['groups']}
+    expected = {device['name'] for device in topology['devices']
+                if device['role'] == 'cap' and device['name'].startswith(('cs1_u', 'cf1_u'))}
+    assert expected and any(name.startswith('cs1_u') for name in expected)
+    assert capacitors == expected | {'cs2'}
+    assert timing['columns'] == ['v(xdut.ntransfer)', 'v(xdut.ntransferb)']
+    assert {group['branch'] for group in timing['groups'] if group['stage'] == 1} == {
+        'input', 'dac_shared', 'dac'}
+    mapping = {group[polarity + '_switch']: 'xdut.physical.' + group[polarity + '_switch'] + '_gate#'
+               for group in timing['groups'] for polarity in ('n', 'p')}
+    mapped = capture._transfer_timing(topology, 'xdut.physical.reset#', mapping)
+    assert set(mapped['columns']) == {'v(' + node + ')' for node in mapping.values()}
+    with pytest.raises(ValueError, match='actual native transfer gate node is absent'):
+        capture._transfer_timing(topology, 'xdut.physical.reset#', dict(list(mapping.items())[1:]))
+    topology['devices'] = [device for device in topology['devices'] if device['name'] != 'mp_cstv1']
+    with pytest.raises(ValueError, match='declared state path capacitor array is incomplete'):
+        capture._transfer_timing(topology, 'xdut.nrstb')
+
+
 def test_disagreeing_branch_pulses_cannot_supply_one_cascade_update(tmp_path):
     path = _dump(tmp_path / 'wave.dat')
     declaration = _declaration()
