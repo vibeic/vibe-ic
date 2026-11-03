@@ -535,10 +535,6 @@ def direct_half(project, top, pdk, half, producer):
         if not deck:
             raise ValueError('CURRENT_NATIVE_DECK_MISSING' + f": direct_half.pdk.{'drc_deck' if half == 'drc' else 'bridge_netgen_setup'} is unset for half={half!r}; no native deck selected")
         inputs["pdk_deck"] = entry(project, deck, external=True)
-        declared_pdk, technology = pdk_of(project)
-        if declared_pdk != pdk.name:
-            raise ValueError("CURRENT_PDK_MISMATCH")
-        inputs["technology"] = entry(project, technology)
         design = design_of(selected["def"])
     except (OSError, ValueError, AttributeError, TypeError, RuntimeError) as exc:
         refusal = str(exc)
@@ -619,7 +615,7 @@ def _direct_half_refusal(project, half):
         return f"CURRENT_NATIVE_RECORD_MISSING: {exc}"
     refusal = validate(project, record, step="31", stage="stage4",
                        tools=("klayout", "magic", "netgen", "svrfdrc"),
-                       required_inputs=("gds", "def", "technology", "pdk_deck", "pdk_tech_lef", "pdk_cell_lef",
+                       required_inputs=("gds", "def", "pdk_deck", "pdk_tech_lef", "pdk_cell_lef",
                                         *(('netlist',) if half == 'lvs' else ())),
                        required_outputs=("report", "native_report", "log"))
     if refusal:

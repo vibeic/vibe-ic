@@ -37501,6 +37501,26 @@ def _recorded_run_path(project: Path, value: str) -> Path:
     return path
 
 
+def _pdk_relative(value: str, pdk_name: str) -> Optional[Tuple[str, ...]]:
+    """The library-relative name of a PDK view, whichever root spells it."""
+    parts = Path(str(value)).parts
+    if parts.count(pdk_name) != 1:
+        return None
+    view = parts[parts.index(pdk_name) + 1:]
+    return view if len(view) >= 2 and view[0] == "libs.ref" else None
+
+
+def _current_pdk_view(path: str, pdk: PdkConfig) -> str:
+    """The same library file under the PDK root this run reads its cell LEF from.
+
+    Without one the recorded path stands and the tool reports the missing file."""
+    view, cell = _pdk_relative(path, pdk.name), _pdk_relative(pdk.cell_lef, pdk.name)
+    if not view or not cell or Path(path).is_file():
+        return path
+    current = Path(*Path(pdk.cell_lef).parts[:-len(cell)]).joinpath(*view)
+    return str(current) if current.is_file() else path
+
+
 def _restore_recorded_physical_views(project: Path, pdk: PdkConfig,
                                      container: str) -> Dict[str, Any]:
     """Give a process that did NOT run place-and-route the physical views
@@ -37562,13 +37582,17 @@ def _restore_recorded_physical_views(project: Path, pdk: PdkConfig,
         recorded = []
     base = {str(pdk.tech_lef), str(pdk.cell_lef),
             str(pdk.tech_lef_source or "")}
+    base_views = {_pdk_relative(path, pdk.name) for path in base} - {None}
+    loaded = {_pdk_relative(path, pdk.name) for path in pdk.macro_lefs} - {None}
     for value in recorded:
         path = str(_recorded_run_path(project, str(value)))
+        view = _pdk_relative(path, pdk.name)
         # The recorded tech LEF is never a macro LEF -- verified or not.
-        if (path in base or path == derived
+        if (path in base or path == derived or view in base_views
                 or Path(path).name == Path(str(pdk.tech_lef)).name):
             continue
-        if path not in pdk.macro_lefs:
+        path = _current_pdk_view(path, pdk)
+        if path not in pdk.macro_lefs and view not in loaded:
             pdk.macro_lefs.append(path)
             done["macro_lefs"].append(path)
     if _padring_chip_top_record(project) is not None:
