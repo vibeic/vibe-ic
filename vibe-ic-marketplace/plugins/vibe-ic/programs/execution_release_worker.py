@@ -211,7 +211,45 @@ def _fpga_hardware_present(project: Path) -> bool:
     return marker.is_file() and not marker.is_symlink() and marker.stat().st_size > 0
 
 
-def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
+def final_adoption(project: Path, context: dict) -> dict:
+    """D78 collects the completed aggregate and the final native views."""
+    import librelane_contract as contract
+    from tapeout_declaration_gen import final_gds
+    project = Path(project).resolve()
+    checks, views = [], {}
+    try:
+        aggregate = json.loads((project / "reports/flow109/components/D77.json").read_text())
+        status = aggregate.get("default_row_status", "NOT_MEASURED")
+        checks.append({"check": "signoff_aggregation", "status": status,
+                       "report": "reports/flow109/components/D77.json"})
+        gds = final_gds(project)
+        electrical = json.loads((project / "reports/flow109/components/D70.json").read_text())
+        raw = electrical.get("netlist")
+        netlist = contract.project_path(project, raw.get("path") if isinstance(raw, dict) else raw)
+        if not netlist.is_file():
+            raise ValueError(f"final electrical netlist is absent: {netlist}")
+        views = {"gds": str(gds.relative_to(project)),
+                 "netlist": str(netlist.relative_to(project))}
+        checks.append({"check": "final_native_views", "status": "PASS", "views": views})
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        checks.append({"check": "final_native_views", "status": "NOT_MEASURED", "reason": str(exc)})
+    statuses = [check["status"] for check in checks]
+    status = ("FAIL" if "FAIL" in statuses else "PASS"
+              if statuses and all(value == "PASS" for value in statuses) else "NOT_MEASURED")
+    result = {"program": "execution_release_worker", "step_id": "D78",
+              "context_sha256": context.get("context_sha256"), "component_status": status,
+              "default_row_status": status, "completed": status == "PASS",
+              "views": views, "checks": checks}
+    for rel in ("reports/phase3/layout_receipts.json", "reports/phase3/gates/stage3_compliance.json"):
+        path = project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, indent=2) + "\n")
+    return result
+
+
+def execute(inputs: Path, outputs, *, step_id: str | None = None, params: dict | None = None) -> dict:
+    if step_id is None:
+        return final_adoption(inputs, outputs)
     inputs, outputs = Path(inputs), Path(outputs)
     outputs.mkdir(parents=True, exist_ok=True)
     project = outputs / "project"

@@ -1,94 +1,17 @@
 #!/usr/bin/env python3
-"""tapeout_declaration_gen.py — write the physical and implementation contract.
+"""Write the initial tapeout contract or measure the final GDS with KLayout.
 
-STEP 0.5ic's OTHER HALF
-=======================
-`submission_template_ingest` records what the OPERATOR published. This records
-what the DESIGN declares about itself. Both belong to step 0.5ic — the step
-that decides the route — because a design doing its own tape-out has no
-operator to publish anything and still has to write these numbers down.
-
-The step has no `condition`, and that is the point: EVERY design passes through
-it, including the ones with no shuttle. A self-tape-out that skipped it would
-be a die whose size, pad ring and seal ring nobody ever stated, and every check
-that compares against a declaration would report NOT_DETERMINED forever with no
-way to fix it.
-
-THE THIRD ROUTER FILE
-=====================
-MEASURED on `flow/phase1_phase2_phase3.yaml` at v1.10.98: step 0.5ic wrote two
-router files for what are three routes.
-
-    input/submission_template/slots/*.yaml     -> 37.5ic  operator's container
-    input/submission_template/NO_TEMPLATE.txt  -> 37.5ip  IP/hardmacro terminal
-    (nothing)                                  -> a CHIP doing its own tape-out
-
-The third design has no operator template, so 37.5ic's `files_exist` condition
-excludes it; and it is a die rather than an IP, so 37.5ip is the wrong terminal
-for it. It reached tape-out having passed no submission check of any kind.
-
-This program writes the missing third file, `SELF_TAPEOUT.txt`. Routing the
-self-tape-out chip onto `NO_TEMPLATE.txt` instead would have collided with the
-IP path — the two designs want different terminals and `files_exist` cannot
-express "and not" — so the discriminator is its own file. Three router files,
-mutually exclusive by construction.
-
-2026-08-20 — THE FILE SURVIVES; THE STEP IT USED TO SELECT DOES NOT. The three
-router files were, for a while, three ROUTES, the third being step `37.5self`.
-The owner retired that step: the general precheck was never an alternative to
-the operator's container, it is a second ARM of `37.5ic` that runs on every
-design reaching that step. So `SELF_TAPEOUT.txt` is now one of the TWO files
-that mark the CHIP path — 37.5ic's condition is `slots/*.yaml` OR
-`SELF_TAPEOUT.txt`, `any_of` — and `NO_TEMPLATE.txt` still marks the IP path
-alone. This program is unchanged in what it writes and why; only what the file
-selects downstream moved, and it moved towards MORE checking: a self tape-out
-now gets the same ladder a shuttle design gets.
-
-Step 37.5ic is untouched, and its verdict stays the shuttle operator's own.
-That property is the whole point of that step and nothing here weakens it:
-`_tapeout_declaration.route_of` gives the OPERATOR's answer priority over the
-design's, so a project carrying slot files goes to the operator's container
-whatever it declared about itself.
-
-RETIRING THE OTHER MARKER
-=========================
-When this program selects SELF_TAPEOUT it retires a `NO_TEMPLATE.txt` that
-carries `submission_template_ingest`'s OWN marker line, because a die that is
-also flagged as an IP would select both terminals at once. A file WITHOUT that
-marker is somebody else's and is left exactly where it is — the checker refuses
-the contradiction rather than this program resolving it by deleting evidence.
-That is the same rule `submission_template_ingest.write_artefacts` already
-applies to its own stale markers, applied symmetrically.
-
-NEVER A DEFAULT
-===============
-The declaration this program writes starts as `_tapeout_declaration.
-blank_declaration()` — all 18 physical questions and both contract fields
-`NOT_DETERMINED` — and the ONLY thing that can change a field is a value in the
-caller's `--answers` file. There is no inference here: not from the floorplan,
-not from the PDK, not from the netlist. A number derived from an artefact and
-written into a DECLARATION stops being a measurement and becomes a claim, and
-the next check compares the artefact against a number taken from that same
-artefact, which is not a check.
-
-Running it with no `--answers` is therefore both legal and useful: it produces
-a well-formed, entirely unanswered declaration. The owning declaration gate
-then reports the synthesis-area dependency INCOMPLETE unless Phase 1 extracts
-a design-owned ceiling into L19; every physical consumer reports
-NOT_DETERMINED naming the exact question it went without.
-
-chip-AGNOSTIC: no vendor, foundry, process node, SKU or design literal.
-
-USAGE
------
-    python3 tapeout_declaration_gen.py <project> [--answers ANSWERS.json]
-        [--json REPORT.json] [--print-json]
+The initial contract is populated only from supplied answers. The explicit
+--measure-final-gds mode writes a separate final declaration of native geometry;
+it preserves the original contract and never derives acceptance limits.
 """
 from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -103,6 +26,114 @@ import plugin_manifest_discovery as _pmd                       # noqa: E402
 from _atomic_artefact import write_text as atomic_write_text   # noqa: E402
 
 PROGRAM = "tapeout_declaration_gen"
+FINAL_REL = "reports/phase3/tapeout_declaration_final.json"
+
+
+def final_gds(project: Path) -> Path:
+    """The final stream this run published, including a relocated run."""
+    import librelane_contract as contract
+    from librelane_fill_dfm import DEFAULT_STREAM_REL
+    from tapeout_readiness_check import discover_layouts
+    selected = project / DEFAULT_STREAM_REL
+    if selected.is_file():
+        record = json.loads(selected.read_text())
+        path = contract.project_path(project, record["canonical"])
+        if path.is_file():
+            return path
+        raise ValueError(f"published final GDS is missing: {path}")
+    layouts = discover_layouts(project)
+    if len(layouts) != 1:
+        raise ValueError(f"expected one final layout, found {len(layouts)}")
+    return layouts[0]
+
+
+_FINAL_MEASURE = r'''
+import json
+import pya
+layout = pya.Layout()
+layout.read(gds)
+tops = layout.top_cells()
+if len(tops) != 1:
+    raise ValueError("final GDS must have exactly one top cell")
+cell = tops[0]
+box = cell.bbox()
+layers = []
+polygons = zero_area = 0
+for index in layout.layer_indexes():
+    count = bad = 0
+    shapes = cell.begin_shapes_rec(index)
+    while not shapes.at_end():
+        shape = shapes.shape()
+        if shape.is_box():
+            area = shape.box.area()
+        elif shape.is_polygon():
+            area = shape.polygon.area()
+        elif shape.is_path():
+            area = shape.path.polygon().area()
+        else:
+            shapes.next()
+            continue
+        count += 1
+        bad += int(area <= 0)
+        shapes.next()
+    if count:
+        info = layout.get_info(index)
+        layers.append({"layer": info.layer, "datatype": info.datatype,
+                       "polygon_count": count, "zero_area_polygon_count": bad})
+    polygons += count
+    zero_area += bad
+bbox = [coordinate * layout.dbu for coordinate in (box.left, box.bottom, box.right, box.top)]
+result = {"tool": "KLayout", "tool_version": pya.Application.instance().version(),
+          "top_cell": cell.name, "database_unit_um": layout.dbu,
+          "bbox_um": bbox, "width_um": box.width() * layout.dbu,
+          "height_um": box.height() * layout.dbu, "polygon_count": polygons,
+          "zero_area_polygon_count": zero_area, "layers": layers}
+with open(out, "w") as stream:
+    json.dump(result, stream, indent=2)
+'''
+
+
+def measure_final(project: Path, gds: Optional[Path] = None) -> dict:
+    """Measure the shipped GDS with KLayout and write the final declaration.
+
+    The initial declaration remains the design contract. Measured dimensions
+    are published separately and never become a new acceptance limit.
+    """
+    project = Path(project).resolve()
+    destination = project / FINAL_REL
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    script = destination.with_name("tapeout_declaration_measure.py")
+    native = destination.with_name("tapeout_declaration_measure.json")
+    log = destination.with_name("tapeout_declaration_measure.log")
+    result = {"program": PROGRAM, "verdict": "NOT_MEASURED", "measurement": None,
+              "scope": "final GDS measurement; original limits are evaluated by tapeout_precheck"}
+    try:
+        gds = Path(gds) if gds is not None else final_gds(project)
+        if not gds.is_absolute():
+            gds = project / gds
+        result["gds"] = str(gds.relative_to(project)) if gds.is_relative_to(project) else str(gds)
+        result["gds_sha256"] = hashlib.sha256(gds.read_bytes()).hexdigest()
+        script.write_text(_FINAL_MEASURE)
+        native.unlink(missing_ok=True)
+        command = ["klayout", "-b", "-r", str(script), "-rd", f"gds={gds}", "-rd", f"out={native}"]
+        result["command"] = command
+        with log.open("w") as stream:
+            completed = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=False)
+        result["exit_code"] = completed.returncode
+        if completed.returncode != 0 or not native.is_file():
+            raise ValueError(f"KLayout measurement did not complete; see {log.relative_to(project)}")
+        measurement = json.loads(native.read_text())
+        result["measurement"] = measurement
+        result["verdict"] = ("PASS" if measurement["polygon_count"] > 0
+                             and measurement["zero_area_polygon_count"] == 0 else "FAIL")
+        source = project / TD.DECLARATION_REL
+        if source.is_file():
+            result["declared_contract"] = json.loads(source.read_text())
+            result["declared_contract_path"] = TD.DECLARATION_REL
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        result["reason"] = str(exc)
+    atomic_write_text(destination, json.dumps(result, indent=2) + "\n")
+    return result
 
 
 def _self_tapeout_text(doc: Dict[str, Any]) -> str:
@@ -277,12 +308,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", type=Path, dest="out_json", default=None,
                    help=f"Report path (default: <project>/{TD.REPORT_REL}).")
     p.add_argument("--print-json", action="store_true")
+    p.add_argument("--measure-final-gds", action="store_true",
+                   help="Measure this run's final GDS with KLayout and write the final declaration.")
     args = p.parse_args(argv)
 
     project = Path(args.project_dir)
     if not project.is_dir():
         print(f"ERROR: project directory not found: {project}", file=sys.stderr)
         return 2
+
+    if args.measure_final_gds:
+        rec = measure_final(project)
+        print(json.dumps(rec, indent=2))
+        return 0 if rec["verdict"] == "PASS" else 1 if rec["verdict"] == "FAIL" else 2
 
     # The direct producer entry point must enforce the same 0.5ic route
     # decision as the runner, before it writes either router file.

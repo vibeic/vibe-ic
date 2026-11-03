@@ -2154,6 +2154,10 @@ def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
     ("D69", "flow109_final_extract", "final_filled_odb_rcx_component_only"),
     ("D70", "flow109_final_electrical", "final_sta_native_component_only"),
     ("D71", "flow109_final_gls", "final_sdf_gls_component_only"),
+    ("D77", "signoff_metrics_aggregate", None),
+    ("D78", "execution_release_worker", None),
+    ("D80", "tapeout_precheck", None),
+    ("D81", "foundry_handoff_pack_gen", None),
 ])
 def test_registered_native_component_route_does_not_claim_generic_qualification(
         step, adapter, component_scope):
