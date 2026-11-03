@@ -361,3 +361,18 @@ def test_the_gds_write_tcl_is_the_flows_own_emitter_not_a_local_copy(
     assert rc == 0, report
     assert stage.texts["blk_a_gds_write.tcl"] == build_gds_write_tcl(
         top_cell="blk_a", layout_mag="blk_a", out_gds="blk_a.gds")
+
+
+@pytest.mark.parametrize("declared, expected", [("/runtime/pdks\n", "/runtime/pdks"), ("", A8G.DEFAULT_PDK_ROOT)])
+def test_with_no_pdk_root_the_runtime_names_it(tmp_path, monkeypatch, declared, expected):
+    proj = _project(tmp_path, mag_body=_REAL_MAG)
+    stage = FakeStage(gds=_gds_with_geometry())
+    answer = stage.sh
+
+    def sh(command, timeout=900):
+        return (0, declared, "") if "PDK_ROOT" in command and "printf" in command else answer(command, timeout)
+
+    stage.sh = sh
+    monkeypatch.setattr(A8G, "Stage", lambda *a, **k: stage)
+    report, _ = A8G.run(proj, "fake-container", None, None, tmp_path / "hosttmp")
+    assert report["pdk_root"] == expected
