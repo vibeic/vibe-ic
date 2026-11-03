@@ -60637,7 +60637,7 @@ def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
                     existing.get("current"), pdk, io_context=io_context)
                 if not refusal:
                     refusal = _pc.clock_plan_receipt_liberty_refusal(
-                        existing.get("current"), pdk)
+                        existing.get("current"), pdk, io_context=io_context)
                 required_inputs = ["floorplan", "recipe", "sdc_0"]
                 if pdk is None:
                     # Direct legacy callers do not carry the resolved PDK;
@@ -60736,7 +60736,8 @@ def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
             pdk, io_context=io_context)[2:]
         pdk = pdk_for_run
         floorplan = _pl.pnr_dir(project) / "floorplan.def"
-        return _pc.clock_plan(project, clock_plan, floorplan, sdc_paths, pdk)
+        return _pc.clock_plan(project, clock_plan, floorplan, sdc_paths, pdk,
+                              io_context=io_context)
     except (OSError, ValueError, RuntimeError) as exc:
         notes.append(f"clock_plan.json NOT written: {exc}")
         return None
