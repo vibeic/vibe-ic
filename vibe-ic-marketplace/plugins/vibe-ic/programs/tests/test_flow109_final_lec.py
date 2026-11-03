@@ -959,3 +959,59 @@ def test_current_metric_consumer_refuses_contradictory_native_proof(tmp_path, mo
     component['proof_receipt'] = lec._record(tmp_path, proof_path)
     with pytest.raises(metrics.MetricRefusal, match='partition proof differs from native evidence'):
         metrics._d44_identity(tmp_path, component, context, obligation)
+
+
+@pytest.mark.parametrize("native_status,expected", [
+    ("PASS", "PASS"), ("FAIL", "FAIL"), ("UNKNOWN", "NOT_MEASURED")])
+def test_existing_eqy_result_does_not_require_another_native_run(tmp_path, monkeypatch,
+                                                               native_status, expected):
+    import flow109_final_lec as owner
+    import hashlib
+    project = tmp_path
+    design = project / 'design.v'
+    design.write_text('module neutral(input a, output y); assign y=a; endmodule\n')
+    sha = hashlib.sha256(design.read_bytes()).hexdigest()
+    manifest = project / owner.INPUT
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({'rtl': [{'path': 'design.v', 'sha256': sha}],
+        'adopted_netlist': {'path': 'design.v', 'sha256': sha}, 'transformations': []}))
+    folder = project / 'reports/flow109/D44/previous'
+    status = folder / 'native/scratch/strategies/neutral.y/sat/status'
+    status.parent.mkdir(parents=True)
+    status.write_text(native_status + '\n')
+    (folder / 'native/scratch/partition.list').write_text('0 neutral.y : y\n')
+    original = folder / 'component.json'
+    original.write_text(json.dumps({'inputs': {'/old/project/design.v': sha},
+                                    'component_status': 'NOT_MEASURED'}))
+    before = original.read_bytes()
+    def refuse_unnecessary_prepare(*args):
+        raise owner.AdmissionRefusal('D44_TEST_UNNECESSARY_PREPARATION', 'native input is unchanged')
+    monkeypatch.setattr(owner, 'prepare', refuse_unnecessary_prepare)
+    monkeypatch.setattr(owner, 'require_launch_admission', lambda *args: None)
+    result = owner.execute(project, {'context_sha256': 'current'})
+    assert result['component_status'] == expected, result
+    assert result['native_started'] is False
+    assert result['default_row_status'] == expected
+    assert original.read_bytes() == before
+
+
+def test_existing_eqy_is_not_reused_after_design_change(tmp_path, monkeypatch):
+    import flow109_final_lec as owner
+    import hashlib
+    design = tmp_path / 'design.v'
+    design.write_text('changed design')
+    sha = hashlib.sha256(design.read_bytes()).hexdigest()
+    manifest = tmp_path / owner.INPUT
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({'rtl': [{'path': 'design.v', 'sha256': sha}],
+        'adopted_netlist': {'path': 'design.v', 'sha256': sha}, 'transformations': []}))
+    folder = tmp_path / 'reports/flow109/D44/previous'
+    folder.mkdir(parents=True)
+    (folder / 'component.json').write_text(json.dumps({'inputs': {'design.v': 'old'}}))
+    def prepare(*args):
+        raise owner.AdmissionRefusal('D44_TEST_CHANGED_INPUT_NEEDS_NATIVE_RUN', 'changed')
+    monkeypatch.setattr(owner, 'prepare', prepare)
+    monkeypatch.setattr(owner, 'require_launch_admission', lambda *args: None)
+    result = owner.execute(tmp_path, {'context_sha256': 'current'})
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['reason'] == 'D44_TEST_CHANGED_INPUT_NEEDS_NATIVE_RUN'
