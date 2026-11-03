@@ -240,48 +240,32 @@ acceptance, or grant a 109-flow PASS. A D62 row PASS covers only its three
 current metric obligations; downstream and whole-flow acceptance remain
 separate.
 
-## Native final floating-fill extraction
+## Final extraction (OpenRCX), with a fill net-capacitance comparison
 
-D69 Default calls the released `vibeic-final-fill-spef extract` directly:
-Magic reads the unchanged final GDS with the dedicated floating-fill deck, and
-floating conductors are eliminated by exact zero-net-charge Schur reduction.
-For a routed DEF the tool joins each route one-to-one to its native conductor
-in that GDS and labels it for extraction only; a disconnected route or a
-missing signal name refuses (ruling #90b). A finished stream carries few net
-labels, so a GDS-only name contract cannot apply to it. The tool labels this
-path's receipts `DIAGNOSTIC_ONLY`/`d69_credit=false`; D69 accepts them only when
-the tool produced the names in that run, with rc=0, all of min/nom/max reduced
-and every DEF signal net present. Bindings a caller supplies through
-`VIBEIC_FINAL_FILL_ADOPTION` are refused and stay diagnostic. The downstream STA
-owner consumes the same SPEFs; an old pre-fill SPEF cannot substitute for them.
-The `analog_die` profile remains `Magic.RCX`; this does not claim stock IHP
-fill-aware extraction.
-The reducer's `--max-degree` is our own computational guard on one
-elimination's clique fill-in, not a signoff threshold (ruling #88 D2). When
-that guard alone refuses, D69 relaunches the tool once with `--max-degree` at
-twice the degree the refusal measured; any other refusal, or a second guard
-refusal, stays a FAIL.
+D69 Default runs `OpenROAD.RCX` min/nom/max on the final State, and D70 STA
+times from those SPEFs. `analog_die` remains `Magic.RCX` and does not claim
+stock IHP fill-aware extraction.
 
-In EDA 0.4.29, OpenROAD `d4d1c6987aa8a1c4bdf99cf8166130549c981b03`
-produced identical SPEF bytes (excluding DATE) before and after adding 41,549
-explicit fills to the public Nangate45 RCX regression design. This is a
-capability counterexample for that use, not GF180 qualification or a statement
-about every extraction model. See `vibeic/vibeic-eda#333` for the pinned
-reproducer. OpenRCX results remain routed pre-fill RC component evidence.
-The replacement capability shipped in `vibeic/vibeic-eda#338` (first 0.4.40,
-also present in 0.4.43). Its published `run_final_fill_spef.sh` checks filled,
-omitted-fill and incorrectly-grounded controls for all three corners. The
-gate removes its temporary raw outputs; a source script or release summary
-is not a retained raw JSON receipt. Reuse genuine native gate logs/receipts
-when available and list absent evidence explicitly.
+OpenRCX extracts routed-net wires and vias, not `dbFill` shapes. In EDA 0.4.29,
+OpenROAD `d4d1c6987aa8a1c4bdf99cf8166130549c981b03` produced identical SPEF
+bytes (excluding DATE) before and after adding 41,549 fills to the public
+Nangate45 RCX regression design (`vibeic/vibeic-eda#333`). What D69 leaves out
+is therefore the fill coupling.
 
-Full-chip feasibility and current-geometry correlation remain unmeasured
-until the actual final filled GDS and corresponding DEF match D62/D65,
-fill-present/omitted extraction differs, required nets and min/nom/max are
-complete, and the resulting bound SPEFs reach downstream STA. Tool presence
-or matching file hashes alone do not prove electrical correctness. Issue
-`vibeic/vibeic-eda#336` closed the product capability; its historical missing
-whole-chip replay did not become PASS. No threshold or baseline changes.
+The D69 manifest can opt in to measuring that gap with
+`"fill_net_comparison": true`. It is off by default (C7): on SPM the Magic and
+reducer run takes about 2.2 hours and 43 GiB and changes no verdict. When off,
+`fill_net_comparison` reads `NOT_RUN`. When on, D69 runs the released
+`vibeic-final-fill-spef extract` on the final GDS and routed DEF and compares
+its per-net capacitance with OpenRCX. The tool's output holds net totals with no
+pins or resistance, so it is not STA input: it never enters `spefs` or
+`final_spefs`, and neither D70 nor M08 reads it. No comparison outcome changes
+the D69 status. The reducer's `--max-degree` is a computational guard on one
+elimination's clique fill-in (ruling #88 D2); when that guard alone refuses, the
+comparison relaunches once at twice the measured degree.
+
+The fill-sensitive correlation obligation stays NOT_MEASURED. No threshold or
+baseline changes.
 
 ## D55 GLS activity and vector-power component
 

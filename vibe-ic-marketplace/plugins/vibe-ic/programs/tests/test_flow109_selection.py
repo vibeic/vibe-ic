@@ -2143,7 +2143,7 @@ def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
 
 @pytest.mark.parametrize("step, adapter, component_scope", [
     ("D45", "flow109_netlist_cdc", None),
-    ("D69", "flow109_final_extract", "native_final_gds_floating_fill_component"),
+    ("D69", "flow109_final_extract", "final_filled_odb_rcx_component_only"),
     ("D70", "flow109_final_electrical", "final_sta_native_component_only"),
     ("D71", "flow109_final_gls", "final_sdf_gls_component_only"),
 ])
@@ -2155,8 +2155,8 @@ def test_registered_native_component_route_does_not_claim_generic_qualification(
     assert dispatch["adapter"] == adapter
     assert dispatch.get("component_scope") == component_scope
     if step == "D69":
-        assert dispatch['engine_families'] == ['magic']
-        assert dispatch['engine_steps'] == {'magic': ['vibeic-final-fill-spef extract']}
+        assert dispatch['engine_families'] == ['openroad']
+        assert dispatch['engine_steps'] == {'openroad': ['OpenROAD.RCX']}
     context = flow109.execution_context(plan, step, step)
     admission = flow109.source_owned_native_admission(context)
     assert admission["admitted"] is True
