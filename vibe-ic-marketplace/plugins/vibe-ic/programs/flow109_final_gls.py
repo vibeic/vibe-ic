@@ -156,12 +156,12 @@ def _engineering_components(project, d69, d70):
     binding = signoff.bind_rcx_spefs(rcx_state.parent, rcx_state.parent / 'state_in.json')
     if binding != d69.get('rcx_binding'):
         raise AdmissionRefusal('D71_FINAL_RCX_BINDING_CHANGED', str(rcx_state))
-    rcx = _read(rcx_state)
+    rcx = {signoff.rc_corner(k): v for k, v in (_read(rcx_state).get('spef') or {}).items()}
     if d69.get('final_spefs') != d69.get('spefs'):
         raise AdmissionRefusal('D71_FINAL_PARASITIC_PROVENANCE_UNBOUND', 'SPEF aliases differ')
     for corner, ref in d69['final_spefs'].items():
         path = _bound(project, ref)
-        if str(path) != rcx.get('spef', {}).get(corner) or final_extract.scan_spef(path) != d69['spef_consumer'][corner]:
+        if str(path) != rcx.get(corner) or final_extract.scan_spef(path) != d69['spef_consumer'][corner]:
             raise AdmissionRefusal('D71_FINAL_SPEF_CHANGED', corner)
     folder, state = postroute.stapostpnr_state(project)
     if _record(project, folder / 'state_out.json') != d70.get('sta_state'):

@@ -1,7 +1,9 @@
-"""D69 native owner: final GDS/DEF -> released floating-fill Magic SPEF tool."""
+"""D69 native owner: final State -> OpenROAD.RCX min/nom/max SPEFs for STA.
+
+The final-fill tool's net totals sit beside the result as a comparison only.
+"""
 from __future__ import annotations
 
-from collections import Counter
 import hashlib
 import json
 import os
@@ -10,7 +12,6 @@ import re
 import uuid
 import shutil
 import subprocess
-import time
 
 import sys
 
@@ -22,12 +23,12 @@ from _atomic_artefact import write_json
 from flow109_admission import AdmissionRefusal, require_launch_admission
 import flow109_density_fill as density
 import librelane_fill_stream as files
+import librelane_signoff as signoff
 from librelane_contract import Refusal
 from spef_extraction_check import scan_spef
 
 SCHEMA = 'vibeic.flow109.final-extract.v1'
 INPUT = 'input/flow109/D69.json'
-NATIVE_NAMING_METHOD = 'final-GDS-native-conductor-route-coverage'
 
 
 def _sha(path):
@@ -131,8 +132,8 @@ def _fill_extraction_scope(d62):
 
 def _component_scope(record, d62):
     fill_scope = _fill_extraction_scope(d62)
-    if (record.get('reason') != 'D69_NATIVE_FINAL_FILL_SPEF_MEASURED'
-            or record.get('component_scope') != 'native_final_gds_floating_fill_component'
+    if (record.get('reason') != 'D69_FINAL_STATE_RCX_MEASURED'
+            or record.get('component_scope') != 'final_filled_odb_rcx_component_only'
             or record.get('fill_sensitive_parasitics') != fill_scope):
         raise AdmissionRefusal('D69_COMPONENT_SCOPE_CHANGED',
                                'native component cannot invent current-geometry correlation')
@@ -140,145 +141,62 @@ def _component_scope(record, d62):
 
 
 def operation_sources():
-    paths = (Path(__file__), Path(files.__file__),
+    paths = (Path(__file__), Path(signoff.__file__), Path(files.__file__),
              Path(density.__file__), Path(__file__).with_name('spef_extraction_check.py'),
              Path(__file__).with_name('librelane_fill_dfm.py'),
              Path(__file__).with_name('_physical_current.py'))
     return {str(path.resolve()): _sha(path) for path in paths}
 
 
-def _normal_required_nets(routed_def):
-    """Derive both DEF sections' signal names from explicit USE intent."""
-    text = routed_def.read_text()
-    sections = list(re.finditer(
-        r'(?ms)^[ \t]*(NETS|SPECIALNETS)[ \t]+(\d+)[ \t]*;[ \t]*\n'
-        r'(.*?)^[ \t]*END[ \t]+\1[ \t]*(?:\n|$)', text))
-    headers = re.findall(r'(?mi)^[ \t]*(?:NETS|SPECIALNETS)\b[^\n]*', text)
-    ends = re.findall(r'(?mi)^[ \t]*END[ \t]+(?:NETS|SPECIALNETS)\b[^\n]*', text)
-    uses = {}
-    valid = (len(headers) == len(sections) == len(ends)
-             and len({s[1] for s in sections}) == len(sections))
-    for section in sections:
-        body = re.sub(r'(?m)^[ \t]*#[^\n]*', '', section[3])
-        pieces = body.split(';')
-        records = [piece.strip() for piece in pieces[:-1] if piece.strip()]
-        names = []
-        for record in records:
-            name = re.match(r'-\s+(\S+)(?:\s|$)', record)
-            valid = valid and name is not None and len(re.findall(r'(?m)^[ \t]*-[ \t]+', record)) == 1
-            if name is not None:
-                names.append(name[1])
-                body = re.sub(r'"(?:\\.|[^"\\])*"', '""', record)
-                declared = re.findall(r'\+\s*USE\s+(\S+)', body)
-                if len(declared) > 1:
-                    raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
-                                           'ambiguous DEF net USE: ' + name[1])
-                uses.setdefault(name[1], set()).update(declared)
-        valid = (valid and not pieces[-1].strip() and len(names) == int(section[2])
-                 and len(names) == len(set(names)))
-    for name, values in uses.items():
-        if len(values) > 1:
-            raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
-                                   'conflicting DEF net USE: ' + name)
-    required = {name for name, values in uses.items() if not values.intersection({'POWER', 'GROUND'})}
-    if not valid or not required:
-        raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
-                               'complete unambiguous DEF net declarations required')
-    return required
+def _fill_net_comparison(project, attempt, final_gds, routed_def, spefs):
+    """Compare net capacitance with the final-fill tool's totals; never a verdict.
 
-
-def _require_net_population(required, names, corner, artifact):
-    counts = Counter(names)
-    actual = set(counts)
-    duplicates = sorted(name for name, count in counts.items() if count > 1)
-    if actual != required or duplicates:
-        raise AdmissionRefusal('D69_REQUIRED_NET_CENSUS_FAILED', json.dumps({
-            'corner': corner, 'artifact': artifact, 'missing': sorted(required - actual),
-            'unexpected': sorted(actual - required), 'duplicates': duplicates}, sort_keys=True), status='FAIL')
-
-
-def _tool_named(project, receipt_ref, native, gds_ref, def_ref, required):
-    """Tell the tool's own routed-DEF naming from bindings a caller supplied.
-
-    The tool writes DIAGNOSTIC_ONLY on both (ruling #90b credits only its own),
-    so the difference is read from the run: the query sits in this receipt's
-    output directory and the producer is the released tool source.
+    Those files hold net totals with no pins or resistance, so STA cannot read
+    them and they never enter `spefs`. No outcome here changes D69's status.
     """
-    identity = native.get('native_adoption') or {}
-    pins = identity.get('pins') or {}
-    source = (pins.get('producer_source') or {}).get('path') or ''
     binary = shutil.which('vibeic-final-fill-spef')
-    if (identity.get('method') != NATIVE_NAMING_METHOD
-            or identity.get('expected_names') != sorted(required)
-            or not binary or not source or source not in Path(binary).resolve().read_text(errors='replace')
-            or not Path(source).is_file() or _sha(source) != pins['producer_source'].get('sha256')):
-        return False
-    bound = {'geometry': _bound(project, gds_ref), 'routed_def': _bound(project, def_ref)}
-    if any(not pins.get(role) or Path(pins[role].get('path') or '') != path.resolve()
-           or pins[role].get('sha256') != _sha(path) for role, path in bound.items()):
-        return False
-    directory = _bound(project, receipt_ref).parent.resolve()
-    for reduction in native['corners'].values():
-        binding, authority = reduction.get('native_binding') or {}, reduction.get('native_authority') or {}
-        query = binding.get('query') or {}
-        path = Path(query.get('path') or '')
-        if (any(binding.get(role) != pins[role] for role in ('geometry', 'routed_def', 'producer_source'))
-                or not path.is_file() or not path.resolve().is_relative_to(directory)
-                or _sha(path) != query.get('sha256') or authority.get('query') != query.get('sha256')
-                or authority.get('raw') != reduction.get('raw_spef_sha256')
-                or reduction.get('expected_name_count') != len(required)):
-            return False
-    return True
+    if binary is None:
+        return {'status': 'NOT_MEASURED', 'reason': 'FILL_TOOL_ABSENT'}
+    top = files.fill_records(routed_def)['top']
 
-
-def _native_outputs(project, receipt_ref, gds_ref, def_ref):
-    """Block incomplete nets using the normal producer's already bound DEF."""
-    native = _read(_bound(project, receipt_ref))
-    # A routed DEF takes the tool's naming path, which labels itself this way;
-    # an already-named input takes the direct path and reports PASS.
-    named_by_tool = native.get('status') == 'DIAGNOSTIC_ONLY'
-    if ((native.get('d69_credit') is not False if named_by_tool
-         else native.get('status') != 'PASS' or native.get('d69_credit') is False)
-            or native.get('geometry') != {'path': str(_bound(project, gds_ref)), 'sha256': gds_ref['sha256']}
-            or native.get('routed_def') != {'path': str(_bound(project, def_ref)), 'sha256': def_ref['sha256']}
-            or native.get('top') != files.fill_records(_bound(project, def_ref))['top']
-            or native.get('declared_corner_set') != ['min', 'nom', 'max']
-            or set(native.get('corners') or {}) != {'min', 'nom', 'max'}
-            or native.get('floating_boundary_condition') != 'zero-net-charge'
-            or native.get('grounded_fill_approximation') is not False
-            or type(native.get('keep_net_count')) is not int or native['keep_net_count'] <= 0):
-        raise AdmissionRefusal('D69_NATIVE_RECEIPT_MISMATCH', str(receipt_ref))
-    required = _normal_required_nets(_bound(project, def_ref))
-    _bound(project, native.get('fill_aware_tech'))
-    if named_by_tool and not _tool_named(project, receipt_ref, native, gds_ref, def_ref, required):
-        raise AdmissionRefusal('D69_NATIVE_RECEIPT_MISMATCH', 'names not produced by this tool run')
-    spefs, scans = {}, {}
-    for corner, reduction in native['corners'].items():
-        if ((reduction.get('status') != 'DIAGNOSTIC_ONLY' or reduction.get('d69_credit') is not False
-             if named_by_tool else reduction.get('status') != 'PASS' or reduction.get('d69_credit') is False)
-                or reduction.get('method') != 'exact-capacitance-matrix-schur-complement'
-                or reduction.get('floating_boundary_condition') != 'zero-net-charge'
-                or reduction.get('grounded_fill_approximation') is not False
-                or reduction.get('retained_net_count') != native['keep_net_count']
-                or reduction.get('keep_nets_sha256') != native.get('keep_nets_sha256')):
-            raise AdmissionRefusal('D69_NATIVE_CORNER_MISMATCH', corner)
-        for key in ('raw_spef', 'keep_nets', 'output_spef'):
-            _bound(project, {'path': reduction.get(key), 'sha256': reduction.get(key + '_sha256')})
-        names = [line.strip() for line in Path(reduction['keep_nets']).read_text().splitlines()
-                 if line.strip() and not line.lstrip().startswith('#')]
-        _require_net_population(required, names, corner, 'keep_nets')
-        path = Path(reduction['output_spef']); facts = scan_spef(path)
-        if (not facts['has_header'] or not facts['has_design'] or not (facts['d_nets'] or facts['r_nets'])
-                or facts['negative_caps'] or facts['negative_net_totals']):
-            raise AdmissionRefusal('D69_SPEF_CONSUMER_FAILED', corner, status='FAIL')
-        text = path.read_text()
-        if re.search(r'(?m)^[ \t]*\*NAME_MAP\b', text):
-            raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
-                                   'normal producer policy requires direct-name SPEF')
-        _require_net_population(required, re.findall(r'(?m)^[ \t]*\*D_NET\s+(\S+)', text),
-                                corner, 'output_spef')
-        spefs[corner], scans[corner] = files._record(project, path), facts
-    return spefs, scans
+    def launch(name, *bound):
+        argv = [binary, 'extract', '--gds', str(final_gds), '--def', str(routed_def),
+                '--top', top, '--output-dir', str(attempt / name), *bound]
+        completed = subprocess.run(argv, cwd=project, capture_output=True, text=True)
+        log = attempt / f'{name}.log'; log.write_text(completed.stdout + completed.stderr)
+        return completed, {'argv': argv, 'returncode': completed.returncode,
+                           'log': files._record(project, log)}
+    native = 'fill-totals'
+    completed, execution = launch(native)
+    comparison = {'status': 'NOT_MEASURED', 'scope': 'net capacitance only; not read by STA'}
+    measured = _measured_degree(completed)
+    if measured is not None:
+        comparison['degree_bound'] = {**measured, 'measuring_execution': execution}
+        native = 'fill-totals-measured-bound'
+        completed, execution = launch(native, '--max-degree', str(measured['max_degree']))
+    comparison['execution'] = execution
+    if completed.returncode != 0:
+        return {**comparison, 'reason': 'FILL_TOOL_REFUSED'}
+    receipt = _read(attempt / native / 'FINAL_FILL_EXTRACTION.json')
+    corners = {}
+    for corner, ref in spefs.items():
+        fill_path = Path(receipt['corners'][corner]['output_spef'])
+        openrcx = signoff.spef_census(_bound(project, ref))['nets']
+        fill = signoff.spef_census(fill_path)['nets']
+        openrcx = {name.replace('\\', ''): value for name, value in openrcx.items()}
+        fill = {name.replace('\\', ''): value for name, value in fill.items()}
+        common = sorted(set(openrcx) & set(fill))
+        ratios = sorted(fill[n] / openrcx[n] for n in common if openrcx[n] > 0)
+        if not ratios:
+            return {**comparison, 'reason': 'NO_COMMON_NETS'}
+        corners[corner] = {'fill_totals': files._record(project, fill_path),
+            'common_nets': len(common), 'only_openrcx': len(set(openrcx) - set(fill)),
+            'only_fill': len(set(fill) - set(openrcx)),
+            'openrcx_total_pf': sum(openrcx[n] for n in common),
+            'fill_total_pf': sum(fill[n] for n in common),
+            'fill_over_openrcx': {'min': ratios[0], 'median': ratios[len(ratios) // 2],
+                                  'max': ratios[-1]}}
+    return {**comparison, 'status': 'MEASURED', 'tool_status': receipt.get('status'), 'corners': corners}
 
 
 def execute(project, context):
@@ -324,53 +242,43 @@ def execute(project, context):
             raise AdmissionRefusal('D69_ADOPTED_VIEWS_ABSENT', 'netlist and SDC required')
         netlist = _bound(project, views['netlist']); sdc = _bound(project, views['sdc'])
         basis = {str(p): _sha(p) for p in (project / INPUT, odb, routed_def, final_gds, netlist, sdc, d62_path)}
+        native = manifest.get('librelane') or {}
+        if set(native) != {'image', 'pdk_root', 'pdk'}:
+            raise AdmissionRefusal('D69_NATIVE_CONFIGURATION_ABSENT', 'image/pdk_root/pdk required')
         sources = operation_sources()
-        binary = shutil.which('vibeic-final-fill-spef')
-        if binary is None:
-            raise AdmissionRefusal('D69_NATIVE_TOOL_ABSENT', 'released vibeic-final-fill-spef required')
-        tool = files._record(project, Path(binary))
-        top = files.fill_records(routed_def)['top']
-        if os.environ.get('VIBEIC_FINAL_FILL_ADOPTION') is not None:
-            raise AdmissionRefusal('D69_CALLER_BINDINGS_REFUSED',
-                                   'caller-supplied native bindings stay diagnostic', status='FAIL')
-
-        def launch(name, *bound):
-            argv = [binary, 'extract', '--gds', str(final_gds), '--def', str(routed_def),
-                    '--top', top, '--output-dir', str(attempt / name), *bound]
-            started = time.monotonic()
-            completed = subprocess.run(argv, cwd=project, capture_output=True, text=True)
-            log = attempt / f'{name}.log'; log.write_text(completed.stdout + completed.stderr)
-            return completed, log, {'argv': argv, 'returncode': completed.returncode,
-                'elapsed_seconds': time.monotonic() - started, 'log': files._record(project, log),
-                'tool': tool}
         result['native_started'] = True
-        native = 'native'
-        completed, log, execution = launch(native)
-        measured = _measured_degree(completed)
-        if measured is not None:
-            result['degree_bound'] = {**measured, 'measuring_execution': execution}
-            native = 'native-measured-bound'
-            completed, log, execution = launch(native, '--max-degree', str(measured['max_degree']))
-        result['native_execution'] = execution
-        if completed.returncode != 0:
-            raise AdmissionRefusal('D69_NATIVE_EXTRACT_FAILED', str(log), status='FAIL')
+        run = signoff.run(project, native['image'], Path(native['pdk_root']), native['pdk'],
+                          routed_def=routed_def, routed_odb=odb, netlist=netlist, sdc=sdc,
+                          extract=True, time=False, lane='flow109-d69')
+        binding = signoff.bind_rcx_spefs(Path(run['rcx']), Path(run['rcx']) / 'state_in.json')
+        scans = {signoff.rc_corner(pattern): scan_spef(Path(path)) for pattern, path in run['spef'].items()}
+        bad = {c: f for c, f in scans.items() if not f['has_header'] or not f['has_design']
+               or not (f['d_nets'] or f['r_nets']) or f['negative_caps'] or f['negative_net_totals']}
+        if bad:
+            raise AdmissionRefusal('D69_SPEF_CONSUMER_FAILED', str(bad), status='FAIL')
         if sources != operation_sources() or any(_sha(Path(p)) != digest for p, digest in basis.items()):
             raise AdmissionRefusal('D69_INPUT_CHANGED', 'source or geometry changed during extraction')
-        _bound(project, tool)
-        native_ref = files._record(project, attempt / native / 'FINAL_FILL_EXTRACTION.json')
+        final_spefs = {signoff.rc_corner(pattern): files._record(project, Path(path))
+                       for pattern, path in run['spef'].items()}
         gds_ref, def_ref = files._record(project, final_gds), files._record(project, routed_def)
-        final_spefs, scans = _native_outputs(project, native_ref, gds_ref, def_ref)
-        result.update(component_status='PASS', reason='D69_NATIVE_FINAL_FILL_SPEF_MEASURED',
+        try:
+            comparison = _fill_net_comparison(project, attempt, final_gds, routed_def, final_spefs)
+        except (OSError, ValueError, KeyError, TypeError, Refusal) as exc:
+            comparison = {'status': 'NOT_MEASURED', 'reason': 'FILL_COMPARISON_UNAVAILABLE', 'detail': str(exc)}
+        result.update(component_status='PASS', reason='D69_FINAL_STATE_RCX_MEASURED',
                       producer='flow109_final_extract',
-                      component_scope='native_final_gds_floating_fill_component',
+                      component_scope='final_filled_odb_rcx_component_only',
                       d62_receipt=manifest.get('d62_receipt'), stream_bridge=manifest.get('stream_bridge'),
                       retained_geometry=retained_geometry,
                       adopted_views=views, inputs=basis,
                       operation_sources=sources,
                       final_geometry=bridge['odb'],
-                      final_gds=gds_ref, final_def=def_ref, native_receipt=native_ref,
+                      final_gds=gds_ref, final_def=def_ref,
+                      rcx_state=files._record(project, Path(run['rcx']) / 'state_out.json'),
+                      rcx_receipt=files._record(project, Path(run['rcx']) / 'vibeic_receipt.json'),
                       spefs=final_spefs, final_spefs=final_spefs,
-                      spef_consumer=scans, execution_context=context)
+                      spef_consumer=scans, rcx_binding=binding,
+                      fill_net_comparison=comparison, execution_context=context)
     except AdmissionRefusal as exc:
         result.update(component_status=exc.status, reason=exc.code, detail=str(exc))
     except Refusal as exc:
@@ -388,7 +296,7 @@ def validate_final_parasitics(project, receipt_ref):
     if record.get('component_scope') == 'native_analog_final_gds_capacitance_component':
         return _validate_analog(project, _analog_read(_bound(project, receipt_ref)), receipt_ref)
     if record.get('schema') != SCHEMA or record.get('component_status') != 'PASS':
-        raise AdmissionRefusal('D69_COMPONENT_NOT_ACCEPTED', 'current final-fill native receipt required')
+        raise AdmissionRefusal('D69_COMPONENT_NOT_ACCEPTED', 'current native RCX receipt required')
     require_launch_admission(project, 'flow109.D69', {'flow109_context': record.get('execution_context')})
     if record.get('operation_sources') != operation_sources():
         raise AdmissionRefusal('D69_OPERATION_SOURCE_CHANGED', 'adapter or retained consumer changed')
@@ -417,15 +325,21 @@ def validate_final_parasitics(project, receipt_ref):
     for path, sha in record['inputs'].items():
         if not Path(path).is_file() or _sha(path) != sha:
             raise AdmissionRefusal('D69_INPUT_CHANGED', path)
-    _bound(project, record['native_execution']['tool'])
-    spefs, scans = _native_outputs(project, record['native_receipt'], final_gds, filled_def)
-    if spefs != record['spefs'] or scans != record['spef_consumer']:
-        raise AdmissionRefusal('D69_SPEF_CHANGED', 'native corner outputs changed')
+    rcx_state = _bound(project, record['rcx_state'])
+    state = {signoff.rc_corner(k): v for k, v in (_read(rcx_state).get('spef') or {}).items()}
+    if set(state) != set(record['spefs']):
+        raise AdmissionRefusal('D69_SPEF_CHANGED', 'RCX scene population changed')
+    for corner, ref in record['spefs'].items():
+        path = _bound(project, ref)
+        if scan_spef(path) != record['spef_consumer'][corner] or Path(state[corner]).resolve() != path.resolve():
+            raise AdmissionRefusal('D69_SPEF_CHANGED', corner)
+    if signoff.bind_rcx_spefs(rcx_state.parent, rcx_state.parent / 'state_in.json') != record['rcx_binding']:
+        raise AdmissionRefusal('D69_SPEF_CHANGED', 'RCX binding changed')
     return {'odb': bridge['odb'], 'filled_def': filled_def, 'd62_receipt': record['d62_receipt'],
             'adopted_views': record['adopted_views'],
             'spefs': record['spefs'], 'final_geometry': record['final_geometry'],
             'final_spefs': record['final_spefs'], 'parasitic_receipt': receipt_ref,
-            'final_gds': final_gds,
+            'final_gds': final_gds, 'fill_net_comparison': record.get('fill_net_comparison'),
             'fill_sensitive_parasitics': fill_scope,
             'component_parasitics_current': True, 'flow109_acceptance': 'NOT_MEASURED'}
 
