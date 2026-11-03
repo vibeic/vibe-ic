@@ -390,11 +390,9 @@ def _launch_dashboard(project: Path, host: str, port: int,
         if full:
             cmd.append("--full")
         _verify_runtime_command(cmd)
-        observer_env = dict(os.environ)
-        observer_env.pop('VIBEIC_FLOW109_ROW_OUTPUT', None)
         proc = subprocess.Popen(
             cmd, stdout=fh, stderr=fh, stdin=subprocess.DEVNULL,
-            start_new_session=True, env=observer_env,
+            start_new_session=True,
         )
         return proc.pid
     except Exception:

@@ -35,8 +35,8 @@ the 1-based Flow109 position and current row name, for example
 `steps/066_final-adopted-netlist-equivalence/`.
 `result.json` holds the same row answer as the working `default_rows` file.
 `outputs/` holds independent copies of files written by the tool and native
-reports cited by the row. `inputs.json` lists paths and SHA-256 hashes already
-known to the row. Layout files over the existing publication size ceiling keep
+reports cited by the row. `inputs.json` lists only paths and SHA-256 hashes
+exposed by the row result. Layout files over the existing publication size ceiling keep
 their path, bytes and SHA-256 in `outputs.json` instead of a copy. Each rerun
 creates a new UTC folder, including failures. Later rows preserve older folders.
 The whole-run verdict reads the newest `result.json` for each selected row.

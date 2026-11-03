@@ -2204,10 +2204,7 @@ def run_rows(args, project: Path, run_row) -> int:
         working = project / 'reports/flow109/default_rows' / (row['id'] + '.json')
         before = outputs._working_files(project).get(str(working.relative_to(project)))
         try:
-            with outputs.observe_flow109_row(project, attempt):
-                # The selection was read before the row boundary was known.
-                outputs.note_flow109_input(Path(args.flow109_manifest))
-                code = run_row(selected)
+            code = run_row(selected)
             after = outputs._working_files(project).get(str(working.relative_to(project)))
             if after is not None and after != before:
                 result = json.loads(working.read_text())

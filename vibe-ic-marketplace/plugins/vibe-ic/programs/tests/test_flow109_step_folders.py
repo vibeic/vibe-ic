@@ -2,8 +2,6 @@ import hashlib
 import json
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -214,29 +212,38 @@ def test_native_windows_capture_before_the_next_row_overwrites_a_report(tmp_path
     assert (tmp_path / 'native.rpt').read_text() == exit_
 
 
-def test_every_read_input_and_native_answer_is_saved_before_later_mutation(tmp_path, monkeypatch):
+def test_inputs_are_only_paths_already_exposed_in_row_result(tmp_path, monkeypatch):
     args = case(tmp_path, 'D31')
     source = put(tmp_path, 'input/neutral.json', {'limit': 0})
+    unreported = put(tmp_path, 'input/unreported.json', {'read': True})
     report = tmp_path / 'answer.rpt'
     report.write_text('errors=0\n')
     original_source = hashlib.sha256(source.read_bytes()).hexdigest()
+    original_report = hashlib.sha256(report.read_bytes()).hexdigest()
     def native(project, context):
         assert json.loads(source.read_text())['limit'] == 0
+        assert json.loads(unreported.read_text())['read'] is True
         assert report.read_text() == 'errors=0\n'
-        report.write_text('changed after judgment\n')
         return {'step_id': 'D31', 'context_sha256': context['context_sha256'],
-                'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True}
+                'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True,
+                'native_report': str(report),
+                'inputs': [{'path': 'input/neutral.json', 'sha256': original_source}]}
     monkeypatch.setattr(flow109, '_retained_backend_result', native)
     assert run(tmp_path, args) == 0
     result = versions(tmp_path, 'D31')[0]
     folder = result.parent
     assert (folder / 'outputs/answer.rpt').read_text() == 'errors=0\n'
-    assert {'path': 'input/neutral.json', 'sha256': original_source} in json.loads(
-        (folder / 'inputs.json').read_text())
+    assert json.loads((folder / 'inputs.json').read_text()) == [
+        {'path': 'answer.rpt', 'sha256': original_report},
+        {'path': 'input/neutral.json', 'sha256': original_source}]
+    assert not (folder / 'outputs/input/unreported.json').exists()
 
 
-@pytest.mark.parametrize('step', ['D22', 'D25', 'D26'])
-def test_native_frontend_inputs_and_answer_files_are_retained(tmp_path, step):
+@pytest.mark.parametrize('step,answer', [
+    ('D22', 'phase3/librelane/02-yosys-synthesis/state_out.json'),
+    ('D25', None),
+    ('D26', 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr/state_out.json')])
+def test_native_frontend_inputs_and_answer_files_are_retained(tmp_path, step, answer):
     from test_flow109_retained_frontend import case as frontend_case
     args, _ = frontend_case(tmp_path, step)
     assert run(tmp_path, args) == 0
@@ -244,56 +251,12 @@ def test_native_frontend_inputs_and_answer_files_are_retained(tmp_path, step):
     assert len(results) == 1
     folder = results[0].parent
     inputs = {r['path'] for r in json.loads((folder / 'inputs.json').read_text())}
-    assert {'phase2/stage2/synth/synth_inputs.json', 'phase2/stage1/rtl/neutral.v'} <= inputs
-    if step == 'D25':
-        answer = 'native/eqy/scratch/strategies/neutral.q/pdr/status'
-    elif step == 'D26':
-        root = 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr'
-        assert {root + '/' + n for n in ('config.json', 'state_in.json', 'input_fingerprint.json')} <= inputs
-        answer = root + '/tt/checks.rpt'
+    assert inputs == ({answer} if answer else set())
+    if answer:
+        assert (folder / 'outputs' / answer).read_bytes() == (tmp_path / answer).read_bytes()
     else:
-        answer = 'phase3/librelane/02-yosys-synthesis/state_out.json'
-    assert answer in inputs
-    assert (folder / 'outputs' / answer).read_bytes() == (tmp_path / answer).read_bytes()
-
-
-def test_parallel_threads_and_native_children_merge_their_reads(tmp_path, monkeypatch):
-    import step_output_collector as collector
-    args = case(tmp_path, 'D31')
-    sources = [put(tmp_path, f'input/source{n}.json', {'number': n}) for n in range(4)]
-    first, second = threading.Event(), threading.Event()
-    original_sha = collector._sha
-    def sha(path):
-        if path == sources[0]:
-            first.set()
-            second.wait(3)
-        elif path == sources[1]:
-            second.set()
-        return original_sha(path)
-    monkeypatch.setattr(collector, '_sha', sha)
-    def native(project, context):
-        with ThreadPoolExecutor(2) as pool:
-            one = pool.submit(sources[0].read_text)
-            assert first.wait(3)
-            two = pool.submit(sources[1].read_text)
-            one.result()
-            two.result()
-        script = 'import sys;sys.path.insert(0,sys.argv[1]);import step_output_collector;from pathlib import Path;Path(sys.argv[2]).read_text()'
-        children = [subprocess.Popen([sys.executable, '-c', script,
-                    str(Path(collector.__file__).parent), str(source)]) for source in sources[2:]]
-        assert all(child.wait() == 0 for child in children)
-        return {'step_id': 'D31', 'context_sha256': context['context_sha256'],
-                'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True}
-    monkeypatch.setattr(flow109, '_retained_backend_result', native)
-    assert run(tmp_path, args) == 0
-    results = versions(tmp_path, 'D31')
-    assert len(results) == 1
-    folder = results[0].parent
-    inputs = {r['path'] for r in json.loads((folder / 'inputs.json').read_text())}
-    for source in sources:
-        relative = str(source.relative_to(tmp_path))
-        assert relative in inputs
-        assert (folder / 'outputs' / relative).read_bytes() == source.read_bytes()
+        native_report = 'reports/flow109/components/D25-native.json'
+        assert (folder / 'outputs' / native_report).read_bytes() == (tmp_path / native_report).read_bytes()
 
 
 @pytest.mark.parametrize('value', [None, '{', '[]'])
