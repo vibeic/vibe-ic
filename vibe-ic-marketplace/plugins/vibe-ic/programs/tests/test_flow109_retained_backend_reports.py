@@ -136,3 +136,20 @@ def test_report_cannot_supply_its_own_relaxed_ir_limit(tmp_path):
     assert flow109.prepare_front_door(args, tmp_path) == 1
     result = json.loads((tmp_path / 'reports/flow109/default_rows/D57.json').read_text())
     assert result['default_row_status'] == 'FAIL'
+
+
+@pytest.mark.parametrize(('errors', 'rc'), [(0, 0), (1, 1)])
+def test_route_checks_read_completed_native_checkers(tmp_path, errors, rc):
+    from test_flow109_retained_padring import _case, _write
+    args = _case(tmp_path)
+    args.entry_step = args.exit_step = 'D42'
+    for index, (step, metric) in enumerate((('Checker.TrDRC', 'route__drc_errors'),
+        ('Checker.DisconnectedPins', 'design__critical_disconnected_pin__count'),
+        ('Checker.WireLength', 'route__wirelength__max'))):
+        folder = tmp_path / 'native' / f'{index:02d}-checker'
+        _write(folder / 'config.json', {'meta': {'step': step}, 'WIRE_LENGTH_THRESHOLD': None})
+        _write(folder / 'state_out.json', {'metrics': {'flow__errors__count': 0, metric: errors}})
+    assert flow109.prepare_front_door(args, tmp_path) == rc
+    row = json.loads((tmp_path / 'reports/flow109/default_rows/D42.json').read_text())
+    assert row['default_row_status'] == ('FAIL' if errors else 'PASS')
+    assert row['unmeasured_obligations'] == ['wire-length limit absent from PDK']

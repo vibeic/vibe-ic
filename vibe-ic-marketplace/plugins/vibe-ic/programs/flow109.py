@@ -2514,6 +2514,9 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
     from flow109_final_electrical import IR_LIMIT_PCT
     contracts = {
         **{step: {} for step in ('D31', 'D32', 'D35', 'D37', 'D38', 'D39', 'D40')},
+        'D42': {'steps': {'Checker.TrDRC': 'route__drc_errors',
+                         'Checker.DisconnectedPins': 'design__critical_disconnected_pin__count',
+                         'Checker.WireLength': None}},
         **{step: {'report': 'reports/phase3/sta_postpnr_signoff.json', 'state': 'sta_state',
             'limits': {**{f'corners.*.{key}': ('ge', 0) for key in ('setup_ws', 'hold_ws')},
                        **{f'corners.*.{key}': ('eq', 0) for key in ('setup_tns', 'hold_tns',
@@ -2622,7 +2625,8 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
     try:
         chain = json.loads(chain_path.read_text())
         states = {item["step"]: project / item["state"] for item in chain["states"]}
-        steps = (("OpenROAD.PadRing", "OpenROAD.GeneratePDN") if row["id"] == "D32"
+        steps = (tuple(entry['steps']) if entry.get('steps') else
+                 ("OpenROAD.PadRing", "OpenROAD.GeneratePDN") if row["id"] == "D32"
                  else row["profile"]["native_steps"])
         if any(step not in states for step in steps):
             root = next(iter(states.values())).parent.parent
@@ -2660,6 +2664,15 @@ def _retained_backend_result(project: Path, context: Mapping) -> dict | None:
             measurements[step] = {"report": str(state_path)}
             if step != "Yosys.JsonHeader":
                 measurements[step]["errors"] = values["flow__errors__count"]
+            if entry.get('steps', {}).get(step):
+                metric = entry['steps'][step]
+                measurements[step][metric] = values[metric]
+            if step == 'Checker.WireLength':
+                config = json.loads((state_path.parent / 'config.json').read_text())
+                if config.get('WIRE_LENGTH_THRESHOLD') is None:
+                    result['unmeasured_obligations'] = ['wire-length limit absent from PDK']
+                elif values['route__wirelength__max'] > config['WIRE_LENGTH_THRESHOLD']:
+                    measurements[step]['wire_length_violations'] = 1
             if step == "OpenROAD.GeneratePDN":
                 measurements[step]["connectivity_errors"] = values["design__power_grid_violation__count"]
             if step == "OpenROAD.DetailedPlacement":
@@ -3122,7 +3135,7 @@ def prepare_front_door(args, project: Path) -> int | None:
     attempt = _new_attempt(project, context)
     os.environ[ATTEMPT_ENV] = str(attempt.resolve())
     adapter = context['resolved_row']['profile']['dispatch'].get('adapter')
-    retained = _retained_backend_result(project, context) if not adapter else None
+    retained = _retained_backend_result(project, context)
     if retained is not None:
         result = _selected_step_result(project, context, retained)
         write_json(destination / 'components' / (context['requested_step'] + '.json'), result)
