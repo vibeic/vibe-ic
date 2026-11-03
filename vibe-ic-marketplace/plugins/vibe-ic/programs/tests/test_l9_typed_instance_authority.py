@@ -168,3 +168,82 @@ def test_two_declarations_of_one_block_that_differ_are_refused(tmp_path):
             "b.md": "```json\n" + json.dumps(decl(kind="resistor")) + "\n```\n"}
     with pytest.raises(ValueError, match="L5_BLOCK_MULTIPLICITY_CONTRADICTION: shared_cap"):
         runner.gen_l5_adi_spec(tmp_path, docs)
+
+
+CAP_PORTS = [port("top", "REFP"), port("vss", "GND", "ground")]
+
+
+@pytest.mark.parametrize("block_type,parameters", [
+    ("resistor", {}), ("inductor", {"resistance_ohm": 5}), ("unit_kind", {}), ("mom_capacitor", {}),
+    ("mim_capacitor", {"capacitance_pf": 10.0})])
+def test_derived_passive_never_yields_to_another_kind(tmp_path, block_type, parameters):
+    name = derived_name(l9_for(tmp_path / "probe", PROSE, {}))
+    l9 = l9_for(tmp_path, PROSE, {"instances": [
+        {"name": name, "block_type": block_type, "ports": CAP_PORTS, "parameters": parameters}]})
+    assert conflicts(l9) == [name]
+    assert name not in rows(l9)
+
+
+@pytest.mark.parametrize("block_type", ["capacitor", "mim_capacitor"])
+def test_derived_passive_yields_to_the_same_kind(tmp_path, block_type):
+    name = derived_name(l9_for(tmp_path / "probe", PROSE, {}))
+    l9 = l9_for(tmp_path, PROSE, {"instances": [{"name": name, "block_type": block_type, "ports": CAP_PORTS}]})
+    assert conflicts(l9) == []
+    assert rows(l9)[name]["block_type"] == block_type
+
+
+def test_derived_passive_with_a_third_port_is_a_conflict(tmp_path):
+    name = derived_name(l9_for(tmp_path / "probe", PROSE, {}))
+    ports = [*CAP_PORTS, port("x", "RAIL")]
+    l9 = l9_for(tmp_path, PROSE, {"instances": [{"name": name, "block_type": "capacitor", "ports": ports}]})
+    assert conflicts(l9) == [name]
+
+
+def test_portless_row_with_a_differing_parameter_does_not_yield():
+    prior = {"block_type": "unit_kind", "parameters": {"capacitance_pf": 25.0}}
+    assert not runner._typed_instance_supersedes(
+        prior, "unit_kind", UNIT_PORTS, {"capacitance_pf": 10.0}, {})
+
+
+def test_keyword_class_declared_as_another_type_is_refused(tmp_path):
+    answers(tmp_path, {"pll": 6})
+    data = {"analog_blocks": [{"name": "pll", "type": "capacitor", "count": 6, "instances": [
+        {"name": f"P{i}"} for i in range(6)]}]}
+    with pytest.raises(ValueError, match="L5_BLOCK_MULTIPLICITY_CONTRADICTION: pll"):
+        l5_for(tmp_path, data)
+
+
+@pytest.mark.parametrize("instances,count,typed", [
+    ([{"ports": []}, {"ports": []}], 2, 2),
+    ([{"name": "C1"}, {"name": "C1"}], 2, 2),
+    ([{"name": 1}, {"name": 2}], None, 2),
+    (["C1", "C2"], 2, 2),
+    ([{"name": "C1"}], True, 1),
+    ([{"name": "C1"}, {"name": "C2"}], "2", 2),
+])
+def test_malformed_declared_rows_never_make_a_count_explicit(tmp_path, instances, count, typed):
+    answers(tmp_path, {"shared_cap": typed})
+    data = {"analog_blocks": [{"name": "shared_cap", "type": "capacitor", "count": count,
+                               "spec": CAP_SPEC, "instances": instances}]}
+    with pytest.raises(ValueError, match="L5_BLOCK_MULTIPLICITY_INVALID: shared_cap"):
+        l5_for(tmp_path, data)
+
+
+def test_declared_block_alone_keeps_the_analog_flags_consistent(tmp_path):
+    answers(tmp_path, {"shared_cap": 1})
+    data = {"analog_blocks": [{"name": "shared_cap", "type": "capacitor", "spec": CAP_SPEC,
+                               "instances": [{"name": "C1"}]}]}
+    text = "# Part\n\nA digital part.\n\n```json\n" + json.dumps(data) + "\n```\n"
+    doc = json.loads(Path(runner.gen_l5_adi_spec(tmp_path, {"spec.md": text}).path).read_text())
+    assert doc["no_analog"] is False and doc["analog_blocks_detected"] is True
+    assert [b["name"] for b in doc["analog_blocks"]] == ["shared_cap"]
+
+
+def test_declared_block_is_not_also_listed_as_spurious(tmp_path):
+    answers(tmp_path, {"adc": 1})
+    data = {"analog_blocks": [{"name": "adc", "type": "adc", "instances": [{"name": "A1"}]}]}
+    text = (HEADING + "\nAn ADC front end.\n\n```json\n" + json.dumps(data) + "\n```\n")
+    doc = json.loads(Path(runner.gen_l5_adi_spec(tmp_path, {"spec.md": text}).path).read_text())
+    assert "adc" in [b["name"] for b in doc["analog_blocks"]]
+    assert "adc" not in [b["name"] for b in doc.get("spurious_analog_blocks", [])]
+

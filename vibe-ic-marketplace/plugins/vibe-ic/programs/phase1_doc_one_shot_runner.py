@@ -14312,18 +14312,25 @@ def _declared_analog_blocks(extracted: Dict[str, str]) -> Dict[str, Dict[str, An
             if not isinstance(block, dict):
                 continue
             name, kind, rows = block.get("name"), block.get("type"), block.get("instances")
-            names = ([row.get("name") for row in rows if isinstance(row, dict)]
-                     if isinstance(rows, list) else [])
             if (not isinstance(name, str) or not identifier.match(name)
-                    or not isinstance(kind, str) or not identifier.match(kind) or not names):
+                    or not isinstance(kind, str) or not identifier.match(kind)
+                    or not isinstance(rows, list) or not rows):
                 continue
-            row = {"name": name, "type": kind, "instances": names, "count": block.get("count"),
+            names = [row.get("name") if isinstance(row, dict) else None for row in rows]
+            count = block.get("count")
+            row = {"name": name, "type": kind, "instances": names, "count": count,
                    "spec": block.get("spec") if isinstance(block.get("spec"), dict) else None,
                    "evidence": evidence}
+            if (any(not isinstance(item, str) or not identifier.match(item) for item in names)
+                    or len(set(map(str, names))) != len(names)):
+                row["invalid"] = "instance names must be unique identifiers"
+            elif count is not None and type(count) is not int:
+                row["invalid"] = f"count must be an integer, got {count!r}"
             prior = blocks.get(name)
             if prior and any(prior[k] != row[k] for k in ("type", "instances", "count", "spec")):
                 row["conflict"] = True
-            blocks.setdefault(name, row).update({"conflict": True} if row.get("conflict") else {})
+            kept = blocks.setdefault(name, row)
+            kept.update({key: row[key] for key in ("conflict", "invalid") if key in row})
     return blocks
 
 
@@ -14337,6 +14344,8 @@ def _typed_block_multiplicity_refusal(typed: Dict[str, Dict[str, Any]],
         if pattern is None and block is None:
             return f"L5_BLOCK_MULTIPLICITY_UNKNOWN_BLOCK: {name}"
         if block is not None:
+            if block.get("invalid"):
+                return f"L5_BLOCK_MULTIPLICITY_INVALID: {name}: {block['invalid']}"
             stated = len(block["instances"])
             if (block.get("conflict") or stated != answer["count"]
                     or block["count"] not in (None, answer["count"])):
@@ -14371,6 +14380,10 @@ def _apply_typed_block_multiplicity(blocks: List[Dict[str, Any]],
             blocks.append(blk)
         if blk is None:
             raise _BlockMultiplicityRefusal(f"L5_BLOCK_MULTIPLICITY_UNKNOWN_BLOCK: {name}")
+        if name in declared and blk.get("type") != declared[name]["type"]:
+            raise _BlockMultiplicityRefusal(
+                f"L5_BLOCK_MULTIPLICITY_CONTRADICTION: {name}: declared type "
+                f"{declared[name]['type']}, document type {blk.get('type')}")
         count = answer["count"]
         if blk.get("count") not in (None, count):
             raise _BlockMultiplicityRefusal(
@@ -37554,6 +37567,10 @@ def gen_l5_adi_spec(project: Path,
     _v466_spurious = _v466_apply_spurious_block_guard(
         blocks, extracted, ic_name)
     _apply_typed_block_multiplicity(blocks, typed, extracted)
+    if typed:
+        _typed_names = {blk.get("name") for blk in blocks if isinstance(blk, dict)}
+        _v466_spurious = [blk for blk in _v466_spurious if blk.get("name") not in _typed_names]
+        _no_analog_flag = False
     # Strip the #466 private bookkeeping keys before serialisation.
     _v466_strip_internal_fields(blocks)
     _v466_strip_internal_fields(_v466_spurious)
@@ -53052,20 +53069,26 @@ def _typed_instance_supersedes(prior: dict, block_type: str, ports: list,
                                parameters: dict, aliases: dict) -> bool:
     """A partial derived row gives way unless both sides state something different."""
     typed_nets = [port["net"] for port in ports]
+    known, stated_parameters = prior.get("parameters") or {}, parameters or {}
+    if any(known[key] != stated_parameters[key] for key in known.keys() & stated_parameters.keys()):
+        return False
     if not prior.get("ports"):
         if prior.get("block_type") != block_type:
             return False
         for field, kind in (("power_net", "power"), ("ground_net", "ground")):
             stated = prior.get(field)
-            nets = {port["net"] for port in ports if port["type"] == kind}
+            nets = {port["net"] for port in ports if port.get("type") == kind}
             if stated and nets and not (aliases.get(stated) or {stated}) & nets:
                 return False
         return True
     if not str(prior.get("terminal_naming", "")).startswith("generic_two_terminal_passive"):
         return False
-    known, stated = prior.get("parameters") or {}, parameters or {}
-    return (sorted(port.get("net") for port in prior["ports"]) == sorted(typed_nets)
-            and all(known[key] == stated[key] for key in known.keys() & stated.keys()))
+    # The emitter writes <material>_capacitor or capacitor. A typed row may name
+    # the same kind with or without the material, never another kind.
+    derived = str(prior.get("block_type", ""))
+    same_kind = (block_type == derived or block_type == derived.rsplit("_", 1)[-1]
+                 or derived == block_type.rsplit("_", 1)[-1])
+    return same_kind and sorted(port.get("net") for port in prior["ports"]) == sorted(typed_nets)
 
 
 def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
@@ -53292,7 +53315,9 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
                                     if row.get("child_inst") != name]
             emit(name, declared["block_type"], declared["ports"],
                  {**(prior.get("parameters") or {}), **declared["parameters"]}, declared["evidence"])
-            row = existing[name]
+            row = existing.get(name)
+            if row is None:
+                continue
             instances.remove(row)
             instances.insert(position, row)
             for field in ("power_net", "ground_net"):
