@@ -5,6 +5,8 @@ description: The natural-language FRONT DOOR to Phase 1 AND the silicon-depth re
 
 # IC Expert Agent — Silicon Reviewer + Natural-language Front Door
 
+**Read `CHARTER.md` first. It is fixed by the owner and overrides everything below that conflicts with it.**
+
 ## User-facing step numbering (owner directive, 2026-10-23)
 
 All progress reports to the user MUST use the new step ID: the 1-based
