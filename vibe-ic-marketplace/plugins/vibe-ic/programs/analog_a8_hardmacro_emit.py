@@ -248,15 +248,14 @@ def interface_liberty(block: str, rails: List[str], signals: List[str],
            '  time_unit : "1ns";',
            '  voltage_unit : "1V";',
            '  current_unit : "1mA";',
-           '  capacitive_load_unit (1, pf);',
-           f'  cell ({block}) {{',
-           '    is_macro_cell : true;',
-           '    interface_timing : false;']
+           '  capacitive_load_unit (1, pf);']
     if measurement is not None:
-        value = measurement["liberty_value"]
-        unit = measurement["liberty_power_unit"]
-        out += [f'    leakage_power_unit : "{unit}";',
-                f'    cell_leakage_power : {value:.12g};']
+        out.append(f'  leakage_power_unit : "{measurement["liberty_power_unit"]}";')
+    out += [f'  cell ({block}) {{',
+            '    is_macro_cell : true;',
+            '    interface_timing : false;']
+    if measurement is not None:
+        out.append(f'    cell_leakage_power : {measurement["liberty_value"]:.12g};')
     for i, p in enumerate(rails):
         out += [f'    pg_pin ({p}) {{',
                 f'      pg_type : "{"primary_power" if i == 0 else "primary_ground"}";',
@@ -735,6 +734,33 @@ def _terminal_voltage_expression(positive: str, negative: str) -> str:
     return f"(v({positive})-v({negative}))"
 
 
+def _l9_block_pins(project: Path, block: str, ports: List[str]) -> Dict[str, Dict]:
+    path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"A8 unloaded power requires L9 pin directions: {exc}") from exc
+    if not isinstance(doc, dict) or not isinstance(doc.get("instances"), list):
+        raise ValueError("A8 unloaded power requires L9 instance pins")
+    candidates = []
+    for instance in doc["instances"]:
+        if not isinstance(instance, dict) or not any(
+                str(instance.get(key, "")).casefold() == block.casefold()
+                for key in ("block", "master", "block_type")):
+            continue
+        pins = {str(pin["name"]).casefold(): {
+                    "direction": str(pin.get("direction", "")).casefold(),
+                    "type": str(pin.get("type", "")).casefold()}
+                for pin in instance.get("ports", []) if isinstance(pin, dict) and "name" in pin}
+        if set(pins) != {port.casefold() for port in ports} or any(
+                pin["direction"] not in ("input", "output", "inout") for pin in pins.values()):
+            raise ValueError(f"A8 L9 pins/directions do not describe all {block} ports")
+        candidates.append(pins)
+    if not candidates or any(pins != candidates[0] for pins in candidates[1:]):
+        raise ValueError(f"A8 requires consistent L9 instance pins for {block}")
+    return candidates[0]
+
+
 def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
                                 ports: List[str], subckt: str,
                                 topology: Dict, wrapper: Optional[Path] = None, *,
@@ -745,8 +771,9 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
     The A3 model bindings and external circuit cards remain the source of the
     conditions. This steady-state deck specializes power-on PWL supply rails
     to their explicit DC bias, or their own final plateau when no DC value is
-    stated. The original waveform remains bound through source metadata and
-    the testbench hash; the DUT, parasitics and external loads are unchanged.
+    stated. L9 output pins drive the original testbench through ideal voltage
+    followers, leaving the DUT outputs unloaded while retaining external bias
+    and feedback. Zero-volt rail probes measure only the DUT terminal power.
     """
     bdir = project / "phase3" / "analog" / block
     a3, tb = bdir / f"{block}.sp", bdir / f"tb_{block}.sp"
@@ -792,7 +819,13 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
     if len(instances) != 1:
         raise ValueError("A8 native OP requires exactly one delivered DUT instance")
     nodes = instances[0][1:len(ports) + 1]
+    pins = _l9_block_pins(project, block, ports)
     rail_ports = {str(value).casefold() for value in (topology.get("rails") or {}).values()}
+    has_supply = any(pin["type"] == "power" and port in rail_ports for port, pin in pins.items())
+    if not has_supply:
+        if not _valid_leakage_power(0, topology):
+            raise ValueError("A8 L9 pins do not identify a power rail for quiescent current")
+        rail_ports = {port for port, pin in pins.items() if pin["direction"] != "output"}
     rail_nodes = {node.casefold() for port, node in zip(ports, nodes)
                   if port.casefold() in rail_ports and node != "0"}
     supplies = []
@@ -826,9 +859,36 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
         raise ValueError("A8 delivered testbench has no voltage source driving its declared rails")
     precision_cards, precision = _native_op_precision(cards)
     method_cards, solver = _native_op_solver(cards)
-    current = " + ".join(f"abs(i({row['source']}))" for row in supplies)
-    power = " + ".join(f"abs(i({row['source']})*{_terminal_voltage_expression(row['positive'], row['negative'])})"
-                       for row in supplies)
+    used = {token.casefold() for token in re.findall(r"[^\s(),]+", " ".join([*cards, *ports, *nodes]))}
+    def fresh(prefix):
+        name, suffix = prefix, 0
+        while name.casefold() in used:
+            suffix += 1
+            name = f"{prefix}_{suffix}"
+        used.add(name.casefold())
+        return name
+
+    probes, rail_probes, power_probes = [], [], []
+    for index, (port, node) in enumerate(zip(ports, nodes)):
+        pin = pins[port.casefold()]
+        if port.casefold() in rail_ports:
+            inner = fresh(f"a8_dut_{index}")
+            source = fresh(f"V_A8_supply_{index}")
+            probes.append(f"{source} {node} {inner} 0")
+            rail_probes.append((source, inner))
+            if pin["type"] == "power" or (not has_supply and pin["type"] != "ground"):
+                power_probes.append(source)
+            nodes[index] = inner
+        elif pin["direction"] == "output":
+            inner = fresh(f"a8_dut_{index}")
+            source = fresh(f"E_A8_unload_{index}")
+            probes.append(f"{source} {node} 0 {inner} 0 1")
+            nodes[index] = inner
+    if not power_probes:
+        raise ValueError("A8 L9 pins do not identify a power rail for quiescent current")
+    current = " + ".join(f"i({source})" for source in power_probes)
+    power = " + ".join(f"i({source})*{_terminal_voltage_expression(node, '0')}"
+                       for source, node in rail_probes)
     includes = [f".include {json.dumps(str(extracted))}"]
     if wrapper is not None:
         includes.append(f".include {json.dumps(str(wrapper))}")
@@ -845,7 +905,7 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
                                 f"{fields[0]} {json.dumps(str(runtime))}" +
                                 (f" {fields[2]}" if len(fields) > 2 else ""))
     text = "\n".join(["* A8 native OP from delivered A3 stimulus and model bindings.",
-                        *runtime_bindings, *includes, *cards, *precision_cards, *method_cards,
+                        *runtime_bindings, *includes, *cards, *precision_cards, *method_cards, *probes,
                         f"XU {' '.join(nodes)} {subckt}", ".control", "set noaskquit", "set num_threads=1", "op",
                         f"let idd = {current}", f"let pwr = {power}",
                         "print idd pwr", "quit", ".endc", ".end", ""])
@@ -854,7 +914,7 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
                   "model_binding_lines": bindings, "power_sources": supplies,
                   "native_op_precision": precision,
                   "native_op_solver": solver,
-                  "native_measurement": "native OP sum(abs(I(source)*V(source terminals)))"}
+                  "native_measurement": "unloaded native OP sum(V(DUT rail)*I(DUT rail probe))"}
 
 
 def _native_op_precision(cards: List[str]) -> Tuple[List[str], Dict]:
@@ -1611,6 +1671,8 @@ def _emit_block(project: Path, block: str, container: str, pdk_root: str, *,
                  for key in ("path", "sha256")):
             measurement, measurement_reason = None, \
                 "cached native measurement used a different selected binary"
+    if measurement is not None and measurement.get("measurement_basis") != "delivered_a3_testbench_op":
+        measurement, measurement_reason = None, "cached measurement predates unloaded DUT power recipe"
     if measurement is None:
         produced, produce_reason = _native_measurement_produce(
             project, block, container, pdk_root, gds, topology,

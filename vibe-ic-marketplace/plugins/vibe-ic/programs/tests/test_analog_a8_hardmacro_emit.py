@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -228,6 +230,7 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
         {"ports": ["vdd", "vss", "vin"], "rails": {"p": "vdd", "n": "vss"}}))
     monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/x.magicrc")
     monkeypatch.setattr(E, "load_native_measurement", lambda *a, **k: ({
+        "measurement_basis": "delivered_a3_testbench_op",
         "liberty_value": 1.0,
         "liberty_power_unit": "1uW",
         "measurement_sha256": "m" * 64,
@@ -402,6 +405,14 @@ def _select_fixture_binary(monkeypatch):
     monkeypatch.setattr(E, "_selected_native_binary", lambda *a, **k: (
         {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
          "selection": "discovered"}, ""))
+    # LEF transport tests consume an already characterized current cache.
+    read = E.load_native_measurement
+    def current(*args, **kwargs):
+        measurement, why = read(*args, **kwargs)
+        if measurement is not None:
+            measurement = dict(measurement, measurement_basis="delivered_a3_testbench_op")
+        return measurement, why
+    monkeypatch.setattr(E, "load_native_measurement", current)
 
 
 def test_missing_native_measurement_refuses_before_magic(tmp_path: Path):
@@ -678,6 +689,14 @@ def _source_power_fixture(tmp_path, monkeypatch, *, native_rc=0, diagnostic=""):
     (b / E._A8_MEASUREMENT).unlink()
     topo = {"ports": ["vp", "vn", "control", "out"], "rails": {"vdd": "vp", "vss": "vn"}}
     (b / "topology.json").write_text(json.dumps(topo))
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"instances": [{
+        "name": "U0", "block_type": "blk", "ports": [
+            {"name": "vp", "type": "power", "direction": "input"},
+            {"name": "vn", "type": "ground", "direction": "inout"},
+            {"name": "control", "type": "analog", "direction": "input"},
+            {"name": "out", "type": "analog", "direction": "output"}]}]}))
     bindings = []
     for filename, section in (("device.lib", "nom"), ("passive.lib", "rnom"), ("capacitive.lib", "cnom")):
         model = b / filename
@@ -723,8 +742,11 @@ def test_current_native_op_preserves_all_models_sources_and_loads(tmp_path, monk
     deck = (b / "a8_native_measurement.sp").read_text()
     assert all(binding in deck for binding in (".lib device.lib nom", ".lib passive.lib rnom", ".lib capacitive.lib cnom"))
     assert "VMAIN vp vn 2.3" in deck and "VREF control vn 0.4" in deck
-    assert "RLOAD out vn 7k" in deck and "XU vp vn control out blk" in deck
-    assert "abs(i(VMAIN)*(v(vp)-v(vn)))" in deck
+    assert "RLOAD out vn 7k" in deck
+    connected = re.search(r"(?m)^XU (\S+) (\S+) (\S+) (\S+) blk$", deck).groups()
+    assert connected[2] == "control"
+    assert all(actual != original for actual, original in zip(connected, topo["ports"]) if original != "control")
+    assert "i(VMAIN)" not in deck and "i(V_A8_supply_0)" in deck
     assert "tran 1n 1u" not in deck and "*1.2" not in deck
     assert len(rec["model_bindings"]) == 3
     assert rec["measured_current_a"] == pytest.approx(0.0002)
@@ -1303,3 +1325,115 @@ def test_cli_requires_the_exact_magicrc_to_be_a_file(runtime_magicrc_case, entry
     assert rc == 2 and result["emitted"] is False, result
     assert str(rcfile) in result["reason"]
     assert exports == []
+
+
+def test_leakage_unit_is_a_library_attribute():
+    text = E.interface_liberty("blk", ["vp", "vn"], ["control", "out"], {
+        "liberty_value": 52.9, "liberty_power_unit": "1uW"})
+    assert 'leakage_power_unit : "1uW";' in text.split('cell (blk)', 1)[0]
+    assert 'cell_leakage_power : 52.9;' in text.split('cell (blk)', 1)[1]
+
+
+@pytest.mark.parametrize("output", ["out", "result_p"])
+def test_no_load_power_excludes_arbitrary_external_loads(tmp_path, monkeypatch, output):
+    binary = shutil.which("ngspice")
+    if binary is None:
+        pytest.skip("native ngspice is required for the terminal-power regression")
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    extracted = b / "post_layout_extracted.spice"
+    topo["ports"][-1] = output
+    (b / "blk.sp").write_text((b / "blk.sp").read_text().replace(" out", " " + output))
+    l9 = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    doc = json.loads(l9.read_text())
+    doc["instances"][0]["ports"][-1]["name"] = output
+    l9.write_text(json.dumps(doc))
+    extracted.write_text(f'.subckt blk vp vn control {output}\nRBIAS vp vn 100k\nRDRIVE vp {output} 11k\n.ends blk\n')
+    powers = []
+    for load_ua in (500, 2500):
+        (b / "tb_blk.sp").write_text(
+            '.include blk.sp\nVMAIN vp vn 2.3\nVZERO vn 0 -0.4\n'
+            f'VREF control vn 0.4\nXDUT vp vn control {output} blk\n'
+            f'ILOAD {output} vn {load_ua}u\nIBYPASS vp vn 1m\n'
+            f'RLOAD {output} vn 7k\nXLOAD {output} vn external_load\n'
+            'V_A8_supply_0 auxiliary vn 0\nRcollision a8_dut_3 vn 1k\n'
+            '.subckt external_load p n\nRCHILD p n 3k\n.ends external_load\n.end\n')
+        text, _ = E._delivered_measurement_deck(project, "blk", extracted, topo["ports"], "blk", topo)
+        deck = b / f"no_load_{load_ua}.sp"
+        deck.write_text(text)
+        result = subprocess.run([binary, '-b', str(deck)], cwd=b,
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        value = re.search(r'(?mi)^pwr\s*=\s*(\S+)', result.stdout)
+        assert value, result.stdout
+        powers.append(float(value[1]))
+    assert powers == pytest.approx([52.9e-6, 52.9e-6], rel=1e-6)
+
+
+def test_no_load_characterization_requires_l9_directions(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    (project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").unlink()
+    with pytest.raises(ValueError, match="L9"):
+        E._delivered_measurement_deck(project, "blk", b / "post_layout_extracted.spice",
+                                      topo["ports"], "blk", topo)
+
+
+def test_no_load_characterization_rejects_conflicting_l9_instances(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    doc = json.loads(path.read_text())
+    conflict = json.loads(json.dumps(doc["instances"][0]))
+    conflict["name"] = "U1"
+    conflict["ports"][-1]["direction"] = "input"
+    doc["instances"].append(conflict)
+    path.write_text(json.dumps(doc))
+    with pytest.raises(ValueError, match="consistent L9"):
+        E._delivered_measurement_deck(project, "blk", b / "post_layout_extracted.spice",
+                                      topo["ports"], "blk", topo)
+
+
+@pytest.mark.parametrize("device, expected", [("C1 TOP VSS 1p", 0), ("R1 TOP VSS 100k", 10e-6)])
+def test_no_load_passive_without_power_pin_uses_native_terminal_power(tmp_path, monkeypatch, device, expected):
+    binary = shutil.which("ngspice")
+    if binary is None:
+        pytest.skip("native ngspice is required for the terminal-power regression")
+    project, b, _ = _source_power_fixture(tmp_path, monkeypatch)
+    topo = {"ports": ["TOP", "VSS"], "rails": {"vss": "VSS"},
+            "devices": [{"role": "cap" if device.startswith("C") else "res"}]}
+    (b / "blk.sp").write_text('.lib device.lib nom\n.subckt blk TOP VSS\n' + device + '\n.ends blk\n')
+    extracted = b / "post_layout_extracted.spice"
+    extracted.write_text('.subckt blk TOP VSS\n' + device + '\n.ends blk\n')
+    (b / "tb_blk.sp").write_text('.include blk.sp\nVBIAS top_bias 0 1\nXDEVICE top_bias 0 blk\n.end\n')
+    (project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").write_text(json.dumps({"instances": [{
+        "block_type": "blk", "ports": [
+            {"name": "TOP", "type": "analog", "direction": "inout"},
+            {"name": "VSS", "type": "ground", "direction": "inout"}]}]}))
+    text, _ = E._delivered_measurement_deck(project, "blk", extracted, topo["ports"], "blk", topo)
+    deck = b / "passive.sp"
+    deck.write_text(text)
+    result = subprocess.run([binary, '-b', str(deck)], cwd=b, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    power = re.search(r'(?mi)^pwr\s*=\s*(\S+)', result.stdout)
+    assert power, result.stdout
+    assert float(power[1]) == pytest.approx(expected, rel=1e-6, abs=1e-18)
+    assert 'let idd = 0' not in text
+
+
+@pytest.mark.parametrize("current", [False, True], ids=["legacy", "current_unloaded"])
+def test_production_only_reuses_current_unloaded_measurement(tmp_path, monkeypatch, current):
+    if current:
+        project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+        measured, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+        assert measured is not None, why
+    else:
+        project, b, _ = _write_native_measurement_fixture(tmp_path)
+    monkeypatch.setattr(E, "_selected_native_binary", lambda *a, **k: (
+        {"path": "/usr/bin/ngspice", "sha256": "c" * 64, "selection": "discovered"}, ""))
+    attempts = []
+    monkeypatch.setattr(E, "_native_measurement_produce", lambda *a, **k: (
+        attempts.append(a[1]) or (None, "native rerun reached")))
+    monkeypatch.setattr(E, "_attach_declared_subject_binding", lambda *a: (None, "cache consumed"))
+    result = E.emit_block(project, "blk", "", "/pdk")
+    if current:
+        assert attempts == [] and "cache consumed" in result["reason"]
+    else:
+        assert attempts == ["blk"] and "native rerun reached" in result["reason"]
