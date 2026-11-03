@@ -34,8 +34,9 @@ method. A stricter method needs the owner's approval.
 - PASS: the tool ran and its native report meets the limit.
 - FAIL: its native report violates the limit.
 - NOT_MEASURED: the tool did not run, or left no report.
-AI review (C9) can hold a PASS open. Nothing can turn a FAIL into a PASS. If the
-wrapper disagrees with a native result, the wrapper is the bug.
+AI review (C9) can hold a PASS open. A FAIL becomes a PASS only when a C9 fix is in
+and the tool, rerun, meets the limit. If the wrapper disagrees with a native result,
+the wrapper is the bug.
 
 **C3. Glue stays thin.** Glue around a tool runs it, reads its report and compares
 the numbers. It does not rebuild what the tool knows.
@@ -67,13 +68,20 @@ AI reads the native report and asks: did it run on the right design and the righ
 limit, do the numbers make physical sense, and what did it leave out? The review is
 about this run's output, not the tool's ability. A tool is qualified once, before it
 enters the flow. After that every case trusts it: IC path, IP path and benchmark. Do
-not plant errors or run positive controls to test a tool during a case. A problem
-the review finds gets a bug: an issue or a PR, fixed in our
-local fork of the tool, or in the plugin when the code is ours. The step stays open
-until the fix lands or the reviewer writes down why the problem does not affect the
-chip. Review never moves a limit and never passes what the tool failed. It is a
-reading and a bug report, not a new gate, receipt or lane (C4). These fixes are the
-extra value Vibe-IC adds on top of the tools.
+not plant errors or run positive controls to test a tool during a case.
+
+When the review finds a problem, the fix goes to one of three places:
+- **The design.** The tool is right and the IC or IP is wrong. Change this IC's or
+  IP's RTL, netlist, circuit or layout.
+- **The tool.** The tool missed a real problem, or it failed something the AI judges
+  correct. Open an issue or PR and fix the tool in our local fork.
+- **The plugin.** The flow, its control or our own code is wrong or weak. Capture the
+  enhancement and fix the plugin.
+
+The step stays open until the fix lands and the tool's result meets the limit, or the
+reviewer writes down why the problem does not affect the chip. Review never moves a
+limit. It is a reading and a fix, not a new gate, receipt or lane (C4). These fixes
+are the extra value Vibe-IC adds on top of the tools.
 
 ## Before any change
 
