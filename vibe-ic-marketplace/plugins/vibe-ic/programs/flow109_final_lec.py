@@ -660,8 +660,52 @@ def _retained_physical_views(project, prepared):
     return views, _record(project, receipt_path)
 
 
+def _reuse_native_eqy(project, context):
+    """C7: read the existing EQY result when its design inputs did not change."""
+    manifest_path = project / INPUT
+    if not manifest_path.is_file():
+        return None
+    manifest = _read(manifest_path)
+    refs = [*manifest.get('rtl', []), manifest.get('adopted_netlist')]
+    refs += [item.get('input') for item in manifest.get('transformations', [])]
+    if not refs or any(not isinstance(ref, dict) for ref in refs):
+        return None
+    for path in sorted((project / 'reports/flow109/D44').glob('*/component.json'),
+                       key=lambda path: path.stat().st_mtime_ns, reverse=True):
+        previous = _read(path)
+        inputs = previous.get('inputs', {})
+        if not inputs or not all(
+                _sha(_bound(project, ref)) in {
+                    value for name, value in inputs.items()
+                    if name == ref['path'] or name.endswith('/' + ref['path'])}
+                for ref in refs):
+            continue
+        native = path.parent / 'native'
+        if not (native / 'scratch/partition.list').is_file():
+            continue
+        # Read EQY's own partition statuses again; a saved wrapper PASS is
+        # neither necessary nor sufficient. No tool is launched here.
+        proof = consume_eqy(native, project / 'reports/flow109/D44/reused-eqy-result.json')
+        status = {'PASS': 'PASS', 'FAIL': 'FAIL'}.get(proof['verdict'], 'NOT_MEASURED')
+        return {'schema': SCHEMA, 'step_id': 'D44',
+                'context_sha256': context['context_sha256'],
+                'proof': proof, 'native_report': str(native.relative_to(project)),
+                'native_started': False, 'native_proof_reused': True,
+                'component_status': status, 'default_row_status': status,
+                'completed': status == 'PASS', 'flow109_acceptance': status,
+                'reason': proof['explanation'], 'whole_flow_acceptance': 'NOT_MEASURED',
+                'delivery_accepted': False}
+    return None
+
+
 def execute(project, context):
     project = Path(project).resolve()
+    try:
+        reused = _reuse_native_eqy(project, context)
+    except (AdmissionRefusal, OSError, ValueError, TypeError, KeyError):
+        reused = None
+    if reused is not None:
+        return reused
     attempt = project / 'reports/flow109/D44' / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
     record = {'schema': SCHEMA, 'step_id': 'D44', 'component_status': 'NOT_MEASURED',
