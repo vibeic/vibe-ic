@@ -181,6 +181,10 @@ def gate_level_sim(project: Path, top: str, image: str, pdk_root: Path, pdk: str
     import sdf_gate_sim as sgs
     import librelane_contract as contract
     import _container_exec
+    sta_folder, state = stapostpnr_state(project)
+    native_config = _load(sta_folder / 'config.json')
+    pdk_mounts = [(pdk_root / pdk, '/pdk/' + pdk),
+                  (pdk_root / pdk, str(Path(native_config.get('PDK_ROOT', PDK_GUEST_ROOT)) / pdk))]
     if _container_exec.no_container_route():
         import time
         from librelane.config import Config
@@ -189,15 +193,11 @@ def gate_level_sim(project: Path, top: str, image: str, pdk_root: Path, pdk: str
         sys.path.insert(0, str(Path(__file__).parent / 'librelane_plugins'))
         from librelane_plugin_vibeic import GateLevelSim
         started = time.monotonic()
-        selected = _load(project / 'reports/phase3/sta_postpnr_signoff.json')
-        sta_folder = Path(selected['sta_state']).parent
-        state = _load(sta_folder / 'state_out.json')
-        native_config = _load(sta_folder / 'config.json')
         models = sorted((project / 'phase2/stage1/sim_full_stack/functional/models').glob('*.v'))
         out = project / 'phase3/librelane/29-config/gls'
         manifest = sgs.tool_arm_manifest(project, top, Path(state['nl']), models, out,
             sdc=Path(state['sdc']), sdfs=[Path(p) for p in state['sdf'].values()],
-            sta_step_dir=sta_folder)
+            sta_step_dir=sta_folder, pdk_mounts=pdk_mounts)
         config, _ = Config.load({'DESIGN_NAME': native_config['DESIGN_NAME'],
             'PDK': pdk, 'STD_CELL_LIBRARY': native_config['STD_CELL_LIBRARY'],
             'VIBEIC_GLS_MANIFEST': str(out / 'gls_manifest.json')},
@@ -216,7 +216,6 @@ def gate_level_sim(project: Path, top: str, image: str, pdk_root: Path, pdk: str
         judged['native_manifest'] = str(out / 'gls_manifest.json')
         write_json(project / 'reports/phase3/gls_corners.json', judged)
         return judged
-    sta_folder, state = stapostpnr_state(project)
     sdf_binding = bind_stapostpnr_sdfs(sta_folder, state)
     sdfs = {corner: Path(row['path'])
             for corner, row in sdf_binding['exports'].items()}
@@ -242,6 +241,7 @@ def gate_level_sim(project: Path, top: str, image: str, pdk_root: Path, pdk: str
                                      sdc=Path(str(state.get('sdc') or '')),
                                      sdfs=[Path(p) for _, p in sorted(sdfs.items())],
                                      sta_step_dir=sta_folder,
+                                     pdk_mounts=pdk_mounts,
                                      path_map={} if local else {v: k for k, v in host.items()})
     folder = run_chain(project, image, [(GLS_STEP, configs[GLS_STEP],
                                          sta_folder / 'state_out.json')],

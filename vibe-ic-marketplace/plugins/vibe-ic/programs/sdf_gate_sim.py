@@ -2621,7 +2621,8 @@ def tool_arm_manifest(project: Path, top: str, netlist: Path,
                       declared_models: List[Path], out: Path,
                       *, sdc: Path, sdfs: List[Path],
                       path_map: Optional[Dict[str, str]] = None,
-                      sta_step_dir: Optional[Path] = None) -> Dict[str, object]:
+                      sta_step_dir: Optional[Path] = None,
+                      pdk_mounts: Optional[list] = None) -> Dict[str, object]:
     """What `Vibeic.GateLevelSim` runs: the run's executed L10 cases bound to
     the netlist the tool timed (`declared_dut_binding`) and clocked at the
     period of the SDC it timed against (`bind_bench_clock`), with the SDF path
@@ -2655,7 +2656,7 @@ def tool_arm_manifest(project: Path, top: str, netlist: Path,
             text, observation = _bound_arithmetic_case(project, case, top,
                                                        declared, closure['files'],
                                                        netlist=netlist, sdc=sdc, sdfs=sdfs,
-                                                       sta_step_dir=sta_step_dir)
+                                                       sta_step_dir=sta_step_dir, pdk_mounts=pdk_mounts)
             text, binding = bind_dut_module(text, top,
                                             str(case["dut_instance"]), ntext,
                                             declared)
