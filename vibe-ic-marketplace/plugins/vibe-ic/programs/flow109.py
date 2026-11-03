@@ -2104,7 +2104,7 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
             source = acceptance['native_observation']['upstream']
             answer['scan_cell_list'] = source['scan_cell_list']
             answer['scan_cell_reconciliation'] = acceptance['native_observation']['scan']
-    if row["id"] == "D14":
+    if row["id"] == "D14" and 'native_measurements' not in answer:
         import flow109_metric_acceptance as metrics
         acceptance = metrics.accept_d14(project, context)
         row_status = 'FAIL' if status == 'FAIL' else acceptance['status']
@@ -2115,7 +2115,7 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
                       qualification=acceptance.get('qualification', 'NOT_MEASURED'),
                       default_row_status=row_status, flow109_acceptance=row_status,
                       completed=row_status == 'PASS', normalized_chain_reason=acceptance.get('reason'))
-    if row["id"] == "D30" and status == "PASS":
+    if row["id"] == "D30" and status == "PASS" and 'native_measurements' not in answer:
         admission = dft_preroute_admission(project, context)
         chain = _complete_preroute_chain(project, context, admission,
                     completion.get('d30_delivery_receipt'),
@@ -2779,7 +2779,26 @@ def _retained_frontend_result(project: Path, context: Mapping) -> dict | None:
     """Read completed native frontend work; unchanged inputs need no producer rerun."""
     row = context.get('resolved_row', {})
     step = row.get('id')
-    if row.get('profile', {}).get('id') != 'default' or step not in ('D22', 'D25', 'D26'):
+    reports = {
+        'D03': ('config', 'phase3/librelane/02-yosys-synthesis/config.json'),
+        'D06': ('verdict', 'reports/phase3/io_pad_chip_top.json'),
+        'D09': ('p0', 'reports/flow109/default_rows/D10.json'),
+        'D10': ('p0', 'reports/flow109/default_rows/D10.json'),
+        'D11': ('verdict', 'reports/phase2/lint/verilator_lint_gate.json'),
+        'D13': ('simulation', 'reports/phase2/sim/l10_execution.json'),
+        'D14': ('formal', 'phase2/stage1/formal/results.json'),
+        'D19': ('sdc_copy', 'phase2/stage2/constraints/asic_sdc.json'),
+        'D20': ('verdict', 'reports/sdc_validator.json'),
+        'D22': ('synthesis', 'phase3/librelane/02-yosys-synthesis/state_out.json'),
+        'D25': ('equivalence', 'reports/lec_eqy_execution.json'),
+        'D26': ('sta', 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr/state_out.json'),
+        'D30': ('verdict', 'phase3/librelane/02-yosys-synthesis/handoff_netlist_gate.json'),
+    }
+    if row.get('profile', {}).get('id') != 'default' or step not in reports:
+        return None
+    kind, report = reports[step]
+    report = project / report
+    if not report.exists():
         return None
     measurements = {}
     status = 'NOT_MEASURED'
@@ -2794,7 +2813,85 @@ def _retained_frontend_result(project: Path, context: Mapping) -> dict | None:
                 p.relative_to(rtl).as_posix(): _file_digest(p)
                 for p in sources.rtl_source_files(project)}:
             return None
-        if step == 'D22':
+        if kind == 'config':
+            from declared_pdk_is_the_pdk_used_check import declared_distribution
+            config = json.loads(report.read_text())
+            declared, _ = declared_distribution(project)
+            measurements.update(report=str(report), pdk=config['PDK'],
+                                library=config['STD_CELL_LIBRARY'])
+            status = 'PASS' if config['PDK'] == declared else 'FAIL'
+        elif kind == 'verdict':
+            native = json.loads(report.read_text())
+            if step == 'D06':
+                owner = json.loads((project / 'input/submission_template/tapeout_declaration.json').read_text())
+                if owner.get('answers', {}).get('deliverable') != 'DIE':
+                    return None
+                result['scope'] = 'bare-die interface; owner input/submission_template/tapeout_declaration.json'
+                assignment = project / 'phase3/stage3/pnr/pad_assignment.json'
+                measurements['pad_assignment'] = json.loads(assignment.read_text())['SIGNAL_MAP']
+            measurements.update(report=str(report), native=native)
+            status = {'WROTE': 'PASS', 'PASS': 'PASS', 'FAIL': 'FAIL'}.get(native['verdict'], 'NOT_MEASURED')
+        elif kind == 'p0':
+            prior = json.loads(report.read_text())
+            p0 = prior.get('p0_native') or prior['evidence']['p0_native']
+            native = json.loads((project / p0['producer_result']['path']).read_text())
+            measurements.update(report=p0['producer_result']['path'], tools=native['tools'])
+            failed = any(native['tools'][name]['exit_code'] != 0
+                         for name in ('Yosys.JsonHeader', 'Verilator.Lint'))
+            if failed or native['passed'] is False:
+                status = 'FAIL'
+            else:
+                import flow109_metric_acceptance as metrics
+                graph = json.loads((project / p0['elaboration_path']).read_text())
+                measured = metrics._d10_feature_inventory(graph, p0['top'])
+                measurements['interface'] = measured
+                status = 'PASS'
+            result['p0_native'] = p0
+        elif kind == 'simulation':
+            native = json.loads(report.read_text())
+            required = json.loads((project / 'requirements/base_07/required_function_scenarios.json').read_text())
+            cases = {case['id']: case for case in native['cases']}
+            selected = [cases[item['name']] for item in required['required_items']]
+            measurements.update(report=str(report), cases=selected)
+            status = 'FAIL' if any(case['verdict'] == 'FAIL' for case in selected) else 'PASS'
+            if not selected or any(not case['sim_executed'] or case['verdict'] != 'PASS' for case in selected):
+                status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+            coverage = json.loads((project / 'reports/phase2/coverage/coverage_verilator.json').read_text())
+            targets = json.loads((project / 'requirements/base_07/coverage_targets.json').read_text())
+            measurements['coverage'] = coverage['totals']
+            if set(coverage['scope_files']) != {str(p) for p in sources.rtl_source_files(project)}:
+                status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+            for category, limits in targets['limits'].items():
+                observed = coverage['totals'][category]
+                if observed['total'] <= 0 or not math.isfinite(observed['pct']):
+                    status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+                elif targets['acceptance_applicable'] and (
+                        'min' in limits and observed['pct'] < limits['min']
+                        or 'max' in limits and observed['pct'] > limits['max']):
+                    status = 'FAIL'
+            result['coverage_scope'] = targets['reason']
+        elif kind == 'formal':
+            native = json.loads(report.read_text())
+            required = json.loads((project / 'requirements/base_08/proof_partition_coverage.json').read_text())
+            tasks = {item['task']: item for item in native['properties']}
+            selected = [tasks[item['task']] for item in required['required_items']]
+            measurements.update(report=str(report), tasks=selected,
+                                completion=native.get('formal_completion'),
+                                unresolved=native.get('unresolved_obligations', []))
+            states = [item['status'] for item in selected]
+            status = 'FAIL' if 'FAIL' in states else 'PASS' if states and set(states) == {'PASS'} else 'NOT_MEASURED'
+        elif kind == 'sdc_copy':
+            native = json.loads(report.read_text())
+            deck = project / native.get('staged_sdc', native['path'])
+            copies = []
+            for state in (project / 'reports/flow109/attempts').glob('*/load_base_sdc/*/state_out.json'):
+                copied = state.with_name(Path(json.loads(state.read_text())['sdc']).name)
+                if copied.read_bytes() == deck.read_bytes():
+                    copies.append(str(copied))
+            measurements.update(report=str(report), native_copies=copies,
+                                clock_period_source=str(deck))
+            status = 'PASS' if copies else 'NOT_MEASURED'
+        elif step == 'D22':
             folder = project / 'phase3/librelane/02-yosys-synthesis'
             if not (folder / 'state_out.json').is_file():
                 return None
