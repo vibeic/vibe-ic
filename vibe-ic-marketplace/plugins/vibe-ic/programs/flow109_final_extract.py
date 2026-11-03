@@ -261,10 +261,13 @@ def execute(project, context):
         final_spefs = {signoff.rc_corner(pattern): files._record(project, Path(path))
                        for pattern, path in run['spef'].items()}
         gds_ref, def_ref = files._record(project, final_gds), files._record(project, routed_def)
-        try:
-            comparison = _fill_net_comparison(project, attempt, final_gds, routed_def, final_spefs)
-        except (OSError, ValueError, KeyError, TypeError, Refusal) as exc:
-            comparison = {'status': 'NOT_MEASURED', 'reason': 'FILL_COMPARISON_UNAVAILABLE', 'detail': str(exc)}
+        # C7: Magic plus the reducer take hours and change no verdict, so opt-in.
+        comparison = {'status': 'NOT_RUN', 'reason': 'FILL_COMPARISON_OFF'}
+        if manifest.get('fill_net_comparison') is True:
+            try:
+                comparison = _fill_net_comparison(project, attempt, final_gds, routed_def, final_spefs)
+            except (OSError, ValueError, KeyError, TypeError, Refusal) as exc:
+                comparison = {'status': 'NOT_MEASURED', 'reason': 'FILL_COMPARISON_UNAVAILABLE', 'detail': str(exc)}
         result.update(component_status='PASS', reason='D69_FINAL_STATE_RCX_MEASURED',
                       producer='flow109_final_extract',
                       component_scope='final_filled_odb_rcx_component_only',

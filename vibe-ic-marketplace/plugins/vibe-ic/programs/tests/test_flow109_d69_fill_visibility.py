@@ -55,7 +55,7 @@ def test_consumer_refuses_forged_fill_sensitive_pass():
 
 
 def _owner_fixture(tmp_path, monkeypatch, *, top="neutral", adopted_views=None,
-                   def_text=None, rcx_nets=(('A', 50), ('B', 200))):
+                   def_text=None, rcx_nets=(('A', 50), ('B', 200)), comparison=True):
     from types import SimpleNamespace
     def record(path):
         return d69.files._record(tmp_path, path)
@@ -74,6 +74,7 @@ def _owner_fixture(tmp_path, monkeypatch, *, top="neutral", adopted_views=None,
     manifest = {'schema': d69.SCHEMA, 'd62_receipt': record(d62),
         'stream_bridge': {'path': 'bridge.json', 'sha256': 'fixture'},
         'librelane': {'image': 'unit', 'pdk_root': str(tmp_path), 'pdk': 'unit'},
+        **({'fill_net_comparison': True} if comparison else {}),
         'adopted_views': adopted_views or {'netlist': record(paths['netlist.v']),
                           'sdc': record(paths['constraint.sdc'])}}
     target = tmp_path / d69.INPUT; target.parent.mkdir(parents=True, exist_ok=True)
@@ -154,6 +155,18 @@ def test_sta_spefs_are_the_openrcx_outputs_on_the_final_state(tmp_path, monkeypa
     assert current['flow109_acceptance'] == 'NOT_MEASURED'
     fill_totals = {row['fill_totals']['path'] for row in result['fill_net_comparison']['corners'].values()}
     assert len(fill_totals) == 3 and not fill_totals & {r['path'] for r in current['spefs'].values()}
+
+
+def test_comparison_is_off_by_default_and_the_fill_obligation_stays_named(tmp_path, monkeypatch):
+    _, launches = _owner_fixture(tmp_path, monkeypatch, comparison=False)
+    result = d69.execute(tmp_path, {'context_sha256': 'developer-control'})
+    assert result['component_status'] == 'PASS', result
+    assert not launches
+    assert result['fill_net_comparison'] == {'status': 'NOT_RUN', 'reason': 'FILL_COMPARISON_OFF'}
+    assert 'fill_sensitive_reference_correlation' in result['unmeasured_obligations']
+    assert result['fill_sensitive_parasitics']['status'] == 'NOT_MEASURED'
+    current = d69.validate_final_parasitics(tmp_path, result['receipt'])
+    assert current['fill_net_comparison']['status'] == 'NOT_RUN'
 
 
 def test_net_capacitance_comparison_is_reported_in_common_units(tmp_path, monkeypatch):

@@ -252,9 +252,12 @@ bytes (excluding DATE) before and after adding 41,549 fills to the public
 Nangate45 RCX regression design (`vibeic/vibeic-eda#333`). What D69 leaves out
 is therefore the fill coupling.
 
-D69 reports that gap by running the released `vibeic-final-fill-spef extract`
-on the final GDS and routed DEF, and comparing its per-net capacitance with
-OpenRCX in `fill_net_comparison`. The tool's output holds net totals with no
+The D69 manifest can opt in to measuring that gap with
+`"fill_net_comparison": true`. It is off by default (C7): on SPM the Magic and
+reducer run takes about 2.2 hours and 43 GiB and changes no verdict. When off,
+`fill_net_comparison` reads `NOT_RUN`. When on, D69 runs the released
+`vibeic-final-fill-spef extract` on the final GDS and routed DEF and compares
+its per-net capacitance with OpenRCX. The tool's output holds net totals with no
 pins or resistance, so it is not STA input: it never enters `spefs` or
 `final_spefs`, and neither D70 nor M08 reads it. No comparison outcome changes
 the D69 status. The reducer's `--max-degree` is a computational guard on one
