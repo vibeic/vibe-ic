@@ -71,6 +71,35 @@ def _solve(exit_step="2", ran=None, not_attempted=None, **extra):
     return row
 
 
+@pytest.mark.parametrize("exit_step,endpoint", [("2", "rtl_validate"), ("4", "sim"),
+                                               ("rtl_validate", "rtl_validate")])
+def test_unexecuted_requested_endpoint_stays_unmeasured(exit_step, endpoint):
+    ran = {"rtl_gen": "PASS", "rtl_validate": "PASS"}
+    ran.pop(endpoint, None)
+    ledger = BD._required_gate_ledger(_solve(exit_step, ran=ran,
+        not_attempted={endpoint: "NOT_APPLICABLE"}))
+    assert ledger["eligibility"] == "NOT_MEASURED", ledger
+    assert ledger["unmeasured_required"] == [endpoint]
+    assert ledger["failed_required"] == []
+
+
+def test_upstream_and_outside_endpoint_inapplicability_remains_visible():
+    ledger = BD._required_gate_ledger(_solve(ran={"rtl_validate": "PASS"},
+        not_attempted={"rtl_gen": "NOT_APPLICABLE", "sim": "NOT_APPLICABLE"}))
+    assert ledger["eligibility"] == "ELIGIBLE", ledger
+    assert ledger["in_scope"]["rtl_gen"] == "NOT_APPLICABLE"
+    assert ledger["out_of_scope"]["sim"] == "NOT_APPLICABLE"
+
+
+@pytest.mark.parametrize("exit_step", ["1", "rtl_gen"])
+def test_supplied_source_author_endpoint_need_not_regenerate(exit_step):
+    ledger = BD._required_gate_ledger(_solve(exit_step, ran={"reused_ip_consume": "PASS"},
+        not_attempted={"rtl_gen": "NOT_APPLICABLE"}))
+    assert ledger["eligibility"] == "ELIGIBLE", ledger
+    assert ledger["in_scope"]["rtl_gen"] == "NOT_APPLICABLE"
+    assert ledger["unmeasured_required"] == []
+
+
 @pytest.mark.parametrize("status,expected", [("PASS", "ELIGIBLE"),
     ("FAIL", "INELIGIBLE"), ("NOT_MEASURED", "NOT_MEASURED")])
 @pytest.mark.parametrize("site,exit_step", [("rtl_validate", "2"), ("sim", "4")])
