@@ -118,6 +118,25 @@ def _try_bcd_counter(prompt, ins, outs, top):
     if extra:
         return None
 
+    import port_parser
+    declared = []
+    port_parser._bullet_ports(prompt, declared)
+    port_parser._header_ports(prompt, declared)
+    ranges = {}
+    for name, left, right in declared:
+        if name not in (q_name, ena_name):
+            continue
+        span = (left, right)
+        if name in ranges and ranges[name] != span:
+            return None
+        if abs(left - right) + 1 != (q_w if name == q_name else ena_w):
+            return None
+        if name == q_name and span != (q_w - 1, 0):
+            return None
+        ranges[name] = span
+    if any(width != 1 for _, width in ins):
+        return None
+
     # ---- emit (general N-digit ripple BCD; reset to all-zero) ----
     # enable[i] = all lower digits are 9 (digit 0 always enabled). The ena port,
     # if present, exposes enable[ndig-1 : 1] -> bits [3:1] for 4 digits.
@@ -130,7 +149,9 @@ def _try_bcd_counter(prompt, ins, outs, top):
 
     ports = [f"input {clk}", f"input {rst}"]
     if ena_name is not None:
-        ports.append(_decl("output", ena_name, ena_w))
+        span = ranges.get(ena_name)
+        ports.append(f"output [{span[0]}:{span[1]}] {ena_name}" if span
+                     else _decl("output", ena_name, ena_w))
     ports.append(_decl("output", q_name, q_w, reg=True))
 
     body = [f"  wire [{ndig-1}:0] enable = {enable_concat};\n"]
