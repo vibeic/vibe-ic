@@ -2171,7 +2171,20 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
                     "tool": f"iverilog-{dialect}"}
         return {"design": design, "verdict": "FAIL",
                 "reason": "no_pass_marker" + (" (some Test failed)" if fail_re and fail_re.search(out) else ""),
-                "tool": f"iverilog-{dialect}"}
+                "tool": f"iverilog-{dialect}",
+                "diagnostics": {
+                    "compile": {
+                        "args": c.args if c.args is not None else "unknown",
+                        "cwd": "unknown",  # Not retained by CompletedProcess.
+                        "returncode": c.returncode,
+                        "stdout": c.stdout, "stderr": c.stderr},
+                    "runtime": {
+                        "args": r.args if r.args is not None else "unknown",
+                        "cwd": (str(dataset / design)
+                                if args.get("cwd_design_dir", True)
+                                else _VVP_SCRATCH_CWD),
+                        "returncode": r.returncode,
+                        "stdout": r.stdout, "stderr": r.stderr}}}
 
 
 def _golden_ref_self_compiles(prob: str, dataset: Path, layout: dict):
