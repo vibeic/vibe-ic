@@ -147,14 +147,17 @@ def test_accepted_spec_to_rtl_author_uses_native_source_metrics(tmp_path,monkeyp
 @pytest.mark.parametrize('damage,status,reason',[
     ('port','FAIL','D09_DECLARED_PORTS_PARAMETERS_MISMATCH'),
     ('no_rtl','NOT_MEASURED','bound RTL inventory is empty'),
-    ('no_review','NOT_MEASURED','awaiting_signed_judgement')])
+    ('no_review','NOT_MEASURED','awaiting_signed_judgement'),
+    ('no_handoff','NOT_MEASURED','normal spec-to-rtl handoff required')])
 def test_spec_to_rtl_author_preserves_interface_and_output_refusals(tmp_path,monkeypatch,damage,status,reason):
     owned=case(tmp_path,monkeypatch,authored=True,damage=damage)
     root,report,_=owned
+    if damage=='no_handoff':
+        (root/'phase2/stage1/fallback_skill.md').unlink()
     actual,_,detail=consume(owned)
     assert actual==status and reason in detail,detail
     if damage=='port':
         assert report['d09_owned_metrics']['declared_ports_parameters']=='FAIL'
     else:
-        with pytest.raises(metrics.MetricRefusal,match='no AI review output|awaiting_signed_judgement'):
+        with pytest.raises(metrics.MetricRefusal,match='no AI review output|awaiting_signed_judgement|normal spec-to-rtl handoff required'):
             metrics.d09_owned_metrics(root,report['steps'][0])
