@@ -129,6 +129,33 @@ def test_l1_width_consumer_refuses_unmeasured_logical_interface_pairs(tmp_path):
 
 
 @TOOL
+def test_native_context_include_root(tmp_path):
+    project, extracted, l9, author, contract = _project(tmp_path)
+    context = project / binding.CONTEXT
+    header = context / "widths.svh"
+    header.write_text("`define NEUTRAL_CODE_WIDTH 4\n")
+    package = context / "types.sv"
+    package.write_text('`include "widths.svh"\n' + package.read_text().replace(
+        "logic [3:0] code_t", "logic [`NEUTRAL_CODE_WIDTH-1:0] code_t"))
+    contract["context"]["include_dirs"] = [binding.CONTEXT]
+    contract["context"]["files"] = {
+        f.relative_to(project).as_posix(): _hash(f) for f in sorted(context.iterdir())}
+    author.write_text(json.dumps(contract))
+    docs.gen_l9_integration_spec(project, extracted, {})
+    measured = json.loads(l9.read_text())["interface_binding_authoring"]["measurement"]
+    assert measured["elaboration_rc"] == measured["simulation_rc"] == 0
+    assert next(p["width"] for p in measured["measurements"] if p["name"] == "code_i") == 4
+
+
+@pytest.mark.parametrize("directory", ["plugin_input", "plugin_input/interface_context_sibling"])
+def test_context_include_rejects_external(tmp_path, directory):
+    project, _, _, _, contract = _project(tmp_path)
+    contract["context"]["include_dirs"] = [directory]
+    with pytest.raises(ValueError, match="path must be within"):
+        binding._context(project, contract["context"])
+
+
+@TOOL
 def test_native_package_binding_actual_producer_and_strict_consumer(tmp_path):
     p, extracted, l9, author, contract = _project(tmp_path)
     l1 = l9.with_name("L1_DATASHEET.json")
