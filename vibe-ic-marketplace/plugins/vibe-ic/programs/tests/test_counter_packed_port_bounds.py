@@ -87,7 +87,7 @@ def test_header_and_bullet_endpoint_conflict_is_refused(bullet_span):
     assert counter.synth(text, top="DecimalChain") is None
 
 
-@pytest.mark.parametrize("bullet_span", ["[8:4]", "[ 8 : 4 ]"])
+@pytest.mark.parametrize("bullet_span", ["[8:4]", "[ 8 : 4 ]", "[08:04]"])
 def test_matching_header_and_reordered_bullets_stay_supported(bullet_span):
     lines = prompt(6, bullet_span, "bullet").splitlines()
     text = prompt(6, "[8:4]", "header") + "\n" + "\n".join(
@@ -95,3 +95,12 @@ def test_matching_header_and_reordered_bullets_stay_supported(bullet_span):
     rtl = counter.synth(text, top="DecimalChain")
     assert rtl is not None
     assert "assign upper_tick = enable[5:1];" in rtl
+
+
+def test_header_bounds_with_width_only_bullets_stay_supported():
+    text = prompt(6, "[8:4]", "header") + (
+        "\n- input clock\n- input rst\n- output upper_tick (5 bits)\n"
+        "- output digits (24 bits)\n")
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None
+    assert "output [8:4] upper_tick" in rtl

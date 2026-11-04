@@ -122,12 +122,22 @@ def _try_bcd_counter(prompt, ins, outs, top):
     modules = re.findall(r"\bmodule\s+(\w+)\s*(?=[(#])", prompt)
     if len(modules) > 1:
         return None
-    if modules:
-        declared = parse_module_ports(prompt, modules[0])
-    else:
-        bullets = re.findall(r"^\s*-\s*((?:input|output)\b[^\n]*)", prompt, re.M)
-        declared = parse_module_ports(
-            "module ports(" + ",".join(bullets) + ");", "ports")
+    declared = parse_module_ports(prompt, modules[0]) if modules else []
+    bullets = re.findall(
+        r"^\s*-\s*((?:input|output)\b(?:\s+(?:wire|reg|logic))?"
+        r"\s*(?:\[[^]\n]+\]\s*)?\w+)", prompt, re.M)
+    bullet_ports = parse_module_ports(
+        "module ports(" + ",".join(bullets) + ");", "ports")
+    if declared and bullet_ports:
+        if sorted((d, n) for d, _, n in declared) != sorted(
+                (d, n) for d, _, n in bullet_ports):
+            return None
+        header_ranges = {n: tuple(map(int, re.findall(r"\d+", s)))
+                         for _, s, n in declared}
+        if any(s and tuple(map(int, re.findall(r"\d+", s))) != header_ranges[n]
+               for _, s, n in bullet_ports):
+            return None
+    declared = declared or bullet_ports
     expected = {name: (direction, width)
                 for direction, items in (("input", ins), ("output", outs))
                 for name, width in items}
