@@ -2158,8 +2158,15 @@ def _finish_d11_selected_owner(project: Path, report: Mapping, invocation: Mappi
                                *, published_current: bool) -> dict:
     """Publish the completed native result through the shared frontend reader."""
     import flow109
+    import flow109_engineering as engineering
     context = flow109.validate_execution_context(json.loads(
         Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+    if engineering.selected_original(project, context):
+        attempt = flow109._bound_attempt(project, context,
+                                        os.environ.get(flow109.ATTEMPT_ENV))
+        return _finish_d11_original_engineering(
+            project, context, report, invocation, published_current=published_current,
+            report_path=attempt / 'phase2_one_shot.json')
     native = flow109._retained_native_result(project, context)
     if native is None:
         return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
@@ -6491,6 +6498,7 @@ def _main(args=None) -> int:
             "phase1_checkpoint_review": _phase1_checkpoint_review,
             "d09_finalization": reports.get("d09_finalization"),
             "d10_finalization": reports.get("d10_finalization"),
+            "d11_finalization": reports.get("d11_finalization"),
             "audit_scope": "bounded; whole-flow audit not refreshed",
             "completion_audit_axis": {"state": "NOT_MEASURED",
                                       "reason": "bounded; whole-flow audit not refreshed"},

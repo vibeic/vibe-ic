@@ -63,6 +63,13 @@ def test_actual_owner_replaces_old_author_report_at_all_consumers(measured):
     assert owned['runner_binding']['invocation_id'] != process.invocation_id
     assert owned['runner_binding']['parent_invocation']['invocation_id'] == process.invocation_id
     assert parent['runner_binding']['invocation_id'] == process.invocation_id
+    summary = json.loads((project / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
+    finalized = summary['d11_finalization']
+    assert finalized['verdict'] == finalized['component_status'] == 'PASS'
+    assert finalized['qualification_status'] == 'NOT_CLAIMED'
+    assert finalized['default_row_status'] == finalized['whole_flow_verdict'] == 'NOT_MEASURED'
+    assert summary['dispatched_verdict'] == 'PASS'
+    assert summary['verdict'] == summary['whole_flow_verdict'] == 'NOT_MEASURED'
     phases = attribution.phase3_verifying(parent, None)
     ledger = dispatch._required_gate_ledger({'exit': '2', 'phases': {'phase3_verifying': phases}})
     assert ledger['eligibility'] == 'ELIGIBLE', ledger
