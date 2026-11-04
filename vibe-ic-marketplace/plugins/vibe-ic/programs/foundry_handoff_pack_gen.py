@@ -94,7 +94,9 @@ def execute(project: Path, context: dict) -> dict:
             import tapeout_checklist_gen as checklist
             rc = checklist.main([str(project)])
         if rc == 0:
-            rc = _fhpc.main([str(project)])
+            report = _pl.reports_phase3_dir(project) / 'foundry_handoff_check.json'
+            rc = _fhpc.main([str(project), '--design-release', '--json', str(report)])
+            result['native_report'] = str(report.relative_to(project))
         status = "PASS" if rc == 0 else "FAIL" if rc == 1 else "NOT_MEASURED"
         result["exit_code"] = rc
     except FileNotFoundError as exc:
@@ -528,6 +530,14 @@ def _handoff_mode(project: Path, assembly=None) -> dict:
             "precheck_report": None,
             "precheck_report_sha256": None,
         }
+    if (project / 'reports/flow109/plan.json').is_file():
+        from submission_template_check import slot_rules_are_owed
+        owed, reason = slot_rules_are_owed(project, None)
+        if not owed:
+            return {'mode': MODE_UNDECLARED, 'basis': reason,
+                    'operator': None, 'operator_status': None,
+                    'precheck_verdict': None, 'precheck_report': None,
+                    'precheck_report_sha256': None}
     rpt = project / _SHUTTLE_PRECHECK_REPORT
     if rpt.is_file():
         try:

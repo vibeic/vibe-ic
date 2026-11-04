@@ -111,6 +111,22 @@ def test_normal_step38_gate_refuses_missing_stale_or_failed_final_gds_lvs(tmp_pa
     print('NORMAL_RELEASE_REFUSAL',damage,json.dumps({'actual':observed,'command':command,'findings':report['findings']}))
 
 
+def test_release_row_refuses_incomplete_archive_instead_of_accepting_skeleton(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    project, _ = neutral(tmp_path, monkeypatch, 'missing_lvs')
+    layout = project / 'phase3/stage4/gds/alpha.gds'
+    (project / 'input').mkdir(exist_ok=True)
+    (project / gen.RELEASE_APPROVAL_REL).write_text(json.dumps({
+        'approved': True, 'approved_by': 'Source fixture owner',
+        'gds': str(layout.relative_to(project)), 'gds_sha256': digest(layout)}))
+    # The document producers have their own focused tests; the real package
+    # producer and checker must decide this intentionally incomplete archive.
+    monkeypatch.setattr(gen, 'subprocess', SimpleNamespace(run=
+        lambda command, **kw: subprocess.CompletedProcess(command, 0)))
+    result = gen.execute(project, {'context_sha256': 'source-test'})
+    assert result['default_row_status'] == 'FAIL' and result['exit_code'] == 1, result
+
+
 def test_new_timestamp_destination_preserves_source_and_rejects_corrupt_members(tmp_path,monkeypatch):
     project,_source=neutral(tmp_path,monkeypatch)
     before={str(p.relative_to(project)):digest(p) for p in project.rglob('*') if p.is_file()}
@@ -683,3 +699,161 @@ def test_timestamp_kit_ate_closure_survives_normal_gate_and_source_free_relocati
                  'header':doc,'source_inputs_unchanged':True,'missing_vector_refused':True,'failed_step5_refused':True}
     (tmp_path/'PORTABLE_ATE_OBSERVATION.json').write_text(json.dumps(observation,indent=2)+'\n')
     print('PORTABLE_ATE_VALUES',json.dumps(observation))
+
+
+def _flow109_native_archive_inputs(tmp_path, monkeypatch):
+    """Source fixtures for the row-owned outputs, never physical signoff claims."""
+    project, neutral_source = neutral(tmp_path, monkeypatch)
+    monkeypatch.setattr(check, 'design_release_sources', _REAL_RELEASE_SOURCES)
+    layout = project / 'phase3/stage4/gds/alpha.gds'
+    def put(rel, value):
+        path = project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+        return path
+    def material(rel, text):
+        path = project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+    put('reports/flow109/plan.json', {'rows': []})
+    magic = material('reports/phase3/current_magic.rpt', 'Magic native error count: 0\n')
+    klayout = material('reports/phase3/current_klayout.rpt', 'KLayout native error count: 0\n')
+    put('reports/flow109/components/D65.json', {'component_status': 'PASS', 'completed': True,
+        'drc': {'verdict': 'PASS', 'scope': {'gds_sha256': digest(layout)},
+                'native_reports': [str(magic), str(klayout)],
+                'metrics': {'magic__drc_error__count': {'value': 0},
+                            'klayout__drc_error__count': {'value': 0}}}})
+    state = put('phase3/librelane/native-density/state_out.json', {
+        'metrics': {'klayout__density_error__count': 0}})
+    put('phase3/librelane/native-density/state_in.json', {'gds': str(layout)})
+    put('phase3/librelane/native-density/input_fingerprint.json', {
+        'state_files': {str(layout): digest(layout)}})
+    active_map = material('active-kit/procx/libs.tech/klayout/tech/process.map', 'active kit native map\n')
+    old_map = material('retired-kit/procx/libs.tech/klayout/tech/process.map', 'older kit map\n')
+    put('phase3/librelane/native-density/config.json', {'PDK': 'procx',
+        'PDK_ROOT': str(project / 'retired-kit'), 'KLAYOUT_DEF_LAYER_MAP': str(old_map)})
+    put('phase3/librelane_pdk_root.provenance.json', {'path': str(project / 'active-kit'), 'pdk': 'procx'})
+    put('reports/phase3/fill_librelane.json', {'gds': {'librelane': {
+        'state': str(state), 'subject': str(layout), 'subject_sha256': digest(layout)}}})
+    routed = material('phase3/stage3/pnr/native.def', 'native routed subject\n')
+    antenna_state = put('phase3/librelane/native-antenna/state_out.json', {'metrics': {}})
+    antenna_report = material('reports/phase3/antenna.rpt', 'net violations: 0; pin violations: 0\n')
+    put('reports/phase3/antenna.json', {'net_violations': 0, 'pin_violations': 0,
+        'source': str(antenna_report), 'tool_state': str(antenna_state),
+        'measured_subject': {'inputs': [{'path': str(routed), 'sha256': digest(routed)}]}})
+    timed = material('phase3/librelane/native-sta/current.rpt', 'native current timing report\n')
+    sdc = material('phase3/librelane/native-sta/current.sdc', 'create_clock -period 10 [get_ports clk]\n')
+    netlist = material('phase3/librelane/native-sta/current.v', 'module alpha(input clk); endmodule\n')
+    spef = material('phase3/librelane/native-sta/current.spef', '*SPEF "IEEE 1481-1998"\n')
+    sta_state = put('phase3/librelane/native-sta/state_out.json', {
+        'sdc': str(sdc), 'nl': str(netlist), 'spef': {'nominal': str(spef)}})
+    put('reports/flow109/components/D70.json', {'component_status': 'PASS', 'completed': True,
+        'timing_judgment': {'verdict': 'PASS'}, 'unmeasured_obligations': ['signal EM', 'thermal and aging'],
+        'sta_state': {'path': str(sta_state)},
+        'corners': {'nominal': {'setup_ws': 0.42, 'hold_ws': 0.08, 'report': str(timed)}}})
+    return project, layout, neutral_source, active_map, put
+
+
+def test_flow109_archive_reads_the_same_native_results_as_rows_and_active_kit(tmp_path, monkeypatch):
+    project, layout, source, layer_map, _ = _flow109_native_archive_inputs(tmp_path, monkeypatch)
+    measured = _REAL_RELEASE_SOURCES(project, layout)
+    for kind in ('drc', 'antenna', 'density', 'sta'):
+        assert measured['validation'][kind]['verdict'] == 'PASS', measured['validation'][kind]
+    assert measured['validation']['antenna']['measured_subject']['inputs'][0]['path'].endswith('native.def')
+    assert measured['validation']['sta']['unmeasured_obligations'] == ['signal EM', 'thermal and aging']
+    assert str(layer_map.resolve()) in measured['files']
+    assert 'layer_map' in measured['files'][str(layer_map.resolve())]['roles']
+    assert any(v['sha256'] == digest(layer_map) for v in measured['external_dependencies'].values())
+    # Other native owners (stream/LVS/stack) are outside this source-reader
+    # test; retain their neutral leaves and use the actual new native readset.
+    source['validation'].update({k: measured['validation'][k] for k in ('drc', 'antenna', 'density', 'sta')})
+    replaced = {'layer_map', 'drc_report', 'antenna_report', 'density_report', 'sta_report', 'sdc', 'spef'}
+    source['files'] = {k: v for k, v in source['files'].items() if not (set(v['roles']) & replaced)}
+    source['files'].update(measured['files'])
+    monkeypatch.setattr(check, 'design_release_sources', lambda *a, **kw: copy.deepcopy(source))
+    assert gen.main([str(project)]) == 0
+    package = project / 'phase3/stage4/foundry_handoff'
+    manifest, bad = check.check_design_release(package)
+    assert not bad, bad
+    assert manifest['archive_status'] == 'COMPLETE' and not manifest['incomplete_validation']
+
+
+@pytest.mark.parametrize('case,kind,expected', [
+    ('drc_missing', 'drc', 'NOT_MEASURED'), ('drc_red', 'drc', 'FAIL'),
+    ('drc_red_missing', 'drc', 'FAIL'),
+    ('density_unknown', 'density', 'NOT_MEASURED'), ('density_red', 'density', 'FAIL'),
+    ('antenna_unknown', 'antenna', 'NOT_MEASURED'), ('antenna_red', 'antenna', 'FAIL'),
+    ('sta_missing', 'sta', 'NOT_MEASURED'), ('sta_red', 'sta', 'FAIL'),
+    ('sta_red_missing', 'sta', 'FAIL'),
+])
+def test_flow109_archive_keeps_native_failures_and_absences(tmp_path, monkeypatch, case, kind, expected):
+    project, layout, _, _, put = _flow109_native_archive_inputs(tmp_path, monkeypatch)
+    if case == 'drc_missing':
+        (project / 'reports/phase3/current_magic.rpt').unlink()
+    elif case.startswith('drc_red'):
+        path = project / 'reports/flow109/components/D65.json'
+        doc = json.loads(path.read_text()); doc['drc']['verdict'] = 'FAIL'
+        doc['drc']['metrics']['magic__drc_error__count']['value'] = 3
+        put(str(path.relative_to(project)), doc)
+        if case.endswith('missing'):
+            (project / 'reports/phase3/current_magic.rpt').unlink()
+    elif case.startswith('density_'):
+        put('phase3/librelane/native-density/state_out.json', {'metrics': {
+            'klayout__density_error__count': None if case.endswith('unknown') else 2}})
+    elif case.startswith('antenna_'):
+        path = project / 'reports/phase3/antenna.json'; doc = json.loads(path.read_text())
+        doc['net_violations'] = None if case.endswith('unknown') else 2
+        put(str(path.relative_to(project)), doc)
+    elif case == 'sta_missing':
+        (project / 'phase3/librelane/native-sta/current.rpt').unlink()
+    else:
+        path = project / 'reports/flow109/components/D70.json'; doc = json.loads(path.read_text())
+        doc['component_status'] = 'FAIL'; doc['completed'] = False
+        doc['timing_judgment']['verdict'] = 'FAIL'; doc['corners']['nominal']['setup_ws'] = -0.1
+        put(str(path.relative_to(project)), doc)
+        if case.endswith('missing'):
+            (project / 'phase3/librelane/native-sta/current.rpt').unlink()
+    measured = _REAL_RELEASE_SOURCES(project, layout)
+    assert measured['validation'][kind]['verdict'] == expected, measured['validation'][kind]
+
+
+def test_missing_active_layer_map_does_not_invent_map_or_erase_measured_density(tmp_path, monkeypatch):
+    project, layout, _, layer_map, _ = _flow109_native_archive_inputs(tmp_path, monkeypatch)
+    layer_map.unlink()
+    measured = _REAL_RELEASE_SOURCES(project, layout)
+    assert measured['validation']['density']['verdict'] == 'PASS'
+    assert not any('layer_map' in entry['roles'] for entry in measured['files'].values())
+
+
+def test_flow109_self_tapeout_uses_native_precheck_and_ignores_old_operator_report(tmp_path, monkeypatch):
+    import _tapeout_declaration as td
+    import _owner_declared as owner
+    project, layout, _, _, put = _flow109_native_archive_inputs(tmp_path, monkeypatch)
+    answers = owner.attest({'answers': {'deliverable': td.DELIVERABLE_DIE},
+        'operator_template': {'path': None, 'slot': None,
+                              'absent_reason': 'Owner selected independent self-tapeout.'}})
+    put('input/step_0_5ic_answers.json', answers)
+    declaration, _ = td.merge_answers(td.blank_declaration(), {'deliverable': td.DELIVERABLE_DIE})
+    owner.attest(declaration)
+    put(td.DECLARATION_REL, declaration)
+    put('reports/phase3/tapeout_precheck.json', {'verdict': 'PASS'})
+    put('reports/phase3/general_precheck.json', {'verdict': 'FAIL'})
+    _precheck(project, verdict='FAIL')
+    measured = _REAL_RELEASE_SOURCES(project, layout)
+    assert str(project / 'reports/phase3/tapeout_precheck.json') in measured['files']
+    assert str(project / 'reports/phase3/general_precheck.json') not in measured['files']
+    assert str(project / 'reports/phase3/shuttle_precheck.json') not in measured['files']
+    assert check._read_shuttle_precheck(project) == (False, False, None, None)
+    assert gen._handoff_mode(project)['mode'] == gen.MODE_UNDECLARED
+
+
+def test_flow109_provider_archive_keeps_current_row_timing_reader(tmp_path, monkeypatch):
+    project, layout, _, _, put = _flow109_native_archive_inputs(tmp_path, monkeypatch)
+    report = put('reports/phase3/provider_die_assembly.json', {})
+    assembly = {'report': str(report), 'sha256': digest(layout), 'basis': {}}
+    measured = _REAL_RELEASE_SOURCES(project, layout, assembly=assembly)
+    # Provider PV still has its separate owner. Internal timing must use the
+    # current Flow109 row even when an assembly was selected.
+    assert measured['validation']['sta']['verdict'] == 'PASS', measured['validation']['sta']
+    assert measured['validation']['sta']['corners']['nominal']['setup_ws'] == 0.42
