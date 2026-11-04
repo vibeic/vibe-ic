@@ -20,7 +20,7 @@ def expectation(token, path="/quantity/target"):
 
 def assert_both_readers(case, item, expected):
     result = track.converge_ai_expectation(case, item)
-    assert result["usable"] is True
+    assert result["usable"] is True, result
     assert result["met"] is expected, result
     json.dumps(result)
     actual, unresolved, unrouted = metrics._d0102_compare(
@@ -166,3 +166,57 @@ def test_invalid_suffix_cannot_supply_ownership_or_carriage(tmp_path, key, unit,
         (case / "phase1/generated_docs" / f"{stem}.json").write_text('{}')
     assert track.owning_layers_answer(case, [token])["layers"] == []
     assert track.token_carriage(case, [token])["verdict"] == track.CARRIAGE_NOWHERE
+
+
+def test_bare_hex_words_keep_literal_value_and_word_boundaries(tmp_path):
+    words = ["8f01cfea", "248d6a61", "9914fb92", "123456db", "123456ff"]
+    blob = {"quantity": {"target": " ".join(words + ["9f01cfeaa"])},
+            "physical": {"target": 12345678, "unit": "F"}}
+    case = raw_project(tmp_path, json.dumps(blob))
+    for token in words:
+        assert_both_readers(case, expectation(token), True)
+        assert track.token_paths(blob, token) == ["quantity.target"]
+    for token in ("8f01cfeb", "8f01cfea0", "08f01cfea", "9f01cfea"):
+        assert_both_readers(case, expectation(token), False)
+        assert track.token_paths(blob, token) == []
+    assert_both_readers(case, expectation("12345678F", "/physical/target"), True)
+    assert_both_readers(case, expectation("12345678", "/physical/target"), False)
+    for token, scalar in [("123456db", "123456 dB"),
+                          ("123456db", "123456dB"),
+                          ("123456ff", "123456fF"),
+                          ("123456db", "limit: 123456dB"),
+                          ("1e999999999999999999999db", "1e999999999999999999999dB"),
+                          ("1e999999999999999999999ff", "1e999999999999999999999fF"),
+                          ("123456db", "-123456db"),
+                          ("123456db", "-123456 dB"),
+                          ("8f01cfea", "8f01 cf ea"),
+                          ("8f01cfea", "+8f01cfea"),
+                          ("8f01cfea", "−8f01cfea"),
+                          ("8f01cfea", "_8f01cfea"),
+                          ("8f01cfea", "8f01cfea_"),
+                          ("8f01cfea", "08f01cfea"),
+                          ("8f01cfea", "8f01cfea0")]:
+        blob = {"quantity": {"target": scalar}}
+        (case / "phase1/generated_docs/L22_VERIFICATION_PLAN.json").write_text(
+            json.dumps(blob))
+        assert_both_readers(case, expectation(token), False)
+        assert track.token_paths(blob, token) == []
+
+
+def test_byte_counts_keep_exact_value_sign_and_dimension(tmp_path):
+    blob = {"quantity": {"target": ["55 bytes", "56 bytes", "119 bytes",
+                                    "120 bytes", "1024 bytes"]}}
+    case = raw_project(tmp_path, json.dumps(blob))
+    for token in [*blob["quantity"]["target"], "55 byte"]:
+        assert_both_readers(case, expectation(token), True)
+        assert track.token_paths(blob, token) == ["quantity.target"]
+    for token in ("57 bytes", "-55 bytes", "55 bit", "55"):
+        assert_both_readers(case, expectation(token), False)
+        assert track.token_paths(blob, token) == []
+    for token in ("55 byets", "55 Bytes", "10db", "1e+", "5.5 [ns]",
+                  "1e999999999999999999999F", "1e999999999999999999999A",
+                  "1e999999999999999999999dB"):
+        result = track.converge_ai_expectation(case, expectation(token))
+        assert result["usable"] is False
+        assert result["tokens_unaskable"][0]["reason"] == "NUMERIC_UNIT_UNSUPPORTED"
+        assert track.token_paths({"target": token}, token) == []
