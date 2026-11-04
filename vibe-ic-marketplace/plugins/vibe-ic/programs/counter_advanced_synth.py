@@ -118,6 +118,39 @@ def _try_bcd_counter(prompt, ins, outs, top):
     if extra:
         return None
 
+    from reset_clock_variant_alias import parse_module_ports
+    modules = re.findall(r"\bmodule\s+(\w+)\s*(?=[(#])", prompt)
+    if len(modules) > 1:
+        return None
+    if modules:
+        declared = parse_module_ports(prompt, modules[0])
+    else:
+        bullets = re.findall(r"^\s*-\s*((?:input|output)\b[^\n]*)", prompt, re.M)
+        declared = parse_module_ports(
+            "module ports(" + ",".join(bullets) + ");", "ports")
+    expected = {name: (direction, width)
+                for direction, items in (("input", ins), ("output", outs))
+                for name, width in items}
+    ranges = {}
+    for direction, span, name in declared:
+        if name in ranges or name not in expected or direction != expected[name][0]:
+            return None
+        if span:
+            bounds = re.fullmatch(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", span)
+            if bounds is None:
+                return None
+            left, right = map(int, bounds.groups())
+            width = expected[name][1]
+            if abs(left - right) + 1 != width:
+                return None
+            if name != ena_name and (left, right) != (width - 1, 0):
+                return None
+        ranges[name] = span
+    if declared and set(ranges) != set(expected):
+        return None
+    if any(width != 1 for _, width in ins):
+        return None
+
     # ---- emit (general N-digit ripple BCD; reset to all-zero) ----
     # enable[i] = all lower digits are 9 (digit 0 always enabled). The ena port,
     # if present, exposes enable[ndig-1 : 1] -> bits [3:1] for 4 digits.
@@ -130,7 +163,8 @@ def _try_bcd_counter(prompt, ins, outs, top):
 
     ports = [f"input {clk}", f"input {rst}"]
     if ena_name is not None:
-        ports.append(_decl("output", ena_name, ena_w))
+        ports.append(f"output {ranges[ena_name]} {ena_name}" if ranges.get(ena_name)
+                     else _decl("output", ena_name, ena_w))
     ports.append(_decl("output", q_name, q_w, reg=True))
 
     body = [f"  wire [{ndig-1}:0] enable = {enable_concat};\n"]
