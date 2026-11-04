@@ -54863,9 +54863,8 @@ def gen_l9_integration_spec(project: Path,
     # and `full_stack_tb_gen` declared a 1-bit `reg tl_i` for a TL-UL request
     # struct.
     #
-    # An existing entry is ENRICHED, never overwritten: the document's own
-    # description, mode and width stay exactly as the document stated them,
-    # and the RTL adds `data_type` / `width_expr` / its own evidence line. A
+    # The reused implementation declares port widths; documents retain their
+    # descriptions and provenance. The RTL adds its declaration evidence. A
     # port the documents never named is APPENDED. Nothing is removed — an
     # inter-signal base name the doc lists is the doc's statement and this
     # tier has no standing to delete it.
@@ -54907,6 +54906,9 @@ def gen_l9_integration_spec(project: Path,
                         f"declaration)")
                 _existing = _stg_by_name.get(_rname)
                 if _existing is not None:
+                    if isinstance(_rp.get("width"), int):
+                        _existing.update(width=_rp["width"],
+                                         msb=_rp["width"] - 1, lsb=0)
                     if _rp.get("data_type"):
                         _existing["data_type"] = _rp["data_type"]
                     if _rp.get("width_expr"):
@@ -66357,7 +66359,8 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
                                            str(_src.get("width")))
                             if _same_width:
                                 for _k in ("msb", "lsb", "width_symbolic"):
-                                    if e.get(_k) in (None, "") and \
+                                    if (e.get(_k) in (None, "") or
+                                            e.get("declared_by_staged_top") is True) and \
                                             _src.get(_k) is not None:
                                         e[_k] = _src[_k]; _filled.append(_k)
                             _blank = ("", "none", "unknown")
@@ -66408,7 +66411,8 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
                             _src = _by.get(_n)
                             if not _src:
                                 continue
-                            if _e.get("width") in (None, "", 0, "0") and \
+                            if (_e.get("width") in (None, "", 0, "0") or
+                                    _src.get("declared_by_staged_top") is True) and \
                                     _src.get("width") is not None:
                                 _e["width"] = _src["width"]
                             _same_width = (_e.get("width") in (None, "", 0, "0") or
@@ -66416,7 +66420,8 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
                                            str(_src.get("width")))
                             if _same_width:
                                 for _k in ("msb", "lsb", "width_symbolic"):
-                                    if _e.get(_k) in (None, "") and \
+                                    if (_e.get(_k) in (None, "") or
+                                            _src.get("declared_by_staged_top") is True) and \
                                             _src.get(_k) is not None:
                                         _e[_k] = _src[_k]
                             _m = str(_e.get("mode") or "").lower()

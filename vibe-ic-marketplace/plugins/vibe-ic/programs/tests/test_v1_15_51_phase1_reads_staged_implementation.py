@@ -233,6 +233,26 @@ def test_l9_is_unchanged_for_a_design_that_stages_no_rtl(tmp_path):
     assert not any("declared_by_staged_top" in p for p in l9["top_ports"])
 
 
+@pytest.mark.parametrize('stage_rtl, expected', [(True, 1), (False, 4)])
+def test_selected_staged_port_width_reaches_both_interface_views(tmp_path, stage_rtl, expected):
+    proj = _project(tmp_path, ic_class='processor_cpu', stage_rtl=stage_rtl)
+    (proj / 'input/docs/widget_interfaces.md').write_text(
+        '# Widget\n\n| Signal | Width | Direction | Description |\n'
+        '| --- | --- | --- | --- |\n'
+        '| clk_i | 1 | input | Core clock. |\n'
+        '| done_o | 4 | output | Completion in another revision. |\n'
+        '| code_o | 4 | output | Status code. |\n')
+    P1.gen_l1_datasheet(proj, _docs(proj))
+    P1.gen_l9_integration_spec(proj, _docs(proj), {})
+    P1._post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(proj)
+    for filename, field in [('L1_DATASHEET.json', 'pin_table'),
+                            ('L9_INTEGRATION_SPEC.json', 'top_ports')]:
+        port = next(p for p in _l_doc(proj, filename)[field] if p['name'] == 'done_o')
+        assert port['width'] == expected
+        assert port.get('msb', expected - 1) == expected - 1
+        assert port.get('lsb', 0) == 0
+
+
 # --------------------------------------------------------------------------
 # the #38 RTL-as-oracle guard, and why `input/vendor_rtl/` is an INPUT
 # --------------------------------------------------------------------------
