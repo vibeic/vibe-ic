@@ -157,6 +157,49 @@ def test_native_bundle_missing_rtl_preserves_real_sdk_failure(tmp_path, monkeypa
     assert result['native_started'] and not result['completed']
 
 
+def _fresh_technology_project(tmp_path, monkeypatch):
+    import shutil
+    project, context, rtl = _native_bundle_case(tmp_path, monkeypatch)
+    shutil.rmtree(project/'phase3')
+    rtl.unlink()
+    (project/'phase1/generated_docs/L9_INTEGRATION_SPEC.json').write_text(
+        json.dumps({'top_module':'neutral'}))
+    monkeypatch.delenv('VIBEIC_LIBRELANE_PDK_ROOT')
+    return project, context
+
+
+def test_fresh_pre_rtl_project_resolves_the_real_native_technology(tmp_path, monkeypatch):
+    project, context = _fresh_technology_project(tmp_path, monkeypatch)
+    result = d03.execute(project, context)
+    assert result['component_status'] == 'PASS', result['checks']
+    assert result['native_started'] and result['completed']
+    resolved = json.loads((project/'reports/flow109/D03/resolved.json').read_text())
+    assert resolved['VERILOG_FILES'] == []
+    assert resolved['STD_CELL_LIBRARY']
+    assert not (project/'phase3').exists()
+    assert not list(project.rglob('*.v')) and not list(project.rglob('*.sv'))
+    consumed = flow109._selected_step_result(project, context, result, d03)
+    assert consumed['default_row_status'] == 'PASS'
+    assert consumed['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+def test_fresh_technology_keeps_explicit_invalid_inputs_unmeasured(tmp_path, monkeypatch):
+    for damage in ('pdk_root', 'config_directory', 'dangling_config'):
+        project, context = _fresh_technology_project(tmp_path/damage, monkeypatch)
+        config = project/'phase3/librelane/config.json'
+        if damage == 'pdk_root':
+            monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(project/'missing_root'))
+        else:
+            config.parent.mkdir(parents=True)
+            if damage == 'config_directory':
+                config.mkdir()
+            else:
+                config.symlink_to(project/'missing_config')
+        result = d03.execute(project, context)
+        assert result['component_status'] == 'NOT_MEASURED', result
+        assert not result['native_started'] and not result['completed']
+
+
 def test_native_consumer_resolves_project_relative_sdc_once(tmp_path, monkeypatch):
     project, context, _ = _native_bundle_case(tmp_path, monkeypatch)
     sdc = project / 'phase3/stage3/pnr/constraint.sdc'

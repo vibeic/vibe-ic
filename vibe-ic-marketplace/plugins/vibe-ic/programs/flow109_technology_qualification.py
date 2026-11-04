@@ -112,13 +112,29 @@ def execute(project: Path, context: Mapping) -> dict:
         image = os.environ.get("VIBEIC_EDA_IMAGE", "")
         if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image):
             raise D03Refusal("D03_RUNTIME_IMAGE_UNRESOLVED", "resolve image on launch host")
-        config_path = project / "phase3/librelane/config.json"
-        inputs.append(_record(config_path))
         declared_pdk, declaration_sources = declared_distribution(project)
         inputs.extend(_record(path) for path in sorted({path for path, _ in declaration_sources}))
+        import librelane_contract as native
+        config_path = project / "phase3/librelane/config.json"
+        if not config_path.exists() and not config_path.is_symlink():
+            # Technology selection precedes RTL authoring; keep its native
+            # input separate from the later implementation configuration.
+            docs = project / 'phase1/generated_docs'
+            design = (native._ldoc(docs, 'L9_INTEGRATION_SPEC.json').get('top_module')
+                      or native._ldoc(docs, 'L1_DATASHEET.json').get('ic_name'))
+            settings, _ = native._declared_flow_settings(
+                native._ldoc(docs, 'L19_CONSTRAINTS_PDK.json'), declared_pdk)
+            config = {'meta': {'version': 2, 'flow': 'Classic'},
+                      'DESIGN_NAME': design, 'PDK': declared_pdk,
+                      'VERILOG_FILES': [], **settings}
+            config_path = project / 'reports/flow109/D03/technology.json'
+            from _atomic_artefact import write_json
+            write_json(config_path, config)
+        inputs.append(_record(config_path))
         raw_root = os.environ.get("VIBEIC_LIBRELANE_PDK_ROOT", "")
         if not raw_root:
-            raise D03Refusal("D03_PDK_ROOT_UNSTATED", "VIBEIC_LIBRELANE_PDK_ROOT")
+            raw_root = native.pdk_root_resolution(project, declared_pdk, image=image,
+                                                  native_handoff=True)['path']
         root = Path(raw_root).resolve(strict=True)
         native_started = True
         selected, pin = _resolve(config_path, root, pdk=declared_pdk, project=project)
