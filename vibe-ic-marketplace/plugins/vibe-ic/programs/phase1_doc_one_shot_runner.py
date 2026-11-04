@@ -6553,9 +6553,7 @@ def _parameter_table_has_flow_owner(section: str) -> bool:
                      r'(?:timing|clock)\s+constraints?)\b'
                      r'|合成|綜合|综合|佈局|布局|實體|实体|物理|佈線|布线', heading, re.I):
             return True
-        if (re.fullmatch(r'rtl|hdl', heading.strip(), re.I)
-                or re.search(r'\b(?:rtl|hdl|module|entity)\b.*\b(?:parameters?|generics?)\b'
-                             r'|(?:模組|模块).*(?:參數|参数)', heading, re.I)):
+        if re.search(r'\b(?:rtl|hdl|module|entity)\b|模組|模块', heading, re.I):
             return False
     return False
 
