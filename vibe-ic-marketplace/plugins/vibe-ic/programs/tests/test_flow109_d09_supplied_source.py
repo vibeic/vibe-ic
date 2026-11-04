@@ -179,6 +179,39 @@ def test_native_elaboration_decides_debug_branch_support(tmp_path,monkeypatch,de
         assert 'D09_NATIVE_WITNESS_UNAVAILABLE' in owned[1]['steps'][0]['extras']['d09_owned_metrics_refusal']
 
 
+@pytest.mark.parametrize('damage', [None, 'unapproved', 'missing_mapping'])
+def test_authored_metrics_use_current_approved_phase1_population(tmp_path, monkeypatch, damage):
+    root, report, invocation = case(tmp_path, monkeypatch, authored='catalog-glue-author')
+    path = root / 'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json'
+    body = json.loads(path.read_text()); body.pop('source_demands')
+    body['schema'] = 'vibeic.phase1-expert-expectations.v1'
+    spec = put(root, 'input/docs/spec.md', (root / 'input/spec.md').read_text())
+    cite = f'input/docs/spec.md:1 sha256:{metrics._sha(spec.read_bytes())} — {spec.read_text()}'
+    for item in body['expectations']: item['evidence'] = [cite]
+    payload = {'required_items': [{'id': e['id']} for e in body['expectations']],
+        'source_documents': [{'path': 'input/docs/spec.md', 'sha256': metrics._sha(spec.read_bytes())}],
+        'expectations': body['expectations'],
+        'features': [{'feature': 'has_digital', 'declared': True, 'evidence': [cite]}]}
+    source = put(root, 'input/base_requirements_candidates.json', {'requirements_trace': payload})
+    put(root, 'requirements/base_01/requirements_trace.json', {
+        'schema': metrics.AUTHORITY_SCHEMA, 'required_items': payload['required_items'],
+        'approval': {'status': 'PENDING' if damage == 'unapproved' else 'APPROVED',
+            'authority': 'requirements_owner', 'approver': 'TEST_ONLY delegated expert',
+            'source_reference': {'path': 'input/base_requirements_candidates.json',
+                                 'sha256': metrics._sha(source.read_bytes())}}})
+    if damage == 'missing_mapping': body['expectations'].pop()
+    put(root, str(path.relative_to(root)), body)
+    review = json.loads((root / 'reports/audit/ai_judgements/1.json').read_text())
+    review['evidence_sha256'] = judgement.evidence_sha256(root, '1')
+    put(root, 'reports/audit/ai_judgements/1.json', review)
+    out = root / 'reports/orchestrator/phase2_one_shot.json'
+    design._write_phase2_report(out, report, root, invocation_context=invocation)
+    status, evidence, detail = consume((root, json.loads(out.read_text()), invocation))
+    assert status == ('PASS' if damage is None else 'NOT_MEASURED'), detail
+    if damage is None:
+        assert evidence['owned_metrics']['required_rtl_items'] == ['0', '1', '2']
+
+
 @pytest.mark.parametrize('damage,status,reason',[
     ('port','FAIL','D09_DECLARED_PORTS_PARAMETERS_MISMATCH'),
     ('no_rtl','NOT_MEASURED','bound RTL inventory is empty'),
