@@ -396,27 +396,7 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
     from benchmark_dispatch import _bind_runner_report
     summary = _bind_runner_report(summary, project, __file__, out.name,
                                   context=invocation_context)
-    current = None
-    if publish_current:
-        # Qualified rows retain their D09 owner report. The ordinary original
-        # engineering continuation instead publishes its current Step-2 owner
-        # at the same path read by collection, attribution and invocation
-        # snapshots. The current publication binds the outer invocation
-        # and points to the child report with its original launch binding.
-        import flow109
-        import flow109_engineering as engineering
-        context = flow109.validate_execution_context(json.loads(
-            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
-        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
-        if (context['resolved_row']['id'] != 'D11'
-                or not engineering.selected_original(project, context)
-                or out != attempt / 'phase2_one_shot.json'
-                or (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink()):
-            raise ValueError('D11_CURRENT_REPORT_PUBLICATION_UNBOUND')
-        current = _pl.report_path(project, 'phase2_one_shot.json')
-        if (any(p.is_symlink() for p in (current, *current.parents))
-                or not current.resolve().is_relative_to(Path(project).resolve())):
-            raise ValueError('D11_CURRENT_REPORT_PATH_UNBOUND')
+    current = _pl.report_path(project, 'phase2_one_shot.json') if publish_current else None
     parent_context = None
     from benchmark_dispatch import _RUNNER_PARENT_CONTEXT_ENV
     parent_raw = os.environ.get(_RUNNER_PARENT_CONTEXT_ENV)
@@ -14588,14 +14568,13 @@ def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
 
 
 def _step_rtl_hygiene_native(project: Path) -> StepResult:
-    """Consume the existing Step-2 project lint and its fresh native proof."""
+    """Judge this invocation's lint return code and findings; missing results block."""
     t0 = time.time()
     out_dir = project / "reports/phase2/lint"
     out_dir.mkdir(parents=True, exist_ok=True)
     findings_path = out_dir / "rtl_hygiene.json"
-    before = set(out_dir.glob("native-elaboration-*/context.json"))
     outputs = []
-    context = {}
+    exit_code = None
     status, detail = "NOT_MEASURED", "native RTL lint did not produce a current tool result"
     try:
         from _rtl_include_hub import silicon_rtl_selection
@@ -14619,31 +14598,20 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
                    *selected, "--top", top]
             for parameter in (pinned[0] if pinned else []):
                 cmd += ["--parameter", parameter]
+        findings_path.unlink(missing_ok=True)
         result = _pr.run(cmd + [
             "--severity", "ERROR", "--json", str(findings_path)],
             capture_output=True, text=True)
-        current = set(out_dir.glob("native-elaboration-*/context.json")) - before
-        if len(current) != 1:
-            raise ValueError("native RTL lint did not emit exactly one current elaboration context")
-        context_path, = current
-        context = json.loads(context_path.read_text())
-        if not isinstance(context, dict):
-            raise ValueError("native RTL lint context is not an object")
+        exit_code = result.returncode
         findings = json.loads(findings_path.read_text())
-        if (not top or context.get("top") != top
-                or context.get("files") != selected
-                or not isinstance(findings, list)):
-            raise ValueError("native RTL lint proof does not bind the selected top and files")
-        outputs = [str(findings_path), *[str(path) for path in context_path.parent.iterdir()
-                                       if path.is_file()]]
-        native_rc = context.get("native_returncode")
-        if (type(native_rc) is int
-                and context.get("transport_returncode") == native_rc):
-            if (native_rc == 0 and context.get("status") == "MEASURED"
-                    and result.returncode in (0, 1)):
-                status = "PASS" if result.returncode == 0 else "FAIL"
-            elif native_rc != 0 and result.returncode == 1:
-                status = "FAIL"
+        if not isinstance(findings, list) or any(
+                not isinstance(f, dict) or f.get('severity') not in ('ERROR', 'WARN', 'INFO')
+                for f in findings):
+            raise ValueError("native lint result missing or unparsable")
+        outputs = [str(findings_path)]
+        blocking = any(f.get('block_eligible', True) and f['severity'] in ('ERROR', 'WARN')
+                       for f in findings)
+        status = "FAIL" if exit_code or blocking else "PASS"
         detail = ((result.stdout or "") + (result.stderr or ""))[-2000:]
     except (OSError, ValueError, TypeError, subprocess.SubprocessError) as exc:
         detail = str(exc)
@@ -14652,8 +14620,8 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
         status, time.time() - t0, detail, outputs,
         extras={"producer": "rtl_hygiene_lint", "step_id": "2",
                 "default_row_status": status, "completed": status == "PASS",
-                "native_context": context, "input_sha256": context.get("input_sha256", {})},
-        reason_class=(context.get("reason_class") or "inconclusive")
+                "exit_code": exit_code},
+        reason_class="inconclusive"
         if status == "NOT_MEASURED" else "")
 
 
@@ -28849,17 +28817,10 @@ def main() -> int:
                 print('REFUSED: D11_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
                 return 2
             out = attempt / 'phase2_one_shot.json'
-        import flow109_engineering as engineering
-        engineering_selected = d11_selected and engineering.selected_original(project, context)
-        if engineering_selected:
-            lint_rows = _step_d11_original_engineering(project, context, pdk_name=args.pdk,
-                bounded_rtl=True, top_name=args.top_name, container=args.container)
-            row = lint_rows[-1]
-        else:
-            row = step_rtl_lint_tool(
-                project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
-                top_name=args.top_name, container=args.container)
-            lint_rows = [row]
+        row = step_rtl_lint_tool(
+            project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
+            top_name=args.top_name, container=args.container)
+        lint_rows = [row]
         if raw_context:
             row.extras["context_sha256"] = json.loads(Path(raw_context).read_text())["context_sha256"]
         summary = {"project": str(project),
@@ -28869,7 +28830,7 @@ def main() -> int:
                    "bounded_disclosures": ["native lint only; whole flow not measured"]}
         _write_phase2_report(out, summary, project,
                             invocation_context=_dispatch_invocation_context,
-                            publish_current=engineering_selected)
+                            publish_current=d11_selected)
         # D11's front door reopens the actual fresh normal owner report before
         # the sole canonical writer publishes; this child owns no row credit.
         finished = None if d11_selected else flow109.finish_native_window(project, summary, out)
@@ -28881,7 +28842,7 @@ def main() -> int:
             summary["verdict"] = status
             _write_phase2_report(out, summary, project,
                                 invocation_context=_dispatch_invocation_context,
-                                publish_current=engineering_selected)
+                                publish_current=d11_selected)
         print(f"native Step 2: {row.status} — {row.detail}")
         return {"PASS": 0, "FAIL": 1}.get(status, 2)
 

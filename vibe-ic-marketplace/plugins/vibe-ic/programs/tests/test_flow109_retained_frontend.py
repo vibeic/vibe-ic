@@ -1,5 +1,7 @@
 """Native report dispatch controls; no synthesis, STA or proof is launched."""
 import json
+import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +10,60 @@ import pytest
 import _delivery_route
 import flow109
 from test_flow109_selection import profile
+
+
+@pytest.mark.parametrize('rc,findings,expected', [
+    (0, '[]', 'PASS'), (1, '[]', 'FAIL'), (17, '[]', 'FAIL'),
+    (0, '[{"severity":"ERROR"}]', 'FAIL'),
+    (0, '[{"severity":"ERROR","block_eligible":false}]', 'PASS'),
+    (0, None, 'NOT_MEASURED'), (0, '{', 'NOT_MEASURED'),
+    (0, '{}', 'NOT_MEASURED'),
+])
+def test_d11_public_reads_this_lint_result(tmp_path, monkeypatch, rc, findings, expected):
+    """Real public/child/producer/finish path; only tool process is SOFTWARE."""
+    import design_one_shot_runner as owner
+    import librelane_contract as contract
+    from test_flow109_selection import _public_d09_entry
+    case(tmp_path, 'D11')
+    (tmp_path / 'reports/phase2/lint/verilator_lint_gate.json').unlink()
+    (tmp_path / 'phase2/stage2/synth/synth_inputs.json').unlink()
+    put(tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'neutral'})
+    lint = tmp_path / 'reports/phase2/lint/rtl_hygiene.json'
+    lint.write_text('[]')  # An earlier clean result must not replace this invocation.
+    runner = _public_d09_entry(tmp_path, monkeypatch)
+    argv = list(sys.argv)
+    for flag in ('--entry-step', '--exit-step'): argv[argv.index(flag) + 1] = 'D11'
+    monkeypatch.setattr(sys, 'argv', argv)
+
+    def native(command, **kwargs):
+        assert Path(command[1]).name == 'rtl_hygiene_lint.py'
+        if findings is not None: lint.write_text(findings)
+        return SimpleNamespace(returncode=rc, stdout='SOFTWARE tool boundary', stderr='')
+
+    def child(command, *, env=None, **kwargs):
+        with monkeypatch.context() as m:
+            for key, value in env.items(): m.setenv(key, value)
+            m.setattr(sys, 'argv', command[1:])
+            m.setattr(owner, '_activate_runtime_program_tree', lambda *_: None)
+            m.setattr(owner, '_bootstrap_execution_policy', lambda *_, **__: None)
+            m.setattr(owner, 'step_reused_ip_consume', lambda *_: None)
+            m.setattr(owner._spf, 'entry_admission', lambda *_: {'admitted': True, 'site': 'rtl_lint_tool'})
+            m.setattr(contract, 'selected_mode', lambda *_: 'librelane')
+            m.setattr(owner._pr, 'run', native)
+            code = owner.main()
+        return SimpleNamespace(returncode=code)
+
+    monkeypatch.setattr(runner.subprocess, 'run', child)
+    assert runner._main() == (0 if expected == 'PASS' else 1)
+    summary = json.loads((tmp_path / 'reports/orchestrator/vibe_ic_one_shot.json').read_bytes())
+    assert summary['dispatched_verdict'] == expected, summary
+    assert summary['whole_flow_verdict'] == 'NOT_MEASURED'
+    attempt = Path(os.environ[flow109.ATTEMPT_ENV])
+    terminal = json.loads((attempt / 'result.json').read_bytes())
+    assert terminal['default_row_status'] == expected
+    assert terminal['delivery_accepted'] is False
+    current = json.loads((tmp_path / 'reports/orchestrator/phase2_one_shot.json').read_bytes())
+    assert current['verdict'] == expected
 
 
 def put(path, body):
@@ -199,7 +255,7 @@ def test_missing_lint_result_reaches_the_native_route(tmp_path, monkeypatch):
         owner.step_rtl_lint_tool(tmp_path)
 
 
-@pytest.mark.parametrize(('step', 'native_step'), [('D11', '2'), ('D13', '4'), ('D14', '5')])
+@pytest.mark.parametrize(('step', 'native_step'), [('D13', '4'), ('D14', '5')])
 @pytest.mark.parametrize('status', ['PASS', 'FAIL', 'NOT_MEASURED'])
 def test_completed_native_owner_uses_the_single_reader(tmp_path, monkeypatch, step, native_step, status):
     import vibe_ic_one_shot_runner as runner
