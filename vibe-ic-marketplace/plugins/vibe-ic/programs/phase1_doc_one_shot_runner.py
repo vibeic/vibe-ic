@@ -35172,6 +35172,21 @@ def gen_l4_regmap(project: Path,
                 r.get("description")
                 if isinstance(r.get("description"), str) else None):
             r["is_counter"] = True
+            widths = {}
+            for fname, text in extracted.items():
+                for lineno, line in enumerate(text.splitlines(), 1):
+                    stated = re.search(
+                        r"(.*?)\b(?:is|are)\s+(?:always\s+available\s+and\s+)?"
+                        r"([1-9]\d*)[- ]bits?\s+wide\b", line, re.IGNORECASE)
+                    if stated and re.search(
+                            r"\b" + re.escape(r["name"]) + r"\b",
+                            stated[1], re.IGNORECASE):
+                        widths.setdefault(int(stated[2]), []).append(
+                            f"{fname}:{lineno} — {line.strip()}")
+            if len(widths) == 1:
+                r["counter_width_bits"] = next(iter(widths))
+                r.setdefault("corroborating_evidence", []).extend(
+                    widths[r["counter_width_bits"]])
 
     otp_layout_addrs: List[Dict[str, Any]] = []
     seen_field_names: Set[str] = set()
