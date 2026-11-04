@@ -401,7 +401,8 @@ def _check(project: Path, image: str | None, scratch: Path, *,
     # return path, so no RTL / a refusal leaves none behind).
     output_root = Path(output_project) if output_project is not None else Path(project)
     (output_root / RTL_ELAB_REL).unlink(missing_ok=True)
-    files = rtl_source_files(project)
+    from rtl_transitive_cone import topological_package_first
+    files = topological_package_first(rtl_source_files(project))
     result = {"program": "p0_tool_frontend_check", "passed": False,
               "sources": [str(p.relative_to(project)) for p in files],
               "tools": {}, "findings": []}
