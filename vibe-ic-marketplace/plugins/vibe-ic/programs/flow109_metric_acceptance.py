@@ -2935,7 +2935,8 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
     else:
         import ai_signed_judgement as judgement
         if (author.get('name') != 'rtl_gen' or author.get('status') not in ('PASS_WITH_WAIVERS', 'WAIVED')
-                or author.get('extras', {}).get('fallback_skill') != 'spec-to-rtl'):
+                or author.get('extras', {}).get('fallback_skill') != 'spec-to-rtl'
+                or not judgement._requested(project, '1')):
             raise MetricRefusal('D09_AUTHOR_UNSUPPORTED', 'normal spec-to-rtl handoff required')
         accepted, detail = judgement.check(project, '1')
         if not accepted:
