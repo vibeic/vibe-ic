@@ -1197,9 +1197,11 @@ def instruction_total(lock: Dict[str, Any], facts: Dict[str, Any]
     """(total, excluded instructions, why) for the base ISA unit."""
     unit = (lock.get("isa_units") or {}).get("I") or {}
     instrs = list(unit.get("instructions") or [])
-    return len(instrs), [], (f"{len(instrs)} required base-ISA instructions; "
-                            f"ECALL/EBREAK are mandatory independently of CSR: "
-                            f"{facts.get('trap_support_why')}")
+    excluded = [i for i in instrs if i.lower() in ("ecall", "ebreak")] \
+        if facts.get("trap_support") is False else []
+    total = len(instrs) - len(excluded)
+    return total, excluded, (f"{total} applicable base-ISA instructions; "
+                             f"trap support from {facts.get('trap_support_why')}")
 
 
 def _arms(project: Path, rtl_dir: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -1356,20 +1358,19 @@ def _produce(project: Path, *, executor: Optional[Callable[[Path, Path],
     wanted_units = sorted({u for us in cases.values() for u in us})
     progs = [dict(p, suite=sname)
              for sname, s in (lock.get("suites") or {}).items()
-             for p in s.get("programs") or [] if p.get("unit") in wanted_units]
+             for p in s.get("programs") or [] if p.get("unit") in wanted_units
+             and not (p.get("unit") == "I" and p.get("instruction") in excluded)]
     # The upstream lock still describes its own unchanged public files. The
     # additional producer-owned challenges are separate, source-bound inputs.
     if "I" in wanted_units:
         for instruction in (lock.get("isa_units", {}).get("I", {}).get("flow_system_programs") or []):
+            if instruction in excluded:
+                continue
             source = system_program_source(instruction)
             item = {"id": "flow-I-" + instruction, "suite": "flow-owned-system",
                     "unit": "I", "instruction": instruction, "role": "primary",
                     "judge": "tohost", "system_obligation": instruction,
                     "source_sha256": sha256_bytes(source.encode())}
-            if not facts.get("trap_support"):
-                item["not_measured_reason"] = (
-                    f"mandatory {instruction}: no declared machine trap environment; "
-                    "precise requested trap is not observed, not excluded")
             progs.append(item)
     if not progs:
         return _refuse(f"the lock holds no program for units {wanted_units}")
