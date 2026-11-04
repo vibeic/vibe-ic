@@ -2788,6 +2788,8 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
             import _path_layout as layout
             import _specrtl_common as sources
             synthesis_path = project / 'phase2/stage2/synth/synth_inputs.json'
+            if step == 'D13' and not synthesis_path.exists():
+                return None
             if method != 'formal' or synthesis_path.exists():
                 synthesis = json.loads(synthesis_path.read_text())
                 rtl = layout.rtl_dir(project)

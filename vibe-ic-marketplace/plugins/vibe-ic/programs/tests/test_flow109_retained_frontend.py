@@ -431,3 +431,91 @@ def test_retained_formal_rejects_proof_source_or_present_synthesis_drift(tmp_pat
     context=flow109.execution_context(flow109.resolve_plan(profile()),'D14','D14')
     assert flow109._retained_native_result(tmp_path,context) is None, 'stale proof must return to its native producer'
     assert not (tmp_path/'reports/flow109/default_rows/D14.json').exists()
+
+
+@pytest.mark.parametrize('wrong_dut,publication,expected',[
+    (False,'current','PASS'),(True,'current','FAIL'),
+    (False,'missing','NOT_MEASURED'),(False,'NOT_MEASURED','NOT_MEASURED'),
+    (False,'INCOMPLETE','NOT_MEASURED'),(False,'PARTIAL','NOT_MEASURED'),
+    (False,'pending_ai','NOT_MEASURED'),(False,'consumer_block','NOT_MEASURED'),
+    (False,'missing_verdict','NOT_MEASURED'),(False,'empty_report','NOT_MEASURED'),
+    (False,'UNSUPPORTED_RESULT','NOT_MEASURED')])
+def test_d13_without_synthesis_runs_native_functional_owner_and_counts_current_result(tmp_path,monkeypatch,wrong_dut,publication,expected):
+    """Actual public transport/native functional step; bootstrap preconditions SOFTWARE.
+
+    The child-process adapter calls the shipped functional producer and normal
+    report writer. It does not claim full pipeline or platform qualification.
+    """
+    import subprocess
+    import time
+    import ai_signed_judgement as judgement
+    import design_one_shot_runner as owner
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from test_flow109_selection import _public_d09_entry
+    case(tmp_path,'D13')
+    (tmp_path/'phase2/stage2/synth/synth_inputs.json').unlink()
+    rtl=tmp_path/'phase2/stage1/rtl/neutral.v'
+    if wrong_dut: rtl.write_text(rtl.read_text().replace('q=d','q=~d'))
+    put(tmp_path/'phase1/generated_docs/L10_TEST_CASES.json',{'test_cases':[{'name':'probe','kind':'functional_vector'}]})
+    tb=tmp_path/'phase2/stage1/sim/tb/probe.v';tb.parent.mkdir(parents=True)
+    tb.write_text('module probe; reg d; wire q; neutral dut(.d(d),.q(q));\n'
+        'initial begin d=0; #1; if(q!==d) $fatal(1,"wrong capture");\n'
+        'd=1; #1; if(q!==d) $fatal(1,"wrong capture"); $finish; end endmodule\n')
+    public=_public_d09_entry(tmp_path,monkeypatch)
+    monkeypatch.setattr(public,'_standalone_rtl_provenance',lambda *_:{'ran':True})
+    if publication=='consumer_block':
+        monkeypatch.setattr(public,'_current_default_acceptance',lambda *_:[{'id':'4','status':'NOT_MEASURED'}])
+    argv=[arg for arg in sys.argv if arg not in ('--skip-phase1','--skip-phase3','--skip-analog')]
+    for flag in ('--entry-step','--exit-step'): argv[argv.index(flag)+1]='D13'
+    monkeypatch.setattr(sys,'argv',argv)
+    actual_run=subprocess.run;calls=[]
+    def child(command,*,env=None,**kwargs):
+        if len(command)<2 or Path(command[1]).name!='phase2_one_shot_runner.py':
+            return actual_run(command,env=env,**kwargs)
+        assert command[command.index('--entry-step')+1]==command[command.index('--exit-step')+1]=='4'
+        with monkeypatch.context() as m:
+            for key,value in env.items():m.setenv(key,value)
+            m.setattr(sys,'argv',command[1:])
+            started=time.time();native=owner.step_l10_unit_tb_run(tmp_path,None)
+            assert native.status==('FAIL' if wrong_dut else 'PASS'),native
+            assert native.extras['executed']==1 and native.extras['sim_executed']
+            calls.append(asdict(native))
+            summary={'project':str(tmp_path),'steps':[asdict(native)],
+                'verdict':owner._aggregate_verdict([native],project=tmp_path,started_at=started),
+                'declared_window':{'entry_step':'4','exit_step':'4','dispatched_step_ids':['4']}}
+            if publication=='pending_ai':
+                put(tmp_path/'reports/phase2/gates/professional_tb.json',{'dut_kind':'expert_reference'})
+                summary['ai_judgements']=judgement.pending(tmp_path,('4',))
+                assert summary['ai_judgements']
+                judgement.demote_runner_rows(summary['steps'],summary['ai_judgements'])
+                summary['verdict']='NOT_MEASURED'
+            elif publication in ('NOT_MEASURED','INCOMPLETE','PARTIAL','UNSUPPORTED_RESULT'): summary['verdict']=publication
+            elif publication in ('missing_verdict','empty_report'):
+                summary.pop('verdict')
+                if publication=='empty_report': summary.pop('steps')
+            if publication!='missing':
+                owner._write_phase2_report(owner._pl.report_path(tmp_path,'phase2_one_shot.json'),summary,tmp_path,
+                    invocation_context=owner._runner_invocation_context())
+        exit_status=native.status if publication in ('missing_verdict','empty_report','UNSUPPORTED_RESULT') else summary['verdict']
+        return SimpleNamespace(returncode=0 if exit_status=='PASS' else 1)
+    monkeypatch.setattr(public.subprocess,'run',child)
+    rc=public._main()
+    assert rc==(0 if expected=='PASS' else 1)
+    assert len(calls)==1, 'D13 must reach its current functional producer before synthesis'
+    row=json.loads((tmp_path/'reports/flow109/default_rows/D13.json').read_text())
+    assert row['default_row_status']==expected and row['completed'] is (expected=='PASS'),row
+    assert row['delivery_accepted'] is False and row['whole_flow_acceptance']=='NOT_MEASURED'
+
+
+@pytest.mark.parametrize('state,expected',[('absent',None),('matching','PASS'),('rtl_drift',None),('digest_drift',None),('malformed','NOT_MEASURED')])
+def test_d13_retained_reuse_preserves_present_synthesis_freshness(tmp_path,state,expected):
+    _,rtl=case(tmp_path,'D13')
+    synth=tmp_path/'phase2/stage2/synth/synth_inputs.json'
+    if state=='absent':synth.unlink()
+    elif state=='rtl_drift':rtl.write_text(rtl.read_text()+'// source changed\n')
+    elif state=='digest_drift':put(synth,{'rtl_sha256':{'neutral.v':'0'*64}})
+    elif state=='malformed':synth.write_text('{')
+    context=flow109.execution_context(flow109.resolve_plan(profile()),'D13','D13')
+    result=flow109._retained_native_result(tmp_path,context)
+    assert result is None if expected is None else result['component_status']==expected
