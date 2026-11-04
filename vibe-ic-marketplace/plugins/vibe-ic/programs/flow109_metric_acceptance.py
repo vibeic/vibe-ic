@@ -7040,6 +7040,9 @@ def _d0102_documents(project: Path, reads: dict, *, include_owner_request: bool 
         docs.append(owner_request)
     if not docs:
         raise MetricRefusal('D0102_SOURCE_DOCUMENTS_ABSENT', 'staged originals required')
+    decisions = project / 'input/feature-decisions.json'
+    if decisions.is_file():
+        docs.append(decisions)
     result = {p.relative_to(project).as_posix(): _sha(_safe_project_file(
         project, p.relative_to(project).as_posix()).read_bytes()) for p in docs}
     reads.update(result)

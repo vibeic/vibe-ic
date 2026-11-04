@@ -57,6 +57,25 @@ def test_legacy_approved_doc_census_preserved_with_unreferenced_owner_request(tm
     assert body == payload['requirements_trace']
 
 
+@pytest.mark.parametrize('changed', [False, True])
+def test_feature_citation_reads_current_design_input(tmp_path, monkeypatch, changed):
+    payload, _ = case(tmp_path, monkeypatch)
+    relative = 'input/feature-decisions.json'
+    source = write(tmp_path, relative, 'has_analog=false\n')
+    for section in payload.values():
+        section['source_documents'].append(source)
+    payload['requirements_trace']['features'][0]['evidence'] = [
+        f"{relative}:1 sha256:{source['sha256']} — has_analog=false"]
+    approve(tmp_path, payload)
+    if changed:
+        write(tmp_path, relative, 'has_analog=true\n')
+        with pytest.raises(metrics.MetricRefusal, match='D0102_.*_STALE'):
+            metrics._d0102_population(tmp_path, 'base_01', 'requirements_trace', {})
+    else:
+        observed, _ = metrics._d0102_population(tmp_path, 'base_01', 'requirements_trace', {})
+        assert observed['status'] == 'APPROVED'
+
+
 def test_normal_second_track_publishes_only_pending_source_facts(tmp_path, monkeypatch, capsys):
     source = owner_case(tmp_path)
     monkeypatch.setattr(runner, '_run_expert_track', lambda project: 0)
