@@ -59,6 +59,9 @@ def assert_fulladder_composition(rtl, width, names, spans):
     (2, ("x", "y", "s"), "with full adders"),
     (5, ("word_left", "word_right", "wide_total"), "using full adders"),
     (9, ("first_word", "next_word", "result_bits"), "built from full-adder cells"),
+    (1, ("low_a", "low_b", "wide_bit"), "using full adders"),
+    (3, ("foo", "bar", "extended"), "using\nfull adders"),
+    (6, ("operand_one", "operand_two", "answer"), "using full adders without registers"),
 ])
 def test_explicit_request_emits_logical_fulladder_chain(width, names, style):
     prompt, _, spans = request(width, names, style=style)
@@ -89,6 +92,13 @@ def test_internal_carry_name_cannot_replace_or_alias_a_public_operand():
     assert_fulladder_composition(rtl, 3, names, spans)
     module, = ports.parse_modules(rtl, "<generated>")
     assert set(module.ports) == set(names)
+
+
+def test_whole_prompt_followup_can_explicitly_request_full_adders():
+    prompt, _, spans = request(style="")
+    prompt += "\nConstruct the implementation from full adders.\n"
+    rtl = arithmetic.synth(prompt, "neutral_sum")
+    assert_fulladder_composition(rtl, 5, ("operand_u", "operand_v", "total"), spans)
 
 
 @pytest.mark.parametrize("style", ["", "using ordinary arithmetic",
