@@ -2020,23 +2020,23 @@ def _d09_bound_phase2_evidence(
             raise ValueError('Phase-2 report does not own the D09 authoring span 1..1')
     except (ValueError, IndexError, KeyError, TypeError) as exc:
         return 'NOT_MEASURED', {}, 'D09_REPORT_UNBOUND: ' + str(exc)
-    supplied = [row for row in steps if row.get('name') == 'reused_ip_consume'
+    supplied = [row for row in steps
+                if row.get('name') in {'reused_ip_consume', 'reused_ip_consume(pre-entry)'}
                 and row.get('status') == 'PASS' and row.get('extras', {}).get('reused_ip') is True]
-    generated = [row for row in steps if row.get('name') == 'rtl_gen' and row.get('status') == 'PASS']
-    authors = supplied + generated
-    if not supplied:
-        authors = [row for row in steps if row.get('name') == 'rtl_gen']
+    authors = supplied or [row for row in steps if row.get('name') == 'rtl_gen']
     if len(authors) != 1:
         return 'NOT_MEASURED', {}, 'D09_REQUIRED_EVIDENCE_ABSENT: unique author required'
-    try:
-        import flow109_metric_acceptance as metrics
-        owned = metrics.d09_owned_metrics(project, authors[0])
-    except (metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
-        return 'NOT_MEASURED', {}, 'D09_OWNED_METRICS_UNAVAILABLE: ' + str(exc)
-    if owned['declared_ports_parameters'] == 'FAIL':
-        return 'FAIL', {}, 'D09_DECLARED_PORTS_PARAMETERS_MISMATCH'
-    if owned['rtl_requirement_mapping'] != 'PASS':
-        return 'NOT_MEASURED', {}, 'D09_REQUIRED_MAPPING_MISSING: ' + ', '.join(owned['missing_items'])
+    owned = None
+    if not supplied:
+        try:
+            import flow109_metric_acceptance as metrics
+            owned = metrics.d09_owned_metrics(project, authors[0])
+        except (metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            return 'NOT_MEASURED', {}, 'D09_OWNED_METRICS_UNAVAILABLE: ' + str(exc)
+        if owned['declared_ports_parameters'] == 'FAIL':
+            return 'FAIL', {}, 'D09_DECLARED_PORTS_PARAMETERS_MISMATCH'
+        if owned['rtl_requirement_mapping'] != 'PASS':
+            return 'NOT_MEASURED', {}, 'D09_REQUIRED_MAPPING_MISSING: ' + ', '.join(owned['missing_items'])
     inventory = [{'path': path, **record} for path, record in sorted(rtl.items())]
     evidence = {
         'runner_invocation_id': binding['invocation_id'],
@@ -2046,11 +2046,13 @@ def _d09_bound_phase2_evidence(
             material, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
         'rtl_inventory': inventory,
         'input_inventory': material.get('input', {}),
-        'owned_metrics': owned,
         'phase2_report': {'path': str(report_path.relative_to(project)),
                           'sha256': hashlib.sha256(report_path.read_bytes()).hexdigest()},
     }
-    return 'PASS', evidence, 'current bound D09 requirement mapping and declared interface'
+    if owned is not None:
+        evidence['owned_metrics'] = owned
+    return ('PASS', evidence, 'provided RTL staged by native consume' if supplied else
+            'current bound D09 requirement mapping and declared interface')
 
 
 def _finish_d09_selected_owner(
