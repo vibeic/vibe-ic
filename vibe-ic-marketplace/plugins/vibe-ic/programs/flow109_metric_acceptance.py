@@ -3093,10 +3093,10 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
             return cell['type'] == item['type'] and cell['connections'][item['cell_port']] == parent['ports'][item['top_port']]['bits']
         return False
     later = {
-        'L19_CONSTRAINTS_PDK':['D19','D20','D21','D22','D26'],
-        'L24_SIGNOFF':['D22','D26','D65','D66','D77'],
-        'L20_DFT_SCAN_TOPOLOGY':['D23','D36','D52'],
-        'L23_SECURITY_REQUIREMENTS':['D17','D73'], 'L25_RELIABILITY_MISSION_PROFILE':['D59']}
+        ('L19_CONSTRAINTS_PDK','timing','constraints','ppa','technology','synthesis'):['D19','D20','D21','D22','D26'],
+        ('L24_SIGNOFF',):['D22','D26','D65','D66','D77'],
+        ('L20_DFT_SCAN_TOPOLOGY',):['D23','D36','D52'],
+        ('L23_SECURITY_REQUIREMENTS',):['D17','D73'], ('L25_RELIABILITY_MISSION_PROFILE',):['D59']}
     for demand in demands:
         expect = by_id[demand['id']]
         if any(expect.get(k) != demand[k] for k in ('requirement', 'evidence')):
@@ -3112,10 +3112,14 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
                 continue
             doc = l9 if layer == 'L9_INTEGRATION_SPEC' else document('phase1/generated_docs/' + str(layer) + '.json')
             node = track.subtree_at(doc, path, layer)
+            scope = track._normalise_field_path(str(path).strip('/').replace('/', '.'), layer)
+            spellings = track._field_path_spellings(scope)
             if not supplied_author and not (
-                    (layer == 'L9_INTEGRATION_SPEC' and str(path).strip('/').replace('/', '.').split('.')[0] in ('top_module','top_ports','parameters'))
+                    (layer == 'L9_INTEGRATION_SPEC' and any(p.split('.')[0] in ('top_module','top_ports','parameters') for p in spellings))
                     or (isinstance(node, list) and len(node) == 1 and witness(node[0], shape_only=True))):
-                trace.append({'id':demand['id'], 'normal_owner':later.get(layer, ['D13','D14']), 'status':'NOT_MEASURED'})
+                owners = next((owners for fields, owners in later.items() if layer in fields
+                    or (layer == 'L9_INTEGRATION_SPEC' and set(scope.split('.')) & set(fields))), ['D13','D14'])
+                trace.append({'id':demand['id'], 'normal_owner':owners, 'status':'NOT_MEASURED'})
                 continue
             own = True
             ok = interface and ((layer == 'L9_INTEGRATION_SPEC' and path in ('top_module','top_ports','parameters'))
