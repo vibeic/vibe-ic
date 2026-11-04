@@ -145,6 +145,26 @@ def test_secondary_checked_in_source_is_clean_and_delivered(tmp_path):
     assert 'conflicts with the golden reference model' not in text
 
 
+def test_multimodule_partition_lesson_uses_task_declared_names(tmp_path):
+    import ic_expert_backup_pack as pack
+    prompt = ('Preserve named modules in separate module.sv files; '
+              'never merge one named module into another file.')
+    handoff = pack.assemble(prompt, None, None, [], [], tmp_path)
+    assert any(c['ic_class'] == 'fsm-controller' for c in handoff['db_classes'])
+    source = json.loads(require_repo(*_PLUGIN, 'agents', 'ic_expert_db', 'ic_expert_db.json').read_text())
+    lesson = next(e for e in source['entries'] if e['ic_class'] == 'fsm-controller')['lessons'][13]
+    text = (tmp_path / 'ic_expert_db.md').read_text()
+    assert lesson in text
+    for answer_marker in ['0006', 'elevator_control_system', 'floor_to_seven_segment', 'Binary2BCD']:
+        assert answer_marker not in prompt
+        assert answer_marker not in text
+    instruction = _flat(lesson)
+    assert 'each task-declared module exactly once in its own <module>.sv file' in instruction
+    assert 'only from the supplied task/interface contract' in instruction
+    assert 'default on silent or ambiguous file-layout input' in instruction
+    assert 'only an explicit contrary file-partition requirement overrides' in instruction
+
+
 @pytest.mark.parametrize('requirement', [
     'No further release-latency requirement is supplied.',
     'The claim must remain asserted for two clocks after the final beat.',
