@@ -242,17 +242,27 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
     out_decls = [_decl(out_name, out_w, "output")]
     body = [f"    assign {out_name} = {a} + {b};"]
     requests = []
+    target = r"(?:(?:(?:an?|the|this)\s+)?(?:(?:unsigned|(?:\d+|[a-z]+)[-\s]+bit)\s+)*(?:adder|implementation)|it)\b"
+    construction = re.compile(r"(?:(?:and|but)\s+)?(?:do\s+)?(?:(?P<deny>not|never|without|avoid)\s+)?"
+                              r"(?:(?:use|using|with|from|instantiate)\s+|(?:built|build|construct)\s+"
+                              r"(?:(?:it|the\s+(?:adder|implementation))\s+)?(?:from|using)\s+)?"
+                              r"(?:(?:only|multiple|individual|one[-\s]bit|1[-\s]bit|a|network|of)\s+)*"
+                              r"full[-\s]+adders?(?:\s+cells)?(?:\s+without\s+registers)?", re.I)
     for clause in re.split(r"[.;]", text):
         request = re.match(r"\s*(?:please\s+)?(?:do\s+)?(?:(?P<deny>not|never|avoid)\s+)?"
                            r"(?:implement|construct|build|use|instantiate)\b(?P<body>[\s\S]*)", clause, re.I)
-        if request is None:
+        if request is None or not re.search(r"\bfull[-\s]+adders?\b", request["body"], re.I):
             continue
-        for phrase in re.finditer(r"\bfull[-\s]+adders?\b", request["body"], re.I):
-            prefix = request["body"][:phrase.start()]
-            denial = re.search(r"\b(?:not|never|without|avoid)\b", prefix, re.I)
-            if denial and re.search(r",|\b(?:and|but)\b", prefix[denial.end():], re.I):
+        requested_style = re.sub(r"^\s*" + target + r"\s*", "", request["body"], count=1, flags=re.I).strip()
+        statement_start = len(requests)
+        for piece in re.split(r"\s+(?:and|but)\s+", requested_style, flags=re.I):
+            parsed = construction.fullmatch(piece.strip())
+            if parsed is None:
                 return None
-            requests.append(not (request["deny"] or denial))
+            positive = not (request["deny"] or parsed["deny"])
+            if positive and False in requests[statement_start:]:
+                return None
+            requests.append(positive)
     explicit_full_adders = bool(requests) and all(requests)
     if explicit_full_adders:
         packed = []
