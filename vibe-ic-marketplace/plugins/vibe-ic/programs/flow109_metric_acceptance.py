@@ -2931,7 +2931,7 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
     else:
         import ai_signed_judgement as judgement
         if (author.get('name') != 'rtl_gen' or author.get('status') not in ('PASS_WITH_WAIVERS', 'WAIVED')
-                or author.get('extras', {}).get('fallback_skill') != 'spec-to-rtl'
+                or author.get('extras', {}).get('fallback_skill') not in ('spec-to-rtl', 'catalog-glue-author')
                 or not judgement._requested(project, '1')):
             raise MetricRefusal('D09_AUTHOR_UNSUPPORTED', 'normal spec-to-rtl handoff required')
         accepted, detail = judgement.check(project, '1')
@@ -3160,7 +3160,7 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
 def d09_owned_metrics(project: Path, author: Mapping) -> dict:
     """Recompute the supported source-bound author metrics, never trust a stamp."""
     if (author.get('name') == 'reused_ip_consume'
-            or author.get('extras', {}).get('fallback_skill') == 'spec-to-rtl'):
+            or author.get('extras', {}).get('fallback_skill') in ('spec-to-rtl', 'catalog-glue-author')):
         return _d09_source_owned_metrics(project, author)
     import serial_parallel_mul_synth as serial
     import design_one_shot_runner as runner

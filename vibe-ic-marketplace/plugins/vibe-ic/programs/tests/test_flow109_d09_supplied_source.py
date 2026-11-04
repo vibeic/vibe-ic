@@ -79,6 +79,8 @@ def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, defer
     if authored:
         owner=asdict(design.step_rtl_gen(root,'unknown'))
         assert owner['status']=='PASS_WITH_WAIVERS' and owner['extras']['fallback_skill']=='spec-to-rtl',owner
+        if isinstance(authored, str):
+            owner['extras']['fallback_skill']=authored
         if damage=='port':
             put(root,'phase2/stage1/rtl/unit.sv',RTL.replace('input on, iso,','input on,'))
         elif damage=='no_rtl':
@@ -156,8 +158,9 @@ def test_missing_real_d01_is_not_accepted(tmp_path,monkeypatch):
 
 
 @pytest.mark.parametrize('unknown',[False,True],ids=['complete','unmapped'])
-def test_accepted_spec_to_rtl_author_uses_native_source_metrics(tmp_path,monkeypatch,unknown):
-    owned=case(tmp_path,monkeypatch,authored=True,unknown=unknown)
+@pytest.mark.parametrize('skill',['spec-to-rtl','catalog-glue-author'])
+def test_accepted_spec_to_rtl_author_uses_native_source_metrics(tmp_path,monkeypatch,unknown,skill):
+    owned=case(tmp_path,monkeypatch,authored=skill,unknown=unknown)
     root,report,_=owned
     author=report['steps'][0]
     result=metrics.d09_owned_metrics(root,author)
@@ -177,8 +180,9 @@ def test_accepted_spec_to_rtl_author_uses_native_source_metrics(tmp_path,monkeyp
     ('no_rtl','NOT_MEASURED','bound RTL inventory is empty'),
     ('no_review','NOT_MEASURED','awaiting_signed_judgement'),
     ('no_handoff','NOT_MEASURED','normal spec-to-rtl handoff required')])
-def test_spec_to_rtl_author_preserves_interface_and_output_refusals(tmp_path,monkeypatch,damage,status,reason):
-    owned=case(tmp_path,monkeypatch,authored=True,damage=damage)
+@pytest.mark.parametrize('skill',['spec-to-rtl','catalog-glue-author'])
+def test_spec_to_rtl_author_preserves_interface_and_output_refusals(tmp_path,monkeypatch,damage,status,reason,skill):
+    owned=case(tmp_path,monkeypatch,authored=skill,damage=damage)
     root,report,_=owned
     if damage=='no_handoff':
         (root/'phase2/stage1/fallback_skill.md').unlink()
