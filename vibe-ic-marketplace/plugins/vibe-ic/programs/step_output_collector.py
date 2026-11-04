@@ -159,6 +159,12 @@ def flow109_step_folder(row) -> str:
 def _known_files(project: Path, value):
     """Use paths already supplied by the row, without resolving new dependencies."""
     if isinstance(value, dict):
+        if isinstance(value.get('sha256'), dict):
+            directory = next((value[key] for key in ('step_dir', 'directory', 'folder')
+                              if isinstance(value.get(key), str)), None)
+            if directory:
+                for name in value['sha256']:
+                    yield from _known_files(project, str(Path(directory) / name))
         if isinstance(value.get('path'), str) and isinstance(value.get('sha256'), str):
             path = Path(value['path'])
             try:
