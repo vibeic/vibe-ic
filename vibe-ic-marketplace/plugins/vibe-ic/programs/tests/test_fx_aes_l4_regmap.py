@@ -137,6 +137,47 @@ def test_the_phase2_emitter_builds_the_named_map(tmp_path):
     assert {"FIFO_0", "FIFO_1", "FIFO_2", "FIFO_3", "CTRL"} <= set(names)
 
 
+def _typed_family_project(tmp_path):
+    import _path_layout as layout
+    project = _project(tmp_path)
+    path = layout.generated_docs_dir(project)/'L4_REGMAP.json'
+    doc = json.loads(path.read_text())
+    doc['registers'][1].update(access='WO', reset_value='0x0', length=4,
+        fields=[{'field_name':'PAYLOAD','bits':'31:0','msb':31,'lsb':0,'access':'WO'}])
+    path.write_text(json.dumps(doc))
+    return project, path
+
+
+def test_array_elements_keep_family_attributes_in_the_phase2_consumer(tmp_path):
+    import phase2_scaffold_gen as consumer
+    project, path = _typed_family_project(tmp_path)
+    R._post_emit_pdf_regmap_table_rows(project)
+    doc = json.loads(path.read_text())
+    rows = {r['name']:r for r in consumer.derive_registers(doc,{})}
+    for i in range(4):
+        row = rows[f'FIFO_{i}']
+        assert row['width'] == 32
+        assert row['access'] == 'wo'
+        assert row['fields'][0]['field_name'] == 'PAYLOAD'
+        original = next(r for r in doc['registers'] if r['name'] == f'FIFO_{i}')
+        assert original['reset_value'] == '0x0'
+        assert original['length'] == 4
+
+
+def test_array_attributes_require_both_declared_index_and_address(tmp_path):
+    import _path_layout as layout
+    for i,(name,addr) in enumerate([('FIFO_1','0x28'),('OTHER_1','0x14')]):
+        project, path = _typed_family_project(tmp_path/str(i))
+        (layout.input_doc_dir(project)/'blk_registers.md').write_text(
+            '| Name | Offset |\n|---|---|\n'
+            '| FIFO_0 | 0x10 |\n'+f'| {name} | {addr} |\n')
+        R._post_emit_pdf_regmap_table_rows(project)
+        row = next(r for r in json.loads(path.read_text())['registers'] if r['name']==name)
+        assert not row.get('fields')
+        assert row.get('access') != 'WO'
+        assert 'reset_value' not in row
+
+
 # ── the order: layer gates judge the final layers ─────────────────────────
 #
 # DERIVED FROM THE WRITES, not from names (review wave 8): a producer is any
