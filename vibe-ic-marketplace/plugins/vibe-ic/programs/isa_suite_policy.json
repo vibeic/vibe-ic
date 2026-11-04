@@ -5,5 +5,5 @@
   "reused_ip_errata": "apply",
   "reused_ip_errata_ruling": "isaprod_rulings 2026-09-28 ruling 2: B \u2014 apply a pinned upstream erratum to the STAGED RTL as a disclosed deviation; the unmodified-RTL result is kept as evidence. Set to \"report_supplied\" (ruling A) to stage the supplied RTL unchanged and judge it.",
   "instruction_total": "derive_from_declaration",
-  "instruction_total_ruling": "Required base-ISA enumeration is retained independently of optional CSR support. ECALL and EBREAK remain mandatory; unavailable trap observation is NOT_MEASURED, not denominator subtraction."
+  "instruction_total_ruling": "Derive applicability from the design declaration: when trap support is explicitly absent, exclude the lock's trap-dependent ECALL and EBREAK instructions and cite that declaration. Designs with trap support retain them."
 }

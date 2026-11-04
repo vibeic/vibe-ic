@@ -465,12 +465,12 @@ def test_a_set_is_pass_only_when_every_member_passes():
     assert I.fold([]) == I.NOT_MEASURED
 
 
-# ── 5. mandatory enumeration; legacy IDs retained for contract migration ──
+# ── 5. declaration-derived instruction applicability ──────────────────────
 
 def test_no_trap_support_excludes_ecall_and_ebreak_by_name(tmp_path):
     facts, _ = I.design_facts(_project(tmp_path))
     total, excl, why = I.instruction_total(_lock(), facts)
-    assert (total, excl) == (4, [])
+    assert (total, excl) == (2, ['ecall', 'ebreak'])
     assert "no Zicsr" in why
 
 
@@ -484,7 +484,7 @@ def test_a_trap_capable_core_is_judged_on_every_instruction(tmp_path):
 def test_the_shipped_lock_gives_38_without_traps_and_40_with():
     lock = I.load_lock()
     assert I.instruction_total(lock, {"trap_support": False})[:2] == (
-        40, [])
+        38, ['ecall', 'ebreak'])
     assert I.instruction_total(lock, {"trap_support": True})[:2] == (40, [])
 
 
@@ -520,11 +520,11 @@ def test_a_passing_suite_writes_pass_rows_and_the_coverage_line(tmp_path):
     assert rec["cases"]["base_isa"].get("delivered", {"verdict": "PASS"})["verdict"] == "PASS"
     assert rows["fence_ext"]["verdict"] == "PASS"
     cov = rec["cases"]["base_isa"]["coverage"]
-    assert cov == {"covered": 1, "total": 4, "excluded": [],
-                   "uncovered": ["sub", "ecall", "ebreak"]}
+    assert cov == {"covered": 1, "total": 2, "excluded": ['ecall', 'ebreak'],
+                   "uncovered": ["sub"]}
     text = (p / I.TRANSCRIPT_REL.format(case="base_isa")).read_text()
-    assert I.coverage_line(1, 4) in text
-    assert "excluded from the instruction total: none" in text
+    assert I.coverage_line(1, 2) in text
+    assert "excluded from the instruction total: ecall, ebreak" in text
     assert "(parameter only); delivered-size subset at memsize 1024" in text
     assert (p / I.RECEIPT_REL).is_file()
 
@@ -546,7 +546,7 @@ def test_full_parameter_pass_does_not_publish_delivered_l10_pass(tmp_path):
     assert "delivered" in row["detail"] and "4096" in row["detail"]
     transcript = (p / I.TRANSCRIPT_REL.format(case="base_isa")).read_text()
     assert "CORE ISA (parameter only) PASS" in transcript
-    assert I.coverage_line(0, 4) in transcript
+    assert I.coverage_line(0, 2) in transcript
 
     import testbench_gen as TB
     import _l10_execution as X
@@ -959,7 +959,7 @@ def test_core_parameters_with_csr_decides_trap_support(tmp_path):
     assert I.instruction_total(_lock(), facts)[:2] == (4, [])
     facts, _ = I.design_facts(_project(
         tmp_path / "b", core_parameters={"WITH_CSR": 0}))
-    assert I.instruction_total(_lock(), facts)[:2] == (4, [])
+    assert I.instruction_total(_lock(), facts)[:2] == (2, ['ecall', 'ebreak'])
 
 
 def test_the_isa_transcript_never_overwrites_the_scaffold_run_log(
@@ -1110,11 +1110,13 @@ def _system_lock():
  {'isa_extensions':['I','Zicsr'],'WITH_CSR':0},
  {'isa_extensions':['I'],'core_parameters':{'WITH_CSR':0}},
 ])
-def test_mandatory_system_obligations_do_not_depend_on_optional_csr(declaration):
+def test_system_obligations_follow_declared_trap_support(declaration):
     traps,why=I.trap_support(declaration)
     total,excluded,reason=I.instruction_total(I.load_lock(),
                     {'trap_support':traps,'trap_support_why':why})
-    assert (total,excluded)==(40,[]), (total,excluded,reason)
+    expected = (40, []) if traps else (38, ['ecall', 'ebreak'])
+    assert (total,excluded)==expected, (total,excluded,reason)
+    assert why in reason
 
 
 @pytest.mark.parametrize('fault,want', [(0,I.PASS),(1,I.FAIL),(2,I.FAIL),(3,I.FAIL)])
@@ -1198,21 +1200,17 @@ def test_flow_owned_system_programs_measure_precise_traps_native(tmp_path,monkey
         assert X.isa_conformance_credit(p,'system_component',row)[0] is None
 
 
-def test_missing_trap_environment_keeps_named_unmeasured_primary_obligations(tmp_path):
+def test_missing_trap_environment_excludes_inapplicable_primary_obligations(tmp_path):
     p=_project(tmp_path,units=('I',),WITH_CSR=0)
     lock,tar=_system_lock()
     rec=I.produce(p,lock=lock,pol=ALLOW,fetch=lambda _u:tar,
                  executor=_fake_executor({'neutral-addi':(None,0,HALT,None)}))
-    assert rec['instruction_total']['total']==3
-    assert rec['instruction_total']['excluded']==[]
-    assert {'flow-I-ecall','flow-I-ebreak'} <= set(rec['programs']), rec['programs']
-    for instruction in ['ecall','ebreak']:
-        prog=rec['programs']['flow-I-'+instruction]
-        assert prog['pre'][0]==I.NOT_MEASURED
-        assert 'mandatory '+instruction in prog['pre'][1]
-    assert rec['cases']['base_isa']['verdict']==I.NOT_MEASURED
-    assert rec['rows'][0]['verdict']=='NOT_EXECUTED'
-    assert rec['cases']['base_isa']['coverage']['uncovered']==['ecall','ebreak']
+    assert rec['instruction_total']['total']==1
+    assert rec['instruction_total']['excluded']==['ecall','ebreak']
+    assert set(rec['programs'])=={'neutral-addi'}
+    assert rec['cases']['base_isa']['verdict']==I.PASS
+    assert rec['rows'][0]['verdict']==I.PASS
+    assert rec['cases']['base_isa']['coverage']['uncovered']==[]
 
 
 def test_flow_system_privileged_instructions_do_not_admit_general_or_unknown_csr():

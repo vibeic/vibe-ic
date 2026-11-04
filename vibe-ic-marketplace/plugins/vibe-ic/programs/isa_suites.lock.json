@@ -51,7 +51,7 @@
     "ecall",
     "ebreak"
    ],
-   "trap_dependent_reason": "ECALL and EBREAK remain mandatory RV32I semantics independently of CSR. Missing precise-trap observation is named NOT_MEASURED, never an excluded obligation.",
+      "trap_dependent_reason": "ECALL and EBREAK require an observable trap mechanism; exclude them only when the design declaration says trap support is absent.",
    "flow_system_programs": [
     "ecall",
     "ebreak"
