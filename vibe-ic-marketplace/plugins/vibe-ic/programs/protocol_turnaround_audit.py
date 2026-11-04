@@ -81,6 +81,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+import _structural_absence as _sa
 
 
 # ---------------------------------------------------------------------------
@@ -155,15 +156,16 @@ class AuditReport:
     rtl_dir: str
     files_scanned: List[str]
     l2_json_path: str
-    clock_period_ns: float
+    clock_period_ns: Optional[float]
     parameters: Dict[str, Any]   # extracted L2 timing values
     findings: List[AuditFinding]
     error_count: int
     pass_count: int
     unknown_count: int
+    structural_absence: Optional[Dict[str, Any]] = None
 
     def as_dict(self) -> Dict[str, Any]:
-        return {
+        report = {
             "rtl_dir": self.rtl_dir,
             "files_scanned": self.files_scanned,
             "l2_json_path": self.l2_json_path,
@@ -176,6 +178,10 @@ class AuditReport:
             "verdict": "ERROR" if self.error_count else "PASS",
             "emitted_by": _pmd.emitted_by("protocol_turnaround_audit"),
         }
+        if self.structural_absence is not None:
+            report["verdict"] = _sa.NOT_APPLICABLE_BY_STRUCTURE
+            _sa.attach(report, self.structural_absence)
+        return report
 
 
 # ---------------------------------------------------------------------------
@@ -265,15 +271,18 @@ def estimate_path_length(rtl_text: str,
 # ---------------------------------------------------------------------------
 # Step 4 — min_safe_cycles computation (the verbatim ceiling formula)
 # ---------------------------------------------------------------------------
-def _lookup(data: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[float]:
+def _lookup(data: Dict[str, Any], keys: Tuple[str, ...],
+            *, presence: bool = False) -> Optional[float]:
     """Walk a possibly-nested dict looking for any of `keys`."""
     if not isinstance(data, dict):
         return None
     for k in keys:
+        if presence and k in data:
+            return 1.0
         if "." in k:
             head, tail = k.split(".", 1)
             if head in data and isinstance(data[head], dict):
-                inner = _lookup(data[head], (tail,))
+                inner = _lookup(data[head], (tail,), presence=presence)
                 if inner is not None:
                     return inner
         elif k in data:
@@ -288,7 +297,7 @@ def _lookup(data: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[float]:
     # Recursive walk for nested objects
     for v in data.values():
         if isinstance(v, dict):
-            r = _lookup(v, keys)
+            r = _lookup(v, keys, presence=presence)
             if r is not None:
                 return r
     return None
@@ -333,8 +342,8 @@ def compute_min_safe_cycles(
 def audit_rtl_dir(
     rtl_dir: Path,
     l2_json: Path,
-    clock_period_ns: float,
-) -> AuditReport:
+    clock_period_ns: Optional[float],
+) -> Optional[AuditReport]:
     rtl_files = sorted(
         [p for p in rtl_dir.rglob("*")
          if p.suffix in (".v", ".sv") and p.is_file()])
@@ -347,6 +356,19 @@ def audit_rtl_dir(
             l2_data = {}
 
     params = extract_l2_parameters(l2_data)
+    timing_keys = (*DELIMITER_MAX_KEYS, *DELIMITER_DETECT_KEYS, *TURNAROUND_MIN_KEYS)
+    if (rtl_files and _lookup(l2_data, timing_keys, presence=True) is None
+            and not any(TX_START_RE.search(text) or RX_TRIGGER_RE.search(text)
+                        for text in (p.read_text(encoding="utf-8") for p in rtl_files))):
+        return AuditReport(
+            str(rtl_dir), [str(p.relative_to(rtl_dir)) for p in rtl_files],
+            str(l2_json), None, params, [], 0, 0, 0,
+            structural_absence=_sa.absence(
+                "RTL source file(s)", len(rtl_files),
+                names=[str(p.relative_to(rtl_dir)) for p in rtl_files],
+                detail="no RX/TX turnaround signal or L2 turnaround timing key"))
+    if clock_period_ns is None:
+        return None  # The CLI must resolve the existing clock prerequisite.
 
     if (params["delimiter_max_ns"] is not None
             and params["delimiter_detect_ns"] is not None
@@ -444,6 +466,9 @@ def report_to_markdown(rep: AuditReport) -> str:
     out.append("")
     out.append("## Summary")
     out.append("")
+    if rep.structural_absence is not None:
+        out.append(_sa.sentence(rep.structural_absence, "protocol turnaround"))
+        out.append("")
     out.append(f"- ERROR : {rep.error_count}")
     out.append(f"- PASS  : {rep.pass_count}")
     out.append(f"- UNKNOWN: {rep.unknown_count}")
@@ -495,11 +520,14 @@ def _cli() -> int:
                    help="Exit non-zero if any ERROR")
     args = p.parse_args()
 
+    # Decide an absent audit subject before requiring its clock.
+    rep = audit_rtl_dir(args.rtl_dir, args.l2_json, args.clock_period_ns)
+
     # Resolve the period BEFORE anything uses it, and REFUSE rather than guess.
     # rc=2 is this repo's "could not run", which is the honest answer when the
     # design owns no period: a turnaround budget measured against a fabricated
     # clock is worse than no measurement, because it looks like one.
-    if args.clock_period_ns is None:
+    if rep is None and args.clock_period_ns is None:
         _l8p = args.l8_json or Path("phase1/generated_docs/L8_RTL_CONSTANTS.json")
         _mhz = None
         if _l8p.is_file():
@@ -524,7 +552,8 @@ def _cli() -> int:
         print(f"rtl-dir does not exist: {args.rtl_dir}", file=sys.stderr)
         return 2
 
-    rep = audit_rtl_dir(args.rtl_dir, args.l2_json, args.clock_period_ns)
+    if rep is None:
+        rep = audit_rtl_dir(args.rtl_dir, args.l2_json, args.clock_period_ns)
     md = report_to_markdown(rep)
     if args.out_md:
         args.out_md.write_text(md, encoding="utf-8")
