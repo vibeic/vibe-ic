@@ -97,6 +97,38 @@ if(done!==1 || product!==21)$fatal;@(negedge clk);if(done!==0)$fatal;
 reset();$display("CHECK_PASS");$finish;end endmodule''')
 
 
+@pytest.mark.parametrize("width", [3, 5])
+@pytest.mark.parametrize("rule", ["equality", "literal_equality", "inactive_clear_only",
+                                  "qualified_hold", "unqualified_raise"])
+def test_explicit_completion_control_clauses(tmp_path, width, rule):
+    prompt = sequential_multiplier_prompt(width, rule != "inactive_clear_only")
+    inactive_clear = "When start is inactive done_r is reset to 0.\n"
+    if rule in ("equality", "literal_equality"):
+        qualifier = "start == 1" if rule == "equality" else "start === 1'b1"
+        prompt = prompt.replace("start is active and", qualifier + " and")
+    elif rule == "inactive_clear_only":
+        prompt = prompt.replace(f"If the shift count register (i) is equal to {width+1}, done_r is reset to 0.\n", "") + inactive_clear
+    else:
+        prompt = prompt.replace(inactive_clear, "")
+        if rule == "unqualified_raise":
+            prompt = prompt.replace(f"If start is active and the shift count register (i) is equal to {width},",
+                                    f"If the shift count register (i) is equal to {width},")
+    completed = rule in ("inactive_clear_only", "qualified_hold")
+    expected = int(rule in ("qualified_hold", "unqualified_raise"))
+    result = chain.try_emit_ex(prompt, top="accumulate_unit")
+    assert_program_chain_candidate(result, prompt)
+    assert result[1] == arithmetic.synth(prompt, top="accumulate_unit")
+    native(tmp_path, result[1], f'''module check;
+reg clk=0,rst_n=1,start=0; reg [{width-1}:0] a=3,b=7;
+wire [{2*width-1}:0] product; wire done; always #5 clk=~clk;
+accumulate_unit d(.*);
+initial begin @(negedge clk);rst_n=0;@(negedge clk);rst_n=1;
+@(negedge clk);start=1;repeat({width+1 if completed else width})@(negedge clk);
+if({int(completed)} && (done!==1 || product!==21))$fatal(1,"completion was not reached");
+start=0;@(negedge clk);if(done!==1'b{expected})$fatal(1,"explicit completion control: got %b expected {expected}",done);
+$display("CHECK_PASS");$finish;end endmodule''')
+
+
 def test_multiplier_without_stated_completion_or_matching_datapath_declines():
     prompt = sequential_multiplier_prompt(5)
     assert arithmetic.synth(prompt.replace("is set to 1", "indicates completion")) is None

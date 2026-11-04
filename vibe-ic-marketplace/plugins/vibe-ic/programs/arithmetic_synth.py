@@ -897,14 +897,24 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
         bound = _parse_counter_bound(text)           # 'i is less than N'
         raise_at = _parse_done_raise_cycle(text)     # 'i==K -> done=1'
         clear_at = _parse_done_clear_cycle(text)     # 'i==J -> done=0'
-        done_gated = any(re.search(
-            r"\b(?:if|when|while|and)\s+(?:the\s+)?start(?:\s+signal)?"
-            r"(?:\s*\(start\))?\s+(?:is\s+)?(?:active|high|asserted|1)\b", clause, re.I)
-            for clause in re.findall(
-                r"[^.\n]*\bdone\w*\b[^.\n]*\b(?:set|reset)\s+to\s+[01]\b[^.\n]*", text, re.I))
+        clauses = re.findall(
+            r"[^.\n]*\bdone\w*\b[^.\n]*\b(?:set|reset)\s+to\s+[01]\b[^.\n]*", text, re.I)
+        enable = (r"\b(?:if|when|while|and)\s+(?:the\s+)?start(?:\s+signal)?"
+                  r"(?:\s*\(start\))?\s*")
+        active = enable + r"(?:(?:is\s+)?(?:active|high|asserted|1)|={2,3}\s*(?:1'b)?1)\b"
+        inactive = enable + r"(?:(?:is\s+)?(?:inactive|low|deasserted|0)|={2,3}\s*(?:1'b)?0)\b"
+        done_gated = {}
+        for value, cycle in ((1, raise_at), (0, clear_at)):
+            done_gated[value] = any(re.search(active, clause, re.I) for clause in clauses
+                if re.search(rf"\bis\s+equal\s+to\s+{cycle}\b", clause, re.I)
+                and re.search(rf"\b(?:set|reset)\s+to\s+{value}\b", clause, re.I))
+        disable_clear = any(re.search(inactive +
+            r"(?:\s*\(!?start\))?\s*,?\s*(?:the\s+)?(?:multiplication\s+)?"
+            r"(?:completion\s+)?(?:flag\s+)?\(?done\w*\)?\s+(?:is\s+)?(?:set|reset)\s+to\s+0\b",
+            clause, re.I) for clause in clauses)
         base.update({"op": "mult_seq_done", "start": start[0], "done": done[0],
                      "bound": bound, "raise_at": raise_at, "clear_at": clear_at,
-                     "done_start_gated": done_gated})
+                     "done_start_gated": done_gated, "done_disable_clear": disable_clear})
         # The product is latched at i==0 and done must rise at the parsed cycle;
         # if the raise cycle is not stated, the latency is a guess -> DEFER.
         if raise_at is None:
@@ -1332,11 +1342,12 @@ def _emit_mult_seq_done(s, m):
     clear_at = s["clear_at"]
     cnt_w = max(2, (bound + 1).bit_length())
     done_lines = [f"        if ({rst_test}) done_r <= 0;"]
-    if s["done_start_gated"]:
+    if s["done_disable_clear"]:
         done_lines.append(f"        else if (!{s['start']}) done_r <= 0;")
-    done_lines.append(f"        else if (i == {raise_at}) done_r <= 1;")
-    if clear_at is not None:
-        done_lines.append(f"        else if (i == {clear_at}) done_r <= 0;")
+    for value, cycle in ((1, raise_at), (0, clear_at)):
+        if cycle is not None:
+            enabled = f"{s['start']} && " if s["done_start_gated"][value] else ""
+            done_lines.append(f"        else if ({enabled}i == {cycle}) done_r <= {value};")
     body_done = "\n".join(done_lines)
     aw, bw = s["aw"], s["bw"]
     return (f"{h}\n"
