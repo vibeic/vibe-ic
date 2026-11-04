@@ -553,7 +553,7 @@ def test_d09_deferred_source_item_survives_signoff_without_item_measurement(tmp_
         owned['responsibility_register'].append({'id':'mapped','mapping_status':'RTL_MAPPED','verification_status':'NOT_MEASURED',
             'targets':[{'mapping_status':'MAPPED_TO_EXACT_GENERATOR','normal_owner':{'steps':{'D09':'RTL authoring'}}}]})
     flow109._selected_step_result(tmp_path,{'resolved_row':{'id':'D09'},'context_sha256':'test-only'},
-        {'step_id':'D09','component_status':'PASS','default_row_status':'PASS','completed':True,
+        {'step_id':'D09','context_sha256':'test-only','component_status':'PASS','default_row_status':'PASS','completed':True,
          'evidence':{'owned_metrics':owned}})
     _write(tmp_path/'reports/orchestrator/phase2_one_shot.json',{'steps':[{'name':'later_row','status':'PASS'}]})
     for owner in ('D22','D26','D65','D70'):
