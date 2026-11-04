@@ -1832,18 +1832,26 @@ def _prose_quantities(text: str) -> Tuple[Quantity, ...]:
     text = text.replace("\u2212", "-")
     quantities = []
     for match in _PROSE_QUANTITY.finditer(text):
-        prefix = text[:match.start()].rstrip(" \t\r\n([")
+        prefix_end = match.start()
+        while prefix_end and text[prefix_end - 1] in " \t\r\n([":
+            prefix_end -= 1
+        prefix_start = prefix_end
+        while prefix_start and not text[prefix_start - 1].isspace():
+            prefix_start -= 1
+        prefix = text[prefix_start:prefix_end]
         if re.search(r"(?:[:+\\\-–—]|(?:^|\s)to)$", prefix):
             continue
         if re.search(r"(?:^|\s)[-+]?\d\S*[eE][-+]?$", prefix):
             continue
         if match.group(1).startswith(("-", "+")) and re.search(r"\d$", prefix):
             continue
-        suffix = text[match.end():].lstrip()
-        if re.match(r"(?:[-–—]|\bto\b)\s*[-+.0-9]", suffix):
+        suffix_start = match.end()
+        while suffix_start < len(text) and text[suffix_start].isspace():
+            suffix_start += 1
+        if re.compile(r"(?:[-–—]|\bto\b)\s*[-+.0-9]").match(text, suffix_start):
             continue
-        if re.match(r"(?:[²^*·×⋅]|per\b|/\s*(?!" + _QUANTITY_NUMBER
-                    + r")(?:\S|$))", suffix):
+        if re.compile(r"(?:[²^*·×⋅]|per\b|/\s*(?!" + _QUANTITY_NUMBER
+                      + r")(?:\S|$))").match(text, suffix_start):
             continue
         quantity = parse_quantity(match.group().removesuffix("."))
         if quantity is not None and quantity.dimension is not None:
