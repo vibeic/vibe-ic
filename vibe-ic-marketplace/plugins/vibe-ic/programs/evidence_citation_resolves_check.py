@@ -692,7 +692,7 @@ def _json_artifact_refs(path: Path,
 # since `citation_routing_is_true_check` blocks a RESOLVES row whose file is not
 # findable from the cell as committed.
 _ROUTING_NAME = "CITATION_ROUTING.txt"
-_DISCLOSURE_DECISIONS = {"OUT_OF_PUBLISHED_SCOPE", "UNFOLLOWABLE_ABSOLUTE"}
+_DISCLOSURE_DECISIONS = {"OUT_OF_PUBLISHED_SCOPE", "UNFOLLOWABLE_ABSOLUTE", "EXTERNAL_PDK"}
 
 
 def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], str]:
@@ -712,6 +712,7 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
                     and _ACTIVE_PROGRESS.enabled):
                 raise
             continue
+        pdk_resolved = None
         for line in text.splitlines():
             s = line.strip()
             if not s or s.startswith("#") or " :: " not in s:
@@ -720,6 +721,19 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
             if decision not in _DISCLOSURE_DECISIONS or " :: " not in rest:
                 continue
             doc, _, cited = rest.partition(" :: ")
+            if decision == 'EXTERNAL_PDK':
+                from benchmark_evidence_publish import (
+                    _external_kit_citation, _pdk_revision, Refuse)
+                if not _external_kit_citation(cited.strip(), cell):
+                    continue
+                if pdk_resolved is None:
+                    try:
+                        _pdk_revision(cell)
+                        pdk_resolved = True
+                    except Refuse:
+                        pdk_resolved = False
+                if not pdk_resolved:
+                    continue
             try:
                 key_doc = (cell / doc.strip()).relative_to(root).as_posix()
             except ValueError:

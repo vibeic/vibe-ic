@@ -802,6 +802,52 @@ def _cited_text_cell(tmp_path, payloads, reports, *, dry=False):
     return run, dest, summary
 
 
+@pytest.mark.parametrize('section', ['libs.ref', 'libs.tech'])
+@pytest.mark.parametrize('dry', [False, True])
+def test_external_kit_citations_keep_revision_and_location_without_copying(tmp_path, section, dry):
+    import benchmark_evidence_publish as publisher
+    cite = f'/retired-store/kit/procx/{section}/cellsZ/model.lef:40'
+    report = 'reports/transport.json'
+    body = json.dumps({'verdict': 'PASS', 'source': cite})
+    run, cell, result = _cited_text_cell(tmp_path, {}, {report: body}, dry=dry)
+    record = result['records'][0]
+    assert record['decision'] == 'EXTERNAL_PDK'
+    assert record['kit_relative_path'] == f'{section}/cellsZ/model.lef'
+    assert record['pdk_revision'] == publisher._pdk_revision(run)['revision']
+    assert record['destination'] == 'external-kit'
+    assert result['amended'] == [] and result['text_bytes'] == 0
+    assert not (cell / section).exists()
+    if not dry:
+        assert (cell / report).read_text() == body
+        publisher.write_citation_routing(cell, [], closure=result)
+        text = (cell / 'CITATION_ROUTING.txt').read_text()
+        assert record['kit_relative_path'] in text and record['pdk_revision'] in text
+
+
+@pytest.mark.parametrize('state', ['missing', 'unresolved'])
+def test_external_kit_citation_stays_unavailable_without_resolved_revision(tmp_path, state):
+    import benchmark_evidence_publish as publisher
+    run = _make_run(tmp_path)
+    revision = run / 'reports/pdk_revision.json'
+    if state == 'missing':
+        revision.unlink()
+    else:
+        record = json.loads(revision.read_text())
+        record['resolved'] = False
+        revision.write_text(json.dumps(record))
+    report = run / 'reports/transport.json'
+    report.write_text(json.dumps({'verdict': 'PASS',
+        'source': '/retired-store/kit/procx/libs.ref/cellsZ/model.lef'}))
+    cell = tmp_path / 'cell'
+    (cell / 'reports').mkdir(parents=True)
+    (cell / 'reports/transport.json').write_bytes(report.read_bytes())
+    result = publisher.close_citations(run, cell, [(report, 'reports/transport.json')],
+                                      {'reports/transport.json'}, False)
+    assert result['records'][0]['decision'] == 'UNALLOWED_TEXT'
+    assert result['external_pdk'] == []
+    assert json.loads((cell / 'reports/transport.json').read_text())['verdict'] == 'UNSUBSTANTIATED'
+
+
 @pytest.mark.parametrize("case", ["binary", "large", "unallowed", "private", "missing"])
 def test_cited_text_refusal_preserves_honest_verdict(tmp_path, case):
     rel = {"binary": "raw/tool.rpt", "large": "raw/tool.log",
@@ -1403,6 +1449,34 @@ def test_flow109_self_tapeout_uses_native_precheck_without_legacy_reports(tmp_pa
     assert 'reports/phase3/general_precheck.json' not in declared
     assert 'reports/phase3/shuttle_precheck.json' not in declared
     assert len(declared) == len(set(declared))
+
+
+def test_external_kit_provenance_preserves_the_release_precheck_and_routing(tmp_path):
+    import citation_routing_is_true_check as routing
+    import evidence_citation_resolves_check as citations
+    run = _flow109_release_docs(tmp_path)
+    cite = '/retired-store/kit/procx/libs.ref/cellsZ/model.gds:UNITS'
+    (run / 'reports/phase3/tapeout_precheck.json').write_text(json.dumps({
+        'verdict': 'PASS', 'final_declaration': 'reports/phase3/transport_declaration.json'}))
+    (run / 'reports/phase3/transport_declaration.json').write_text(json.dumps({
+        'verdict': 'PASS', 'source': cite}))
+    dest_root = tmp_path / 'benchmark-data'
+    result = _run(_base_args(run, dest_root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    cell = dest_root / 'ic/widgetmul/v9.9.9_openpdkx'
+    assert json.loads((cell / 'reports/phase3/tapeout_precheck.json').read_text())['verdict'] == 'PASS'
+    assert json.loads((cell / 'reports/phase3/transport_declaration.json').read_text())['source'] == cite
+    assert _routing_rows(cell)[('reports/phase3/transport_declaration.json', cite)] == 'EXTERNAL_PDK'
+    assert routing.audit_cell(cell)['false_claims'] == []
+    disclosed = citations._disclosed_map(cell, None)
+    key = ('reports/phase3/transport_declaration.json', cite)
+    assert disclosed[key] == 'EXTERNAL_PDK'
+    text = (cell / 'CITATION_ROUTING.txt').read_text()
+    revision = json.loads((cell / 'reports/pdk_revision.json').read_text())['revision']
+    assert 'libs.ref/cellsZ/model.gds:UNITS' in text and revision in text
+    assert not (cell / 'libs.ref').exists()
+    (cell / 'reports/pdk_revision.json').unlink()
+    assert key not in citations._disclosed_map(cell, None)
 
 
 @pytest.mark.parametrize('verdict', ['FAIL', 'NOT_MEASURED', 'UNSUBSTANTIATED'])
