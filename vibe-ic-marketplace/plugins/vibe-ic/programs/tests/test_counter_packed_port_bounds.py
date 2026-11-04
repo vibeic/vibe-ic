@@ -1,4 +1,3 @@
-"""Neutral interface controls for the BCD emitter's packed enable port."""
 import re
 import sys
 from pathlib import Path
@@ -104,3 +103,48 @@ def test_header_bounds_with_width_only_bullets_stay_supported():
     rtl = counter.synth(text, top="DecimalChain")
     assert rtl is not None
     assert "output [8:4] upper_tick" in rtl
+
+
+@pytest.mark.parametrize("enable,width", [("(5 bits) upper_tick", "(24 bits) digits"),
+                                          ("(5 bits) upper_tick", "digits (24 bits)"),
+                                          ("upper_tick (5 bits)", "(24 bits) digits")])
+@pytest.mark.parametrize("header", [False, True])
+def test_before_name_width_bullets_stay_supported(enable, width, header):
+    text = (f"- input clock\n- input rst\n- output {enable}\n- output {width}\n"
+            "Implement a 6-digit BCD counter. Output an enable signal indicating "
+            "when each upper digit should increment. Include a synchronous "
+            "active-high reset.")
+    if header:
+        text = prompt(6, "[8:4]", "header") + "\n" + text
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None
+    assert f"output {'[8:4]' if header else '[4:0]'} upper_tick" in rtl
+
+
+@pytest.mark.parametrize("header", [False, True])
+def test_identical_bullet_restatements_stay_supported(header):
+    text = prompt(6, "[4:0]", "bullet")
+    text += "\n" + "\n".join(text.splitlines()[:4])
+    if header:
+        text = prompt(6, "[4:0]", "header") + "\n" + text
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None
+    assert rtl.count("output [4:0] upper_tick") == 1
+
+
+def test_width_only_restatement_does_not_impose_zero_based_endpoints():
+    text = prompt(6, "[4:8]", "bullet")
+    text += "\n- output (5 bits) upper_tick\n- output (24 bits) digits"
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None and "output [4:8] upper_tick" in rtl
+
+
+@pytest.mark.parametrize("span", ["[8:4]", "[4:8]"])
+def test_section_bounded_numeric_spans_use_existing_port_grammar(span):
+    text = ("### Inputs:\n- `clock`\n- `rst`\n### Outputs:\n"
+            f"- `upper_tick` {span}\n- `digits` [23:0]\n"
+            "Implement a 6-digit BCD counter. Output an enable signal indicating "
+            "when each upper digit should increment. Include a synchronous "
+            "active-high reset.")
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None and f"output {span} upper_tick" in rtl
