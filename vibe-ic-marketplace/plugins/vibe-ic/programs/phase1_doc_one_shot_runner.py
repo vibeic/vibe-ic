@@ -6547,6 +6547,19 @@ def _v1_6_418_is_env_var_context(text_window: str) -> bool:
     return bool(_V1_6_418_ENV_VAR_CONTEXT_DENYLIST.search(text_window))
 
 
+def _parameter_table_has_flow_owner(section: str) -> bool:
+    for heading in reversed(section.split(' > ')):
+        if re.search(r'\b(?:synthesis|floor\s*plan|physical|placement|routing|'
+                     r'(?:timing|clock)\s+constraints?)\b'
+                     r'|合成|綜合|综合|佈局|布局|實體|实体|物理|佈線|布线', heading, re.I):
+            return True
+        if (re.fullmatch(r'rtl|hdl', heading.strip(), re.I)
+                or re.search(r'\b(?:rtl|hdl|module|entity)\b.*\b(?:parameters?|generics?)\b'
+                             r'|(?:模組|模块).*(?:參數|参数)', heading, re.I)):
+            return False
+    return False
+
+
 def _v1_6_400_extract_anchorless_param_table(text: str) -> list:
     """Anchorless parameter-table fallback. Scan every pipe-table
     in ``text``; for each, if its first header-cell matches
@@ -6569,6 +6582,8 @@ def _v1_6_400_extract_anchorless_param_table(text: str) -> list:
     out: list = []
     if not text or not isinstance(text, str):
         return out
+    from constraint_prose_tokens import heading_path_map
+    sections = heading_path_map(text)
     # Pre-compute byte-offset ranges of canonical Parameters
     # section anchor windows so we can skip tables that fall
     # inside one (already covered by v1.6.329).
@@ -6619,6 +6634,8 @@ def _v1_6_400_extract_anchorless_param_table(text: str) -> list:
         preceding = _v1_6_425_get_preceding_lines(
             text, block_off_for_anchor, 10)
         if not _v1_6_400_is_parameter_table_header(header, preceding):
+            continue
+        if _parameter_table_has_flow_owner(sections.get(start_line + 1, '')):
             continue
         # Is this table already inside a canonical anchor window?
         block_off = line_offsets[start_line] if start_line < len(
@@ -65518,7 +65535,7 @@ def _post_emit_mirror_parameters_to_l9_v1_6_327(
     gap for parameters.
 
     Behaviour:
-      * No-op if L8.parameters is empty.
+      * An explicit empty L8.parameters list mirrors as an empty L9 list.
       * No-op if L9.parameters is already truthy (idempotent guard
         — never overwrite a parameter list that some upstream
         emitter already populated).
@@ -65542,8 +65559,8 @@ def _post_emit_mirror_parameters_to_l9_v1_6_327(
         return
     if l9.get("parameters"):
         return
-    l8_params = (l8 or {}).get("parameters") or []
-    if not isinstance(l8_params, list) or not l8_params:
+    l8_params = (l8 or {}).get("parameters")
+    if not isinstance(l8_params, list) or (l8 or {}).get("phase1_step_error"):
         return
     seen: Set[str] = set()
     deduped: List[Dict[str, Any]] = []
@@ -65558,7 +65575,7 @@ def _post_emit_mirror_parameters_to_l9_v1_6_327(
             continue
         seen.add(key)
         deduped.append(dict(p))
-    if not deduped:
+    if l8_params and not deduped:
         return
     l9.setdefault("parameters", deduped)
     _ensure_bool_flags(l9)
