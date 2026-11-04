@@ -3074,11 +3074,12 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
     mapped, missing, required, trace = [], [], [], []
     by_id = {e['id']: e for e in expectations}
     import phase1_expert_parse_track as track
-    def witness(node):
+    def witness(node, shape_only=False):
         # Typed native IR properties only; prose/token echoes cannot prove a
         # functional claim. Unsupported properties remain NOT_MEASURED.
         if not isinstance(node, dict): return False
         node = {k:v for k,v in node.items() if k not in ('id','text','evidence')}
+        if shape_only: return set(node) in ({'constant'}, {'connection'})
         if set(node) == {'constant'}:
             item = node['constant']
             if set(item) != {'module', 'port', 'bits'}: return False
@@ -3091,6 +3092,11 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
             parent = graph['modules'][item['module']]; cell = parent['cells'][item['cell']]
             return cell['type'] == item['type'] and cell['connections'][item['cell_port']] == parent['ports'][item['top_port']]['bits']
         return False
+    later = {
+        ('L19_CONSTRAINTS_PDK','timing','constraints','ppa','technology','synthesis'):['D19','D20','D21','D22','D26'],
+        ('L24_SIGNOFF',):['D22','D26','D65','D66','D77'],
+        ('L20_DFT_SCAN_TOPOLOGY',):['D23','D36','D52'],
+        ('L23_SECURITY_REQUIREMENTS',):['D17','D73'], ('L25_RELIABILITY_MISSION_PROFILE',):['D59']}
     for demand in demands:
         expect = by_id[demand['id']]
         if any(expect.get(k) != demand[k] for k in ('requirement', 'evidence')):
@@ -3104,9 +3110,18 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
                     raise MetricRefusal('D09_REQUIRED_POPULATION_INVALID', 'retained power authority field absent')
                 trace.append({'id':demand['id'], 'normal_owner':['D05','D15','D46'], 'status':'NOT_MEASURED'})
                 continue
-            own = True
             doc = l9 if layer == 'L9_INTEGRATION_SPEC' else document('phase1/generated_docs/' + str(layer) + '.json')
             node = track.subtree_at(doc, path, layer)
+            scope = track._normalise_field_path(str(path).strip('/').replace('/', '.'), layer)
+            spellings = track._field_path_spellings(scope)
+            if not supplied_author and not (
+                    (layer == 'L9_INTEGRATION_SPEC' and any(p.split('.')[0] in ('top_module','top_ports','parameters') for p in spellings))
+                    or (isinstance(node, list) and len(node) == 1 and witness(node[0], shape_only=True))):
+                owners = next((owners for fields, owners in later.items() if layer in fields
+                    or (layer == 'L9_INTEGRATION_SPEC' and set(scope.split('.')) & set(fields))), ['D13','D14'])
+                trace.append({'id':demand['id'], 'normal_owner':owners, 'status':'NOT_MEASURED'})
+                continue
+            own = True
             ok = interface and ((layer == 'L9_INTEGRATION_SPEC' and path in ('top_module','top_ports','parameters'))
                                 or (layer == 'L2_FRS' and isinstance(node, list) and len(node) == 1
                                     and isinstance(node[0], dict) and node[0].get('id') == demand['id']

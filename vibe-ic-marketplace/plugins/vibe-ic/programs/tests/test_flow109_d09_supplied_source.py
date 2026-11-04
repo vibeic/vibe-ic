@@ -23,7 +23,7 @@ def put(root, rel, body):
     return path
 
 
-def case(root, monkeypatch, *, unknown=False, authored=False, damage=None):
+def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, deferred=None, mixed=False):
     # Exact original two-module D15 carrier, including its genuine empty
     # parameter and clock/reset populations. Not a serial benchmark fixture.
     assert hashlib.sha256(RTL.encode()).hexdigest() == '931ac7bddbfa37b3a7d3c98942387b068b389e295dad1664468facee015b5be9'
@@ -40,10 +40,38 @@ def case(root, monkeypatch, *, unknown=False, authored=False, damage=None):
         facts.append({'unrecognized_function':{'operator':'saturating_addition'}})
         demands.append({'id':'unsupported','requirement':'Additional saturating arithmetic','evidence':['input/spec.md:1']})
         expects.append({**demands[-1],'layer':'L2_FRS','field_path':'/requirements/2','expected_tokens':['saturating']})
+    aliases={'fields':('fields.top_ports','fields.parameters'),
+             'layer':('L9_INTEGRATION_SPEC.top_ports','L9_INTEGRATION_SPEC.parameters'),
+             'bracket':('top_ports[0].name','parameters[0]'),
+             'pointer':('/top_ports/0/name','/parameters')}
+    if damage in aliases:
+        for leaf, path in zip(expects[2]['sub_expectations'],aliases[damage]): leaf['field_path']=path
+    if damage == 'missing_constant': facts[0]['constant'].pop('bits')
+    if damage == 'constant': facts[0]['constant']['bits'] = ['0'] * 8
+    if damage == 'connection': facts[1]['connection']['type'] = 'wrong_cell_type'
     for i,fact in enumerate(facts):
         fact.update(id=demands[i]['id'],text=demands[i]['requirement'])
     put(root,'phase1/generated_docs/L2_FRS.json',{'requirements':facts})
     put(root,'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json',{'source_demands':demands,'expectations':expects,'responsibility_register':[]})
+    if deferred:
+        layer, field = deferred
+        demand = {'id':'later','requirement':'Counter must increment on every enabled cycle','evidence':['input/spec.md:1']}
+        if mixed:
+            structural = {k:v for k,v in expects[0].items() if k not in ('id','requirement','evidence')}
+            expects[0] = {**demands[0],'sub_expectations':[structural,
+                {'layer':layer,'field_path':field,'expected_tokens':['increment']},
+                {'layer':'L2_FRS','field_path':'behavior','expected_tokens':['increment']}]}
+            put(root,'phase1/generated_docs/L2_FRS.json',{'requirements':facts,'behavior':'Counter increments'})
+        else:
+            demands.append(demand)
+            expects.append({**demand,'layer':layer,'field_path':field,'expected_tokens':['increment']})
+        path = root / ('phase1/generated_docs/' + layer + '.json')
+        doc = json.loads(path.read_text()) if path.exists() else {}
+        node=doc
+        for part in field.split('.')[:-1]: node=node.setdefault(part,{})
+        node[field.split('.')[-1]]=demand['requirement']
+        put(root,str(path.relative_to(root)),doc)
+        put(root,'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json',{'source_demands':demands,'expectations':expects,'responsibility_register':[]})
     def accepted_d01(project):
         path=project/'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json'
         return {'current':True,'evidence_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'detail':'TEST_ONLY accepted D01 precondition isolated, NOT a native/current-row approval'}
@@ -134,14 +162,14 @@ def test_accepted_spec_to_rtl_author_uses_native_source_metrics(tmp_path,monkeyp
     author=report['steps'][0]
     result=metrics.d09_owned_metrics(root,author)
     assert result['mapped_items']==['0','1','2']
-    assert result['missing_items']==(['unsupported'] if unknown else [])
+    assert result['missing_items']==[]
+    assert result['required_rtl_items']==['0','1','2']
+    assert result['responsibility_register']==([{'id':'unsupported','normal_owner':['D13','D14'],'status':'NOT_MEASURED'}] if unknown else [])
     assert result['declared_ports_parameters']=='PASS'
     assert result==report['d09_owned_metrics']
     assert (root/result['native_witness']['path']).is_file()
     status,_,detail=consume(owned)
-    assert status==('NOT_MEASURED' if unknown else 'PASS'),detail
-    if unknown:
-        assert detail=='D09_REQUIRED_MAPPING_MISSING: unsupported'
+    assert status=='PASS',detail
 
 
 @pytest.mark.parametrize('damage,status,reason',[
@@ -161,3 +189,41 @@ def test_spec_to_rtl_author_preserves_interface_and_output_refusals(tmp_path,mon
     else:
         with pytest.raises(metrics.MetricRefusal,match='no AI review output|awaiting_signed_judgement|normal spec-to-rtl handoff required'):
             metrics.d09_owned_metrics(root,report['steps'][0])
+
+
+@pytest.mark.parametrize('mixed',[False,'valid','missing'])
+@pytest.mark.parametrize('layer,owners,field',[(*item,'deferred_clause') for item in [
+    ('L2_FRS',['D13','D14']), ('L3_CMD_PROTOCOL',['D13','D14']),
+    ('L4_REGMAP',['D13','D14']), ('L5_ADI_SPEC',['D13','D14']),
+    ('L9_INTEGRATION_SPEC',['D13','D14']), ('L10_TEST_CASES',['D13','D14']),
+    ('L12_BEHAVIORAL_SEQUENCES',['D13','D14']), ('L13_LAB_CALIBRATION',['D13','D14']),
+    ('L19_CONSTRAINTS_PDK',['D19','D20','D21','D22','D26']),
+    ('L22_VERIFICATION_PLAN',['D13','D14']),
+    ('L24_SIGNOFF',['D22','D26','D65','D66','D77']),
+    ('L21_POWER_INTENT',['D05','D15','D46']),
+    ('L27_DELIVERY',['D13','D14'])]]+[
+    ('L9_INTEGRATION_SPEC',['D19','D20','D21','D22','D26'],'integration.'+family)
+    for family in ('timing','constraints','ppa','technology','synthesis')])
+def test_authored_later_demands_remain_named_without_structural_credit(tmp_path,monkeypatch,layer,owners,field,mixed):
+    owned=case(tmp_path,monkeypatch,authored=True,deferred=(layer,field),mixed=mixed,
+        damage='missing_constant' if mixed=='missing' else None)
+    status,evidence,detail=consume(owned)
+    assert status==('NOT_MEASURED' if mixed=='missing' else 'PASS'),detail
+    result=owned[1]['d09_owned_metrics']
+    assert result['required_rtl_items']==['0','1','2']
+    assert result['mapped_items']==(['1','2'] if mixed=='missing' else ['0','1','2'])
+    assert result['missing_items']==(['0'] if mixed=='missing' else [])
+    expected=[{'id':'0' if mixed else 'later','normal_owner':owners,'status':'NOT_MEASURED'}]
+    if mixed: expected.append({'id':'0','normal_owner':['D13','D14'],'status':'NOT_MEASURED'})
+    assert result['responsibility_register']==expected
+    assert {d['id'] for d in result['source_demands']}==set(result['required_rtl_items'])|{r['id'] for r in result['responsibility_register']}
+
+
+@pytest.mark.parametrize('damage,missing',[('constant','0'),('connection','1'),('missing_constant','0'),('fields','2'),('layer','2'),('bracket','2'),('pointer','2')])
+def test_false_explicit_structural_witness_stays_owned_and_unmeasured(tmp_path,monkeypatch,damage,missing):
+    owned=case(tmp_path,monkeypatch,authored=True,damage=damage)
+    status,_,detail=consume(owned)
+    result=owned[1]['d09_owned_metrics']
+    assert status=='NOT_MEASURED' and detail=='D09_REQUIRED_MAPPING_MISSING: '+missing
+    assert result['missing_items']==[missing] and missing in result['required_rtl_items']
+    assert result['responsibility_register']==[]
