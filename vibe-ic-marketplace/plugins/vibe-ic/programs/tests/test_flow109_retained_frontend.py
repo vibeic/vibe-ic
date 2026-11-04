@@ -1,4 +1,4 @@
-"""Native report dispatch controls; no synthesis, STA or proof is launched."""
+"""Retained dispatch controls, plus explicit neutral native formal regressions."""
 import json
 import os
 import sys
@@ -95,7 +95,14 @@ def case(project, step):
             'limits': {'branch': {'min': 95}}, 'acceptance_applicable': True,
             'reason': 'declared neutral source coverage target'})
     elif step == 'D14':
+        import _chip_synth_read as chip
+        harness = project / 'phase2/stage1/formal/formal_neutral.sv'
+        harness.parent.mkdir(parents=True)
+        harness.write_text('module formal_neutral(input clk); (* anyseq *) wire d; wire q;\n'
+                           'neutral dut(.d(d),.q(q)); always @(*) assert(q == d); endmodule\n')
         put(project / 'phase2/stage1/formal/results.json', {
+            'chip_read':chip.current_chip_read(project,'neutral'),
+            'proof_inputs':{'files':{harness.name:flow109._file_digest(harness)}},
             'properties': [{'task': 'safety', 'status': 'PASS', 'bound': 'unbounded'}],
             'formal_completion': 'INCOMPLETE', 'unresolved_obligations': ['port name binding']})
         put(project / 'requirements/base_08/proof_partition_coverage.json', {
@@ -244,8 +251,9 @@ def test_native_report_failure_is_published_with_the_original_limit(tmp_path, mo
         put(tmp_path / 'reports/phase2/sim/l10_execution.json', {
             'cases': [{'id': 'neutral_case', 'verdict': 'FAIL', 'sim_executed': True}]})
     elif step == 'D14':
-        put(tmp_path / 'phase2/stage1/formal/results.json', {
-            'properties': [{'task': 'safety', 'status': 'FAIL'}]})
+        path=tmp_path / 'phase2/stage1/formal/results.json'
+        native=json.loads(path.read_text());native['properties']=[{'task':'safety','status':'FAIL'}]
+        put(path,native)
     elif step == 'D25':
         (tmp_path / 'native/eqy/scratch/strategies/neutral.q/pdr/status').write_text('FAIL\n')
     else:
@@ -343,3 +351,71 @@ def test_completed_native_owner_uses_the_single_reader(tmp_path, monkeypatch, st
     assert result['verdict'] == status
     assert seen == [{'status': status, 'extras': {
         'component_status': status, 'reason': 'native report read', 'step_id': native_step}}]
+
+
+def native_formal_case(project, *, status='PASS', later_synthesis=False):
+    import formal_property_run as producer
+    import _chip_synth_read as chip
+    args,rtl=case(project,'D14')
+    for path in (project/'phase2/stage2/synth').iterdir(): path.unlink()
+    formal=project/'phase2/stage1/formal'
+    harness=formal/'formal_neutral.sv'
+    if status=='PARTIAL':
+        native=json.loads((formal/'results.json').read_text())
+        native['properties'][0]['status']='PARTIAL'  # SOFTWARE verdict-selection control only.
+        put(formal/'results.json',native)
+    else:
+        if status=='FAIL': rtl.write_text(rtl.read_text().replace('q=d','q=~d'))
+        native=producer.run(project,harness=harness,rtl=[rtl],top='formal_neutral',
+            container=None,timeout=30,mem_limit_kb=4*1024*1024,prove_engines='direct')
+        assert native['properties'] and {p['status'] for p in native['properties']}=={status},native
+    if later_synthesis:
+        put(project/'phase2/stage2/synth/synth_inputs.json',{'rtl_sha256':{rtl.name:flow109._file_digest(rtl)}})
+        put(chip.built_record_path(project),chip.current_chip_read(project,'neutral'))
+    return args,rtl,formal,native
+
+
+@pytest.mark.parametrize('caller',['entry','finish'])
+@pytest.mark.parametrize('later_synthesis',[False,True])
+@pytest.mark.parametrize('status',['PASS','FAIL','PARTIAL'])
+def test_current_formal_source_owns_early_proof_without_later_synthesis(tmp_path,monkeypatch,caller,later_synthesis,status):
+    import formal_proof_evidence_check as checker
+    args,_,formal,native=native_formal_case(tmp_path,status=status,later_synthesis=later_synthesis)
+    assert checker.proof_source_staleness(tmp_path,formal,native)==[]
+    expected='NOT_MEASURED' if status=='PARTIAL' else status
+    context=flow109.execution_context(flow109.resolve_plan(profile()),'D14','D14')
+    if caller=='entry':
+        assert flow109.prepare_front_door(args,tmp_path)=={'PASS':0,'FAIL':1,'NOT_MEASURED':2}[expected]
+    else:
+        import vibe_ic_one_shot_runner as runner
+        context_path=tmp_path/'context.json';put(context_path,context)
+        monkeypatch.setenv(flow109.CONTEXT_ENV,str(context_path))
+        monkeypatch.setenv(flow109.ATTEMPT_ENV,str(flow109._new_attempt(tmp_path,context)))
+        answer=runner._finish_d14_selected_owner(tmp_path,{}, {},published_current=True)
+        assert answer['verdict']==expected,answer
+    row=json.loads((tmp_path/'reports/flow109/default_rows/D14.json').read_text())
+    assert row['default_row_status']==expected and row['reason']=='D14_RETAINED_NATIVE_REPORT',row
+    assert row['native_measurements']['tasks'] and row['native_started'] is False
+    assert row['completed'] is (expected=='PASS')
+
+
+@pytest.mark.parametrize('damage',['rtl','harness','missing_chip_read','missing_proof_inputs','define','built_read','synth_inputs'])
+def test_retained_formal_rejects_proof_source_or_present_synthesis_drift(tmp_path,damage):
+    import _chip_synth_read as chip
+    args,rtl,formal,native=native_formal_case(tmp_path,later_synthesis=True)
+    if damage in ('rtl','harness'):
+        path=rtl if damage=='rtl' else formal/'formal_neutral.sv'
+        path.write_text(path.read_text()+'\n// source changed after the native proof\n')
+    elif damage=='built_read':
+        built=chip.current_chip_read(tmp_path,'neutral');built['top']='other_top'
+        put(chip.built_record_path(tmp_path),built)
+    elif damage=='synth_inputs':
+        put(tmp_path/'phase2/stage2/synth/synth_inputs.json',{'rtl_sha256':{rtl.name:'0'*64}})
+    else:
+        if damage=='missing_chip_read': native.pop('chip_read')
+        elif damage=='missing_proof_inputs': native.pop('proof_inputs')
+        else: native['chip_read']['define']['simulation']=not native['chip_read']['define']['simulation']
+        put(formal/'results.json',native)
+    context=flow109.execution_context(flow109.resolve_plan(profile()),'D14','D14')
+    assert flow109._retained_native_result(tmp_path,context) is None, 'stale proof must return to its native producer'
+    assert not (tmp_path/'reports/flow109/default_rows/D14.json').exists()
