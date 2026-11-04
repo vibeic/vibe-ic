@@ -312,6 +312,15 @@ _RTL_FUNCTION_REFERENCE = re.compile(
 _NAMED_DIE_BACKGROUND = re.compile(
     r"\b(?:the\s+)?(?P<name>\w+)(?:\s+device)?\s+is\s+"
     r"(?:a|an)\s+" + _DIE_OBJECT + r"\b", re.I)
+_DIE_INTERFACE_REFERENCE = re.compile(
+    r"(?P<delivery>" + _REQUESTED_DIE.pattern + r")|"
+    r"\b" + _DIE_OBJECT + r"[ \t]+(?="
+    r"reset\b(?=[ \t]*(?:[.;,]|$)|[ \t]+and[ \t]+(?:0|1|zero|one)\b)|"
+    r"(?:(?:input|output|inout)[ \t]+)?"
+    r"(?:(?:clock|reset|enable|control|data|status|flag)[ \t]+)?(?:signal|port)\b)", re.I)
+_PORT_DESCRIPTION_FIELD = re.compile(
+    r"^(?P<label>[ \t]*(?:[-*][ \t]+)?[`*]*\w+[`*]*[ \t]*:)"
+    r"(?P<description>[^\n]*)", re.M)
 _REQUESTED_IP = re.compile(
     r"\b(?:deliver|produce|output(?:\s+is)?)\s+"
     r"(?:(?:a|an|the|separate)\s+)*(?:standalone\s+)?"
@@ -406,7 +415,11 @@ def _delivery_prose(text: str) -> str:
         else:
             cursor = header_end
     prose.append(text[cursor:])
-    text = " ".join(" ".join(prose).split())
+    text = _PORT_DESCRIPTION_FIELD.sub(
+        lambda field: field.group("label") + _DIE_INTERFACE_REFERENCE.sub(
+            lambda role: role.group("delivery") or "", field.group("description")),
+        " ".join(prose))
+    text = " ".join(text.split())
     # Names remain in the original prompt/semantic payload. Only the delivery
     # noun scan excludes these explicitly declared identifier positions.
     return re.sub(

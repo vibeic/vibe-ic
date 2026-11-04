@@ -131,6 +131,48 @@ def test_bounded_rtl_request_resolves_shipped_profile(subject, monkeypatch, caps
     assert not (project / 'input/step_0_5ic_answers.json').exists()
 
 
+@pytest.mark.parametrize('front_door', ['general', 'adapter'])
+def test_interface_chip_description_reaches_bounded_rtl_owner(subject, monkeypatch, capsys, front_door):
+    project, _ = subject
+    (project / 'input/flow109-manifest.json').unlink()
+    prompt = ('Implement the design of a seven-bit event counter.\n'
+              'Input ports:\n'
+              'tick: Chip clock signal.\n'
+              'clear: Zero requests chip reset; one leaves the reset inactive.\n'
+              'permit: Chip enable signal.\n'
+              'Output ports:\n'
+              'done: Chip output flag signal.\n'
+              'Give me the complete code.')
+    (project / 'input/phase1_prompt.md').write_text(prompt)
+    requirements = routing.prompt_delivery_requirements(prompt)
+    resolved = routing.resolve_prompt_delivery_target(requirements, 'rtl')
+    delivery_route = routing.delivery_route_for_target(resolved['target'], resolved['route_family'])
+    if front_door == 'general':
+        argv = [sys.executable, str(Path(public.__file__)), str(project),
+                '--flow', '109', '--entry-step', 'D09', '--exit-step', 'D11',
+                '--delivery-target', 'rtl', '--rtl-input', 'original', '--no-dashboard']
+    else:
+        argv = dispatch._solver_argv(Path(public.__file__), project, '1', '2',
+                                     delivery_route, 'original')
+    observed = observe_public(argv, monkeypatch, capsys)
+    (project.parent / ('OBSERVATION-interface-' + front_door + '.json')).write_text(
+        json.dumps({'prompt': prompt, 'requirements': requirements, 'resolved': resolved,
+                    'route': delivery_route, 'argv': argv, 'observed': observed}, indent=2))
+    assert observed['outcome'] == 'OWNER_REACHED', observed
+    assert delivery_route == 'ip'
+    assert (observed['owner'], observed['entry'], observed['exit']) == (
+        'design_one_shot_runner', '1', '1')
+    assert argv[argv.index('--entry-step') + 1] == 'D09'
+    assert argv[argv.index('--exit-step') + 1] == 'D11'
+    manifest = json.loads((project / 'input/flow109-manifest.json').read_text())
+    registry = json.loads(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                                      'flow', 'flow109.json').read_text())
+    profile = next(row for row in registry['reference_profiles'] if row['name'] == 'RTL-only')
+    assert manifest['features'] == profile['features']
+    assert manifest['features']['physical'] is False
+    assert not (project / 'input/step_0_5ic_answers.json').exists()
+
+
 @pytest.mark.parametrize('obligation', [
     'Deliver the final chip.',
     'Deliver GDS for fabrication.',
