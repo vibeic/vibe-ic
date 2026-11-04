@@ -231,6 +231,27 @@ def test_public_frontend_reads_native_reports_without_a_producer_rerun(tmp_path,
     assert row['native_measurements']
 
 
+@pytest.mark.parametrize('status', ['PASS', 'FAIL'])
+def test_explicit_current_row_rerun_reaches_owner(tmp_path, status):
+    args, _ = case(tmp_path, 'D13')
+    put(tmp_path / 'reports/phase2/sim/l10_execution.json', {
+        'cases': [{'id': 'neutral_case', 'verdict': status, 'sim_executed': True}]})
+    args._flow109_resume_plan = {'status': 'READY', 'execution_steps': ['D13']}
+    assert flow109.prepare_front_door(args, tmp_path) is None
+    assert not (tmp_path / 'reports/flow109/default_rows/D13.json').exists()
+
+
+@pytest.mark.parametrize('status', ['PASS', 'FAIL'])
+def test_other_row_rerun_preserves_retained_native_verdict(tmp_path, status):
+    args, _ = case(tmp_path, 'D13')
+    put(tmp_path / 'reports/phase2/sim/l10_execution.json', {
+        'cases': [{'id': 'neutral_case', 'verdict': status, 'sim_executed': True}]})
+    args._flow109_resume_plan = {'status': 'READY', 'execution_steps': ['D14']}
+    assert flow109.prepare_front_door(args, tmp_path) == (0 if status == 'PASS' else 1)
+    row = json.loads((tmp_path / 'reports/flow109/default_rows/D13.json').read_text())
+    assert row['default_row_status'] == status
+
+
 @pytest.mark.parametrize('step', ['D22', 'D25', 'D26'])
 def test_changed_rtl_returns_to_the_normal_producer(tmp_path, monkeypatch, step):
     args, rtl = case(tmp_path, step)
