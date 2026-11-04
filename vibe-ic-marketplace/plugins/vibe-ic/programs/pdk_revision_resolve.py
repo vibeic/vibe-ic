@@ -607,9 +607,8 @@ def candidate_trees_from_run(run: Path, fs: Fs, cap: int = 400
     """
     libs: List[str] = []
     scanned = 0
-    runtime_sources = run / ".vibeic" / "runtime-program-trees"
     logs = (log for log in run.rglob("*.log")
-            if not log.is_relative_to(runtime_sources)
+            if "/.vibeic/runtime-program-trees/" not in log.as_posix()
             and "/plugin_work/" not in str(log) and "/plugin_" not in str(log))
     for log in sorted(logs)[:cap]:
         try:
