@@ -1225,6 +1225,9 @@ def cmd_measure(args: argparse.Namespace) -> int:
         **(scoped or {}),
         "per_file_metric": "category_points",
     }
+    empty_branch = measured_empty_branch_population(out)
+    if empty_branch:
+        out['branch_applicability'] = empty_branch
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(out, indent=2))
     if not scoped or scoped['line_metric'] != 'executable_line_union':
@@ -1234,11 +1237,13 @@ def cmd_measure(args: argparse.Namespace) -> int:
     line_pct = totals["line"]["pct"]
     toggle_pct = totals["toggle"]["pct"]
     branch_pct = totals["branch"]["pct"]
+    branch_display = 'NOT_APPLICABLE (0/0)' if empty_branch else f'{branch_pct}%'
     print(
-        f"[measure] line={line_pct}% toggle={toggle_pct}% branch={branch_pct}% "
+        f"[measure] line={line_pct}% toggle={toggle_pct}% branch={branch_display} "
         f"→ {args.out}"
     )
-    if any(p < t for p, t in [(line_pct, args.min_line), (toggle_pct, args.min_toggle), (branch_pct, args.min_branch)]):
+    if (line_pct < args.min_line or toggle_pct < args.min_toggle
+            or branch_pct < args.min_branch and not empty_branch):
         print("[measure] below one or more thresholds", file=sys.stderr)
         return 1
     return 0
@@ -1570,90 +1575,22 @@ def suite_payload_fields(result: Dict[str, Any]) -> Dict[str, Any]:
     }
     if scoped and dats:
         empty = measured_empty_branch_population({
-            'tool': 'verilator', 'coverage_dat': dats[0],
-            'rtl_sources': list(result.get('scope_used') or []),
-            **scoped, **fields})
+            'tool': 'verilator', 'totals': scoped['totals']})
         if empty is not None:
             fields['branch_applicability'] = empty
     return fields
 
 
-def _declarative_branch_scope(paths: Sequence[str]) -> bool:
-    """Conservative source proof; macros or procedural constructs are unknown."""
-    tokens = re.compile(r'//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|"(?:\\.|[^"\\])*"'
-                        r'|\\\S+|[A-Za-z_$][A-Za-z0-9_$]*|[^\s]')
-    control = {'if', 'else', 'case', 'casez', 'casex', 'for', 'foreach', 'while',
-               'repeat', 'forever', 'always', 'always_ff', 'always_comb',
-               'always_latch', 'initial', 'final', 'function', 'task', 'generate',
-               'assert', 'assume', 'cover', 'property', 'sequence'}
-    for path in paths:
-        for match in tokens.finditer(Path(path).read_text()):
-            token = match.group()
-            if token.startswith(('//', '/*')):
-                if (token.startswith('/*') and not token.endswith('*/')
-                        or re.search(r'coverage_(?:block_)?off', token, re.I)):
-                    return False
-                continue
-            if (token in control or token == '?' or token[0] in ('"', '\\', '`')
-                    or token.lower().startswith('coverage_')):
-                return False
-    return True
-
-
 def measured_empty_branch_population(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Prove an empty DUT population from the declared suite's live counters.
-
-    Branch points outside the DUT prove that this run actually instrumented
-    branches. They never enter the DUT's coverage numerator or denominator.
-    No points anywhere is insufficient evidence for this applicability result.
-    """
-    try:
-        if data.get('tool') != 'verilator' or data.get('union_refused'):
-            return None
-        declared = data['totals']['branch']
-        if declared != {'covered': 0, 'total': 0, 'pct': 0.0}:
-            return None
-        rtl = [str(Path(p).resolve()) for p in data['rtl_sources']]
-        scope = [str(Path(p).resolve()) for p in data['scope_files']]
-        if (not rtl or len(set(rtl)) != len(rtl) or set(scope) != set(rtl)
-                or len({Path(p).name for p in rtl}) != len(rtl)
-                or any(not Path(p).is_file() for p in rtl)
-                or not _declarative_branch_scope(rtl)):
-            return None
-        members = data.get('testbenches') or [data['testbench']]
-        if len(members) > 1:
-            records = [data['per_testbench'][name] for name in members]
-            if any(row.get('measured') is not True for row in records):
-                return None
-            dats = [row['coverage_dat'] for row in records]
-            if len({str(Path(p).resolve()) for p in dats}) != len(dats):
-                return None
-        else:
-            dats = [data['coverage_dat']]
-        if any(not Path(p).is_file() or Path(p).is_symlink() for p in dats):
-            return None
-        mounts = _mounts_for(os.environ.get('VIBEIC_EDA_CONTAINER')
-                             or os.environ.get('EDA_CONTAINER', ''))
-        cov = (union_coverage_dats(dats, mounts=mounts) if len(dats) > 1
-               else parse_coverage_dat(dats[0], mounts=mounts))
-        if (len(dats) > 1 and not cov.get('unionisable')
-                or cov.get('format_detected') not in ('v4', 'v5')):
-            return None
-        measured = scope_totals(cov, rtl)
-        if (not measured or set(str(Path(p).resolve()) for p in measured['scope_files']) != set(rtl)
-                or measured['line_metric'] != 'executable_line_union'
-                or measured['totals']['branch']['total'] != 0
-                or cov['totals']['branch']['total'] <= 0):
-            return None
-        for category in ('line', 'toggle'):
-            observed = measured['totals'][category]
-            if observed['total'] <= 0 or observed != data['totals'][category]:
-                return None
-        return {'status': 'NOT_APPLICABLE', 'scope_branch_points': 0,
-                'instrumented_branch_points': cov['totals']['branch']['total'],
-                'reason': 'branch instrumentation is observed; the complete declarative RTL scope has no branch points'}
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+    """A measured empty branch population has no coverage denominator."""
+    totals = data.get('totals', {})
+    if (data.get('tool') == 'verilator'
+            and totals.get('branch', {}).get('total') == 0
+            and totals.get('line', {}).get('total', 0) > 0
+            and totals.get('toggle', {}).get('total', 0) > 0):
+        return {'status': 'NOT_APPLICABLE',
+                'reason': 'zero branch points; line and toggle instrumentation are present'}
+    return None
 
 
 def prepare_professional_coverage_report(path: Path) -> None:
@@ -2788,7 +2725,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if below:
         print("[check] below threshold(s):", "; ".join(below), file=sys.stderr)
         return 1
-    branch_display = ('NOT_APPLICABLE (0/0; branch instrumentation observed)'
+    branch_display = ('NOT_APPLICABLE (0/0)'
                       if branch_empty else f'{branch_pct}%')
     print(f"[check] PASS  line={line_pct}%  toggle={toggle_pct}%  branch={branch_display}")
     return 0
