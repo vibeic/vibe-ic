@@ -142,9 +142,12 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    work around them):
    - Combinational `always @(*)` blocks: every branch assigns every output
      OR a `default` covers them (no inferred latches).
-   - Reset-less registered outputs: add `initial <reg> = 0;` in a SEPARATE
-     `initial` block (NOT inline on `output reg q = 0;`) so the runner's
-     `rtl_hygiene_lint --fix` doesn't have to repair PROCASSINIT.
+   - Startup values: follow the input's reset/power-up contract and any declared
+     startup policy. If it leaves a choice open, make a defensible supported
+     engineering choice and record the reason; reset-less shape alone does not
+     require zero initialization. When an `initial` assignment is appropriate for
+     the target, use a SEPARATE block rather than inline `output reg q = 0;` to
+     avoid PROCASSINIT. Never overwrite a specified value to fit hidden checks.
    - `case`: include `default`; rewrite overlapping `casez` priority encoders
      as `if/else-if`.
 6. **Self-verify with the HARNESS-EXACT toolchain BEFORE emit (MANDATORY —

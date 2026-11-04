@@ -1775,7 +1775,7 @@ Generalized, chip-AGNOSTIC patterns absorbed from the open-benchmark fresh-blind
 
 **When to apply**: Sequential RTL whose supplied reset/power-up contract declares an initial value and whose target technology supports the stated initialization mechanism.
 
-**What to do**: Implement the declared value using the declared reset or supported power-up mechanism. Run power-up hygiene checks to identify uninitialized state, but do not insert initial-0 solely to match a checker. If the value is observable and no permitted default or input requirement resolves it, report the gap.
+**What to do**: Implement the declared value using the declared reset or supported power-up mechanism. Run power-up hygiene checks to identify uninitialized state, but do not insert initial-0 solely to match a checker. If the input leaves startup behavior free, make a defensible technology-supported choice and record it as a design choice, not an input requirement. Do not overwrite an explicit input value or infer a requirement from a hidden checker.
 
 **Worked pattern** (anonymized): a reset-less N-bit output required to start at zero may use a supported zero initialization; a port with no such requirement must not acquire one from a reference model.
 
@@ -3755,24 +3755,24 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
-### Skill: async FIFO gray pointer — register the CURRENT binary address, never the next one
-The gray pointer a CDC synchronizer carries must be the gray encoding of the binary address the
-FIFO is at RIGHT NOW, registered in the same edge that updates that binary address:
-`wptr <= bin2gray(waddr_bin);` beside `waddr_bin <= waddr_bin + wen;`. Do NOT pre-compute the
-next address into the pointer (`wptr <= bin2gray(waddr_bin + wen)`). Both forms look correct and
-both self-consistently round-trip, but the pre-computed form publishes the pointer ONE CYCLE EARLY
-into the other clock domain, so `wfull` asserts a cycle late and `rempty` de-asserts a cycle early —
-the depth-check equations `wfull = (wptr == {~rptr_syn[MSB:MSB-1], rptr_syn[MSB-2:0]})` and
-`rempty = (rptr == wptr_syn)` are written against the CURRENT pointer, not a lookahead.
-A functional testbench that only writes then only reads will still pass; the failure needs
-back-to-back traffic near the full/empty boundary to appear.
-**Worked pattern** (anonymized): a Cummings-style async FIFO registered `bin2gray(addr + inc)`.
-Cycle-by-cycle comparison against the reference showed `wfull` low where 1 was expected at the 2nd
-and 3rd samples and `rempty` high where 0 was expected 28 samples later — both symptoms of one
-pointer being a cycle ahead. Changing both pointers to `bin2gray(addr)` fixed every sample.
-**Why this is GENERAL**: every gray-code CDC pointer in every dual-clock FIFO, and the same
-"register the current value, not the lookahead" rule applies to any value crossing a clock domain
-whose consumer compares it against a same-domain current value.
+### Skill: async FIFO gray pointer — align binary, Gray, and flag timing
+The binary address, registered Gray pointer, synchronized remote pointer, and full/empty
+comparisons must describe consistent logical positions under the supplied FIFO timing contract.
+Trace the current and next binary addresses at each accepted read/write edge, then identify which
+position each Gray register and flag equation represents. `bin2gray(addr)` and
+`bin2gray(addr + accepted)` are different schedules; neither expression is a universal replacement
+for the other. A design that registers the updated binary position and its corresponding Gray
+encoding must derive both from that same next position. A deliberately pipelined pointer must
+account for its stated lag in address, flag, and admission timing.
+**What to do**: Preserve the architecture the supplied RTL/interface contract declares. Check
+back-to-back traffic near full/empty, wraparound, reset, and independent clock phases against that
+contract. If the input leaves the architecture open, choose a coherent CDC scheme and record its
+capacity and flag timing; do not select a pointer phase from a hidden comparison result.
+**Worked pattern** (anonymized): tabulate current binary address, accepted operation, next binary
+address, registered Gray value, and flag state for consecutive writes and reads at a capacity
+boundary. This distinguishes an intentional pipeline from an accidental one-cycle disagreement.
+**Why this is GENERAL**: CDC pointer correctness depends on consistent state and comparison timing,
+not on whether a particular expression happened to match another design's samples.
 
 ### Skill: pulse / edge detector — the state holds only the PREVIOUS sample, and reset is a real baseline
 For "detect a 0→1→0 pulse and assert at its END cycle", the state register holds ONLY the previous
@@ -3808,24 +3808,24 @@ its sampling. Restoring the pending state passed.
 ("the following clock cycle", "one cycle after") is stating a pipeline depth. Read it as a
 structural requirement, not as prose to be optimized away.
 
-### Skill: odd-ratio clock divider — decode the phase from the PRE-increment counter
-For an odd divider built from two counters (one per clock edge) OR-ed together, the output level
-registered on an edge must be decoded from the counter value that edge is LEAVING, not the value it
-is moving to: `clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;` in the same block. Rewriting it
-as `clk_div1 <= (cnt1_next < NUM_DIV/2)` shifts the whole divided clock one source cycle relative to
-reset — the period and the duty stay correct, so a ratio/duty oracle cannot see it; only a check
-anchored to the reset instant can. Reset drives the counters to 0 and the divider outputs HIGH,
-because counter value 0 lies in the first half.
-**Worked pattern** (anonymized): an odd divider was "fixed" from the pre-increment to the
-post-increment form on the reasoning that a flop should describe the value it holds. Period and
-duty were still exactly right; the reference testbench failed 7 of 20 sampled points, all of them
-phase.
-**Why this is GENERAL**: the pre- vs post-increment decode choice appears in every counter-derived
-waveform (dividers, PWM, strobe generators). Period-and-duty measurement is blind to it, so pin the
-phase against reset explicitly whenever a spec fixes the reset output value.
+### Skill: odd-ratio clock divider — derive decode and reset phase from the supplied waveform
+For an odd divider using opposite-edge counters and OR-ed intermediate clocks, a decode of the
+pre-increment counter and a decode of its next value produce different reset-relative phases.
+`clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;` reads the old counter through nonblocking
+assignment semantics; `clk_div1 <= (cnt1_next < NUM_DIV/2)` reads the proposed next position.
+Both can produce the same period and duty cycle while disagreeing about the first observable edge.
+**What to do**: Derive the counter seed, intermediate output reset levels, and decode schedule from
+the supplied reset/phase/waveform contract. Reset-to-high is appropriate only when that contract or
+a recorded design choice requires a high first phase; reset-to-low is a different valid choice when
+permitted. If phase is left free, choose a defensible schedule and record the reason. Do not import
+another design's first edge merely because a reference test happened to sample it.
+**Worked pattern** (anonymized): at a decode threshold, list the old counter, next counter, and
+registered output on both source-clock edges. Compare this table to the input's stated first edge
+and reset level, separately from the period/duty calculation.
+**Why this is GENERAL**: Every counter-derived waveform needs consistent update semantics. A
+frequency ratio does not alone specify startup phase, and hidden harness outcomes cannot supply it.
 
-_Captured by benchmark-enhancement-capture 2026-09-07 (RTLLM clean-room run; all four verified
-against the official harness)._
+_Captured by benchmark-enhancement-capture 2026-09-07; source-conditioned counter/phase reasoning._
 
 ### Skill: Testbench time-zero initialisation — clock in the DECLARATION, asynchronous reset from an INITIAL block
 

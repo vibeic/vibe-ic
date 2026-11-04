@@ -13,6 +13,11 @@ import lessons_corpus_consistency_check as A
 from _hostpaths import require_repo
 
 _PLUGIN = ('vibe-ic-marketplace', 'plugins', 'vibe-ic')
+_MIXED_BAD = {
+    'public_then_bad': 'The supplied public golden reference model must match the interface; the golden reference model is authoritative.',
+    'prohibition_then_bad': 'Do not use the golden reference model as authoritative; the golden reference model is authoritative.',
+    'public_mention_then_bad': 'The supplied public golden reference model is documented; the golden reference model is authoritative.',
+}
 _BAD = [
     'The oracle expects the inverted polarity.',
     'Observed oracle-FAIL, so invert the output.',
@@ -24,6 +29,7 @@ _BAD = [
     "When prose conflicts with the golden reference model, the index formula must match the reference's placement, not the ambiguous English.",
     'The host scorer confirms the literal golden phase is a guaranteed match.',
     'Use the spec example, a standard reference, or the original golden.',
+    *_MIXED_BAD.values(),
 ]
 _GOOD = [
     'matching it is spec-faithful, not oracle-fitting.',
@@ -36,6 +42,8 @@ _GOOD = [
     'Do not assume the golden holds a particular phase.',
     'A public testbench supplied as normative input defines the sampling edge.',
     'Use golden_rule as the output name from the provided header.',
+    'The supplied public golden reference model must match the interface.',
+    'Do not use the golden reference model as authoritative.',
     'For unsigned bytes the public maximum is 0xFF; compute the arithmetic oracle independently.',
 ]
 
@@ -75,7 +83,9 @@ def test_rendered_checked_in_author_sources_do_not_supply_hidden_answers(tmp_pat
     # These actual source assertions failed on the pre-fix render, rather than
     # importing a new predicate and calling its absence a negative control.
     for claim in ['host scorer confirms', 'guaranteed match', 'the MODEL is authoritative',
-                  'the TB wins', 'golden holds BOTH', 'verified against its']:
+                  'the TB wins', 'golden holds BOTH', 'verified against its',
+                  'reference testbench failed 7 of 20 sampled points',
+                  'register the CURRENT binary address, never the next one']:
         assert claim not in text, claim
     h = pack.assemble('combinational 2D matrix transform flattened bus rotation padding',
                       None, None, [], [], tmp_path / 'pack')
@@ -94,12 +104,19 @@ def test_direct_author_skill_derives_pipeline_from_supplied_waveform():
     assert not re.search(r'\bProb\d+\w*|scores?\s+[~≈]?\d+/\d+', text)
 
 
-def _tainted_source(tmp_path, monkeypatch, surface):
+def test_direct_author_skill_does_not_overwrite_startup_by_resetless_shape():
+    path = require_repo(*_PLUGIN, 'skills', 'spec-to-rtl', 'SKILL.md')
+    text = path.read_text().split('5. **Apply known hygiene proactively**', 1)[1]
+    text = text.split('6. **Self-verify', 1)[0]
+    assert 'Reset-less registered outputs: add `initial <reg> = 0;' not in text
+
+
+def _tainted_source(tmp_path, monkeypatch, surface, body=None):
     import _lesson_digest as ld
     import ic_expert_db_query as db
     if surface == 'lessons.md':
         source = tmp_path / 'neutral-corpus.md'
-        source.write_text(_section(_BAD[4]))
+        source.write_text(_section(body if body is not None else _BAD[4]))
         real_render = ld.render_lesson_digest
         monkeypatch.setattr(ld, 'render_lesson_digest',
                             lambda out: real_render(out, source))
@@ -107,17 +124,20 @@ def _tainted_source(tmp_path, monkeypatch, surface):
         source = tmp_path / 'neutral-db.json'
         source.write_text(json.dumps({'entries': [{
             'ic_class': 'neutral-vector-datapath', 'lesson_count': 1,
-            'lessons': [_BAD[7] + ' vector datapath transform.']}]}))
+            'lessons': [(body if body is not None else _BAD[7])
+                        + ' vector datapath transform.']}]}))
         monkeypatch.setattr(db, '_DEFAULT_DB', source)
 
 
 @pytest.mark.parametrize('surface', ['lessons.md', 'ic_expert_db.md'])
 @pytest.mark.parametrize('consumer', ['public-pack', 'rtl-handoff'])
+@pytest.mark.parametrize('body', [pytest.param(None, id='standalone'),
+                                *(pytest.param(v, id=k) for k, v in _MIXED_BAD.items())])
 def test_contaminated_source_is_withheld_with_named_consumer_reason(
-        tmp_path, monkeypatch, surface, consumer):
+        tmp_path, monkeypatch, surface, consumer, body):
     import ic_expert_backup_pack as pack
     import design_one_shot_runner as runner
-    _tainted_source(tmp_path, monkeypatch, surface)
+    _tainted_source(tmp_path, monkeypatch, surface, body)
     prompt = 'Design a neutral vector datapath transform with registered outputs.'
     if consumer == 'public-pack':
         dest = tmp_path / 'pack'
@@ -161,6 +181,7 @@ def test_inactive_sections_cannot_taint_a_render(tmp_path):
 
 
 @pytest.mark.parametrize('body,allowed', [(_BAD[4], False), (_BAD[7], False),
+                                        *((v, False) for v in _MIXED_BAD.values()),
                                         (_GOOD[5], True), (_GOOD[-1], True)])
 def test_existing_db_consistency_boundary_uses_same_authority_contract(tmp_path, body, allowed):
     import ic_expert_db_consistency_check as dbcheck

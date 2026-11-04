@@ -148,15 +148,15 @@ _AUTHOR_AUTHORITY_PATTERNS = {
         r"hidden(?:/golden)?\s+(?:TB|testbench))\s+"
         r"(?:holds?|expects?|requires?|wants?|applies|outputs?|produces?|returns?)\b"),
     "HIDDEN_REFERENCE_AUTHORITY": (
-        r"\bhidden\s+(?:TB|testbench)\b[^.!?]{0,180}\b(?:wins|overrides?|outranks?)\b|"
-        r"\bgolden\s+(?:reference\s+)?model\b[^.!?]{0,200}"
+        r"\bhidden\s+(?:TB|testbench)\b[^.!?]{0,180}?\b(?:wins|overrides?|outranks?)\b|"
+        r"\bgolden\s+(?:reference\s+)?model\b[^.!?]{0,200}?"
         r"\b(?:must\s+match|authoritative|not\s+the\s+ambiguous)\b|"
-        r"\bgolden\s+RTL\b[^.!?]{0,160}\b(?:ARE|IS)\s+the\s+spec\b"),
+        r"\bgolden\s+RTL\b[^.!?]{0,160}?\b(?:ARE|IS)\s+the\s+spec\b"),
     "SCORER_PHASE_AUTHORITY": (
-        r"\bscorer\s+confirms\b[^.!?]{0,100}\bgolden\b|"
-        r"\bguaranteed\s+match\b[^.!?]{0,100}\bgolden\b"),
+        r"\bscorer\s+confirms\b[^.!?]{0,100}?\bgolden\b|"
+        r"\bguaranteed\s+match\b[^.!?]{0,100}?\bgolden\b"),
     "ORIGINAL_GOLDEN_AS_INPUT": (
-        r"\b(?:reference|example)\b[^.!?]{0,100}\bor\s+the\s+original\s+golden\b"),
+        r"\b(?:reference|example)\b[^.!?]{0,100}?\bor\s+the\s+original\s+golden\b"),
 }
 
 
@@ -168,8 +168,10 @@ def author_source_findings(text: str) -> List[str]:
     """
     findings = []
     for name, pattern in _AUTHOR_AUTHORITY_PATTERNS.items():
-        for match in re.finditer(pattern, text, re.IGNORECASE):
-            prefix = re.split(r"[.!?\n]", text[:match.start()])[-1]
+        # Overlapping starts keep a later source claim visible even if an
+        # earlier qualified span reaches across it before exemption.
+        for match in re.finditer("(?=(" + pattern + "))", text, re.IGNORECASE):
+            prefix = re.split(r"[.!?;\n]", text[:match.start()])[-1]
             # A qualifier must attach to THIS claim's source, not be an escape
             # phrase elsewhere in a paragraph/lesson containing hidden advice.
             supplied = re.search(
@@ -179,7 +181,7 @@ def author_source_findings(text: str) -> List[str]:
                 r"\b(?:never|do not|don't|must not)\s+"
                 r"(?:read|inspect|consult|use|assume|follow)\s+(?:the\s+)?$", prefix, re.I)
             if prohibition or (supplied and not re.search(
-                    r"\bhidden\b", match.group(), re.I)):
+                    r"\bhidden\b", match.group(1), re.I)):
                 continue
             findings.append(name)
             break
