@@ -1144,9 +1144,22 @@ def aggregate(project: Path) -> tuple[dict, dict]:
     metrics: dict = {}
     provenance: dict = {}
     rows = []
-    for key, label, resolve in RULES:
+    rel = 'reports/flow109/default_rows/D09.json'
+    owned = ((_json(project, rel) or {}).get('evidence') or {}).get('owned_metrics') or {}
+    demands = {item['id']:item for item in owned.get('source_demands', [])}
+    deferred = {}
+    for item in owned.get('responsibility_register', []):
+        owners = item.get('normal_owner') or [target['normal_owner'] for target in item.get('targets', [])
+            if target.get('mapping_status') == 'DOWNSTREAM_RESPONSIBILITY_PRESERVED']
+        if owners: deferred.setdefault(item['id'], []).append(owners)
+    rules = list(RULES)
+    for identity, owners in deferred.items():
+        cell = unmeasured('No later item measurement for ' + identity + '; normal owners: ' + json.dumps(owners), rel)
+        rules.append(('source_demand__' + identity, demands[identity]['requirement'], lambda project, cell=cell:cell))
+    native_keys = {key for key, _, _ in RULES}
+    for key, label, resolve in rules:
         try:
-            cell = _librelane_state_cell(project, key)
+            cell = _librelane_state_cell(project, key) if key in native_keys else None
             if cell is None:
                 cell = resolve(project)
         except Exception as exc:                       # a broken artefact is a
@@ -1244,7 +1257,7 @@ def main(argv=None) -> int:
             return 1
         # A numerically unchanged report can still describe different bytes.
         # Check the producer's material digests and types as well as values.
-        keys = [k for k, _, _ in RULES] + ['__provenance__']
+        keys = list(metrics)
         drifted = [k for k in keys if json.dumps(on_disk.get(k), sort_keys=True)
                    != json.dumps(metrics[k], sort_keys=True)]
         if drifted:
