@@ -1255,6 +1255,82 @@ def test_an_ic_run_missing_a_declared_signoff_output_is_REFUSED(tmp_path):
     assert "shuttle_precheck.json" in (r.stdout + r.stderr)
 
 
+def _flow109_release_docs(tmp_path, *, shuttle=False):
+    run = _make_run(tmp_path)
+    _declare_route(run, _TD.DELIVERABLE_DIE)
+    answers = _OD.attest({'answers': {'deliverable': _TD.DELIVERABLE_DIE},
+        'operator_template': {'path': None, 'slot': 'owned-slot' if shuttle else None,
+            'absent_reason': 'Owner selects an independent self-tapeout.'}})
+    (run / 'input/step_0_5ic_answers.json').write_text(json.dumps(answers))
+    _plant_ic_signoff(run)
+    _plant_docs(run, 'ic', 'widgetdie', _IC_DOC_SET)
+    plan = run / 'reports/flow109/plan.json'
+    plan.parent.mkdir(parents=True)
+    plan.write_text(json.dumps({'rows': []}))
+    (run / 'reports/phase3/tapeout_precheck.json').write_text(json.dumps({'verdict': 'PASS'}))
+    return run
+
+
+def _release_docs_check(run):
+    import benchmark_evidence_publish as publisher
+    return publisher.release_docs_invariant(run,
+        {p.relative_to(run).as_posix() for p in run.rglob('*') if p.is_file()})
+
+
+def test_flow109_self_tapeout_uses_native_precheck_without_legacy_reports(tmp_path):
+    run = _flow109_release_docs(tmp_path)
+    for name in ('general_precheck.json', 'shuttle_precheck.json'):
+        (run / 'reports/phase3' / name).unlink()
+    state, violations = _release_docs_check(run)
+    assert violations == [], violations
+    declared = state['arms']['ic']['declared_outputs_enforced']
+    assert 'reports/phase3/tapeout_precheck.json' in declared
+    assert 'reports/phase3/general_precheck.json' not in declared
+    assert 'reports/phase3/shuttle_precheck.json' not in declared
+    assert len(declared) == len(set(declared))
+
+
+@pytest.mark.parametrize('verdict', ['FAIL', 'NOT_MEASURED', None, 'invalid-json'])
+def test_flow109_native_precheck_cannot_fall_back_to_legacy_pass(tmp_path, verdict):
+    run = _flow109_release_docs(tmp_path)
+    (run / 'reports/phase3/general_precheck.json').write_text(json.dumps({'verdict': 'PASS'}))
+    native = run / 'reports/phase3/tapeout_precheck.json'
+    if verdict is None:
+        native.unlink()
+    else:
+        native.write_text('not JSON' if verdict == 'invalid-json' else json.dumps({'verdict': verdict}))
+    _, violations = _release_docs_check(run)
+    assert any('native verdict' in item and 'tapeout_precheck.json' in item for item in violations)
+
+
+def test_flow109_shuttle_still_requires_the_operator_precheck(tmp_path):
+    run = _flow109_release_docs(tmp_path, shuttle=True)
+    (run / 'reports/phase3/general_precheck.json').unlink()
+    shuttle = run / 'reports/phase3/shuttle_precheck.json'
+    shuttle.unlink()
+    _, violations = _release_docs_check(run)
+    assert any('shuttle_precheck.json' in item for item in violations)
+    shuttle.write_text('{}')
+    assert _release_docs_check(run)[1] == []
+
+
+def test_non_flow109_still_requires_the_legacy_general_precheck(tmp_path):
+    run = _flow109_release_docs(tmp_path)
+    (run / 'reports/flow109/plan.json').unlink()
+    (run / 'reports/phase3/general_precheck.json').unlink()
+    _, violations = _release_docs_check(run)
+    assert any('general_precheck.json' in item for item in violations)
+
+
+@pytest.mark.parametrize('missing', ['PRELIMINARY_DATASHEET.md', 'SIGNOFF_widgetmul_openpdkx.html'])
+def test_flow109_native_precheck_does_not_replace_required_release_documents(tmp_path, missing):
+    run = _flow109_release_docs(tmp_path)
+    next(p for p in run.rglob(missing) if p.is_file()).unlink()
+    _, violations = _release_docs_check(run)
+    assert any(missing in item or (missing.startswith('SIGNOFF_') and 'SIGNOFF_' in item)
+               for item in violations)
+
+
 def test_an_ip_run_is_NOT_asked_for_the_ic_set(tmp_path):
     """The honest half: an IP has no die, and a run with no ic/ tree stages
     nothing for that arm and is not refused for it."""

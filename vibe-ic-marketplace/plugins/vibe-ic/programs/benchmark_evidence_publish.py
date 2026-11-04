@@ -2462,6 +2462,26 @@ def release_docs_invariant(run_dir: Path,
         declared = (step_required_outputs(step_id)
                     if arm in arms and arm in _KIND_DECLARED_OUTPUT_ARMS
                     else [])
+        if arm == "ic" and arm in arms:
+            shuttle_owed, _ = _submission_template_check.slot_rules_are_owed(run_dir, None)
+            if not shuttle_owed:
+                declared = [p for p in declared if p != "reports/phase3/shuttle_precheck.json"]
+            if (run_dir / "reports/flow109/plan.json").is_file():
+                # Flow109's native precheck replaces the legacy general report.
+                precheck = "reports/phase3/tapeout_precheck.json"
+                declared = list(dict.fromkeys(
+                    precheck if p == "reports/phase3/general_precheck.json" else p
+                    for p in declared))
+                try:
+                    native = json.loads((run_dir / precheck).read_text())
+                except (OSError, ValueError):
+                    native = {}
+                verdict = native.get("verdict") if isinstance(native, dict) else None
+                if verdict != "PASS":
+                    violations.append(
+                        f"Flow109 step 108 Tapeout precheck requires {precheck} "
+                        f"PASS; native verdict is {verdict or 'NOT_MEASURED'}. "
+                        "general_precheck.json cannot replace this run's native result.")
         staged = {rel for rels in releases.values() for rel in rels
                   if rel in cell_rels}
         arm_state = {
