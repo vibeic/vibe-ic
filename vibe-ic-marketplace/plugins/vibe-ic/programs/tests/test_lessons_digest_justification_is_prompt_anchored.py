@@ -13,10 +13,12 @@ import lessons_corpus_consistency_check as A
 from _hostpaths import require_repo
 
 _PLUGIN = ('vibe-ic-marketplace', 'plugins', 'vibe-ic')
-_MIXED_BAD = {
+_AUTHORITY_CONTEXT_BAD = {
     'public_then_bad': 'The supplied public golden reference model must match the interface; the golden reference model is authoritative.',
     'prohibition_then_bad': 'Do not use the golden reference model as authoritative; the golden reference model is authoritative.',
     'public_mention_then_bad': 'The supplied public golden reference model is documented; the golden reference model is authoritative.',
+    'supplied_note_says_bad': 'The supplied note says the oracle expects the inverted output.',
+    'supplied_hidden_checker_note_says_bad': 'The supplied hidden-checker note says the oracle expects the inverted output.',
 }
 _BAD = [
     'The oracle expects the inverted polarity.',
@@ -29,7 +31,7 @@ _BAD = [
     "When prose conflicts with the golden reference model, the index formula must match the reference's placement, not the ambiguous English.",
     'The host scorer confirms the literal golden phase is a guaranteed match.',
     'Use the spec example, a standard reference, or the original golden.',
-    *_MIXED_BAD.values(),
+    *_AUTHORITY_CONTEXT_BAD.values(),
 ]
 _GOOD = [
     'matching it is spec-faithful, not oracle-fitting.',
@@ -38,6 +40,7 @@ _GOOD = [
     'Tier 1 — VERIFIED blind-absorbable (zero-oracle blind A/B at the real oracle)',
     "the clamp-vs-wrap choice is determined by the spec's overflow language, not by any oracle",
     'The supplied public golden reference model expects a registered output; it is a declared input contract.',
+    'The supplied public\ngolden reference model expects a registered output; it is a declared input contract.',
     'Never read the hidden testbench. Derive names from the supplied module header.',
     'Do not assume the golden holds a particular phase.',
     'A public testbench supplied as normative input defines the sampling edge.',
@@ -104,11 +107,25 @@ def test_direct_author_skill_derives_pipeline_from_supplied_waveform():
     assert not re.search(r'\bProb\d+\w*|scores?\s+[~≈]?\d+/\d+', text)
 
 
-def test_direct_author_skill_does_not_overwrite_startup_by_resetless_shape():
+@pytest.mark.parametrize('startup', [
+    pytest.param('The reset-less output register must start at binary 1 before the first clock.',
+                 id='explicit-one'),
+    pytest.param('Startup is an open engineering choice; choose a supported value and record the reason.',
+                 id='open-choice'),
+])
+def test_direct_author_skill_does_not_overwrite_startup_by_resetless_shape(tmp_path, startup):
+    import design_one_shot_runner as runner
     path = require_repo(*_PLUGIN, 'skills', 'spec-to-rtl', 'SKILL.md')
-    text = path.read_text().split('5. **Apply known hygiene proactively**', 1)[1]
-    text = text.split('6. **Self-verify', 1)[0]
+    docs = tmp_path / 'project' / 'phase1' / 'input_doc'
+    docs.mkdir(parents=True)
+    (docs / 'L2_architecture.md').write_text(
+        'Design a neutral vector datapath transform with registered outputs. ' + startup)
+    result = runner.step_rtl_gen(tmp_path / 'project', 'digital_arithmetic_primitive')
+    staged = Path(result.extras['fallback_skill_path'])
+    assert staged.read_bytes() == path.read_bytes()
+    text = staged.read_text()
     assert 'Reset-less registered outputs: add `initial <reg> = 0;' not in text
+    assert 'Reset-less registered outputs have an `initial = 0` block.' not in text
 
 
 def _tainted_source(tmp_path, monkeypatch, surface, body=None):
@@ -132,7 +149,7 @@ def _tainted_source(tmp_path, monkeypatch, surface, body=None):
 @pytest.mark.parametrize('surface', ['lessons.md', 'ic_expert_db.md'])
 @pytest.mark.parametrize('consumer', ['public-pack', 'rtl-handoff'])
 @pytest.mark.parametrize('body', [pytest.param(None, id='standalone'),
-                                *(pytest.param(v, id=k) for k, v in _MIXED_BAD.items())])
+                                *(pytest.param(v, id=k) for k, v in _AUTHORITY_CONTEXT_BAD.items())])
 def test_contaminated_source_is_withheld_with_named_consumer_reason(
         tmp_path, monkeypatch, surface, consumer, body):
     import ic_expert_backup_pack as pack
@@ -180,8 +197,25 @@ def test_inactive_sections_cannot_taint_a_render(tmp_path):
     assert '0xFF' in text and 'golden holds' not in text
 
 
+@pytest.mark.parametrize('surface', ['lessons.md', 'ic_expert_db.md'])
+@pytest.mark.parametrize('wrap', [' ', '\n'], ids=['flat', 'wrapped'])
+def test_public_source_claim_survives_line_wrapping_in_real_renderers(
+        tmp_path, monkeypatch, surface, wrap):
+    import _lesson_digest as ld
+    body = ('The supplied public' + wrap + 'golden reference model expects a '
+            'registered output; it is a declared input contract.')
+    _tainted_source(tmp_path, monkeypatch, surface, body)
+    dest = tmp_path / 'render'
+    if surface == 'lessons.md':
+        count = ld.render_lesson_digest(dest)
+    else:
+        count = ld.render_ic_expert_db_digest(dest, 'neutral vector datapath transform')
+    assert count == 1
+    assert body in (dest / surface).read_text()
+
+
 @pytest.mark.parametrize('body,allowed', [(_BAD[4], False), (_BAD[7], False),
-                                        *((v, False) for v in _MIXED_BAD.values()),
+                                        *((v, False) for v in _AUTHORITY_CONTEXT_BAD.values()),
                                         (_GOOD[5], True), (_GOOD[-1], True)])
 def test_existing_db_consistency_boundary_uses_same_authority_contract(tmp_path, body, allowed):
     import ic_expert_db_consistency_check as dbcheck

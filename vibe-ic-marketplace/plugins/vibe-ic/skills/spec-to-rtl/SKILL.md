@@ -282,7 +282,8 @@ A "good" spec-to-rtl emission means:
 - The module name + port list match the description verbatim.
 - No latches inferred (or, if a latch IS intended per the description,
   declared `always_latch`).
-- Reset-less registered outputs have an `initial = 0` block.
+- Startup values follow the input's reset/power-up contract and declared policy;
+  any open engineering choice is supported by the target and its reason recorded.
 
 If you cannot satisfy this from the description blindly (e.g. the description
 genuinely under-specifies a parameter the TB will instantiate by name), emit

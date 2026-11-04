@@ -166,6 +166,10 @@ def author_source_findings(text: str) -> List[str]:
     This bounded lexical check does not establish semantic purity of arbitrary
     natural language. Source review still owns paraphrases outside these forms.
     """
+    # Markdown soft wraps do not change a claim's source. Keep paragraph
+    # boundaries while treating a single physical newline as whitespace.
+    text = re.sub(r"\n[ \t]*\n", "\n\n", text)
+    text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
     findings = []
     for name, pattern in _AUTHOR_AUTHORITY_PATTERNS.items():
         # Overlapping starts keep a later source claim visible even if an
@@ -174,14 +178,17 @@ def author_source_findings(text: str) -> List[str]:
             prefix = re.split(r"[.!?;\n]", text[:match.start()])[-1]
             # A qualifier must attach to THIS claim's source, not be an escape
             # phrase elsewhere in a paragraph/lesson containing hidden advice.
+            # Intervening words must describe that source; arbitrary prose is
+            # not a bridge from a supplied document to an oracle assertion.
             supplied = re.search(
                 r"\b(?:provided|supplied|given|input[- ]declared|spec[- ]derived)"
-                r"\s+(?:[\w-]+\s+){0,3}(?:the\s+)?$", prefix, re.I)
+                r"(?:\s+(?:public|normative|executable|reference|independent|arithmetic)){0,3}"
+                r"\s+(?:the\s+)?$", prefix, re.I)
             prohibition = re.search(
                 r"\b(?:never|do not|don't|must not)\s+"
                 r"(?:read|inspect|consult|use|assume|follow)\s+(?:the\s+)?$", prefix, re.I)
             if prohibition or (supplied and not re.search(
-                    r"\bhidden\b", match.group(1), re.I)):
+                    r"\bhidden\b", supplied.group() + match.group(1), re.I)):
                 continue
             findings.append(name)
             break
