@@ -164,27 +164,52 @@ def test_retained_frontend_report_is_used_only_by_its_own_row(tmp_path, step, do
     put(downstream, prior)
     saved = downstream.read_bytes()
     result = flow109.prepare_front_door(args, tmp_path)
+    assert result is None, f'{step} must continue to its registered owner'
+    assert downstream.read_bytes() == saved
     if step == 'D09':
-        assert result is None, 'D09 must continue to its source author'
-        assert downstream.read_bytes() == saved
         assert not (tmp_path / 'reports/flow109/default_rows/D09.json').exists()
-        context = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
-        assert context['resolved_row']['id'] == 'D09'
-    else:
-        assert result == (0 if downstream_status == 'PASS' else 2)
-        retained = json.loads(downstream.read_text())
-        assert retained['default_row_status'] == downstream_status
-        assert retained['native_started'] is False
-        if downstream_status == 'PASS':
-            assert retained['native_measurements']['interface']['ports'] == {
-                'd': {'direction': 'input', 'width': 1, 'signed': 0},
-                'q': {'direction': 'output', 'width': 1, 'signed': 0}}
-        else:
-            assert retained['reason'] == 'D10_NATIVE_REPORT_UNAVAILABLE'
-            assert 'synth_inputs.json' in retained['detail']
+    context = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
+    assert context['resolved_row']['id'] == step
 
 
-@pytest.mark.parametrize('step', ['D11', 'D13', 'D14', 'D22', 'D25', 'D26', 'D30'])
+@pytest.mark.parametrize('step,report', [
+    ('D10', 'reports/flow109/default_rows/D10.json'),
+    ('D11', 'reports/phase2/lint/verilator_lint_gate.json'),
+    ('D19', 'phase2/stage2/constraints/asic_sdc.json'),
+    ('D20', 'reports/sdc_validator.json'),
+])
+@pytest.mark.parametrize('later_synthesis', [False, True])
+def test_early_report_cannot_replace_current_registered_owner(
+        tmp_path, monkeypatch, step, report, later_synthesis):
+    args, _ = case(tmp_path, step)
+    put(tmp_path / report, {'verdict': 'PASS', 'default_row_status': 'PASS'})
+    saved = (tmp_path / report).read_bytes()
+    if not later_synthesis:
+        for path in (tmp_path / 'phase2/stage2/synth').iterdir(): path.unlink()
+    reads = []
+    original = Path.read_text
+    def read(path, *a, **kw):
+        if path.is_relative_to(tmp_path / 'phase2/stage2/synth'):
+            reads.append(str(path))
+        return original(path, *a, **kw)
+    monkeypatch.setattr(Path, 'read_text', read)
+    result = flow109.prepare_front_door(args, tmp_path)
+    assert reads == [], 'early owner dispatch must not read later synthesis'
+    assert result is None
+    context = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
+    dispatch = context['resolved_row']['profile']['dispatch']
+    route = json.loads((tmp_path / 'reports/flow109/owner_route.json').read_text())
+    assert route['owner_runner'] == dispatch['owner_runner'] == 'design_one_shot_runner'
+    assert (args.entry_step, args.exit_step) == (
+        dispatch['owner_entry_step'], dispatch['owner_exit_step'])
+    assert route['component_status'] == route['flow109_acceptance'] == 'NOT_MEASURED'
+    assert route['native_started'] is False
+    assert (tmp_path / report).read_bytes() == saved
+    if step != 'D10':
+        assert not (tmp_path / f'reports/flow109/default_rows/{step}.json').exists()
+
+
+@pytest.mark.parametrize('step', ['D13', 'D14', 'D22', 'D25', 'D26', 'D30'])
 def test_public_frontend_reads_native_reports_without_a_producer_rerun(tmp_path, monkeypatch, step):
     args, _ = case(tmp_path, step)
     monkeypatch.setattr(flow109, 'dft_source_intent', lambda *a: pytest.fail(
@@ -208,7 +233,7 @@ def test_changed_rtl_returns_to_the_normal_producer(tmp_path, monkeypatch, step)
     assert not (tmp_path / f'reports/flow109/default_rows/{step}.json').exists()
 
 
-@pytest.mark.parametrize('step', ['D11', 'D13', 'D14', 'D22', 'D25', 'D26', 'D30'])
+@pytest.mark.parametrize('step', ['D13', 'D14', 'D22', 'D25', 'D26', 'D30'])
 def test_native_report_failure_is_published_with_the_original_limit(tmp_path, monkeypatch, step):
     args, _ = case(tmp_path, step)
     if step in ('D11', 'D30'):
