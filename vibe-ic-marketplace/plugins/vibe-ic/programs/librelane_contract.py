@@ -4272,6 +4272,7 @@ def resolve_step_config(project: Path, image: str, source: Path, output: Path,
         '_,cls=Step.factory.from_step_config(p);'
         f'cfg,_=Config.load(p,cls.get_all_config_variables(),design_dir={str(project)!r},pdk_root=root);'
         'fd,tmp=tempfile.mkstemp(dir=os.path.dirname(out));'
+        'os.fchmod(fd,0o644);'
         'os.write(fd,cfg.dumps().encode());os.close(fd);os.replace(tmp,out)'
     )
     volumes = ['-v', f'{project.resolve()}:{project.resolve()}']

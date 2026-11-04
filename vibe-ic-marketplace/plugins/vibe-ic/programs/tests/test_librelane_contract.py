@@ -580,6 +580,37 @@ def test_local_config_resolution_preserves_declared_mount_paths(local_image, mon
     assert source.read_bytes() == before
 
 
+@pytest.mark.parametrize('mask', [0o022, 0o077])
+def test_resolved_config_is_readable_outside_its_writer(tmp_path, monkeypatch, mask):
+    """The native config writer publishes a report to its invoking host reader."""
+    import types
+    source = put(tmp_path / 'input.json', {'meta': {'step': 'Yosys.Synthesis'}})
+    output = tmp_path / 'resolved.json'
+    config = types.ModuleType('librelane.config')
+    config.Config = SimpleNamespace(load=lambda *a, **kw:
+        (SimpleNamespace(dumps=lambda: '{"DESIGN_NAME":"unit"}'), []))
+    steps = types.ModuleType('librelane.steps')
+    steps.Step = SimpleNamespace(factory=SimpleNamespace(from_step_config=lambda p:
+        (None, SimpleNamespace(get_all_config_variables=lambda: []))))
+    monkeypatch.setitem(sys.modules, 'librelane.config', config)
+    monkeypatch.setitem(sys.modules, 'librelane.steps', steps)
+    monkeypatch.setattr(contract, '_provider_route_mismatch', lambda *a: None)
+    monkeypatch.setattr(contract, '_provider_for_image', lambda *a: None)
+    monkeypatch.setattr(contract, '_provider_route', lambda *a: False)
+    monkeypatch.setattr(__import__('flow109_frontend'), 'require_librelane_launch', lambda *a, **kw: None)
+    def native_writer(argv, **kw):
+        previous = os.umask(mask)
+        try:
+            exec(argv[-1], {})
+        finally:
+            os.umask(previous)
+        return subprocess.CompletedProcess(argv, 0, '', '')
+    monkeypatch.setattr(contract, 'run_container', native_writer)
+    contract.resolve_step_config(tmp_path, 'tools', source, output)
+    assert output.stat().st_mode & 0o444 == 0o444
+    assert json.loads(output.read_text()) == {'DESIGN_NAME': 'unit'}
+
+
 def test_local_measured_stall_reaps_native_descendant(local_image, monkeypatch):
     pid_file = local_image.tmp / 'child.pid'
     script = ('import subprocess,time;from pathlib import Path;'
