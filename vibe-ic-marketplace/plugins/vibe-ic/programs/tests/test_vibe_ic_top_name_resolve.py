@@ -10,6 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import vibe_ic_one_shot_runner as R  # noqa: E402
+import _path_layout as pl
+import pytest
 
 
 def _mk(tmp_path, files):
@@ -112,3 +114,28 @@ def test_sanitize_module():
     assert R._sanitize_module("my-chip 2") == "my_chip_2"
     assert R._sanitize_module("2bad") == ""
     assert R._sanitize_module("") == ""
+
+
+@pytest.mark.parametrize("wrapper", ["cedar_alias", "chip_top"])
+def test_original_declared_top_precedes_derived_wrapper(tmp_path, wrapper):
+    _mk(tmp_path, {"logic.v": (
+        "module cedar_logic(input a, output y); assign y = a; endmodule\n"
+        f"module {wrapper}(input a, output y); "
+        "cedar_logic u0(.a(a), .y(y)); endmodule\n")})
+    prompt = tmp_path / "input/phase1_prompt.md"
+    prompt.parent.mkdir()
+    prompt.write_text("Module name: cedar_logic\nInput a; output y follows a.\n")
+    with pl.rtl_input_view(tmp_path, "original"):
+        top, note = R._resolve_top_name(tmp_path, wrapper, "chip_top", False)
+    assert top == "cedar_logic", (top, note)
+
+
+def test_explicit_original_top_remains_the_callers_request(tmp_path):
+    _mk(tmp_path, {"logic.v": "module cedar_logic(); endmodule\n"
+                 "module cedar_alias(); cedar_logic u0(); endmodule\n"})
+    prompt = tmp_path / "input/phase1_prompt.md"
+    prompt.parent.mkdir()
+    prompt.write_text("Module name: cedar_logic\n")
+    with pl.rtl_input_view(tmp_path, "original"):
+        top, note = R._resolve_top_name(tmp_path, "cedar_alias", "cedar_alias", True)
+    assert top == "cedar_alias" and note == ""

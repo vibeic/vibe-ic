@@ -4174,6 +4174,9 @@ def _resolve_top_name(project: Path, ic_name: str, top_name: str,
     full-chip wrapper); else prefer the --ic-name module; else the sole root
     module (declared, never instantiated).
 
+    Original-input requests retain their declared top before automatic wrapper
+    selection, matching the downstream original-input producer's choice.
+
     An EXPLICIT --top-name wins -- but only when that module actually EXISTS in
     the staged RTL. A caller that passes the PROJECT/repo name rather than a
     module name (e.g. `--top-name caravel_user_project`, whose real top module
@@ -4187,6 +4190,12 @@ def _resolve_top_name(project: Path, ic_name: str, top_name: str,
     is kept. (This resolution runs AFTER phase 1 has staged/produced the RTL and
     BEFORE phase 2, so the declared-module set is complete and authoritative --
     nothing creates a new top module in between.) Returns (top, note)."""
+    if not explicit and _pl.rtl_input(project) == "original":
+        import design_one_shot_runner as design
+        source_top = design._phase1_declared_module_name(
+            design._gather_phase1_plain_spec_text(project).text)
+        if source_top:
+            return source_top, f"top='{source_top}' from original input declaration"
     rtl_dir = project / "phase2" / "stage1" / "rtl"
     decls, insts = _scan_rtl_modules(rtl_dir)
     supplied_note = ""
