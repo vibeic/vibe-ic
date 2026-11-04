@@ -247,14 +247,12 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
                            r"(?:implement|construct|build|use|instantiate)\b(?P<body>[\s\S]*)", clause, re.I)
         if request is None:
             continue
-        phrase = re.search(r"\bfull[-\s]+adders?\b", request["body"], re.I)
-        if phrase is None:
-            continue
-        prefix = request["body"][:phrase.start()]
-        denial = re.search(r"\b(?:not|never|without|avoid)\b", prefix, re.I)
-        if denial and re.search(r",|\b(?:and|but)\b", prefix[denial.end():], re.I):
-            return None
-        requests.append(not (request["deny"] or denial))
+        for phrase in re.finditer(r"\bfull[-\s]+adders?\b", request["body"], re.I):
+            prefix = request["body"][:phrase.start()]
+            denial = re.search(r"\b(?:not|never|without|avoid)\b", prefix, re.I)
+            if denial and re.search(r",|\b(?:and|but)\b", prefix[denial.end():], re.I):
+                return None
+            requests.append(not (request["deny"] or denial))
     explicit_full_adders = bool(requests) and all(requests)
     if explicit_full_adders:
         packed = []
