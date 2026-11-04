@@ -437,7 +437,9 @@ def test_retained_formal_rejects_proof_source_or_present_synthesis_drift(tmp_pat
     (False,'current','PASS'),(True,'current','FAIL'),
     (False,'missing','NOT_MEASURED'),(False,'NOT_MEASURED','NOT_MEASURED'),
     (False,'INCOMPLETE','NOT_MEASURED'),(False,'PARTIAL','NOT_MEASURED'),
-    (False,'pending_ai','NOT_MEASURED'),(False,'consumer_block','NOT_MEASURED')])
+    (False,'pending_ai','NOT_MEASURED'),(False,'consumer_block','NOT_MEASURED'),
+    (False,'missing_verdict','NOT_MEASURED'),(False,'empty_report','NOT_MEASURED'),
+    (False,'UNSUPPORTED_RESULT','NOT_MEASURED')])
 def test_d13_without_synthesis_runs_native_functional_owner_and_counts_current_result(tmp_path,monkeypatch,wrong_dut,publication,expected):
     """Actual public transport/native functional step; bootstrap preconditions SOFTWARE.
 
@@ -488,11 +490,15 @@ def test_d13_without_synthesis_runs_native_functional_owner_and_counts_current_r
                 assert summary['ai_judgements']
                 judgement.demote_runner_rows(summary['steps'],summary['ai_judgements'])
                 summary['verdict']='NOT_MEASURED'
-            elif publication in ('NOT_MEASURED','INCOMPLETE','PARTIAL'): summary['verdict']=publication
+            elif publication in ('NOT_MEASURED','INCOMPLETE','PARTIAL','UNSUPPORTED_RESULT'): summary['verdict']=publication
+            elif publication in ('missing_verdict','empty_report'):
+                summary.pop('verdict')
+                if publication=='empty_report': summary.pop('steps')
             if publication!='missing':
                 owner._write_phase2_report(owner._pl.report_path(tmp_path,'phase2_one_shot.json'),summary,tmp_path,
                     invocation_context=owner._runner_invocation_context())
-        return SimpleNamespace(returncode=0 if summary['verdict']=='PASS' else 1)
+        exit_status=native.status if publication in ('missing_verdict','empty_report','UNSUPPORTED_RESULT') else summary['verdict']
+        return SimpleNamespace(returncode=0 if exit_status=='PASS' else 1)
     monkeypatch.setattr(public.subprocess,'run',child)
     rc=public._main()
     assert rc==(0 if expected=='PASS' else 1)
