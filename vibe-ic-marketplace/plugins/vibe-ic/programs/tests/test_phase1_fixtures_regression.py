@@ -1012,7 +1012,9 @@ def test_parameter_table_ownership_keeps_flow_settings_in_l19(tmp_path, heading,
                    ('L8_RTL_CONSTANTS', 'L9_INTEGRATION_SPEC', 'L19_CONSTRAINTS_PDK')]
     rows = [row for row in l19['fields']['constraint_declarations'] if row.get('token') == token]
     assert len(rows) == 1 and rows[0]['value'] == '8', rows
-    assert rows[0]['source'] == 'input/docs/L9_integration.md'
+    assert rows[0]['source'] == 'phase1/input_doc/L9_integration.txt'
+    assert rows[0]['evidence'] in source.read_text()
+    assert rows[0]['evidence'] in (tmp_path / rows[0]['source']).read_text()
     assert f'`{token}` | **8**' in rows[0]['evidence']
     assert l8['parameters'] == [], l8.get('parameters')
     assert l9['parameters'] == [], l9.get('parameters')
