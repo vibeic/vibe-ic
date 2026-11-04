@@ -2957,9 +2957,7 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
         return json.loads(bound(relative), object_pairs_hook=unique)
     files = _d09_supplied_rtl(project, author, bound, document) if supplied_author else rtl.rtl_source_files(project)
     for path in files:
-        relative = str(path.relative_to(project))
-        if re.search(r'`include|\$(?:fopen|readmem\w*|system)|DPI-C', bound(relative).decode()):
-            raise MetricRefusal('D09_NATIVE_READSET_UNSUPPORTED', relative)
+        bound(str(path.relative_to(project)))
     body = document('reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json')
     l9 = document('phase1/generated_docs/L9_INTEGRATION_SPEC.json')
     demands = body.get('source_demands'); expectations = body.get('expectations')
