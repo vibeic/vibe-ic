@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sys
 from pathlib import Path
 
@@ -203,10 +204,13 @@ def test_unknown_input_contract_is_rejected():
         rd.canonical_dag(input_contract="unverified")
 
 
-@pytest.mark.parametrize("nature", ["spec_generation", "completion", "debug"])
-def test_explicit_rtl_delivery_reaches_initial_and_resume_runner(tmp_path, nature):
+@pytest.mark.parametrize("nature,evidence", [
+    (nature, evidence) for nature in tnr.NATURE_ENTRY
+    for evidence in ("existence", "lint_validated", "behaviour", "proof")
+    if (nature, evidence) != ("debug", "proof")
+])
+def test_explicit_rtl_delivery_reaches_initial_and_resume_runner(tmp_path, nature, evidence):
     import benchmark_dispatch as dispatch
-    evidence = "behaviour" if nature == "debug" else "lint_validated"
     receipt = _receipt(nature=nature, evidence=evidence)
     target = dispatch._rtl_delivery_target(receipt)
     assert target == "rtl"
@@ -223,11 +227,64 @@ def test_explicit_rtl_delivery_reaches_initial_and_resume_runner(tmp_path, natur
 
 @pytest.mark.parametrize("target,evidence", [
     ("gds", "lint_validated"), ("ip_hardmacro", "lint_validated"),
+    ("shippable_gds", "lint_validated"), ("foundry_handoff", "lint_validated"),
     ("rtl", "area"), ("rtl", "timing"), ("rtl", "power"),
 ])
 def test_physical_evidence_never_acquires_rtl_scope(target, evidence):
     import benchmark_dispatch as dispatch
     assert dispatch._rtl_delivery_target(_receipt(target=target, evidence=evidence)) is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("verify_through", "2"), ("verify_through", "5"),
+    ("verify_through", "9"), ("verify_through", "unrecognised"),
+    ("requested_evidence", "area"), ("requested_evidence", "unrecognised"),
+    ("entry_step", "1"), ("verify_closed_steps", ["1", "2", "4"]),
+])
+def test_rehashed_receipt_cannot_invent_an_rtl_proof_window(field, value):
+    import benchmark_dispatch as dispatch
+    receipt = _receipt(nature="debug")
+    receipt[field] = value
+    assert rd.validate_route_receipt(_rehash(receipt))
+    assert dispatch._rtl_delivery_target(receipt) is None
+
+
+def test_unbound_receipt_cannot_forward_rtl_delivery():
+    import benchmark_dispatch as dispatch
+    receipt = _receipt(nature="debug")
+    receipt["source_sha256"] = "changed"
+    assert dispatch._rtl_delivery_target(receipt) is None
+    assert dispatch._rtl_delivery_target(None) is None
+
+
+def test_debug_formal_join_outside_rtl_owners_keeps_normal_admission():
+    import benchmark_dispatch as dispatch
+    receipt = _receipt(nature="debug", evidence="proof")
+    assert receipt["verify_through"] == "6"
+    assert rd.validate_route_receipt(receipt) == []
+    assert dispatch._rtl_delivery_target(receipt) is None
+
+
+def test_debug_lint_frontdoor_produces_bound_docs_from_unchanged_source(tmp_path):
+    import benchmark_dispatch as dispatch
+    import flow109
+    (tmp_path / "input/rtl").mkdir(parents=True)
+    prompt = tmp_path / "input/phase1_prompt.md"
+    prompt.write_text(PROMPT)
+    rtl = tmp_path / "input/rtl/unit.v"
+    rtl.write_text("module Unit(input a, input b, output y); assign y=a^b; endmodule\n")
+    profile = next(row for row in flow109.load_registry()["reference_profiles"]
+                   if row["name"] == "RTL-only")
+    (tmp_path / "input/flow109-manifest.json").write_text(
+        json.dumps({"features": profile["features"]}))
+    before = {path: path.read_bytes() for path in (prompt, rtl)}
+    result = dispatch._ensure_phase1_frontdoor(
+        Path(dispatch.__file__).with_name("vibe_ic_one_shot_runner.py"), tmp_path,
+        dispatch._RunnerBudget(1, 1, 1), route_receipt=_receipt(nature="debug"))
+    assert result["status"] == "GENERATED", result
+    assert result["provenance"]["ran"] is True
+    assert {path: path.read_bytes() for path in before} == before
+    assert not (tmp_path / "reports/phase1/submission_template_fetch.json").exists()
 
 
 def test_unscoped_runner_keeps_existing_delivery_admission(tmp_path):
