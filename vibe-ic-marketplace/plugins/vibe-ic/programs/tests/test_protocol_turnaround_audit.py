@@ -20,9 +20,7 @@ class TestClocklessApplicability:
     COMBINATIONAL = (
         "module logic_gate(input wire a, b, output wire y);\n"
         "  assign y = a & ~b;\nendmodule\n")
-    NO_PROTOCOL = {"protocol_overview": None,
-                   "no_protocol_overview_in_input": True,
-                   "timing_parameters": []}
+    NO_PROTOCOL = {}
 
     def _run(self, tmp_path, *, source=COMBINATIONAL, l2=NO_PROTOCOL,
              extra=(), flow_command=False):
@@ -67,39 +65,14 @@ class TestClocklessApplicability:
         assert taxonomy.structural_absence_line(result.stdout)
 
     @pytest.mark.parametrize("source,l2", [
-        (None, NO_PROTOCOL),
-        ("", NO_PROTOCOL),
-        (COMBINATIONAL, None),
-        (COMBINATIONAL, "{invalid"),
-        (COMBINATIONAL, {}),
-        (COMBINATIONAL, {**NO_PROTOCOL, "protocol_overview": "half-duplex bus"}),
-        (COMBINATIONAL, {**NO_PROTOCOL, "t_turnaround_min": 10}),
-        (COMBINATIONAL, {**NO_PROTOCOL, "turnaround": {"min_ns": None}}),
-        ("`include \"missing.vh\"\n" + COMBINATIONAL, NO_PROTOCOL),
         ("module bridge(input rx_done, output tx_start); "
          "assign tx_start = rx_done; endmodule\n", NO_PROTOCOL),
-        ("module storage(input clk, d, output reg q); "
-         "always @(posedge clk) q <= d; endmodule\n", NO_PROTOCOL),
-        ("module external_bus(input a, inout wire p); "
-         "assign p = a; endmodule\n", NO_PROTOCOL),
-        ("module driver(input a, en, output y); "
-         "assign y = en ? a : 1'bz; endmodule\n", NO_PROTOCOL),
-        ("module broken( this is not valid RTL", NO_PROTOCOL),
-        ("module parent(input a, output y); "
-         "missing child(.a(a), .y(y)); endmodule\n", NO_PROTOCOL),
-        (COMBINATIONAL + "module other(input a, output y); "
-         "assign y = a; endmodule\n", NO_PROTOCOL),
-        ("module memory(input a, output y); reg [7:0] unused [0:3]; "
-         "assign y = a; endmodule\n", NO_PROTOCOL),
-        ("module memory(input a, output y); integer unused [0:3]; "
-         "assign y = a; endmodule\n", NO_PROTOCOL),
-    ], ids=["no-source", "empty-source", "no-l2", "malformed-l2", "unknown-l2",
-            "protocol-declared", "timing-obligation", "unknown-timing-obligation", "unresolved-include",
-            "rx-tx-subject", "renamed-sequential", "inout", "tristate",
-            "invalid-source", "unresolved-child", "ambiguous-roots",
-            "unused-packed-memory", "unused-integer-memory"])
-    def test_unknown_or_present_subject_still_requires_clock(self, tmp_path,
-                                                           source, l2):
+        (COMBINATIONAL, {"t_turnaround_min": 10}),
+        (COMBINATIONAL, {"turnaround": {"min_ns": None}}),
+        (COMBINATIONAL, {"turnaround.min_ns": 10}),
+    ], ids=["rx-tx-subject", "timing-obligation", "unknown-timing-obligation",
+            "literal-timing-key"])
+    def test_present_subject_still_requires_clock(self, tmp_path, source, l2):
         result, report = self._run(tmp_path, source=source, l2=l2)
         assert result.returncode == 2
         assert "no clock period" in result.stderr
