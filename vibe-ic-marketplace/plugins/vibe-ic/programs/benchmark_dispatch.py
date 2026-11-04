@@ -9460,8 +9460,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
 
     PROGRAM emits first. A runner WAIVE or a valid route-level declaration may
     authorise AI backup for a missing initial candidate. Every gated candidate
-    then receives a blind AI route + semantic review. AI may reject only with a
-    prompt-derived test that the frozen candidate actually fails; a repair must
+    then receives a blind AI route + semantic review. Repair follows a proven
+    semantic failure or required native gate FAIL with functional PASS; it must
     pass that same immutable test plus PROGRAM gates and a fresh review. A
     changed prompt is never legitimised by refresh.
     """
@@ -10162,8 +10162,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                            "ai_repair_required": True})
             print(f"  {pid:44s} AI backup rejected by PROGRAM gates (rc={rc})")
 
-    # AI repair is authorised only after the frozen candidate demonstrably
-    # failed a prompt-derived test.  Validation remains coordinator-owned;
+    # AI repair follows a proven semantic or required native gate failure.
+    # Validation remains coordinator-owned;
     # only the independent project runner calls fan out.
     repair_plans: list[dict] = []
     for pid, task in list(task_by_id.items()):
@@ -10189,6 +10189,18 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         repair_output_sha256 = None
         repair_state = False
         proj = Path(str(task.get("project") or ""))
+        gate_ledger = _required_gate_ledger(result)
+        native_repair = (bool(gate_ledger.get("failed_required"))
+                         and all(gate_ledger["in_scope"].get(name) == "FAIL"
+                                 for name in gate_ledger["failed_required"])
+                         and not _gate_evidence_freshness_reasons(proj, result))
+
+        def repair_authorized(verdict):
+            return (verdict.get("status") == "REPAIR_REQUIRED"
+                    or (native_repair and verdict.get("status") == "ACCEPTED"
+                        and (verdict.get("challenge_result") or {}).get(
+                            "status") == "PASS"))
+
         working_paths = _rtl_files(proj)
         try:
             working_hash = (_sha256_text(_candidate_text(working_paths))
@@ -10204,7 +10216,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 task, allow_repaired_output=True,
                 repaired_output_sha256=str(working_hash))
             challenge = proof_verdict.get("verified_challenge")
-            if (proof_verdict.get("status") == "REPAIR_REQUIRED"
+            if (repair_authorized(proof_verdict)
                     and isinstance(challenge, dict)):
                 candidate_provenance, provenance_reasons = \
                     _validate_repair_record(
@@ -10218,7 +10230,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                         repaired_output_sha256=str(working_hash))
                     candidate_challenge = candidate_verdict.get(
                         "verified_challenge")
-                    if (candidate_verdict.get("status") == "REPAIR_REQUIRED"
+                    if (repair_authorized(candidate_verdict)
                             and isinstance(candidate_challenge, dict)
                             and candidate_challenge.get("sha256")
                             == challenge.get("sha256")):
@@ -10360,7 +10372,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             continue
         prior_verdict = repair_verdict or _validate_ai_review(task)
         challenge = repair_challenge or prior_verdict.get("verified_challenge")
-        if prior_verdict.get("status") != "REPAIR_REQUIRED" or not challenge:
+        if not repair_authorized(prior_verdict) or not challenge:
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": True,
                            "ai_repair_required": False})
@@ -10731,12 +10743,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             continue
         if _refresh_retained_measurement_result(task, result, got):
             _attach_ai_review_attribution(result, verdict, task)
-        if task.get("candidate_origin") == "AI_REPAIR":
-            recovery = _verified_program_recovery(task, result, verdict)
-            enhancement_by_key[(
-                pid, str(task.get("prompt_sha256")),
-                str(task.get("rtl_sha256")), "VERIFIED_RECOVERY",
-            )] = recovery
         # #2012's invariant, at the only site that can violate it: a
         # candidate whose canonical Phase-1 provenance is missing, or was
         # changed after its review task was written, is NOT accepted and NOT
@@ -10818,9 +10824,23 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 "required_gate_ledger": gate_ledger,
                 "review_path": task.get("review_path"),
                 "reviewed_rtl_sha256": task.get("rtl_sha256"),
+                "verified_challenge": verdict.get("verified_challenge"),
+                "challenge_result": verdict.get("challenge_result"),
+                "repair_record_path": str(_repair_record_path(run_p, task)),
+                "repair_record_requirements": {
+                    "schema": _AI_REPAIR_RECORD_SCHEMA, "id": pid,
+                    "prompt_sha256": task.get("prompt_sha256"),
+                    "parent_rtl_sha256": task.get("rtl_sha256"),
+                    "repaired_rtl_sha256": "sha256 of the corrected working RTL",
+                    "challenge_sha256": (verdict.get("verified_challenge") or {}).get("sha256"),
+                    "author": {"kind": "AI", "model": "required"},
+                    "oracle_accessed": False, "rationale": "required",
+                    **_repair_contract_requirements(task, verdict),
+                },
                 "required_next": (
                     "repair the RTL so the named in-scope gate passes, then "
-                    "run --resume for PROGRAM gates and submit a fresh AI "
+                    "write the AI repair record, run --resume for PROGRAM gates "
+                    "and submit a fresh AI "
                     "review for the new hash; an independent semantic PASS "
                     "does not discharge a required in-scope gate failure"),
                 **(_reference_model_next(task.get("project"))
@@ -10832,6 +10852,12 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             print(f"  {pid:44s} NOT ACCEPTED -- "
                   f"{_gate_status_note(gate_ledger)}")
             continue
+        if task.get("candidate_origin") == "AI_REPAIR":
+            recovery = _verified_program_recovery(task, result, verdict)
+            enhancement_by_key[(
+                pid, str(task.get("prompt_sha256")),
+                str(task.get("rtl_sha256")), "VERIFIED_RECOVERY",
+            )] = recovery
         _atomic_write_json(Path(task["response_path"]), frozen_payload)
         accepted_ids.append(pid)
         # Readiness may have been withdrawn by a prior invocation refusal,
@@ -11968,9 +11994,10 @@ def main():
     ap.add_argument("--resume", action="store_true",
                     help="Advance needs_ai_routing.jsonl before any runner, "
                          "then needs_ai_backup.jsonl, needs_ai_review.jsonl, "
-                         "and needs_ai_repair.jsonl. AI-authored/modified RTL is "
-                         "allowed only after a prompt-derived executable test "
-                         "proves the frozen candidate wrong, then is re-gated "
+                         "and needs_ai_repair.jsonl. AI-authored/modified RTL "
+                         "requires a proven semantic failure or a required "
+                         "in-scope native gate FAIL with independent functional "
+                         "PASS, then is re-gated "
                          "and must pass the same test plus fresh AI review; "
                          f"repeat until {_ACCEPTANCE_REPORT} is COMPLETE.")
     ap.add_argument("--review-correction", metavar="REQUEST.json", action="append",
