@@ -3297,7 +3297,7 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
                 return before, after
             consumed = system.end()
         else:
-            return False, False
+            return before, False
         cursor = consumed
         while cursor < len(body) and body[cursor].isspace():
             cursor += 1
