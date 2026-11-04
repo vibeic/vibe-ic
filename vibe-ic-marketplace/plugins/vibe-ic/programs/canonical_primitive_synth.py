@@ -2367,7 +2367,7 @@ module asyn_fifo #(
     //   full  : write gray == read gray with the top two bits inverted
     //   empty : read gray == synchronized write gray
     // ------------------------------------------------------------------
-    assign wfull  = (wptr == {~rptr_syn[PW-1:PW-2], rptr_syn[PW-3:0]});
+    assign wfull  = (wptr == (rptr_syn ^ ({PW{1'b1}} << (PW-2))));
     assign rempty = (rptr == wptr_syn);
 
 endmodule
