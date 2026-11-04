@@ -897,8 +897,14 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
         bound = _parse_counter_bound(text)           # 'i is less than N'
         raise_at = _parse_done_raise_cycle(text)     # 'i==K -> done=1'
         clear_at = _parse_done_clear_cycle(text)     # 'i==J -> done=0'
+        done_gated = any(re.search(
+            r"\b(?:if|when|while|and)\s+(?:the\s+)?start(?:\s+signal)?"
+            r"(?:\s*\(start\))?\s+(?:is\s+)?(?:active|high|asserted|1)\b", clause, re.I)
+            for clause in re.findall(
+                r"[^.\n]*\bdone\w*\b[^.\n]*\b(?:set|reset)\s+to\s+[01]\b[^.\n]*", text, re.I))
         base.update({"op": "mult_seq_done", "start": start[0], "done": done[0],
-                     "bound": bound, "raise_at": raise_at, "clear_at": clear_at})
+                     "bound": bound, "raise_at": raise_at, "clear_at": clear_at,
+                     "done_start_gated": done_gated})
         # The product is latched at i==0 and done must rise at the parsed cycle;
         # if the raise cycle is not stated, the latency is a guess -> DEFER.
         if raise_at is None:
@@ -1308,7 +1314,7 @@ def _emit_fixed_sub(s, m):
 
 
 def _emit_mult_seq_done(s, m):
-    # Sequential multiplier with start->done handshake (multi_16bit shape). The
+    # Sequential multiplier with a counter-dependent completion flag. The
     # counter FSM cycle counts are PARSED from the prose (never guessed):
     #   bound    = the 'i is less than N' loop bound,
     #   raise_at = the 'i==K -> done=1' cycle,
@@ -1325,9 +1331,12 @@ def _emit_mult_seq_done(s, m):
     bound = s["bound"] if s["bound"] is not None else raise_at + 1
     clear_at = s["clear_at"]
     cnt_w = max(2, (bound + 1).bit_length())
-    done_lines = [f"            if (i == {raise_at}) done_r <= 1;"]
+    done_lines = [f"        if ({rst_test}) done_r <= 0;"]
+    if s["done_start_gated"]:
+        done_lines.append(f"        else if (!{s['start']}) done_r <= 0;")
+    done_lines.append(f"        else if (i == {raise_at}) done_r <= 1;")
     if clear_at is not None:
-        done_lines.append(f"            else if (i == {clear_at}) done_r <= 0;")
+        done_lines.append(f"        else if (i == {clear_at}) done_r <= 0;")
     body_done = "\n".join(done_lines)
     aw, bw = s["aw"], s["bw"]
     return (f"{h}\n"
@@ -1338,13 +1347,15 @@ def _emit_mult_seq_done(s, m):
             f"    reg [{pw-1}:0] yout_r;\n"
             f"    always @(posedge {s['clk']} or {edge}) begin\n"
             f"        if ({rst_test}) begin\n"
-            f"            i <= 0; done_r <= 0;\n"
+            f"            i <= 0;\n"
             f"        end else if ({s['start']}) begin\n"
             f"            if (i < {bound}) i <= i + 1;\n"
-            f"{body_done}\n"
             f"        end else begin\n"
-            f"            i <= 0; done_r <= 0;\n"
+            f"            i <= 0;\n"
             f"        end\n"
+            f"    end\n"
+            f"    always @(posedge {s['clk']} or {edge}) begin\n"
+            f"{body_done}\n"
             f"    end\n"
             f"    always @(posedge {s['clk']} or {edge}) begin\n"
             f"        if ({rst_test}) begin\n"

@@ -62,6 +62,47 @@ initial begin #1; if(result!==16) begin $display("CHECK_FAIL initial %h",result)
 $display("CHECK_PASS"); $finish; end endmodule''')
 
 
+def sequential_multiplier_prompt(width, gated=False):
+    condition = "start is active and " if gated else ""
+    return ("Implement an unsigned shift and accumulate multiplier.\nModule name:\n accumulate_unit\n"
+            "Input ports:\n clk: Clock.\n rst_n: Active-low reset.\n start: Enable.\n"
+            f" a[{width-1}:0]: Multiplicand.\n b[{width-1}:0]: Multiplier.\n"
+            f"Output ports:\n product[{2*width-1}:0]: Product.\n done: Completion flag.\n"
+            f"The shift count register (i) is less than {width+1} and increments while start is active.\n"
+            "When start is inactive the counter is reset to 0. Reset clears all registers.\n"
+            f"If {condition}the shift count register (i) is equal to {width}, done_r is set to 1.\n"
+            f"If {condition}the shift count register (i) is equal to {width+1}, done_r is reset to 0.\n"
+            + ("When start is inactive done_r is reset to 0.\n" if gated else "")
+            + "While start is active, count 0 loads operands and clears the product; subsequent counts shift and accumulate.\n")
+
+
+@pytest.mark.parametrize("width", [3, 5])
+@pytest.mark.parametrize("gated", [False, True])
+def test_completion_obeys_its_own_enable_condition(tmp_path, width, gated):
+    prompt = sequential_multiplier_prompt(width, gated)
+    result = chain.try_emit_ex(prompt, top="accumulate_unit")
+    assert_program_chain_candidate(result, prompt)
+    assert result[1] == arithmetic.synth(prompt, top="accumulate_unit")
+    native(tmp_path, result[1], f'''module check;
+reg clk=0,rst_n=1,start=0; reg [{width-1}:0] a=3,b=7;
+wire [{2*width-1}:0] product; wire done; always #5 clk=~clk;
+accumulate_unit d(.*);
+task reset; begin @(negedge clk);rst_n=0;start=0;#1;if(done!==0 || product!==0)$fatal;
+@(negedge clk);rst_n=1;end endtask
+initial begin reset(); @(negedge clk);start=1;repeat({width})@(negedge clk);
+start=0;@(negedge clk);if(done!==1'b{int(not gated)})$fatal(1,"completion suppressed on disable: %b",done);
+@(negedge clk);if(done!==1'b{int(not gated)})$fatal;
+reset();@(negedge clk);start=1;repeat({width+1})@(negedge clk);
+if(done!==1 || product!==21)$fatal;@(negedge clk);if(done!==0)$fatal;
+reset();$display("CHECK_PASS");$finish;end endmodule''')
+
+
+def test_multiplier_without_stated_completion_or_matching_datapath_declines():
+    prompt = sequential_multiplier_prompt(5)
+    assert arithmetic.synth(prompt.replace("is set to 1", "indicates completion")) is None
+    assert arithmetic.synth(prompt.replace(" a[4:0]", " data[4:0]")) is None
+
+
 def test_reserved_or_case_colliding_opcode_parameters_decline():
     reserved = alu_prompt(True).replace("parameter And", "parameter and")
     assert arithmetic.synth(reserved, top="operator_unit") is None
