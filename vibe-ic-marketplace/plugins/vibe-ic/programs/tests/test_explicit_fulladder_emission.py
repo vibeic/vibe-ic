@@ -36,7 +36,8 @@ def assert_fulladder_composition(rtl, width, names, spans):
     a, b, result = names
     equations = assignments(rtl)
     # A vector addition is not an explicit logical full-adder composition.
-    assert all("+" not in expr for expr in equations.values()), equations
+    vector_additions = sum(expression.count("+") for expression in equations.values())
+    assert vector_additions == 0, equations
     first_sum = equations[bit_name(result, spans, 0)]
     terms = first_sum.split("^")
     assert len(terms) == 3, first_sum
@@ -81,7 +82,8 @@ def test_explicit_style_preserves_declared_packed_spans(spans):
     module, = ports.parse_modules(rtl, "<generated>")
     actual = {name: re.sub(r"\s+", "", declaration.width_expr)
               for name, declaration in module.ports.items()}
-    assert actual == {name: f"[{hi}:{lo}]" for name, (hi, lo) in spans.items()}, rtl
+    for name, (hi, lo) in spans.items():
+        assert actual[name] == f"[{hi}:{lo}]", rtl
     assert_fulladder_composition(rtl, 5, ("operand_u", "operand_v", "total"), spans)
 
 
