@@ -186,12 +186,11 @@ def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_
     # This is bounded native-consumer evidence, not D09-to-D11 acceptance.
     from _route_fixture import stage_owner_route
     stage_owner_route(root, "ip")
-    program = Path(runner.__file__)
-    invocation = subprocess.run([
-        sys.executable, str(program), str(root), "--entry-step", "2", "--exit-step", "2",
-        "--rtl-input", "original", "--top-name", "unit",
-        "--skip-analog", "--skip-hardware", "--skip-phase3",
-    ], capture_output=True, text=True)
+    program = Path(runner.__file__).with_name("vibe_ic_one_shot_runner.py")
+    command = dispatch._solver_argv(program, root, "2", "2", "ip", "original", "rtl")
+    invocation = subprocess.run(command + ["--top-name", "unit"],
+                                capture_output=True, text=True)
+    assert invocation.returncode == int(broken), invocation.stdout[-3000:] + invocation.stderr
     report_path = root / "reports/orchestrator/phase2_one_shot.json"
     assert report_path.is_file(), invocation.stderr
     measured = json.loads(report_path.read_text())
