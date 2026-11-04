@@ -73,3 +73,8 @@ def test_repeated_positive_composition_in_one_statement_stays_valid():
 def test_unqualified_body_cannot_misbind_composition_or_polarity(style):
     prompt, _, _ = request(style=style)
     assert arithmetic.synth(prompt, "neutral_sum") is None
+
+
+def test_nested_construction_denials_are_unqualified():
+    prompt, _, _ = request(style="without full adders")
+    assert arithmetic.synth(prompt.replace("Implement", "Do not implement", 1), "neutral_sum") is None
