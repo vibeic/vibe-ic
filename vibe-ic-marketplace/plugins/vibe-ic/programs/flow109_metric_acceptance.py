@@ -7119,7 +7119,13 @@ def _d0102_population(project: Path, key: str, metric: str, reads: dict) -> tupl
                        if relative == 'input/step_0_5ic_answers.json' else documents.get(relative))
             if current != digest:
                 raise MetricRefusal('D0102_REQUIREMENT_SOURCE_STALE', exp['id'])
-            lines = (project / relative).read_text().splitlines()
+            source = project / relative
+            import phase1_expert_parse_track as expert
+            if source.suffix.lower() in expert._INPUT_TEXT_EXTS:
+                lines = source.read_text().splitlines()
+            else:
+                from phase1_doc_one_shot_runner import extract_one
+                lines = extract_one(source).splitlines()
             if not 1 <= int(line) <= len(lines) or literal not in lines[int(line) - 1]:
                 raise MetricRefusal('D0102_REQUIREMENT_LITERAL_DIFFERS', exp['id'])
     return authority, payload
