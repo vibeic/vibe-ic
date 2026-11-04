@@ -25,8 +25,8 @@ Chip-AGNOSTIC. Pure regex + structural heuristics. Defensive against
 false positives via:
 
   * minimum-length floor (≥3 consecutive items),
-  * monotone-increasing numbers (1, 2, 3, ...) — a number reset
-    starts a NEW sequence,
+  * increasing numbers or automatic Markdown markers (1, 1, 1, ...),
+    with an explicit counter reset starting a NEW sequence,
   * imperative-verb floor (≥half of the items must begin with a
     capitalised imperative verb from a generic vocabulary —
     Load / Set / Write / Read / Wait / Send / Configure / etc.),
@@ -274,9 +274,10 @@ def extract_usage_sequence_from_readme(
     last_num: int = 0
     source_numbers: List[int] = []
     content_column = 0
+    automatic_numbers = False
 
     def _flush() -> None:
-        nonlocal current_steps, last_num, source_numbers
+        nonlocal current_steps, last_num, source_numbers, automatic_numbers
         # Continuations cannot manufacture the minimum numbered-list length.
         if len(set(source_numbers)) >= _MIN_STEPS:
             # Imperative-verb fraction floor.
@@ -318,6 +319,7 @@ def extract_usage_sequence_from_readme(
         current_steps = []
         source_numbers = []
         last_num = 0
+        automatic_numbers = False
 
     for line_num, line in enumerate(lines, start=1):
         line = line.expandtabs(8)
@@ -336,6 +338,9 @@ def extract_usage_sequence_from_readme(
                 current_steps.append(step_rec)
                 source_numbers.append(last_num)
                 continue
+            if current_steps and action and indent >= content_column:
+                current_steps[-1]["action"] += "\n" + action
+                continue
             # A non-numbered line ends the current sequence iff it
             # is non-blank prose (blank lines are tolerated inside
             # markdown lists).
@@ -343,6 +348,9 @@ def extract_usage_sequence_from_readme(
                 _flush()
             continue
         num = int(m.group(1))
+        if num == 1 and (last_num == 1 or automatic_numbers):
+            automatic_numbers = True
+            num = last_num + 1
         action = m.group(2).strip()
         # Strip surrounding markdown emphasis from the action text.
         action = re.sub(r"^[`*_]+|[`*_]+$", "", action).strip()
