@@ -2103,71 +2103,20 @@ def _finish_d09_selected_owner(
             'detail': detail, 'evidence': evidence}
 
 
-def _finish_d11_original_engineering(project, context, report, invocation, *,
-                                     published_current, report_path):
-    """BLOCKING current original owner evidence; never grant qualified row credit."""
-    import flow109
-    import flow109_engineering as engineering
-    import benchmark_dispatch as dispatch
-    status, detail, record = 'NOT_MEASURED', 'D11_ENGINEERING_OWNER_UNBOUND', {}
-    try:
-        binding = report['runner_binding']
-        argv = binding['argv']
-        if (published_current is not True or report_path.is_symlink()
-                or json.loads(report_path.read_bytes()) != report
-                or set(invocation) != {'invocation_id', 'argv', 'project', 'source'}
-                or invocation['project'] != str(project) or not invocation['invocation_id']
-                or any(binding[k] != invocation[k] for k in invocation)
-                or binding['schema'] != 'vibeic.runner_report_binding.v1'
-                or binding['report_name'] != 'phase2_one_shot.json'
-                or binding['source'] != dispatch._runner_source_snapshot(argv,
-                    consumer=binding['source']['consumer']['path'])
-                or binding['material'] != dispatch._runner_material_snapshot(project)
-                or Path(binding['producer']['path']).name != 'design_one_shot_runner.py'
-                or hashlib.sha256(Path(binding['producer']['path']).read_bytes()).hexdigest()
-                    != binding['producer']['sha256']
-                or argv[argv.index('--entry-step') + 1] != '2'
-                or argv[argv.index('--exit-step') + 1] != '2'
-                or report['declared_window'] != {'entry_step': '2', 'exit_step': '2',
-                    'dispatched_step_ids': ['2']}):
-            raise ValueError('D11_ENGINEERING_OWNER_UNBOUND')
-        owners = [r for r in report['steps'] if r.get('name') == 'rtl_validate']
-        if len(owners) != 1 or owners[0]['extras']['context_sha256'] != context['context_sha256']:
-            raise ValueError('D11_ENGINEERING_OWNER_UNBOUND')
-        record = owners[0]['extras']['engineering_evidence']
-        status = engineering.consume(project, record, report['steps'])
-        if owners[0]['status'] != status or report['verdict'] != status:
-            raise ValueError('D11_ENGINEERING_VERDICT_MISMATCH')
-        detail = 'D11_ORIGINAL_ENGINEERING_CHECKS_' + status
-    except (OSError, ValueError, TypeError, KeyError, IndexError) as exc:
-        status, detail = 'NOT_MEASURED', str(exc)
-    finished = flow109.finish_native_window(project, {'steps': [{'status': status,
-        'extras': {'step_id': '2', 'default_row_status': 'FAIL' if status == 'FAIL' else 'NOT_MEASURED',
-            'completed': False, 'qualification_status': 'NOT_CLAIMED',
-            'engineering_evidence': record, 'detail': detail,
-            'owner_report': engineering.reference(project, report_path)}}]})
-    if not isinstance(finished, Mapping) or finished.get('component_status') != status:
-        status, detail = 'NOT_MEASURED', 'D11_ENGINEERING_FINALIZATION_UNBOUND'
-    return {'verdict': status, 'component_status': status,
-            'default_row_status': finished.get('default_row_status', 'NOT_MEASURED') if finished else 'NOT_MEASURED',
-            'qualification_status': 'NOT_CLAIMED', 'whole_flow_verdict': 'NOT_MEASURED',
-            'detail': detail, 'engineering_evidence': record}
-
-
 def _finish_d11_selected_owner(project: Path, report: Mapping, invocation: Mapping,
                                *, published_current: bool) -> dict:
-    """Publish the completed native result through the shared frontend reader."""
+    """Publish this child lint result; it has no retained/synthesis dependency."""
     import flow109
-    context = flow109.validate_execution_context(json.loads(
-        Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
-    native = flow109._retained_native_result(project, context)
-    if native is None:
-        return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
-                'detail': 'native report is unavailable'}
+    rows = [r for r in report.get('steps', []) if r.get('name') in ('rtl_lint_tool', 'rtl_validate')]
+    row = rows[0] if len(rows) == 1 else {}
+    status = row.get('status', 'NOT_MEASURED')
+    if status not in ('PASS', 'FAIL', 'NOT_MEASURED'):
+        status = 'NOT_MEASURED'
     finished = flow109.finish_native_window(project, {'steps': [{
-        'status': native['component_status'], 'extras': {**native, 'step_id': '2'}}]})
+        'status': status, 'extras': {**row.get('extras', {}), 'step_id': '2',
+            'default_row_status': status, 'completed': status == 'PASS'}}]})
     return {'verdict': finished['default_row_status'], 'whole_flow_verdict': 'NOT_MEASURED',
-            'detail': native['reason']}
+            'detail': row.get('detail', 'native lint result missing or unparsable')}
 
 
 def _finish_d13_selected_owner(project: Path, report: Mapping, invocation: Mapping,
