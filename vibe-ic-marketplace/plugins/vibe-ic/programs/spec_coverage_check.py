@@ -2829,7 +2829,43 @@ def _tb_bound_port_roles(rtl_text: Optional[str], tb_code: str) -> Dict[str, str
     args = instances[0].group(1)
     binding: Dict[str, str] = {}
     named = list(_NAMED_CONN_RE.finditer(args))
-    if named:
+    implicit = any(re.fullmatch(r"\.\s*(?:\*|[A-Za-z_]\w*)", arg)
+                   for arg in _split_top_level_args(args))
+    if implicit:
+        from module_port_audit import parse_modules
+        owners = [(module, instance) for module in parse_modules(tb_code, "<testbench>")
+                  for instance in module.instances if instance.module_name == top]
+        if len(owners) != 1:
+            return {}
+        owner, instance = owners[0]
+        if owner.discovery_issues or instance.has_mixed_connections or instance.malformed_connections:
+            return {}
+        explicit = {connection.port_name.lower(): connection.wire_expr
+                    for connection in instance.connections}
+        if len(explicit) != len(instance.connections):
+            return {}
+        binding.update({name: actual.lower() for name, actual in explicit.items()
+                        if re.fullmatch(r"[A-Za-z_]\w*", actual)})
+        if instance.is_implicit:
+            body = re.sub(r"\b(task|function)\b.*?\bend(?:task|function)\b", "",
+                          owner.body, flags=re.I | re.S)
+            locals_ = {name.lower() for name in owner.ports}
+            for declaration in re.finditer(
+                    r"\b(?:wire|reg|logic|bit)\b\s*(?:(?:signed|unsigned)\s+)?"
+                    r"(?:\[[^\]\n]+\]\s*)?([^;]+);", body, re.I):
+                depth = sum(1 if token[0].lower() in {"begin", "generate", "fork", "case", "casez", "casex", "class"}
+                            else -1 for token in re.finditer(
+                                r"\b(?:begin|end|generate|endgenerate|fork|join|case[zx]?|endcase|class|endclass)\b",
+                                body[:declaration.start()], re.I))
+                if depth:
+                    continue
+                for scalar in _split_top_level_args(declaration[1]):
+                    name = scalar.split("=", 1)[0].strip()
+                    if re.fullmatch(r"[A-Za-z_]\w*", name):
+                        locals_.add(name.lower())
+            binding.update({port.name.lower(): port.name.lower() for port in ports
+                            if port.name.lower() in locals_ and port.name.lower() not in explicit})
+    elif named:
         for match in named:
             binding[match.group(1).lower()] = match.group(2).lower()
     else:
@@ -3261,7 +3297,7 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
                 return before, after
             consumed = system.end()
         else:
-            return False, False
+            return before, False
         cursor = consumed
         while cursor < len(body) and body[cursor].isspace():
             cursor += 1

@@ -279,3 +279,42 @@ def test_reference_helper_must_fatally_reject_false_and_be_called(tmp_path, muta
     else:
         tb = tb.replace("ck(count===model[slot]);", "if(1'b0)ck(count===model[slot]);")
     assert consumer(tmp_path, COUNTER_PROMPT, COUNTER_RTL, tb)["status"] == "FAIL"
+
+
+@pytest.mark.parametrize("syntax", ["wildcard", "explicit_override", "shorthand"])
+def test_implicit_dut_connections_preserve_native_output_attribution(tmp_path, native, syntax):
+    tb = TB.replace("observed", "z")
+    connection = ".*" if syntax == "wildcard" else ".clk,.x,.z"
+    if syntax == "explicit_override":
+        tb = TB
+        connection = ".*,.z(observed)"
+    tb = re.sub(r"neutral_ff dut\([^;]*\);", f"neutral_ff dut({connection});", tb)
+    result = consumer(tmp_path, PROMPT, RTL, tb)
+    assert result["status"] == "PASS", result
+    good, _, _ = native_challenge(tmp_path / "good", native, RTL, tb)
+    wrong, _, _ = native_challenge(tmp_path / "wrong", native,
+        RTL.replace("q = 1'b0", "q = 1'b1"), tb)
+    assert good["status"] == "PASS", good
+    assert wrong["status"] == "FAIL", wrong
+
+
+@pytest.mark.parametrize("mutation", ["missing", "other_scope", "task_local", "empty_override", "expression_override", "explicit_decoy"])
+def test_wildcard_connections_cannot_invent_or_override_an_output_binding(tmp_path, mutation):
+    tb = TB.replace("observed", "z")
+    connection = ".*"
+    if mutation in {"missing", "other_scope", "task_local"}:
+        tb = tb.replace("wire z;", "")
+        if mutation == "other_scope":
+            tb += "\nmodule unrelated;wire z;endmodule"
+        elif mutation == "task_local":
+            tb = tb.replace("initial begin", "task unused;reg z;begin end endtask\ninitial begin", 1)
+    elif mutation == "empty_override":
+        connection = ".*,.z()"
+    elif mutation == "expression_override":
+        connection = ".*,.z({z})"
+    else:
+        tb = tb.replace("wire z;", "wire actual;reg z=0;")
+        connection = ".*,.z(actual)"
+    tb = re.sub(r"neutral_ff dut\([^;]*\);", f"neutral_ff dut({connection});", tb)
+    result = consumer(tmp_path, PROMPT, RTL, tb)
+    assert result["status"] == "FAIL", result
