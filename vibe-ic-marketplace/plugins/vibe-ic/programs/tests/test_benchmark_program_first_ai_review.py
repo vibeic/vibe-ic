@@ -1249,7 +1249,7 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     return run, task, runner
 
 
-def _stub_dispatched_reentry(monkeypatch, input_contract="structured"):
+def _stub_dispatched_reentry(monkeypatch, input_contract="structured", *, runner=None):
     """Keep dispatched repair at the coordinator/consumer boundary.
 
     The route/D1 producer is covered by the normal-dispatch tests.  These
@@ -1265,6 +1265,11 @@ def _stub_dispatched_reentry(monkeypatch, input_contract="structured"):
             "delivery_route": "ip", "route_receipt": {"input_contract": input_contract},
             "activation": {}, "task": {"task_sha256": "fixture"},
         })
+    if runner is not None:
+        snapshot = bd._runner_source_snapshot
+        monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
+                            snapshot([argv[0], str(runner)], **kw) if len(argv) == 2
+                            else snapshot(argv, **kw))
     monkeypatch.setattr(bd, "_capture_d1_evidence", lambda project: None)
     monkeypatch.setattr(
         bd, "_run_from_d1_snapshot",
@@ -1849,7 +1854,7 @@ def test_required_sim_failure_reenters_only_for_a_filled_reference_model(
     monkeypatch.setattr(bd, "_required_gate_ledger", lambda _result: {
         "failed_required": ["sim"], "in_scope": {"sim": "FAIL"},
         "unmeasured_required": [], "eligibility": "INELIGIBLE"})
-    _stub_dispatched_reentry(monkeypatch)
+    _stub_dispatched_reentry(monkeypatch, runner=runner)
     real_argv = bd._resume_solver_argv
     monkeypatch.setattr(
         bd, "_resume_solver_argv",
@@ -1945,7 +1950,7 @@ def test_source_upgrade_does_not_grant_unrelated_reentry(tmp_path, monkeypatch, 
     _solve_report(run, task)
     _stub_dispatched_reentry(monkeypatch)
     source = copy.deepcopy(task["program_verification"]["runner_invocation"]["source_before"])
-    if control != "same-source":
+    if control not in {"same-source", "native-fail"}:
         source["consumer"]["sha256"] = "0" * 64
     snapshot = bd._runner_source_snapshot
     monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
@@ -1981,7 +1986,7 @@ def test_source_upgrade_does_not_grant_unrelated_reentry(tmp_path, monkeypatch, 
 
 
 def test_non_sim_gate_failure_keeps_its_repair_instruction(tmp_path, monkeypatch):
-    run, task, _ = _dispatched_parent_task(tmp_path)
+    run, task, runner = _dispatched_parent_task(tmp_path)
     _solve_report(run, task)
     _write_review(task, _valid_review(task))
     project = Path(task["project"])
@@ -1995,7 +2000,7 @@ def test_non_sim_gate_failure_keeps_its_repair_instruction(tmp_path, monkeypatch
     monkeypatch.setattr(bd, "_run_verification_challenge", lambda candidate, challenge: {
         "status": "PASS", "candidate_rtl_sha256": candidate["rtl_sha256"],
         "challenge_sha256": challenge["sha256"]})
-    _stub_dispatched_reentry(monkeypatch)
+    _stub_dispatched_reentry(monkeypatch, runner=runner)
     assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
     repair = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
     assert repair["status"] == "PROGRAM_GATE_INELIGIBLE"
@@ -2003,13 +2008,14 @@ def test_non_sim_gate_failure_keeps_its_repair_instruction(tmp_path, monkeypatch
     assert "reference_model_handoff" not in repair
 
 
-def _native_gate_parent_task(tmp_path, monkeypatch):
-    """Real native lint FAIL with an exhaustive functional PASS, no dataset."""
+def _native_gate_parent_task(tmp_path, monkeypatch, *, wrapper_reject=False, runner_selection=None):
+    """Native lint and a fixture wrapper with a functional PASS, no dataset."""
     run, _, runner = _dispatched_parent_task(tmp_path)
     project = run / "projects/p1"
     rtl = project / "phase2/stage1/rtl/dut.v"
     rtl.write_text("module dut(input wire a, output wire y); "
-                   "assign y = a == 1'd1?1'b1:1'b0; endmodule\n")
+                   + ("assign y = a; endmodule\n" if wrapper_reject else
+                      "assign y = a == 1'd1?1'b1:1'b0; endmodule\n"))
     runner.write_text('''import pathlib, sys, subprocess, os
 from dataclasses import asdict
 sys.path.insert(0, %r)
@@ -2017,20 +2023,22 @@ from design_one_shot_runner import _write_phase2_report, _required_site_row, Ste
 p = pathlib.Path(sys.argv[1]).resolve()
 assert sys.argv[sys.argv.index('--entry-step') + 1] == '2'
 source = (p/'phase2/stage1/rtl/dut.v').read_text()
+wrapper_reject = %r
 container = os.environ.get('VIBEIC_REPAIR_TEST_CONTAINER')
 argv = (['docker','exec','-i',container,'yosys'] if container else ['yosys'])
 lint = subprocess.run(argv + ['-Q','-T','-p',
-    'read_verilog ' + str(p/'phase2/stage1/rtl/dut.v') + '; hierarchy -check -top dut'],
+    'read_verilog ' + str(p/'phase2/stage1/rtl/dut.v') + '; hierarchy -check -top dut; proc; check -assert'],
     text=True, capture_output=True)
 (p/'native_lint.json').write_text(__import__('json').dumps({
-    'argv': argv, 'rc': lint.returncode, 'stdout': lint.stdout, 'stderr': lint.stderr}))
+    'argv': argv, 'rc': lint.returncode, 'stdout': lint.stdout, 'stderr': lint.stderr,
+    'wrapper_reject': wrapper_reject}))
 row = _required_site_row(p, 'rtl_validate', StepResult(
-    'neutral_native_lint', 'PASS' if lint.returncode == 0 else 'FAIL',
+    'neutral_native_lint', 'PASS' if lint.returncode == 0 and not wrapper_reject else 'FAIL',
     detail=lint.stderr, extras={'native_rc':lint.returncode}))
 _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     'verdict':row.status,
     'steps':[{'name':'rtl_gen','status':'PASS','detail':'fixture'},asdict(row)]}, p)
-''' % str(PROGRAMS))
+''' % (str(PROGRAMS), wrapper_reject))
     argv = bd._resume_solver_argv(runner, project, True, "2", "2", resolve_manifest=False)
     process = bd._RunnerBudget(1, None, 0).run(argv)
     assert process.error is None, process.error
@@ -2042,8 +2050,14 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     _stub_dispatched_reentry(monkeypatch)
     monkeypatch.setenv("VIBEIC_CHALLENGE_BACKEND", "host")
     real_argv = bd._resume_solver_argv
+    runner_selection = {} if runner_selection is None else runner_selection
     monkeypatch.setattr(bd, "_resume_solver_argv", lambda _runner, *args, **kwargs:
-                        real_argv(runner, *args, **{**kwargs, "resolve_manifest": False}))
+                        real_argv(runner_selection.get("path", runner), *args,
+                                  **{**kwargs, "resolve_manifest": False}))
+    snapshot = bd._runner_source_snapshot
+    monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
+                        snapshot([argv[0], str(runner_selection.get("path", runner))], **kw) if len(argv) == 2
+                        else snapshot(argv, **kw))
     return run, task, rtl
 
 
@@ -3732,3 +3746,47 @@ def test_emitted_candidate_missing_an_explicit_exception_enters_repair(tmp_path)
     assert repairs[0]['status'] == 'AI_SEMANTIC_REPAIR_REQUIRED'
     assert repairs[0]['verified_challenge']['sha256'] == bd._sha256_text(proof)
     assert clause in json.dumps(review['semantic_review'])
+
+
+@_NEEDS_SIMULATOR
+@pytest.mark.parametrize('fixed', [True, False], ids=['wrapper-fixed', 'native-still-fails'])
+def test_source_upgrade_regates_native_fail_without_changing_candidate(tmp_path, monkeypatch, fixed):
+    selection = {}
+    run, task, rtl = _native_gate_parent_task(
+        tmp_path, monkeypatch, wrapper_reject=fixed, runner_selection=selection)
+    original = rtl.read_bytes()
+    _write_review(task, _valid_review(task))
+    assert bd._validate_ai_review(task)['challenge_result']['status'] == 'PASS'
+    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 2
+    assert not list((run / 'runner_regates').rglob('prior_task.json'))
+    runner = Path(task['program_verification']['runner_invocation']['source_before']['runner']['path'])
+    upgraded = runner.parent.with_name('upgraded-runner') / runner.name
+    upgraded.parent.mkdir()
+    upgraded.write_text(runner.read_text().replace('wrapper_reject = True', 'wrapper_reject = False')
+                        + '\n# source upgrade\n')
+    selection['path'] = upgraded
+
+    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 2
+    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    measured = current['program_verification']['runner_invocation']['source_before']['runner']
+    assert measured['sha256'] == bd.hashlib.sha256(upgraded.read_bytes()).hexdigest()
+    solve = json.loads((run / 'solve_report.json').read_text())
+    assert bd._required_gate_ledger(solve['results'][0])['eligibility'] == (
+        'ELIGIBLE' if fixed else 'INELIGIBLE')
+    archives = list((run / 'runner_regates').rglob('prior_task.json'))
+    assert len(archives) == 1
+    assert json.loads(archives[0].read_text()) == task
+    prior_result = json.loads(archives[0].with_name('prior_result.json').read_text())
+    assert bd._required_gate_ledger(prior_result)['failed_required'] == ['rtl_validate']
+    assert current['rtl_sha256'] == task['rtl_sha256'] and rtl.read_bytes() == original
+    assert current['candidate_origin'] == 'PROGRAM'
+    assert current['review_path'] != task['review_path']
+    assert not Path(current['review_path']).exists()
+    assert not Path(current['response_path']).exists()
+    native = json.loads((Path(task['project']) / 'native_lint.json').read_text())
+    assert (native['rc'] == 0) == fixed
+    assert native['wrapper_reject'] is False
+    _write_review(current, _valid_review(current))
+    assert bd.cmd_resume('rtllm', '/unused', str(run)) == (0 if fixed else 2)
+    assert Path(current['response_path']).exists() == fixed
+    assert len(list((run / 'runner_regates').rglob('prior_task.json'))) == 1
