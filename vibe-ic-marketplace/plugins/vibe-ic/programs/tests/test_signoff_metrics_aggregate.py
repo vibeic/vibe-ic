@@ -534,3 +534,45 @@ def test_check_still_refuses_changed_native_input(tmp_path, monkeypatch, capsys)
         json.dumps({"rc": rc, "stdout": output.out, "stderr": output.err}, indent=2) + "\n")
     assert rc == 1
     assert "__provenance__" in output.out
+
+
+@pytest.mark.parametrize('owner_status',['PASS','NOT_MEASURED'])
+@pytest.mark.parametrize('contract',['source','serial'])
+def test_d09_deferred_source_item_survives_signoff_without_item_measurement(tmp_path,monkeypatch,owner_status,contract):
+    monkeypatch.setattr(AGG,'_librelane_state_cell',lambda project,key: None)
+    monkeypatch.setattr(AGG,'RULES',[('measured_native','Native component',lambda project:AGG.Cell(0))])
+    demand={'id':'area-fmax','requirement':'Area times Fmax must improve against the declared baseline','evidence':['input/spec.md:1']}
+    import flow109
+    owned={'source_demands':[demand], 'responsibility_register':[
+        {'id':demand['id'],'normal_owner':['D22','D26'],'status':'NOT_MEASURED'}]}
+    if contract=='serial':
+        owned['responsibility_register']=[{'id':demand['id'],'verification_status':'NOT_MEASURED','targets':[
+            {'mapping_status':'DOWNSTREAM_RESPONSIBILITY_PRESERVED','normal_owner':{'steps':{'D22':'Synthesis','D26':'Timing'},'input_authority':'L19_CONSTRAINTS_PDK'}}]}]
+    flow109._selected_step_result(tmp_path,{'resolved_row':{'id':'D09'},'context_sha256':'test-only'},
+        {'step_id':'D09','component_status':'PASS','default_row_status':'PASS','completed':True,
+         'evidence':{'owned_metrics':owned}})
+    _write(tmp_path/'reports/orchestrator/phase2_one_shot.json',{'steps':[{'name':'later_row','status':'PASS'}]})
+    for owner in ('D22','D26','D65','D70'):
+        _write(tmp_path/('reports/flow109/components/'+owner+'.json'),{'component_status':owner_status,'metrics':{'area':12,'fmax':100}})
+    result=AGG.execute(tmp_path,{})
+    report=json.loads((tmp_path/AGG.REPORT_REL).read_text())
+    rows=[row for row in report['rows'] if row['key']=='source_demand__area-fmax']
+    assert len(rows)==1, 'unmeasured source demand vanished at signoff'
+    row=rows[0]
+    assert row['label']==demand['requirement'] and row['value']=='NOT_MEASURED' and row['measured'] is False
+    assert 'D22' in row['reason'] and 'D26' in row['reason']
+    assert row['source']=='reports/flow109/default_rows/D09.json'
+    assert result['component_status']==result['default_row_status']=='NOT_MEASURED'
+    assert result['measured']==1 and result['not_measured']==1 and result['completed'] is False
+    assert result['metrics']['source_demand__area-fmax']=='NOT_MEASURED'
+
+    assert AGG.main([str(tmp_path),'--check'])==0
+    path=tmp_path/'phase3/final/metrics.json'
+    original=json.loads(path.read_text())
+    for change in ('remove','change'):
+        altered=dict(original)
+        if change=='remove': altered.pop('source_demand__area-fmax')
+        else: altered['source_demand__area-fmax']=0
+        _write(path,altered)
+        assert AGG.main([str(tmp_path),'--check'])==1
+        _write(path,original)
