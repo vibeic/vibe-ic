@@ -662,7 +662,8 @@ def _d19_exception_commands(path: Path) -> list[str]:
             continue
         command = line.split()[0]
         if (command not in ordinary | exceptions or any(c in line for c in (';', '$'))
-                or any(x not in collections for x in re.findall(r'\[\s*([^\s\[\]]+)', line))):
+                or any(x not in collections for x in re.findall(
+                    r'\[\s*([^\s\[\]]+)', re.sub(r'\{[^{}]*\}', '', line)))):
             raise MetricRefusal('D19_EXCEPTION_CENSUS_UNSUPPORTED', str(path))
         if command in exceptions:
             found.append(' '.join(line.split()))
