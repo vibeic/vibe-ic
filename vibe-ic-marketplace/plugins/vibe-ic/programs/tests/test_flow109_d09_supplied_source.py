@@ -23,11 +23,15 @@ def put(root, rel, body):
     return path
 
 
-def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, deferred=None, mixed=False):
+def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, deferred=None, mixed=False, debug=None):
     # Exact original two-module D15 carrier, including its genuine empty
     # parameter and clock/reset populations. Not a serial benchmark fixture.
     assert hashlib.sha256(RTL.encode()).hexdigest() == '931ac7bddbfa37b3a7d3c98942387b068b389e295dad1664468facee015b5be9'
-    put(root,'phase2/stage1/rtl/unit.sv' if authored else 'input/rtl/unit.sv',RTL)
+    source = RTL
+    if debug is not None:
+        source += ('module debug_only; generate if (' + str(int(debug)) + ') begin '
+                   'integer fd; initial fd=$fopen("debug.log","w"); end endgenerate endmodule\n')
+    put(root,'phase2/stage1/rtl/unit.sv' if authored else 'input/rtl/unit.sv',source)
     ports=[{'name':n,'direction':d,'width':w} for n,d,w in [('on','input',1),('iso','input',1),('y','output',8)]]
     put(root,'phase1/generated_docs/L9_INTEGRATION_SPEC.json',{'top_module':'unit','top_ports':ports,'parameters':[]})
     put(root,'input/spec.md','q initializes to A5. u_state.q connects to y. Interface is on,iso,y with no parameters.')
@@ -173,6 +177,15 @@ def test_accepted_spec_to_rtl_author_uses_native_source_metrics(tmp_path,monkeyp
     assert (root/result['native_witness']['path']).is_file()
     status,_,detail=consume(owned)
     assert status=='PASS',detail
+
+
+@pytest.mark.parametrize('debug',[False,True],ids=['disabled','active'])
+def test_native_elaboration_decides_debug_branch_support(tmp_path,monkeypatch,debug):
+    owned=case(tmp_path,monkeypatch,authored='catalog-glue-author',debug=debug)
+    status,_,detail=consume(owned)
+    assert status==('NOT_MEASURED' if debug else 'PASS'),detail
+    if debug:
+        assert 'D09_NATIVE_WITNESS_UNAVAILABLE' in owned[1]['steps'][0]['extras']['d09_owned_metrics_refusal']
 
 
 @pytest.mark.parametrize('damage,status,reason',[
