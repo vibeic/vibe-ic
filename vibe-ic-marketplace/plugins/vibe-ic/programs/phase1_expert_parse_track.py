@@ -1594,6 +1594,7 @@ _PREFIXABLE_LONGEST_FIRST = sorted(_PREFIXABLE_UNITS.items(),
 #: Symbols no prefix may precede.
 _PLAIN_UNITS = {"%": "%", "ppm": "ppm", "dB": "dB", "dBm": "dBm",
                 "dBc": "dBc", "dBFS": "dBFS", "C": "degC", "LSB": "LSB",
+                "byte": "byte", "bytes": "byte",
                 "cycle": "cycle", "cycles": "cycle", "clocks": "cycle",
                 "": "dimensionless", "—": "dimensionless", "-": "dimensionless"}
 #: Lowercase field-name aliases (`pad_edge_spacing_um`, `freq_mhz`,
@@ -1637,6 +1638,8 @@ _QUANTITY = re.compile(
     r"([-+]?(?:(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]*)?"
     r"|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)"
     r"(?:\s*-?\s*(\S.*))?", re.S)
+_HEX_LITERAL = re.compile(r"(?:0[xX][0-9a-fA-F]+|"
+                          r"(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{8,})")
 
 
 class Quantity(NamedTuple):
@@ -1729,11 +1732,18 @@ def _token_quantity(token: str) -> Optional[Quantity]:
     return parse_quantity(token)
 
 
+def _numeric_quantity_syntax(text: str) -> bool:
+    numeric = _QUANTITY.fullmatch(text.strip().replace("\u2212", "-"))
+    return numeric is not None and parse_unit(numeric.group(2) or "") is not None
+
+
 def _unsupported_numeric_token(token: str) -> bool:
     if _token_quantity(token) is not None:
         return False
     text = token.strip().replace("\u2212", "-")
-    if re.fullmatch(r"0[xX][0-9a-fA-F]+", text):
+    if _numeric_quantity_syntax(text):
+        return True
+    if _HEX_LITERAL.fullmatch(text):
         return False
     unwrapped = re.sub(r"^[^A-Za-z0-9]+", "", text)
     return bool(re.match(r"[0-9]", unwrapped)
@@ -1822,12 +1832,18 @@ def token_in_unit(token: str, unit: str) -> bool:
     """Does this ONE haystack unit carry the expected token?
 
     A NUMERIC token (a number, optionally with a unit) is carried only by a
-    typed value equal to it; every other token by `phrase_present`, exactly
-    as before. The one predicate behind `met`, ownership and carriage."""
+    typed value equal to it; hex literals match contiguously; other tokens
+    use `phrase_present`. The predicate behind `met`, ownership and carriage."""
     want = _token_quantity(token)
     if want is None:
         if _unsupported_numeric_token(token):
             return False
+        if _HEX_LITERAL.fullmatch(token.strip()):
+            if getattr(unit, "quantity", None) is not None:
+                return False
+            return any(not _numeric_quantity_syntax(match.group()) for match in
+                       re.finditer(r"(?<![\w+\-−])" + re.escape(token.strip())
+                                   + r"(?!\w)", unit, re.I))
         return phrase_present(token, unit)
     have = getattr(unit, "quantity", None)
     return have is not None and want.matches(have)
