@@ -1,0 +1,70 @@
+"""Neutral interface controls for the BCD emitter's packed enable port."""
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import counter_advanced_synth as counter
+
+
+def prompt(digits=6, enable_range="[8:4]", style="header", q_range=None,
+           clock_range="", duplicate=""):
+    q_range = q_range or f"[{digits * 4 - 1}:0]"
+    declarations = [f"input {clock_range} clock", "input rst",
+                    f"output {enable_range} upper_tick",
+                    f"output {q_range} digits"]
+    if duplicate:
+        declarations.append(duplicate)
+    if style == "header":
+        interface = "module DecimalChain(" + ", ".join(declarations) + ");"
+    else:
+        interface = "\n".join("- " + declaration for declaration in declarations)
+    return interface + (f"\nImplement a {digits}-digit BCD counter. "
+                        "Output an enable signal indicating when each upper digit "
+                        "should increment. Include a synchronous active-high reset.")
+
+
+@pytest.mark.parametrize("style", ["header", "bullet"])
+@pytest.mark.parametrize("digits,span", [(6, "[8:4]"), (6, "[4:8]"),
+                                        (3, "[6:5]"), (3, "[5:6]"),
+                                        (2, "[9:9]")])
+def test_opaque_enable_preserves_packed_bounds(style, digits, span):
+    rtl = counter.synth(prompt(digits, span, style), top="DecimalChain")
+    assert rtl is not None
+    declaration = re.search(r"output\s+(\[[^]]+\])\s+upper_tick\b", rtl)
+    actual = declaration.group(1) if declaration else "scalar"
+    assert actual == span
+
+
+@pytest.mark.parametrize("style", ["header", "bullet"])
+def test_zero_based_enable_and_scalar_controls_stay_supported(style):
+    rtl = counter.synth(prompt(3, "[1:0]", style), top="DecimalChain")
+    assert rtl is not None
+    assert "output [1:0] upper_tick" in rtl
+    assert "input clock," in rtl and "input rst," in rtl
+    assert "assign upper_tick = enable[2:1];" in rtl
+
+
+def test_scalar_enable_stays_supported():
+    rtl = counter.synth(prompt(2, ""), top="DecimalChain")
+    assert rtl is not None and "output upper_tick," in rtl
+
+
+def test_width_only_bullets_stay_supported():
+    text = ("- input clock\n- input rst\n- output upper_tick (5 bits)\n"
+            "- output digits (24 bits)\nImplement a 6-digit BCD counter. "
+            "Output an enable signal indicating when each upper digit should "
+            "increment. Include a synchronous active-high reset.")
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None and "output [4:0] upper_tick" in rtl
+
+
+@pytest.mark.parametrize("overrides", [
+    {"q_range": "[27:4]"}, {"q_range": "[0:23]"},
+    {"clock_range": "[1:0]"}, {"enable_range": "[9:4]"},
+    {"duplicate": "output [9:5] upper_tick"},
+])
+def test_incompatible_or_ambiguous_interface_is_refused(overrides):
+    assert counter.synth(prompt(**overrides), top="DecimalChain") is None
