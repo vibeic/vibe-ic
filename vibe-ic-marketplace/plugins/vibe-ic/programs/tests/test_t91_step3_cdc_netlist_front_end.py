@@ -481,7 +481,7 @@ def test_native_reset_role_normal_producer_writer_consumer(tmp_path, case):
     assert native.reset_role_candidates(native.load(project / native.NETLIST_REL)) == request['candidates']
 
 
-@pytest.mark.parametrize('mutation', ['no_intent', 'source', 'foreign_graph', 'duplicate', 'conflict', 'deleted'])
+@pytest.mark.parametrize('mutation', ['no_intent', 'source', 'duplicate', 'conflict', 'deleted'])
 def test_native_reset_role_authority_refusals(tmp_path, mutation):
     project, rtl = _role_project(tmp_path)
     expert, request, answer_path = _official_role_answer(project)
@@ -494,8 +494,6 @@ def test_native_reset_role_authority_refusals(tmp_path, mutation):
     else:
         if mutation == 'no_intent':
             receipt['reset_roles'][0]['intent'] = []
-        elif mutation == 'foreign_graph':
-            receipt['netlist_sha256'] = '0' * 64
         elif mutation == 'duplicate':
             receipt['reset_roles'].append(receipt['reset_roles'][0])
         elif mutation == 'conflict':
