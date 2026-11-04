@@ -1,12 +1,10 @@
-"""Actual ordinary supplied-source owner and native IR; D01 isolated explicitly."""
+"""Supplied RTL staging and authored RTL native metrics remain separate."""
 from dataclasses import asdict
 from pathlib import Path
 import hashlib
 import json
 import sys
 import uuid
-import os
-import shutil
 import pytest
 import design_one_shot_runner as design
 import vibe_ic_one_shot_runner as front
@@ -110,55 +108,45 @@ def consume(case):
     return front._d09_bound_phase2_evidence(root,report,invocation,published_current=True)
 
 
-def test_actual_supplied_owner_and_complete_native_population_pass(tmp_path,monkeypatch):
-    owned=case(tmp_path,monkeypatch)
-    status,evidence,detail=consume(owned)
-    assert status=='PASS',detail
-    assert evidence['owned_metrics']['mapped_items']==['0','1','2']
-    assert evidence['owned_metrics']['native_witness']['sha256']
-    assert not (tmp_path/'reports/flow109/default_rows/D09.json').exists()
-    assert not (tmp_path/'reports/flow109/default_rows/D10.json').exists()
-    if os.environ.get('D09_CAPTURE_ROOT'):
-        shutil.copytree(tmp_path,Path(os.environ['D09_CAPTURE_ROOT'])/'positive',dirs_exist_ok=True)
+@pytest.mark.parametrize('pre_entry', [False, True])
+def test_supplied_owner_stages_rtl_without_downstream_metrics(tmp_path, monkeypatch, pre_entry):
+    def unexpected_metrics(*args, **kwargs):
+        raise AssertionError('supplied staging must not run authored metrics')
+    monkeypatch.setattr(metrics, '_d09_source_owned_metrics', unexpected_metrics)
+    root, report, invocation = case(tmp_path, monkeypatch)
+    if pre_entry:
+        report['steps'][1]['name'] = 'reused_ip_consume(pre-entry)'
+        put(root, 'reports/orchestrator/phase2_one_shot.json', report)
+    status, evidence, detail = consume((root, report, invocation))
+    assert status == 'PASS', detail
+    assert 'unit.sv' in {item['path'] for item in evidence['rtl_inventory']}
+    assert 'owned_metrics' not in evidence
+    for row in ('D09', 'D10', 'D11', 'D13'):
+        assert not (root / f'reports/flow109/default_rows/{row}.json').exists()
 
 
-@pytest.mark.parametrize('damage',['staged_source','foreign_owner','stale_owner','population','port','parameter','removed_witness','unsupported_claim','ambiguous_publishers','original_source','forged_native_witness','top_metrics'])
-def test_each_absent_stale_or_unsupported_proof_refuses(tmp_path,monkeypatch,damage):
-    owned=case(tmp_path,monkeypatch,unknown=damage=='unsupported_claim')
-    root,report,invocation=owned
-    if damage != 'unsupported_claim':
-        status,_,detail=consume(owned)
-        assert status == 'PASS', detail
-    if damage=='original_source':(root/'input/rtl/unit.sv').write_text(RTL+'// changed source\n')
-    elif damage=='top_metrics':report['d09_owned_metrics']={}
-    elif damage=='forged_native_witness':
-        path=root/'reports/audit/phase2/d09_supplied_elaboration.json'
-        body=json.loads(path.read_text());body['modules']['cell_keep']['ports']['q']['bits']=['0']*8
-        put(root,str(path.relative_to(root)),body)
-        report['steps'][1]['extras']['d09_owned_metrics']['native_witness']['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
-        report['d09_owned_metrics']=report['steps'][1]['extras']['d09_owned_metrics']
-    elif damage=='staged_source':(root/'phase2/stage1/rtl/unit.sv').write_text(RTL+'// changed\n')
-    elif damage=='foreign_owner':report['runner_binding']['project']=str(root.parent/'foreign')
-    elif damage=='stale_owner':report['runner_binding']['invocation_id']='stale'
-    elif damage=='population':
-        path=root/'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json';body=json.loads(path.read_text());body['source_demands'].append({'id':'unmapped','requirement':'new required function','evidence':['input/spec.md:1']});put(root,str(path.relative_to(root)),body)
-    elif damage in ('port','parameter'):
-        path=root/'phase1/generated_docs/L9_INTEGRATION_SPEC.json';body=json.loads(path.read_text())
-        if damage=='port':body['top_ports'][0]['direction']='output'
-        else:body['parameters']=[{'name':'new_parameter','default':'1'}]
-        put(root,str(path.relative_to(root)),body)
-    elif damage=='removed_witness':(root/'reports/audit/phase2/d09_supplied_elaboration.json').unlink(missing_ok=True)
-    elif damage=='ambiguous_publishers':report['steps'].append(dict(report['steps'][1]))
-    put(root,'reports/orchestrator/phase2_one_shot.json',report)
-    status,_,detail=consume(owned)
-    assert status in ('NOT_MEASURED','FAIL'),detail
-
-
-def test_missing_real_d01_is_not_accepted(tmp_path,monkeypatch):
-    owned=case(tmp_path,monkeypatch)
-    monkeypatch.setattr(design,'_serial_d01_state',lambda p: (_ for _ in ()).throw(ValueError('current D01 publication/review absent')))
-    status,_,detail=consume(owned)
-    assert status=='NOT_MEASURED' and 'D01' in detail
+@pytest.mark.parametrize('damage,expected', [
+    ('staged_source', 'NOT_MEASURED'), ('original_source', 'NOT_MEASURED'),
+    ('foreign_owner', 'NOT_MEASURED'), ('stale_owner', 'NOT_MEASURED'),
+    ('ambiguous_publishers', 'NOT_MEASURED'), ('tool_fail', 'FAIL'),
+])
+def test_supplied_staging_preserves_real_failures_and_current_sources(tmp_path, monkeypatch, damage, expected):
+    root, report, invocation = case(tmp_path, monkeypatch)
+    if damage == 'staged_source':
+        (root / 'phase2/stage1/rtl/unit.sv').write_text(RTL + '// changed\n')
+    elif damage == 'original_source':
+        (root / 'input/rtl/unit.sv').write_text(RTL + '// changed\n')
+    elif damage == 'foreign_owner':
+        report['runner_binding']['project'] = str(root.parent / 'foreign')
+    elif damage == 'stale_owner':
+        report['runner_binding']['invocation_id'] = 'stale'
+    elif damage == 'ambiguous_publishers':
+        report['steps'].append(dict(report['steps'][1]))
+    else:
+        report['steps'].append({'name': 'rtl_lint_tool', 'status': 'FAIL'})
+    put(root, 'reports/orchestrator/phase2_one_shot.json', report)
+    status, _, detail = consume((root, report, invocation))
+    assert status == expected, detail
 
 
 @pytest.mark.parametrize('unknown',[False,True],ids=['complete','unmapped'])
