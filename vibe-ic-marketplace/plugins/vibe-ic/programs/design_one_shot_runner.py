@@ -28799,7 +28799,8 @@ def main() -> int:
                      and os.environ.get("VIBEIC_FLOW109_CONTEXT")))):
         import flow109
         raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
-        d11_selected = bool(raw_context and json.loads(Path(raw_context).read_bytes())
+        original_rtl_scope = args.rtl_input == 'original' and flow109.active_rtl_scope(project) is not None
+        d11_selected = bool(not original_rtl_scope and raw_context and json.loads(Path(raw_context).read_bytes())
                             .get('resolved_row', {}).get('id') == 'D11')
         out = _pl.report_path(project, "phase2_one_shot.json")
         if d11_selected:
@@ -28825,8 +28826,9 @@ def main() -> int:
                             publish_current=d11_selected)
         # D11's front door reopens the actual fresh normal owner report before
         # the sole canonical writer publishes; this child owns no row credit.
-        finished = None if d11_selected else flow109.finish_native_window(project, summary, out)
-        status = (row.status if d11_selected else
+        finished = (None if d11_selected or original_rtl_scope
+                    else flow109.finish_native_window(project, summary, out))
+        status = (row.status if d11_selected or original_rtl_scope else
                   finished.get("default_row_status", "NOT_MEASURED")
                   if raw_context and finished is not None
                   else "NOT_MEASURED" if raw_context else row.status)

@@ -15,6 +15,7 @@ import benchmark_dispatch as dispatch
 import flow_phase_attribution as fpa
 import port_parser
 import spec_artifact_registry
+import flow109
 from _prose_handoff_assertions import assert_program_candidate
 
 
@@ -83,9 +84,7 @@ def test_original_ordinary_step1_through_step2_uses_same_public_top(tmp_path, ov
     switch.parent.mkdir(parents=True)
     switch.write_text('{"steps":{"2":"direct"}}')
     program = Path(runner.__file__).parent / "vibe_ic_one_shot_runner.py"
-    command = [sys.executable, str(program), str(root), "--entry-step", "1", "--exit-step", "2",
-               "--rtl-input", "original", "--route", "ip", "--skip-analog",
-               "--skip-hardware", "--skip-phase3", "--no-dashboard"]
+    command = dispatch._solver_argv(program, root, "1", "2", "ip", "original", "rtl")
     if override:
         command += ["--top-name", override]
     native = subprocess.run(command, capture_output=True, text=True)
@@ -95,12 +94,16 @@ def test_original_ordinary_step1_through_step2_uses_same_public_top(tmp_path, ov
         assert "ORIGINAL_TOP_CONFLICT" in native.stderr
         assert not rtl
         return
+    assert native.returncode == 0, native.stdout[-3000:] + native.stderr[-1000:]
     assert [path.name for path in rtl] == ["cedar_vote.sv"]
     inputs, outputs = port_parser.parse_ports(rtl[0].read_text())
     assert set(inputs) == {("x3", 1), ("x2", 1), ("x1", 1)}
     assert set(outputs) == {("f", 1)}
     report = json.loads((root / "reports/orchestrator/phase2_one_shot.json").read_text())
-    solving = next(row for row in report["steps"] if row["name"] == "rtl_gen")
+    reports = [json.loads(path.read_text()) for path in root.glob(
+        "steps/*/*/outputs/reports/orchestrator/phase2_one_shot.json")]
+    solving = next(row for record in reports for row in record["steps"]
+                   if row["name"] == "rtl_gen" and row["status"] == "PASS")
     validate = next(row for row in report["steps"] if row["name"] == "rtl_validate")
     assert solving["status"] == "PASS", solving
     assert validate["status"] == "PASS", validate
@@ -110,3 +113,33 @@ def test_original_ordinary_step1_through_step2_uses_same_public_top(tmp_path, ov
         "exit": "2", "phases": {"phase3_verifying": fpa.phase3_verifying(report, None)}})
     (root / "reports/required_gate_ledger.json").write_text(json.dumps(ledger, indent=2))
     assert ledger["eligibility"] == "ELIGIBLE", ledger
+    outer = json.loads((root / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
+    assert outer["whole_flow_verdict"] == "NOT_MEASURED"
+    whole = flow109.whole_run_verdict(root)
+    assert whole["verdict"] == "NOT_MEASURED"
+    assert {row["id"]: row["status"] for row in whole["steps"]
+            if row["id"] in {"D09", "D10", "D11"}} == dict.fromkeys(
+                ["D09", "D10", "D11"], "NOT_MEASURED")
+
+
+def test_original_full_row_still_requires_its_owned_metrics(tmp_path):
+    from _route_fixture import stage_owner_route
+    root = tmp_path / "full_row"
+    source = root / "input/phase1_prompt.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("Module name: cedar_vote\n" + BODY)
+    stage_owner_route(root, "ip")
+    registry = flow109.load_registry()
+    features = {key: False for key in registry["predicate_names"]
+                if key not in registry["predicate_definitions"]}
+    features.update(always=True, has_digital=True, soft_ip=True)
+    manifest = root / "input/flow109-manifest.json"
+    manifest.write_text(json.dumps({"features": features}))
+    command = dispatch._solver_argv(Path(runner.__file__).with_name("vibe_ic_one_shot_runner.py"),
+        root, "1", "1", "ip", "original")
+    native = subprocess.run(command, capture_output=True, text=True)
+    assert native.returncode != 0
+    outer = json.loads((root / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
+    assert outer["d09_finalization"]["verdict"] == "NOT_MEASURED"
+    assert "D09_AUTHOR_UNSUPPORTED" in outer["d09_finalization"]["detail"]
+    assert flow109.whole_run_verdict(root)["verdict"] == "NOT_MEASURED"

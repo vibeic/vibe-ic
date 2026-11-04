@@ -6157,8 +6157,9 @@ def _main(args=None) -> int:
         else:
             p2_env = _canonical_admission.child_env(
                 p2_admission.identity_sha256, _phase_env)
-            d09_selected = _flow109_selected_row('D09')
-            d11_selected = _flow109_selected_row('D11')
+            original_rtl_scope = args.rtl_input == 'original' and flow109.active_rtl_scope(project) is not None
+            d09_selected = not original_rtl_scope and _flow109_selected_row('D09')
+            d11_selected = not original_rtl_scope and _flow109_selected_row('D11')
             d12_selected = _flow109_selected_row('D12')
             d13_selected = _flow109_selected_row('D13')
             d14_selected = _flow109_selected_row('D14')

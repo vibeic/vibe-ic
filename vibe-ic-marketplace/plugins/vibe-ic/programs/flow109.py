@@ -2185,6 +2185,14 @@ def run_rows(args, project: Path, run_row) -> int:
     plan = resolve_plan(manifest.get('features'), manifest.get('step_profiles'))
     window = resolve_execution_window(plan, args.entry_step, args.exit_step)
     rows = window.get('resolved_rows') or [window['resolved_row']]
+    native = [str(row['profile']['dispatch'].get('native_step_id')) for row in rows]
+    if (getattr(args, 'rtl_input', None) == 'original'
+            and getattr(args, 'delivery_target', None) == 'rtl'
+            and plan['features']['rtl_only']
+            and native[0] in ('1', '2') and native[-1] in ('1', '2')
+            and set(native) <= {'1', 'P0', '2'}):
+        # The bounded original contract owns authoring/lint, not adopted-IP inventory.
+        rows = [row for row in rows if row['profile']['dispatch']['native_step_id'] != 'P0']
     code = 0
     for row in rows:
         current = execution_context(plan, row['id'], row['id'],
