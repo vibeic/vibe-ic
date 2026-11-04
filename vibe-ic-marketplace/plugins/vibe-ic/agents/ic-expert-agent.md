@@ -1145,80 +1145,53 @@ its measured source contract or fabricates one for an unspecified interface.
 
 ### Skill: infer downstream-ready input from 'whether the result has been consumed' phrasing
 
-**Pattern**: Description prose like 'res_valid is managed based on … whether the result has been consumed' EMBEDS a downstream-ready input even when no port-list entry mentions it. The hidden TB will instantiate that handshake input.
+**Pattern**: Description prose like 'res_valid is managed based on whether the result has been consumed' implies a downstream-ready handshake. When the input leaves the interface open, the DEFAULT is a paired ready input and standard valid/ready consumption.
 
-**When to apply**: When the description's behavioral / control-flow paragraph references 'consumed' / 'acknowledged' / 'read' / 'accepted' / 'handshake' in connection with a `*_valid` output, but the port list doesn't include a paired `*_ready` input.
+**When to apply**: The behavioral paragraph references 'consumed', 'acknowledged', 'read', 'accepted', or 'handshake' in connection with a `*_valid` output, and no equivalent ready input is already declared. An explicit supplied interface header wins; check any public instantiation supplied as input for consistency.
 
-**What to do**: Add a `*_ready` 1-bit input port (paired with the named `*_valid`); deassert `*_valid` only on the cycle when `*_valid && *_ready` (the consummation handshake). This is the canonical valid/ready protocol.
+**What to do**: For an open interface, add a paired `*_ready` 1-bit input and deassert `*_valid` only when `*_valid && *_ready`. Keep this default on silent or ambiguous input and record the assumption; only explicit contrary input overrides it. For a real supplied-source conflict, pick by declared precedence, record the conflict, and emit RTL.
 
-**Worked pattern** (anonymized): a divider-class design listed `res_valid` in outputs and no `res_ready` in inputs, but the implementation paragraph said 'res_valid is managed based on … whether the result has been consumed'. The hidden TB drove a `res_ready` input the module had to accept. Resolved by adding `input wire res_ready` + handshake-aware deassertion.
+**Worked pattern** (anonymized): A producer must retain its valid result while the consumer stalls. Trace accepted versus unaccepted cycles to verify that a result is neither dropped nor consumed twice.
 
-**Why this is GENERAL**: Standard valid/ready protocol applies across hash cores, accelerators, queues, decoders, anywhere a producer needs to know the consumer took the result. The phrase set ('consumed', 'acknowledged', 'accepted') is a reliable lexical trigger.
+**Why this is GENERAL**: Standard valid/ready protocol applies across accelerators, queues, and decoders; consumption language supplies the protocol cue.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: active-low reset naming — accept reset_n and rst_n as equivalent
 
-**Pattern**: Many descriptions use `reset_n` for the active-low reset port, but industry-style testbenches frequently instantiate `.rst_n(rst_n)` (the short form). Both names mean the same active-low reset.
+**Pattern**: `reset_n`, `resetn`, `n_reset`, and `rst_n` conventionally denote an active-low reset. Equivalent polarity does not make their interface identifiers interchangeable.
 
-**When to apply**: Description names a reset port `reset_n` (or `resetn`, `n_reset`, etc.) but the IC class / benchmark family uses `rst_n` as the canonical short form.
+**When to apply**: An active-low reset is required but its spelling is left open. The documented short-name DEFAULT is `rst_n`; an explicit supplied interface header wins, including a declared `reset_n` spelling. Check any public instantiation supplied as input.
 
-**What to do**: Emit the port under the canonical short form `rst_n`. Semantically equivalent; matches common TB instantiation convention. If multiple reset naming conventions are unclear, emit the design with `rst_n` and document the convention choice.
+**What to do**: Use `rst_n` when silent or ambiguous input leaves the spelling open, and record the assumption. Only explicit contrary input overrides that default. Preserve an explicitly named reset port and map a supplied alias internally when needed; do not rename it to fit an imagined binding. Pick by declared precedence, record a real source conflict, and emit RTL.
 
-**Worked pattern** (anonymized): a sequence-detector design's description said 'reset_n: Reset signal' but the hidden TB wired `.rst_n(rst_n)`. Renaming the module's port from `reset_n` to `rst_n` (semantics unchanged) resolved a compile_error.
-
-**Why this is GENERAL**: Active-low reset naming variance is industry-wide; `rst_n` is the de-facto short form in OpenROAD/SkyWater/and most open-style-guides. Description authors mix forms freely.
+**Why this is GENERAL**: Reset polarity and case-exact interface identity are separate concerns; a conventional default resolves an open name without overriding a declared one.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
-### Skill: module name — prefer dir/file convention when description has a likely typo
+### Skill: module name — use supplied dir/file convention when the name is left open
 
-**Pattern**: When the description's `Module name: <X>` differs from the design's directory or filename by a single-letter-or-syllable typo (e.g. a missing syllable in a compound name), the hidden TB instantiates by the DIR/FILE name, not the description name.
+**Pattern**: A visible input directory or filename can supply a module-name DEFAULT when the contract leaves the module name open. A likely typo is a judgment to record, not authority to override an explicit interface declaration.
 
-**When to apply**: Compare `description.module_name` against `basename(<design_dir>)`. If they differ by ≤2 edit distance AND the dir name is the more conventional spelling (no missing word, no obvious shortening), the description likely has a typo.
+**When to apply**: Compare only the dir/file names supplied as design input against the description. A nearby conventional spelling can resolve an open or ambiguous name; the explicit supplied interface header wins. Check any public instantiation supplied as input for consistency.
 
-**What to do**: Emit the module under the directory/file name. Note the discrepancy in `SOURCE_MANIFEST.md` as a 'description-typo-correction'. Do NOT silently rename without recording the judgment.
+**What to do**: Use the supplied dir/file stem as the default when no explicit module name fixes the identity. Record a likely typo and the chosen interpretation in `SOURCE_MANIFEST.md`. Only explicit contrary input overrides the default; for a real source conflict, pick by declared precedence, record it, and emit RTL.
 
-**Worked pattern** (anonymized): a frequency-divider design where the directory name had an extra syllable that the description's `Module name:` line dropped. TB instantiated by directory name. Trusting the dir name resolved a compile_error.
-
-**Why this is GENERAL**: Benchmark description typos are not rare. The dir/file name is the de-facto canonical identifier across most spec-driven flows (it's what users grep and what test harnesses key off).
+**Why this is GENERAL**: Visible file naming is useful design context, while a declared interface fixes its public identity.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
-### Skill: misspelled leaf name — emit BOTH spellings (leaf primary + canonical alias wrapper)
+### Skill: misspelled leaf name — emit BOTH spellings (declared primary + canonical alias wrapper)
 
-**Pattern**: The "prefer dir/file convention" lesson above says use the LEAF name as the
-module identity. But when the leaf name is itself a probable MISSPELLING of a canonical
-term (e.g. `substractor` → `subtractor`, `diveven` → `divbyeven`, `multipler` →
-`multiplier`), the hidden testbench may instantiate by EITHER spelling — you cannot know
-which from the prompt alone. Betting on a single spelling risks a `compile_error` floor.
+**Pattern**: A supplied leaf name can be a probable misspelling of a conventional hardware term. When the input leaves aliasing open, the DEFAULT is a thin canonical-spelling alias alongside the primary module, preserving both visible spellings.
 
-**When to apply**: The design's leaf name (dir/file) is a plausible typo of a standard
-arithmetic / logic term — a single-letter transposition/omission/duplication, OR a missing
-short connective syllable (`by`, `of`), away from a common canonical spelling. (Reader
-judgment: this is the Bucket-B core — a regex cannot tell an *intentional novel* name from a
-*misspelling*; only after a human/agent confirms it IS a typo is the deterministic remedy
-safe to apply.)
+**When to apply**: The visible leaf has a single-letter transposition, omission, duplication, or missing short connective syllable relative to a conventional term. Confirm that it is a probable typo rather than an intentional name. An explicit supplied interface header wins for the primary name; check any public instantiation supplied as input.
 
-**What to do**: Emit the real RTL under the LEAF name as the primary module (per the typo
-lesson above), AND **additionally** emit a thin **alias wrapper** module under the CANONICAL
-spelling whose only job is to instantiate the primary and pass every port straight through.
-Now the design elaborates whichever spelling the TB picks. Record both names in
-`SOURCE_MANIFEST.md` as a 'typo-alias-wrapper' pair. Do NOT pick one spelling and hope.
+**What to do**: Emit the primary module under the declared name, or the supplied leaf default when no name is declared, and add a canonical-spelling passthrough alias wrapper. Preserve every port and parameter. Keep the alias default on silent or ambiguous input; only explicit contrary input overrides it. Record the pair in `SOURCE_MANIFEST.md` as 'typo-alias-wrapper'. For a real source conflict, choose by declared precedence, record it, and emit RTL.
 
-**Worked pattern** (anonymized): a subtractor-class design whose leaf name dropped a letter
-from the canonical term. Primary module emitted under the leaf name; a one-line alias wrapper
-emitted under the corrected spelling instantiating it. A `compile_error` floor flipped to
-PASS regardless of which spelling the hidden TB instantiated (+1 this run).
+**BOUNDARY — do NOT over-apply**: A module-name alias never invents, renames, or drops ports. Port identity comes from the supplied interface, including any explicit reset or ready name.
 
-**BOUNDARY — do NOT over-apply**: this rescues a misspelled MODULE/leaf NAME only. A pure
-**port-NAME** mismatch (TB wires `res_ready` / `rst_n` but the prose used a different alias)
-is NOT recoverable this way — that needs hidden-port identity and stays a Category-A FLOOR.
-The alias wrapper duplicates the module identity, never invents port names.
-
-**Why this is GENERAL**: leaf-name typos recur across spec-driven datasets, and a two-spelling
-emit is strictly safer than a one-spelling bet — the extra wrapper costs nothing when the TB
-happens to use the leaf spelling, and saves the run when it uses the canonical one.
+**Why this is GENERAL**: A small alias preserves useful visible naming compatibility without changing the datapath or its declared interface.
 
 **NOW DETERMINISTIC (ORGANIC #517)** — the high-confidence half of this lesson is no longer
 prose-only: `programs/leaf_typo_alias_emit.py` decides it without judgment. A leaf token that is
@@ -1258,24 +1231,11 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: optional handshake port — infer + graceful-degrade (ORGANIC #520)
 
-**Pattern**: A hidden TB instantiates a downstream-ready / result-consumed INPUT (`res_ready`,
-`out_ready`, `ready`) that the prose never lists → "Unknown port" compile-FAIL. When the prose hints at
-a downstream-consume / back-pressure flow (e.g. "whether the result has been consumed", "stall when
-downstream is not ready"), emit a CONVENTIONAL optional handshake input that GRACEFULLY DEGRADES — an
-unconnected port defaults to always-ready — so the design elaborates AND behaves correctly whether or
-not the TB drives it.
+**Pattern**: When an open interface's prose strongly implies downstream consumption or back-pressure, the DEFAULT is a conventional optional ready input. An unconnected optional ready defaults to always-ready; this supports callers that leave the optional handshake unused.
 
-**What to do**: `programs/port_convention_corpus.py::infer_optional_handshake(prose, ports)` returns the
-conventional ready input (name + graceful default) ONLY when a strong downstream-flow hint is present
-AND no equivalent ready port already exists; `graceful_handshake_idiom(hs)` emits the
-`<name>_eff = (unconnected) ? 1'b1 : <name>` degrade wire. Use `<name>_eff` in the body.
+**What to do**: `programs/port_convention_corpus.py::infer_optional_handshake(prose, ports)` returns the conventional ready input and graceful default only when a strong downstream-flow hint is present and no equivalent ready port exists. `graceful_handshake_idiom(hs)` emits the `<name>_eff = (unconnected) ? 1'b1 : <name>` wire; use it in the body. The explicit supplied interface header wins, and any public instantiation supplied as input is checked. Keep the default on silent or ambiguous input; only explicit contrary input overrides it. Record the assumption, or a real source conflict and chosen precedence, and emit RTL.
 
-**why_not_bucket_a**: WHICH handshake port to add and its graceful default depend on reading the prose's
-downstream-flow implication, and the genre-conventional order depends on the design class — judgement +
-a convention corpus, not a single regex. The corpus makes the convention explicit + testable; the
-strong-hint gate keeps it from regressing a clean design (no hint → no port). Honest limit: the emitted
-name is the single most-conventional spelling (`ready`); a TB using a rarer spelling for the SAME flow
-is not rescued.
+**why_not_bucket_a**: Reading the downstream-flow implication and selecting a genre convention require judgment. The corpus makes that default explicit and testable; no strong hint means no inferred port. A conventional spelling cannot replace an explicitly declared ready name.
 
 _Captured by benchmark-enhancement-capture 2026-06-08 (ORGANIC #520)._
 
@@ -1353,17 +1313,15 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ## Captured by benchmark-enhancement-capture — 2026-05-28 (v0.1.37 close-loop sweep, 22 fresh + 3 close-loop agents)
 
-### Skill: hidden-TB parameter override forces explicit `parameter` declarations (case-sensitive)
+### Skill: named width/size parameters require explicit case-sensitive declarations
 
-**Pattern**: When the module name contains 'pipe' / 'pipeline' or the description names widths (DATA_WIDTH, `STG_WIDTH`, SIZE), the hidden TB instantiates the DUT via `module #(.PARAM(N)) u_dut (...)`. Hardcoding the value fails iverilog elaboration with "parameter X not found in `u_dut`". Also: parameter names are CASE-SENSITIVE — `SIZE` and `size` are different identifiers.
+**Pattern**: A named width/size parameter is part of a reusable module's public interface. Named parameter overrides require a matching declaration, and `SIZE` and `size` are distinct identifiers.
 
-**When to apply**: Any spec-to-RTL on a description that names a width/size parameter (even just once in prose). Always declare it as `parameter`.
+**When to apply**: The input names a width/size parameter, even once in prose. The DEFAULT is to expose that named parameter rather than hardcode its value; an explicit fixed-interface requirement overrides it.
 
-**What to do**: For every width/size symbol the description names, declare `parameter <NAME> = <default>;` at the top of the module. If the description uses upper-case (DATA_WIDTH), declare upper-case. If lower-case (size), declare lower-case. If both casings might apply, prefer the description's exact spelling and let TB-side `#(.X(N))` connect by name.
+**What to do**: Declare `parameter <NAME> = <default>;` for each input-named width/size parameter, preserving exact case. Take the default from the supplied contract or the documented genre default when silent, and record the assumption. The explicit supplied interface header wins; check public instantiations supplied as input, including `#(.NAME(value))` overrides. Only explicit contrary input overrides the default. Pick by declared precedence, record any real source conflict, and emit RTL.
 
-**Worked pattern** (anonymized): a pipelined-arithmetic family of designs where the description named width parameters. TBs bound `#(.DATA_WIDTH(N), .STG_WIDTH(M))` and (separately) `#(.size(N))` — hardcoded-width samples failed elaboration with "parameter not found"; declaring those parameters with matching case PASSed.
-
-**Why this is GENERAL**: Universal across pipelined / parameterizable RTL designs. The parameter override is the TB's principal contract surface.
+**Why this is GENERAL**: Case-exact public parameter declarations support reusable and parameterizable RTL without depending on an unseen caller.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
@@ -2514,17 +2472,17 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; reg
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; request cleared one cycle after ack, recurred across 2 interrupt-controller designs)._
 
-### Skill: when the prompt supplies CONFLICTING interface sources, prefer the SEMANTIC description over an inline code stub whose name contradicts it
+### Skill: conflicting supplied interface sources — the explicit interface header wins
 
-**Pattern**: A prompt can carry two interface descriptions that disagree — a descriptive signal-table ("`s_ready` … indicates the slave is ready to accept the transaction") and an inline module stub that names the same port differently (`s_read`), where the stub name contradicts the port's stated semantics. The authoritative choice is the SEMANTIC source (the description, often corroborated by the majority of sources and the hidden TB's usage). The recurring defect preserves the stub's name, so the TB (which follows the description) raises an immediate name error before any functional check.
+**Pattern**: A supplied signal table and inline module header can disagree on a port name, width, or direction. The explicit interface header wins for binding identity; semantic prose guides the behavior implemented behind that interface.
 
-**When to apply**: any task whose prompt includes BOTH a signal-description table and a code stub, when the two disagree on a port name/width and the stub name conflicts with the described meaning. The tell is a runtime `AttributeError` on a port name before functional checks run.
+**When to apply**: The prompt supplies conflicting interface sources. Check any public instantiation supplied as input as well; do not infer an unseen caller's names.
 
-**What to do**: adopt the description-table name when it conflicts with a stub, especially when the stub identifier contradicts the port's stated role and most sources agree with the table. Also preserve the full width/direction of a supplied input-context interface — never degenerate a sized port to a bare/1-bit one.
+**What to do**: Preserve the supplied header's case-exact module and port names, widths, directions, and structure. Reconcile the semantic description against that interface. For a real source conflict, pick by declared precedence, record the conflicting sources and chosen interpretation, and emit RTL without asking a human. Where the input leaves a choice open, apply the documented same-genre default and record the assumption; only explicit contrary input overrides it.
 
-**Why this is GENERAL**: reconciling conflicting interface specs toward the semantically-described name is standard spec-comprehension. *`why_not_bucket_a`*: a program can DIFF the two sources and flag the mismatch, but it cannot decide WHICH is authoritative — choosing the description over a contradictory stub name requires reading the port's stated meaning, a semantic judgment.
+**Why this is GENERAL**: A declared interface fixes binding identity, while source comparison exposes contradictions that must be recorded rather than silently substituted.
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; description-table vs contradictory inline stub port names). Deduped vs the GIVEN-interface-header and TB-port-authority skills — this resolves a conflict BETWEEN two in-prompt sources._
+_Captured by benchmark-enhancement-capture 2026-06-30; interface-source precedence clarified._
 
 ### Skill: a sequence-detector / combination-lock partial-match state resets to start on ANY intervening operation that isn't the exact next step — including reads
 

@@ -142,8 +142,8 @@ _AUTHOR_AUTHORITY_PATTERNS = {
         r"oracle-(?:FAIL|PASS)|fail\w*\s+the\s+oracle"),
     "ORACLE_BEHAVIOUR": (
         r"\b(?:oracle|golden(?:\s+(?:reference\s+)?(?:model|RTL|implementation))?|"
-        r"hidden(?:/golden)?\s+(?:TB|testbench))\s+"
-        r"(?:holds?|expects?|requires?|wants?|applies|outputs?|produces?|returns?)\b"),
+        r"hidden(?:/golden)?\s+(?:TB|testbench)|hidden\s+checkers?)\s+"
+        r"(?:holds?|expects?|requires?|wants?|applies|outputs?|produces?|returns?|asserts?)\b"),
     "HIDDEN_REFERENCE_AUTHORITY": (
         r"\bhidden\s+(?:TB|testbench)\b[^.!?]{0,180}?\b(?:wins|overrides?|outranks?)\b|"
         r"\bgolden\s+(?:reference\s+)?model\b[^.!?]{0,200}?"

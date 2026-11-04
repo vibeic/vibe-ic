@@ -183,7 +183,7 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
 6b. **Prompt→interface conformance pre-emit check (ORGANIC #695)**. Before
    handing back, run the deterministic interface gate — it reads ONLY the
    prompt + your RTL (BLIND; never the oracle/hidden TB) and flags the three
-   PROMPT-DERIVABLE interface misses the hidden cocotb harness gets you on:
+   PROMPT-DERIVABLE interface misses that prevent a supplied caller from binding:
 
    ```bash
    python3 plugins/vibe-ic/programs/iface_conformance_v2.py \
@@ -193,18 +193,21 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    ```
 
    It checks (1) MODULE-NAME-CASE — the RTL module name must match the
-   canonical id stem the harness uses as TOPLEVEL CASE-EXACTLY (`-s
-   findfasterclock` won't find `FindFasterClock`); (2) MISSING-PORT — every
+   supplied interface header CASE-EXACTLY (`stream_unit` and `StreamUnit`
+   are different names). If the input leaves the name open, use the supplied
+   file/id stem DEFAULT and record the assumption; only explicit contrary input
+   overrides it. The interface header wins; check any public instantiation
+   supplied as input for consistency; (2) MISSING-PORT — every
    interface signal the prompt NAMES (table rows, backtick signal names with a
    nearby direction, a given-code module header, wavedrom `name` entries) must
    appear in your port list (AXI master must keep `ar*`/`aw*`, `s_ready`, etc.);
    (3) PORT-DIRECTION — a port's direction must match the prompt's signal table
-   (don't declare `output sram_valid` when the harness drives it as an input).
+   (do not declare an output where the supplied interface declares an input).
    ADVISORY by default (prompt extraction is heuristic — an internal signal
    mentioned in prose is NOT a port and must not block); add `--strict` to make
    any finding exit 1 once you've confirmed the named signals really are ports.
    FIX every confirmed finding before emit — these are deterministic
-   elaboration/bind failures the scorer would hit, not authoring judgment.
+   elaboration/bind failures implied by the supplied interface.
 6c. **Spec-first coverage attribution pre-emit gate (ORGANIC #697)**. The
    hidden scorer is built from the SAME spec you read — where "spec" is the
    WHOLE input chain (prompt → fact graph → the L1-L27 the runner just emitted).
@@ -451,7 +454,7 @@ that happened to match its OWN (wrong) RTL, so the self-TB confirmed the wrong
 behaviour. There is no independent yard-stick in a single-self-TB flow.
 
 `latency_conformance_check.py` IS that yard-stick. It generates its OWN canonical
-measurement testbench, **counts the way a hidden scorer counts** (pulse the event
+measurement testbench, **uses the documented canonical event/edge-counting DEFAULT** (pulse the event
 HIGH for exactly one clock = one latch edge, then count posedges until the output
 first asserts), resolves the spec literal against the module's real parameters,
 and **BLOCKS on any mismatch**. Run it and fix the RTL until it prints

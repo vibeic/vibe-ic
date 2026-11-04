@@ -28,6 +28,7 @@ _BAD = [
     'Do not use the golden reference model as authoritative; the golden reference model is authoritative.',
     'The supplied note says the oracle expects the inverted output.',
     'The supplied hidden-checker note says the oracle expects the inverted output.',
+    "Hidden checkers assert the interface's end-state immediately after the last handshake, with zero grace cycles.",
 ]
 _GOOD = [
     'matching it is spec-faithful, not oracle-fitting.',
@@ -43,6 +44,8 @@ _GOOD = [
     'Register read data by DEFAULT unless the spec explicitly requires combinational read.',
     'The same-genre documented default may outrank a relative ambiguity; only explicit contrary input overrides it.',
     'Do NOT implement that literal reading of ambiguous wording; keep the documented default unless the spec explicitly contradicts it.',
+    'The supplied public checker asserts the interface end-state; it is a declared input contract.',
+    'Do not assume the hidden checker asserts an immediate release; keep the documented default unless explicit contrary input overrides it.',
 ]
 
 
@@ -66,6 +69,17 @@ def test_no_lesson_justifies_itself_with_oracle_behaviour():
     assert A.audit_file(_corpus()) == []
     raw = _corpus().read_text()
     assert 'Prob153_gshare' not in raw and 'host-verified 0/1083' not in raw
+    for hidden_binding_claim in [
+        'The hidden TB will instantiate that handshake input',
+        'The hidden TB drove a `res_ready`',
+        'the hidden TB wired `.rst_n(rst_n)`',
+        'the hidden TB instantiates by the DIR/FILE name',
+        'the hidden testbench may instantiate by EITHER spelling',
+        'A hidden TB instantiates a downstream-ready',
+        'the hidden TB instantiates the DUT via',
+        "the hidden TB's usage",
+    ]:
+        assert hidden_binding_claim not in raw, hidden_binding_claim
 
 
 @pytest.mark.parametrize('body', _BAD)
@@ -131,6 +145,27 @@ def test_secondary_checked_in_source_is_clean_and_delivered(tmp_path):
     assert 'conflicts with the golden reference model' not in text
 
 
+@pytest.mark.parametrize('requirement', [
+    'No further release-latency requirement is supplied.',
+    'The claim must remain asserted for two clocks after the final beat.',
+])
+def test_ping_pong_release_default_and_explicit_override_are_delivered(tmp_path, requirement):
+    import ic_expert_backup_pack as pack
+    prompt = ('Design a ping-pong double-buffer claim/activate stream interface. '
+              'Complete the final valid-ready beat and release handshake controller. ' + requirement)
+    handoff = pack.assemble(prompt, None, None, [], [], tmp_path)
+    assert any(c['ic_class'] == 'ping-pong-buffer' for c in handoff['db_classes'])
+    assert handoff['dual_track']['track1_general_blind']['n_skills'] == 218
+    source = json.loads(require_repo(*_PLUGIN, 'agents', 'ic_expert_db', 'ic_expert_db.json').read_text())
+    lesson = next(e for e in source['entries'] if e['ic_class'] == 'ping-pong-buffer')['lessons'][1]
+    assert lesson in (tmp_path / 'ic_expert_db.md').read_text()
+    assert A.audit_text(_section(lesson)) == []
+    text = _flat(lesson)
+    assert 'release default is the same clock edge' in text
+    assert 'only an explicit contrary release-latency or claim-hold requirement overrides' in text
+    assert 'hidden checkers' not in text and 'zero grace cycles' not in text
+
+
 @pytest.mark.parametrize('consumer', ['direct', 'public-pack', 'rtl-handoff'])
 def test_static_finding_does_not_filter_runtime_knowledge(tmp_path, monkeypatch, consumer):
     import _lesson_digest as ld
@@ -172,6 +207,24 @@ def test_general_defaults_and_explicit_override_reach_real_digest(tmp_path, titl
         assert instruction in body, (title, instruction)
 
 
+@pytest.mark.parametrize('title,required', [
+    ('infer downstream-ready', ['paired', 'ready', 'valid &&', 'explicit supplied interface header wins']),
+    ('active-low reset naming', ['default', 'rst_n', 'declared `reset_n`', 'supplied interface header wins']),
+    ('module name —', ['stem', 'default', 'supplied interface header wins']),
+    ('misspelled leaf name', ['alias wrapper', 'preserve every port and parameter', 'supplied interface header wins']),
+    ('optional handshake port', ['always-ready', 'no equivalent ready port', 'supplied interface header wins']),
+    ('parameter.*case-sensitive', ['parameter <name>', 'preserving exact case', 'supplied interface header wins']),
+    ('conflicting.*interface sources', ['interface header wins', 'emit rtl without asking a human']),
+])
+def test_interface_defaults_use_declared_sources_in_real_digest(tmp_path, title, required):
+    dest, _ = _deliver(tmp_path, 'direct')
+    sections = A._split_skill_sections((dest / 'lessons.md').read_text())
+    body = _flat(next(body for heading, body in sections if re.search(title, heading, re.I)))
+    for instruction in required + ['default', 'explicit contrary input overrides', 'public instantiation', 'emit rtl']:
+        assert instruction in body, (title, instruction)
+    assert 'hidden tb' not in body and 'hidden testbench' not in body
+
+
 @pytest.mark.parametrize('startup', [
     pytest.param('Startup is unspecified.', id='silent-default'),
     pytest.param('The reset-less output register must start at binary 1 before the first clock.', id='explicit-one'),
@@ -196,6 +249,12 @@ def test_direct_author_skill_keeps_default_and_explicit_override(tmp_path, start
     assert 'first defined output transition' in waveform
     assert 'early x rows are not an extra register stage' in waveform
     assert 'prob098_circuit7' not in waveform and '58/123' not in waveform
+    interface = text.split('it checks (1) module-name-case', 1)[1].split('6c.', 1)[0]
+    assert 'supplied interface header case-exactly' in interface
+    assert 'the interface header wins' in interface and 'public instantiation' in interface
+    assert 'canonical id stem the harness uses' not in interface
+    assert 'uses the documented canonical event/edge-counting default' in text
+    assert 'counts the way a hidden scorer counts' not in text
 
 
 @pytest.mark.parametrize('initial,expected_changes', [('', 1), ("initial q = 1'b1;", 0)])
