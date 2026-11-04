@@ -6715,10 +6715,15 @@ def _forward_product_manifest(run_p: Path, project: Path, receipt: dict | None =
 def _rtl_delivery_target(receipt: dict | None) -> str | None:
     """Forward explicit RTL delivery only for the admitted RTL proof window."""
     import task_nature_route as tnr
+    import route_decision as rd
     receipt = receipt or {}
+    # Requested evidence is a lower bound: the task's entry may promote lint
+    # to simulation. Validate that join rather than requiring the requested
+    # class's nominal endpoint to equal the effective endpoint.
     if (receipt.get("delivery_target") == "rtl"
-            and tnr.is_rtl_only_evidence(receipt.get("requested_evidence"),
-                                         exit_step=receipt.get("verify_through"))):
+            and tnr.is_rtl_only_evidence(receipt.get("requested_evidence"))
+            and tnr.is_rtl_only_evidence(exit_step=receipt.get("verify_through"))
+            and not rd.validate_route_receipt(receipt)):
         return "rtl"
     return None
 
@@ -7625,9 +7630,7 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
         return {"status": "REFUSED", "reason": str(exc)}
 
     expected_exit = str(receipt["verify_through"])
-    rtl_only = (receipt.get("delivery_target") == "rtl"
-                and _tnr.is_rtl_only_evidence(
-                    receipt.get("requested_evidence"), exit_step=expected_exit))
+    rtl_only = _rtl_delivery_target(receipt) == "rtl"
     # Preserve the issued delivery family independently of the evidence window.
     expected_route = _tnr.delivery_route_for_target(
         str(receipt["delivery_target"]),
@@ -9103,10 +9106,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             route_backup = _declared_route_ai_backup(verdict)
             # RTL authoring uses the original source-authorized normal entry.
             # Full-design delivery still qualifies D1 before its later span.
-            rtl_delivery = (
-                route_receipt.get("delivery_target") == "rtl"
-                and tnr.is_rtl_only_evidence(
-                    route_receipt.get("requested_evidence"), exit_step=exit_step))
+            rtl_delivery = _rtl_delivery_target(route_receipt) == "rtl"
             input_contract = str(route_receipt.get("input_contract") or "structured")
             admitted_steps = []
             if input_contract == "original":
