@@ -7139,7 +7139,8 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
         if result.returncode != 0:
             reason = f'native Yosys elaboration failed (rc={result.returncode}); {work}'
             opaque = re.compile(r'`(?!timescale\b|default_nettype\b)\w+|(?:/\*|//)\s*verilator\b', re.I)
-            if not (driver_lint and "in 'check -assert'" in result.stderr + result.stdout
+            if not (driver_lint and any(message in result.stderr + result.stdout for message in
+                        ("in 'check -assert'", 'unsynthesizable timing control'))
                     and any(_delayed_clock_toggle_sites(p.read_text(), str(p), blocking_only=False) for p in files)
                     and not any(opaque.search(p.read_text()) for p in tracked)):
                 raise ValueError(reason)
@@ -7222,7 +7223,9 @@ def _resolve_native_driver_findings(findings, path, design):
         variants = [m for name, m in native_modules.items()
                     if name == parent or m.get('attributes', {}).get('hdlname', '').split()[-1:] == [parent]]
         if not variants:
-            return finding.rule == 'instance-driver-analysis-unresolved'
+            # Slang may flatten the child into the selected top. Its successful
+            # native check already owns the active closure's driver verdict.
+            return True
         for module in variants:
             net = module.get('netnames', {}).get(finding.symbol)
             if net is None:
