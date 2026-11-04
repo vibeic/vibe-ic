@@ -2961,6 +2961,10 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
     body = document('reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json')
     l9 = document('phase1/generated_docs/L9_INTEGRATION_SPEC.json')
     demands = body.get('source_demands'); expectations = body.get('expectations')
+    if 'source_demands' not in body:
+        _, adopted = _d0102_population(project, 'base_01', 'requirements_trace', reads)
+        demands = [{key: item[key] for key in ('id', 'requirement', 'evidence')}
+                   for item in adopted['expectations']]
     if (not isinstance(demands, list) or not demands or not isinstance(expectations, list)
             or any(not isinstance(d, dict) or not d.get('id') or not d.get('requirement')
                    or not isinstance(d.get('evidence'), list) or not d['evidence'] for d in demands)
