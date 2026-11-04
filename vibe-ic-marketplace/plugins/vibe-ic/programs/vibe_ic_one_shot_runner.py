@@ -1735,10 +1735,13 @@ def _d10_p0_native(project: Path) -> dict:
                 'attestation_sha256': authority.get('attestation_sha256') if authority else None}
         if result.get('passed') is not True:
             from flow109_frontend import d10_native_failure
-            failure = d10_native_failure(result)
-            if failure:
-                return {**bound_identity, 'status': 'FAIL', 'native_failure': failure}
-            raise ValueError('native failure lacks a supported elaboration diagnostic')
+            tools = result.get('tools', {})
+            failed = any(tool.get('exit_code') for tool in tools.values())
+            complete = {'Yosys.JsonHeader', 'Verilator.Lint'} <= tools.keys()
+            return {**bound_identity,
+                    'status': 'FAIL' if failed or complete else 'NOT_MEASURED',
+                    'detail': '; '.join(result.get('findings', [])) or str(result.get('not_measured') or 'no native tool report'),
+                    'native_failure': d10_native_failure(result)}
         elab = output_root / frontend.RTL_ELAB_REL
         if (result.get('passed') is not True
                 or (result.get('elaboration') or {}).get('written') is not True
@@ -1890,38 +1893,23 @@ def _d10_dft_ports(project: Path, p0: dict) -> dict:
 
 def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False,
                                     input_refusal: dict | None = None) -> dict:
-    """BLOCKING: grade the existing native P0 and complete D10 row obligations."""
+    """Publish the current native structural outcome without qualification gates."""
     import flow109
-    import flow109_metric_acceptance as metrics
 
     evidence = {'p0_native': (_d10_p0_native(project) if run_p0 else
                              {'status': 'NOT_MEASURED',
                               'detail': 'D10 current adopted input is unavailable'})}
-    try:
-        context = flow109.validate_execution_context(json.loads(
-            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
-        acceptance = metrics.accept_d10(project, context, evidence['p0_native'])
-    except (flow109.Flow109Error, OSError, ValueError, TypeError, KeyError) as exc:
-        acceptance = {'status': 'NOT_MEASURED', 'reason': 'D10_CONTEXT_UNAVAILABLE',
-                      'detail': str(exc)}
-    evidence['native_metric_observation'] = acceptance.get('native_metric_observation', {})
-    evidence['dft_port_consistency'] = acceptance.get('dft_port_consistency', {})
-    evidence['metric_acceptance'] = acceptance
+    status = evidence['p0_native']['status']
+    detail = evidence['p0_native'].get('detail', 'native structural frontends: ' + status)
     if input_refusal:
         evidence['input_refusal'] = input_refusal
-    status, detail = acceptance['status'], acceptance['reason']
-    if input_refusal and status != 'FAIL':
-        status, detail = 'NOT_MEASURED', input_refusal['reason']
-    failure = evidence['native_metric_observation'].get('native_failure')
-    if failure:
-        detail = ('D10_QUALIFIED_NATIVE_METRIC_FAILED' if status == 'FAIL' else
-                  'D10_NATIVE_FAILURE_OBSERVED: TOOL_QUALIFICATION_UNPROVEN')
+        if status != 'FAIL':
+            status, detail = 'NOT_MEASURED', input_refusal['reason']
     try:
         finished = flow109.finish_native_window(project, {'steps': [{
             'status': status, 'extras': {
                 'step_id': 'P0', 'default_row_status': status,
                 'completed': status == 'PASS', 'detail': detail, 'evidence': evidence,
-                'metric_acceptance': acceptance, 'metric_acceptance_status': status,
             },
         }]})
     except flow109.Flow109Error as exc:

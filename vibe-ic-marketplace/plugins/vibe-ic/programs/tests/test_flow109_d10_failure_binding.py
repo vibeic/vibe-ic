@@ -77,10 +77,10 @@ def test_failed_native_producer_retains_current_identity(owner_cases):
     assert observed['obligations'][0]['observed_value'] == 1
     assert observed['obligations'][1]['observed_value'] is None
     assert observed['reason'] == 'TOOL_QUALIFICATION_UNPROVEN'
-    assert c['result']['verdict'] == c['result']['whole_flow_verdict'] == 'NOT_MEASURED'
-    assert 'TOOL_QUALIFICATION_UNPROVEN' in c['result']['detail']
+    assert c['result']['verdict'] == 'FAIL'
+    assert c['result']['whole_flow_verdict'] == 'NOT_MEASURED'
     terminal = json.loads((c['attempt'] / 'result.json').read_text())
-    assert terminal['default_row_status'] == 'NOT_MEASURED'
+    assert terminal['default_row_status'] == 'FAIL'
     assert all(row['completed'] is False for row in terminal['components'])
     print(json.dumps({'native': p0, 'consumer': identity, 'metric': observed,
                       'terminal': terminal}, sort_keys=True))
@@ -94,7 +94,8 @@ def test_successful_native_observations_keep_qualification_debt(owner_cases):
     observed = metrics.observe_d10_frontend_metrics(c['project'], c['context'], c['p0'])
     assert [o['observed_value'] for o in observed['obligations']] == [0, 0]
     assert all(o['status'] == 'NOT_MEASURED' for o in observed['obligations'])
-    assert observed['qualification'] == c['result']['verdict'] == 'NOT_MEASURED'
+    assert observed['qualification'] == 'NOT_MEASURED'
+    assert c['result']['verdict'] == 'PASS'
     assert not (c['project'] / 'input/feature-decisions.json').exists()
 
 

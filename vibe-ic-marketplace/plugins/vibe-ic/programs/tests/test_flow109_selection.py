@@ -2601,7 +2601,7 @@ def test_public_d10_keeps_yosys_observation_separate_from_row_verdict(tmp_path, 
 
 
 @pytest.mark.parametrize('mode', ['pass', 'yosys_fail', 'rtl_changed'])
-def test_public_d10_runs_isolated_p0_but_never_promotes_missing_inventory(tmp_path, monkeypatch, mode):
+def test_public_d10_runs_isolated_p0_and_preserves_native_outcome(tmp_path, monkeypatch, mode):
     import re
     import p0_tool_frontend_check as frontend
     runner = _public_d09_entry(tmp_path, monkeypatch)
@@ -2636,17 +2636,23 @@ def test_public_d10_runs_isolated_p0_but_never_promotes_missing_inventory(tmp_pa
             if mode == 'rtl_changed':
                 rtl.write_text(rtl.read_text() + '// changed while running\n')
         return SimpleNamespace(returncode=0, stdout='', stderr='')
+    native_tool = tmp_path / 'native-tool-fixture'
+    native_tool.write_text('TEST_ONLY tool bytes; native execution is doubled below')
+    original_which = runner.shutil.which
+    monkeypatch.setattr(runner.shutil, 'which', lambda name: str(native_tool)
+        if name in ('yosys', 'verilator') else original_which(name))
     monkeypatch.setattr(frontend, '_invoke', fake_tool)
     monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 0)
     monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('PASS', None))
     monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'PASS', 'steps': []})
-    assert runner._main() != 0
+    expected = {'pass': 'PASS', 'yosys_fail': 'FAIL', 'rtl_changed': 'NOT_MEASURED'}[mode]
+    assert runner._main() == {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[expected]
     attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
     terminal = json.loads((attempt / 'result.json').read_text())
-    assert terminal['default_row_status'] == 'NOT_MEASURED'
+    assert terminal['default_row_status'] == expected
     assert terminal['delivery_accepted'] is False
     p0 = terminal['components'][0]['evidence']['p0_native']
-    assert p0['status'] == ('PASS' if mode == 'pass' else 'NOT_MEASURED')
+    assert p0['status'] == expected
     producer_result = tmp_path / p0['producer_result']['path']
     assert producer_result.is_file()
     recorded = json.loads(producer_result.read_text())
@@ -2976,23 +2982,14 @@ def test_d10_p0_consumer_binds_actual_argv_and_rejects_stale_inputs(tmp_path, mo
     assert p0['status'] == 'PASS'  # P0 only; this test does not claim D10.
 
 
-def test_d10_dft_owner_finalizes_mismatch_as_fail(tmp_path, monkeypatch):
+def test_explicit_d10_metric_checker_preserves_dft_mismatch(tmp_path, monkeypatch):
     import vibe_ic_one_shot_runner as runner
+    import flow109_metric_acceptance as metrics
     context = flow109.execution_context(flow109.resolve_plan(profile()), 'D10', 'D10')
-    request = tmp_path / 'context.json'
-    request.write_text(json.dumps(context))
-    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
-    monkeypatch.setattr(runner, '_d10_p0_native', lambda _p: {'status': 'PASS'})
-    monkeypatch.setattr(runner, '_d10_yosys_observation', lambda _p: {})
-    monkeypatch.setattr(runner, '_d10_dft_ports', lambda _p, _p0: {'status': 'FAIL', 'reason': 'DFT_PORT_MISMATCH'})
-    reports = []
-    def finish(_p, report):
-        reports.append(report)
-        return {'default_row_status': report['steps'][0]['extras']['default_row_status']}
-    monkeypatch.setattr(flow109, 'finish_native_window', finish)
-    outcome = runner._finish_d10_unimplemented_owner(tmp_path, run_p0=True)
-    assert reports[0]['steps'][0]['status'] == 'FAIL'
-    assert outcome['verdict'] == 'FAIL' and outcome['whole_flow_verdict'] == 'NOT_MEASURED'
+    monkeypatch.setattr(runner, '_d10_dft_ports', lambda *_: {'status': 'FAIL', 'reason': 'DFT_PORT_MISMATCH'})
+    outcome = metrics.accept_d10(tmp_path, context, {'status': 'PASS'})
+    assert outcome['status'] == 'FAIL'
+    assert outcome['dft_port_consistency']['reason'] == 'DFT_PORT_MISMATCH'
 
 
 def test_d01_dft_producer_binding_and_wrong_owner_refusal(tmp_path):

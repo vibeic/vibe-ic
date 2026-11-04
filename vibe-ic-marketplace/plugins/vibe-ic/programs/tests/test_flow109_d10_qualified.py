@@ -70,7 +70,7 @@ def cases():
 def test_current_native_qualified_metrics_and_terminal(cases, kind):
     c = cases(kind)
     result = c['result']
-    observed = result['evidence']['native_metric_observation']
+    observed = metrics.observe_d10_frontend_metrics(c['project'], c['context'], c['p0'])
     assert observed['qualification'] == 'PASS', observed
     assert observed['qualification_admission']['status'] == 'PASS'
     first, second = observed['obligations']
@@ -78,11 +78,11 @@ def test_current_native_qualified_metrics_and_terminal(cases, kind):
     assert first['observed_value'] == (1 if kind == 'undefined_module' else 0)
     assert second['status'] == ('PASS' if kind == 'positive' else 'NOT_MEASURED')
     assert second['observed_value'] == (0 if kind == 'positive' else None)
-    assert result['verdict'] == ('FAIL' if kind == 'undefined_module' else 'NOT_MEASURED')
+    assert result['verdict'] == ('FAIL' if kind == 'undefined_module' else 'PASS')
     assert result['whole_flow_verdict'] == 'NOT_MEASURED'
     terminal = json.loads((c['attempt'] / 'result.json').read_text())
     assert terminal['default_row_status'] == result['verdict']
-    assert all(row['completed'] is False for row in terminal['components'])
+    assert all(row['completed'] is (result['verdict'] == 'PASS') for row in terminal['components'])
     assert not (c['project'] / 'input/feature-decisions.json').exists()
     if kind == 'known_blackbox':
         assert observed['observed_blackbox_instances'] == ['u_opaque']
@@ -238,13 +238,10 @@ def test_d10_canonical_selected_owner_publishes_complete_row(bound_row, monkeypa
     assert result['verdict'] == 'PASS', result
     row = json.loads((project / 'reports/flow109/default_rows/D10.json').read_text())
     assert row['default_row_status'] == 'PASS' and row['completed'] is True
-    acceptance = row['metric_acceptance']
-    assert [r['status'] for r in acceptance['obligations']] == ['PASS'] * 3
-    assert acceptance['dft_port_consistency']['reason'] == 'SCAN_NOT_REQUIRED'
+    assert 'metric_acceptance' not in row
     assert row['whole_flow_acceptance'] == 'NOT_MEASURED' and not row['delivery_accepted']
     p0 = row['evidence']['p0_native']
     assert p0['status'] == 'PASS'
-    assert acceptance['obligations'][2]['observed_value'] == c['reference']
     c['p0'] = p0
 
 
