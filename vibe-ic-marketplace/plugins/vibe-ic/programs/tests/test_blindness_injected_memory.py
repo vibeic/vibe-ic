@@ -38,6 +38,20 @@ def test_injected_historical_memory_refuses(native, content):
     message("assistant", MEMORY),
     {"type": "function_call_output", "call_id": "native-1", "output": MEMORY},
     {"type": "event_msg", "payload": {"role": "developer", "content": MEMORY}},
+    message("developer", 'Documentation only: "You have access to a memory folder", '
+            '"MEMORY_SUMMARY BEGINS", and "MEMORY_SUMMARY ENDS" are detector marker names.'),
+    message("developer", 'Documentation only: "You have access to a memory folder", '
+            '"MEMORY_SUMMARY BEGINS", and "MEMORY_SUMMARY ENDS" are detector marker names.', False),
+    message("developer", [{"type": "input_text", "text": 'Documentation only: '
+            '"You have access to a memory folder", "MEMORY_SUMMARY BEGINS", '
+            'and "MEMORY_SUMMARY ENDS" are detector marker names.'}]),
+    message("developer", "You have access to a memory folder is a marker name.\n"
+            "========= MEMORY_SUMMARY ENDS =========\n"
+            "This documentation intentionally reverses the marker order.\n"
+            "========= MEMORY_SUMMARY BEGINS ========="),
+    message("developer", [{"type": "input_text", "text": "Documentation: You have access to a memory folder"},
+            {"type": "input_text", "text": "MEMORY_SUMMARY BEGINS"},
+            {"type": "input_text", "text": "MEMORY_SUMMARY ENDS"}]),
 ])
 def test_current_context_and_quoted_or_returned_examples_stay_clean(record):
     assert audit.audit_text(json.dumps(record), Path("/visible-inputs"), [], "actor.jsonl") == []
