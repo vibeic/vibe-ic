@@ -28767,26 +28767,9 @@ def main() -> int:
     if _lock is None:
         return 3
 
-    # Under the lock -- it writes -- and BEFORE canonical span admission, which
-    # admits a phase-2 span this call does not dispatch.
+    # Refresh writes under the lock without dispatching a Phase-2 span.
     if not _bounded and getattr(args, "refresh_only", False):
         return _run_refresh_only(project, args)
-
-    _canonical = _canonical_admission.admit_span(
-        project, "phase2", PROGRAMS_DIR, args.container,
-        {"top_name": args.top_name, "pdk": args.pdk, "rtl_input": args.rtl_input,
-         "max_rtl_repair_retries": args.max_rtl_repair_retries,
-         "skip_hardware": args.skip_hardware, "skip_phase3": args.skip_phase3,
-         "skip_analog": args.skip_analog, "entry_step": args.entry_step,
-         "exit_step": args.exit_step, "force_rtl_regen": args.force_rtl_regen,
-         "dry_run": args.dry_run,
-         "lec_max_completed_rungs": args.lec_max_completed_rungs},
-        writable_outputs=(_pl.sim_full_stack_dir(project),)
-        if not args.dry_run and _step_requested("4") else ())
-    if not _canonical.admitted:
-        print(f"REFUSED: canonical Phase-2 admission: {_canonical.reason} "
-              f"({_canonical.detail})", file=sys.stderr)
-        return 2
 
     # A native Step-2 request owns lint, not slot packaging, arithmetic
     # declarations or the neighbouring CDC span. Consume the actual native

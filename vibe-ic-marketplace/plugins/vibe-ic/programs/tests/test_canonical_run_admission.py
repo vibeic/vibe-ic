@@ -599,9 +599,9 @@ def _load_runner(filename: str, module_name: str):
     return module
 
 
-def test_direct_phase_runners_refuse_before_expensive_dispatch(tmp_path, monkeypatch,
+def test_direct_phase3_runner_refuses_before_expensive_dispatch(tmp_path, monkeypatch,
                                                                 capsys):
-    """Integration seam: both bypassable CLIs obey a negative admission."""
+    """Legacy Phase3 admission keeps its own CLI integration coverage."""
     import execution_policy as policy
     import runtime_program_tree
     # The CLIs bootstrap before admission. Restore that in-process metadata
@@ -619,19 +619,6 @@ def test_direct_phase_runners_refuse_before_expensive_dispatch(tmp_path, monkeyp
         name: os.environ.get(name) for name in (
             runtime_program_tree.ENV_ROOT, runtime_program_tree.ENV_MANIFEST)}
     try:
-        design = _load_runner("design_one_shot_runner.py", "_test_direct_phase2")
-        monkeypatch.setattr(design._runner_lock, "acquire_or_reenter", lambda *_: object())
-        monkeypatch.setattr(design._canonical_admission, "admit_span", lambda *a, **k: refused)
-        monkeypatch.setattr(sys, "argv", ["design_one_shot_runner.py", str(project)])
-        assert design.main() == 2
-        assert "canonical Phase-2 admission" in capsys.readouterr().err
-        # Cleanup must not weaken the active invocation's source guard.
-        import pytest
-        with pytest.raises(runtime_program_tree.RuntimeTreeError,
-                           match="LIVE_PLUGIN_PATH_AFTER_RETENTION"):
-            design._RUNTIME_PROGRAM_TREE.verify_command(
-                [sys.executable, str(PROGRAMS / 'serial_parallel_mul_synth.py')])
-
         # Phase 3 refuses an UNDECLARED delivery before it asks admission (#2376,
         # `_delivery_admission_refusal`), so without a declaration this arm was
         # measuring that gate and never reached the admission it is about -- the
