@@ -2889,41 +2889,9 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
     return answer
 
 
-def _d09_supplied_owned_metrics(project: Path, author: Mapping, *, publish=False, invocation=None) -> dict:
-    """Recompute typed source facts for the ordinary supplied-source publisher.
-
-    This is source-author evidence, not functional simulation or D10 credit.
-    Unknown source claims remain owed. Existing D01 admission is mandatory.
-    """
-    import shutil
-    import tempfile
-    import design_one_shot_runner as runner
+def _d09_supplied_rtl(project, author, bound, document):
     import reused_ip_rtl_consume as supplied
-    import p0_tool_frontend_check as frontend
     import _specrtl_common as rtl
-    import _atomic_artefact as atomic
-    project = Path(project).resolve()
-    if (author.get('name') != 'reused_ip_consume' or author.get('status') != 'PASS'
-            or author.get('extras', {}).get('reused_ip') is not True):
-        raise MetricRefusal('D09_AUTHOR_UNSUPPORTED', 'ordinary supplied-source publisher required')
-    d01 = runner._serial_d01_state(project)
-    reads = {}
-    owner_sources = {p.name: _sha(p.read_bytes()) for p in (Path(__file__), Path(runner.__file__), Path(frontend.__file__))}
-    def bound(relative):
-        path = _safe_project_file(project, relative)
-        if not path.is_file():
-            raise MetricRefusal('D09_SOURCE_UNAVAILABLE', relative)
-        raw = path.read_bytes(); reads[relative] = _sha(raw)
-        return raw
-    def document(relative):
-        def unique(pairs):
-            value = {}
-            for key, item in pairs:
-                if key in value:
-                    raise ValueError('D09_DUPLICATE_SOURCE_KEY: ' + key)
-                value[key] = item
-            return value
-        return json.loads(bound(relative), object_pairs_hook=unique)
     manifest_rel = 'phase2/stage1/rtl/SOURCE_MANIFEST.json'
     if author['extras'].get('manifest_emitted') != manifest_rel:
         raise MetricRefusal('D09_SUPPLIED_PUBLICATION_UNBOUND', 'normal consume manifest required')
@@ -2945,8 +2913,56 @@ def _d09_supplied_owned_metrics(project: Path, author: Mapping, *, publish=False
         staged = 'phase2/stage1/rtl/' + src.name
         if _sha(bound(staged)) != origins[str(src.relative_to(project))]:
             raise MetricRefusal('D09_SUPPLIED_SOURCE_STALE', staged)
-        if re.search(r'`include|\$(?:fopen|readmem\w*|system)|DPI-C', bound(staged).decode()):
-            raise MetricRefusal('D09_NATIVE_READSET_UNSUPPORTED', staged)
+    return files
+
+
+def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, invocation=None) -> dict:
+    """Recompute source facts for supplied RTL or an accepted spec-to-rtl author.
+
+    Unknown claims remain owed. This grants no functional or D10 credit.
+    """
+    import shutil
+    import tempfile
+    import design_one_shot_runner as runner
+    import p0_tool_frontend_check as frontend
+    import _specrtl_common as rtl
+    import _atomic_artefact as atomic
+    project = Path(project).resolve()
+    supplied_author = author.get('name') == 'reused_ip_consume'
+    if supplied_author:
+        if author.get('status') != 'PASS' or author.get('extras', {}).get('reused_ip') is not True:
+            raise MetricRefusal('D09_AUTHOR_UNSUPPORTED', 'ordinary supplied-source publisher required')
+    else:
+        import ai_signed_judgement as judgement
+        if (author.get('name') != 'rtl_gen' or author.get('status') not in ('PASS_WITH_WAIVERS', 'WAIVED')
+                or author.get('extras', {}).get('fallback_skill') != 'spec-to-rtl'):
+            raise MetricRefusal('D09_AUTHOR_UNSUPPORTED', 'normal spec-to-rtl handoff required')
+        accepted, detail = judgement.check(project, '1')
+        if not accepted:
+            raise MetricRefusal('D09_AUTHOR_UNSUPPORTED', detail)
+    d01 = runner._serial_d01_state(project)
+    reads = {}
+    owner_sources = {p.name: _sha(p.read_bytes()) for p in (Path(__file__), Path(runner.__file__), Path(frontend.__file__))}
+    def bound(relative):
+        path = _safe_project_file(project, relative)
+        if not path.is_file():
+            raise MetricRefusal('D09_SOURCE_UNAVAILABLE', relative)
+        raw = path.read_bytes(); reads[relative] = _sha(raw)
+        return raw
+    def document(relative):
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('D09_DUPLICATE_SOURCE_KEY: ' + key)
+                value[key] = item
+            return value
+        return json.loads(bound(relative), object_pairs_hook=unique)
+    files = _d09_supplied_rtl(project, author, bound, document) if supplied_author else rtl.rtl_source_files(project)
+    for path in files:
+        relative = str(path.relative_to(project))
+        if re.search(r'`include|\$(?:fopen|readmem\w*|system)|DPI-C', bound(relative).decode()):
+            raise MetricRefusal('D09_NATIVE_READSET_UNSUPPORTED', relative)
     body = document('reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json')
     l9 = document('phase1/generated_docs/L9_INTEGRATION_SPEC.json')
     demands = body.get('source_demands'); expectations = body.get('expectations')
@@ -2975,8 +2991,9 @@ def _d09_supplied_owned_metrics(project: Path, author: Mapping, *, publish=False
         invocation = previous.get('publication_invocation')
         published = document('reports/orchestrator/phase2_one_shot.json')
         record = published.get('runner_binding', {})
-        candidates = [row for row in published.get('steps', []) if row.get('status') == 'PASS'
-                      and row.get('name') in ('rtl_gen', 'reused_ip_consume')]
+        candidates = [row for row in published.get('steps', [])
+                      if (row.get('status') == 'PASS' and row.get('name') in ('rtl_gen', 'reused_ip_consume'))
+                      or (not supplied_author and row == author)]
         if (candidates != [author] or published.get('d09_owned_metrics') != previous
                 or record.get('schema') != 'vibeic.runner_report_binding.v1'
                 or record.get('report_name') != 'phase2_one_shot.json'
@@ -3130,8 +3147,9 @@ def _d09_supplied_owned_metrics(project: Path, author: Mapping, *, publish=False
 
 def d09_owned_metrics(project: Path, author: Mapping) -> dict:
     """Recompute the supported source-bound author metrics, never trust a stamp."""
-    if author.get('name') == 'reused_ip_consume':
-        return _d09_supplied_owned_metrics(project, author)
+    if (author.get('name') == 'reused_ip_consume'
+            or author.get('extras', {}).get('fallback_skill') == 'spec-to-rtl'):
+        return _d09_source_owned_metrics(project, author)
     import serial_parallel_mul_synth as serial
     import design_one_shot_runner as runner
     if (author.get('status') != 'PASS'

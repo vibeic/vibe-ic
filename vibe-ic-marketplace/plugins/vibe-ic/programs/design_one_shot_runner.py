@@ -379,9 +379,11 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
         import flow109_metric_acceptance as metrics
         for row in summary.get("steps", []):
             extras = row.get("extras") or {}
-            if row.get('name') == 'reused_ip_consume' and row.get('status') == 'PASS' and extras.get('reused_ip') is True:
+            if ((row.get('name') == 'reused_ip_consume' and row.get('status') == 'PASS' and extras.get('reused_ip') is True)
+                    or (row.get('name') == 'rtl_gen' and row.get('status') in ('PASS_WITH_WAIVERS', 'WAIVED')
+                        and extras.get('fallback_skill') == 'spec-to-rtl')):
                 try:
-                    extras['d09_owned_metrics'] = metrics._d09_supplied_owned_metrics(project, row, publish=True, invocation=invocation_context if invocation_context is not None else _runner_invocation_context())
+                    extras['d09_owned_metrics'] = metrics._d09_source_owned_metrics(project, row, publish=True, invocation=invocation_context if invocation_context is not None else _runner_invocation_context())
                     summary['d09_owned_metrics'] = extras['d09_owned_metrics']
                 except (OSError, ValueError, TypeError, KeyError) as exc:
                     extras['d09_owned_metrics_refusal'] = str(exc)
