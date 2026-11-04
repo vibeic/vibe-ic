@@ -3027,6 +3027,14 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                 "limitation; AI semantic judgment is authoritative"),
             "semantic_verdicts": ["PASS", "FAIL"],
             "semantic_fail_action": (
+                "Reject only for explicit visible-input obligations; cite the exact clause "
+                "imposing each rejected check. General defaults guide authors but add no unstated "
+                "latency, reset, full-threshold or clock-phase duties. If several readings satisfy "
+                "the explicit contract, record an engineering interpretation without rejecting "
+                "other compatible implementations for extra restrictions. Positive examples alone "
+                "do not imply iff; test clocks and stimulus must obey input assumptions. Rigorously "
+                "verify every explicit duty and retain all required proof; compatible choices "
+                "must not cause blanket acceptance, skipped validation or human clarification; "
                 "normally, write a self-contained prompt-derived executable test "
                 "that the reviewed candidate FAILS. For a declared structural-only "
                 "defect with existing Program functional PASS, that same functional "

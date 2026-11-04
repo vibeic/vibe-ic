@@ -497,6 +497,10 @@ a derivable fact wrongly called "unspecifiable" is a false-floor.
 
 ### L8 RTL Constants
 - Every L8 timing parameter has a Verilog `localparam` with explicit integer.
+- For Verilog delivery without required SystemVerilog features, use portable Verilog constant sizing.
+  A ranged declaration or legal part-select already sets its width. Do not add SystemVerilog sized
+  casts merely to silence warnings. Preserve signedness, parameter overrides, and the complete RHS.
+  Change a cast only after checking equivalent width, extension, and truncation semantics.
 - Port naming convention table present (`<bus>_<dir>_<suffix>`).
 - Units and cycle counts both recorded (avoid ambiguity at ns → cycles conversion).
 
@@ -3720,21 +3724,18 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
-### Skill: async FIFO gray pointer — register the CURRENT binary address by default
-The documented Cummings-form DEFAULT registers the Gray encoding of the CURRENT binary address:
-`wptr <= bin2gray(waddr_bin);` beside `waddr_bin <= waddr_bin + wen;`.
-Do NOT pre-compute `bin2gray(waddr_bin + wen)` merely to anticipate the update. Keep the
-current-address default on silent or ambiguous input and record it as an assumption. Only an
-explicit contrary pointer/flag timing contract overrides it.
-**What to do**: Keep binary addresses, Gray registers, synchronized remote pointers, and full/empty
-comparisons aligned to that current-address convention. FULL compares the write Gray pointer with
-the synchronized read pointer's top two bits inverted; EMPTY compares Gray equality. Check
-back-to-back traffic near full/empty, wraparound, reset, and independent clock phases.
-**Worked pattern** (anonymized): list the current address and the Gray encoding registered on each
-accepted read/write. Check the address/flag equations at the capacity boundary to catch an
-unintentional lookahead; no hidden sample trace is needed to define the default.
-**Why this is GENERAL**: Current-value registration is a documented CDC pointer convention;
-explicit source requirements determine when an alternative is required.
+### Skill: async FIFO Gray pointer — register the current binary position by default
+The DEFAULT registers Gray for the current binary position after this source edge's accepted operation.
+Compute `bin_next = bin + accepted` and update `bin <= bin_next; gray <= (bin_next >> 1) ^ bin_next;`.
+Both nonblocking RHS expressions then describe that position. `gray <= (bin >> 1) ^ bin`
+beside `bin <= bin_next` instead encodes the pre-edge position and adds a source-clock delay.
+Keep this default on silent or ambiguous input and record the assumption. Explicit extra-delay or
+pointer/flag timing requirements override it. Do not add stages or impose a fixed flag latency.
+Align binary, Gray, synchronized remote pointers, and full/empty comparisons to the chosen convention.
+FULL compares the write Gray pointer with the synchronized read pointer's top two bits inverted;
+EMPTY compares Gray equality. Check accepted/stalled traffic, wraparound, reset, clock phases,
+and capacity boundaries. Without an explicit latency requirement, a checker must not reject a
+documented latency choice.
 
 ### Skill: pulse / edge detector — the state holds only the PREVIOUS sample, and reset is a real baseline
 For "detect a 0→1→0 pulse and assert at its END cycle", the state register holds ONLY the previous

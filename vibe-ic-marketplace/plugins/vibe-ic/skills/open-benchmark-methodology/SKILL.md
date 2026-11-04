@@ -96,6 +96,14 @@ This is a sequence, not two independent racing solvers:
    fresh independent AI review. AI is the final semantic authority only after
    this evidence chain is complete.
 
+Reject only for explicit visible-input obligations; quote the clause imposing each rejected check.
+General defaults guide authors; reviewer preferences add no unstated latency, reset,
+full-threshold or clock-phase duties. If several readings satisfy the explicit contract,
+record an engineering interpretation without rejecting other compatible choices for
+extra restrictions. Positive examples alone do not imply iff; test clocks and stimulus
+must obey input assumptions. Rigorously verify every explicit duty and required proof.
+Compatible choices do not justify blanket acceptance, skipped validation or human clarification.
+
 A structural-only rejection still requires the frozen candidate to PASS the
 prompt-derived functional challenge. Supplied-RTL tasks retain the existing
 source-bound structural contract and Program functional PASS requirement. A
