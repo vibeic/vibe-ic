@@ -40,6 +40,12 @@ def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, defer
         facts.append({'unrecognized_function':{'operator':'saturating_addition'}})
         demands.append({'id':'unsupported','requirement':'Additional saturating arithmetic','evidence':['input/spec.md:1']})
         expects.append({**demands[-1],'layer':'L2_FRS','field_path':'/requirements/2','expected_tokens':['saturating']})
+    aliases={'fields':('fields.top_ports','fields.parameters'),
+             'layer':('L9_INTEGRATION_SPEC.top_ports','L9_INTEGRATION_SPEC.parameters'),
+             'bracket':('top_ports[0].name','parameters[0]'),
+             'pointer':('/top_ports/0/name','/parameters')}
+    if damage in aliases:
+        for leaf, path in zip(expects[2]['sub_expectations'],aliases[damage]): leaf['field_path']=path
     if damage == 'missing_constant': facts[0]['constant'].pop('bits')
     if damage == 'constant': facts[0]['constant']['bits'] = ['0'] * 8
     if damage == 'connection': facts[1]['connection']['type'] = 'wrong_cell_type'
@@ -61,7 +67,9 @@ def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, defer
             expects.append({**demand,'layer':layer,'field_path':field,'expected_tokens':['increment']})
         path = root / ('phase1/generated_docs/' + layer + '.json')
         doc = json.loads(path.read_text()) if path.exists() else {}
-        doc[field] = demand['requirement']
+        node=doc
+        for part in field.split('.')[:-1]: node=node.setdefault(part,{})
+        node[field.split('.')[-1]]=demand['requirement']
         put(root,str(path.relative_to(root)),doc)
         put(root,'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json',{'source_demands':demands,'expectations':expects,'responsibility_register':[]})
     def accepted_d01(project):
@@ -184,7 +192,7 @@ def test_spec_to_rtl_author_preserves_interface_and_output_refusals(tmp_path,mon
 
 
 @pytest.mark.parametrize('mixed',[False,'valid','missing'])
-@pytest.mark.parametrize('layer,owners',[
+@pytest.mark.parametrize('layer,owners,field',[(*item,'deferred_clause') for item in [
     ('L2_FRS',['D13','D14']), ('L3_CMD_PROTOCOL',['D13','D14']),
     ('L4_REGMAP',['D13','D14']), ('L5_ADI_SPEC',['D13','D14']),
     ('L9_INTEGRATION_SPEC',['D13','D14']), ('L10_TEST_CASES',['D13','D14']),
@@ -193,9 +201,11 @@ def test_spec_to_rtl_author_preserves_interface_and_output_refusals(tmp_path,mon
     ('L22_VERIFICATION_PLAN',['D13','D14']),
     ('L24_SIGNOFF',['D22','D26','D65','D66','D77']),
     ('L21_POWER_INTENT',['D05','D15','D46']),
-    ('L27_DELIVERY',['D13','D14'])])
-def test_authored_later_demands_remain_named_without_structural_credit(tmp_path,monkeypatch,layer,owners,mixed):
-    owned=case(tmp_path,monkeypatch,authored=True,deferred=(layer,'deferred_clause'),mixed=mixed,
+    ('L27_DELIVERY',['D13','D14'])]]+[
+    ('L9_INTEGRATION_SPEC',['D19','D20','D21','D22','D26'],'integration.'+family)
+    for family in ('timing','constraints','ppa','technology','synthesis')])
+def test_authored_later_demands_remain_named_without_structural_credit(tmp_path,monkeypatch,layer,owners,field,mixed):
+    owned=case(tmp_path,monkeypatch,authored=True,deferred=(layer,field),mixed=mixed,
         damage='missing_constant' if mixed=='missing' else None)
     status,evidence,detail=consume(owned)
     assert status==('NOT_MEASURED' if mixed=='missing' else 'PASS'),detail
@@ -209,7 +219,7 @@ def test_authored_later_demands_remain_named_without_structural_credit(tmp_path,
     assert {d['id'] for d in result['source_demands']}==set(result['required_rtl_items'])|{r['id'] for r in result['responsibility_register']}
 
 
-@pytest.mark.parametrize('damage,missing',[('constant','0'),('connection','1'),('missing_constant','0')])
+@pytest.mark.parametrize('damage,missing',[('constant','0'),('connection','1'),('missing_constant','0'),('fields','2'),('layer','2'),('bracket','2'),('pointer','2')])
 def test_false_explicit_structural_witness_stays_owned_and_unmeasured(tmp_path,monkeypatch,damage,missing):
     owned=case(tmp_path,monkeypatch,authored=True,damage=damage)
     status,_,detail=consume(owned)
