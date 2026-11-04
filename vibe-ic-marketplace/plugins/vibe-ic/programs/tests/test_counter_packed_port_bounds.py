@@ -113,7 +113,7 @@ def test_before_name_width_bullets_stay_supported(enable, width, header):
     text = (f"- input clock\n- input rst\n- output {enable}\n- output {width}\n"
             "Implement a 6-digit BCD counter. Output an enable signal indicating "
             "when each upper digit should increment. Include a synchronous "
-            "active-high reset.")
+            "active-high reset.\n")
     if header:
         text = prompt(6, "[8:4]", "header") + "\n" + text
     rtl = counter.synth(text, top="DecimalChain")
@@ -145,6 +145,6 @@ def test_section_bounded_numeric_spans_use_existing_port_grammar(span):
             f"- `upper_tick` {span}\n- `digits` [23:0]\n"
             "Implement a 6-digit BCD counter. Output an enable signal indicating "
             "when each upper digit should increment. Include a synchronous "
-            "active-high reset.")
+            "active-high reset.\n")
     rtl = counter.synth(text, top="DecimalChain")
     assert rtl is not None and f"output {span} upper_tick" in rtl
