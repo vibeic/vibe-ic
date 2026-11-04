@@ -52,9 +52,10 @@ NATIVE_LEAF = 'module leaf(input a, output y); assign y=a; endmodule\n'
 ], ids=['timed-model', 'undriven-reg', 'partial-output', 'same-clock-drivers',
         'combinational-loop', 'source-warning-suppression', 'tool-conditional',
         'timed-model-nba', 'nba-same-clock-drivers'])
-def test_native_timed_model_preserves_driver_refusals(tmp_path, ports, body, blocked, alternate, nonblocking):
+@pytest.mark.parametrize('suffix', ['.v', '.sv'])
+def test_native_timed_model_preserves_driver_refusals(tmp_path, ports, body, blocked, alternate, nonblocking, suffix):
     assert shutil.which('yosys') and shutil.which('verilator')
-    source = tmp_path / 'model.v'
+    source = tmp_path / ('model' + suffix)
     original = ('module model #(parameter CYCLE=12)(output reg tick' + ports + ');\n'
                 'initial tick=0;\nalways #(CYCLE/2.0) tick=~tick;\n' + body + '\nendmodule\n')
     if nonblocking:
@@ -1386,3 +1387,37 @@ endmodule
     assert problems == []
     assert ('routed' in driven) == bool(value)
     assert connections == ({'routed': 'y'} if value else {})
+
+
+@pytest.mark.parametrize('fault', ['none', 'undriven', 'multidriver'])
+def test_native_sv_flattened_generate_output_drivers(tmp_path, fault):
+    source = tmp_path / 'closure.sv'
+    original = """module leaf(input a, output y); assign y=a; endmodule
+module bank(input [3:0] a, output [3:0] y);
+  wire [3:0] routed;
+  for(genvar lane=0; lane<4; lane=lane+1) begin: lanes
+    leaf child(.a(a[lane]), .y(routed[lane]));
+  end
+  assign y=routed;
+endmodule
+module top(input [7:0] a, output [7:0] y);
+  bank low(.a(a[3:0]), .y(y[3:0]));
+  bank high(.a(a[7:4]), .y(y[7:4]));
+endmodule
+"""
+    if fault == 'undriven':
+        original = original.replace('.y(routed[lane])', '.y()')
+    elif fault == 'multidriver':
+        original = original.replace('  end\n',
+            '    leaf conflicting(.a(~a[lane]), .y(routed[lane]));\n  end\n')
+    source.write_text(original)
+    report = tmp_path / 'findings.json'
+    result = subprocess.run([sys.executable, str(PROGRAMS / 'rtl_hygiene_lint.py'),
+        str(source), '--top', 'top', '--severity', 'ERROR', '--json', str(report)],
+        capture_output=True, text=True)
+    assert result.returncode == int(fault != 'none'), result.stdout + result.stderr
+    findings = json.loads(report.read_text())
+    assert any(row['rule'] == 'native-elaboration-unresolved' for row in findings) == (fault != 'none')
+    assert source.read_text() == original
+    contexts = [json.loads(path.read_text()) for path in tmp_path.glob('native-elaboration-*/context.json')]
+    assert len(contexts) == 1 and contexts[0]['native_returncode'] == int(fault != 'none')
