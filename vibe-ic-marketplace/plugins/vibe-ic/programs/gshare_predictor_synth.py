@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""gshare_predictor_synth.py — deterministic SOLVER for the gshare branch-predictor
-datapath family (VerilogEval Prob153_gshare and any prompt of the same SHAPE).
-
-A gshare predictor DECOMPOSES into structural parts, each of which a fully-stated
+"""A gshare predictor DECOMPOSES into structural parts, each of which a fully-stated
 prompt determines blind:
 
   (a) a global history shift register of width H,
@@ -33,19 +30,6 @@ carry two notoriously convention-dependent, host-OBSERVABLE details:
     few trains is observable, so 2'b00 and 2'b01 (same MSB) still diverge.
   * the history-register RESET VALUE (0 vs any other seed) — also host-observable
     because it XOR-indexes the very first predictions.
-
-Reset-VALUE policy (OWNER-DIRECTED house defaults, 2026-06-23 — supersedes the
-original SKIP-unless-stated gate): the solver uses the prompt's stated reset values
-when given; when the prompt is SILENT it applies the documented GENRE CONVENTION —
-a K-bit saturating predictor counter resets to WEAKLY-NOT-TAKEN (2'b01 for K=2,
-i.e. 2^(K-1)-1) and the history register resets to 0 (see
-`agents/defaults/industry_std.yaml::reset_defaults`). This is open-benchmark §4
-Category-G "conventional shape inference" (a canonical genre default), NOT an
-overfit to a specific golden, and the emitted RTL carries a `// ... house default;
-spec silent` provenance comment for every auto-applied value. The solver still
-returns None on a structurally-impossible value or a non-gshare prompt; it never
-fires outside the gshare-detected shape, so the convention default touches only
-predictor designs.
 
 API: synth(prompt_text, top="TopModule") -> RTL str | None
 """
@@ -124,7 +108,7 @@ def _pc_width(text: str, ins):
 
 
 def _counter_bits(text: str):
-    """K = saturating-counter width. Prob153 = two-bit. Stated, else None."""
+
     m = re.search(r"(two|three|four|\d+)\s*-?\s*bit\s+saturat", text, re.I)
     if not m:
         return None
@@ -212,11 +196,6 @@ def _reset_timing(text: str):
     return (is_async, active_high)
 
 
-# --------------------------------------------------------------------------- #
-# §4.05 FLOOR primitive — the two reset VALUES. host-observable, convention-laden.
-# Returns (pht_reset_val:int, hist_reset_val:int) ONLY if BOTH are unambiguously
-# stated by the prompt, else None (the documented FLOOR for Prob153 as written).
-# --------------------------------------------------------------------------- #
 def _reset_values(text: str, k, h):
     """The K-bit PHT counter reset value AND the H-bit history reset value.
 
@@ -261,13 +240,6 @@ def _reset_values(text: str, k, h):
         else:
             base = 16 if "'h" in m.group(0).lower() else 2
             hist_val = int(m.group(2), base)
-    # OWNER-DIRECTED HOUSE DEFAULTS (2026-06-23): when the spec is silent on a reset
-    # VALUE, apply the documented genre convention instead of SKIPping — a 2-bit (K-bit)
-    # saturating predictor counter resets to WEAKLY-NOT-TAKEN (2'b01 for K=2, i.e.
-    # 2^(K-1)-1), and the history register resets to 0. These are GENERAL conventions
-    # (open-benchmark §4 Category-G "conventional shape inference"), not an overfit to
-    # any golden, and the emitted RTL carries a provenance comment. `defaulted` records
-    # which values were auto-applied so the emit (and any audit) can trace the assumption.
     defaulted = []
     if pht_val is None:
         pht_val = (1 << (k - 1)) - 1           # weakly-not-taken (K=2 -> 2'b01)

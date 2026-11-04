@@ -321,7 +321,6 @@ def _gate_bank(text: str, ins, outs, top: str) -> Optional[str]:
             inner = f"{op}{bus_name}"
             assigns[out] = f"~({inner})" if inv else inner
 
-    # (b) 2-input named-scalar gate bank (Prob087_gates).
     bin_hits = list(_BIN_LINE.finditer(text))
     if bin_hits:
         for m in bin_hits:

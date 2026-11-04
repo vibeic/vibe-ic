@@ -17,14 +17,6 @@ it. (A literal Boolean equation `z = (x^y) & x` is owned by the dedicated
 
 Two §4.05-guarded sub-shapes, dispatched internally by `synth`:
 
-  (1) constant_output     — one output, prose "always drive/output 0/1/LOW/HIGH".
-                            e.g. Prob001_zero, Prob002_m2014_q4i, Prob003_step_one.
-  (2) [REMOVED v1.1.76]    — boolean_equation moved to comb_gate_synth (the gate/
-                            boolean family) so exactly one solver claims Prob010.
-  (3) equality_comparator — two same-width inputs + one 1-bit output, prose
-                            "z should be 1 if A = B, otherwise z should be 0".
-                            e.g. Prob020_mt2015_eq2.
-
 §4.05 NO-LEAK: every sub-shape SKIPs on ANY ambiguity. A prompt that mentions a
 clock/register/state/sequence/sub-module/arithmetic-add, or whose stated equation
 references a token that is NOT a declared input, or whose interface does not match
@@ -121,17 +113,6 @@ def _synth_constant_output(text: str, top: str) -> Optional[str]:
                  [f"assign {oname} = {val};"])
 
 
-# --------------------------------------------------------------------------- #
-# (2) boolean_equation  — REMOVED at v1.1.76 integration.
-# A literal Boolean equation (`z = (x^y) & x`) is owned by the dedicated
-# `comb_gate_synth` family (single gate / wire / boolean-equation). Keeping a
-# second copy here made two solvers fire on Prob010 — redundant. residual now
-# owns ONLY the two shapes comb_gate does not: constant output + equality
-# comparator. (Disjointness is enforced by the registry mutual-exclusion test.)
-# --------------------------------------------------------------------------- #
-# (3) equality_comparator
-# --------------------------------------------------------------------------- #
-# "two N-bit inputs A and B ... z should be 1 if A = B, otherwise z should be 0"
 _EQ_CMP_RE = re.compile(
     r"\b(\w+)\s*(?:=|==|equals?)\s*(\w+)\b[^.\n]*?\botherwise\b[^.\n]*?\b0\b",
     re.I,

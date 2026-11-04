@@ -13,27 +13,6 @@ calendar, parallel<->serial, width converter, instruction register, MAC, the fou
 frequency dividers, the three fixed-pattern sequence FSMs, traffic-light) are NOT
 included here — they hardcode design-specific constants and are REJECTED.
 
-Each solver EMITS synthesizable Verilog from the DESIGN PROSE + the recovered
-interface ONLY, then the caller (rtllm_tier_pipeline.deterministic_emit) compiles +
-runs it against the design's OWN testbench under iverilog and keeps it ONLY when the
-RTLLM pass token appears (Tier-1). The golden/reference RTL is NEVER read here — the
-input is the prompt text and the recovered port list, exactly as §4.05 requires.
-
-§4.05 NO-LEAK / NO-CHEAT (binding):
-  * Every dispatch key is a GENERAL structural signature (operation word + interface
-    shape). No key is a design name. The same emitter would fire on any RTLLM-form
-    prompt that declares the same structure.
-  * No golden text is read; the body semantics come from the prose's stated
-    behaviour (which, for these designs, is complete: the BCD-correction rule, the
-    Johnson-counter shift rule, the div quotient/remainder, the modulo wrap value
-    PARSED from the prose, etc.).
-  * Port NAMES/order are taken from the recovered interface so the emit binds to the
-    testbench's actual ports.
-  * NO emitter body contains a sized Verilog literal (N'dDD / N'hHH / N'bBB) whose
-    value is >1 unless that literal is DERIVED from a width variable or PARSED from
-    the prompt by that emitter. The mechanical gate `magic_constant_violations()`
-    in this module asserts that property over the assembled emitter source.
-
 API
     synth(prompt_text, ins, outs, top) -> str | None
         `ins`/`outs` are [(name, width)] from the shared interface recoverer.

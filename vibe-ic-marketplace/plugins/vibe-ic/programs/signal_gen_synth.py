@@ -19,19 +19,6 @@ the prompt's "Input ports:/Output ports:" prose, never from a hard-coded table.
 
 SHAPES (each keyed on STATED structure, never on the design name):
 
-  synchronizer — an N-FF MUX-based CDC synchronizer (data latched on clk_a, the
-          enable resampled through 2 clk_b FFs, output muxed on the resampled en).
-  signal_generator — a counter/state-driven TRIANGLE wave whose peak/period is
-          STATED. SKIP if the waveform shape or its bound is unstated.
-  square_wave — a counter that toggles wave_out when count reaches the STATED
-          (freq-1) bound. SKIP if the toggle rule is unstated.
-  clkgenerator — a free-running clock toggled every PERIOD/2. (NB: in the RTLLM
-          dataset this design's TESTBENCH is iverilog-incompatible — it compares a
-          1-bit clock output against a monotonically incrementing integer `res`, so
-          even the GOLDEN fails under iverilog. This is a Category-D / VCS-only-TB
-          FLOOR; the solver still emits the correct module but the host scorer
-          cannot grade it under the substituted toolchain.)
-
 API:  synth(prompt_text, top="TopModule") -> str | None
       `top` is used verbatim; when it is the caller default ("TopModule") the
       prompt's "Module name:" token is used instead (the RTLLM TB instance name).

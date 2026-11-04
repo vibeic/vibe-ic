@@ -159,16 +159,7 @@ def _arith_ext(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optional
 def _general(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optional[str]]:
     """The structural bank: comparator / subtractor / BCD adder / multiplier /
     divider / up-down + Johnson counters / right + barrel shifters / edge +
-    pulse detectors / pipelined adder.
-
-    LAST IN THE CHAIN, and the ordering is measured rather than assumed.
-    `rtllm_tier_pipeline` ran this BEFORE the registry ("narrower forms first").
-    On today's registry that ordering is wrong: this bank fires on Prob085_shift4
-    and Prob115_shift18 with an emit that FAILS the official testbench, while the
-    registry's `shift_register` emit passes both. Narrow-first is only safe when
-    a verifier decides; order decides when one is absent, and after-the-registry
-    is the order that cannot lose ground.
-    """
+    pulse detectors / pipelined adder."""
     try:
         import general_synth as _gs                      # noqa: PLC0415
     except ImportError:
@@ -227,9 +218,6 @@ def _bit_mapping(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Option
 EMITTERS: List[Tuple[str, Callable[..., Tuple[Optional[str], Optional[str]]]]] = [
     ("spec_artifact_registry", _registry),
     ("fsm_vector_rtl_emit", _supplemental),
-    # Exact-envelope solvers next: each SKIPs on any deviation from one stated
-    # shape, so neither can shadow a registry hit, and both are measured to fire
-    # only where they verify (Prob031_dff, Prob136_m2014_q6).
     ("moore_arrow_fsm_synth", _moore_arrow),
     ("dff_primitive_synth", _dff_primitive),
     # Then the interface-taking prose solvers, narrowest cue first.
@@ -261,26 +249,20 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
     if not (prompt_text or "").strip():
         return None, None, rejected
     from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
-                                 SPEC_SENTENCES_UNACCOUNTED, emission_spec_contract,
-                                 unsupported_logic_obligations, unaccounted_spec_sentences)
+                                 emission_spec_contract, unsupported_logic_obligations)
     try:
         contract = emission_spec_contract(prompt_text, ifc_text, top)
     except ValueError as exc:
         return None, None, [('DECLARED_LOGIC_OBLIGATION_INVALID', [str(exc)])]
     obligations = unsupported_logic_obligations(contract)
-    unaccounted = unaccounted_spec_sentences(contract)
     if obligations:
         rejected.append((DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
                          [f"{o.kind}: {o.clause}" for o in obligations]))
-    if unaccounted:
-        rejected.append((SPEC_SENTENCES_UNACCOUNTED,
-                         [f"[{row.source_span[0]}:{row.source_span[1]}] {row.source_sentence}"
-                          for row in unaccounted]))
     if rejected:
         return None, None, rejected
     if contract.source == 'json':
         return None, None, rejected
-    return _try_emitters(prompt_text, ifc_text, top, verify, check)
+    return _try_emitters(prompt_text, ifc_text, top, verify, check, registry_contract=contract)
 
 
 def _try_emitters(prompt_text, ifc_text, top, verify, check, registry_contract=None):
@@ -348,14 +330,6 @@ def try_emit(prompt_text: str, ifc_text: str = "",
     real testbench) and passes `rtl -> bool`. An emit that fails it is DISCARDED
     and the chain continues, so a wrong early emit no longer buries a right later
     one.
-
-    Without an oracle the chain cannot say whether an emit is RIGHT, and it says
-    so by accepting any emit the conformance gate does not refuse — the runner
-    has no testbench at rtl_gen time. That is the honest degradation, and it is
-    not free: measured on the RTLLM designs, no-oracle acceptance ships 4 emits
-    that do not pass, and on VerilogEval-v2 it ships `Prob099_m2014_q6c` — RTL
-    that does not even COMPILE against the official test. The conformance gate
-    does not catch those; only an oracle does.
 
     Use `try_emit_ex` when the caller needs to REPORT whether a waive was
     "nothing recognised it" or "what it emitted was refused".

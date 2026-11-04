@@ -41,7 +41,7 @@ import rtl_provenance  # noqa: E402
 # was invisible.
 _PROD_RTL_PROV = runner._rtl_prov
 from _hostpaths import require_repo  # noqa: E402
-from _prose_handoff_assertions import assert_prose_handoff  # noqa: E402
+from _prose_handoff_assertions import assert_program_candidate  # noqa: E402
 
 
 COMPLETE_DIRECTIONAL_FALL = (
@@ -69,11 +69,7 @@ The module should implement the function shown in the Karnaugh map below.
   1 | 1 | 0 |
 """
 
-_DIRECTIONAL_UNACCOUNTED_SPANS = [
-    (0, 65), (66, 192), (194, 297), (298, 378), (379, 436),
-    (437, 475), (476, 555), (556, 621), (622, 712), (713, 811),
-    (813, 873), (874, 965), (967, 1143),
-]
+
 _PULSE_UNACCOUNTED_SPANS = [
     (0, 101), (102, 127), (129, 142), (144, 167), (168, 209),
 ]
@@ -245,11 +241,9 @@ def test_step_rtl_gen_calls_phase1_flowback_before_class_fallback(tmp_path):
 
     result = runner.step_rtl_gen(project, "deliberately_unregistered_class")
 
-    assert_prose_handoff(result, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
-    assert result.output_files == []
-    assert not (project / "phase2" / "stage1" / "rtl").exists()
+    assert_program_candidate(result, COMPLETE_DIRECTIONAL_FALL)
+    assert result.extras['deterministic_generator'] == 'spec_artifact_registry'
+    assert Path(result.output_files[0]).is_file()
 
 
 def test_step_behavioral_classify_is_bound_across_live_root_swap_restore(

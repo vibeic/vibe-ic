@@ -2,25 +2,6 @@
 """fsm_vector_rtl_emit.py — supplemental DETERMINISTIC Tier-1 emitters
 for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline.
 
-WHY a NEW module (not an edit of spec_artifact_registry):
-  The shared `spec_artifact_registry` canonical already DETERMINISTICALLY solves
-  125/156 problems and is mutual-exclusion-checked across the whole VE/RTLLM/CVDP
-  corpus. Touching its recognizers risks the 125. This module is a SEPARATE,
-  ADD-ONLY fall-through that the pipeline consults ONLY when the registry returns
-  nothing OR its emit fails iverilog verification — so it can NEVER regress the
-  125, and every emit here is independently iverilog-proven against the official
-  _test.sv before it counts as Tier1.
-
-§4.05 NO-LEAK / GENERAL-not-keyword (binding):
-  * Every emitter keys on STRUCTURE (the ANSI interface shape parsed from the
-    _ifc.txt header, an arrow/tabular transition table, an explicit state
-    encoding, a stated per-bit neighbour relation) — NEVER on a problem id or a
-    design name. The golden _ref.sv is never read by any emitter.
-  * Each emitter PARSES the facts it emits from the submitter-visible spec
-    (prompt prose + the interface). An unstated/ambiguous fact ⇒ the emitter
-    returns None (SKIP-on-doubt); the pipeline then leaves the problem at its
-    AI tier. A wrong emit is caught by the pipeline's iverilog gate and discarded.
-
 Public API
     emit(prob) -> (kind, rtl) | (None, None)
         prob is the load_problem(...) dict; tries each structural emitter in
@@ -80,8 +61,7 @@ def _port(ports: List[dict], name: str) -> Optional[dict]:
 
 
 def _decl(p: dict, kw: str) -> str:
-    """Re-emit a port declaration with its EXACT literal range from the _ifc.txt
-    (so the candidate's header byte-matches the contract the _test.sv binds)."""
+
     if p["hi"] is not None and p["lo"] is not None:
         return f"  {kw} [{p['hi']}:{p['lo']}] {p['name']}"
     return f"  {kw} {p['name']}"
@@ -91,19 +71,7 @@ def _decl(p: dict, kw: str) -> str:
 # emitter 1 — per-bit NEIGHBOUR-VECTOR relations (gatesv family) at EXACT widths
 # ---------------------------------------------------------------------------- #
 def _emit_neighbour_vector(prob: dict) -> Optional[Tuple[str, str]]:
-    """A 1-input/3-output vector relation stated as:
-        out_both       = bit AND its left (higher-index) neighbour
-        out_any        = bit OR  its right (lower-index) neighbour
-        out_different  = bit XOR its left neighbour, treating the vector as
-                         WRAPPING (in[MSB]'s left neighbour is in[0]).
-    The registry's comb_advanced already recognizes this shape but pads every
-    output to the full input width — WRONG: the interface declares out_both one
-    bit NARROWER (no MSB) and out_any one bit narrower (no LSB). This emitter
-    reads the EXACT declared widths from the _ifc.txt and slices the input to
-    match, so the candidate header binds the official _test.sv. STRUCTURAL gate:
-    fires ONLY when the prose states all three neighbour relations AND the
-    interface has exactly the in / out_both / out_any / out_different shape with
-    the expected one-bit-narrower out_both/out_any. Otherwise SKIP."""
+
     text = (prob.get("prompt") or "").lower()
     if not ("neighbour" in text or "neighbor" in text):
         return None
@@ -256,15 +224,7 @@ def _parse_state_encoding(text: str, states: List[str]) -> Optional[Dict[str, in
 
 
 def _emit_fsm_next_state_bit(prob: dict) -> Optional[Tuple[str, str]]:
-    """Combinational next-state BIT(s) by inspection: the prompt gives a COMPLETE
-    arrow transition table + an EXPLICIT state encoding, and asks for one (or a
-    few) named next-state output bit(s) Y<k> = function of (present-state vector
-    y, input w). Fully mechanical: build the present-state code -> next-state code
-    table and, for each requested output bit, emit a case over {y, w} (covering
-    only the reachable present-state codes; unreachable codes -> x, matching the
-    by-inspection don't-care convention the golden uses).
-
-    Fires ONLY when: the interface is exactly (input y[..], input w, output Y..)
+    """    Fires ONLY when: the interface is exactly (input y[..], input w, output Y..)
     with no clock (this is the COMBINATIONAL by-inspection sub-question, not the
     sequential FSM), AND the table + encoding both parse. SKIP otherwise."""
     parsed = _iface_of(prob)
@@ -347,16 +307,7 @@ def _emit_fsm_next_state_bit(prob: dict) -> Optional[Tuple[str, str]]:
 # emitter 3 — FULL sequential Moore FSM from a COMPLETE arrow transition table
 # ---------------------------------------------------------------------------- #
 def _emit_full_moore_fsm(prob: dict) -> Optional[Tuple[str, str]]:
-    """A complete clocked Moore FSM whose ENTIRE behaviour is the arrow table:
-        interface = (clk, reset, <one 1-bit input>, <one 1-bit Moore output>),
-        a COMPLETE arrow transition table (every state has 0/1 successors + a
-        Moore output), and a reset state that is UNAMBIGUOUS — the first state in
-        the table (the conventional reset/initial state) AND the prompt states a
-        reset. We synthesize a textbook two-always Moore FSM with localparam
-        symbolic state codes (we choose the encoding — the testbench only observes
-        the Moore output, never the internal code, so any encoding is correct;
-        this is the same freedom the golden _ref.sv exercises). SKIP unless the
-        interface is exactly this shape and the table parses COMPLETE."""
+
     parsed = _iface_of(prob)
     if parsed is None:
         return None
@@ -389,24 +340,20 @@ def _emit_full_moore_fsm(prob: dict) -> Optional[Tuple[str, str]]:
     if fsm is None:
         return None
     states, trans, mout = fsm["states"], fsm["transitions"], fsm["moore_output"]
-    # reset state = the first state listed (textbook reset/initial). We require
-    # the prompt to imply this is the reset/begin state. The arrow table lists the
-    # reset state first by universal convention; we additionally guard that the
-    # FSM is otherwise unambiguous (handled by the COMPLETE check). SKIP if any
-    # transition target is not a known state.
     for s in states:
         for w in ("0", "1"):
             if trans[s][w] not in states:
                 return None
-    reset_state = states[0]
+    reset = re.search(r"reset[s]?\s+(?:in)?to\s+state\s+(\w+)", text, re.I)
+    if reset is None or reset[1] not in states:
+        return None
+    reset_state = reset[1]
     win_name, z_name, clk_name, rst_name = win["name"], zout["name"], "clk", reset_port["name"]
     # reset polarity / sync: resetn -> active-low; reset/areset default active-high.
     # synchronous unless the port is named areset OR the prose says asynchronous.
     active_low = rst_name == "resetn"
     asynchronous = (rst_name == "areset") or ("asynchronous" in text.lower())
     rst_expr = f"!{rst_name}" if active_low else rst_name
-    # localparam state codes — we pick a plain binary enumeration (encoding is
-    # free; testbench observes only the Moore output).
     nbits = max(1, (len(states) - 1).bit_length())
     codes = {s: i for i, s in enumerate(states)}
     lp = ",\n".join(f"    {s} = {nbits}'d{codes[s]}" for s in states)
@@ -433,8 +380,7 @@ def _emit_full_moore_fsm(prob: dict) -> Optional[Tuple[str, str]]:
     for p in ports:
         hdr_ports.append(_decl(p, p["dir"]))
     rtl = ("// program-SOLVED full Moore FSM from the COMPLETE arrow transition\n"
-           "// table; symbolic localparam encoding (testbench observes only the\n"
-           "// Moore output, so the internal encoding is free); deterministic.\n"
+           "// table; symbolic localparam encoding.\n"
            f"module {name} (\n" + ",\n".join(hdr_ports) + "\n);\n"
            f"  localparam [{nbits-1}:0]\n{lp};\n"
            f"  reg [{nbits-1}:0] state, next;\n"

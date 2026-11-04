@@ -18,25 +18,6 @@ convention mismatch can never be banked. (The named caller used to be
 `verilogeval_tier_pipeline --verify`; that pipeline is deleted and the chain is
 where the rule lives now.)
 
-WHY this is GENERAL (keyed on STRUCTURE, not on a problem id / name):
-  * The trigger is the canonical PRIMITIVE NAME "D flip-flop" / "D flip flop"
-    (a structural artifact name in the same family as "multiplexer", "counter",
-    "NAND gate" that the registry already keys on) — NOT a problem id, file name,
-    or design SKU.
-  * Port roles are inferred by GENERIC structure: clk = a port named clk/clock;
-    an active-high SYNCHRONOUS reset = a 1-bit port named r/rst/reset/clr WHEN the
-    prose says "synchronous reset"; the data input is the 1-bit port named `d`
-    (the D in D-flip-flop); the output is the port named `q` (the canonical
-    flip-flop output). A D-flip-flop's interface shape is FIXED by the primitive
-    itself, so a prompt that mislabels the `q` PORT DIRECTION (some dataset prompts
-    list `q` as an input by typo while the testbench wires it as the output) is
-    still resolved correctly from the primitive's structure — exactly the
-    "directory/TB authority over a prose typo" convention.
-  * SYNCHRONOUS, active-high, reset-to-0 only. An ASYNCHRONOUS reset, a non-zero
-    reset value, a vector data path, more than one data input, an enable/load, or
-    any FSM / combinational / multi-output cue takes the spec OUT of envelope and
-    forces a SKIP — those are owned by the FSM / register-file / AI-gate tiers.
-
 Public API
     synth(text, top="TopModule") -> str|None    # registry generator shape
 """
@@ -105,10 +86,7 @@ def synth(text: str, top: str = "TopModule") -> Optional[str]:
     # the data input and the flip-flop output are both 1 bit (the bare primitive).
     if d_port.width != 1 or q_port.width != 1:
         return None
-    # `d` must be an input. `q` is the OUTPUT by the primitive's fixed shape — even
-    # if the prompt mislabels its direction (the dataset typo case). The data input
-    # `d` being declared as an output, however, is a genuine contradiction -> SKIP.
-    if d_port.direction != "input":
+    if d_port.direction != "input" or q_port.direction != "output":
         return None
 
     # An optional active-high SYNCHRONOUS reset port, present ONLY when the prose

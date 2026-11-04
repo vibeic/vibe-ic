@@ -3,17 +3,6 @@
 receiver FSMs whose behaviour is a PRECISE, mechanically-buildable protocol stated
 in PROSE (not as a transition table).
 
-WHY (§4.2 absorption, "bucket-② -> bucket-①"): a VerilogEval prompt that describes a
-PRECISE serial-framing or run-counting protocol in words — "one start bit (0), 8
-data bits, 1 stop bit (1), idle high, LSB first" (Prob137/146); "exactly 6
-consecutive 1s is a flag, 5+0 is a discard, 7+ is an error" (Prob140); "serial 2's
-complementer, LSB first" (Prob089); "detect 1101, shift 4 MSB-first delay bits,
-count (delay+1)*1000 cycles" (Prob156) — fully determines the machine even though
-the transition TABLE is never written out. The behaviour is well-defined and
-buildable from the STATED protocol parameters, so the problem becomes program-
-GENERATED (zero authoring variance) rather than AI-authored. The INTERNAL state /
-counter encoding is FREE because the testbench observes only the OUTPUT ports.
-
 The load-bearing work here is RECOGNISING the protocol shape and PARSING its stated
 parameters (data-bit count, start/stop polarity, idle level, run thresholds, the
 error-recovery rule, the count multiplier). Once those are pinned the RTL is a free
@@ -137,8 +126,6 @@ def _try_2s_complement(prompt, ins, outs, top, clk, rst):
     if rk is None:
         return None
     is_async, active_high = rk
-    # the 2's-complement prompt (Prob089) states a POSITIVE-EDGE async reset; if the
-    # prose is sync we still honour it.  edge/level per the shared helper.
     edge, rst_lvl = _reset_clauses(prompt, clk, rst, "P", is_async, active_high)
     return "\n".join([
         "// program-SOLVED serial 2's complementer (LSB-first Moore, carry-derived); "

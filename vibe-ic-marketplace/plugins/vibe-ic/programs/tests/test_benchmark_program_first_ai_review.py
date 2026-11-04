@@ -3690,3 +3690,45 @@ def test_normal_successful_resume_with_current_issued_io_binding(tmp_path):
     report = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
     assert report["status"] == "COMPLETE" and report["accepted_ids"] == ["p1"]
     assert json.loads(Path(task["response_path"]).read_text())["completion"] == got["completion"]
+
+
+@_NEEDS_SIMULATOR
+def test_emitted_candidate_missing_an_explicit_exception_enters_repair(tmp_path):
+    import deterministic_emit_chain as chain
+
+    run = tmp_path / 'run'
+    (run / 'responses').mkdir(parents=True)
+    project = _project(tmp_path)
+    clause = 'Exception: when both inputs are one, cout must be zero.'
+    prompt = ('Implement a module named dut.\n - input a\n - input b\n'
+              ' - output sum\n - output cout\nImplement a half adder.\n' + clause)
+    (project / 'input/phase1_prompt.md').write_text(prompt)
+    kind, rtl, rejected = chain.try_emit_ex(prompt, top='dut')
+    assert kind == 'arithmetic' and rtl, rejected
+    (project / 'phase2/stage1/rtl/dut.v').write_text(rtl)
+    got = bio.collect('rtllm', 'neutral', project)
+    task = bd._make_ai_review_task('neutral', project, got, ROUTING, 0, run, 'PROGRAM')
+    task['verification_execution'] = {'backend': 'host', 'selection': 'explicit test host'}
+    proof = ('module vibeic_ai_challenge_tb; reg a=1,b=1; wire s,c; '
+             'dut d(.a(a),.b(b),.sum(s),.cout(c)); initial begin #1; '
+             'if(c!==0) begin $display("VIBEIC_AI_CHALLENGE=FAIL"); $fatal(1); end '
+             '$display("VIBEIC_AI_CHALLENGE=PASS"); $finish; end endmodule')
+    Path(task['challenge_path']).parent.mkdir(parents=True, exist_ok=True)
+    review = _valid_review(task)
+    Path(task['challenge_path']).write_text(proof)
+    evidence = [{'excerpt': clause, 'supports': 'Checks the explicit exception at its specified input.'}]
+    review['semantic_review'] = {
+        'verdict': 'FAIL', 'findings': [{'issue': clause}], 'prompt_evidence': evidence,
+        'rationale': 'The emitted standard half adder ignores the explicitly stated carry exception; the prompt-derived simulation demonstrates this on the unchanged candidate.'}
+    review['verification_test'] = {
+        'schema': bd._CHALLENGE_SCHEMA, 'path': task['challenge_path'],
+        'sha256': bd._sha256_text(proof), 'top_module': 'vibeic_ai_challenge_tb',
+        'prompt_evidence': evidence, 'expected_behavior': clause,
+        'rationale': 'Drive the exact input named in the exception and check its declared carry value; no external expected data is used.'}
+    _write_review(task, review)
+    _solve_report(run, task)
+    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 2
+    repairs = bd._read_jsonl(run / bd._REPAIR_WORKLIST)
+    assert repairs[0]['status'] == 'AI_SEMANTIC_REPAIR_REQUIRED'
+    assert repairs[0]['verified_challenge']['sha256'] == bd._sha256_text(proof)
+    assert clause in json.dumps(review['semantic_review'])

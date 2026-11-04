@@ -71,8 +71,6 @@ import comb_advanced_synth as _cadvc            # noqa: E402  advanced combinati
 import sequential_waveform_synth as _seqwf       # noqa: E402  multi-bit/sequential waveform -> RTL
 import conway_2d_synth as _c2d                   # noqa: E402  2-D Game-of-Life-class CA -> RTL
 import gshare_predictor_synth as _gsh            # noqa: E402  gshare predictor (gate-ready; SKIPs till spec complete) -> RTL
-# --- v1.1.83 RTLLM-prose NEW canonicals (general, §4.05 parse-or-SKIP; audit-clean,
-#     remediated: parse stated facts, never hardcode/copy-golden) ---
 import calendar_counter_synth as _cal             # noqa: E402  cascaded modulo (sec/min/hour) counters -> RTL
 import memory_array_synth as _mem                 # noqa: E402  RAM / ROM / LIFO / instruction register -> RTL
 import serdes_width_synth as _serdes              # noqa: E402  parallel<->serial / width converter -> RTL
@@ -625,11 +623,7 @@ REGISTRY: Tuple[ArtifactType, ...] = (
                  _rec_gshare_predictor, _gsh.synth,
                  "Full gshare datapath (history reg + 2-bit-saturating PHT + PC^history "
                  "index + predict/train bypass). SKIPs unless the reset VALUES are stated "
-                 "(spec-absent in Prob153 -> honest floor); fires once a complete spec appears."),
-    # --- v1.1.83 RTLLM-prose NEW canonicals. General parse-or-SKIP (audit-clean,
-    #     remediated): every emitted fact is parsed from the prose, never hardcoded /
-    #     golden-copied; an unstated fact SKIPs. Each fires on the structured prose
-    #     form and is verified to fire 0 times on every VE-phrasing prompt.
+                 ""),
     ArtifactType("calendar_counter", "Cascaded Modulo Calendar/Clock Counters", ("L6", "L4"),
                  _rec_calendar_counter, _cal.synth,
                  "Cascaded modulo counters (sec/min/hour rollover with stated ranges + "

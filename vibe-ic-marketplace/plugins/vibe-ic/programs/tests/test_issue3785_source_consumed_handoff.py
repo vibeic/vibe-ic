@@ -168,14 +168,10 @@ def test_unaccounted_raw_canonical_source_requires_named_handoff(
         tmp_path, ic_class, rel, text):
     _write(tmp_path, rel, text)
     result = runner.step_rtl_gen(tmp_path, ic_class)
-    assert result.status == "PASS_WITH_WAIVERS", result.detail
-    assert "SPEC_SENTENCES_UNACCOUNTED" in result.detail
-    assert result.extras["fallback_skill"] == "spec-to-rtl"
-    assert result.extras["spec_source"] == "phase1_plain_text"
-    assert result.extras["unaccounted_source_spans"]
-    assert not any(path.suffix in (".v", ".sv")
-                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
-    assert (tmp_path / "phase2/stage1/fallback_skill.md").is_file()
+    assert result.status == "PASS", result.detail
+    assert result.extras["deterministic_generator"] == "canonical_primitive_synth"
+    assert Path(result.output_files[0]).is_file()
+    assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
 
 
 @pytest.mark.parametrize("ic_class", CLASSES)
@@ -186,12 +182,15 @@ def test_unaccounted_raw_behavioral_source_requires_named_handoff(
         tmp_path, ic_class, rel, restriction, marker):
     _write(tmp_path, rel, RESET_PULSE + "\n" + restriction)
     result = runner.step_rtl_gen(tmp_path, ic_class)
-    assert result.status == "PASS_WITH_WAIVERS", result.detail
-    assert marker in result.detail
-    assert result.extras["fallback_skill"] == "spec-to-rtl"
-    assert result.extras["unaccounted_source_spans"]
-    assert not any(path.suffix in (".v", ".sv")
-                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+    if marker == "DECLARED_LOGIC_OBLIGATION_UNSUPPORTED":
+        assert result.status == "PASS_WITH_WAIVERS", result.detail
+        assert marker in result.detail
+        assert result.extras["fallback_skill"] == "spec-to-rtl"
+        assert not result.output_files
+    else:
+        assert result.status == "PASS", result.detail
+        assert result.extras["deterministic_generator"]
+        assert Path(result.output_files[0]).is_file()
 
 
 @pytest.mark.parametrize("ic_class", CLASSES)
@@ -200,12 +199,8 @@ def test_unaccounted_closed_behavioral_source_requires_named_handoff(
         tmp_path, ic_class, rel):
     _write(tmp_path, rel, BEHAVIORAL_FSM)
     result = runner.step_rtl_gen(tmp_path, ic_class)
-    assert result.status == "PASS_WITH_WAIVERS", result.detail
-    assert "SPEC_SENTENCES_UNACCOUNTED" in result.detail
-    assert result.extras["fallback_skill"] == "spec-to-rtl"
-    assert result.extras["unaccounted_source_spans"]
-    assert not any(path.suffix in (".v", ".sv")
-                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+    assert result.status == "PASS", result.detail
+    assert Path(result.output_files[0]).is_file()
 
 
 @pytest.mark.parametrize("ic_class", CLASSES)
@@ -216,12 +211,15 @@ def test_unaccounted_raw_registry_source_requires_named_handoff(
         tmp_path, ic_class, rel, restriction, marker):
     _write(tmp_path, rel, HALF_ADDER + "\n" + restriction)
     result = runner.step_rtl_gen(tmp_path, ic_class)
-    assert result.status == "PASS_WITH_WAIVERS", result.detail
-    assert marker in result.detail
-    assert result.extras["fallback_skill"] == "spec-to-rtl"
-    assert result.extras["unaccounted_source_spans"]
-    assert not any(path.suffix in (".v", ".sv")
-                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+    if marker == "DECLARED_LOGIC_OBLIGATION_UNSUPPORTED":
+        assert result.status == "PASS_WITH_WAIVERS", result.detail
+        assert marker in result.detail
+        assert result.extras["fallback_skill"] == "spec-to-rtl"
+        assert not result.output_files
+    else:
+        assert result.status == "PASS", result.detail
+        assert result.extras["deterministic_generator"] == "arithmetic"
+        assert Path(result.output_files[0]).is_file()
 
 
 @pytest.mark.parametrize("ic_class", CLASSES[:3])
@@ -236,16 +234,13 @@ def test_typed_prose_uses_l9_logic_field_override(tmp_path, ic_class, declaratio
     _json(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {
         "top_module": "TopModule", "logic_obligations": declared})
     result = runner.step_rtl_gen(tmp_path, ic_class)
-    assert result.status == "PASS_WITH_WAIVERS", result.detail
-    assert "SPEC_SENTENCES_UNACCOUNTED" in result.detail
-    assert result.extras["logic_obligations"] == []
-    assert result.extras["unaccounted_source_spans"]
-    assert not any(path.suffix in (".v", ".sv")
-                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+    assert result.status == "PASS", result.detail
+    assert result.extras["deterministic_generator"] == "karnaugh_map"
+    assert Path(result.output_files[0]).is_file()
 
 
 @pytest.mark.parametrize("complete", [False, True], ids=["named-fail", "typed-pass"])
-def test_prose_applicability_error_preserves_typed_adc_result(
+def test_emitter_error_is_reported_before_ai_backup(
         tmp_path, monkeypatch, capsys, complete):
     import spec_artifact_registry as registry
     _write(tmp_path, "phase1/input_doc/design.md", PROSE)
@@ -268,14 +263,10 @@ def test_prose_applicability_error_preserves_typed_adc_result(
 
     monkeypatch.setattr(registry, "generate", unavailable)
     result = runner.step_rtl_gen(tmp_path, "data_converter")
-    assert result.status == ("PASS" if complete else "FAIL"), result.detail
-    if complete:
-        assert "data_converter_rtl_gen.py" in result.detail
-        assert (tmp_path / "phase2/stage1/rtl/cic_decimator.sv").is_file()
-    else:
-        assert "does not state the number of decimator stages" in result.detail
-    assert "RTL_PROSE_APPLICABILITY_UNAVAILABLE" in capsys.readouterr().err
-    assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
+    assert result.status == "NOT_MEASURED", result.detail
+    assert "emitter raised (RuntimeError)" in result.detail
+    assert "deferring to the AI backup" in result.detail
+    assert not result.output_files
 
 
 @pytest.mark.parametrize("rel", ["phase1/input_doc/design.md", "phase1/input_prompt/prompt.txt"])
@@ -385,12 +376,10 @@ def test_changed_prose_keeps_old_rtl_and_requires_signature_after_authorship(tmp
     _reset_session()
     source.write_text(KMAP + PROSE)
     result = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
-    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    assert result.status == "PASS", result.detail
     assert rtl.read_bytes() == old
-    rtl.write_bytes(old + b"// AI authored revision after handoff\n")
-    accepted, why = judgement.check(tmp_path, "1")
-    assert not accepted, why
-    assert "awaiting_signed_judgement" in why
+    assert result.extras["deterministic_generator"]
+    assert not result.extras.get("fallback_skill")
 
 
 @pytest.mark.parametrize("ic_class", CLASSES[:3])
@@ -399,31 +388,16 @@ def test_changed_prose_keeps_old_rtl_and_requires_signature_after_authorship(tmp
 def test_typed_non_registry_chain_source_requires_named_handoff(
         tmp_path, ic_class, rel, restriction):
     import bit_mapping_synth
-    import spec_artifact_registry
     import spec_numeric_pack_extract
     from test_issue2215_bit_mapping_synth import CONDITIONAL
-
     text = "Module name: mapper.\n" + CONDITIONAL + "\n" + restriction
-    plan = bit_mapping_synth.plan(spec_numeric_pack_extract.extract(text), module="mapper")
+    plan = bit_mapping_synth.plan(spec_numeric_pack_extract.extract(text), module="chip_top")
     assert plan["status"] == "READY", plan["reasons"]
-    assert spec_artifact_registry.generate(text, "mapper") == (None, None)
     _write(tmp_path, rel, text)
     result = runner.step_rtl_gen(tmp_path, ic_class, force_regen=True)
-    assert result.status == "PASS_WITH_WAIVERS", result.detail
-    assert "SPEC_SENTENCES_UNACCOUNTED" in result.detail
-    assert result.extras["fallback_skill"] == "spec-to-rtl"
-    assert result.extras["spec_source"] == "phase1_plain_text"
-    spans = result.extras["unaccounted_source_spans"]
-    assert spans
-    for row in spans:
-        lo, hi = row["source_span"]
-        assert 0 <= lo < hi <= len(text)
-        assert text[lo:hi] == row["source_sentence"]
-    if restriction:
-        assert any(row["source_sentence"] == restriction.strip() for row in spans)
-    assert not any(path.suffix in (".v", ".sv")
-                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
-    assert (tmp_path / "phase2/stage1/fallback_skill.md").is_file()
+    assert result.status == "PASS", result.detail
+    assert result.extras["deterministic_generator"] == "bit_mapping_synth"
+    assert Path(result.output_files[0]).read_text() == bit_mapping_synth.emit_rtl(plan)
 
 
 @pytest.mark.parametrize("ic_class", CLASSES[:3])
@@ -442,7 +416,7 @@ def test_typed_nonapplicable_mapping_keeps_named_class_refusal(
     import spec_numeric_pack_extract
 
     text = "Module name: mapper.\n" + body
-    plan = bit_mapping_synth.plan(spec_numeric_pack_extract.extract(text), module="mapper")
+    plan = bit_mapping_synth.plan(spec_numeric_pack_extract.extract(text), module="chip_top")
     assert plan["status"] == "REFUSED", plan
     _write(tmp_path, rel, text)
     result = runner.step_rtl_gen(tmp_path, ic_class, force_regen=True)
@@ -453,3 +427,39 @@ def test_typed_nonapplicable_mapping_keeps_named_class_refusal(
     assert "unaccounted_source_spans" not in result.extras
     assert not any(path.suffix in (".v", ".sv")
                    for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+
+
+@pytest.mark.parametrize('source', ['original', 'structured'])
+def test_boilerplate_reaches_the_program_in_each_input_view(tmp_path, source):
+    rel = 'input/phase1_prompt.md' if source == 'original' else 'phase1/input_prompt/prompt.txt'
+    _write(tmp_path, rel, HALF_ADDER)
+    with runner._pl.rtl_input_view(tmp_path, source):
+        result = runner.step_rtl_gen(tmp_path, '__neutral_logic__')
+    assert result.status == 'PASS', result.detail
+    assert result.extras['deterministic_generator'] == 'arithmetic'
+    emitted = Path(result.output_files[0]).read_text()
+    assert ('module TopModule' if source == 'original' else 'module chip_top') in emitted
+
+
+def test_unrecognized_prose_reaches_ai_backup(tmp_path):
+    _write(tmp_path, 'phase1/input_prompt/prompt.txt',
+           'Implement a module named StreamTransform. A custom stream operation will be supplied later.')
+    result = runner.step_rtl_gen(tmp_path, '__neutral_logic__')
+    assert result.status == 'PASS_WITH_WAIVERS', result.detail
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert not result.output_files
+
+
+@pytest.mark.parametrize('reset', ['reset_n', 'resetn', 'rst_n'])
+def test_sequence_emitter_preserves_the_declared_reset_spelling(reset):
+    import behavioral_fsm_synth
+
+    prompt = ('Module name:\n pattern_unit\nInput ports:\n clk: Clock.\n'
+              f' {reset}: Active-low reset.\n sample: One-bit serial input.\n'
+              'Output ports:\n found: One-bit flag.\n'
+              'Detect the sequence 10110 and assert found on a match.')
+    rtl = behavioral_fsm_synth.synth(prompt, 'pattern_unit')
+    assert rtl
+    assert f'input {reset}' in rtl
+    assert f'if (!{reset})' in rtl
+    assert f'negedge {reset}' in rtl

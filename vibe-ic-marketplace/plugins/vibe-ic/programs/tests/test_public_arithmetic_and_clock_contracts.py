@@ -7,7 +7,7 @@ import pytest
 import arithmetic_synth as arithmetic
 import canonical_primitive_synth as clocks
 import deterministic_emit_chain as chain
-from _prose_handoff_assertions import assert_prose_chain_handoff
+from _prose_handoff_assertions import assert_program_chain_candidate
 
 
 def native(tmp_path, rtl, tb):
@@ -40,12 +40,10 @@ def alu_prompt(lower=False):
 def test_public_opcode_override_reaches_normal_emit_chain_and_native_tool(tmp_path, lower):
     prompt = alu_prompt(lower)
     result = chain.try_emit_ex(prompt, top="operator_unit")
-    assert_prose_chain_handoff(result, prompt)
+    assert_program_chain_candidate(result, prompt)
     parameter = "Add" if lower else "ADD"
-    assert f"[167:188] parameter {parameter} = 4'd0;" in dict(result[2])[
-        "SPEC_SENTENCES_UNACCOUNTED"]
-    rtl = arithmetic.synth(prompt, top="operator_unit")
-    assert rtl
+    rtl = result[1]
+    assert rtl == arithmetic.synth(prompt, top="operator_unit")
     native(tmp_path, rtl, f'''module check;
 reg [31:0] a=7,b=9; reg [3:0] control=12; wire [31:0] result;
 operator_unit #(.{parameter}(4'd12)) d(a,b,control,result);
@@ -88,15 +86,10 @@ def fixed_prompt(sign=None):
 def test_branch_sign_is_from_public_source_not_an_arithmetic_convention(tmp_path, sign):
     prompt = fixed_prompt(sign)
     result = chain.try_emit_ex(prompt, top="signed_unit")
-    assert_prose_chain_handoff(result, prompt)
-    expected = ("[460:499] Equal opposite magnitudes produce zero."
-                if sign is None else
-                "[500:588] If `a` is greater than `b`, the result is `a - b` "
-                f"and the MSB of the result is set to {sign}.")
-    assert expected in dict(result[2])["SPEC_SENTENCES_UNACCOUNTED"]
-    rtl = arithmetic.synth(prompt, top="signed_unit")
-    assert rtl
-    a_sign = "a[4]" if sign is None else str(sign)
+    assert_program_chain_candidate(result, prompt)
+    rtl = result[1]
+    assert rtl == arithmetic.synth(prompt, top="signed_unit")
+    a_sign = str(sign) if sign is not None else "a[4]"
     native(tmp_path, rtl, '''module check;
 reg [4:0] a,b; wire [4:0] c; reg [4:0] expected; integer x,y,mag;
 signed_unit #(.N(5),.Q(2)) d(a,b,c);

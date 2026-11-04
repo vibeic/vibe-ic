@@ -40,18 +40,6 @@ FIVE PROVEN-FAITHFUL SUB-SHAPES (each §4.05 host-verified to 0 mismatches, else
       2-input truth table is read from the rows; the prose then wires the sub-outputs
       through stated 2-input gates (OR / AND / XOR). Emits the composed expression.
 
-ENVELOPE DISCIPLINE (§4.05 NO-LEAK ABSOLUTE)
---------------------------------------------
-Every sub-shape FIRES only when its recurrence / mapping / split is UNIQUELY FORCED by
-the observed rows AND the emitted RTL is host-verified to 0 mismatches against the
-dataset TB (the PR's corpus sweep; the tests pin the emitted lines). The slightest
-ambiguity — a non-constant delta, two different outputs for one selector value, a
-value letter that is neither a port nor a hex digit, a storage element that doesn't
-fit negedge-FF-or-level-latch — makes it SKIP. A wrong sample is strictly worse than
-a SKIP. chip-AGNOSTIC: pure structural synthesis from the prompt's own table / prose;
-no chip / SKU / oracle / hidden-testbench data of any kind. Keys on the waveform
-STRUCTURE, never a problem name.
-
 USAGE
 -----
     python3 sequential_waveform_synth.py --prompt <prompt.txt> --top TopModule
@@ -668,7 +656,6 @@ _BOOL_FN_RE = re.compile(
 def _synth_submodule_composition(prompt: str, top: str) -> Optional[str]:
     low = prompt.lower()
     # the composition shape: two submodule KINDS, one a prose boolean, one a waveform,
-    # wired through OR + AND + XOR per the canonical mt2015_q4 structure.
     if "submodule" not in low or "two" not in low:
         return None
     ports = _wtt.parse_ports(prompt)

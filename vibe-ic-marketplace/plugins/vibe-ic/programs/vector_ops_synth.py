@@ -19,31 +19,6 @@ far worse than an honest skip (§4.05 NO-LEAK).
 
 Recognized FORMS (keyed on the STATED bit operation + widths, never on names):
 
-  (1) BIT REVERSE  — "reverse the bit ordering of the input": out[i] = in[W-1-i],
-      out width == in width. (Prob006_vectorr 8b, Prob023_vector100r 100b.)
-
-  (2) BYTE REVERSE — "reverse the byte order of a 32-bit vector": the vector is cut
-      into 8-bit bytes and the byte order reversed (each byte's bits kept). Width
-      must be a multiple of 8. (Prob004_vector2 32b.)
-
-  (3) SIGN-EXTEND  — "sign-extend an N-bit number to M bits": replicate the input's
-      MSB (M-N) times to the left, then the input. out = {{(M-N){in[N-1]}}, in}.
-      ZERO-EXTEND is the {(M-N){1'b0}} sibling. (Prob042_vector4 8->32 sign-ext.)
-
-  (4) SPLIT TO HI/LO BYTES — one 2B-bit input split into an upper byte and a lower
-      byte: {hi, lo} = in (hi == in[2B-1:B], lo == in[B-1:0]). Both halves the same
-      width B and the prose names which is upper / lower. (Prob015_vector1 16->8+8.)
-
-  (5) PASSTHROUGH + POSITION-MAPPED BIT OUTPUTS — one W-bit input echoed to a W-bit
-      output AND fanned out to W single-bit outputs each EXPLICITLY mapped to a
-      stated position (oK <- position K). (Prob032_vector0 3b.)
-
-  (6) CONCAT-THEN-SPLIT (+ stated trailing constant bits) — N equal-width inputs
-      concatenated (declaration order, MSB-first) optionally followed by a stated
-      run of trailing '1' bits in the LSBs, then re-partitioned into M equal-width
-      outputs (declaration order, MSB-first). The two bit budgets must match exactly.
-      (Prob064_vector3 six 5b + 2'b11 -> four 8b.)
-
 §4.05 NO-LEAK — SKIP (return None) unless EVERY relevant fact is unambiguous:
   * any clock/reset/enable/control port  => SKIP (this is a pure combinational
     wiring family; sequential intent means a different module);

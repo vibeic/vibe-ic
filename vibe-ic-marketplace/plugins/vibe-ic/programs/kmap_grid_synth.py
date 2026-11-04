@@ -2,26 +2,6 @@
 """kmap_grid_synth.py — DETERMINISTIC Karnaugh-map → RTL synthesizer
 (v1.1.38 clean-room §4.2 absorption).
 
-THE GAP THIS CLOSES
--------------------
-VerilogEval K-map prompts ("implement the function shown in the Karnaugh map
-below") embed a LITERAL grid that, when it contains NO don't-cares, is a complete
-truth table — the answer is the exact sum-of-products, with zero ambiguity and no
-oracle. Yet a blind author re-derives the boolean function by eye and FLIPS the
-column/row axis mapping per round (Prob113, Prob050, Prob122 alternate PASS/FAIL =
-single-shot variance). Per open-benchmark-methodology §4.2, a GENERAL no-cheat
-recovery MUST be absorbed as a deterministic PROGRAM. This is that absorption.
-
-§4.05 NO-LEAK — EXACT (don't-care-FREE) GRIDS ONLY
---------------------------------------------------
-A K-map containing a don't-care cell (`d`/`-`) is UNDER-DETERMINED: the golden
-picks ONE of many valid functions, which the prompt never pins, so reproducing it
-needs the oracle — that is a genuine FLOOR, not a program-absorbable case. This
-synthesizer FIRES only on a fully-specified (0/1-only) grid and SKIPs (emits
-nothing) on any grid with a don't-care, a mux-decomposition output (`mux_in[..]`),
-an unparseable header, or anything outside its proven-faithful envelope. So it can
-never ship an under-determined guess.
-
 USAGE
 -----
     python3 kmap_grid_synth.py --prompt <prompt.txt> --top TopModule [--out s.sv]
@@ -29,11 +9,7 @@ USAGE
 EXIT CODES
 ----------
     0  synthesized + emitted (exact don't-care-free grid)
-    2  SKIP — outside the envelope (don't-care / unparseable / not a K-map)
-
-chip-AGNOSTIC: pure boolean synthesis from the prompt's own grid; no chip / SKU /
-oracle / hidden-testbench data.
-"""
+    2  SKIP — outside the envelope (don't-care / unparseable / not a K-map)"""
 from __future__ import annotations
 
 import argparse

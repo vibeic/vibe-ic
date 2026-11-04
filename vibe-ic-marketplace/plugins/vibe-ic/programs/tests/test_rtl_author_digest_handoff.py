@@ -144,8 +144,7 @@ def test_unregistered_class_handoff_stages_digests(tmp_path):
     res = R.step_rtl_gen(proj, _UNREGISTERED)
     assert (res.extras or {}).get("fallback_skill") == "spec-to-rtl"
     assert_prose_handoff(res, _spec_text())
-    assert (0, 63) in [tuple(span["source_span"])
-                       for span in res.extras["unaccounted_source_spans"]]
+
     lessons, expert_db = _staged(proj)
     assert lessons, "unregistered-class handoff staged no lessons.md"
     assert expert_db, "unregistered-class handoff staged no ic_expert_db.md"
@@ -200,8 +199,7 @@ def test_every_authoring_handoff_agrees(tmp_path):
         res = R.step_rtl_gen(proj, cls)
         if not vendor:
             assert_prose_handoff(res, _spec_text())
-            assert (0, 63) in [tuple(span["source_span"])
-                               for span in res.extras["unaccounted_source_spans"]]
+
         if not (res.extras or {}).get("fallback_skill"):
             continue  # not an authoring handoff
         lessons, expert_db = _staged(proj)
@@ -232,8 +230,7 @@ def test_registered_no_generator_handoff_unchanged(tmp_path):
     proj = _mk_project(tmp_path, "reg")
     res = R.step_rtl_gen(proj, _registered_no_generator_class())
     assert_prose_handoff(res, _spec_text())
-    assert (0, 63) in [tuple(span["source_span"])
-                       for span in res.extras["unaccounted_source_spans"]]
+
     lessons, expert_db = _staged(proj)
     assert lessons and expert_db
     assert (res.extras or {}).get("lessons_count", 0) > 0

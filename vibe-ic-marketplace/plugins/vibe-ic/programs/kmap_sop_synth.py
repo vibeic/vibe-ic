@@ -10,41 +10,8 @@ BLOCKS a mis-authored RTL — but it does not itself EMIT RTL. This program is t
 complementary SOLVER: it reads the prompt, parses the K-map grid, and EMITS correct
 synthesizable RTL deterministically, or returns None (SKIP) on ANY parse ambiguity.
 
-WHAT it handles (general / chip-AGNOSTIC):
-  - scalar named 1-bit axes, header 1-var ("0 1") OR 2-var ("00 01 11 10" Gray, in
-    ANY order — e.g. Prob125's reordered "01 00 10 11"); row axis labels likewise in
-    any order, validated against the declared axis-variable count;
-  - bus-indexed axes (`x[0]x[1]` / `x[3]x[4]`): a single multi-bit input bus whose
-    K-map axes are bit-indices of that bus; the distinct indices are mapped to bus
-    bits in ascending order (the only convention consistent with a 1-based label set
-    like x[1..4] on a 4-bit bus);
-  - don't-care cells ('d' or 'x'): assigned the canonical minimal-risk value 0; the
-    caller MUST host-verify (the TB checks the function on CARE cells only, so any
-    valid cover is accepted — but a chosen don't-care assignment that the TB happens
-    to constrain will show as a mismatch and the honest response is to SKIP);
-  - emits a FULL truth-table `case` over all 2^N input combinations (deterministic,
-    provably correct on every CARE cell — no risky minimization step that could
-    drop a variable wrong).
-
-§4.05 NO-LEAK — SKIP (return None) on ANY ambiguity in PARSING the map:
-  - cannot locate the column header / row labels / cell grid;
-  - axis variables do not partition the declared inputs exactly;
-  - a multi-bit output or an explicit transform ("multiplexer"/"mux_in") — the
-    output is NOT the K-map value (Prob093) -> SKIP;
-  - a cell that is neither 0/1 nor a recognised don't-care token -> SKIP;
-  - the reconstructed table is not COMPLETE (every 2^N combination exactly once)
-    -> SKIP.
-For don't-cares the EMIT itself is unambiguous (we pick 0); whether that emission is
-*correct* is decided by the caller's host-score (iverilog+vvp against the TB). If it
-mismatches, the TB constrains the don't-cares and the honest floor is to SKIP that
-problem rather than guess a different cover.
-
 API:
     synth(prompt_text, top="TopModule") -> str | None
-
-CLI (host-score harness):
-    python3 kmap_sop_synth.py --prompt <prompt.txt> [--top TopModule] > dut.sv
-    iverilog -g2012 -o a.vvp dut.sv <Prob>_ref.sv <Prob>_test.sv && vvp a.vvp
 
 Reuses parse_ports / parse_kmap heritage from kmap_truth_table_oracle_check.
 """
@@ -213,7 +180,7 @@ def parse_kmap_grid(prompt: str):
     if not ins or not outs:
         return None
     if len(outs) != 1 or outs[0][1] != 1:
-        return None  # multi-bit / transform output -> SKIP (e.g. Prob093 mux_in)
+        return None
     out_name = outs[0][0]
     if re.search(r"multiplexer|\bmux\b|mux_in", prompt, re.I):
         return None  # explicit transform problem -> SKIP

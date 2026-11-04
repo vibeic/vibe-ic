@@ -3,21 +3,10 @@
 FORM the shipped arithmetic_synth.py does not yet cover: the N-bit ripple/parallel
 ADDER with a carry-in input and a SEPARATE carry-out output.
 
-arithmetic_synth's FORMs cover the scalar half/full adder, the N-bit adder whose
-SINGLE (N+1)-bit output packs the carry, the signed two's-complement adder with a
-signed-overflow FLAG, and add/subtract-by-control. The RTLLM `adder_8bit` /
-`adder_16bit` family states a DIFFERENT, equally-deterministic structure:
-
     two N-bit operands  (a[N-1:0], b[N-1:0]),
     a 1-bit carry-in    (cin / Cin / ...),            <- optional
     an N-bit sum output (sum / y / ...),
     a 1-bit carry-out   (cout / Co / C... / ...).
-
-The function is fixed with NO hidden information: {cout, sum} = a + b + cin.
-When the prompt additionally mandates bit-level full adders, repeated sub-adder
-blocks, or carry-lookahead hierarchy, that architecture is part of the contract
-and is emitted structurally. Detection is keyed on the declared interface and
-prompt-visible architecture, never on a design name or hidden testbench.
 
 §4.05 NO-LEAK — return None (SKIP) unless EVERY condition holds; a wrong adder is
 far worse than an honest skip:

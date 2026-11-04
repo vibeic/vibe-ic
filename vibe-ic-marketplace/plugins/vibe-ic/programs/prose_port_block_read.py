@@ -24,18 +24,6 @@ the existing solver chain (registry.generate / *_synth.synth) WITHOUT touching a
 existing file — the solvers keep seeing the full original prose for their body
 semantics; they additionally now see a leading bullet port block they can parse.
 
-This is a GENERAL FORMAT READER, not keyed to any RTLLM design name:
-  * It keys ONLY on the literal section headers "Input ports" / "Output ports"
-    (ASCII colon ':' OR full-width '：' — RTLLM has both), never on a module name.
-  * Width is read from the explicit `[hi:lo]` bus range, else from a width token
-    in the SAME line's description ("8-bit", "8 bit", "One-bit", "single bit",
-    "1-bit"), else defaulted to 1 ONLY when the line carries no range and no
-    competing/contradictory width token. ANY ambiguity (a port line that names a
-    width range we cannot reduce to a single integer, or two contradictory width
-    tokens) drops THAT port — a dropped port makes the downstream solver SKIP,
-    which is the §4.05-conservative behavior we want (never fabricate a width).
-  * It NEVER reads a golden/reference solution: input is the prompt text only.
-
 Pure-function module. chip-AGNOSTIC, deterministic.
 """
 from __future__ import annotations

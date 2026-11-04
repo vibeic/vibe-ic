@@ -1,35 +1,6 @@
 #!/usr/bin/env python3
 """full_moore_fsm_synth.py — deterministic SOLVER for a full Moore FSM.
 
-WHY (§4.2 absorption, "bucket-② -> bucket-①"): a VerilogEval prompt that gives a
-COMPLETE Moore state-transition table (`A (0) --1--> B` = state A outputs 0, on
-input 1 goes to B) + a fully-specified RESET (sync|async, named reset state,
-active level) determines the whole machine, blind — the INTERNAL state encoding is
-FREE because the testbench observes only the OUTPUT, not the state register. So we
-pick a sequential encoding and EMIT the state register + next-state logic +
-Moore-output lookup, making the problem program-GENERATED (zero authoring variance)
-instead of AI-authored (Prob109_fsm1, Prob138_2012_q2fsm).
-
-Extraction-completeness note (the "②->① is really push extraction up" doctrine):
-the load-bearing work here is RECOGNISING the transition structure — three written
-forms are accepted: bare arrow `A (0) --1--> B`, NAMED arrow `B (out=1) --in=0--> A`,
-and tabular `A | A, B | 0`. The named arrow also expresses a TWO-input Moore where
-each state gates on its OWN named input (`OFF (out=0) --j=1--> ON` /
-`ON (out=1) --k=1--> OFF`, Prob110/111). Once the structure is complete the RTL is a
-free formula. The output column being FREE internal encoding is what makes emission
-deterministic (the TB observes only the Moore output, never the state register).
-
-§4.05 NO-LEAK: returns None (SKIP — author untouched) unless EVERYTHING is
-unambiguous: a clk + a reset port, ≥1 1-bit FSM input, exactly one 1-bit Moore
-output, a complete table (both input values per state), consistent per-state output
-annotations, all next-states known, and an EXPLICIT reset (async|sync + a named
-reset state + active level). For the named-input form: every state's two arrows must
-name the SAME governing input (a state gating on two different inputs SKIPs — we
-never guess j-vs-k priority), the set of governing inputs must EQUAL the module's
-1-bit inputs (no module input silently dropped), and bare/named arrows must not be
-mixed. A prompt that omits the reset state / polarity (e.g. Prob136_m2014_q6) SKIPs
-— we never guess reset behavior.
-
 API: synth(prompt_text, top="TopModule") -> RTL string | None
 """
 from __future__ import annotations
@@ -120,8 +91,6 @@ def _parse_reset(prompt, known):
         for t in re.finditer(r"\b(?:into|to)\s+state\s+(\w+)", m.group(1), re.I):
             if t.group(1) in known:
                 targets.append(t.group(1))
-    # also the declarative phrasing "The reset state is <S>" (Prob107_fsm1s) — a
-    # named reset target that is not anchored by a "resets to/into" verb clause.
     for m in re.finditer(r"\breset\s+state\s+is\s+(\w+)", prompt, re.I):
         if m.group(1) in known:
             targets.append(m.group(1))

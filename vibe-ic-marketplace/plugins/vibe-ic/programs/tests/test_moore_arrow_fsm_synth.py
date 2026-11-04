@@ -211,3 +211,7 @@ def test_prose_with_no_arrow_diagram_skips():
     assert M.synth(_HDR + _PORTS + "Implement a two-state toggle.\n",
                    "TopModule") is None
     assert M.synth("", "TopModule") is None
+
+
+def test_arrow_order_does_not_supply_an_unstated_reset_target():
+    assert M.synth(_spec("The reset is synchronous and active-high."), "StateBlock") is None

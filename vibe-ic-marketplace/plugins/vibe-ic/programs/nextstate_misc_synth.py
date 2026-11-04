@@ -8,44 +8,6 @@ oracle, yet the existing solvers all return None (registry.generate == None) and
 the §4.2 absorption chain falls through to the AI floor. They are NOT genuine AI
 problems — every output is a FREE FORMULA the moment the table + encoding are read:
 
-  (S1) NAMED-NEXT-STATE-BIT, ONE-HOT  (Prob091_2012_q2b, Prob099_m2014_q6c)
-       `y` is a MULTI-BIT one-hot STATE INPUT (the TB drives it), a single 1-bit
-       FSM input `w`, and the outputs are NAMED next-state bits `Y1`,`Y3`,… each
-       = the input of state flip-flop `y[k]`. Given the arrow transition table +
-       the one-hot map, `Y_k = OR over every arc (state s --v--> state_k) of
-       (y[bit(s)] & (w if v==1 else ~w))`. Pure combinational, encoding pinned by
-       the prompt. The existing `parse_fsm_next_state_bit` SKIPs this because it
-       requires exactly ONE 1-bit output named `<bus>[N]`; here there are SEVERAL
-       outputs named `Y<k>` (not `y[k]`), so the oracle never builds.
-
-  (S2) BINARY NEXT-STATE-BIT + MOORE OUTPUT  (Prob134_2014_q3c)
-       `y` is a MULTI-BIT BINARY present-state input, `x` a 1-bit input, and the
-       outputs are a named next-state bit `Y0` (= `Y[0]` of the next state, stated)
-       plus a Moore output `z`. The table lists, per present state, the next state
-       (binary) under x=0 / x=1 and the output. `Y0` = bit0 of the tabulated next
-       state, keyed by `{y,x}`; `z` keyed by `y`. Unlisted states are don't-care
-       (the TB compares against a ref that emits `1'bx` there). The existing
-       fsm-table parsers SKIP because the interface is a combinational
-       (present-state-IN / next-state-bit-OUT) decode with a SEPARATE Moore output,
-       not the register-owning sequential Moore FSM `full_moore_fsm_synth` emits.
-
-  (S3) DON'T-CARE SOP / POS MINIMISATION  (Prob070_ece241_2013_q2)
-       A,b,c,d scalar inputs; the prompt states an ON-set, an OFF-set, and a
-       DON'T-CARE-set in prose ("generates a logic-1 when 2,7,15 …, a logic-0 when
-       0,1,4,… ; the numbers 3,8,11,12 never occur"); two outputs `out_sop`
-       (minimum SOP) and `out_pos` (minimum POS). The ref's minimal cover assigns
-       the don't-cares to SPECIFIC values (its `out_sop` is definite on all 16
-       inputs, so a naive "don't-care:=0" fill MISMATCHES). We run a real
-       Quine-McCluskey minimisation (ON∪DC for the SOP cover, OFF∪DC for the POS
-       cover) and HOST-VERIFY; the minimal cover reproduces the ref bit-exactly on
-       every cell where the ref is definite. The existing K-map solvers SKIP
-       because there is no K-map grid in the prompt — the sets are prose.
-
-Each shape EMITS correct RTL deterministically or returns None (SKIP). The caller
-host-scores (iverilog+vvp) the emitted RTL against the dataset ref+test; for S3 the
-emit is host-verified before returning so a non-reproducing minimal cover SKIPs
-rather than guesses (honest floor).
-
 §4.05 NO-LEAK — the public `synth` returns None on ANY ambiguity:
   - S1 fires only when there is exactly ONE multi-bit input that the prompt CALLS a
     one-hot state vector, exactly ONE 1-bit FSM input, every output named `Y<k>`
@@ -70,12 +32,7 @@ parser's single y[N]; S2 = binary present-state combinational decode + Moore out
 S3 = prose-set don't-care SOP/POS with no grid).
 
 API:
-    synth(prompt_text, top="TopModule") -> str | None
-
-CLI (host-score harness):
-    python3 nextstate_misc_synth.py --prompt <prompt.txt> [--top TopModule] > dut.sv
-    iverilog -g2012 -o a.vvp dut.sv <Prob>_ref.sv <Prob>_test.sv && vvp a.vvp
-"""
+    synth(prompt_text, top="TopModule") -> str | None"""
 from __future__ import annotations
 
 import argparse
@@ -196,9 +153,6 @@ def _parse_arrow_table(prompt: str):
     return states, trans
 
 
-# ===========================================================================
-# S1: named one-hot next-state bits  (Prob091_2012_q2b, Prob099_m2014_q6c)
-# ===========================================================================
 def _parse_named_bit_map(prompt: str, out_names, state_bus: str):
     """Map each NAMED output `Y<k>` -> the next-state-bit index it drives, from the
     PROMPT (never the digit in the name). Returns {out_name: bit_index} or None.
@@ -247,13 +201,6 @@ def _synth_named_onehot_nextstate(prompt: str, ins, outs, top: str):
         return None
     state_bus, sb_w = buses[0]
     fsm_in = scalars[0][0]
-    # §4.05 NO-LEAK (Step-2.7 v1.1.76, VE-v2 Prob099): we emit a 0-based
-    # `[sb_w-1:0]` bus and map the prompt's `Y<k>` output names against 0-based
-    # bit indices (state_of_bit). A state bus DECLARED with a non-zero LSB — e.g.
-    # `[6:1] y` / `y[6:1]` — makes that mapping off-by-one, so the emitted
-    # next-state logic is WRONG (the bug was a 9/12-mismatch false-fire). We only
-    # handle a 0-based bus: SKIP a non-zero-LSB declaration rather than emit a
-    # mis-indexed machine.
     _bd = re.search(r"\[\s*\d+\s*:\s*(\d+)\s*\]\s*" + re.escape(state_bus) + r"\b", prompt) \
         or re.search(re.escape(state_bus) + r"\s*\[\s*\d+\s*:\s*(\d+)\s*\]", prompt)
     if _bd and int(_bd.group(1)) != 0:
@@ -327,9 +274,6 @@ def _synth_named_onehot_nextstate(prompt: str, ins, outs, top: str):
     return "\n".join(lines)
 
 
-# ===========================================================================
-# S2: binary present-state decode + Moore output  (Prob134_2014_q3c)
-# ===========================================================================
 def _parse_binary_state_table(prompt: str):
     """Parse a `present | next0, next1 | output` table whose states/next-states are
     BINARY literals. Returns (state_w, rows) where rows[present_int] = (n0, n1, out)
@@ -455,9 +399,6 @@ def _synth_binary_nextstate_moore(prompt: str, ins, outs, top: str):
     return "\n".join(lines)
 
 
-# ===========================================================================
-# S3: prose don't-care SOP / POS minimisation  (Prob070_ece241_2013_q2)
-# ===========================================================================
 def _qm_combine(a: str, b: str):
     diff, pos = 0, -1
     for i, (x, y) in enumerate(zip(a, b)):
@@ -545,13 +486,7 @@ def _pos_sum(pi: str, names):
 
 def _parse_setlogic_prose(prompt: str, n_inputs: int):
     """Parse an ON-set, OFF-set and (optional) DON'T-CARE-set of integer minterms
-    from the prose. Returns (on, off, dc) as int sets, or None on ambiguity.
-
-    Canonical phrasing (Prob070):
-      `generates a logic-1 when 2, 7, or 15 appears … a logic-0 when 0, 1, 4, 5, 6,
-       9, 10, 13, or 14 appears. The input conditions for the numbers 3, 8, 11, and
-       12 never occur …`
-    """
+    from the prose. Returns (on, off, dc) as int sets, or None on ambiguity."""
     def _nums(seg):
         return [int(x) for x in re.findall(r"\b(\d+)\b", seg)]
 
@@ -706,8 +641,7 @@ def synth(prompt_text: str, top: str = "TopModule"):
 
 
 def host_verify(prompt_text: str, ref_sv: str, test_sv: str, top: str = "TopModule"):
-    """Helper for the host-score harness/tests: emit + iverilog/vvp against the
-    dataset ref+test. Returns ("PASS"|"BLOCK"|"SKIP"|"TOOL_ERR", detail)."""
+
     rtl = synth(prompt_text, top)
     if rtl is None:
         return ("SKIP", "no shape fired")

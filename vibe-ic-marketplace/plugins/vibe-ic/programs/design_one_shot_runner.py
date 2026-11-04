@@ -2770,33 +2770,26 @@ def _declared_logic_author_handoff(project: Path, t0: float,
 def _spec_contract_author_handoff(project: Path, t0: float, contract: SpecContract,
                                   spec_source: str) -> Optional[StepResult]:
     from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
-                                 SPEC_SENTENCES_UNACCOUNTED,
-                                 unsupported_logic_obligations, unaccounted_spec_sentences)
+                                 unsupported_logic_obligations)
     obligations = unsupported_logic_obligations(contract)
-    unaccounted = unaccounted_spec_sentences(contract)
-    if not obligations and not unaccounted:
+    if not obligations:
         return None
     rules = [f"{o.kind}: {o.clause}" for o in obligations]
-    unknown_rules = [f"[{row.source_span[0]}:{row.source_span[1]}] {row.source_sentence}"
-                     for row in unaccounted]
-    marker = DECLARED_LOGIC_OBLIGATION_UNSUPPORTED if obligations else SPEC_SENTENCES_UNACCOUNTED
-    explanation = ("Deterministic producers do not establish this implementation obligation. "
-                   if obligations else "The parsed contract does not account for the complete prose spec. ")
+    marker = DECLARED_LOGIC_OBLIGATION_UNSUPPORTED
     skill_hint, skill_extras = _stage_fallback_skill(project, "spec-to-rtl")
     author_hint, author_extras = _stage_author_knowledge_digests(project)
     return StepResult(
         "rtl_gen", "PASS_WITH_WAIVERS", time.time() - t0,
-        f"{marker}: " + "; ".join(rules + unknown_rules)
-        + ". " + explanation
+        f"{marker}: " + "; ".join(rules)
+        + ". Deterministic producers do not establish this implementation obligation. "
         + "AI invokes `spec-to-rtl` and reads the full spec; "
         "no RTL was generated or changed." + skill_hint + author_hint,
         extras={"fallback_skill": "spec-to-rtl",
                 **skill_extras, **author_extras,
                 "rejected_emitters": [marker],
-                "rejected_rules": rules + unknown_rules,
+                "rejected_rules": rules,
                 "spec_source": spec_source,
-                "logic_obligations": [asdict(row) for row in contract.logic_obligations],
-                "unaccounted_source_spans": [asdict(row) for row in unaccounted]})
+                "logic_obligations": [asdict(row) for row in contract.logic_obligations]})
 
 
 def _try_spec_artifact_registry_rtl(
@@ -8983,8 +8976,7 @@ def _step_rtl_gen_bound(
     typed_generator = (_lookup_class(ic_class) or {}).get("rtl_gen")
     prose_contract = None
     if typed_generator and not _design_supplied_build_rtl(project):
-        from _specrtl_common import (unsupported_logic_obligations,
-                                     unaccounted_spec_sentences)
+        from _specrtl_common import unsupported_logic_obligations
         try:
             prose_contract, _ = _declared_logic_source_contract(
                 project, _phase1_plain.text)
@@ -8997,9 +8989,7 @@ def _step_rtl_gen_bound(
         handoff = _declared_logic_author_handoff(project, t0, _phase1_plain.text)
         if handoff is not None:
             return handoff
-    if prose_contract is not None and (
-            unsupported_logic_obligations(prose_contract)
-            or unaccounted_spec_sentences(prose_contract)):
+    if prose_contract is not None and unsupported_logic_obligations(prose_contract):
         _sar = _try_spec_artifact_registry_rtl(
             project, t0, phase1_plain_text=_phase1_plain.text,
             handoff_contract=prose_contract)
