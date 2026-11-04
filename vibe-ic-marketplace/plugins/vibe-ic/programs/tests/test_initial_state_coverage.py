@@ -63,13 +63,34 @@ def test_long_linear_trace_keeps_initial_state_and_output_timing(clocks):
         "initial_state", "latency"}
 
 
-def test_long_linear_trace_does_not_skip_unknown_tail_after_valid_witnesses():
+@pytest.mark.parametrize("tail", ["wait", "finite_loop"])
+def test_preclock_witness_survives_unknown_tail_without_clocked_credit(tmp_path, native, tail):
     tb = long_linear_tb(500).replace(' $display("VIBEIC_AI_CHALLENGE=PASS")',
                                     ' wait (x); $display("VIBEIC_AI_CHALLENGE=PASS")')
+    if tail == "finite_loop":
+        tb = tb.replace("reg clk, x;", "reg clk, x; integer tail_step;").replace(
+            "wait (x);", "for(tail_step=0;tail_step<4;tail_step=tail_step+1)begin #1;end")
+    measured = report(tb)
+    assert measured["blocking_gaps"] > 0
+    initial, = [item for item in measured["items"] if item["kind"] == "initial_state"]
+    latency, = [item for item in measured["items"] if item["kind"] == "latency"]
+    assert initial["covered"] is True
+    assert latency["covered"] is False
+    good, _, _ = native_challenge(tmp_path / "good", native, RTL, tb)
+    wrong, _, _ = native_challenge(tmp_path / "wrong", native,
+        RTL.replace("q = 1'b0", "q = 1'b1"), tb)
+    assert good["status"] == "PASS", good
+    assert wrong["status"] == "FAIL", wrong
+
+
+def test_unknown_statement_before_witness_cannot_earn_initial_or_clocked_credit(tmp_path, native):
+    tb = TB.replace("initial begin", "initial begin wait (1'b1);", 1)
     measured = report(tb)
     assert measured["blocking_gaps"] > 0
     assert all(item["covered"] is False for item in measured["items"]
                if item["kind"] in {"initial_state", "latency"})
+    good, _, _ = native_challenge(tmp_path, native, RTL, tb)
+    assert good["status"] == "PASS", good
 
 
 def test_initial_state_is_a_blocking_obligation_covered_by_real_preclock_output_check():
