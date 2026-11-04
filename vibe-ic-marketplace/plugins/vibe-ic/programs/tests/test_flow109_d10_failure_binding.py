@@ -35,7 +35,8 @@ def owner_cases(tmp_path_factory):
         else:
             rtl = project / 'phase2/stage1/rtl/neutral.v'
             rtl.parent.mkdir(parents=True)
-            defect = 'D10_UNDEFINED_MODULE u_missing();' if kind == 'undefined_module' else ''
+            count = 45 if kind == 'undefined_module_noisy' else 1
+            defect = ''.join(f'D10_UNDEFINED_MODULE u_missing_{i}();' for i in range(count)) if kind.startswith('undefined_module') else ''
             rtl.write_text('module neutral(input a,output y);assign y=a;' + defect + 'endmodule\n')
             doc = project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
             doc.parent.mkdir(parents=True)
@@ -97,6 +98,17 @@ def test_successful_native_observations_keep_qualification_debt(owner_cases):
     assert observed['qualification'] == 'NOT_MEASURED'
     assert c['result']['verdict'] == 'PASS'
     assert not (c['project'] / 'input/feature-decisions.json').exists()
+
+
+def test_long_native_diagnostics_retain_the_observed_failure(owner_cases):
+    c = owner_cases('undefined_module_noisy')
+    diagnostic = json.loads((c['project'] / c['p0']['producer_result']['path']).read_text())
+    lint = diagnostic['tools']['Verilator.Lint']
+    assert len(lint['output']) >= 8000
+    assert c['p0']['status'] == 'FAIL', c['p0']
+    identity = runner._validate_d10_p0_consumer(c['project'], c['p0'])
+    assert identity['native_failure']['elaboration_errors'] == 45
+    assert c['result']['verdict'] == 'FAIL'
 
 
 @pytest.mark.parametrize('field', ['tool_sha256', 'input_fingerprint', 'producer_result', 'cid', 'native_failure'])

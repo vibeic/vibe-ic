@@ -525,7 +525,7 @@ def _check(project: Path, image: str | None, scratch: Path, *,
                                             "execution": "host" if shutil.which("verilator") else verilator_image,
                                             "argv": ["verilator", *verilator_args],
                                             "diagnostics": diagnostics,
-                                            "output": lint_log[-8000:]}
+                                            "output": lint_log}
     result["elaboration"] = _keep_elaboration(output_root, elab_out,
                                               yosys.returncode, top)
     if yosys.returncode:
