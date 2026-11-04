@@ -380,8 +380,7 @@ per-element default from `agents/defaults/industry_std.yaml::reset_defaults` as
 > observable initial states. The documented owner house default is `2'b01` for
 > predictor counters and 0 for history registers; it applies only when the design
 > input is silent, and must be flagged as an assumption. This is a declared
-> general policy, not evidence about a hidden reference. The
-> guess: `gshare_predictor_synth` now emits it with a `// ... house default; spec
+> general policy, not a per-problem guess: `gshare_predictor_synth` now emits it with a `// ... house default; spec
 > silent` provenance comment and fires only inside the gshare-detected shape.
 
 The line is: a value gets auto-filled iff it has a SAFE default (named/all-0) OR an
@@ -1394,7 +1393,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **When to apply**: Reset signals named with `_n` suffix; "shifter" output named `q` (sometimes scalar, sometimes vector across benchmark conventions); RAM port-direction (input vs inout); parameter casing.
 
-**What to do**: Follow the supplied interface header. If public input documents disagree, use their declared precedence; if none resolves the conflict, report the interface ambiguity. Do not invent aliases or change ports to fit unavailable checker bindings.
+**What to do**: The supplied interface header WINS over a prose paraphrase: preserve its names, directions, widths, and parameter casing. Check every public instantiation supplied as input for consistency with that header. For a real conflict, use declared source precedence, record the conflict and chosen interpretation, and EMIT RTL; do not ask a human or invent aliases to fit unavailable checker bindings.
 
 **Worked pattern** (anonymized): a prose summary says scalar output while the supplied normative module header declares a vector. Preserve the header's vector width and check the public instantiation against it.
 
@@ -1440,7 +1439,7 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **Worked pattern** (anonymized): a serial-to-parallel converter with `cnt==N-1` terminal made dout_valid race the next collection's bit 0; switching to `cnt==N` terminal placed the valid pulse one cycle before the next bit shifts in.
 
-**Reactive (not predictive), ungated valid (load-bearing — a waiting testbench HANGS otherwise)**: drive the done/valid output REACTIVELY from the counter having REACHED the VALUE N. CRITICAL counting semantics: "collect N bits" needs a counter that takes **N+1 distinct values `0,1,…,N`** — it must actually reach the value `N`, which is ONE STATE BEYOND the cycle the N-th (last) bit arrives. Shift the N data bits in while the counter is in `0..N-1`; the counter then advances to the DEDICATED terminal value `N`; register `dout_valid<=1` and present `dout_parallel` from the already-assembled register **on that `cnt==N` cycle** (`else if (cnt==N) begin dout_valid<=1; dout_parallel<=assembled; end`); then wrap `cnt: N→0`. Do **NOT** fire on the cycle the last bit arrives (`cnt==N-1`) — that is the off-by-one PREDICTIVE anti-pattern: for an 8-bit collect the valid lands at the `cnt==8` state, NOT at `cnt==7` (the cycle bit-8 shifts in). And do **NOT** gate the valid on the input-data-valid (`din_valid`): the counter increments only while `din_valid`, but a paused `din_valid` must HOLD the count (not suppress an already-earned valid), and the counter wraps `N→0` (not `N→1`). A completion flag must remain observable after input activity stops; derive its assertion cycle and wrap behavior from the supplied protocol timing, not from a hidden checker. This dedicated terminal-state example applies when that timing requires a cycle after collection. §4-E: follow an explicit spec-stated timing if one is given; this is the default when the spec only says "valid=1 when all N received".
+**Reactive (not predictive), ungated valid (load-bearing — a waiting testbench HANGS otherwise)**: drive the done/valid output REACTIVELY from the counter having REACHED the VALUE N. CRITICAL counting semantics: "collect N bits" needs a counter that takes **N+1 distinct values `0,1,…,N`** — it must actually reach the value `N`, which is ONE STATE BEYOND the cycle the N-th (last) bit arrives. Shift the N data bits in while the counter is in `0..N-1`; the counter then advances to the DEDICATED terminal value `N`; register `dout_valid<=1` and present `dout_parallel` from the already-assembled register **on that `cnt==N` cycle** (`else if (cnt==N) begin dout_valid<=1; dout_parallel<=assembled; end`); then wrap `cnt: N→0`. Do **NOT** fire on the cycle the last bit arrives (`cnt==N-1`) — that is the off-by-one PREDICTIVE anti-pattern: for an 8-bit collect the valid lands at the `cnt==8` state, NOT at `cnt==7` (the cycle bit-8 shifts in). And do **NOT** gate the valid on the input-data-valid (`din_valid`): the counter increments only while `din_valid`, but a paused `din_valid` must HOLD the count (not suppress an already-earned valid), and the counter wraps `N→0` (not `N→1`). A completion flag must remain observable after input activity stops. On silent or ambiguous completion timing, KEEP this dedicated terminal-state default and record it as an assumption; only an explicit contrary timing requirement overrides it. §4-E: follow an explicit spec-stated timing if one is given; this is the default when the spec only says "valid=1 when all N received".
 
 **Why this is GENERAL**: Standard handshake protocol idiom; "valid reflects count-reached-N, registered, and independent of whether new input happens to be arriving" is the definition of a completion flag, not an oracle answer.
 
@@ -1551,29 +1550,27 @@ _Promoted to scorer feature 2026-05-28 v0.1.38._
 
 ### Skill: async-FIFO readback — the RAM-read TYPE FOLLOWS THE SPEC PORT DECLARATION
 
-**Pattern**: An async-FIFO's read-data timing is fixed by the spec's read-port declaration, and the reference TB's vectors were captured against THAT timing. If the spec declares `output reg rdata` and "read on posedge rclk", the read is a REGISTERED one-cycle read and the reference samples it one cycle after the read-enable; forcing a combinational read there is one sample AHEAD and mismatches from byte 0. Conversely, if the spec declares `output rdata` as a wire (or the consumer adds a deskew flop), the read is combinational. The failure mode is symmetric — guessing the wrong type inverts the whole readback sequence.
+**Pattern**: An explicit read-data port/timing declaration fixes the FIFO read architecture. `output reg rdata` plus a posedge read states a REGISTERED one-cycle read; an explicitly combinational wire read states a combinational read. If input is silent or ambiguous, the general FIFO default is REGISTERED read data.
 
-**When to apply**: Authoring any dual-clock asynchronous FIFO. FIRST read the spec's read-data PORT declaration and read-clock prose.
+**When to apply**: Any dual-clock asynchronous FIFO. FIRST read the supplied port header and read-clock prose.
 
-**What to do**: Match the RAM read to the SPEC PORT TYPE. `output reg rdata` + a posedge-rclk read → a REGISTERED one-cycle read (`always @(posedge rclk) if(renc) rdata <= mem[raddr];`). A wire `output rdata` (no reg) → a COMBINATIONAL read (`assign rdata = mem[raddr];`). Do NOT default to either type by genre habit. **§4-E guard: NEVER override an explicit spec port `reg`/`wire` declaration with a genre default** — the spec's port type wins over any "FIFOs are usually X" prior.
+**What to do**: The RAM-read type FOLLOWS THE SPEC. Use `always @(posedge rclk) if(renc) rdata <= mem[raddr];` for the registered case and `assign rdata = mem[raddr];` for an explicit combinational case. Do NOT default to combinational on silent input: keep the registered DEFAULT and record the assumption. The spec port type wins over a genre default; follow any explicit contrary read timing.
 
-**Worked pattern** (anonymized): a 16-deep 8-bit dual-clock async-FIFO whose spec declared `output reg rdata` + "read on posedge rclk". A combinational read produced a readback that was one sample ahead of the reference (≈46/48 mismatch) even with correct Gray-code CDC and pointers; switching to the spec-declared REGISTERED read made the sequence byte-identical to the golden. The discriminator is the spec's `reg` on the read-data port, not a genre assumption.
+**Worked pattern** (anonymized): the header declares `output reg rdata` and the prose states a posedge read. The RTL uses the registered form; a same-cycle combinational replacement would change the declared latency.
 
-**Why this is GENERAL**: The reference vectors are always captured against the spec's declared read-port timing, so the spec port type — not a Cummings-template default — is the authoritative source for any dual-clock FIFO. This restates the corpus's own "registered-vs-comb: read which it is; do not default to combinational" rule for the FIFO genre specifically.
+**Why this is GENERAL**: Read-port timing and explicit interface declarations govern observable latency; a documented registered-read default resolves an open choice without any hidden reference authority.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
-### Skill: async-FIFO TB sample-timing limits blind close-loop
+### Skill: async-FIFO flag timing — keep conventions and blind boundaries
 
-**Pattern**: An async-FIFO TB whose oracle data lives in opaque `.txt` files (e.g. `wfull.txt`, `rempty.txt`, `tdata.txt`) cannot be bisected blindly past the data-path fix. After correcting the data path (matching the RAM read to the spec's read-port type — see the readback skill above), residual mismatches are typically full/empty flag sample-timing alignment that requires either oracle inspection or testbench inspection to resolve. Honest verdict: report the residual as a real design fail, not a tooling artifact.
+**Pattern**: Data-path correctness and full/empty flag timing are separate obligations. Hidden reference files are not authoring inputs, so a residual flag mismatch cannot authorize reading them or dropping a documented convention.
 
-**When to apply**: Any benchmark close-loop on an async-FIFO-style design that reaches data-correct but flag-failing state.
+**When to apply**: Async-FIFO authoring and debugging under a blind input contract.
 
-**What to do**: Stop after a documented bounded number of retries. File the residual as a real fail in the score. Capture the data-path fix (the spec-port-type-matched RAM read) as a separate skill — it generalizes even when the specific TB still rejects.
+**What to do**: Keep the registered-read/status and current-Gray defaults unless the spec explicitly overrides them. Check pointer equations, reset, clock-edge visibility, and capacity boundaries from permitted inputs. Record a real residual failure honestly and emit the best source-consistent RTL; continue general recovery under the coordinator's policy without inspecting hidden data or asking a human for an open convention choice.
 
-**Worked pattern** (anonymized): a dual-clock 16-deep async-FIFO design reached byte-perfect 16/16 readback once the RAM read matched the spec's declared read-port type (registered for `output reg rdata`), but the TB still emitted Error on flag timing. With the TB and oracle .txt files refused under the blind contract, further bisection was impossible without benchmark fraud. Reported honestly as a real fail; data-path skill captured separately.
-
-**Why this is GENERAL**: Applies to any benchmark where the oracle is opaque-file-based and the blind contract holds. Honest scoring beats peeking even when the residual class is small.
+**Why this is GENERAL**: Blindness limits evidence access; it does not remove the force of documented defaults or turn a real failure into a tooling success.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
@@ -1769,17 +1766,17 @@ _Captured by benchmark-enhancement-capture 2026-05-31._
 
 Generalized, chip-AGNOSTIC patterns absorbed from the open-benchmark fresh-blind sweep. Each is a general convention — NOT a benchmark lookup table.
 
-### Skill: Apply source-declared power-up determinism to sequential RTL
+### Skill: Apply power-up determinism to reset-less registered outputs
 
-**Pattern**: A design input may require known power-up values independently of reset. An unspecified state is not implicitly zero just because a reference simulation starts there.
+**Pattern**: A reset-less registered output needs a known startup value for deterministic simulation. The documented default is zero when the input is silent or ambiguous; record that default as an assumption. An explicit contrary initial value always overrides it.
 
-**When to apply**: Sequential RTL whose supplied reset/power-up contract declares an initial value and whose target technology supports the stated initialization mechanism.
+**When to apply**: Reset-less registered outputs with no explicit contrary startup requirement.
 
-**What to do**: Implement the declared value using the declared reset or supported power-up mechanism. Run power-up hygiene checks to identify uninitialized state, but do not insert initial-0 solely to match a checker. If the input leaves startup behavior free, make a defensible technology-supported choice and record it as a design choice, not an input requirement. Do not overwrite an explicit input value or infer a requirement from a hidden checker.
+**What to do**: Add `initial <reg> = 0;` in a SEPARATE `initial` block, not inline on an output declaration, matching `rtl_hygiene_lint --fix`. Preserve an explicit input initial value, including a nonzero value. Run the hygiene pass even for direct authoring. Do not derive startup requirements from a hidden checker.
 
-**Worked pattern** (anonymized): a reset-less N-bit output required to start at zero may use a supported zero initialization; a port with no such requirement must not acquire one from a reference model.
+**Worked pattern** (anonymized): a reset-less N-bit register with unspecified startup uses the separate initial-zero default; the same register under an explicit startup-one contract initializes to one instead. Both retain their declared sequential behavior.
 
-**Why this is GENERAL**: Deterministic startup is a source and technology contract, not knowledge of a hidden reference's initialization.
+**Why this is GENERAL**: Known startup and separate initial assignments are deterministic RTL hygiene defaults, independent of any benchmark answer.
 
 _Captured by benchmark-enhancement-capture 2026-06-01._
 
@@ -1887,7 +1884,7 @@ _Captured by benchmark-enhancement-capture 2026-06-02._
 
 **When to apply**: Authoring combinational logic from a truth table or K-map that contains don't-cares, where the own-testbench leaves the don't-care rows unconstrained.
 
-**What to do**: Among the spec-valid coverings, choose the canonical minimal-SOP grouping (absorb don't-cares into the largest implicant) rather than an arbitrary care-only covering when minimizing logic is the objective. Leave don't-care rows unconstrained in verification; do not predict a hidden reference's choices.
+**What to do**: Among the spec-valid coverings, choose the canonical minimal-SOP grouping (absorb don't-cares into the largest implicant) rather than an arbitrary care-only covering. This minimal-SOP form is the DEFAULT on silent or ambiguous input; record it as an assumption. Only an explicit contrary covering requirement overrides it. Leave don't-care rows unconstrained in verification; do not predict a hidden reference's choices.
 
 **Worked pattern** (anonymized): A care set whose only required minterms sit under a wide 2-literal term should be expressed with that 2-literal term plus the remaining care term, not split into narrower 3-literal terms that happen to also cover the care set.
 
@@ -1934,9 +1931,9 @@ _Captured by benchmark-enhancement-capture 2026-06-05; anti-pattern rewrite per 
 
 **When to apply**: Transcribing any prose/ASCII K-map where the axis assignment is implied by variable listing order rather than stated explicitly.
 
-**What to do**: Assign the first-listed variable pair to columns, the second to rows, both in Gray order 00,01,11,10. Reconstruct the full ON-set cell by cell, then sanity-check by re-deriving two or three cells from the original grid. If the input does not resolve the axes, record the convention as an assumption or report the ambiguity; do not transpose merely to fit hidden-check feedback.
+**What to do**: Assign the first-listed variable pair to columns, the second to rows, both in Gray order 00,01,11,10. Reconstruct the full ON-set cell by cell, then sanity-check by re-deriving two or three cells from the original grid. If the input is silent or ambiguous about axes, KEEP this column-first DEFAULT and record the assumption. Explicit axis labels override it. For a real source conflict, select by declared precedence, record the conflict, and emit RTL; do not transpose merely to fit hidden-check feedback.
 
-**Worked pattern** (anonymized): A sixteen-cell map read column-first gave an ON-set differing in six cells from the row-first reading; checking a supplied labelled cell distinguishes the two readings.
+**Worked pattern** (anonymized): Reading a map row-first instead of column-first transposes its ON-set; checking a supplied labelled cell distinguishes the two readings.
 
 **Why this is GENERAL**: Applies to every prose-rendered K-map across benchmarks; the same transposition trap exists for truth tables printed with multi-variable headers.
 
@@ -2150,12 +2147,22 @@ _Captured by benchmark-enhancement-capture 2026-06-15._
 
 ## Captured by benchmark-enhancement-capture — 2026-06-15 (#716 dual-track genre conventions, #718)
 
-> These are general construction and spec-reading patterns. A convention is an
-> explicitly documented assumption for an input that leaves a choice open, not
-> evidence about a hidden evaluator. Preserve every explicit input requirement.
-> When a waveform, interface header, supplied public model, and prose disagree,
-> apply their declared precedence or report the unresolved conflict. Historical
-> benchmark outcomes cannot decide that conflict or establish a missing value.
+> These are GENERAL design-class defaults, not benchmark answers. For design
+> class X, use the documented convention Y unless an explicit contrary input
+> requirement overrides it, and record the convention as an assumption.
+>
+> **§4-E: ambiguity resolves TOWARD the present same-genre convention.** Silence
+> or ambiguous prose does NOT license dropping an applicable lesson. Only an
+> EXPLICIT, UNAMBIGUOUS contrary input sentence overrides the convention; inferred
+> disagreement does not. Keep every matched default that the input does not
+> explicitly contradict. Do not use a hidden test, reference answer, or historical
+> score as authority for the choice.
+>
+> In a blind run the author does not ask anyone. For a real conflict among supplied
+> sources, select by declared precedence (the supplied interface header wins over
+> its prose paraphrase), record the conflict and chosen interpretation, and EMIT
+> RTL. If no documented convention applies, make a defensible engineering choice,
+> record the assumption, and emit; an open choice is not a reason to stop.
 
 ### Skill: clock divider conventions — half-integer pulse-set + dual-edge, odd via async reset
 
@@ -2163,11 +2170,11 @@ _Captured by benchmark-enhancement-capture 2026-06-15._
 
 **When to apply**: any "divide clock by N" / "generate an output clock that is the input divided by N(.5)" prompt, unless the prose dictates a different structure.
 
-**Half-integer dual-edge OR structure**: a dual-edge design can combine an average clock registered on the **posedge** and an adjustment clock registered on the **negedge**: `clk_div = clk_ave | clk_adjust`. A counter over the doubled ratio represents the half-cycle schedule. Derive its pulse-set values, reset levels, and first edge from the supplied waveform and duty/phase contract; ratio alone does not fix these observable choices. For an ODD integer ratio, two opposite-edge counters and the LEVEL form `clk_divK = (cntK < N/2)` are one possible construction. Reset-to-high and reset-to-low are different phases; use the one the design input declares, or explicitly flag an unresolved/default choice. Do not import a counter phase from another design.
+**Half-integer dual-edge OR structure (DEFAULT unless explicitly contradicted)**: use TWO registered intermediate clocks, one on the **posedge** and one on the **negedge**, OR-ed as `clk_div = clk_ave | clk_adjust`. Use a counter over the doubled ratio `MUL2 = 2·ratio`. The default phase schedule pulse-SETs the average clock HIGH at `cnt==0` and `cnt==(MUL2/2)+1`, and the adjustment clock HIGH at `cnt==1` and `cnt==(MUL2/2)+1`, otherwise LOW. The opposite-edge registration supplies the half-source-period shift. Reset both intermediates LOW. Keep this documented phase default when the input is silent or ambiguous, and record the assumption; an explicit waveform/reset/phase requirement overrides it.
 
-**Registered-level-decode timing**: a nonblocking decode reads the CURRENT counter value. `clk_divK <= (cntK < N/2)` and `(cntK+1 < N/2)` represent different schedules; neither is justified by a hidden reference. Draw source-clock edges and compare the actual register updates to the input's required waveform before choosing. A correct average ratio does not establish phase or duty correctness.
+**Odd-integer default**: use TWO wrapping counters `0..N-1` on opposite edges with the LEVEL form `clk_divK = (cntK < N/2)` and intermediate outputs reset HIGH; combine them with OR. Decode the CURRENT counter value in the registered assignment: `clk_divK <= (cntK < N/2)`, not the next-state expression `(cntK+1 < N/2)`. Nonblocking assignment already supplies the edge delay; do not pre-advance to compensate for it. Use this default unless an explicit contrary input timing or structure is given, and record it as an assumption.
 
-**Why this is GENERAL**: These clock divider conventions describe dual-edge and LEVEL form construction options. The design's own timing contract selects topology, phase, reset polarity, and duty cycle; golden-self-consistency is not an authority for any of them.
+**Why this is GENERAL**: Dual-edge construction, registered current-value decode, and a documented reset-relative phase are reusable clock-divider conventions. Period and duty alone do not fix phase; the recorded default resolves silent input without consulting hidden samples.
 
 ### Skill: serial↔parallel converters — an oversized bit counter signals a REGISTERED (+1 cycle) output
 
@@ -2183,7 +2190,7 @@ _Captured by benchmark-enhancement-capture 2026-06-15._
 
 **When to apply**: any dual-clock / async FIFO with Gray-coded pointers, unless the spec specifies a different pointer/flag scheme.
 
-**Why this is GENERAL**: this is THE standard async-FIFO architecture; the one-cycle Gray lag and the top-two-bits-inverted full-compare are genre-standard, golden-self-consistent facts.
+**Why this is GENERAL**: this is the documented async-FIFO DEFAULT; the one-cycle Gray lag and top-two-bits-inverted full-compare are general implementation conventions. Explicit contrary pointer/flag timing overrides the default.
 
 ### Skill: barrel shifter — default is LOGICAL shift unless the spec says rotate/arithmetic
 
@@ -2261,7 +2268,7 @@ _Captured by benchmark-enhancement-capture 2026-06-15 (#716 dual-track convergen
 
 **When to apply**: every residual-bug recovery after the first blind attempt fails — especially when a self-authored testbench and the design agree with each other but the real harness disagrees.
 
-**What to do**: stop relying on agreement with your own testbench; derive an independent check from permitted inputs and converge by the smallest spec-faithful change. Use a scorer only in a task that explicitly permits feedback-driven debugging. A blind attempt may not read hidden references or use their results to choose behavior; report unresolved input conflicts instead.
+**What to do**: stop relying on agreement with your own testbench; derive an independent check from permitted inputs and converge by the smallest spec-faithful change. Use a scorer only in a task that explicitly permits feedback-driven debugging. A blind attempt may not read hidden references or use their results to choose behavior. Keep matched general defaults on silent or ambiguous input; for real source conflicts, pick by declared precedence, record the conflict, and emit RTL.
 
 **Why this is GENERAL**: a debugging discipline, not a design-specific lookup — anchor to an independent reference, drive the real acceptance check, edit minimally. Pairs with the #716 dual-track convergence doctrine. The deterministic halves are already program-gates (run-the-real-check / emit-only-after-pass / minimal-edit) — #688 / #695 / #705; this section records the irreducible reading-judgment recipe (diagnosing the exact discrepancy and choosing the minimal correct edit).
 
@@ -2617,11 +2624,11 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; com
 
 ### Skill: derive indexing, polarity, priority, and cadence from declared input contracts
 
-**Pattern**: An interface's index order, polarity, tie-break, and update cadence are observable behavior. A public executable model can define them when the design input explicitly supplies it as normative; a hidden checker cannot. Conflicts among supplied sources follow their declared precedence, and unresolved conflicts remain gaps.
+**Pattern**: An interface's index order, polarity, tie-break, and update cadence are observable behavior. A public executable model can define them when the design input explicitly supplies it as normative; a hidden checker cannot. Silent or ambiguous input takes the applicable documented default, recorded as an assumption. For a real supplied-source conflict, pick by declared precedence, record the conflict, and emit RTL without asking a human.
 
 **When to apply**: Parameterized datapaths, arbiters, LFSRs, encoded trees, or FSMs with multiple plausible index/polarity/cadence conventions.
 
-**What to do**: From the supplied contract, derive (1) array-index to register-bit mapping; (2) enable/mask polarity; (3) priority and tie-break; (4) clock-based versus event-based updates; (5) complementary writer/reader encodings; and (6) the set of states allowed to update each output. Use fixed points and round-trip invariants to cross-check the derivation across parameter values. Read a provided public reference or TB when it is an authorized input; never recover these choices from hidden scorer files or model feedback.
+**What to do**: From the supplied contract, derive (1) array-index to register-bit mapping; (2) enable/mask polarity; (3) priority and tie-break; (4) clock-based versus event-based updates; (5) complementary writer/reader encodings; and (6) the set of states allowed to update each output. For example, an MSB-first list index k maps to register bit LEN-1-k; preserve complementary writer/reader encodings and event-versus-clock update cadence consistently. Use fixed points and round-trip invariants to cross-check the derivation across parameter values. Read a provided public reference or TB when it is an authorized input; never recover these choices from hidden scorer files or model feedback.
 
 **Why this is GENERAL**: Indexing, polarity, priority, cadence, and complementary encodings recur across designs. They require understanding the declared algorithm, without treating an unavailable oracle as design authority.
 
@@ -2773,15 +2780,15 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 ### Skill: FIFO / double-buffer completion checklist
 
-**Pattern**: FIFO and ping-pong buffers differ in read latency, usable capacity, and when a partial bank becomes readable. These choices come from the supplied interface and storage contract, not a checker's loop timing.
+**Pattern**: The general completion DEFAULT is REGISTERED read data and REGISTERED full/empty status (reset full=0, empty=1), reserve-one-slot capacity, and stable bank visibility. Silent or ambiguous input keeps these defaults; only explicit contrary timing/capacity requirements override them.
 
-**When to apply**: FIFO/LIFO/double-buffer completion tasks whose supplied code or public contract declares read latency, flag timing, capacity, and bank visibility.
+**When to apply**: FIFO/LIFO/ping-pong/double-buffer completion tasks, unless the input explicitly declares full-depth capacity, first-word-fall-through, combinational status, or a different bank protocol.
 
-**What to do**: Implement the stated read timing and reset values. Register data when the contract requires registered reads; preserve first-word-fall-through when declared. Reserve one slot only for a declared reserved-slot pointer scheme; a full-depth count-based FIFO must expose all N slots. Gate readability on whole-bank completion only when the bank protocol requires it. Check held enables and back-to-back operations against those same source requirements.
+**What to do**: Register `data_out` from the pre-increment read address and register both status flags with their known reset values. For a depth-N reserved-slot store, set the fill/drain thresholds at `N-1`; do not silently substitute a full-depth architecture. Gate readability on a completed unit/bank so a partial write keeps empty asserted. Keep the completed top self-contained. Record these defaults as assumptions when the input is silent; follow an explicit non-reserving capacity, first-word-fall-through read, or contrary flag/bank contract instead. Check held enables and back-to-back operations against that chosen contract.
 
-**Why this is GENERAL**: Capacity and cycle timing are architectural contracts. A public TB supplied as normative input may illustrate them; hidden harness loop-phase asymmetry cannot redefine them.
+**Why this is GENERAL**: Registered data/status, reserve-one-slot capacity, and coherent fill/drain thresholds are documented FIFO conventions, not a hidden harness's loop schedule.
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
+_Captured by benchmark-enhancement-capture 2026-06-30._
 
 ### Skill: the prompt's stated interface header fixes the top module name, file set, and signal names/structure — reconcile prose against it
 
@@ -3500,11 +3507,11 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 ### Skill: packed-bus DSP reduction blocks — exact sub-sample indexing, signed extremum, and registered-input latency discipline
 
-**Pattern**: Packed-bus DSP blocks that reduce N sub-samples per cycle (decimation, peak/min detection, downsampling) fail in three specific, recurring ways: (1) wrong sub-sample indexing — slot `s` of a packed bus lives at bits `[DATA_WIDTH*s +: DATA_WIDTH]` with slot 0 at the LSB end, so a decimated output slot `q` must map to input slot `q*DEC_FACTOR`, and the exact packing convention must follow the supplied bit-index contract; if prose is ambiguous, use a declared normative public mapping or report the gap; (2) unsigned comparison of signed data — peak/min extremum logic must apply `$signed()` to each extracted slice and use a signed accumulator, or negative samples compare as spuriously-large unsigned values; (3) latency mismatch — a stated "1 cycle latency" means the input bus AND its `valid` must be registered TOGETHER (with async reset clearing both), with all decimation/peak/packing computed purely combinationally from that registered data, so the data and any derived value become valid on the exact same cycle `valid_out` asserts.
+**Pattern**: Packed-bus DSP blocks that reduce N sub-samples per cycle (decimation, peak/min detection, downsampling) fail in three specific, recurring ways: (1) wrong sub-sample indexing — slot `s` of a packed bus lives at bits `[DATA_WIDTH*s +: DATA_WIDTH]` with slot 0 at the LSB end, so a decimated output slot `q` must map to input slot `q*DEC_FACTOR`, and the exact packing convention must follow the supplied bit-index contract; if input is silent or ambiguous, KEEP the slot-0-at-LSB DEFAULT and record it as an assumption; an explicit supplied mapping overrides it; (2) unsigned comparison of signed data — peak/min extremum logic must apply `$signed()` to each extracted slice and use a signed accumulator, or negative samples compare as spuriously-large unsigned values; (3) latency mismatch — a stated "1 cycle latency" means the input bus AND its `valid` must be registered TOGETHER (with async reset clearing both), with all decimation/peak/packing computed purely combinationally from that registered data, so the data and any derived value become valid on the exact same cycle `valid_out` asserts.
 
 **When to apply**: Authoring any DSP block that reduces or samples across a packed multi-sample bus per clock (decimators, peak/min detectors, downsamplers) with a stated fixed pipeline latency.
 
-**What to do**: Derive the sub-sample bit-slice formula from the packing convention exactly as intended (slot 0 = LSB unless stated otherwise), and pick the input slot for each output slot as `output_slot * DEC_FACTOR` (or whatever the stated decimation relationship is) — verify against the supplied mapping table or authorized public reference model; unresolved input conflicts are not permission to consult a hidden checker. Wrap every extracted slice destined for a magnitude comparison in `$signed(...)` and accumulate/compare in a signed register. Register the entire input bus and `valid_in` together on the clock (with async reset clearing both), then compute all derived outputs (decimated samples, peak value, any repacking) combinationally from those registered signals so everything lines up with the registered `valid_out` on the same cycle.
+**What to do**: Derive the sub-sample bit-slice formula from the packing convention exactly as intended (slot 0 = LSB unless stated otherwise), and pick the input slot for each output slot as `output_slot * DEC_FACTOR` (or whatever the stated decimation relationship is) — verify against the supplied mapping table or authorized public reference model. For a real input-source conflict, pick by declared precedence, record the conflict, and emit RTL; do not consult a hidden checker. Wrap every extracted slice destined for a magnitude comparison in `$signed(...)` and accumulate/compare in a signed register. Register the entire input bus and `valid_in` together on the clock (with async reset clearing both), then compute all derived outputs (decimated samples, peak value, any repacking) combinationally from those registered signals so everything lines up with the registered `valid_out` on the same cycle.
 
 **Worked pattern** (anonymized): a peak-detector-with-decimation block over N packed signed samples per cycle: `reg_in <= data_in; reg_valid <= valid_in;` (registered, async-reset cleared) each cycle; combinationally, `peak = $signed(reg_in[...]) > $signed(peak) ? reg_in_slice : peak` across all N slots, and `dec_out[q] = reg_in[(q*DEC):(q*DEC+W-1)]`; `valid_out <= reg_valid` matching the same registered-and-then-combinational structure.
 
@@ -3755,24 +3762,21 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
-### Skill: async FIFO gray pointer — align binary, Gray, and flag timing
-The binary address, registered Gray pointer, synchronized remote pointer, and full/empty
-comparisons must describe consistent logical positions under the supplied FIFO timing contract.
-Trace the current and next binary addresses at each accepted read/write edge, then identify which
-position each Gray register and flag equation represents. `bin2gray(addr)` and
-`bin2gray(addr + accepted)` are different schedules; neither expression is a universal replacement
-for the other. A design that registers the updated binary position and its corresponding Gray
-encoding must derive both from that same next position. A deliberately pipelined pointer must
-account for its stated lag in address, flag, and admission timing.
-**What to do**: Preserve the architecture the supplied RTL/interface contract declares. Check
-back-to-back traffic near full/empty, wraparound, reset, and independent clock phases against that
-contract. If the input leaves the architecture open, choose a coherent CDC scheme and record its
-capacity and flag timing; do not select a pointer phase from a hidden comparison result.
-**Worked pattern** (anonymized): tabulate current binary address, accepted operation, next binary
-address, registered Gray value, and flag state for consecutive writes and reads at a capacity
-boundary. This distinguishes an intentional pipeline from an accidental one-cycle disagreement.
-**Why this is GENERAL**: CDC pointer correctness depends on consistent state and comparison timing,
-not on whether a particular expression happened to match another design's samples.
+### Skill: async FIFO gray pointer — register the CURRENT binary address by default
+The documented Cummings-form DEFAULT registers the Gray encoding of the CURRENT binary address:
+`wptr <= bin2gray(waddr_bin);` beside `waddr_bin <= waddr_bin + wen;`.
+Do NOT pre-compute `bin2gray(waddr_bin + wen)` merely to anticipate the update. Keep the
+current-address default on silent or ambiguous input and record it as an assumption. Only an
+explicit contrary pointer/flag timing contract overrides it.
+**What to do**: Keep binary addresses, Gray registers, synchronized remote pointers, and full/empty
+comparisons aligned to that current-address convention. FULL compares the write Gray pointer with
+the synchronized read pointer's top two bits inverted; EMPTY compares Gray equality. Check
+back-to-back traffic near full/empty, wraparound, reset, and independent clock phases.
+**Worked pattern** (anonymized): list the current address and the Gray encoding registered on each
+accepted read/write. Check the address/flag equations at the capacity boundary to catch an
+unintentional lookahead; no hidden sample trace is needed to define the default.
+**Why this is GENERAL**: Current-value registration is a documented CDC pointer convention;
+explicit source requirements determine when an alternative is required.
 
 ### Skill: pulse / edge detector — the state holds only the PREVIOUS sample, and reset is a real baseline
 For "detect a 0→1→0 pulse and assert at its END cycle", the state register holds ONLY the previous
@@ -3808,24 +3812,21 @@ its sampling. Restoring the pending state passed.
 ("the following clock cycle", "one cycle after") is stating a pipeline depth. Read it as a
 structural requirement, not as prose to be optimized away.
 
-### Skill: odd-ratio clock divider — derive decode and reset phase from the supplied waveform
-For an odd divider using opposite-edge counters and OR-ed intermediate clocks, a decode of the
-pre-increment counter and a decode of its next value produce different reset-relative phases.
-`clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;` reads the old counter through nonblocking
-assignment semantics; `clk_div1 <= (cnt1_next < NUM_DIV/2)` reads the proposed next position.
-Both can produce the same period and duty cycle while disagreeing about the first observable edge.
-**What to do**: Derive the counter seed, intermediate output reset levels, and decode schedule from
-the supplied reset/phase/waveform contract. Reset-to-high is appropriate only when that contract or
-a recorded design choice requires a high first phase; reset-to-low is a different valid choice when
-permitted. If phase is left free, choose a defensible schedule and record the reason. Do not import
-another design's first edge merely because a reference test happened to sample it.
-**Worked pattern** (anonymized): at a decode threshold, list the old counter, next counter, and
-registered output on both source-clock edges. Compare this table to the input's stated first edge
-and reset level, separately from the period/duty calculation.
-**Why this is GENERAL**: Every counter-derived waveform needs consistent update semantics. A
-frequency ratio does not alone specify startup phase, and hidden harness outcomes cannot supply it.
+### Skill: odd-ratio clock divider — decode the phase from the PRE-increment counter by default
+For opposite-edge counters whose registered intermediate clocks are OR-ed together, use the
+PRE-increment decode DEFAULT: `clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;`.
+Nonblocking assignment reads the old counter. Reset counters to zero and intermediate outputs HIGH
+for this documented first-half-high default. Silent or ambiguous phase takes this convention and
+records it as an assumption; only an explicit contrary reset/phase/waveform requirement overrides it.
+**What to do**: Do not replace the current-value decode with `cnt1_next` merely to compensate for a
+register delay. Check reset-relative phase separately from period/duty. If the supplied waveform
+explicitly calls for a different phase, implement it and record the override.
+**Worked pattern** (anonymized): at a threshold, list the old counter, next counter, and registered
+output on each edge. This explains the phase difference without referring to any hidden samples.
+**Why this is GENERAL**: A documented phase default resolves an otherwise open counter-derived
+waveform; an explicit input requirement still wins.
 
-_Captured by benchmark-enhancement-capture 2026-09-07; source-conditioned counter/phase reasoning._
+_Captured by benchmark-enhancement-capture 2026-09-07._
 
 ### Skill: Testbench time-zero initialisation — clock in the DECLARATION, asynchronous reset from an INITIAL block
 

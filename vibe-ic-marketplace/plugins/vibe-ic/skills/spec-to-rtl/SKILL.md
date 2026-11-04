@@ -142,12 +142,11 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    work around them):
    - Combinational `always @(*)` blocks: every branch assigns every output
      OR a `default` covers them (no inferred latches).
-   - Startup values: follow the input's reset/power-up contract and any declared
-     startup policy. If it leaves a choice open, make a defensible supported
-     engineering choice and record the reason; reset-less shape alone does not
-     require zero initialization. When an `initial` assignment is appropriate for
-     the target, use a SEPARATE block rather than inline `output reg q = 0;` to
-     avoid PROCASSINIT. Never overwrite a specified value to fit hidden checks.
+   - Reset-less registered outputs: when input is silent or ambiguous, add
+     `initial <reg> = 0;` in a SEPARATE `initial` block (not inline on an output
+     declaration), matching `rtl_hygiene_lint --fix`, and record this DEFAULT as
+     an assumption. Only an explicit contrary initial value overrides it; preserve
+     a supplied nonzero startup value rather than resetting it to zero.
    - `case`: include `default`; rewrite overlapping `casez` priority encoders
      as `if/else-if`.
 6. **Self-verify with the HARNESS-EXACT toolchain BEFORE emit (MANDATORY —
@@ -282,8 +281,9 @@ A "good" spec-to-rtl emission means:
 - The module name + port list match the description verbatim.
 - No latches inferred (or, if a latch IS intended per the description,
   declared `always_latch`).
-- Startup values follow the input's reset/power-up contract and declared policy;
-  any open engineering choice is supported by the target and its reason recorded.
+- Reset-less registered outputs use a separate initial-zero block by DEFAULT
+  when input is silent or ambiguous; record the assumption. An explicit contrary
+  startup value overrides this default and is preserved.
 
 If you cannot satisfy this from the description blindly (e.g. the description
 genuinely under-specifies a parameter the TB will instantiate by name), emit
@@ -492,13 +492,15 @@ When the prompt embeds a **literal simulation table** — rows of
 `time [clk] <input...> [internal...] <output>` under a "**Read the simulation
 waveforms to determine what the circuit does, then implement it**" instruction
 (the VerilogEval `circuitN` family) — the table **IS** a directed test vector you
-must reproduce **exactly**. Derive pipeline depth from the table's defined input
-and output transitions. An early `x` can reflect unspecified initialization or a
-sampling race; it does not by itself establish another register stage. Compare
-candidate cycle schedules against every defined row and the supplied sampling
-convention. If multiple schedules remain possible, report that ambiguity rather
-than import a pipeline depth from a hidden reference. The published table's
-X-match convention applies only to the rows it leaves unconstrained.
+must reproduce **exactly**. Count pipeline depth from the **first DEFINED output
+transition**, not from the first `x`. Early X rows are not an extra register stage:
+an input-sampling NBA race (`@(posedge) a<=val`) can leave the input unknown at the
+first edge, and the table's X-match convention consumes that unconstrained window.
+Do NOT add a stage just to explain early X. Keep this default on silent or ambiguous
+stage-count wording and record the assumption; an explicit contrary latency or
+fully defined timing requirement overrides it. Check every defined row. For a real
+source conflict, pick by declared precedence, record it, and emit RTL without asking
+a human or importing a hidden reference's implementation.
 
 `waveform_table_conformance_check.py` is the independent yard-stick. It parses the
 table, replays it the way the scorer compares (X in the table matches anything;

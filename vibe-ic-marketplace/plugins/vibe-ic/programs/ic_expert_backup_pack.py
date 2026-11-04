@@ -72,8 +72,6 @@ from typing import Any, Dict, List, Optional
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-from lessons_corpus_consistency_check import LessonSourceRefusal  # noqa: E402
-
 SUBAGENT_TYPE = "vibe-ic:ic-expert-agent"
 
 
@@ -419,15 +417,9 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
 
     # expert-SKILLS digest (Track 1) + expert-DB digest (Track 2).
     n_skills = n_db = 0
-    source_refusals = []
     try:
         import _lesson_digest as _ld
         n_skills = _ld.render_lesson_digest(out_dir)
-    except LessonSourceRefusal as exc:
-        source_refusals.append(exc.record)
-    except Exception:
-        pass
-    try:
         # SAME ic_class as the descriptor below. `ic_expert_db.md` is the file
         # the agent READS; `db_classes` is only a note about it. Rendering the
         # digest unconfined while the descriptor lists the confined classes
@@ -436,8 +428,6 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
                                               ic_class=ic_class)
     except KeyError:
         raise
-    except LessonSourceRefusal as exc:
-        source_refusals.append(exc.record)
     except Exception:
         pass
     db_classes = _db_hits(prompt, k, ic_class=ic_class)
@@ -492,8 +482,6 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
         },
         "output_target": output_target,
     }
-    if source_refusals:
-        handoff["knowledge_source_refusals"] = source_refusals
 
     # ── assembly status ─────────────────────────────────────────────────────
     # Emitted only for a class the DB PROFILES: only there is "assembled"

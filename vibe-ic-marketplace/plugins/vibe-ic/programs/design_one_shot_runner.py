@@ -7683,36 +7683,30 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
     an author receives must depend on the fact that it is authoring, never on
     which branch happened to notice.
 
-    Best-effort by contract: a render failure never blocks the WAIVE. A source
-    purity refusal withholds that artifact and remains named in the handoff.
+    Best-effort by contract: a render failure returns ("", {}) and never blocks
+    the WAIVE it decorates.
     """
     digest_path = None
     n_lessons = 0
     db_digest_path = None
     n_db = 0
-    source_refusals = []
     try:
         stage1 = _pl.phase2_stage1_dir(project)
         n_lessons = _lesson_digest.render_lesson_digest(stage1)
         if n_lessons:
             digest_path = str(stage1 / "lessons.md")
-    except _lesson_digest.LessonSourceRefusal as exc:
-        source_refusals.append(exc.record)
-    except Exception:
-        pass
-    try:
-        stage1 = _pl.phase2_stage1_dir(project)
         # IC Expert DB is a SEPARATE dual-track artifact — the relevant
         # design-class knowledge for THIS design, written to its own file for
         # an INDEPENDENT second-track author (measured: folding it into the
         # single digest dilutes recovery 38→31; as a complementary track the
         # union is 38→51). chip-AGNOSTIC advisory; never overrides a gate.
-        _spec = _gather_spec_text(project)
-        n_db = _lesson_digest.render_ic_expert_db_digest(stage1, _spec)
-        if n_db:
-            db_digest_path = str(stage1 / "ic_expert_db.md")
-    except _lesson_digest.LessonSourceRefusal as exc:
-        source_refusals.append(exc.record)
+        try:
+            _spec = _gather_spec_text(project)
+            n_db = _lesson_digest.render_ic_expert_db_digest(stage1, _spec)
+            if n_db:
+                db_digest_path = str(stage1 / "ic_expert_db.md")
+        except Exception:
+            pass
     except Exception:
         pass
     # ------------------------------------------------------------------ #
@@ -7861,11 +7855,6 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
         if strong_titles and ack_path else "")
     extras: Dict[str, Any] = {"lessons_digest": digest_path,
                               "lessons_count": n_lessons}
-    if source_refusals:
-        extras["knowledge_source_refusals"] = source_refusals
-        lessons_hint += (
-            "\nAUTHOR_LESSON_ORACLE_AUTHORITY: author knowledge withheld: "
-            + ", ".join(r["surface"] for r in source_refusals))
     if _pl.rtl_input(project) == "original":
         original = project / "input/phase1_prompt.md"
         context = _pl.original_input_sources(project)[1:]

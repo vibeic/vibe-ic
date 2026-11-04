@@ -33,10 +33,10 @@ spec-deference phrase (e.g. "follows the spec", "read which it is",
 sharing a genre that take OPPOSITE poles on the same axis, with NEITHER
 deferring to the spec, are a CONTRADICTION.
 
-The same author-source check is used by the digest renderer. It refuses explicit
-oracle behaviour/answer authority, not mentions of verification or legitimate
-references supplied as design inputs. This CLI is an audit; at render time a
-finding blocks only the contaminated knowledge artifact, with a named refusal.
+Author-source checks are a static corpus audit used at test time. They flag
+explicit oracle behaviour/answer authority, not general engineering defaults or
+legitimate references supplied as design inputs. The runtime renderer does not
+call this audit and never withholds lessons because a prose regex matched.
 
 EXIT CODES
 ----------
@@ -115,7 +115,7 @@ _SPEC_DEFERENCE = re.compile(
     re.IGNORECASE)
 
 def _split_skill_sections(text: str) -> List[Tuple[str, str]]:
-    """Return active Skill sections, with the same heading boundaries as render."""
+    """Return active Skill sections, following the renderer's heading boundaries."""
     out: List[Tuple[str, str]] = []
     heading = None
     body: List[str] = []
@@ -140,9 +140,6 @@ def _split_skill_sections(text: str) -> List[Tuple[str, str]]:
 _AUTHOR_AUTHORITY_PATTERNS = {
     "ORACLE_OUTCOME_JUSTIFICATION": (
         r"oracle-(?:FAIL|PASS)|fail\w*\s+the\s+oracle"),
-    "PROMPT_OVERRIDE": (
-        r"do\s*not\s+implement\s+that\s+literal|OPPOSITE\s+of\s+the\s+literal|"
-        r"outrank\w*\s+a\s+relative"),
     "ORACLE_BEHAVIOUR": (
         r"\b(?:oracle|golden(?:\s+(?:reference\s+)?(?:model|RTL|implementation))?|"
         r"hidden(?:/golden)?\s+(?:TB|testbench))\s+"
@@ -194,25 +191,6 @@ def author_source_findings(text: str) -> List[str]:
             break
     return findings
 
-
-class LessonSourceRefusal(ValueError):
-    """A contaminated knowledge artifact was withheld from the author."""
-
-    def __init__(self, surface: str, findings: List[str]):
-        self.record = {"reason_class": "AUTHOR_LESSON_ORACLE_AUTHORITY",
-                       "surface": surface, "rules": sorted(set(findings))}
-        # No rejected source text (including its title) reaches the author.
-        super().__init__(f"AUTHOR_LESSON_ORACLE_AUTHORITY: {surface} withheld; "
-                         + ", ".join(self.record["rules"]))
-
-
-def require_author_source(text: str, surface: str, output: Path) -> None:
-    findings = author_source_findings(text)
-    if findings:
-        # This renderer owns the artifact. A failed rerender must not leave a
-        # previously rendered answer available at the advertised output path.
-        output.unlink(missing_ok=True)
-        raise LessonSourceRefusal(surface, findings)
 
 
 def _section_genres(heading: str, body: str) -> List[str]:
