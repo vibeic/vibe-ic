@@ -127,6 +127,23 @@ def test_legacy_named_reset_with_complete_witness_stays_covered():
     assert report["blocked"] is False, report
 
 
+@pytest.mark.parametrize("form", ["nonzero_inline", "zero_task"])
+def test_existing_valid_reset_witnesses_outside_inline_zero_grammar_stay_covered(form):
+    prompt, rtl, tb = fixture()
+    tb = tb.replace('"clear"', '"synchronous reset value"')
+    if form == "nonzero_inline":
+        prompt = prompt.replace("[4:0]", "[7:0]").replace("clearing state to zero", "setting state to 165")
+        rtl = rtl.replace("[4:0]", "[7:0]").replace("5'd0", "8'd165")
+        tb = tb.replace("[4:0]", "[7:0]").replace("5'd0", "8'd165")
+    else:
+        task = "task tick; begin clock_i=1; #1; end endtask\n"
+        tb = tb.replace("clock_i=1; #1;", "tick;")
+        tb = tb.replace("initial begin", task + "initial begin")
+    report, reset = measured(prompt, rtl, tb)
+    assert reset["covered"] is True, reset
+    assert report["blocked"] is False, report
+
+
 @pytest.mark.parametrize("complete", [False, True])
 def test_ordinary_program_review_consumer_reads_same_obligation(tmp_path, complete):
     import benchmark_dispatch as dispatch
