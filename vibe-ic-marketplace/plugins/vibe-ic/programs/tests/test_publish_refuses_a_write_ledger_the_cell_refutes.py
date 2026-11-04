@@ -195,3 +195,20 @@ def test_publish_still_works_with_no_ledger_at_all(tmp_path):
     run = _make_run(tmp_path, None)
     r = _publish(run, tmp_path / "dest")
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+
+
+def test_external_gds_cannot_refute_a_ledger_absence_or_require_a_guessed_top(tmp_path):
+    from flow_artifact_paths import GDS_SPEC
+    cell = tmp_path / 'cell'
+    (cell / 'reports').mkdir(parents=True)
+    ledger = _ledger(GDS_SPEC)
+    ledger['undetermined'] = ['OUTPUT_TOP_UNBOUND: typed invocation top is absent or unsafe']
+    (cell / 'reports/write_ledger.json').write_text(json.dumps(ledger))
+    assert B.stale_write_ledger(cell) == []
+    # A real literal contradiction still refuses on the very same ledger.
+    ledger['steps'].extend(_ledger(_REAL)['steps'])
+    (cell / 'reports/write_ledger.json').write_text(json.dumps(ledger))
+    (cell / _REAL).parent.mkdir(parents=True)
+    (cell / _REAL).write_text('module neutral; endmodule\n')
+    problems = B.stale_write_ledger(cell)
+    assert len(problems) == 1 and _REAL in problems[0]
