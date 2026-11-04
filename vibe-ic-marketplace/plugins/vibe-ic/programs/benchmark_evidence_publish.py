@@ -159,7 +159,8 @@ ladder (the citing document's directory, then each ancestor to the cell root).
 A rung that names a regular file in the RUN tree is STAGED at that same
 relative path: it is evidence by definition, the document's own proof, and the
 reader following the pointer finds it exactly where the document said.
-Citation copies are bounded UTF-8 text: at most 1,000,000 bytes per file and
+Files already selected by the copy plan stay in the cell; closure only decides
+extra files. Citation-added copies are bounded UTF-8 text: at most 1,000,000 bytes per file and
 10,000,000 source bytes per cell, deduplicated by published path (#3315).
 Only public run logs and legitimate project proof inputs of the declared
 text types are eligible; private/reference/answer datasets, build residue,
@@ -1480,8 +1481,8 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
     """Decide -- and, when the answer is STAGED, perform -- the closure of
     ONE citation. Returns `(decision, path)`.
 
-    The first rung that answers wins, in the gate's order. Existing copies
-    obey the same text policy and budget as newly discovered evidence. A
+    The first rung that answers wins, in the gate's order. Planned files
+    already belong to the cell; citation policy only admits extra files. A
     regular, allowed, bounded UTF-8 project file is staged with its digest.
     Layout artefacts and the steps/ view retain their own routing policies.
     A citation with no rung in the run is
@@ -1489,25 +1490,25 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
     ladder still reaches (`ic/<IC>/…`, `ic/…`) and this program does not
     stage."""
     if Path(cite).is_absolute():
-        if not rel_doc.endswith(".json"):
-            return "UNALLOWED_TEXT", cite
         try:
             rungs = [Path(cite).resolve().relative_to(run_dir.resolve()).as_posix()]
         except ValueError:
             return "UNALLOWED_TEXT", cite
+        if not rel_doc.endswith(".json") and rungs[0] not in cell_rels:
+            return "UNALLOWED_TEXT", cite
     else:
         rungs = _closure_rungs(rel_doc, cite)
     for rung in rungs:
+        if rung in cell_rels:
+            if rung.startswith(_STEPS_DIRNAME + "/"):
+                return _CLOSURE_STEP_VIEW, rung
+            return _CLOSURE_IN_CELL, rung
         src = run_dir / rung
         if not src.is_file():
-            if rung in cell_rels:
-                return _CLOSURE_IN_CELL, rung
             continue
         if rung.startswith(_STEPS_DIRNAME + "/"):
             return _CLOSURE_STEP_VIEW, rung
         if is_layout_artefact(src):
-            if rung in cell_rels:
-                return _CLOSURE_IN_CELL, rung
             return _CLOSURE_LAYOUT, rung
         if over_ceiling(src):
             return _CLOSURE_OVER_CEILING, rung
@@ -1538,13 +1539,12 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
         text_state["bytes"] += len(payload)
         text_state["files"][rung] = {
             "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
-        already = rung in cell_rels
         if not dry:
             target = dest / rung
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload)
         cell_rels.add(rung)
-        return (_CLOSURE_IN_CELL if already else _CLOSURE_STAGED), rung
+        return _CLOSURE_STAGED, rung
     import posixpath
     norm = posixpath.normpath(cite)
     if not norm.startswith(".."):
@@ -1673,6 +1673,8 @@ def close_citations(run_dir: Path, dest: Path,
                     and candidate.resolve().is_relative_to(run_dir.resolve())
                     and candidate.is_file()):
                 record["bytes"] = candidate.stat().st_size
+                if decision == _CLOSURE_IN_CELL:
+                    record['sha256'] = _sha256(candidate)
             if path in text_state["files"]:
                 record.update(text_state["files"][path])
             result["records"].append(record)
@@ -1697,15 +1699,6 @@ def close_citations(run_dir: Path, dest: Path,
                 queued.add(path)
                 worklist.append((run_dir / path, path))
 
-            if decision not in (_CLOSURE_STAGED, _CLOSURE_IN_CELL,
-                                _CLOSURE_ABOVE_CELL, _CLOSURE_LAYOUT, _CLOSURE_STEP_VIEW):
-                # A copied subtree is not an escape from the citation budget.
-                # Remove only this cited target from this freshly staged cell.
-                if path in cell_rels:
-                    cell_rels.discard(path)
-                    if not dry and (dest / path).is_file():
-                        (dest / path).unlink()
-
     accepted = {_CLOSURE_STAGED, _CLOSURE_IN_CELL, _CLOSURE_ABOVE_CELL,
                 _CLOSURE_LAYOUT, _CLOSURE_STEP_VIEW, "DESCRIPTION_REBOUND"}
     rebound = {}
@@ -1726,13 +1719,14 @@ def close_citations(run_dir: Path, dest: Path,
                  if isinstance(data.get(key), str)]
         prose = rows.get(description)
         if (prose and prose["decision"] == _CLOSURE_ABSENT and len(named) == 2
-                and all(r and r["path"] in text_state["files"] for r in named)):
+                and all(r and r["path"] in cell_rels for r in named)):
             # A compound human description is not itself a filesystem path.
             # Rebind only to BOTH explicitly named, packaged report/state
             # files; never guess a basename or fabricate a missing state.
             rebound[rel_doc] = [r["path"] for r in named]
             prose.update(decision="DESCRIPTION_REBOUND", destination="in-cell",
-                         path=named[0]["path"], **text_state["files"][named[0]["path"]])
+                         path=named[0]["path"],
+                         **text_state["files"].get(named[0]["path"], {}))
             result["absent"] = [r for r in result["absent"]
                                 if (r["doc"], r["cited"]) != (rel_doc, description)]
     unavailable = {r["doc"] for r in result["records"] if r["decision"] not in accepted}
@@ -1793,7 +1787,7 @@ def close_citations(run_dir: Path, dest: Path,
     # Citation documents can have been made portable or honestly amended.
     # Bind the delivered bytes as well as their original source bytes.
     for row in result["records"]:
-        if row["path"] in text_state["files"]:
+        if 'sha256' in row:
             row["source_sha256"] = row["sha256"]
             target = dest / row["path"]
             if not dry and target.is_file():
@@ -2007,7 +2001,8 @@ def collect_step_records(run_dir: Path, dest: Path) -> Tuple[List[dict], List[di
 
 
 def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
-                  route='not-retained', layout_out=None) -> Dict[str, object]:
+                  route='not-retained', layout_out=None,
+                  cell_rels=None) -> Dict[str, object]:
     """Stage the per-step evidence RECORD into the cell.
 
     Writes `steps/<folder>/STEP_RECORD.json` (self-contained: no host-absolute
@@ -2024,12 +2019,7 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
     """
     result: Dict[str, object] = {
         "present": (run_dir / _STEPS_DIRNAME).is_dir(),
-        # WHERE a declared output can be read is decided against the STAGED
-        # cell, so on --dry-run there is nothing to decide it against. Say so
-        # rather than report the split every entry would fall into by default
-        # ("out of scope"), which is the answer an empty directory gives to
-        # every question.
-        "location_determined": not dry,
+        "location_determined": not dry or cell_rels is not None,
         "n_steps": 0, "n_declared": 0, "n_in_cell": 0,
         "n_out_of_scope": 0, "n_zero_byte": 0,
         "n_dangling": 0, "n_absent": 0, "n_records_copied": 0,
@@ -2042,50 +2032,76 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
     except Exception as exc:                       # never fatal to a publish
         result["error"] = f"{type(exc).__name__}: {exc}"
 
+    planned = cell_rels if cell_rels is not None else set()
+    steps_dest = dest / _STEPS_DIRNAME
+    for v in verbatim:
+        target = dest / v["rel"]
+        try:
+            if not dry:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(Path(v["src"]), target)
+            planned.add(v["rel"])
+            result["n_records_copied"] = int(result["n_records_copied"]) + 1
+        except OSError:
+            continue
+    canonical_folders = set()
+    attempts = 0
+    for folder in sorted((run_dir / _STEPS_DIRNAME).glob('[0-9][0-9][0-9]_*')):
+        if not folder.is_dir() or folder.is_symlink():
+            continue
+        copied_here = []
+        count, layouts = _copy_tree(folder, steps_dest / folder.name, dry,
+                                    rel_base=run_dir, route=route, public_only=True,
+                                    copied_out=copied_here)
+        planned.update(rel for _src, rel in copied_here)
+        retained = sum(1 for _src, rel in copied_here
+                       if Path(rel).parent.parent.name == folder.name
+                       and Path(rel).name == 'result.json')
+        if retained:
+            canonical_folders.add(folder.name)
+            attempts += retained
+        result['n_records_copied'] += count
+        if layout_out is not None:
+            layout_out.extend(layouts)
+
+    # The run's selected rows, not the number of historical attempts or the
+    # legacy symlink-view directories. Both histories still ship as before.
+    plan = run_dir / 'reports/flow109/plan.json'
+    result['n_legacy_steps'] = len(steps)
+    result['n_canonical_attempts'] = attempts
+    if plan.is_file():
+        from step_output_collector import flow109_step_folder
+        selected = {flow109_step_folder(row) for row in json.loads(plan.read_text())['rows']}
+        result['n_selected_rows'] = len(selected)
+        result['n_steps'] = len(selected & canonical_folders)
+    else:
+        result['n_steps'] = len(steps) + len(canonical_folders)
+
     counts = {"IN_CELL": 0, "OUT_OF_PUBLISHED_SCOPE": 0, "ZERO_BYTE": 0,
               "DANGLING_IN_RUN": 0, "ABSENT_IN_RUN": 0}
     for s in steps:
         for o in s["declared_outputs"]:
-            counts[str(o["decision"])] = counts.get(str(o["decision"]), 0) + 1
-    result.update(
-        n_steps=len(steps),
-        n_declared=sum(counts.values()),
-        n_in_cell=counts["IN_CELL"] if not dry else -1,
-        n_out_of_scope=counts["OUT_OF_PUBLISHED_SCOPE"] if not dry else -1,
-        n_zero_byte=counts["ZERO_BYTE"],
-        n_dangling=counts["DANGLING_IN_RUN"],
-        n_absent=counts["ABSENT_IN_RUN"])
-
-    if dry:
-        result["n_records_copied"] = len(verbatim)
-        return result
-
-    steps_dest = dest / _STEPS_DIRNAME
-    for s in steps:
-        sdir = steps_dest / s["folder"] if s["folder"] != "." else steps_dest
-        sdir.mkdir(parents=True, exist_ok=True)
-        (sdir / _STEP_RECORD_FILENAME).write_text(
-            json.dumps(s, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
-    for v in verbatim:
-        target = dest / v["rel"]
-        try:
+            if cell_rels is not None and o['decision'] in ('IN_CELL', 'OUT_OF_PUBLISHED_SCOPE'):
+                o['in_cell'] = o['rel'] in planned
+                o['decision'] = 'IN_CELL' if o['in_cell'] else 'OUT_OF_PUBLISHED_SCOPE'
+            counts[str(o['decision'])] += 1
+        rel = (Path(_STEPS_DIRNAME) / s['folder'] / _STEP_RECORD_FILENAME).as_posix()
+        planned.add(rel)
+        if not dry:
+            target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(Path(v["src"]), target)
-            result["n_records_copied"] = int(result["n_records_copied"]) + 1
-        except OSError:
-            continue
-    for folder in sorted((run_dir / _STEPS_DIRNAME).glob('[0-9][0-9][0-9]_*')):
-        if not folder.is_dir() or folder.is_symlink():
-            continue
-        count, layouts = _copy_tree(folder, steps_dest / folder.name, dry,
-                                    rel_base=run_dir, route=route, public_only=True)
-        result['n_steps'] += len(list(folder.glob('*/result.json')))
-        result['n_records_copied'] += count
-        if layout_out is not None:
-            layout_out.extend(layouts)
+            target.write_text(json.dumps(s, indent=2, ensure_ascii=False) + '\n',
+                              encoding='utf-8')
+    result.update(
+        n_declared=sum(counts.values()),
+        n_in_cell=counts['IN_CELL'] if result['location_determined'] else -1,
+        n_out_of_scope=counts['OUT_OF_PUBLISHED_SCOPE'] if result['location_determined'] else -1,
+        n_zero_byte=counts['ZERO_BYTE'], n_dangling=counts['DANGLING_IN_RUN'],
+        n_absent=counts['ABSENT_IN_RUN'])
+
     if steps:
-        steps_dest.mkdir(parents=True, exist_ok=True)
+        planned.add(f'{_STEPS_DIRNAME}/{_STEP_INDEX_FILENAME}')
+    if steps and not dry:
         (steps_dest / _STEP_INDEX_FILENAME).write_text(
             json.dumps({"source_run_had_steps_tree": bool(result["present"]),
                         "steps": [{k: s[k] for k in
@@ -2099,7 +2115,9 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
                        indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8")
 
-    _write_step_routing(dest, steps, result)
+    planned.add(_STEP_ROUTING_FILENAME)
+    if not dry:
+        _write_step_routing(dest, steps, result)
     return result
 
 
@@ -2776,18 +2794,18 @@ def publish(args: argparse.Namespace) -> dict:
     # NOT_PUBLISHED after having been staged would be a false entry in the
     # one file whose whole value is that it can be trusted.
     shared_input = ic_root / "input"
-    input_result, input_recs = _stage_shared_input(run_dir, args, shared_input,
-                                                   dry, route, residue_out=residue)
+    input_result, input_recs, input_count = _stage_shared_input(
+        run_dir, args, shared_input, dry, route, residue_out=residue)
     layout_records.extend(input_recs)
 
     # Per-step evidence. AFTER the subtrees + the GDS, because each declared
     # output's decision is "can a reader of THIS cell find it", and that is not
     # answerable until the cell is populated. Publishes records only — no
     # symlink is created and none is copied.
-    steps_result = publish_steps(run_dir, dest, dry, route=route, layout_out=layout_records)
+    steps_result = publish_steps(run_dir, dest, dry, route=route,
+                                 layout_out=layout_records, cell_rels=cell_rels)
     if steps_result["n_steps"]:
-        staged.append(f"steps/ ({steps_result['n_steps']} "
-                      f"{_STEP_RECORD_FILENAME}"
+        staged.append(f"steps/ ({steps_result['n_steps']} step(s)"
                       + (f" + {steps_result['n_records_copied']} record file(s)"
                          if steps_result["n_records_copied"] else "") + ")")
     staged.append(_STEP_ROUTING_FILENAME)
@@ -2819,6 +2837,7 @@ def publish(args: argparse.Namespace) -> dict:
     write_citation_routing(dest, citation_records, dry, closure=closure)
     staged.append(_ROUTING_FILENAME)
     staged.append(_CITATION_ROUTING_FILENAME)
+    cell_rels.update((_ROUTING_FILENAME, _CITATION_ROUTING_FILENAME))
     excluded_total = sum(1 for r in layout_records if r["decision"] == "ROUTED_AWAY")
 
     # Rewrite the (already-copied) provenance.jsonl with pruned-at-publish
@@ -2879,6 +2898,9 @@ def publish(args: argparse.Namespace) -> dict:
         "verdict_source": str(verdict_src),
         "result_md_verdict": rmd_verdict,
         "dest": str(dest),
+        "file_count": len(cell_rels),
+        "shared_input_file_count": input_count,
+        "total_file_count": len(cell_rels) + input_count,
         "gds_manifest": manifest_line,
         "gds_source": [str(g) for g in gds_files],
         "staged": staged,
@@ -3061,17 +3083,17 @@ def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
                         shared_input: Path, dry: bool,
                         route: str = "not-retained",
                         residue_out: Optional[List[dict]] = None
-                        ) -> Tuple[str, List[dict]]:
+                        ) -> Tuple[str, List[dict], int]:
     """Copy the design-input docs to ic/<IC>/input/ once. Non-fatal: on a 2nd/3rd
     PDK for the same IC the shared input already exists and is left untouched.
 
-    Returns (message, layout_records). Design docs are not normally layout
+    Returns (message, layout_records, files_to_copy). Design docs are not normally layout
     artefacts, but the input dir usually sits UNDER the run — so anything the
     inventory would otherwise sweep up as NOT_PUBLISHED has to be accounted
     for here first, or the record would contradict itself.
     """
     if shared_input.is_dir() and any(shared_input.iterdir()) and not args.force:
-        return f"kept existing {shared_input}", []
+        return f"kept existing {shared_input}", [], 0
     src: Optional[Path] = None
     if args.input_docs:
         src = Path(args.input_docs).resolve()
@@ -3085,14 +3107,14 @@ def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
                 src = cand
                 break
     if src is None:
-        return "no design-input docs found to stage (shared input unchanged)", []
+        return "no design-input docs found to stage (shared input unchanged)", [], 0
     dst = shared_input / "docs"
     c, recs = _copy_tree(src, dst, dry, rel_base=run_dir, route=route,
                          residue_out=residue_out)
     for r in recs:
         if r["decision"] == "STAGED":
             r["destination"] = "shared-input"
-    return f"staged {c} input doc(s) -> {dst}", recs
+    return f"staged {c} input doc(s) -> {dst}", recs, c
 
 
 def _git_ignored(dest: Path, rels: set) -> set:
@@ -3297,6 +3319,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     verb = "WOULD STAGE" if summary["dry_run"] else "STAGED"
     print(f"[{verb}] {summary['ic']} × {summary['pdk']}  ->  {summary['dest']}")
+    print(f"  files       : {summary['file_count']} in cell, "
+          f"{summary['shared_input_file_count']} shared input, "
+          f"{summary['total_file_count']} total")
     print(f"  verdict     : {summary['verdict']} (source: {summary['verdict_source']})")
     print(f"  pdk revision: {summary['pdk_revision']} "
           f"(read from the tree that ran, not from --pdk)")
