@@ -104,3 +104,39 @@ def test_actual_public_d14_reopens_retained_qualified_evidence_without_native_re
         assert report['steps'][0]['name']=='formal_verification'
         assert report['steps'][0]['extras']['completed'] is False
         assert report['steps'][0]['extras']['metric_acceptance']['qualification']=='PASS'
+
+
+@pytest.mark.parametrize('damage',['current','owner_hash','missing_cover','cover','required_partition'])
+def test_retained_formal_public_result_still_requires_existing_admission(reach_case,monkeypatch,damage):
+    import flow109_metric_acceptance as metrics
+    project,context=reach_case
+    _write_dft_intent(project,monkeypatch,scan=False)
+    for layer,field in [('L10_TEST_CASES','test_cases'),('L12_BEHAVIORAL_SEQUENCES','behavioral_sequences')]:
+        put(project/('phase1/generated_docs/'+layer+'.json'),{'scope':'SOFTWARE_NEUTRAL_UPSTREAM_INPUT',field:[]})
+    software_covers(project)
+    context=software_qualified_binding(project,context)
+    assert metrics.accept_d14(project,context)['status']=='PASS'
+    formal=project/'phase2/stage1/formal'
+    if damage=='owner_hash':
+        path=formal/'results.json';native=json.loads(path.read_text())
+        native['program_owner_sha256']['formal_property_run.py']='a'*64;put(path,native)
+    elif damage=='missing_cover': (formal/'reachability/results.json').unlink()
+    elif damage=='cover':
+        path=formal/'reachability/results.json';native=json.loads(path.read_text())
+        native['tasks'][0]['property']='wrong_target';put(path,native)
+    elif damage=='required_partition':
+        path=project/'requirements/base_08/proof_partition_coverage.json';native=json.loads(path.read_text())
+        native['required_items']=[{'task':'foreign_required_task'}];put(path,native)
+    public=_public_d09_entry(project,monkeypatch)
+    put(project/'manifest.json',{key:context[key] for key in ('features','runtime_tool_uses','qualification_registry')})
+    argv=[arg for arg in sys.argv if arg not in ('--skip-phase1','--skip-phase3','--skip-analog')]
+    for flag in ('--entry-step','--exit-step'): argv[argv.index(flag)+1]='D14'
+    monkeypatch.setattr(sys,'argv',argv)
+    monkeypatch.setattr(public.subprocess,'run',lambda *a,**kw:pytest.fail('current retained proof must not launch a child'))
+    assert public._main()==(0 if damage=='current' else 2)
+    row=json.loads((project/'reports/flow109/default_rows/D14.json').read_text())
+    assert row['default_row_status']==('PASS' if damage=='current' else 'NOT_MEASURED'),row
+    if damage!='required_partition':
+        assert row['component_status']=='PASS' and row['native_measurements']['tasks']
+    assert row['completed'] is (damage=='current')
+    assert row['delivery_accepted'] is False

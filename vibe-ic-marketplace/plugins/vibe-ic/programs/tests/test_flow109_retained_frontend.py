@@ -221,9 +221,12 @@ def test_public_frontend_reads_native_reports_without_a_producer_rerun(tmp_path,
     args, _ = case(tmp_path, step)
     monkeypatch.setattr(flow109, 'dft_source_intent', lambda *a: pytest.fail(
         'completed native work must not enter the old DFT receipt wrapper'))
-    assert flow109.prepare_front_door(args, tmp_path) == 0
+    context=flow109.execution_context(flow109.resolve_plan(profile()),step,step)
+    assert flow109._retained_native_result(tmp_path,context)['component_status']=='PASS'
+    expected='NOT_MEASURED' if step=='D14' else 'PASS'
+    assert flow109.prepare_front_door(args, tmp_path) == (2 if step=='D14' else 0)
     row = json.loads((tmp_path / f'reports/flow109/default_rows/{step}.json').read_text())
-    assert row['default_row_status'] == 'PASS'
+    assert row['default_row_status'] == expected
     assert row['native_started'] is False
     assert row['native_measurements']
 
@@ -388,8 +391,11 @@ def test_current_formal_source_owns_early_proof_without_later_synthesis(tmp_path
     import formal_proof_evidence_check as checker
     args,_,formal,native=native_formal_case(tmp_path,status=status,later_synthesis=later_synthesis)
     assert checker.proof_source_staleness(tmp_path,formal,native)==[]
-    expected='NOT_MEASURED' if status=='PARTIAL' else status
+    component='NOT_MEASURED' if status=='PARTIAL' else status
+    expected='FAIL' if status=='FAIL' else 'NOT_MEASURED'
     context=flow109.execution_context(flow109.resolve_plan(profile()),'D14','D14')
+    retained=flow109._retained_native_result(tmp_path,context)
+    assert retained['component_status']==component and retained['reason']=='D14_RETAINED_NATIVE_REPORT',retained
     if caller=='entry':
         assert flow109.prepare_front_door(args,tmp_path)=={'PASS':0,'FAIL':1,'NOT_MEASURED':2}[expected]
     else:
