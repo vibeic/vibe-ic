@@ -67,6 +67,7 @@ def test_named_connection_local_alias_is_behaviorally_bound():
     "comments_only", "wrong_retained_value", "same_time_retention", "no_assertion",
     "aliased_input", "helper_driven_control", "wrong_polarity",
     "zero_data_at_clear", "irrelevant_control", "ignores_clear",
+    "second_sequential_driver", "disabled_reset_branch", "non_scalar_control",
 ])
 def test_incomplete_or_unbound_clear_witness_stays_blocked(change):
     prompt, rtl, tb = fixture()
@@ -109,6 +110,12 @@ def test_incomplete_or_unbound_clear_witness_stays_blocked(change):
         tb = tb.replace("purge_i=1;", "unrelated=1; payload=0;")
     elif change == "ignores_clear":
         rtl = rtl.replace("if (purge_i) state <= 5'd0; else ", "")
+    elif change == "second_sequential_driver":
+        rtl = rtl.replace("endmodule", "always @(posedge purge_i) state<=0; endmodule")
+    elif change == "disabled_reset_branch":
+        rtl = rtl.replace("always @", "if (0) begin always @").replace("endmodule", "end endmodule")
+    elif change == "non_scalar_control":
+        rtl = rtl.replace("input purge_i,", "input [2:0] purge_i,")
     report, reset = measured(prompt, rtl, tb)
     assert reset["covered"] is False, reset
     assert report["blocked"] is True, report
@@ -118,3 +125,19 @@ def test_legacy_named_reset_with_complete_witness_stays_covered():
     report, reset = measured(*fixture("rst_n", active=0))
     assert reset["covered"] is True, reset
     assert report["blocked"] is False, report
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_ordinary_program_review_consumer_reads_same_obligation(tmp_path, complete):
+    import benchmark_dispatch as dispatch
+    prompt, rtl, tb = fixture()
+    if not complete:
+        tb = "\n".join(line for line in tb.splitlines() if '"retention"' not in line)
+    design = tmp_path / "unit.sv"
+    challenge = tmp_path / "check.sv"
+    design.write_text(rtl)
+    challenge.write_text(tb)
+    result = dispatch._program_review_coverage_result(prompt, {"rtl_paths": [str(design)]},
+        [{"path": str(challenge), "sha256": dispatch._sha256_text(tb)}])
+    assert result["status"] == ("PASS" if complete else "FAIL"), result
+    assert result["blocking_gaps"] == (0 if complete else 1), result
