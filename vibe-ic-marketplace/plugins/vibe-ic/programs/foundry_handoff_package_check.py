@@ -710,8 +710,8 @@ def sha256_file(path):
 
 def layout_member_sources(project):
     """{member name: the file it must be derived from}. The SIGNED-OFF GDS
-    (`phase3/stage4/gds/<name>`) wins; a PnR GDS only supplies a name the
-    signed-off set lacks. Scribe stubs and comparison references are never
+    (`phase3/stage4/gds/<name>`) set wins; PnR is a fallback only when that
+    set is empty. Scribe stubs and comparison references are never
     members (their own rules name them)."""
     project = Path(project)
     out = {}
@@ -726,6 +726,8 @@ def layout_member_sources(project):
                    for sfx in REFERENCE_ONLY_SUFFIXES):
                 continue
             out.setdefault(g.name, g)
+        if out:
+            break
     return out
 
 

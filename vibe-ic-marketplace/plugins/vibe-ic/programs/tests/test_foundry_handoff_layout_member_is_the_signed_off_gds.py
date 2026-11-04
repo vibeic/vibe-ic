@@ -128,3 +128,15 @@ def test_a_recorded_digest_that_no_longer_matches_is_refused(tmp_path):
         json.dumps({"layout_members": {"spm.gds": {"sha256": "0" * 64}}}))
     stale = C.stale_layout_members(proj)
     assert stale and "records a different digest" in stale[0]["why"], stale
+
+
+def test_pnr_layouts_remain_the_fallback_when_no_final_gds_exists(tmp_path):
+    pnr = tmp_path / 'phase3/stage3/pnr'
+    pnr.mkdir(parents=True)
+    legacy = pnr / 'legacy_name.gds'
+    legacy.write_bytes(OLD)
+    final = tmp_path / 'phase3/stage4/gds'
+    final.mkdir(parents=True)
+    # Comparison-only data is not a signed-off layout set.
+    (final / 'comparison.prefinish.gds').write_bytes(NEW)
+    assert C.layout_member_sources(tmp_path) == {legacy.name: legacy}
