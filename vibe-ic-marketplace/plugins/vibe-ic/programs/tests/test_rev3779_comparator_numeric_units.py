@@ -220,3 +220,97 @@ def test_byte_counts_keep_exact_value_sign_and_dimension(tmp_path):
         assert result["usable"] is False
         assert result["tokens_unaskable"][0]["reason"] == "NUMERIC_UNIT_UNSUPPORTED"
         assert track.token_paths({"target": token}, token) == []
+
+
+@pytest.mark.parametrize("scalar, token", [
+    ("Power must remain below 5 mW", "0.005 W"),
+    ("| area | 100,000 µm² | maximum |", "100000 um2"),
+    ("Operate at −40 °C through startup", "-40 °C"),
+    ("offset (+1.25e-3 V) at nominal bias", "1.25 mV"),
+    ("delay [5.5 ns] measured", "5500 ps"),
+    ("packet 512-bit plus 66 cycles", "512 bit"),
+    ("packet 512-bit plus 66 cycles", "66 cycles"),
+    ("lengths 55 bytes / 56 bytes / 119 bytes", "55 byte"),
+    ("lengths 55 bytes / 56 bytes / 119 bytes", "56 bytes"),
+    ("lengths 55 bytes / 56 bytes / 119 bytes", "119 bytes"),
+    ("Set 1.0000000000000001 V before sampling", "1000.0000000000001 mV"),
+    ("Temperature is 27 deg C during sampling", "27 °C"),
+    ("Rate exceeds 2 MS/s during sampling", "2000000 S/s"),
+    ("Power <5 mW.", "5 mW"),
+])
+def test_explicit_prose_quantities_use_shared_readers(tmp_path, scalar, token):
+    blob = {"quantity": {"target": scalar}}
+    case = raw_project(tmp_path, json.dumps(blob))
+    for path in ("/quantity", "/quantity/target", "quantity.target"):
+        assert_both_readers(case, expectation(token, path), True)
+    assert track.token_paths(blob, token) == ["quantity.target"]
+
+
+@pytest.mark.parametrize("record", [{"unit": "unrecognized"}, {"unit": "mV"}, {}])
+def test_inline_prose_unit_keeps_ownership_and_scope(tmp_path, record):
+    blob = {"quantity": {"target": "Supply is 1 V during operation", **record},
+            "other": {"target": "Supply is 2 V during operation"}}
+    case = raw_project(tmp_path, json.dumps(blob))
+    for stem in ("L5_ADI_SPEC", "L19_CONSTRAINTS_PDK"):
+        (case / "phase1/generated_docs" / f"{stem}.json").write_text('{}')
+    for path in ("/quantity", "/quantity/target", "quantity.target"):
+        assert_both_readers(case, expectation("1 V", path), True)
+        assert_both_readers(case, expectation("2 V", path), False)
+    assert track.token_paths(blob, "1 V") == ["quantity.target"]
+    assert track.owning_layers_answer(case, ["1 V"])["layers"] == ["L22_VERIFICATION_PLAN"]
+    assert track.token_carriage(case, ["1 V"])["verdict"] == track.CARRIAGE_NAMED_FIELD
+
+
+@pytest.mark.parametrize("scalar, token", [
+    ("Power is 5 mWextra", "5 mW"), ("Power is 5 mW/s", "5 mW"),
+    ("Area is 5 m · m", "5 m"), ("Area is 5 m × m", "5 m"),
+    ("Area is 5 m ⋅ m", "5 m"),
+    ("Power is 5 mystery mW", "5 mW"), ("Power is 5 frobs", "5"),
+    ("Power is 5 mw", "5 mW"), ("Power is 5 mW", "5"),
+    ("Power is -5 mW", "5 mW"), ("Power is 5 mW", "-5 mW"),
+    ("Power is 5 mW", "5 V"), ("Value is 1,00 V", "100 V"),
+    ("Value is 1,00 V", "0 V"), ("Value is 1e+ V", "1 V"),
+    ("Value is 1e+ 5 V", "5 V"), ("Value is 1.5.5 V", "5 V"),
+    ("Value is v1.5.5 V", "5 V"), ("Value is id5 V", "5 V"),
+    ("Value is _5 V", "5 V"), ("Value is 0x5 V", "5 V"),
+    ("Value is 1e999999999999999999999 V", "1 V"),
+    ("Range is 0–5 V", "5 V"), ("Range is 0-5 V", "5 V"),
+    ("Range is 0 - 5 V", "5 V"), ("Range is 0 -5 V", "-5 V"),
+    ("Range is 0 to 5 V", "5 V"),
+    ("Range is 0 V to 5 V", "0 V"), ("Range is 0 V – 5 V", "0 V"),
+    ("Power is 5 mW / s", "5 mW"), ("Power is 5 mW /s", "5 mW"),
+    ("Power is 5 mW /", "5 mW"), ("Power is 5 V / mW", "5 V"),
+    ("Slew is 5 V per ns", "5 V"), ("Area is 5 m ^2", "5 m"),
+    ("Area is 5 m * m", "5 m"), ("Source is draft.md: (55 V)", "55 V"),
+    ("Value is 1e 5 V", "5 V"),
+    ("See source.md:55 V", "55 V"), ("See source.md: 55 V", "55 V"),
+    ("See line 55", "55"), ("See source.md:55", "55"),
+    ("Use 66 cycles", "66"),
+    ("Use 55 / 56 bytes", "55 bytes"),
+    ("Power is 1.0000000000000001 V", "1 V"),
+])
+def test_prose_quantity_atoms_never_rescue_invalid_prefixes(tmp_path, scalar, token):
+    blob = {"quantity": {"target": scalar}}
+    case = raw_project(tmp_path, json.dumps(blob))
+    assert_both_readers(case, expectation(token), False)
+    assert track.token_paths(blob, token) == []
+
+
+@pytest.mark.parametrize("blob, path, token", [
+    ({"quantity": {"line": "Limit is 5 V"}}, "/quantity/line", "5 V"),
+    ({"quantity": {"header_line": "Limit is 5 V"}}, "/quantity/header_line", "5 V"),
+    ({"quantity": {"sha256": "Limit is 5 V"}}, "/quantity/sha256", "5 V"),
+    ({"quantity": {"digest": "Limit is 5 V"}}, "/quantity/digest", "5 V"),
+    ({"quantity": {"target": True}}, "/quantity/target", "1"),
+    ({"quantity": {"5 V": "absent"}}, "/quantity", "5 V"),
+    ({"quantity_mHZ": {"target": "Limit is 5 Hz", "unit": "Hz"}},
+     "/quantity_mHZ/target", "5 Hz"),
+    ({"quantity": {"target": ["Limit is 5", "V"]}}, "/quantity/target", "5 V"),
+    ({"quantity": {"target": "absent"}, "other": "Limit is 5 V"},
+     "/quantity/target", "5 V"),
+])
+def test_prose_quantity_discovery_keeps_leaf_eligibility(tmp_path, blob, path, token):
+    case = raw_project(tmp_path, json.dumps(blob))
+    assert_both_readers(case, expectation(token, path), False)
+    if "other" not in blob:
+        assert track.token_paths(blob, token) == []
