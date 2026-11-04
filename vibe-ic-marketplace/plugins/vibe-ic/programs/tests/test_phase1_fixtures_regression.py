@@ -1026,6 +1026,9 @@ def test_parameter_table_ownership_keeps_flow_settings_in_l19(tmp_path, heading,
     ('## Synthesis\n\n### Top Entity - Generics', None),
     ('## Physical Integration\n\n### RTL\n\n#### Parameters', None),
     ('## Integration\n\n### Parameters', None),
+    ('## Synthesis\n\n### Module\n\n#### Parameters', None),
+    ('## Physical Integration\n\n### Entity\n\n#### Generics', None),
+    ('## Synthesis\n\n### Module `neutral`\n\n#### Parameters', None),
 ])
 def test_parameter_table_ownership_preserves_neighboring_rtl_parameters(tmp_path, module_heading, constraint_first):
     fixture = Path(__file__).parent / 'fixtures/phase1_local/parameter_table_ownership/constraint_table.md'
