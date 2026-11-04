@@ -377,6 +377,13 @@ def _runner_child_report_current(project: Path, binding: dict, receipt: dict,
             or source != _runner_source_snapshot(argv, consumer=source["consumer"]["path"])):
         raise ValueError("child owner source/generation/material differs")
 
+    if native_step == "1":
+        outer = _read_json_regular(project / "reports/orchestrator/vibe_ic_one_shot.json")
+        launched = (outer.get("d09_finalization") or {}).get("launched_invocation_id")
+        prior = (receipt["reports_before"].get("phase2_one_shot.json") or {}).get("runner_binding") or {}
+        if launched != binding["invocation_id"] or prior.get("invocation_id") == binding["invocation_id"]:
+            raise ValueError("D09 child was not launched by the current parent")
+
 
 def _runner_owner_report_current(project: Path, binding: dict, receipt: dict) -> None:
     """Reopen the actual child owner behind an outer current publication."""
