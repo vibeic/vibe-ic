@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +26,36 @@ _spec = importlib.util.spec_from_file_location(
 P = importlib.util.module_from_spec(_spec)
 sys.modules["ic_expert_backup_pack"] = P
 _spec.loader.exec_module(P)
+
+
+def test_file_loaded_pack_assembles_from_clean_isolated_subprocess(tmp_path):
+    code = """
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("ic_expert_backup_pack", sys.argv[1])
+pack = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pack)
+handoff = pack.assemble(
+    "Design a sequential multiplier with shift-add and a valid/done handshake.",
+    None, None, [], [], Path(sys.argv[2]))
+print(json.dumps(handoff))
+"""
+    dest = tmp_path / "pack"
+    cp = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", code,
+         str(_PROGRAMS / "ic_expert_backup_pack.py"), str(dest)],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stderr
+    handoff = json.loads(cp.stdout)
+    assert handoff["subagent_type"] == "vibe-ic:ic-expert-agent"
+    assert handoff["dual_track"]["track1_general_blind"]["n_skills"] > 150
+    assert handoff["dual_track"]["track2_db_informed"]["n_db_lessons"] > 0
+    assert (dest / "lessons.md").is_file()
+    assert (dest / "ic_expert_db.md").is_file()
+    assert json.loads((dest / "ic_expert_agent_handoff.json").read_text()) == handoff
 
 
 def test_iface_to_contract_v_header_only():
@@ -135,7 +166,6 @@ def test_phase1_ai_subtrack_handoff_keeps_expectation_authoring_scope(tmp_path):
     assert (dest / h['read_design_input_from']).read_text() == MIXED_ROLES
 
 
-import subprocess
 import pytest
 
 _PUBLIC_ROLE_CASES = json.loads((Path(__file__).parent / "fixtures" /

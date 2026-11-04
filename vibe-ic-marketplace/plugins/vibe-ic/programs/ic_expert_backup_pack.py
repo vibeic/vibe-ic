@@ -68,10 +68,11 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from lessons_corpus_consistency_check import LessonSourceRefusal
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
+
+from lessons_corpus_consistency_check import LessonSourceRefusal  # noqa: E402
 
 SUBAGENT_TYPE = "vibe-ic:ic-expert-agent"
 
