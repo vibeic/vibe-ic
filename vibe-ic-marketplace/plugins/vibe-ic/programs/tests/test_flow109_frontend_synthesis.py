@@ -435,6 +435,33 @@ def test_default_synthesis_uses_registered_owner_without_qualification_claim(tmp
     assert flow109.source_owned_native_admission(claimed) is None
 
 
+@pytest.mark.parametrize('debug', [0, 1])
+def test_native_synthesis_elaboration_decides_debug_file_operation(tmp_path, monkeypatch, debug):
+    publish_d09(tmp_path, {'requires_scan': False, 'reason': 'neutral control does not require scan'})
+    context = engineering_case(tmp_path, monkeypatch)
+    source = tmp_path / 'phase2/stage1/rtl/unit_alpha.v'
+    source.write_text('module unit_alpha(input a,output y); assign y=a; '
+                     f'localparam DEBUG={debug}; integer fd; '
+                     'initial if (DEBUG) fd=$fopen("debug.log","w"); endmodule\n')
+    assert frontend.prepare(tmp_path, context)['manifest']['top'] == 'unit_alpha'
+    native = subprocess.run([shutil.which('yosys'), '-Q', '-T', '-p',
+        f'read_verilog {source}; hierarchy -check -top unit_alpha; proc; check -assert'],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert (native.returncode == 0) is (debug == 0), native.stdout + native.stderr
+    if debug:
+        assert '$fopen' in native.stdout + native.stderr
+
+
+@pytest.mark.parametrize('external', ['`include "outside.vh"', 'initial $readmemh("outside.hex", mem);'])
+def test_external_source_input_refusal_is_preserved(tmp_path, monkeypatch, external):
+    publish_d09(tmp_path, {'requires_scan': False, 'reason': 'neutral control does not require scan'})
+    context = engineering_case(tmp_path, monkeypatch)
+    source = tmp_path / 'phase2/stage1/rtl/unit_alpha.v'
+    source.write_text(external + '\n' + source.read_text())
+    with pytest.raises(admission.AdmissionRefusal, match='D22_TRANSITIVE_INPUT_UNIMPLEMENTED'):
+        frontend.prepare(tmp_path, context)
+
+
 @pytest.mark.parametrize('status,complete,expected', [('PASS', True, 'NOT_MEASURED'),
                                                       ('PASS', False, 'NOT_MEASURED'),
                                                       ('FAIL', False, 'FAIL'),
