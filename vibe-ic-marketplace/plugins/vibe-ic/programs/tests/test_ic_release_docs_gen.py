@@ -572,3 +572,47 @@ def test_the_qualification_section_is_titled_by_question_and_names_no_programme(
     text = (docs_dir(project) / "RELEASE_NOTES.md").read_text(encoding="utf-8")
     assert "## 5. Third-Party Qualification Status" in text
     assert "names no programme" in text
+
+
+def test_every_product_document_carries_native_limits_without_approval_or_errata_claim(tmp_path):
+    project = build_project(tmp_path / 'scoped', releases=(SUBJECT,))
+    records = project / 'reports/flow109/default_rows'
+    records.mkdir(parents=True)
+    (records.parent / 'plan.json').write_text(json.dumps({'rows': [
+        {'id': 'R1', 'position': 95, 'name': 'Final electrical analysis'}]}))
+    (records / 'R1.json').write_text(json.dumps({
+        'unmeasured_obligations': ['signal EM', 'thermal and aging', 'extractor qualification'],
+        'dynamic_ir_status': 'NOT_MEASURED',
+        'native_result': {'unmeasured_obligations': ['ESD characterization']}}))
+    result = run(project)
+    assert result.returncode == RC_PASS, result.stdout + result.stderr
+    for path in docs_dir(project).glob('*.md'):
+        text = path.read_text()
+        for scope in ('signal EM', 'thermal and aging', 'extractor qualification',
+                      'dynamic ir', 'ESD characterization', 'ESD simulation'):
+            assert scope in text, (path, scope)
+        assert 'not a tape-out approval' in text and 'manufactured part' in text
+        assert 'No erratum is open against this release.' not in text
+        assert 'signed off here is manufacturability' not in text
+
+
+def test_product_identity_uses_the_same_run_sources_as_the_html_documents(tmp_path):
+    project = build_project(tmp_path / 'native', releases=(SUBJECT,))
+    (project / 'input/project.json').unlink()
+    provenance = project / 'phase3/librelane_pdk_root.provenance.json'
+    provenance.write_text(json.dumps({'pdk': 'gf180mcuD'}))
+    result = run(project)
+    assert result.returncode == RC_PASS, result.stdout + result.stderr
+    rows = derived_rows((docs_dir(project) / 'PRELIMINARY_DATASHEET.md').read_text())
+    assert ('Design', 'widget', '`phase1/generated_docs/L1_DATASHEET.json`') in rows
+    assert ('Target PDK', 'gf180mcuD', '`phase3/librelane_pdk_root.provenance.json`') in rows
+
+
+def test_valid_bus_and_supply_ports_do_not_claim_a_false_view_disagreement(tmp_path):
+    project = build_project(tmp_path / 'bus', releases=(SUBJECT,))
+    netlist = project / 'phase3/stage3/pnr/widget_pnr.v'
+    netlist.write_text('module widget(input [1:0] din, output dout, inout vpwr, vgnd); endmodule\n')
+    result = run(project)
+    assert result.returncode == RC_PASS, result.stdout + result.stderr
+    notes = (docs_dir(project) / 'RELEASE_NOTES.md').read_text()
+    assert 'View disagreement recorded' not in notes

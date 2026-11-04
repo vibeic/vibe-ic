@@ -221,3 +221,46 @@ def test_by_id_refuses_a_class_it_does_not_have(tmp_path):
     project = build_project(tmp_path / "p")
     with pytest.raises(KeyError):
         A.audit(project).by_id("no_such_class")
+
+
+def test_final_native_drc_supersedes_the_retired_legacy_audit(tmp_path):
+    import json
+    project = build_project(tmp_path / 'native')
+    (project / A.DRC_REL).write_text(json.dumps({'verdict': 'FAIL', 'summary': {
+        'checked': False, 'files_found': 0, 'terminal_verdict': 'NOT_CHECKED'}}))
+    report = project / 'reports/phase3/native_drc.rpt'
+    report.write_text('native DRC: zero errors\n')
+    path = project / 'reports/flow109/components/D65.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'drc': {'verdict': 'PASS', 'native_reports': [str(report)]}}))
+    state = A.audit(project).by_id('drc')
+    assert state.findings == [] and state.facts['drc_verdict'] == 'PASS'
+    assert state.facts['drc_reports_read'] == 1
+    assert state.source() == 'reports/flow109/components/D65.json'
+    report.unlink()
+    assert A.audit(project).by_id('drc').refused
+
+
+def test_documents_use_selected_native_layout_timing_and_activity_power(tmp_path):
+    import json
+    project = build_project(tmp_path / 'native')
+    routed = project / A.DEF_REL
+    final_def = routed.with_name('filled.def')
+    final_def.write_text(routed.read_text().replace('240000 160000', '480000 160000'))
+    state_path = project / 'phase3/final/state_out.json'
+    state_path.write_text(json.dumps({'def': str(final_def)}))
+    component = project / 'reports/flow109/components/D70.json'
+    component.parent.mkdir(parents=True)
+    component.write_text(json.dumps({'sta_state': {'path': str(state_path)},
+        'corners': {'nominal': {'setup_ws': 0.42, 'hold_ws': 0.08}}}))
+    activity = project / 'reports/phase3/functional_activity.json'
+    activity.write_text(json.dumps({'component_status': 'PASS', 'modes': {
+        'reset': {'power': {'total_w': 0.012}},
+        'active': {'power': {'total_w': 0.018}}}}))
+    audit = A.audit(project)
+    assert audit.by_id('def').facts['die_width_um'] == 480
+    assert audit.by_id('sta').facts['corners_recorded'] == 1
+    assert audit.by_id('sta').source() == 'reports/flow109/components/D70.json'
+    assert audit.by_id('power').facts['mode_total_power_w'] == {'reset': 0.012, 'active': 0.018}
+    state_path.write_text('{}')
+    assert not A.audit(project).by_id('def').present

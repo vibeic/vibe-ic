@@ -123,7 +123,6 @@ from _release_docs_build import (
     Field,
     constraint_body,
     delivered_dft_access_constraint,
-    identity,
     layer,
     layer_count,
     layer_text,
@@ -292,7 +291,8 @@ def power_fields(project: Path, audit: _art.ArtefactAudit,
                     ("isolation_cells",)),
         layer_count(project, "L21_POWER_INTENT", "Level shifters",
                     ("level_shifters",)),
-    ]
+    ] + [measured(f"Estimated total power, {name} (W)", value, power.source())
+         for name, value in sorted(power.facts.get('mode_total_power_w', {}).items())]
 
 
 def contents_fields(audit: _art.ArtefactAudit) -> List[Field]:
@@ -442,64 +442,18 @@ class Release:
     constraints: List[Constraint] = dc_field(default_factory=list)
     register_rich: bool = False
     register_rich_source: str = ""
-    conflicts: List[str] = dc_field(default_factory=list)
 
     def ident(self) -> List[Field]:
         return [self.design, self.pdk, self.release, self.tree]
 
 
-def _pin_conflicts(project: Path, audit: _art.ArtefactAudit) -> List[str]:
-    """DEF vs gate-level netlist, RECORDED here and REFUSED by the gate.
-
-    ``release_docs_check`` decides this on its own evidence. Recording it here
-    as well is not a second verdict: the manifest carries it so a reader of the
-    DOCUMENTS can see that a disagreement existed, which a reader who never
-    opens the gate's JSON otherwise cannot.
-    """
-    def_state = audit.by_id("def")
-    stated = def_state.facts.get("signal_pins")
-    if stated is None:
-        return []
-    netlist = _netlist_ports(project)
-    if netlist is None:
-        return []
-    count, where = netlist
-    if count == stated:
-        return []
-    return [f"DEF vs gate-level netlist signal port count: "
-            f"`{def_state.source()}` states {stated}; `{where}` declares "
-            f"{count}"]
-
-
-#: Where the route leaves the gate-level netlist. A glob rather than a fixed
-#: name because the emitter names it after the design, and the design name is
-#: exactly the literal a chip-AGNOSTIC program may not carry.
-PNR_NETLIST_GLOB = "phase3/stage3/pnr/*_pnr.v"
-
-
-def _netlist_ports(project: Path) -> Optional[Tuple[int, str]]:
-    """The logical port count the route's own netlist declares, re-derived.
-
-    Uses ``digital_hardmacro_check.parse_verilog`` — the tree's existing
-    Verilog port reader — rather than a second one, so this cannot disagree
-    with step 37.5ip about what a port is.
-    """
-    import digital_hardmacro_check as _hm
-    hits = sorted(project.glob(PNR_NETLIST_GLOB))
-    if len(hits) != 1:
-        # NOT a guess between candidates. Two netlists is two answers, and
-        # picking one would make the cross-check depend on sort order.
-        return None
-    parsed = _hm.parse_verilog(
-        hits[0].read_text(encoding="utf-8", errors="replace"), "[]<>")
-    ports = parsed.get("ports")
-    return ((len(ports) if isinstance(ports, set) else 0),
-            _art.rel(project, hits[0]))
-
-
 def build_release(project: Path, name: str,
                   audit: _art.ArtefactAudit) -> Release:
-    design, pdk = identity(project)
+    resolved = _tap.resolve_identity(project)
+    design, pdk = (unmeasured(label, source) if value == NOT_MEASURED
+                   else measured(label, value, source)
+                   for label, (value, source) in zip(('Design', 'Target PDK'),
+                       (resolved['design'], resolved['pdk'])))
     rich, rich_source = register_rich(project)
     metrics, _rel = _metrics(project)
     gds_state = audit.by_id("gds")
@@ -509,7 +463,6 @@ def build_release(project: Path, name: str,
         release=measured("Release", name, gds_state.source(_art.DEF_REL)),
         constraints=constraints_for(project, audit),
         register_rich=rich, register_rich_source=rich_source,
-        conflicts=_pin_conflicts(project, audit),
     )
 
 
@@ -614,20 +567,17 @@ def release_notes(rel: Release) -> Tuple[str, List[Field]]:
     verification = verification_fields(rel.audit, rel.metrics)
     every = ident + contents + verification
     limitations = [
-        "- Silicon measurement: not performed. There is no characterised "
-        "timing, no measured power, no temperature range and no yield datum "
-        "in this release. Every number in this set is a tool estimate over "
-        "this run's own artefacts.",
-        "- Functional correctness is not the subject of this release. What is "
-        "signed off here is manufacturability and the substance of the "
-        "artefacts the sign-off was decided over.",
+        "- Post-silicon measurements are NOT_MEASURED. These documents claim "
+        "no characterized operating-temperature range, manufacturing yield "
+        "or fabricated-part qualification. Quantities cite this run's input "
+        "or generated evidence; missing quantities remain NOT_MEASURED.",
+        "- These documents report the cited design-verification results and "
+        "artifact contents. They grant no tape-out approval and establish no "
+        "manufactured part or manufacturing qualification.",
         "- This is a PRELIMINARY datasheet set. A production datasheet "
         "requires post-silicon characterisation evidence that does not exist "
         "at this step.",
     ]
-    if rel.conflicts:
-        limitations += [f"- View disagreement recorded: {c}"
-                        for c in rel.conflicts]
     spec = _spec(RELEASE_NOTES)
     body = document(
         f"Release Notes — {rel.design.value}",
@@ -652,15 +602,11 @@ def errata(rel: Release) -> Tuple[str, List[Field]]:
         (
             (spec.sections[0], table(ident)),
             (spec.sections[1],
-             "No erratum is open against this release.\n\n"
-             "This document is emitted with an empty open list rather than "
-             "omitted. Errata update POST-SHIPMENT, on a cadence the design "
-             "release does not control; a release that ships without the "
-             "document has nowhere to record the first one, and the absence "
-             "of the file is indistinguishable from a release with no known "
-             "issues."),
+             "Errata tracking status is NOT_MEASURED: no errata tracking "
+             "record was supplied. The measurement limits below remain open; "
+             "an empty tracking record does not establish an issue-free design."),
             (spec.sections[2],
-             "No erratum has been closed against this release."),
+             "Closed errata are NOT_MEASURED: no errata closure record was supplied."),
             (spec.sections[3],
              "Report an erratum against the release identified in section 1, "
              "quoting the Tree SHA above. An erratum reported against a "
@@ -754,11 +700,6 @@ def manifest_yaml(rel: Release, written: Sequence[Tuple[str, Path]],
         lines.append(f"    requirement: {yaml_str(spec.requirement)}")
         lines.append(f"    sha256: {yaml_str(sha256_of(path))}")
     lines.append("unresolved_placeholders: []")
-    if rel.conflicts:
-        lines.append("source_conflicts:")
-        lines.extend(f"  - {yaml_str(c)}" for c in rel.conflicts)
-    else:
-        lines.append("source_conflicts: []")
     return "\n".join(lines) + "\n"
 
 
@@ -787,8 +728,10 @@ def emit(project: Path, out_dir: Path, name: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     written: List[Tuple[str, Path]] = []
     all_fields: List[Field] = []
+    scope = _tap.measurement_scope(project)
     for filename, text, fields in built:
         path = out_dir / filename
+        text += '\n## Measurement scope and limitations\n\n' + scope + '\n'
         atomic_write_text(path, text)
         written.append((filename, path))
         all_fields.extend(fields)

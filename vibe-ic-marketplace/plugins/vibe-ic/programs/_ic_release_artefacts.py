@@ -318,6 +318,15 @@ DEF_REL = "phase3/stage3/pnr/routed.def"
 def _def_class(project: Path, release: str = "") -> ClassState:
     state = ClassState("def", "Placed and routed layout (DEF)")
     path = _pl.pnr_dir(project) / "routed.def"
+    native_path = project / 'reports/flow109/components/D70.json'
+    if native_path.is_file():
+        electrical = _read_json(native_path) or {}
+        selected = electrical.get('sta_state', {})
+        native = _read_json(project / selected['path']) if selected.get('path') else {}
+        if not isinstance(native, dict) or not isinstance(native.get('def'), str):
+            state.absent_reason = 'The selected final native State has no readable DEF view.'
+            return state
+        path = project / native['def']
     if not path.is_file():
         state.absent_reason = (
             f"{rel(project, path)} is absent, so no artefact of this run "
@@ -490,24 +499,26 @@ STA_REL = "reports/phase3/sta/post_route_summary.json"
 
 def _sta_class(project: Path, release: str = "") -> ClassState:
     state = ClassState("sta", "Post-route timing")
-    path = project / STA_REL
+    source = ('reports/flow109/components/D70.json'
+              if (project / 'reports/flow109/components/D70.json').is_file() else STA_REL)
+    path = project / source
     if not path.is_file():
         state.absent_reason = (
-            f"{STA_REL} is absent, so no artefact of this run states a "
+            f"{source} is absent, so no artefact of this run states a "
             f"post-route slack")
         return state
-    state.paths = [STA_REL]
+    state.paths = [source]
     doc = _read_json(path)
     if doc is None:
         state.findings.append(Finding(
-            "STA_REPORT_UNREADABLE", "ERROR", "sta", STA_REL,
+            "STA_REPORT_UNREADABLE", "ERROR", "sta", source,
             "the post-route timing record does not parse as JSON. A timing "
             "claim nobody can re-read is a timing claim nobody can check."))
         return state
-    slacks = _numbers_under_key(doc, ("slack", "wns", "tns"))
+    slacks = _numbers_under_key(doc, ("slack", "wns", "tns", "setup_ws", "hold_ws"))
     if not slacks:
         state.findings.append(Finding(
-            "STA_NO_SLACK", "ERROR", "sta", STA_REL,
+            "STA_NO_SLACK", "ERROR", "sta", source,
             "the post-route timing record carries no slack number anywhere — "
             "not a worst slack, not a total negative slack, not one per "
             "corner. A timing report with no slack in it is a file, and a "
@@ -527,6 +538,8 @@ def _sta_class(project: Path, release: str = "") -> ClassState:
     # A robust presence test and a precise value read are two different jobs.
     state.facts["slack_datapoints"] = len(slacks)
     corners = doc.get("summary", {}).get("corners") if isinstance(doc, dict) else None
+    if isinstance(doc, dict) and isinstance(doc.get('corners'), dict):
+        corners = list(doc['corners'])
     if isinstance(corners, list) and corners:
         state.facts["corners_recorded"] = len(corners)
     return state
@@ -538,6 +551,20 @@ POWER_REL = "reports/phase3/power.json"
 
 def _power_class(project: Path, release: str = "") -> ClassState:
     state = ClassState("power", "Power estimate")
+    source = 'reports/phase3/functional_activity.json'
+    if (project / source).is_file():
+        state.paths = [source]
+        doc = _read_json(project / source) or {}
+        modes = doc.get('modes', {})
+        totals = {name: mode['power']['total_w'] for name, mode in modes.items()
+                  if isinstance(mode, dict) and isinstance(mode.get('power'), dict)
+                  and type(mode['power'].get('total_w')) in (int, float)}
+        if doc.get('component_status') != 'PASS' or not totals:
+            state.findings.append(Finding('POWER_NO_TOTAL', 'ERROR', 'power', source,
+                'The selected native functional-activity result has no completed power population.'))
+        else:
+            state.facts.update(power_datapoints=len(totals), mode_total_power_w=totals)
+        return state
     path = project / POWER_REL
     if not path.is_file():
         state.absent_reason = (
@@ -591,6 +618,19 @@ _NOT_CHECKED = "NOT_CHECKED"
 
 def _drc_class(project: Path, release: str = "") -> ClassState:
     state = ClassState("drc", "DRC sign-off record")
+    source = 'reports/flow109/components/D65.json'
+    if (project / source).is_file():
+        doc = _read_json(project / source)
+        native = doc.get('drc', {}) if isinstance(doc, dict) else {}
+        state.paths = [source]
+        verdict = native.get('verdict')
+        reports = native.get('native_reports', [])
+        if verdict != 'PASS' or not reports or any(not (project / p).is_file() for p in reports):
+            state.findings.append(Finding('DRC_SIGNOFF_NOT_RUN', 'ERROR', 'drc', source,
+                'The final native DRC result is absent, incomplete or refused.'))
+        else:
+            state.facts.update(drc_verdict=verdict, drc_reports_read=len(reports))
+        return state
     path = project / DRC_REL
     if not path.is_file():
         state.absent_reason = (
