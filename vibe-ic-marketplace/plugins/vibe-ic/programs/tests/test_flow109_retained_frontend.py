@@ -365,10 +365,14 @@ def native_formal_case(project, *, status='PASS', later_synthesis=False):
         native['properties'][0]['status']='PARTIAL'  # SOFTWARE verdict-selection control only.
         put(formal/'results.json',native)
     else:
-        if status=='FAIL': rtl.write_text(rtl.read_text().replace('q=d','q=~d'))
+        rtl.write_text('module neutral(input clk,input d,output reg q); always @(posedge clk) q <= d; endmodule\n')
+        harness.write_text('module formal_neutral(input clk); (* anyseq *) wire d; wire q; reg past_valid=0;\n'
+            'neutral dut(.clk(clk),.d(d),.q(q)); always @(posedge clk) begin past_valid<=1;\n'
+            'if(past_valid) assert(q == $past(d)); end endmodule\n')
+        if status=='FAIL': rtl.write_text(rtl.read_text().replace('q <= d','q <= ~d'))
         native=producer.run(project,harness=harness,rtl=[rtl],top='formal_neutral',
             container=None,timeout=30,mem_limit_kb=4*1024*1024,prove_engines='direct')
-        assert native['properties'] and {p['status'] for p in native['properties']}=={status},native
+        assert native['verdict']==status and native['properties'] and {p['status'] for p in native['properties']}=={status},native
     if later_synthesis:
         put(project/'phase2/stage2/synth/synth_inputs.json',{'rtl_sha256':{rtl.name:flow109._file_digest(rtl)}})
         put(chip.built_record_path(project),chip.current_chip_read(project,'neutral'))
