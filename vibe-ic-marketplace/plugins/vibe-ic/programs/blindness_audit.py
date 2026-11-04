@@ -1037,8 +1037,10 @@ def audit_text(text: str, dataset: Path, allowed: list[str],
                 if isinstance(content, list):
                     content = "\n".join(part["text"] for part in content
                                         if isinstance(part, dict) and isinstance(part.get("text"), str))
-                if isinstance(content, str) and all(marker in content for marker in (
-                        "You have access to a memory folder", "MEMORY_SUMMARY BEGINS", "MEMORY_SUMMARY ENDS")):
+                if isinstance(content, str) and re.search(
+                        r"(?m)^You have access to a memory folder[^\n]*\n"
+                        r"[\s\S]*?^========= MEMORY_SUMMARY BEGINS =========\r?\n"
+                        r"[\s\S]*?^========= MEMORY_SUMMARY ENDS =========[ \t]*\r?$", content):
                     findings.append({"kind": "injected-historical-memory",
                                      "class": "historical workspace memory in developer context",
                                      "transcript": source, "line": ln_no,
