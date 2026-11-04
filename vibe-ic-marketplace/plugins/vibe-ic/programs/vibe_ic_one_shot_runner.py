@@ -6138,24 +6138,8 @@ def _main(args=None) -> int:
             p2_args.append("--skip-analog")
         elif not run_analog:
             p2_args.append("--skip-analog")
-        p2_admission = _canonical_admission.admit_span(
-            project, "phase2", PROGRAMS_DIR, args.container,
-            {"top_name": flow_top, "max_rtl_repair_retries": args.max_rtl_repair_retries,
-             "rtl_input": args.rtl_input,
-             "skip_hardware": args.skip_hardware, "skip_phase3": args.skip_phase3,
-             "skip_analog": "--skip-analog" in p2_args,
-             "entry_step": (phase2_entry if _prelayout_entry else args.entry_step),
-             "exit_step": args.exit_step,
-             "force_rtl_regen": False, "dry_run": False,
-             "lec_max_completed_rungs": args.lec_max_completed_rungs})
-        if not p2_admission.admitted:
-            print(f"REFUSED: canonical Phase-2 admission: {p2_admission.reason} "
-                  f"({p2_admission.detail})", file=sys.stderr)
-            plan.append(("phase2", "REFUSED-CANONICAL-ADMISSION", 2))
-            halted_at = "phase2"
-        else:
-            p2_env = _canonical_admission.child_env(
-                p2_admission.identity_sha256, _phase_env)
+        if not halted_at:
+            p2_env = dict(_phase_env)
             original_rtl_scope = args.rtl_input == 'original' and flow109.active_rtl_scope(project) is not None
             d09_selected = not original_rtl_scope and _flow109_selected_row('D09')
             d11_selected = not original_rtl_scope and _flow109_selected_row('D11')
