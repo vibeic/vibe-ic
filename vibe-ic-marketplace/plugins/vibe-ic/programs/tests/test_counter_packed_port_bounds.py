@@ -68,3 +68,30 @@ def test_width_only_bullets_stay_supported():
 ])
 def test_incompatible_or_ambiguous_interface_is_refused(overrides):
     assert counter.synth(prompt(**overrides), top="DecimalChain") is None
+
+
+@pytest.mark.parametrize("span", ["[4:0]", "[8:4]", "[4:8]"])
+@pytest.mark.parametrize("description", [": enable output, asserted on carry",
+                                         " enable output, asserted on carry"])
+def test_classic_bullet_description_does_not_add_ports(span, description):
+    text = prompt(6, span, "bullet").replace(
+        "upper_tick\n", f"upper_tick{description}\n")
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None
+    assert f"output {span} upper_tick" in rtl
+
+
+@pytest.mark.parametrize("bullet_span", ["[7:3]", "[4:8]"])
+def test_header_and_bullet_endpoint_conflict_is_refused(bullet_span):
+    text = prompt(6, "[8:4]", "header") + "\n" + prompt(6, bullet_span, "bullet")
+    assert counter.synth(text, top="DecimalChain") is None
+
+
+@pytest.mark.parametrize("bullet_span", ["[8:4]", "[ 8 : 4 ]"])
+def test_matching_header_and_reordered_bullets_stay_supported(bullet_span):
+    lines = prompt(6, bullet_span, "bullet").splitlines()
+    text = prompt(6, "[8:4]", "header") + "\n" + "\n".join(
+        list(reversed(lines[:4])) + lines[4:])
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None
+    assert "assign upper_tick = enable[5:1];" in rtl
