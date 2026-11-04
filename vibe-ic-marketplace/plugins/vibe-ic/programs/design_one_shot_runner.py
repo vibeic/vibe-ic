@@ -25745,45 +25745,49 @@ def _refuse_a_disagreeing_declaration(row: "StepResult", early: Any,
 
 
 def step_d12_cdc_rdc(project: Path, context: Mapping[str, Any]) -> StepResult:
-    """D12 only: consume the current original graph, never rebuild an old proof."""
-    import flow109_metric_acceptance as metrics
-    import librelane_contract as contract
-    try:
-        launch = contract.local_image_attestation()
-        accepted = metrics.accept_d12(project, context)
-    except contract.Refusal as exc:
-        launch = {'status': 'NOT_MEASURED', 'reason': exc.code}
-        accepted = {'status': 'NOT_MEASURED', 'reason': str(exc)}
-    status = accepted['status']
-    return StepResult('cdc_rdc', status, detail=accepted['reason'],
-        reason_class='input_absent' if status == 'NOT_MEASURED' else '',
+    """Run the existing structural analyzers on the current native graph."""
+    import _cdc_netlist as native
+    import clock_domain_reg_crossing_check as crossing
+    import cdc_async_input_check as asynchronous
+    import reset_dependency_check as reset
+    reports, outputs = [], []
+    for name, tool in (('crossing', crossing), ('async_input', asynchronous), ('reset_dep', reset)):
+        report = asdict(tool.audit(project_dir=str(project),
+            netlist=str(project / native.NETLIST_REL), front_end='netlist'))
+        path = project / 'reports/phase2/cdc' / (name + '.json')
+        _aa.write_json(path, report)
+        reports.append(report)
+        outputs.append(str(path))
+    unresolved = sum(f['rule'] == 'RESET_ROLE_UNRESOLVED'
+                     for report in reports for f in report['findings'])
+    failed = any(report['summary'].get('netlist_read') and not report['passed']
+        and not (report['findings'] and all(f['rule'] == 'RESET_ROLE_UNRESOLVED'
+                                            for f in report['findings'])) for report in reports)
+    complete = (all(report['summary'].get('netlist_read') for report in reports)
+        and reports[0]['summary'].get('reg_crossing_population', {}).get('status') == 'MEASURED'
+        and reports[2]['summary'].get('reset_dependency_analysis', {}).get('cycle_detection_complete') is True)
+    status = 'FAIL' if failed else 'PASS' if complete and not unresolved else 'NOT_MEASURED'
+    return StepResult('cdc_rdc', status,
+        detail=f'native structural CDC/RDC {status}; unresolved reset roles={unresolved}; '
+               'decoded graph and async-name candidates only; protocol/MTBF not measured',
+        output_files=outputs, reason_class='inconclusive' if status == 'NOT_MEASURED' else '',
         extras={'step_id': '3', 'context_sha256': context['context_sha256'],
-            'metric_acceptance': accepted, 'reader_launch': launch,
             'default_row_status': status, 'completed': status == 'PASS',
             'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False})
 
 
 def _publish_d12_owner(project: Path, context: Mapping[str, Any], *, invocation_context=None) -> int:
-    """Publish only this fresh D12 read, then reopen before the canonical writer."""
+    """Publish this requested row from the existing native analysis reports."""
     import flow109
-    import flow109_metric_acceptance as metrics
     row = step_d12_cdc_rdc(project, context)
     summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
         'declared_window': {'entry_step': '3', 'exit_step': '3', 'dispatched_step_ids': ['3']},
-        'bounded_disclosures': ['complete current early RTL CDC/RDC read; no native graph replay; whole flow unmeasured']}
+        'bounded_disclosures': ['native structural CDC/RDC; protocol/MTBF not measured; whole flow unmeasured']}
     attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
     if (attempt / 'result.json').exists():
         raise flow109.Flow109Error('FLOW109_ATTEMPT_RESULT_EXISTS', 'D12 attempt is immutable')
     out = attempt / 'phase2_one_shot.json'
     _write_phase2_report(out, summary, project, invocation_context=invocation_context)
-    reread = metrics.accept_d12(project, context)
-    if reread != row.extras['metric_acceptance']:
-        row.status = 'NOT_MEASURED'
-        row.reason_class = 'input_absent'
-        row.detail = 'D12_INPUT_CHANGED_DURING_OWNER_PUBLICATION'
-        row.extras.update(default_row_status='NOT_MEASURED', completed=False)
-        summary.update(steps=[asdict(row)], verdict=row.status)
-        _write_phase2_report(out, summary, project, invocation_context=invocation_context)
     finished = flow109.finish_native_window(project, summary, out)
     status = finished.get('default_row_status', 'NOT_MEASURED') if finished else 'NOT_MEASURED'
     return {'PASS': 0, 'FAIL': 1}.get(status, 2)
@@ -28671,7 +28675,6 @@ def main() -> int:
         # same step is a no-op rather than a second copy.
         if _d12_context:
             import _cdc_netlist as native
-            import flow109_metric_acceptance as metrics
             try:
                 path = project / native.NETLIST_REL
                 try:
@@ -28679,7 +28682,6 @@ def main() -> int:
                 except native.Refusal:
                     inputs = native.source_binding(project, args.top_name)
                     native.build(project, [project / p for p in inputs['rtl_files']], args.top_name)
-                metrics.d12_subject(project)
                 _adm = {'admitted': True, 'site': 'cdc_rdc'}
             except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
                 _adm = {'admitted': False, 'reason': str(exc)}
@@ -28831,11 +28833,7 @@ def main() -> int:
     if _d14_context:
         return _publish_d14_owner(project, _d14_context, invocation_context=_dispatch_invocation_context)
     if _d12_context:
-        import flow109
-        import flow109_metric_acceptance as metrics
-        context = _d12_context
-        if context['resolved_row']['id'] == 'D12':
-            return _publish_d12_owner(project, context, invocation_context=_dispatch_invocation_context)
+        return _publish_d12_owner(project, _d12_context, invocation_context=_dispatch_invocation_context)
     if _d19_context:
         return _publish_d19_owner(project, _d19_context, args.top_name, args.container,
             getattr(args, 'ic_class', None), args.pdk, invocation_context=_dispatch_invocation_context)
