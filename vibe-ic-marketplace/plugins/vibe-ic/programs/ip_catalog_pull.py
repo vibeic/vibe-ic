@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -663,7 +664,8 @@ def prune_catalog_ip(project: Path, ip_name: str,
 
 #: Session cache for the clone fallback. One directory per (IP, pin), so a
 #: cache holding another commit is never mistaken for this pin.
-CACHE_ROOT = Path("/tmp/vibe_ic_catalog_cache")
+CACHE_ROOT = Path(os.environ.get("VIBEIC_IP_SOURCE_CACHE")
+                  or Path(tempfile.gettempdir()) / "vibe_ic_catalog_cache")
 
 
 def _git(args: List[str], timeout: int = 120) -> subprocess.CompletedProcess:
@@ -964,11 +966,11 @@ def verify_existing_official_pins_outcome(project: Path,
             return PIN_MISMATCH, "official reference cache is inside the project"
     with tempfile.TemporaryDirectory(prefix="ip-pin-verify-") as scratch:
         reference = Path(scratch)
-        # Independently re-fetch the current upstream pin and errata. Reusing
-        # the initial pull's cache would accept unreachable or rewritten tags
-        # solely because their old checkout still matches the local receipts.
+        # An explicit operator cache supplies the same pinned source offline.
+        # Otherwise retain the ordinary fresh-pull behavior.
         audit = pull_all_catalog_matches(reference, matches, official_only=True,
-                                         cache_root=reference / "canonical",
+                                         cache_root=(CACHE_ROOT if os.environ.get("VIBEIC_IP_SOURCE_CACHE")
+                                                     else reference / "canonical"),
                                          apply_corrections=False)
 
         def _scrub(text: Any) -> str:

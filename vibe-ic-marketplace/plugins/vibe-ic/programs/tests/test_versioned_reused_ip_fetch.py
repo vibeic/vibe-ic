@@ -324,6 +324,28 @@ def _first_pull(tmp_path, monkeypatch, matches, text):
     return runner, project
 
 
+@pytest.mark.parametrize('corrupt_cache',[False,True],ids=['available','dirty'])
+def test_operator_canonical_cache_supports_offline_verification(tmp_path,monkeypatch,corrupt_cache):
+    import ip_catalog_pull as pull
+    repo, erratum = _upstream(tmp_path)
+    match = _match(repo, erratum)
+    _, project = _first_pull(tmp_path,monkeypatch,[match],'Reuse leaf from vendor:reusable:leaf:2.3.4.')
+    manifest=json.loads((project/'phase2/stage1/rtl/SOURCE_MANIFEST.json').read_text())
+    monkeypatch.setenv('VIBEIC_IP_SOURCE_CACHE',str(pull.CACHE_ROOT))
+    repo.rename(tmp_path/'upstream_offline')
+    if corrupt_cache:
+        (pull.CACHE_ROOT/'leaf@2.3.4/rtl/leaf.v').write_text('module wrong; endmodule\n')
+    state, reason=pull.verify_existing_official_pins_outcome(project,[match],manifest)
+    assert state==(pull.PIN_MISMATCH if corrupt_cache else pull.PIN_VERIFIED),reason
+
+
+def test_default_canonical_cache_honors_tmpdir(tmp_path):
+    result=subprocess.run([sys.executable,'-c','from ip_catalog_pull import CACHE_ROOT; print(CACHE_ROOT)'],
+        cwd=PROGRAMS,env={'TMPDIR':str(tmp_path),'VIBEIC_IP_SOURCE_CACHE':'','PYTHONDONTWRITEBYTECODE':'1'},
+        check=True,capture_output=True,text=True)
+    assert result.stdout.strip()==str(tmp_path/'vibe_ic_catalog_cache')
+
+
 def _repoint_tag(repo: Path, *, drop_leaf: bool = False) -> None:
     """Upstream force-moves the release tag to a side commit off the old tag."""
     _git(repo, "checkout", "-q", "-b", "rewrite", "2.3.4")
