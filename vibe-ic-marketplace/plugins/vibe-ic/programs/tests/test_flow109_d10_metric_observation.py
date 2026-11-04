@@ -82,7 +82,7 @@ def test_missing_current_native_readset_is_named_not_measured(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize('blackbox,expected', [(False, 0), (True, None)])
-def test_d10_owner_publishes_observations_without_promoting_row(tmp_path, monkeypatch, blackbox, expected):
+def test_explicit_d10_metric_checker_keeps_unqualified_observations(tmp_path, monkeypatch, blackbox, expected):
     graph = {'modules': {'top': {'cells': {}}}}
     if blackbox:
         graph['modules']['top']['cells']['u'] = {'type': 'opaque'}
@@ -95,13 +95,10 @@ def test_d10_owner_publishes_observations_without_promoting_row(tmp_path, monkey
     monkeypatch.setattr(runner, '_d10_p0_native', lambda *_: p0)
     monkeypatch.setattr(runner, '_d10_yosys_observation', lambda *_: {'status': 'NOT_MEASURED'})
     monkeypatch.setattr(runner, '_d10_dft_ports', lambda *_: {'status': 'NOT_MEASURED'})
-    seen = []
-    monkeypatch.setattr(flow109, 'finish_native_window', lambda _p, report: seen.append(report) or {'default_row_status': 'NOT_MEASURED'})
-    result = runner._finish_d10_unimplemented_owner(tmp_path, run_p0=True)
-    assert result['verdict'] == result['whole_flow_verdict'] == 'NOT_MEASURED'
-    published = seen[0]['steps'][0]['extras']
-    observed = published['evidence']['native_metric_observation']
+    result = metric.accept_d10(tmp_path, c, p0)
+    assert result['status'] == 'NOT_MEASURED'
+    observed = result['native_metric_observation']
     assert observed['status'] == observed['qualification'] == 'NOT_MEASURED'
     assert observed['obligations'][0]['observed_value'] == 0
     assert observed['obligations'][1]['observed_value'] == expected
-    assert published['default_row_status'] == 'NOT_MEASURED' and published['completed'] is False
+    assert not (tmp_path / 'reports/flow109/default_rows/D10.json').exists()
