@@ -308,14 +308,6 @@ def _role_citations(project: Path, rows, allowed: set[Path]) -> list[str]:
 
 
 def _admit_reset_roles(project: Path, receipt: dict, request: dict) -> dict:
-    if (receipt.get("schema") != SCHEMA or receipt.get("step_id") != "3"
-            or receipt.get("scope") != "reset-role" or receipt.get("verdict") != "PASS"
-            or not request.get("evidence_sha256")
-            or receipt.get("evidence_sha256") != request["evidence_sha256"]
-            or receipt.get("netlist_sha256") != request["netlist_sha256"]
-            or not all(isinstance(receipt.get(k), str) and receipt[k].strip()
-                       for k in ("signed_by", "judgement"))):
-        raise ValueError("missing, foreign or stale Step3 reset-role judgement")
     records = receipt.get("reset_roles")
     candidates = {r["state"]: r for r in request["candidates"]}
     if not isinstance(records, list) or len(records) != len(candidates):
@@ -352,7 +344,7 @@ def _admit_reset_roles(project: Path, receipt: dict, request: dict) -> dict:
 
 
 def reset_roles(project: Path, nl=None, path: Optional[Path] = None) -> tuple[dict, str]:
-    """A signature attributes reviewed bytes; cited intent admits each role."""
+    """Read source-cited semantic roles; native audits decide the verdict."""
     project = Path(project).resolve()
     try:
         request = reset_role_request(project)
@@ -364,9 +356,9 @@ def reset_roles(project: Path, nl=None, path: Optional[Path] = None) -> tuple[di
         roles = _admit_reset_roles(project, receipt, request)
         if "unresolved" in roles.values():
             return roles, "RESET_ROLE_UNRESOLVED: expert could not establish every role"
-        return roles, "signed judgement bound to current source/graph and cited reset-role intent"
+        return roles, "source-cited reset-role semantics"
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return {}, "awaiting_signed_judgement: Step 3 reset-role: " + str(exc)
+        return {}, "RESET_ROLE_UNRESOLVED: " + str(exc)
 
 
 def main(argv=None) -> int:
