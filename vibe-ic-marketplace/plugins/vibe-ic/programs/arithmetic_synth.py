@@ -241,13 +241,21 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
     in_decls = [_decl(n, w, "input") for n, w in ins]
     out_decls = [_decl(out_name, out_w, "output")]
     body = [f"    assign {out_name} = {a} + {b};"]
-    style = re.compile(r"\b(?:(?P<deny>not|never|without|avoid)\s+)?"
-                       r"(?:(?P<action>use|using|with|from|of|instantiate)\s+)?"
-                       r"(?:(?:only|multiple|individual|one[-\s]bit|1[-\s]bit|a|network|of)\s+)*full[-\s]+adders?\b", re.I)
-    requests = [(match, clause) for clause in re.split(r"[.;]", text) for match in style.finditer(clause)]
-    explicit_full_adders = not any(match["deny"] for match, _ in requests) and any(
-        match["action"] and re.search(r"\b(?:implement|build|built|construct|use|instantiate)\b", clause, re.I)
-        for match, clause in requests)
+    requests = []
+    for clause in re.split(r"[.;]", text):
+        request = re.match(r"\s*(?:please\s+)?(?:do\s+)?(?:(?P<deny>not|never|avoid)\s+)?"
+                           r"(?:implement|construct|build|use|instantiate)\b(?P<body>[\s\S]*)", clause, re.I)
+        if request is None:
+            continue
+        phrase = re.search(r"\bfull[-\s]+adders?\b", request["body"], re.I)
+        if phrase is None:
+            continue
+        prefix = request["body"][:phrase.start()]
+        denial = re.search(r"\b(?:not|never|without|avoid)\b", prefix, re.I)
+        if denial and re.search(r",|\b(?:and|but)\b", prefix[denial.end():], re.I):
+            return None
+        requests.append(not (request["deny"] or denial))
+    explicit_full_adders = bool(requests) and all(requests)
     if explicit_full_adders:
         packed = []
         _pp._bullet_ports(text, packed)
