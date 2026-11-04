@@ -71,7 +71,7 @@ def _bullet_port_name(line: str) -> Optional[str]:
     return None
 
 
-def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tuple[str, Optional[int]]]]:
+def _bullet_ports(text: str, packed=None) -> Tuple[List[Tuple[str, Optional[int]]], List[Tuple[str, Optional[int]]]]:
     """Parse bullet-style port lists (VerilogEval-v2 / CVDP prose).
 
     Supports three conventions:
@@ -98,6 +98,8 @@ def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tupl
         d, hi, lo, w_pre, name, w_post = m.groups()
         if hi is not None and lo is not None:
             w = abs(int(hi) - int(lo)) + 1
+            if packed is not None:
+                packed.append((name, int(hi), int(lo)))
         elif w_pre is not None:
             w = int(w_pre)
         elif w_post is not None:
@@ -129,6 +131,8 @@ def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tupl
                 or re.search(r"\b(\d+)\s*-?\s*bits?\b", line, re.I)
             if wm and wm.lastindex == 2:
                 w = abs(int(wm.group(1)) - int(wm.group(2))) + 1
+                if packed is not None:
+                    packed.append((name, int(wm.group(1)), int(wm.group(2))))
             elif wm:
                 w = int(wm.group(1))
             else:
@@ -137,7 +141,7 @@ def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tupl
     return ins, outs
 
 
-def _header_ports(text: str) -> Tuple[List, List]:
+def _header_ports(text: str, packed=None) -> Tuple[List, List]:
     m = re.search(r"module\s+\w+\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", text, re.S)
     if not m:
         return [], []
@@ -148,6 +152,8 @@ def _header_ports(text: str) -> Tuple[List, List]:
         r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?(\w+)", body):
         d, hi, lo, name = pm.groups()
         w = abs(int(hi) - int(lo)) + 1 if hi is not None and lo is not None else 1
+        if packed is not None and hi is not None and lo is not None:
+            packed.append((name, int(hi), int(lo)))
         (ins if d == "input" else outs).append((name, w))
     return ins, outs
 

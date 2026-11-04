@@ -118,46 +118,22 @@ def _try_bcd_counter(prompt, ins, outs, top):
     if extra:
         return None
 
-    from reset_clock_variant_alias import parse_module_ports
-    modules = re.findall(r"\bmodule\s+(\w+)\s*(?=[(#])", prompt)
-    if len(modules) > 1:
-        return None
-    declared = parse_module_ports(prompt, modules[0]) if modules else []
-    bullets = re.findall(
-        r"^\s*-\s*((?:input|output)\b(?:\s+(?:wire|reg|logic))?"
-        r"\s*(?:\[[^]\n]+\]\s*)?\w+)", prompt, re.M)
-    bullet_ports = parse_module_ports(
-        "module ports(" + ",".join(bullets) + ");", "ports")
-    if declared and bullet_ports:
-        if sorted((d, n) for d, _, n in declared) != sorted(
-                (d, n) for d, _, n in bullet_ports):
-            return None
-        header_ranges = {n: tuple(map(int, re.findall(r"\d+", s)))
-                         for _, s, n in declared}
-        if any(s and tuple(map(int, re.findall(r"\d+", s))) != header_ranges[n]
-               for _, s, n in bullet_ports):
-            return None
-    declared = declared or bullet_ports
-    expected = {name: (direction, width)
-                for direction, items in (("input", ins), ("output", outs))
-                for name, width in items}
+    import port_parser
+    declared = []
+    port_parser._bullet_ports(prompt, declared)
+    port_parser._header_ports(prompt, declared)
     ranges = {}
-    for direction, span, name in declared:
-        if name in ranges or name not in expected or direction != expected[name][0]:
+    for name, left, right in declared:
+        if name not in (q_name, ena_name):
+            continue
+        span = (left, right)
+        if name in ranges and ranges[name] != span:
             return None
-        if span:
-            bounds = re.fullmatch(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", span)
-            if bounds is None:
-                return None
-            left, right = map(int, bounds.groups())
-            width = expected[name][1]
-            if abs(left - right) + 1 != width:
-                return None
-            if name != ena_name and (left, right) != (width - 1, 0):
-                return None
+        if abs(left - right) + 1 != (q_w if name == q_name else ena_w):
+            return None
+        if name == q_name and span != (q_w - 1, 0):
+            return None
         ranges[name] = span
-    if declared and set(ranges) != set(expected):
-        return None
     if any(width != 1 for _, width in ins):
         return None
 
@@ -173,7 +149,8 @@ def _try_bcd_counter(prompt, ins, outs, top):
 
     ports = [f"input {clk}", f"input {rst}"]
     if ena_name is not None:
-        ports.append(f"output {ranges[ena_name]} {ena_name}" if ranges.get(ena_name)
+        span = ranges.get(ena_name)
+        ports.append(f"output [{span[0]}:{span[1]}] {ena_name}" if span
                      else _decl("output", ena_name, ena_w))
     ports.append(_decl("output", q_name, q_w, reg=True))
 
