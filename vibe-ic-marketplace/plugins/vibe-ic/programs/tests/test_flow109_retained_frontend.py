@@ -1,5 +1,8 @@
 """Native report dispatch controls; no synthesis, STA or proof is launched."""
 import json
+import sys
+import tempfile
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +11,161 @@ import pytest
 import _delivery_route
 import flow109
 from test_flow109_selection import profile
+
+
+def hygiene_owner(project, monkeypatch, native_status='PASS'):
+    """Actual owner/report writers; only native process output is SOFTWARE."""
+    import benchmark_dispatch as dispatch
+    import design_one_shot_runner as owner
+    import _path_layout as layout
+    case(project, 'D11')
+    (project / 'reports/phase2/lint/verilator_lint_gate.json').unlink()
+    (project / 'phase2/stage2/synth/synth_inputs.json').unlink()
+    put(project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'neutral'})
+    context = flow109.execution_context(flow109.resolve_plan(profile()), 'D11', 'D11')
+    selected = project / 'selected.json'; put(selected, context)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(selected))
+    attempt = flow109._new_attempt(project, context)
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    monkeypatch.setattr(layout, '_RTL_INPUT', (None, 'structured'))
+
+    def software_native(command, **kwargs):
+        lint = project / 'reports/phase2/lint'
+        work = Path(tempfile.mkdtemp(prefix='native-elaboration-SOFTWARE-', dir=lint))
+        rtl = project / 'phase2/stage1/rtl/neutral.v'
+        graph = work / 'design.json'; put(graph, {'modules': {'neutral': {}}})
+        (work / 'native.log').write_text('SOFTWARE boundary; no native execution\n')
+        native = {'top': 'neutral', 'files': [str(rtl)], 'defines': [], 'parameters': [],
+            'include_dirs': [str(rtl.parent)], 'backend': 'SOFTWARE', 'image': None,
+            'input_sha256': {str(rtl): flow109._file_digest(rtl)},
+            'native_returncode': 7 if native_status == 'NATIVE_FAIL' else 0 if native_status != 'NOT_MEASURED' else None,
+            'transport_returncode': 7 if native_status == 'NATIVE_FAIL' else 0 if native_status != 'NOT_MEASURED' else None,
+            'status': 'MEASURED' if native_status in ('PASS', 'FAIL') else 'NOT_MEASURED',
+            'native_json_sha256': flow109._file_digest(graph)}
+        put(work / 'context.json', native)
+        put(lint / 'rtl_hygiene.json', [] if native_status != 'FAIL' else
+            [{'severity': 'ERROR', 'rule': 'SOFTWARE-finding'}])
+        return SimpleNamespace(returncode=0 if native_status == 'PASS' else 1,
+            stdout='SOFTWARE native process boundary', stderr='')
+
+    monkeypatch.setattr(owner._pr, 'run', software_native)
+    row = owner._step_rtl_hygiene_native(project)
+    row.extras['context_sha256'] = context['context_sha256']
+    argv = [sys.executable, str(Path(owner.__file__).with_name('phase2_one_shot_runner.py')),
+            str(project), '--entry-step', '2', '--exit-step', '2']
+    invocation = {'invocation_id': 'SOFTWARE-current-owner', 'argv': argv,
+        'project': str(project), 'source': dispatch._runner_source_snapshot(argv)}
+    summary = {'project': str(project), 'verdict': row.status,
+        'steps': [asdict(owner.StepResult('rtl_gen', 'NOT_APPLICABLE', 0,
+            'supplied RTL', declared_by='--entry-step 2')), asdict(row)],
+        'declared_window': {'entry_step': '2', 'exit_step': '2', 'dispatched_step_ids': ['2']}}
+    path = attempt / 'phase2_one_shot.json'
+    owner._write_phase2_report(path, summary, project, invocation_context=invocation)
+    return context, path, invocation
+
+
+@pytest.mark.parametrize('native_status,status', [('PASS','PASS'), ('FAIL','FAIL'),
+    ('NATIVE_FAIL','FAIL'), ('NOT_MEASURED','NOT_MEASURED')])
+def test_d11_current_hygiene_owner_without_synthesis(tmp_path, monkeypatch, native_status, status):
+    import vibe_ic_one_shot_runner as runner
+    _, path, invocation = hygiene_owner(tmp_path, monkeypatch, native_status)
+    result = runner._finish_d11_selected_owner(tmp_path, json.loads(path.read_bytes()),
+        invocation, published_current=True)
+    assert result['verdict'] == status, result
+    assert result['whole_flow_verdict'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('mutation', ['not_published', 'wrong_invocation', 'context_changed',
+    'output_changed', 'source_changed', 'context_missing', 'empty_population', 'unrelated_row'])
+def test_d11_current_hygiene_owner_refuses_stale_evidence(tmp_path, monkeypatch, mutation):
+    import vibe_ic_one_shot_runner as runner
+    _, path, invocation = hygiene_owner(tmp_path, monkeypatch)
+    report = json.loads(path.read_bytes())
+    row = report['steps'][-1]
+    if mutation == 'wrong_invocation': invocation = {**invocation, 'invocation_id': 'foreign'}
+    elif mutation == 'context_changed':
+        context = Path(next(p for p in row['output_files'] if p.endswith('context.json')))
+        put(context, {**json.loads(context.read_bytes()), 'image': 'foreign-image'})
+    elif mutation == 'output_changed':
+        put(tmp_path / 'reports/phase2/lint/rtl_hygiene.json', [{'severity': 'ERROR'}])
+    elif mutation == 'source_changed':
+        (tmp_path / 'phase2/stage1/rtl/neutral.v').write_text('module changed; endmodule\n')
+    elif mutation == 'context_missing':
+        Path(next(p for p in row['output_files'] if p.endswith('context.json'))).unlink()
+    elif mutation == 'empty_population': row['extras']['native_context']['files'] = []
+    elif mutation == 'unrelated_row': row['extras']['step_id'] = '4'
+    if mutation in ('empty_population', 'unrelated_row'): put(path, report)
+    result = runner._finish_d11_selected_owner(tmp_path, report, invocation,
+        published_current=mutation != 'not_published')
+    assert result['verdict'] == 'NOT_MEASURED', result
+
+
+def test_d11_source_owned_structured_current_publication(tmp_path, monkeypatch):
+    import benchmark_dispatch as dispatch
+    import design_one_shot_runner as owner
+    import benchmark_io_adapter as adapter
+    _, path, invocation = hygiene_owner(tmp_path, monkeypatch)
+    report = json.loads(path.read_bytes())
+    parent_argv = [sys.executable, str(Path(owner.__file__).with_name('vibe_ic_one_shot_runner.py')),
+        str(tmp_path), '--entry-step', 'D11', '--exit-step', 'D13']
+    parent = {'invocation_id': 'SOFTWARE-parent', 'argv': parent_argv,
+        'project': str(tmp_path), 'source': dispatch._runner_source_snapshot(parent_argv)}
+    monkeypatch.setenv(dispatch._RUNNER_PARENT_CONTEXT_ENV, json.dumps(parent))
+    observed = 'PUBLISHED'
+    try:
+        owner._write_phase2_report(path, report, tmp_path, invocation_context=invocation,
+            publish_current=True)
+    except ValueError as exc:
+        observed = str(exc)
+    assert observed == 'PUBLISHED'
+    current = json.loads((tmp_path / 'reports/orchestrator/phase2_one_shot.json').read_bytes())
+    assert current['runner_binding']['invocation_id'] == parent['invocation_id']
+    assert current['runner_binding']['owner_report']['sha256'] == flow109._file_digest(path)
+    dispatch._runner_owner_report_current(tmp_path, current['runner_binding'], {
+        **parent, 'source_before': parent['source'],
+        'material_after': dispatch._runner_material_snapshot(tmp_path)})
+    assert adapter._rtl_gen_verdict(tmp_path)['status'] == 'NOT_APPLICABLE'
+
+
+@pytest.mark.parametrize('status', ['PASS', 'FAIL'])
+def test_d11_public_hygiene_child_publishes_and_finishes(tmp_path, monkeypatch, status):
+    import os
+    import benchmark_dispatch as dispatch
+    import design_one_shot_runner as owner
+    import librelane_contract as contract
+    from test_flow109_selection import _public_d09_entry
+    hygiene_owner(tmp_path, monkeypatch, status)
+    runner = _public_d09_entry(tmp_path, monkeypatch)
+    argv = list(sys.argv)
+    for flag in ('--entry-step', '--exit-step'): argv[argv.index(flag) + 1] = 'D11'
+    monkeypatch.setattr(sys, 'argv', argv)
+    children = []
+
+    def child(command, *, env=None, **kwargs):
+        children.append(command)
+        with monkeypatch.context() as m:
+            for key, value in env.items(): m.setenv(key, value)
+            m.setattr(sys, 'argv', command[1:])
+            m.setattr(owner, '_activate_runtime_program_tree', lambda *_: None)
+            m.setattr(owner, '_bootstrap_execution_policy', lambda *_, **__: None)
+            m.setattr(owner, 'step_reused_ip_consume', lambda *_: None)
+            m.setattr(owner._spf, 'entry_admission', lambda *_: {'admitted': True, 'site': 'rtl_lint_tool'})
+            m.setattr(contract, 'selected_mode', lambda *_: 'librelane')
+            rc = owner.main()
+        return SimpleNamespace(returncode=rc)
+
+    monkeypatch.setattr(runner.subprocess, 'run', child)
+    assert runner._main() == (0 if status == 'PASS' else 1)
+    summary = json.loads((tmp_path / 'reports/orchestrator/vibe_ic_one_shot.json').read_bytes())
+    assert summary['dispatched_verdict'] == status, summary
+    assert summary['whole_flow_verdict'] == 'NOT_MEASURED'
+    attempt = Path(os.environ[flow109.ATTEMPT_ENV])
+    terminal = json.loads((attempt / 'result.json').read_bytes())
+    assert terminal['default_row_status'] == status
+    assert terminal['delivery_accepted'] is False
+    current = json.loads((tmp_path / 'reports/orchestrator/phase2_one_shot.json').read_bytes())
+    assert current['verdict'] == status
+    assert current['runner_binding']['argv'] == children[0]
 
 
 def put(path, body):

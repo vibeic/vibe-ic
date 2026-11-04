@@ -2156,10 +2156,102 @@ def _finish_d11_original_engineering(project, context, report, invocation, *,
 
 def _finish_d11_selected_owner(project: Path, report: Mapping, invocation: Mapping,
                                *, published_current: bool) -> dict:
-    """Publish the completed native result through the shared frontend reader."""
+    """BLOCKING: consume this owner's native lint; never require later synthesis."""
     import flow109
+    import flow109_engineering as engineering
     context = flow109.validate_execution_context(json.loads(
         Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+    if engineering.selected_original(project, context):
+        path = flow109._bound_attempt(project, context,
+            os.environ.get(flow109.ATTEMPT_ENV)) / 'phase2_one_shot.json'
+        return _finish_d11_original_engineering(project, context, report, invocation,
+            published_current=published_current, report_path=path)
+    rows = report.get('steps') or []
+    hygiene = [r for r in rows if (r.get('extras') or {}).get('producer') == 'rtl_hygiene_lint']
+    if (hygiene and context.get('runtime_tool_uses') is None
+            and context.get('qualification_registry') is None):
+        import benchmark_dispatch as dispatch
+        from _rtl_include_hub import silicon_rtl_selection
+        path = flow109._bound_attempt(project, context,
+            os.environ.get(flow109.ATTEMPT_ENV)) / 'phase2_one_shot.json'
+        status, detail = 'NOT_MEASURED', 'D11_CURRENT_LINT_UNBOUND'
+        row = hygiene[0]
+        try:
+            if (context['resolved_row']['id'] != 'D11' or published_current is not True
+                    or len(hygiene) != 1 or path.is_symlink()
+                    or json.loads(path.read_bytes()) != report
+                    or set(invocation) != {'invocation_id', 'argv', 'project', 'source'}
+                    or not invocation['invocation_id'] or invocation['project'] != str(project)):
+                raise ValueError('D11_CURRENT_LINT_OWNER_UNBOUND')
+            expected = dispatch._bind_runner_report({}, project,
+                str(Path(__file__).with_name('design_one_shot_runner.py')),
+                'phase2_one_shot.json', context=dict(invocation))['runner_binding']
+            if any(report['runner_binding'].get(k) != value for k, value in expected.items()):
+                raise ValueError('D11_CURRENT_LINT_OWNER_UNBOUND')
+            argv = invocation['argv']
+            extras = row['extras']
+            if (Path(argv[1]).name != 'phase2_one_shot_runner.py'
+                    or argv[argv.index('--entry-step') + 1] != '2'
+                    or argv[argv.index('--exit-step') + 1] != '2'
+                    or report['declared_window'] != {'entry_step':'2', 'exit_step':'2',
+                        'dispatched_step_ids':['2']}
+                    or row['name'] != 'rtl_lint_tool' or extras.get('step_id') != '2'
+                    or extras.get('context_sha256') != context['context_sha256']):
+                raise ValueError('D11_CURRENT_LINT_WINDOW_UNBOUND')
+            outputs = [Path(p) for p in row['output_files']]
+            hashes = extras['output_sha256']
+            if (not outputs or len(set(outputs)) != len(outputs)
+                    or set(hashes) != {str(p) for p in outputs}
+                    or any(engineering.reference(project, p)['sha256'] != hashes[str(p)] for p in outputs)):
+                raise ValueError('D11_CURRENT_LINT_OUTPUT_STALE')
+            contexts = [p for p in outputs if p.name == 'context.json']
+            findings_path = project / 'reports/phase2/lint/rtl_hygiene.json'
+            if len(contexts) != 1 or findings_path not in outputs:
+                raise ValueError('D11_CURRENT_LINT_OUTPUT_MISSING')
+            native = json.loads(contexts[0].read_bytes())
+            selected = [str(p.resolve()) for p in silicon_rtl_selection(_pl.rtl_dir(project))]
+            tracked = set(selected)
+            for directory in native['include_dirs']:
+                root = Path(directory)
+                if root.is_symlink() or not root.resolve().is_relative_to(Path(project).resolve()):
+                    raise ValueError('D11_CURRENT_LINT_INPUT_UNBOUND')
+                tracked.update(str(p.resolve()) for p in root.rglob('*')
+                    if p.is_file() and p.suffix in {'.v', '.sv', '.vh', '.svh'})
+            if (not selected or native.get('files') != selected
+                    or native != extras['native_context']
+                    or native['input_sha256'] != extras['input_sha256']
+                    or set(native['input_sha256']) != tracked
+                    or any(engineering.reference(project, Path(p))['sha256'] != sha
+                        for p, sha in native['input_sha256'].items())):
+                raise ValueError('D11_CURRENT_LINT_INPUT_STALE')
+            findings = json.loads(findings_path.read_bytes())
+            if not isinstance(findings, list):
+                raise ValueError('D11_CURRENT_LINT_FINDINGS_INVALID')
+            rc = native.get('native_returncode')
+            if type(rc) is int and native.get('transport_returncode') == rc:
+                if rc == 0 and native.get('status') == 'MEASURED':
+                    graph = contexts[0].with_name('design.json')
+                    if (graph not in outputs or engineering.reference(project, graph)['sha256']
+                            != native['native_json_sha256']
+                            or native.get('top') not in json.loads(graph.read_bytes()).get('modules', {})):
+                        raise ValueError('D11_CURRENT_LINT_NATIVE_UNBOUND')
+                    blocking = any(f.get('block_eligible', True) and f.get('severity') in ('ERROR', 'WARN')
+                                   for f in findings)
+                    status = 'FAIL' if blocking else 'PASS'
+                    if extras.get('exit_code') != (1 if blocking else 0):
+                        raise ValueError('D11_CURRENT_LINT_EXIT_MISMATCH')
+                elif rc != 0 and extras.get('exit_code') == 1:
+                    status = 'FAIL'
+            if row['status'] != status or report['verdict'] != status:
+                raise ValueError('D11_CURRENT_LINT_VERDICT_MISMATCH')
+            detail = 'D11_CURRENT_NATIVE_LINT_' + status
+        except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+            status, detail = 'NOT_MEASURED', str(exc)
+        finished = flow109.finish_native_window(project, {'steps': [{
+            'status': status, 'extras': {**row.get('extras', {}), 'step_id': '2',
+                'default_row_status': status, 'completed': status == 'PASS', 'detail': detail}}]})
+        return {'verdict': finished['default_row_status'], 'whole_flow_verdict': 'NOT_MEASURED',
+                'detail': detail}
     native = flow109._retained_native_result(project, context)
     if native is None:
         return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',

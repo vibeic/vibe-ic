@@ -398,18 +398,18 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
                                   context=invocation_context)
     current = None
     if publish_current:
-        # Qualified rows retain their D09 owner report. The ordinary original
-        # engineering continuation instead publishes its current Step-2 owner
+        # Qualified rows retain their D09 owner report. A source-owned
+        # continuation publishes its current Step-2 owner
         # at the same path read by collection, attribution and invocation
         # snapshots. The current publication binds the outer invocation
         # and points to the child report with its original launch binding.
         import flow109
-        import flow109_engineering as engineering
         context = flow109.validate_execution_context(json.loads(
             Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
         attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
         if (context['resolved_row']['id'] != 'D11'
-                or not engineering.selected_original(project, context)
+                or context.get('runtime_tool_uses') is not None
+                or context.get('qualification_registry') is not None
                 or out != attempt / 'phase2_one_shot.json'
                 or (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink()):
             raise ValueError('D11_CURRENT_REPORT_PUBLICATION_UNBOUND')
@@ -14597,6 +14597,7 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
     before = set(out_dir.glob("native-elaboration-*/context.json"))
     outputs = []
     context = {}
+    exit_code = None
     status, detail = "NOT_MEASURED", "native RTL lint did not produce a current tool result"
     try:
         from _rtl_include_hub import silicon_rtl_selection
@@ -14623,6 +14624,7 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
         result = _pr.run(cmd + [
             "--severity", "ERROR", "--json", str(findings_path)],
             capture_output=True, text=True)
+        exit_code = result.returncode
         current = set(out_dir.glob("native-elaboration-*/context.json")) - before
         if len(current) != 1:
             raise ValueError("native RTL lint did not emit exactly one current elaboration context")
@@ -14653,7 +14655,10 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
         status, time.time() - t0, detail, outputs,
         extras={"producer": "rtl_hygiene_lint", "step_id": "2",
                 "default_row_status": status, "completed": status == "PASS",
-                "native_context": context, "input_sha256": context.get("input_sha256", {})},
+                "native_context": context, "input_sha256": context.get("input_sha256", {}),
+                "exit_code": exit_code,
+                "output_sha256": {path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                                  for path in outputs}},
         reason_class=(context.get("reason_class") or "inconclusive")
         if status == "NOT_MEASURED" else "")
 
@@ -28852,6 +28857,8 @@ def main() -> int:
             out = attempt / 'phase2_one_shot.json'
         import flow109_engineering as engineering
         engineering_selected = d11_selected and engineering.selected_original(project, context)
+        publish_current = (d11_selected and context.get('runtime_tool_uses') is None
+                           and context.get('qualification_registry') is None)
         if engineering_selected:
             lint_rows = _step_d11_original_engineering(project, context, pdk_name=args.pdk,
                 bounded_rtl=True, top_name=args.top_name, container=args.container)
@@ -28870,7 +28877,7 @@ def main() -> int:
                    "bounded_disclosures": ["native lint only; whole flow not measured"]}
         _write_phase2_report(out, summary, project,
                             invocation_context=_dispatch_invocation_context,
-                            publish_current=engineering_selected)
+                            publish_current=publish_current)
         # D11's front door reopens the actual fresh normal owner report before
         # the sole canonical writer publishes; this child owns no row credit.
         finished = None if d11_selected else flow109.finish_native_window(project, summary, out)
@@ -28882,7 +28889,7 @@ def main() -> int:
             summary["verdict"] = status
             _write_phase2_report(out, summary, project,
                                 invocation_context=_dispatch_invocation_context,
-                                publish_current=engineering_selected)
+                                publish_current=publish_current)
         print(f"native Step 2: {row.status} — {row.detail}")
         return {"PASS": 0, "FAIL": 1}.get(status, 2)
 
