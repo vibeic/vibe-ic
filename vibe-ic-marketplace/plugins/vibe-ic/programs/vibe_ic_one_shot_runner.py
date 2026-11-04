@@ -4911,6 +4911,8 @@ def _main(args=None) -> int:
         resume_lock.release()
         if _resume_plan["status"] != "READY":
             return 0 if _resume_plan["status"] == "NO_ACTION" else 2
+    _resume_plan = _resume_plan or getattr(args, '_flow109_resume_plan', None)
+    args._flow109_resume_plan = _resume_plan
     try:
         if (args.flow == '109' and not args.flow109_plan_only
                 and not getattr(args, '_flow109_row_active', False)):
