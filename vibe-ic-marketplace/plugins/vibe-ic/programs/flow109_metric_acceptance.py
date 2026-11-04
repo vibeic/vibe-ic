@@ -2917,10 +2917,6 @@ def _d09_supplied_rtl(project, author, bound, document):
 
 
 def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, invocation=None) -> dict:
-    """Recompute source facts for supplied RTL or an accepted spec-to-rtl author.
-
-    Unknown claims remain owed. This grants no functional or D10 credit.
-    """
     import shutil
     import tempfile
     import design_one_shot_runner as runner
