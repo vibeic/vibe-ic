@@ -253,53 +253,16 @@ def _try_divider(prompt: str, ins: List[Port], outs: List[Port], top: str) -> Op
 # 6) sequential SHIFT-ACCUMULATE MULTIPLIER (start/done handshake, yout=ain*bin)
 # --------------------------------------------------------------------------- #
 def _try_seq_multiplier(prompt: str, ins: List[Port], outs: List[Port], top: str) -> Optional[str]:
-    if not _cue(prompt, "multiplier", "multiply", "multiplication"):
+    if not _cue(prompt, "multiplier", "multiply", "multiplication") or _cue(prompt, "booth", "pipelin*", "float"):
         return None
-    clk = next((n for n, _ in ins if _is_clock(n)), None)
-    rst = next((n for n, w in ins if _is_reset(n)), None)
-    start = next((n for n, w in ins if w == 1 and re.search(r"(?i)start|en\b|enable", n)), None)
-    if not (clk and rst and start) or _cue(prompt, "booth", "pipelin*", "float"):
+    from arithmetic_synth import _recognize_multiplier, _dia_emit
+    spec = _recognize_multiplier(prompt, ins, outs)
+    if not spec or spec["op"] != "mult_seq_done" or spec.get("_latency_unparsed"):
         return None
-    data = [(n, w) for n, w in ins if n not in (clk, rst, start)]
-    if len(data) != 2:
+    if (len(ins) != 5 or spec["pw"] != spec["aw"] + spec["bw"]
+            or dict(ins)[spec["start"]] != 1 or dict(outs)[spec["done"]] != 1):
         return None
-    (a, aw), (b, bw) = data
-    prod = next((n for n, w in outs if w == aw + bw), None)
-    done = next((n for n, w in outs if w == 1 and re.search(r"(?i)done|ready|rdy|valid", n)), None)
-    if not prod or not done:
-        return None
-    rst_lo = _active_low_reset(rst, prompt)
-    rst_edge = "negedge" if rst_lo else "posedge"
-    rst_cond = f"!{rst}" if rst_lo else rst
-    N = aw  # iteration count == operand width
-    body = f"""    reg [4:0] i;
-    reg done_r;
-    reg [{aw-1}:0] areg, breg;
-    reg [{aw+bw-1}:0] yout_r;
-    always @(posedge {clk} or {rst_edge} {rst}) begin
-        if ({rst_cond}) i <= 0;
-        else if ({start} && i < {N+1}) i <= i + 1;
-        else if (!{start}) i <= 0;
-    end
-    always @(posedge {clk} or {rst_edge} {rst}) begin
-        if ({rst_cond}) done_r <= 0;
-        else if (i == {N}) done_r <= 1;
-        else if (i == {N+1}) done_r <= 0;
-    end
-    always @(posedge {clk} or {rst_edge} {rst}) begin
-        if ({rst_cond}) begin areg <= 0; breg <= 0; yout_r <= 0; end
-        else if ({start}) begin
-            if (i == 0) begin areg <= {a}; breg <= {b}; yout_r <= 0; end
-            else if (i > 0 && i < {N+1}) begin
-                if (areg[i-1]) yout_r <= yout_r + ({{{aw}'b0, breg}} << (i-1));
-            end
-        end
-    end
-    assign {prod} = yout_r;
-    assign {done} = done_r;
-"""
-    return ("// program-SOLVED shift-accumulate multiplier (start/done, yout=a*b).\n"
-            + _ansi_header(top, ins, outs) + body + "endmodule\n")
+    return _dia_emit(spec, top)
 
 
 # --------------------------------------------------------------------------- #

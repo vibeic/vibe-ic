@@ -558,7 +558,7 @@ def _completion_enable_qualification(text: str, enable: str) -> Optional[bool]:
             return True
         return True if re.search(rf"{name}\s+(?:is\s+)?(?:high|1|asserted)\b", clause, re.I) else None
 
-    rules = re.findall(r"[^.\n]*\bdone\w*\b[^.\n]*", text, re.I)
+    rules = re.findall(r"[^.]*\bdone\w*\b[^.]*", text, re.I)
     predicates = [rule for rule in rules if re.search(r"\bis\s+equal\s+to\s+\d+\b", rule, re.I)]
     context = {qualifier(rule) for rule in rules if rule not in predicates
                and re.search(name, rule, re.I)}
