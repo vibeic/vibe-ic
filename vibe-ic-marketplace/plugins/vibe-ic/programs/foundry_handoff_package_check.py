@@ -335,6 +335,10 @@ def _read_shuttle_precheck(project, assembly=None):
         provider = selected_provider_precheck(assembly)
         return (bool(provider.get('retained_report')), True,
                 provider['technical_precheck_status'], provider.get('provider'))
+    if (project / 'reports/flow109/plan.json').is_file():
+        from submission_template_check import slot_rules_are_owed
+        if not slot_rules_are_owed(project, None)[0]:
+            return False, False, None, None
     p = project / _SHUTTLE_PRECHECK_REPORT
     if not p.is_file():
         return False, False, None, None
@@ -1008,6 +1012,7 @@ def design_release_sources(project, layout, assembly=None):
     project = Path(project).resolve()
     files, validation, external = {}, {}, {}
     physical_project = Path(assembly["report"]).parents[2] if assembly else project
+    flow109_run = (project / 'reports/flow109/plan.json').is_file()
     def add(path, role, expected=None, bundle=None):
         path = Path(path)
         if not path.is_absolute():
@@ -1100,6 +1105,85 @@ def design_release_sources(project, layout, assembly=None):
     for kind in ('drc','lvs','antenna','density'):
         if assembly and kind != 'lvs':
             continue  # Selected provider PV and internal LVS have separate owners.
+        if flow109_run and kind != 'lvs':
+            try:
+                if kind == 'drc':
+                    record = project / 'reports/flow109/components/D65.json'
+                    packet = json.loads(record.read_text())
+                    result = packet['drc']
+                    validation[kind] = {'verdict': result.get('verdict', 'NOT_MEASURED'),
+                        'rows': result.get('metrics', {}),
+                        'gds_sha256': result.get('scope', {}).get('gds_sha256'), 'record': str(record)}
+                    add(record, 'drc_report')
+                    if result.get('verdict') == 'PASS' and (packet.get('component_status') != 'PASS'
+                            or packet.get('completed') is not True):
+                        raise ValueError('Final physical verification has not completed')
+                    reports = result.get('native_reports') or []
+                    if not reports or any(not (project / p).is_file() for p in reports):
+                        raise ValueError('Final Magic/KLayout native reports are missing')
+                    for path in reports:
+                        add(path, 'drc_report')
+                elif kind == 'antenna':
+                    import flow109
+                    result = flow109._retained_native_result(project, {
+                        'resolved_row': {'id': 'D43', 'profile': {'id': 'default'}},
+                        'context_sha256': None})
+                    if result is None:
+                        raise ValueError('The run has no completed native antenna result')
+                    # The release GDS is the package target. The actual routed
+                    # measurement input remains named in measured_subject.
+                    validation[kind] = {'verdict': result['component_status'],
+                        'gds_sha256': sha256_file(layout),
+                        'rows': {key: {'value': values[0]} for key, values in
+                                 result['native_measurements'].items()},
+                        'scope': 'Run native routed-State antenna count retained for this release; '
+                                 'no post-finishing GDS antenna measurement is implied.'}
+                    for rel in result.get('native_reports', []):
+                        path = project / rel
+                        add(path, 'antenna_report')
+                        doc = json.loads(path.read_text())
+                        validation[kind]['measured_subject'] = doc.get('measured_subject')
+                        for key in ('source', 'tool_state'):
+                            if doc.get(key):
+                                if not (project / doc[key]).is_file():
+                                    raise ValueError('Native antenna output missing: ' + doc[key])
+                                add(doc[key], 'antenna_report')
+                        for entry in (doc.get('measured_subject') or {}).get('inputs', []):
+                            add(entry['path'], 'tool_provenance', entry.get('sha256'))
+                else:
+                    record = project / finishing.RECORD_REL
+                    arm = json.loads(record.read_text())['gds']['librelane']
+                    row = finishing.validate_density_result(project, arm, layout=Path(layout))
+                    count = finishing._count(row.get('value'))
+                    validation[kind] = {'verdict': 'NOT_MEASURED' if count is None else
+                        'PASS' if count == 0 else 'FAIL', 'gds_sha256': arm.get('subject_sha256'),
+                        'rows': {finishing.DENSITY_METRIC: row}}
+                    add(record, 'density_report')
+                    add(arm['state'], 'density_report')
+                    if arm.get('report'):
+                        add(arm['report'], 'density_report')
+                    try:
+                        config_path = lc.project_path(project, arm['state']).parent / 'config.json'
+                        config = json.loads(config_path.read_text())
+                        add(config_path, 'tool_provenance')
+                        # The configured map's kit-relative path selects the map
+                        # in the active PDK, including Nix directory symlinks.
+                        root = json.loads((project / lc.PDK_ROOT_PROVENANCE_REL).read_text())
+                        suffix = Path(config['KLAYOUT_DEF_LAYER_MAP']).relative_to(
+                            Path(config['PDK_ROOT']) / config['PDK'])
+                        layer_map = Path(root['path']) / config['PDK'] / suffix
+                        add(layer_map, 'layer_map')
+                        if layer_map.is_file():
+                            external[str(layer_map)] = {'sha256': sha256_file(layer_map),
+                                'reason': 'Active PDK layer map; external kit input archived verbatim'}
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        external['layer_map'] = {'status': 'NOT_MEASURED', 'reason': str(exc)}
+            except (OSError, ValueError, KeyError, TypeError, lc.Refusal) as exc:
+                if (validation.get(kind) or {}).get('verdict') == 'FAIL':
+                    validation[kind]['reason'] = str(exc)
+                else:
+                    validation[kind] = {'verdict': 'NOT_MEASURED', 'reason': str(exc)}
+            continue
         measurement_project = physical_project
         selected_ll_record = None
         if kind == 'lvs' and assembly and 'lvs' in (assembly.get('basis', {}).get('current_signoff') or {}):
@@ -1268,43 +1352,75 @@ def design_release_sources(project, layout, assembly=None):
                 add(path,'layer_map',entry['sha256'])
     except (OSError, ValueError, KeyError, lc.Refusal) as exc:
         validation['stream'] = {"verdict":"NOT_MEASURED","reason":str(exc)}
-    try:
-        import sta_corner_record_completeness_check as sta_corners
-        arm = sta_corners.read_tool_arm(project)
-        if arm is None:
-            raise ValueError('No retained native STA source selected')
-        gaps = {name:row.get('scope_gaps') for name,row in arm['corners'].items() if row.get('scope_gaps')}
-        if gaps:
-            raise ValueError(f'incomplete STA scene coverage: {gaps}')
-        record = project / timing.SIGNOFF_RECORD
-        doc = json.loads(record.read_text()); state = Path(doc['sta_state'])
-        views = json.loads(state.read_text())
-        add(record,'sta_report');retained(state.parent,'sta_report')
-        add(views['sdc'],'sdc')
-        for path in (views.get('spef') or {}).values():
-            add(path,'spef')
-        for role, key in (('timed_reference_netlist','pnl'),('timed_reference_netlist','nl')):
-            if views.get(key):add(views[key],role)
-        import eda_report_audit as sta_audit
-        from dataclasses import asdict
-        complete = sta_corners.evaluate_tool(project, arm)
-        verdict = complete['verdict']
-        report_audit = None
-        subjects = [Path(row['files'][timing.CORNER_REPORT]['path']) for row in arm['corners'].values()
-                    if timing.CORNER_REPORT in row['files']]
-        if subjects:
-            with sta_audit.scoped_discovery([Path(arm['folder'])]), sta_audit.named_subjects(subjects):
-                judged = sta_audit._check_sta(project)
-            report_audit = asdict(judged)
-            if verdict == 'PASS':
-                verdict = judged.verdict or ('PASS' if judged.passed else 'FAIL')
-            elif any(finding.rule == 'STA_REAL_VIOLATION_FOUND' for finding in judged.findings):
-                verdict = 'FAIL'
-        validation['sta'] = {"verdict":verdict,"corner_consumer":complete,
-                             "report_consumer":report_audit,"basis":timing.tool_arm_basis(arm),
-                             "scope":"Retained timed netlist/SDC/SPEF and routing checkpoint; not a new parasitic measurement of provider finishing"}
-    except (OSError, ValueError, KeyError, lc.Refusal) as exc:
-        validation['sta'] = {"verdict":"NOT_MEASURED","reason":str(exc)}
+    if flow109_run:
+        try:
+            record = project / 'reports/flow109/components/D70.json'
+            doc = json.loads(record.read_text())
+            add(record, 'sta_report')
+            verdict = doc.get('component_status', 'NOT_MEASURED')
+            if verdict == 'PASS' and (doc.get('completed') is not True
+                    or doc.get('timing_judgment', {}).get('verdict') != 'PASS'):
+                raise ValueError('Final electrical timing has not completed')
+            validation['sta'] = {**doc, 'verdict': verdict}
+            state = lc.project_path(project, doc['sta_state']['path'])
+            views = json.loads(state.read_text())
+            add(state, 'sta_report')
+            if not doc.get('corners'):
+                raise ValueError('Final electrical native timing corners absent')
+            for corner in doc['corners'].values():
+                path = lc.project_path(project, corner['report'])
+                if not path.is_file():
+                    raise ValueError('Final electrical native timing report missing: ' + str(path))
+                add(path, 'sta_report')
+            for key, role in (('sdc', 'sdc'), ('nl', 'timed_reference_netlist'),
+                              ('pnl', 'timed_reference_netlist')):
+                if views.get(key):
+                    add(views[key], role)
+            for path in (views.get('spef') or {}).values():
+                add(path, 'spef')
+        except (OSError, ValueError, KeyError, TypeError, lc.Refusal) as exc:
+            if validation.get('sta', {}).get('verdict') == 'FAIL':
+                validation['sta']['reason'] = str(exc)
+            else:
+                validation['sta'] = {'verdict': 'NOT_MEASURED', 'reason': str(exc)}
+    else:
+        try:
+            import sta_corner_record_completeness_check as sta_corners
+            arm = sta_corners.read_tool_arm(project)
+            if arm is None:
+                raise ValueError('No retained native STA source selected')
+            gaps = {name:row.get('scope_gaps') for name,row in arm['corners'].items() if row.get('scope_gaps')}
+            if gaps:
+                raise ValueError(f'incomplete STA scene coverage: {gaps}')
+            record = project / timing.SIGNOFF_RECORD
+            doc = json.loads(record.read_text()); state = Path(doc['sta_state'])
+            views = json.loads(state.read_text())
+            add(record,'sta_report');retained(state.parent,'sta_report')
+            add(views['sdc'],'sdc')
+            for path in (views.get('spef') or {}).values():
+                add(path,'spef')
+            for role, key in (('timed_reference_netlist','pnl'),('timed_reference_netlist','nl')):
+                if views.get(key):add(views[key],role)
+            import eda_report_audit as sta_audit
+            from dataclasses import asdict
+            complete = sta_corners.evaluate_tool(project, arm)
+            verdict = complete['verdict']
+            report_audit = None
+            subjects = [Path(row['files'][timing.CORNER_REPORT]['path']) for row in arm['corners'].values()
+                        if timing.CORNER_REPORT in row['files']]
+            if subjects:
+                with sta_audit.scoped_discovery([Path(arm['folder'])]), sta_audit.named_subjects(subjects):
+                    judged = sta_audit._check_sta(project)
+                report_audit = asdict(judged)
+                if verdict == 'PASS':
+                    verdict = judged.verdict or ('PASS' if judged.passed else 'FAIL')
+                elif any(finding.rule == 'STA_REAL_VIOLATION_FOUND' for finding in judged.findings):
+                    verdict = 'FAIL'
+            validation['sta'] = {"verdict":verdict,"corner_consumer":complete,
+                                 "report_consumer":report_audit,"basis":timing.tool_arm_basis(arm),
+                                 "scope":"Retained timed netlist/SDC/SPEF and routing checkpoint; not a new parasitic measurement of provider finishing"}
+        except (OSError, ValueError, KeyError, lc.Refusal) as exc:
+            validation['sta'] = {"verdict":"NOT_MEASURED","reason":str(exc)}
     # These are retained electrical/logic closure results, not extra provider
     # uploads. No P0/audit/checker is dispatched by the archive assembler.
     for rel in ('phase3/final/metrics.json','reports/phase3/signoff_metrics_aggregate.json',
@@ -1313,6 +1429,13 @@ def design_release_sources(project, layout, assembly=None):
                 'reports/phase3/power.rpt','reports/phase3/layout_receipts.json',
                 'reports/phase3/general_precheck.json','reports/phase3/shuttle_precheck.json',
                 'input/step_0_5ic_answers.json','input/submission_template/operator_answers.json'):
+        if flow109_run:
+            if rel == 'reports/phase3/general_precheck.json':
+                rel = 'reports/phase3/tapeout_precheck.json'
+            elif rel == 'reports/phase3/shuttle_precheck.json':
+                from submission_template_check import slot_rules_are_owed
+                if not slot_rules_are_owed(project, None)[0]:
+                    continue
         add(rel,'internal_closure')
     provider = None
     if assembly:
@@ -1358,7 +1481,8 @@ def emit_design_release(project, destination, layout, physical_top, assembly=Non
               "reason":"Provider contract/precheck must bind this final layout; no slot, CoB or submission approval inferred"}
     # Only the actual selected operator result can describe submission scope.
     precheck=project/'reports/phase3/shuttle_precheck.json'
-    if not assembly and precheck.is_file():
+    if not assembly and precheck.is_file() and (
+            not (project / 'reports/flow109/plan.json').is_file() or _read_shuttle_precheck(project)[1]):
         provider['retained_report']={"source":str(precheck),"sha256":sha256_file(precheck)}
         try:
             report=json.loads(precheck.read_text())
@@ -1922,6 +2046,9 @@ def main(argv=None):
         precheck_operator = _read_shuttle_precheck(project, assembly=assembly)
     evidence_mode = (_MODE_SHUTTLE if precheck_is_an_operators
                      else _MODE_UNDECLARED)
+    if (project / 'reports/flow109/plan.json').is_file():
+        from foundry_handoff_pack_gen import _handoff_mode
+        evidence_mode = _handoff_mode(project, assembly)['mode']
 
     if precheck_is_an_operators and precheck_verdict not in _PRECHECK_ACCEPTS:
         substance_findings.append({
