@@ -215,6 +215,11 @@ A canonical run is a fresh full-dataset run. Do not read or inherit:
   review, repair, or optimization;
 - prior failing IDs as a way to narrow the evaluation.
 
+Codex launchers that inject workspace memory must disable `memories` for blind
+actors, for example `codex exec --disable memories --disable multi_agent`.
+Verify the actual native developer context; `fork_turns=none` alone does not
+establish a clean room. An injected historical memory summary is disqualifying.
+
 `--solve` owns run-directory creation, writes clean-room metadata, pre-creates
 the transcript directory, and processes every current dataset case. Separate
 scaffolding, benchmark-local authoring, and partial prior-failure evaluation are

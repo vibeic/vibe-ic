@@ -1028,6 +1028,21 @@ def audit_text(text: str, dataset: Path, allowed: list[str],
             except (ValueError, TypeError):
                 obj = None                     # non-JSON / truncated → fallback
         if obj is not None:
+            message = obj
+            if isinstance(obj, dict) and obj.get("type") == "response_item":
+                message = obj.get("payload")
+            if (isinstance(message, dict) and message.get("type", "message") == "message"
+                    and message.get("role") == "developer"):
+                content = message.get("content")
+                if isinstance(content, list):
+                    content = "\n".join(part["text"] for part in content
+                                        if isinstance(part, dict) and isinstance(part.get("text"), str))
+                if isinstance(content, str) and all(marker in content for marker in (
+                        "You have access to a memory folder", "MEMORY_SUMMARY BEGINS", "MEMORY_SUMMARY ENDS")):
+                    findings.append({"kind": "injected-historical-memory",
+                                     "class": "historical workspace memory in developer context",
+                                     "transcript": source, "line": ln_no,
+                                     "evidence": content.strip()[:300]})
             calls: list[dict] = []
             frags, unread = _harvest_tool_strings_cov(obj, calls)
             call_fragments = {f for c in calls for f in c["fragments"]}
