@@ -241,19 +241,26 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
     in_decls = [_decl(n, w, "input") for n, w in ins]
     out_decls = [_decl(out_name, out_w, "output")]
     body = [f"    assign {out_name} = {a} + {b};"]
-    explicit_full_adders = any(
-        re.search(r"\b(?:use|using|with|from|of|instantiate)\s+"
-                  r"(?:(?:only|multiple|individual|one[-\s]bit|1[-\s]bit)\s+)*full[-\s]+adders?\b", clause, re.I)
-        and not re.search(r"\b(?:not|never|without|avoid)\s+"
-                          r"(?:(?:use|using|build|built|from|with|be|implemented|only|any)\s+)*full[-\s]+adders?\b", clause, re.I)
-        for clause in re.split(r"[.;]", text))
+    style = re.compile(r"\b(?:(?P<deny>not|never|without|avoid)\s+)?"
+                       r"(?:(?P<action>use|using|with|from|of|instantiate)\s+)?"
+                       r"(?:(?:only|multiple|individual|one[-\s]bit|1[-\s]bit|a|network|of)\s+)*full[-\s]+adders?\b", re.I)
+    requests = [(match, clause) for clause in re.split(r"[.;]", text) for match in style.finditer(clause)]
+    explicit_full_adders = not any(match["deny"] for match, _ in requests) and any(
+        match["action"] and re.search(r"\b(?:implement|build|built|construct|use|instantiate)\b", clause, re.I)
+        for match, clause in requests)
     if explicit_full_adders:
         packed = []
-        bullet_ins, bullet_outs = _pp._bullet_ports(text, packed)
-        if not (bullet_ins or bullet_outs):
-            _pp._header_ports(text, packed)
-        spans = {name: (hi, lo) for name, hi, lo in packed}
+        _pp._bullet_ports(text, packed)
+        header_ins, header_outs = _pp._header_ports(text, packed)
+        if (header_ins or header_outs) and _pp.enforce_unique_port_names(header_ins, header_outs) != (ins, outs):
+            return None
         widths = dict(ins + outs)
+        spans = {}
+        for name, hi, lo in packed:
+            if (name not in widths or abs(hi - lo) + 1 != widths[name]
+                    or name in spans and spans[name] != (hi, lo)):
+                return None
+            spans[name] = (hi, lo)
 
         def declaration(name, width, direction):
             if name in spans:

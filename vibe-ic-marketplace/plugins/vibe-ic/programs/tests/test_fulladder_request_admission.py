@@ -2,7 +2,7 @@ import pytest
 
 import arithmetic_synth as arithmetic
 import port_parser
-from test_explicit_fulladder_emission import assignments, request, assert_fulladder_composition
+from test_explicit_fulladder_emission import request, assert_fulladder_composition
 
 
 @pytest.mark.parametrize("style", ["but do not instantiate full adders",
