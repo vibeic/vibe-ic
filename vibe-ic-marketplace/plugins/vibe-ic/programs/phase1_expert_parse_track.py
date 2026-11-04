@@ -888,7 +888,7 @@ def input_text_report(project: Path) -> Dict[str, Any]:
             skipped.append({"path": str(rel), "suffix": q.suffix.lower(),
                             "bytes": size, "reason": SKIP_ORACLE_PATH})
             continue
-        if q.suffix.lower() not in _INPUT_TEXT_EXTS:
+        if q.suffix.lower() not in _INPUT_TEXT_EXTS and q not in design:
             skipped.append({"path": str(rel), "suffix": q.suffix.lower(),
                             "bytes": size, "reason": SKIP_UNSUPPORTED_FORMAT})
             continue
@@ -908,7 +908,16 @@ def input_text_report(project: Path) -> Dict[str, Any]:
             continue
         try:
             raw = q.read_bytes()
-            t = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+            if q.suffix.lower() in _INPUT_TEXT_EXTS:
+                t = raw.decode("utf-8", errors="replace")
+            else:
+                from phase1_doc_one_shot_runner import extract_one
+                t = extract_one(q)
+                if not t.strip() or re.match(r"\[\w+-extract-failed:", t):
+                    skipped.append({"path": str(rel), "suffix": q.suffix.lower(),
+                                    "bytes": size, "reason": SKIP_UNSUPPORTED_FORMAT})
+                    continue
+            t = t.replace("\r\n", "\n").replace("\r", "\n")
         except OSError:
             skipped.append({"path": str(rel), "suffix": q.suffix.lower(),
                             "bytes": size, "reason": SKIP_UNREADABLE})
