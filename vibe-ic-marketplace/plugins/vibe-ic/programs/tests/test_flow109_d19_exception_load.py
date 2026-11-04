@@ -42,6 +42,23 @@ def test_static_design_constraints_keep_exception_census_strict(tmp_path, suffix
         assert observed == expected
 
 
+@pytest.mark.parametrize('exception', [False, True])
+def test_braced_bus_literal_preserves_exception_census(tmp_path, exception):
+    sdc = tmp_path / 'functional.sdc'
+    command = ('set_false_path -from [get_ports {data[*]}] -to [get_ports q]' if exception else
+               'set_input_delay 2 -clock core [get_ports {data[*]}]')
+    sdc.write_text(command + '\n')
+    assert metrics._d19_exception_commands(sdc) == ([command] if exception else [])
+
+
+@pytest.mark.parametrize('command', ['source unknown.tcl', 'exec command'])
+def test_unbraced_tcl_execution_remains_unsupported(tmp_path, command):
+    sdc = tmp_path / 'functional.sdc'
+    sdc.write_text(f'set_input_delay 2 -clock core [get_ports [{command}]]\n')
+    with pytest.raises(metrics.MetricRefusal, match='D19_EXCEPTION_CENSUS_UNSUPPORTED'):
+        metrics._d19_exception_commands(sdc)
+
+
 def exception_authority(project, context, fields, *, command=None, validated_absence=True):
     scenarios = fields['scenario_constraints']['required_items']
     items = [{**row, 'command': command, 'justification': 'Declared neutral asynchronous test path'}
