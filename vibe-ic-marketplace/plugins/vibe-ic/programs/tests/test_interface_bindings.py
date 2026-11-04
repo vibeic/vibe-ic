@@ -101,6 +101,34 @@ def _gate(project):
 
 
 @TOOL
+def test_l1_width_consumer_accepts_measured_logical_interface_pairs(tmp_path):
+    import l1_pin_bus_width_actionable_check as widths
+    project, extracted, l9, _, _ = _project(tmp_path)
+    before = widths.evaluate(project)
+    assert before["rc"] == 1
+    assert {"link", "transport"} <= {v["pin"] for v in before["violations"]}
+    docs.gen_l9_integration_spec(project, extracted, {})
+    measured = json.loads(l9.read_text())["interface_binding_authoring"]
+    assert {p["name"] for p in measured["physical_ports"]} >= {
+        "link_req_o", "link_rsp_i", "transport_req_i", "transport_rsp_o"}
+    after = widths.evaluate(project)
+    assert after["rc"] == 0, after
+    assert after["violations"] == []
+
+
+@TOOL
+def test_l1_width_consumer_refuses_unmeasured_logical_interface_pairs(tmp_path):
+    import l1_pin_bus_width_actionable_check as widths
+    project, extracted, _, _, _ = _project(tmp_path)
+    docs.gen_l9_integration_spec(project, extracted, {})
+    (project / binding.REPORT / "proof.json").unlink()
+    result = widths.evaluate(project)
+    assert result["rc"] == 1
+    assert "native_binding_not_current" in {v["kind"] for v in result["violations"]}
+    assert {"link", "transport"} <= {v["pin"] for v in result["violations"]}
+
+
+@TOOL
 def test_native_package_binding_actual_producer_and_strict_consumer(tmp_path):
     p, extracted, l9, author, contract = _project(tmp_path)
     l1 = l9.with_name("L1_DATASHEET.json")

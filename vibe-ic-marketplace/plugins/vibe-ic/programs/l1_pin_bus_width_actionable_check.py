@@ -546,6 +546,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
     resolved_from_binding: List[Dict[str, Any]] = []
     parametric_interfaces: List[Dict[str, Any]] = []
     physical: Dict[str, Any] = {}
+    logical = set()
     # A verified physical L9 is a consuming view, not a second raw L1. Do
     # not trust a numeric L9 field or ledger status on its own. Reuse native
     # source admission and independently validate its current tool artifacts.
@@ -558,6 +559,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
             if not isinstance(l9, dict):
                 raise ValueError("L9 is not an object")
             physical = interface_bindings.current_published_ports(project, l9)
+            logical = {b['source_name'] for b in l9['interface_binding_authoring']['logical_bindings']}
     except (OSError, ValueError, TypeError, KeyError) as exc:
         violations.append({"pin": None, "kind": "native_binding_not_current",
                            "detail": str(exc)})
@@ -571,6 +573,9 @@ def evaluate(project: Path) -> Dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             continue
         name = name.strip()
+        # An admitted logical pair is represented by its measured physical ports.
+        if name in logical:
+            continue
         contract = source_parametric.get(name)
         # A current prose module's unresolved range cannot borrow the global
         # default of an unrelated HDL module found elsewhere in input/.
