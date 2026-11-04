@@ -2412,7 +2412,8 @@ def _required_documents(arm: str) -> List[str]:
 
 
 def release_docs_invariant(run_dir: Path,
-                           cell_rels: set) -> Tuple[Dict[str, object], List[str]]:
+                           cell_rels: set, *, published_verdicts=None
+                           ) -> Tuple[Dict[str, object], List[str]]:
     """(what each documentation arm did, every way this cell breaks the rule).
 
     THE RULE IS PER DESIGN KIND (owner ruling, 2026-10-19):
@@ -2495,10 +2496,12 @@ def release_docs_invariant(run_dir: Path,
                 except (OSError, ValueError):
                     native = {}
                 verdict = native.get("verdict") if isinstance(native, dict) else None
-                if verdict != "PASS":
+                delivered = (published_verdicts or {}).get(precheck, verdict)
+                if verdict != "PASS" or delivered != "PASS":
                     violations.append(
                         f"Flow109 step 108 Tapeout precheck requires {precheck} "
-                        f"PASS; native verdict is {verdict or 'NOT_MEASURED'}. "
+                        f"PASS; native verdict is {verdict or 'NOT_MEASURED'}, "
+                        f"published verdict is {delivered or 'NOT_MEASURED'}. "
                         "general_precheck.json cannot replace this run's native result.")
         staged = {rel for rels in releases.values() for rel in rels
                   if rel in cell_rels}
@@ -2852,7 +2855,8 @@ def publish(args: argparse.Namespace) -> dict:
     # carry, so `--dry-run` refuses exactly what a real publish refuses. Placed
     # after every staging decision because the question is about the FINAL
     # tree, and before the summary so the state it reports is what was judged.
-    docs_state, docs_violations = release_docs_invariant(run_dir, cell_rels)
+    docs_state, docs_violations = release_docs_invariant(run_dir, cell_rels,
+        published_verdicts={r['doc']: r['verdict'] for r in closure['amended']})
     if docs_state["design_kind"] == _KIND_UNDECLARED:
         # NOT a refusal — and not silence either. A run that never declared a
         # delivery route cannot be told which document set it owes, and
@@ -2870,6 +2874,9 @@ def publish(args: argparse.Namespace) -> dict:
             f"release documentation INVARIANT (#2017) — a "
             f"{docs_state['design_kind']} cell is incomplete:\n  - "
             + "\n  - ".join(docs_violations)
+            + f"\nPlan: {steps_result['n_steps']} step folders; "
+              f"{len(cell_rels)} cell file(s) + {input_count} shared input file(s); "
+              f"target {dest}."
             + "\nThe documentation is step 37.5ip's / 37.5ic's declared "
               "product and is what a downstream integrator reads; a published "
               "PASS cell without it is a claim about a delivery nobody "

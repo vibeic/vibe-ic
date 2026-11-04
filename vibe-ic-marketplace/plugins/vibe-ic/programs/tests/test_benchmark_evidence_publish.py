@@ -1405,6 +1405,40 @@ def test_flow109_self_tapeout_uses_native_precheck_without_legacy_reports(tmp_pa
     assert len(declared) == len(set(declared))
 
 
+@pytest.mark.parametrize('verdict', ['FAIL', 'NOT_MEASURED', 'UNSUBSTANTIATED'])
+def test_release_requires_pass_in_the_published_precheck_too(tmp_path, verdict):
+    import benchmark_evidence_publish as publisher
+    run = _flow109_release_docs(tmp_path)
+    rels = {p.relative_to(run).as_posix() for p in run.rglob('*') if p.is_file()}
+    _, violations = publisher.release_docs_invariant(run, rels,
+        published_verdicts={'reports/phase3/tapeout_precheck.json': verdict})
+    assert any(f'published verdict is {verdict}' in v for v in violations), violations
+
+
+@pytest.mark.parametrize('dry', [False, True])
+def test_source_pass_cannot_hide_a_published_unsubstantiated_release_precheck(tmp_path, dry):
+    run = _flow109_release_docs(tmp_path)
+    native = run / 'reports/phase3/tapeout_precheck.json'
+    native.write_text(json.dumps({'verdict': 'PASS',
+        'final_declaration': 'reports/phase3/transport_declaration.json'}))
+    (run / 'reports/phase3/transport_declaration.json').write_text(json.dumps({
+        'verdict': 'PASS', 'source': str(tmp_path / 'historical-absent-source.json')}))
+    before = native.read_bytes()
+    dest_root = tmp_path / 'benchmark-data'
+    args = _base_args(run, dest_root) + (['--dry-run'] if dry else [])
+    result = _run(args)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'native verdict is PASS, published verdict is UNSUBSTANTIATED' in result.stderr
+    assert 'step folders;' in result.stderr and 'cell file(s)' in result.stderr
+    assert '#2017' in result.stderr
+    assert native.read_bytes() == before
+    if dry:
+        assert not dest_root.exists()
+    else:
+        delivered = dest_root / 'ic/widgetmul/v9.9.9_openpdkx' / native.relative_to(run)
+        assert json.loads(delivered.read_text())['verdict'] == 'UNSUBSTANTIATED'
+
+
 @pytest.mark.parametrize('verdict', ['FAIL', 'NOT_MEASURED', None, 'invalid-json'])
 def test_flow109_native_precheck_cannot_fall_back_to_legacy_pass(tmp_path, verdict):
     run = _flow109_release_docs(tmp_path)
