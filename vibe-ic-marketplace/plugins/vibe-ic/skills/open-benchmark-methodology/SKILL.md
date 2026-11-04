@@ -219,6 +219,8 @@ Codex launchers that inject workspace memory must disable `memories` for blind
 actors, for example `codex exec --disable memories --disable multi_agent`.
 Verify the actual native developer context; `fork_turns=none` alone does not
 establish a clean room. An injected historical memory summary is disqualifying.
+Preserve native per-content provenance in the unfiltered export. A text banner
+alone cannot establish which provider supplied that context.
 
 `--solve` owns run-directory creation, writes clean-room metadata, pre-creates
 the transcript directory, and processes every current dataset case. Separate

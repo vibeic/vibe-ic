@@ -1034,17 +1034,19 @@ def audit_text(text: str, dataset: Path, allowed: list[str],
             if (isinstance(message, dict) and message.get("type", "message") == "message"
                     and message.get("role") == "developer"):
                 content = message.get("content")
-                if isinstance(content, list):
-                    content = "\n".join(part["text"] for part in content
-                                        if isinstance(part, dict) and isinstance(part.get("text"), str))
-                if isinstance(content, str) and re.search(
-                        r"(?m)^You have access to a memory folder[^\n]*\n"
-                        r"[\s\S]*?^========= MEMORY_SUMMARY BEGINS =========\r?\n"
-                        r"[\s\S]*?^========= MEMORY_SUMMARY ENDS =========[ \t]*\r?$", content):
-                    findings.append({"kind": "injected-historical-memory",
-                                     "class": "historical workspace memory in developer context",
-                                     "transcript": source, "line": ln_no,
-                                     "evidence": content.strip()[:300]})
+                parts = content if isinstance(content, list) else [content]
+                metadata = message.get("internal_chat_message_metadata_passthrough")
+                kinds = metadata.get("content_item_kinds") if isinstance(metadata, dict) else None
+                if isinstance(kinds, list) and len(kinds) == len(parts):
+                    for kind, part in zip(kinds, parts):
+                        text = part.get("text") if isinstance(part, dict) else part
+                        if kind == "memories.instructions" and isinstance(text, str) and re.search(
+                                r"(?m)^========= MEMORY_SUMMARY BEGINS =========\r?\n"
+                                r"[\s\S]*?^========= MEMORY_SUMMARY ENDS =========[ \t]*\r?$", text):
+                            findings.append({"kind": "injected-historical-memory",
+                                             "class": "historical summary from native memory provider",
+                                             "transcript": source, "line": ln_no,
+                                             "evidence": text.strip()[:300]})
             calls: list[dict] = []
             frags, unread = _harvest_tool_strings_cov(obj, calls)
             call_fragments = {f for c in calls for f in c["fragments"]}
