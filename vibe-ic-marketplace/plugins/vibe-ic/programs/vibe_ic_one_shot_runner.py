@@ -6196,7 +6196,7 @@ def _main(args=None) -> int:
                 verdict = finalized['verdict']
                 rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
             if d13_selected:
-                finalized = _finish_d13_selected_owner(project, {**rep, 'verdict': verdict}, d09_invocation,
+                finalized = _finish_d13_selected_owner(project, {**rep, 'verdict': rep.get('verdict') if verdict == 'PASS' else verdict}, d09_invocation,
                     published_current=_pl.published_here(phase2_report, _phase_started['phase2']))
                 reports['d13_finalization'] = finalized
                 verdict = finalized['verdict']
