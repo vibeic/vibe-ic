@@ -1033,19 +1033,22 @@ _NOISE = {
 def _odd_declared_phase(desc: str) -> Optional[str]:
     """Only source-declared edge phases; period/duty alone never select one."""
     for clause in re.split(r"[.\n]", desc):
-        if (re.search(r"\bwrap\w*\b|\bcurrent\s+counter\b|\bfirst\s+half\b", clause, re.I)
+        if (re.search(r"\bwrap\w*\b|\b(?:current|next)\s+counter\b|\bfirst\s+half\b", clause, re.I)
                 and re.search(r"\b(?:not|never|without)\b", clause, re.I)):
             return "unsupported"  # a negated phase is not a positive declaration
     high_at_wrap = bool(re.search(
         r"\bwrap\w*[^.\n]*\bto\s+0\b[^.\n]*\bhigh\b", desc, re.I))
     current_decode = bool(re.search(
         r"\bcurrent\s+counter\s+value\b|\bpre[- ]increment", desc, re.I))
+    next_decode = bool(re.search(r"\bnext\s+counter\s+value\b|\bpost[- ]increment", desc, re.I))
     low_at_wrap = bool(re.search(
         r"\blow\b[^.\n]*\bwrap\b|\bwrap\b[^.\n]*\blow\b", desc, re.I))
-    if high_at_wrap and (current_decode or low_at_wrap):
+    if (high_at_wrap and (current_decode or low_at_wrap)) or (next_decode and (current_decode or low_at_wrap)):
         return "conflict"
-    if high_at_wrap:
+    if next_decode:
         return "post"
+    if high_at_wrap:
+        return "wrap"
     if current_decode and low_at_wrap:
         return "pre"
     return None
@@ -1058,9 +1061,9 @@ def _odd_clock_contract(desc: str) -> Optional[Dict]:
     requires the reset, half-period rule, phase and default divisor in source.
     """
     module = module_name_of(desc)
-    phase = _odd_declared_phase(desc)
+    phase = _odd_declared_phase(desc) or "pre"
     if (not module or not re.fullmatch(r"[A-Za-z_]\w*", module)
-            or phase not in {"pre", "post"}):
+            or phase not in {"pre", "post", "wrap"}):
         return None
     import port_parser
     from prose_port_block_read import bridge_prompt
@@ -2206,9 +2209,7 @@ _TPL_FIFO = r'''// asyn_fifo: Asynchronous FIFO with gray-code CDC pointers (Cum
 // Design notes:
 //   - Binary pointers are (clog2(DEPTH)+1) bits: the extra MSB distinguishes
 //     full from empty. The low clog2(DEPTH) bits are the RAM address.
-//   - Binary and Gray pointers are registered from the same accepted next
-//     position. Local full/empty protection therefore accounts for every
-//     completed access without permitting a one-cycle overflow/underflow.
+//   - Each registered Gray pointer encodes its named current binary register.
 //   - Write gray pointer is 2-FF synchronized into the rclk domain (wptr_syn);
 //     read gray pointer is 2-FF synchronized into the wclk domain (rptr_syn).
 //   - Read data is REGISTERED (spec: dual_port_RAM has 'output reg rdata'),
@@ -2311,7 +2312,7 @@ module asyn_fifo #(
 
     // ------------------------------------------------------------------
     // Write controller (wclk domain)
-    // Binary and Gray pointers advance together for each accepted write.
+    // The Gray register reads the current binary value on this edge.
     // ------------------------------------------------------------------
     always @(posedge wclk or negedge wrstn) begin
         if (!wrstn) begin
@@ -2319,7 +2320,7 @@ module asyn_fifo #(
             wptr      <= {PW{1'b0}};
         end else begin
             waddr_bin <= waddr_bin + wen;
-            wptr      <= bin2gray(waddr_bin + wen);
+            wptr      <= bin2gray(waddr_bin);
         end
     end
 
@@ -2332,7 +2333,7 @@ module asyn_fifo #(
             rptr      <= {PW{1'b0}};
         end else begin
             raddr_bin <= raddr_bin + ren;
-            rptr      <= bin2gray(raddr_bin + ren);
+            rptr      <= bin2gray(raddr_bin);
         end
     end
 
@@ -3978,11 +3979,12 @@ def emit_rtl(shape: str, desc_text: str = "") -> str:
             rtl = _TPL_ODD[re.search(r"(?m)^module\b", _TPL_ODD).start():]
             rtl = re.sub(r"(parameter\s+NUM_DIV\s*=\s*)\d+",
                          lambda m: m.group(1) + str(contract["default_divisor"]), rtl, count=1)
-            if contract["phase"] == "post":
+            if contract["phase"] in {"post", "wrap"}:
                 for counter, output in (("cnt1", "clk_div1"), ("cnt2", "clk_div2")):
                     rtl = rtl.replace(f"{output} <= 1'b0;", f"{output} <= 1'b1;")
-                    rtl = rtl.replace(f"({counter} < (NUM_DIV / 2))",
-                                      f"(({counter} + 32'd1) < (NUM_DIV / 2))")
+                    if contract["phase"] == "post":
+                        rtl = rtl.replace(f"({counter} < (NUM_DIV / 2))",
+                                          f"(({counter} + 32'd1) < (NUM_DIV / 2))")
                 rtl = rtl.replace("Decode the CURRENT counter value.",
                                   "Decode the incremented or wrapped counter value.")
                 rtl = rtl.replace("identical current-state rule", "identical source-declared phase")
@@ -4006,7 +4008,15 @@ def emit_rtl(shape: str, desc_text: str = "") -> str:
         if _odd_declared_phase(desc_text) is not None:
             raise ValueError("odd divider phase contract is conflicting or incomplete")
     if shape in _TEMPLATES:
-        return _TEMPLATES[shape]
+        rtl = _TEMPLATES[shape]
+        if shape == "async_gray_fifo" and any(
+                re.search(r"\bgray\b[^.\n]*\bnext\s+binary\b", clause, re.I)
+                and re.search(r"\bsame[- ]edge\b", clause, re.I)
+                and not re.search(r"\b(?:not|never|without)\b", clause, re.I)
+                for clause in re.split(r"[.\n]", desc_text)):
+            for binary, enable in (("waddr_bin", "wen"), ("raddr_bin", "ren")):
+                rtl = rtl.replace(f"bin2gray({binary})", f"bin2gray({binary} + {enable})")
+        return rtl
     if shape == _UNSIGNED_DIVISION_SHAPE:
         contract, unresolved = _unsigned_division_observation(desc_text or "")
         if contract is None or unresolved:

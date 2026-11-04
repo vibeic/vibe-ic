@@ -56,7 +56,10 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    shifter logical-vs-rotate default, FIFO Gray-pointer, restoring-divider
    remainder width, overlapping-sequence FSM re-seed, valid/ready handshake
    inference, …), **NOT per-problem answers** — applying them is REQUIRED, not
-   optional. A runner-driven author that skipped this re-invented a
+   optional. Registered outputs decode the CURRENT value of the named register;
+   use a next value, extra stage, or guard only for an explicit input relation.
+   A clause about one edge applies to that edge alone, and flags defined as
+   comparisons remain comparisons. A runner-driven author that skipped this re-invented a
    genre-determined topology from the prompt's loose wording and failed; this is
    the SAME digest Shape-C blind authors already MUST read.
 

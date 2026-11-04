@@ -2742,11 +2742,11 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 ### Skill: FIFO / double-buffer completion checklist
 
-**Pattern**: The general completion DEFAULT is REGISTERED read data and REGISTERED full/empty status (reset full=0, empty=1), reserve-one-slot capacity, and stable bank visibility. Silent or ambiguous input keeps these defaults; only explicit contrary timing/capacity requirements override them.
+**Pattern**: The general completion DEFAULT is REGISTERED read data, reserve-one-slot capacity, and stable bank visibility. Keep full/empty flags as the comparisons the input defines. Silent or ambiguous input keeps these defaults; explicit timing/capacity requirements override them.
 
 **When to apply**: FIFO/LIFO/ping-pong/double-buffer completion tasks, unless the input explicitly declares full-depth capacity, first-word-fall-through, combinational status, or a different bank protocol.
 
-**What to do**: Register `data_out` from the pre-increment read address and register both status flags with their known reset values. For a depth-N reserved-slot store, set the fill/drain thresholds at `N-1`; do not silently substitute a full-depth architecture. Gate readability on a completed unit/bank so a partial write keeps empty asserted. Keep the completed top self-contained. Record these defaults as assumptions when the input is silent; follow an explicit non-reserving capacity, first-word-fall-through read, or contrary flag/bank contract instead. Check held enables and back-to-back operations against that chosen contract.
+**What to do**: Register `data_out` from the current read address; preserve defined status comparisons without an added register stage. For a depth-N reserved-slot store, set the fill/drain thresholds at `N-1`; do not silently substitute a full-depth architecture. Gate readability on a completed unit/bank so a partial write keeps empty asserted. Keep the completed top self-contained. Record these defaults as assumptions when the input is silent; follow an explicit non-reserving capacity, first-word-fall-through read, or contrary flag/bank contract instead. Check held enables and back-to-back operations against that chosen contract.
 
 **Why this is GENERAL**: Registered data/status, reserve-one-slot capacity, and coherent fill/drain thresholds are documented FIFO conventions, not a hidden harness's loop schedule.
 
@@ -2818,7 +2818,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **When to apply**: Any "ping-pong", "double-buffer", "A/B buffer", or "fill one while draining the other" structure verified by async-reset / data-validation tests that never re-drive the enables. Unless the spec explicitly describes a single shared ring buffer with a unified occupancy count.
 
-**What to do**: Instantiate two banks plus a registered active-bank select; toggle the select when the filling bank hits per-bank capacity; gate `empty` on a full bank's worth of valid data (a partial / stray write keeps empty=1); register `empty`/`full` with reset defaults the way the FIFO checklist requires. Do not collapse the two banks into a single shared count.
+**What to do**: Instantiate two banks plus a registered active-bank select; toggle the select when the filling bank hits per-bank capacity; gate `empty` on a full bank's worth of valid data (a partial / stray write keeps empty=1); preserve the stated `empty`/`full` comparisons and reset behavior. Do not collapse the two banks into a single shared count.
 
 **Why this is GENERAL**: swap-at-per-bank-capacity and hold-empty-until-a-whole-bank-fills are the defining semantics of every double-buffer, independent of the data it carries. *`why_not_bucket_a`*: a program cannot tell from prose that the structure is two banks rather than one ring, nor that the quiescent test leaves the enable stuck high — that is a reading of the architecture against the TB's idle behavior. (Builds on "FIFO / double-buffer completion checklist" with the bank-swap-timing facet that checklist does not cover.)
 
@@ -3724,18 +3724,15 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
-### Skill: async FIFO Gray pointer — register the current binary position by default
-The DEFAULT registers Gray for the current binary position after this source edge's accepted operation.
-Compute `bin_next = bin + accepted` and update `bin <= bin_next; gray <= (bin_next >> 1) ^ bin_next;`.
-Both nonblocking RHS expressions then describe that position. `gray <= (bin >> 1) ^ bin`
-beside `bin <= bin_next` instead encodes the pre-edge position and adds a source-clock delay.
-Keep this default on silent or ambiguous input and record the assumption. Explicit extra-delay or
-pointer/flag timing requirements override it. Do not add stages or impose a fixed flag latency.
-Align binary, Gray, synchronized remote pointers, and full/empty comparisons to the chosen convention.
-FULL compares the write Gray pointer with the synchronized read pointer's top two bits inverted;
-EMPTY compares Gray equality. Check accepted/stalled traffic, wraparound, reset, clock phases,
-and capacity boundaries. Without an explicit latency requirement, a checker must not reject a
-documented latency choice.
+### Skill: registered outputs decode the current value of the named register
+A registered output described as a function of a named register reads its CURRENT value:
+`q <= f(r); r <= next_r;`. Do not substitute `f(next_r)`, add a stage, or add a guard
+unless the input explicitly requires that relation. A requirement about one edge, such
+as a wrap edge, constrains that edge alone. Keep flags defined as comparisons as comparisons.
+For Gray pointers, use `gray <= (bin >> 1) ^ bin` while updating the binary register.
+Use the next binary position only when the input explicitly relates both updates on the
+same edge. Keep registered read data and the stated pointer synchronizers. Check accepted
+and stalled operations, reset, wrap, and capacity against those source requirements.
 
 ### Skill: pulse / edge detector — the state holds only the PREVIOUS sample, and reset is a real baseline
 For "detect a 0→1→0 pulse and assert at its END cycle", the state register holds ONLY the previous
@@ -3771,19 +3768,12 @@ its sampling. Restoring the pending state passed.
 ("the following clock cycle", "one cycle after") is stating a pipeline depth. Read it as a
 structural requirement, not as prose to be optimized away.
 
-### Skill: odd-ratio clock divider — decode the phase from the PRE-increment counter by default
-For opposite-edge counters whose registered intermediate clocks are OR-ed together, use the
-PRE-increment decode DEFAULT: `clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;`.
-Nonblocking assignment reads the old counter. Reset counters to zero and intermediate outputs HIGH
-for this documented first-half-high default. Silent or ambiguous phase takes this convention and
-records it as an assumption; only an explicit contrary reset/phase/waveform requirement overrides it.
-**What to do**: Do not replace the current-value decode with `cnt1_next` merely to compensate for a
-register delay. Check reset-relative phase separately from period/duty. If the supplied waveform
-explicitly calls for a different phase, implement it and record the override.
-**Worked pattern** (anonymized): at a threshold, list the old counter, next counter, and registered
-output on each edge. This explains the phase difference without referring to any hidden samples.
-**Why this is GENERAL**: A documented phase default resolves an otherwise open counter-derived
-waveform; an explicit input requirement still wins.
+### Skill: odd-ratio clock divider — apply the current-register decode rule
+For opposite-edge counters whose registered intermediate clocks are OR-ed together,
+use `clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;` for the first-half-high rule.
+Reset counters to zero and intermediate outputs HIGH when the input leaves these open;
+record the assumption. Apply explicit reset and edge requirements within their stated
+scope. A wrap-edge output requirement does not change the decode on other edges.
 
 _Captured by benchmark-enhancement-capture 2026-09-07._
 
