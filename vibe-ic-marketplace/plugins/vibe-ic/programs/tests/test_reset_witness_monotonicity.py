@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 import spec_coverage_check as coverage
@@ -52,9 +54,13 @@ def test_irrelevant_nonzero_input_cannot_rescue_zero_actual_data():
 
 @pytest.mark.parametrize("expression", ["payload ^ payload", "payload & 5'd0", "payload + spare"])
 def test_data_expression_is_outside_the_new_direct_copy_proof(expression):
-    _, rtl, tb = fixture()
+    prompt, rtl, tb = fixture()
     rtl, tb = with_unused_port(rtl, tb, "1")
     rtl = rtl.replace("state <= payload;", f"state <= {expression};")
+    report, reset = measured(prompt, rtl, tb)
+    assert reset["covered"] is False, reset
+    assert report["blocked"] is True, report
     markers = set()
-    coverage._tb_direct_state_checks(rtl, coverage._HDL.strip_hdl_comments_and_strings(tb), reset_checks=markers)
+    kwargs = {"reset_checks": markers} if "reset_checks" in inspect.signature(coverage._tb_direct_state_checks).parameters else {}
+    coverage._tb_direct_state_checks(rtl, coverage._HDL.strip_hdl_comments_and_strings(tb), **kwargs)
     assert markers == set(), markers
