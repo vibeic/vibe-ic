@@ -1833,7 +1833,7 @@ def _prose_quantities(text: str) -> Tuple[Quantity, ...]:
         suffix = text[match.end():].lstrip()
         if re.match(r"(?:[-–—]|\bto\b)\s*[-+.0-9]", suffix):
             continue
-        if re.match(r"(?:[²^*]|per\b|/\s*(?!" + _QUANTITY_NUMBER
+        if re.match(r"(?:[²^*·×⋅]|per\b|/\s*(?!" + _QUANTITY_NUMBER
                     + r")(?:\S|$))", suffix):
             continue
         quantity = parse_quantity(match.group().removesuffix("."))
