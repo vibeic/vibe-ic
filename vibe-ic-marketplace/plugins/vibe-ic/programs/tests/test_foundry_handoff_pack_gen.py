@@ -224,3 +224,20 @@ def test_fresh_timestamp_output_preserves_the_canonical_package(tmp_path):
     assert marker.read_text() == 'canonical package is outside this timestamp destination\n'
     assert (destination / layout.name).read_bytes() == layout.read_bytes()
     assert not (destination / marker.name).exists()
+
+
+def test_handoff_never_adds_a_differently_named_pnr_layout_to_final_gds(tmp_path):
+    project, layout = _labelled_layout(tmp_path, _physical_gds())
+    old = project / 'phase3/stage3/pnr/previous_name.gds'
+    old.parent.mkdir(parents=True)
+    old.write_bytes(_physical_gds(('old_physical_root',)))
+    original = old.read_bytes()
+    result = _run(project)
+    assert result.returncode == 0, result.stdout + result.stderr
+    handoff = project / 'phase3/stage4/foundry_handoff'
+    spec = json.loads((handoff / 'mask_spec.json').read_text())
+    assert set(spec['layout_members']) == {layout.name}
+    assert spec['layout_members'][layout.name]['signed_off_source'] is True
+    assert {hashlib.sha256(p.read_bytes()).hexdigest() for p in handoff.rglob('*.gds')} == {
+        hashlib.sha256(layout.read_bytes()).hexdigest()}
+    assert old.read_bytes() == original
