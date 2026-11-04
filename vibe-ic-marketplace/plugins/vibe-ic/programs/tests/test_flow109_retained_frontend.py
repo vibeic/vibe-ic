@@ -143,6 +143,47 @@ def case(project, step):
     return args, rtl
 
 
+@pytest.mark.parametrize('step', ['D09', 'D10'])
+@pytest.mark.parametrize('downstream_status', ['PASS', 'NOT_MEASURED'])
+def test_retained_frontend_report_is_used_only_by_its_own_row(tmp_path, step, downstream_status):
+    args, _ = case(tmp_path, step)
+    downstream = tmp_path / 'reports/flow109/default_rows/D10.json'
+    prior = {'step_id': 'D10', 'component_status': downstream_status,
+             'default_row_status': downstream_status}
+    if downstream_status == 'PASS':
+        put(tmp_path / 'reports/frontend_native.json', {'passed': True, 'tools': {
+            name: {'exit_code': 0} for name in ('Yosys.JsonHeader', 'Verilator.Lint')}})
+        put(tmp_path / 'reports/frontend_elaboration.json', {'modules': {'neutral': {
+            'ports': {'d': {'direction': 'input', 'bits': [2]},
+                      'q': {'direction': 'output', 'bits': [2]}}, 'cells': {}}}})
+        prior['p0_native'] = {'producer_result': {'path': 'reports/frontend_native.json'},
+            'elaboration_path': 'reports/frontend_elaboration.json', 'top': 'neutral'}
+    else:
+        prior['reason'] = 'D10_D09_NOT_ACCEPTED'
+        (tmp_path / 'phase2/stage2/synth/synth_inputs.json').unlink()
+    put(downstream, prior)
+    saved = downstream.read_bytes()
+    result = flow109.prepare_front_door(args, tmp_path)
+    if step == 'D09':
+        assert result is None, 'D09 must continue to its source author'
+        assert downstream.read_bytes() == saved
+        assert not (tmp_path / 'reports/flow109/default_rows/D09.json').exists()
+        context = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
+        assert context['resolved_row']['id'] == 'D09'
+    else:
+        assert result == (0 if downstream_status == 'PASS' else 2)
+        retained = json.loads(downstream.read_text())
+        assert retained['default_row_status'] == downstream_status
+        assert retained['native_started'] is False
+        if downstream_status == 'PASS':
+            assert retained['native_measurements']['interface']['ports'] == {
+                'd': {'direction': 'input', 'width': 1, 'signed': 0},
+                'q': {'direction': 'output', 'width': 1, 'signed': 0}}
+        else:
+            assert retained['reason'] == 'D10_NATIVE_REPORT_UNAVAILABLE'
+            assert 'synth_inputs.json' in retained['detail']
+
+
 @pytest.mark.parametrize('step', ['D11', 'D13', 'D14', 'D22', 'D25', 'D26', 'D30'])
 def test_public_frontend_reads_native_reports_without_a_producer_rerun(tmp_path, monkeypatch, step):
     args, _ = case(tmp_path, step)
