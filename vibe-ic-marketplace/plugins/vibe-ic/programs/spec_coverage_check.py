@@ -3306,6 +3306,7 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
                                 or not any(p.name == control and p.width == 1 for p in ports)
                                 or _parse_hdl_int(match[3]) != 0):
                             continue
+                        reset_checks.add("supported")
                         active_value = int(polarity == "active-high")
                         observations = samples.get(output, [])
                         for a, b, c, d in zip(observations, observations[1:], observations[2:], observations[3:]):
@@ -3520,9 +3521,9 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
     for it in items:
         if (it.kind == "reset" and rtl_text
                 and _detect_reset_mode_polarity(it.evidence)[0] == "synchronous"
-                and not _rtl_reset_ports(rtl_text, tb_text)):
+                and not _rtl_reset_ports(rtl_text, tb_text) and "supported" in reset_checks):
             _, polarity = _detect_reset_mode_polarity(it.evidence)
-            it.covered = polarity in reset_checks if polarity else bool(reset_checks)
+            it.covered = polarity in reset_checks if polarity else bool(reset_checks - {"supported"})
             it.coverage_note = ("bound synchronous clear, between-edge retention and recovery checks"
                                 if it.covered else "no bound synchronous clear/retention/recovery witness")
             continue

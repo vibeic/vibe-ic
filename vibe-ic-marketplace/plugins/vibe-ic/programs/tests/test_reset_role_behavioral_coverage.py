@@ -144,6 +144,15 @@ def test_existing_valid_reset_witnesses_outside_inline_zero_grammar_stay_covered
     assert report["blocked"] is False, report
 
 
+def test_supported_grammar_alone_is_not_an_unspecified_polarity_witness():
+    prompt, rtl, tb = fixture()
+    prompt = prompt.replace("active-high ", "")
+    tb = tb[:tb.index("initial begin")] + 'initial begin $display("reset rst por"); $finish; end endmodule'
+    report, reset = measured(prompt, rtl, tb)
+    assert reset["covered"] is False, reset
+    assert report["blocked"] is True, report
+
+
 @pytest.mark.parametrize("complete", [False, True])
 def test_ordinary_program_review_consumer_reads_same_obligation(tmp_path, complete):
     import benchmark_dispatch as dispatch
