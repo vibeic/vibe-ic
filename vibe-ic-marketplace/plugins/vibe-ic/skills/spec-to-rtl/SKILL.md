@@ -142,9 +142,11 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    work around them):
    - Combinational `always @(*)` blocks: every branch assigns every output
      OR a `default` covers them (no inferred latches).
-   - Reset-less registered outputs: add `initial <reg> = 0;` in a SEPARATE
-     `initial` block (NOT inline on `output reg q = 0;`) so the runner's
-     `rtl_hygiene_lint --fix` doesn't have to repair PROCASSINIT.
+   - Reset-less registered outputs: when input is silent or ambiguous, add
+     `initial <reg> = 0;` in a SEPARATE `initial` block (not inline on an output
+     declaration), matching `rtl_hygiene_lint --fix`, and record this DEFAULT as
+     an assumption. Only an explicit contrary initial value overrides it; preserve
+     a supplied nonzero startup value rather than resetting it to zero.
    - `case`: include `default`; rewrite overlapping `casez` priority encoders
      as `if/else-if`.
 6. **Self-verify with the HARNESS-EXACT toolchain BEFORE emit (MANDATORY —
@@ -181,7 +183,7 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
 6b. **Prompt→interface conformance pre-emit check (ORGANIC #695)**. Before
    handing back, run the deterministic interface gate — it reads ONLY the
    prompt + your RTL (BLIND; never the oracle/hidden TB) and flags the three
-   PROMPT-DERIVABLE interface misses the hidden cocotb harness gets you on:
+   PROMPT-DERIVABLE interface misses that prevent a supplied caller from binding:
 
    ```bash
    python3 plugins/vibe-ic/programs/iface_conformance_v2.py \
@@ -191,18 +193,21 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    ```
 
    It checks (1) MODULE-NAME-CASE — the RTL module name must match the
-   canonical id stem the harness uses as TOPLEVEL CASE-EXACTLY (`-s
-   findfasterclock` won't find `FindFasterClock`); (2) MISSING-PORT — every
+   supplied interface header CASE-EXACTLY (`stream_unit` and `StreamUnit`
+   are different names). If the input leaves the name open, use the supplied
+   file/id stem DEFAULT and record the assumption; only explicit contrary input
+   overrides it. The interface header wins; check any public instantiation
+   supplied as input for consistency; (2) MISSING-PORT — every
    interface signal the prompt NAMES (table rows, backtick signal names with a
    nearby direction, a given-code module header, wavedrom `name` entries) must
    appear in your port list (AXI master must keep `ar*`/`aw*`, `s_ready`, etc.);
    (3) PORT-DIRECTION — a port's direction must match the prompt's signal table
-   (don't declare `output sram_valid` when the harness drives it as an input).
+   (do not declare an output where the supplied interface declares an input).
    ADVISORY by default (prompt extraction is heuristic — an internal signal
    mentioned in prose is NOT a port and must not block); add `--strict` to make
    any finding exit 1 once you've confirmed the named signals really are ports.
    FIX every confirmed finding before emit — these are deterministic
-   elaboration/bind failures the scorer would hit, not authoring judgment.
+   elaboration/bind failures implied by the supplied interface.
 6c. **Spec-first coverage attribution pre-emit gate (ORGANIC #697)**. The
    hidden scorer is built from the SAME spec you read — where "spec" is the
    WHOLE input chain (prompt → fact graph → the L1-L27 the runner just emitted).
@@ -279,7 +284,9 @@ A "good" spec-to-rtl emission means:
 - The module name + port list match the description verbatim.
 - No latches inferred (or, if a latch IS intended per the description,
   declared `always_latch`).
-- Reset-less registered outputs have an `initial = 0` block.
+- Reset-less registered outputs use a separate initial-zero block by DEFAULT
+  when input is silent or ambiguous; record the assumption. An explicit contrary
+  startup value overrides this default and is preserved.
 
 If you cannot satisfy this from the description blindly (e.g. the description
 genuinely under-specifies a parameter the TB will instantiate by name), emit
@@ -447,7 +454,7 @@ that happened to match its OWN (wrong) RTL, so the self-TB confirmed the wrong
 behaviour. There is no independent yard-stick in a single-self-TB flow.
 
 `latency_conformance_check.py` IS that yard-stick. It generates its OWN canonical
-measurement testbench, **counts the way a hidden scorer counts** (pulse the event
+measurement testbench, **uses the documented canonical event/edge-counting DEFAULT** (pulse the event
 HIGH for exactly one clock = one latch edge, then count posedges until the output
 first asserts), resolves the spec literal against the module's real parameters,
 and **BLOCKS on any mismatch**. Run it and fix the RTL until it prints
@@ -488,15 +495,15 @@ When the prompt embeds a **literal simulation table** — rows of
 `time [clk] <input...> [internal...] <output>` under a "**Read the simulation
 waveforms to determine what the circuit does, then implement it**" instruction
 (the VerilogEval `circuitN` family) — the table **IS** a directed test vector you
-must reproduce **exactly**. The trap that fails the hidden scorer is
-**MIS-COUNTING PIPELINE STAGES**: the early rows where the output reads `x` are
-the **input-sampling NBA race** (`@(posedge) a<=val` leaves the input `x` on the
-first edge), **NOT** an extra register stage. An agent who reads that X-window as
-a second stage authors a TWO-stage `q1<=~a; q<=q1` pipeline when the spec is the
-ONE-stage `q<=~a`; its self-TB still "passes" but it scores ~58/123 mismatches on
-the hidden TB (Prob098_circuit7, the round-18 FAIL). The X-window is consumed by
-the X-match convention — it does **not** license an added latency stage. Count
-stages from the **first DEFINED output transition**, not from the first `x`.
+must reproduce **exactly**. Count pipeline depth from the **first DEFINED output
+transition**, not from the first `x`. Early X rows are not an extra register stage:
+an input-sampling NBA race (`@(posedge) a<=val`) can leave the input unknown at the
+first edge, and the table's X-match convention consumes that unconstrained window.
+Do NOT add a stage just to explain early X. Keep this default on silent or ambiguous
+stage-count wording and record the assumption; an explicit contrary latency or
+fully defined timing requirement overrides it. Check every defined row. For a real
+source conflict, pick by declared precedence, record it, and emit RTL without asking
+a human or importing a hidden reference's implementation.
 
 `waveform_table_conformance_check.py` is the independent yard-stick. It parses the
 table, replays it the way the scorer compares (X in the table matches anything;

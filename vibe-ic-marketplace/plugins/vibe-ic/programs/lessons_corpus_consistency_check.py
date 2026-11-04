@@ -33,10 +33,15 @@ spec-deference phrase (e.g. "follows the spec", "read which it is",
 sharing a genre that take OPPOSITE poles on the same axis, with NEITHER
 deferring to the spec, are a CONTRADICTION.
 
+Author-source checks are a static corpus audit used at test time. They flag
+explicit oracle behaviour/answer authority, not general engineering defaults or
+legitimate references supplied as design inputs. The runtime renderer does not
+call this audit and never withholds lessons because a prose regex matched.
+
 EXIT CODES
 ----------
   0  consistent (or no corpus / no genre overlap)
-  1  >=1 contradictory directive pair found (listed)
+  1  >=1 contradictory directive or oracle-authority finding (listed)
   2  usage / I/O error
 """
 from __future__ import annotations
@@ -109,19 +114,83 @@ _SPEC_DEFERENCE = re.compile(
     r"reads? .{0,30}from the spec|follow(?:s|ing)? the (?:declared |stated )?spec",
     re.IGNORECASE)
 
-_SKILL_HEAD_RE = re.compile(r"^###\s+Skill:\s*(.+?)\s*$", re.MULTILINE)
-
-
 def _split_skill_sections(text: str) -> List[Tuple[str, str]]:
-    """Return [(heading, body)] for each `### Skill:` section."""
+    """Return active Skill sections, following the renderer's heading boundaries."""
     out: List[Tuple[str, str]] = []
-    matches = list(_SKILL_HEAD_RE.finditer(text))
-    for i, m in enumerate(matches):
-        heading = m.group(1).strip()
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        out.append((heading, text[start:end]))
+    heading = None
+    body: List[str] = []
+    for line in text.splitlines():
+        if line.startswith(("# ", "## ", "### ")):
+            if heading is not None:
+                out.append((heading, "\n".join(body).rstrip()))
+            heading = (line[len("### Skill:"):].strip()
+                       if line.startswith("### Skill:") else None)
+            body = []
+        elif heading is not None:
+            body.append(line)
+    if heading is not None:
+        out.append((heading, "\n".join(body).rstrip()))
     return out
+
+
+# These are authority claims, not a list of benchmark names or forbidden words.
+# Keep verification provenance (including blind A/B), public constants, and
+# references explicitly supplied by the input legal. A deference sentence
+# elsewhere in a lesson cannot license a separate hidden-answer assertion.
+_AUTHOR_AUTHORITY_PATTERNS = {
+    "ORACLE_OUTCOME_JUSTIFICATION": (
+        r"oracle-(?:FAIL|PASS)|fail\w*\s+the\s+oracle"),
+    "ORACLE_BEHAVIOUR": (
+        r"\b(?:oracle|golden(?:\s+(?:reference\s+)?(?:model|RTL|implementation))?|"
+        r"hidden(?:/golden)?\s+(?:TB|testbench)|hidden\s+checkers?)\s+"
+        r"(?:holds?|expects?|requires?|wants?|applies|outputs?|produces?|returns?|asserts?)\b"),
+    "HIDDEN_REFERENCE_AUTHORITY": (
+        r"\bhidden\s+(?:TB|testbench)\b[^.!?]{0,180}?\b(?:wins|overrides?|outranks?)\b|"
+        r"\bgolden\s+(?:reference\s+)?model\b[^.!?]{0,200}?"
+        r"\b(?:must\s+match|authoritative|not\s+the\s+ambiguous)\b|"
+        r"\bgolden\s+RTL\b[^.!?]{0,160}?\b(?:ARE|IS)\s+the\s+spec\b"),
+    "SCORER_PHASE_AUTHORITY": (
+        r"\bscorer\s+confirms\b[^.!?]{0,100}?\bgolden\b|"
+        r"\bguaranteed\s+match\b[^.!?]{0,100}?\bgolden\b"),
+    "ORIGINAL_GOLDEN_AS_INPUT": (
+        r"\b(?:reference|example)\b[^.!?]{0,100}?\bor\s+the\s+original\s+golden\b"),
+}
+
+
+def author_source_findings(text: str) -> List[str]:
+    """Recognise explicit oracle-authority claims in author-facing prose.
+
+    This bounded lexical check does not establish semantic purity of arbitrary
+    natural language. Source review still owns paraphrases outside these forms.
+    """
+    # Markdown soft wraps do not change a claim's source. Keep paragraph
+    # boundaries while treating a single physical newline as whitespace.
+    text = re.sub(r"\n[ \t]*\n", "\n\n", text)
+    text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+    findings = []
+    for name, pattern in _AUTHOR_AUTHORITY_PATTERNS.items():
+        # Overlapping starts keep a later source claim visible even if an
+        # earlier qualified span reaches across it before exemption.
+        for match in re.finditer("(?=(" + pattern + "))", text, re.IGNORECASE):
+            prefix = re.split(r"[.!?;\n]", text[:match.start()])[-1]
+            # A qualifier must attach to THIS claim's source, not be an escape
+            # phrase elsewhere in a paragraph/lesson containing hidden advice.
+            # Intervening words must describe that source; arbitrary prose is
+            # not a bridge from a supplied document to an oracle assertion.
+            supplied = re.search(
+                r"\b(?:provided|supplied|given|input[- ]declared|spec[- ]derived)"
+                r"(?:\s+(?:public|normative|executable|reference|independent|arithmetic)){0,3}"
+                r"\s+(?:the\s+)?$", prefix, re.I)
+            prohibition = re.search(
+                r"\b(?:never|do not|don't|must not)\s+"
+                r"(?:read|inspect|consult|use|assume|follow)\s+(?:the\s+)?$", prefix, re.I)
+            if prohibition or (supplied and not re.search(
+                    r"\bhidden\b", supplied.group() + match.group(1), re.I)):
+                continue
+            findings.append(name)
+            break
+    return findings
+
 
 
 def _section_genres(heading: str, body: str) -> List[str]:
@@ -173,7 +242,7 @@ def _poles_taken(body: str, pole_a, pole_b) -> Tuple[bool, bool]:
 
 
 def audit_text(text: str) -> List[Dict]:
-    """Return a list of contradiction records (empty == consistent)."""
+    """Return directive and author-source findings (empty == consistent)."""
     sections = _split_skill_sections(text)
     enriched = []
     for heading, body in sections:
@@ -181,7 +250,11 @@ def audit_text(text: str) -> List[Dict]:
         defers = bool(_SPEC_DEFERENCE.search(body))
         enriched.append((heading, body, genres, defers))
 
-    contradictions: List[Dict] = []
+    contradictions: List[Dict] = [
+        {"reason_class": "AUTHOR_LESSON_ORACLE_AUTHORITY", "section": heading,
+         "rules": findings}
+        for heading, body in sections
+        if (findings := author_source_findings(heading + "\n" + body))]
     for axis_name, axis_genres, pole_a, pole_b in _AXES:
         # The correct guidance on a spec-governed axis (read-timing, shift-kind)
         # is "FOLLOW THE SPEC" — the reference vectors are captured against the
@@ -243,13 +316,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     contradictions = audit_file(path)
     if not contradictions:
-        print(f"PASS: lessons corpus self-consistent — no Skill section "
+        print(f"PASS: lessons corpus self-consistent — no oracle-authority claim "
+              f"or Skill section "
               f"hard-codes a single pole on a spec-governed axis without "
               f"deferring to the spec ({path.name})")
         return 0
-    print(f"FAIL: {len(contradictions)} harmful hard-coded directive(s) in "
+    print(f"FAIL: {len(contradictions)} harmful directive/authority finding(s) in "
           f"{path.name}:", file=sys.stderr)
     for c in contradictions:
+        if c.get("reason_class"):
+            print(f"  - {c['reason_class']}: {c['section']}: {c['rules']}",
+                  file=sys.stderr)
+            continue
         print(f"  - axis={c['axis']} genre={c['genre']} poles={c['poles']}: "
               f"{c['hard_coded_sections']} hard-codes a fixed pole on a "
               f"spec-governed axis without deferring to the spec", file=sys.stderr)
