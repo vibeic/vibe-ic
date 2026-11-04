@@ -43,10 +43,15 @@ def test_unused_input_values_do_not_replace_the_actual_data_role(mode):
     assert report["blocked"] is False, report
 
 
-def test_irrelevant_nonzero_input_cannot_rescue_zero_actual_data():
+@pytest.mark.parametrize("phase", ["assertion", "baseline"])
+def test_irrelevant_nonzero_input_cannot_rescue_zero_actual_data(phase):
     prompt, rtl, tb = fixture()
     rtl, tb = with_unused_port(rtl, tb, "1")
-    tb = tb.replace("purge_i=1;", "purge_i=1; payload=0;")
+    if phase == "assertion":
+        tb = tb.replace("purge_i=1;", "purge_i=1; payload=0;")
+    else:
+        tb = tb.replace('if (state !== 5\'d17) $fatal(1, "baseline");',
+            'payload=0; if (state !== 5\'d17) $fatal(1, "baseline");')
     report, reset = measured(prompt, rtl, tb)
     assert reset["covered"] is False, reset
     assert report["blocked"] is True, report
