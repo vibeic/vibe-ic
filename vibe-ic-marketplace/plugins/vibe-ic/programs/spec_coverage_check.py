@@ -3184,8 +3184,6 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
     with literal delays, direct assignments and fatal-backed case comparisons
     is measured. Unknown control flow, other clock drivers and forced outputs
     cannot earn credit. Native simulation still adjudicates the expected values.
-    Reset witnesses additionally bind a scalar clear branch and hold nonzero
-    data through assertion, retention and clearing before exercising recovery.
     """
     clocks, scope = _tb_bound_clock_ports(rtl_text, tb_code)
     if (len(clocks) != 1 or next(iter(clocks.values()), None) != "input"
@@ -3297,28 +3295,34 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
                             and len(re.findall(r"\balways(?:_ff)?\b", module[1])) == 1
                             and not re.search(r"\b(?:generate|task|function)\b|\bif\b(?=[\s\S]*\balways)", module[1]))
                     pattern = (rf"\balways(?:_ff)?\s*@\(\s*(?:posedge|negedge)\s+{re.escape(formal[0])}\s*\)"
-                               rf"\s*(?:begin\s*)?if\s*\(([^)]+)\)\s*(?:begin\s*)?(\w+)\s*<=\s*({_HDL_INT})\s*;")
+                               rf"\s*(?:begin\s*)?if\s*\(([^)]+)\)\s*(?:begin\s*)?(\w+)\s*<=\s*({_HDL_INT})\s*;"
+                               r"\s*(?:end\s*)?else\s*(?:begin\s*)?\2\s*<=\s*(\w+)\s*;")
                     for match in re.finditer(pattern, module[1] if module and safe else "", re.I):
                         control, polarity = _SRC._classify_polarity(match[1])
                         local, output = roles.get((control or "").lower()), roles.get(match[2].lower())
-                        data = inputs - {local}
-                        if (local not in inputs or output not in outputs or not data
+                        data = roles.get(match[4].lower())
+                        if (local not in inputs or output not in outputs or data not in inputs - {local}
                                 or not any(p.name == control and p.width == 1 for p in ports)
+                                or len(_assigned_expressions(module[1], match[2])) != 2
                                 or _parse_hdl_int(match[3]) != 0):
                             continue
                         reset_checks.add("supported")
                         active_value = int(polarity == "active-high")
                         observations = samples.get(output, [])
-                        for a, b, c, d in zip(observations, observations[1:], observations[2:], observations[3:]):
-                            controls = [sample[4].get(local, (None, None)) for sample in (a, b, c, d)]
-                            if (a[0] == b[0] and c[0] == b[0] + 1 and d[0] > c[0]
-                                    and a[3] == b[3] != 0 and c[3] == 0 and d[3] != 0
-                                    and [entry[1] for entry in controls] == [1-active_value, active_value, active_value, 1-active_value]
-                                    and a[1] < controls[1][0] < b[1] and controls[1] == controls[2]
-                                    and c[1] <= controls[3][0] < d[2]
-                                    and all(a[4].get(net, (None, None))[1] not in (None, 0)
-                                            and a[4].get(net) == b[4].get(net) == c[4].get(net) for net in data)):
-                                reset_checks.add(polarity)
+                        a = b = c = None
+                        for d in observations:
+                            ctrl, datum = d[4].get(local, (None, None)), d[4].get(data, (None, None))
+                            if ctrl[1] == 1-active_value and d[3] != 0:
+                                if c and d[0] > c[0] and c[1] <= ctrl[0] < d[2]:
+                                    reset_checks.add(polarity)
+                                elif (datum[1] not in (None, 0)
+                                      and (a is None or (d[0], d[3], datum) != (a[0], a[3], a[4].get(data)))):
+                                    a, b, c = d, None, None
+                            if a and ctrl[1] == active_value and datum == a[4].get(data):
+                                if d[0] == a[0] and d[3] == a[3] and a[1] < ctrl[0] < d[1]:
+                                    b = d
+                                elif b and d[0] == b[0] + 1 and d[3] == 0 and ctrl == b[4].get(local):
+                                    c = c or d
                 if endpoint_checks is not None:
                     for port in ports:
                         signal = roles.get(port.name.lower())
