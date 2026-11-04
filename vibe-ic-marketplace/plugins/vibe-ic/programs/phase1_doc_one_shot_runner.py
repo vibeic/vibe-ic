@@ -59301,6 +59301,7 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
     entries to `L4.registers[]` (deduped by addr_hex). No-op if
     L1/L4 is missing or class_path is not in the eligible set.
     """
+    from copy import deepcopy
     gd = _pl.generated_docs_dir(project)
     if not gd.is_dir():
         return
@@ -59425,6 +59426,14 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
                         prior, row):
                     absorbed += 1
                 continue
+            for family in registers:
+                declaration = {**family, 'name': family.get('multireg_family') or family.get('name'),
+                               'multireg_family': None}
+                if _multireg_element_of(declaration, row, ah):
+                    for key in ('fields', 'access', 'reset_value', 'length', 'width', 'width_bits'):
+                        if row.get(key) in (None, '', []) and key in family:
+                            row[key] = deepcopy(family[key])
+                    break
             registers.append(row)
             existing_addrs.add(ah)
             existing_by_addr.setdefault(ah.lower(), row)
