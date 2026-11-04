@@ -95,6 +95,23 @@ def test_agent_answered_route_does_not_create_authority(tmp_path):
     assert not (tmp_path / 'requirements/base_01/requirements_trace.json').exists()
 
 
+@pytest.mark.parametrize('ensure_ascii', [True, False])
+@pytest.mark.parametrize('citation', ['請交付完整晶片。', 'Deliver an IC with "pads".'])
+def test_json_escaped_owner_citation_publishes_pending_candidate(tmp_path, ensure_ascii, citation):
+    owner_case(tmp_path)
+    answers = tmp_path / 'input/step_0_5ic_answers.json'
+    doc = json.loads(answers.read_text())
+    doc['answer_provenance']['deliverable']['citation'] = citation
+    answers.write_text(json.dumps(doc, ensure_ascii=ensure_ascii, indent=2))
+    result = publication(tmp_path)
+    assert result['status'] == 'PENDING'
+    payload = json.loads((tmp_path / 'input/base_requirements_candidates.json').read_text())
+    evidence = payload['requirements_trace']['expectations'][0]['evidence'][0]
+    literal = evidence.split(' — ', 1)[1]
+    assert literal in answers.read_text()
+    assert authority(tmp_path, 'base_01', 'requirements_trace')['approval']['status'] == 'PENDING'
+
+
 def test_first_handoff_frame_survives_pending_candidate_publication(tmp_path, monkeypatch):
     import phase1_expert_parse_track as expert
 

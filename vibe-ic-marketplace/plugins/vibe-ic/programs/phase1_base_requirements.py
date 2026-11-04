@@ -65,14 +65,17 @@ def _owner_fact(project: Path) -> tuple[dict, str]:
     citation = declaration.attestation_of(doc, 'deliverable')['citation'].strip()
     raw = (project / submission.DESIGN_ANSWERS_REL).read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
+    spellings = (citation, *(json.dumps(citation, ensure_ascii=ascii_only)[1:-1]
+                            for ascii_only in (True, False)))
     for number, text in enumerate(raw.decode().splitlines(), 1):
-        if citation and citation in text:
+        literal = next((value for value in spellings if value and value in text), None)
+        if literal:
             return {
                 'id': 'delivery-route', 'layer': 'L19_CONSTRAINTS_PDK',
                 'field_path': '/constraints/tapeout_geometry/deliverable',
                 'requirement': 'Preserve the explicit owner delivery route.',
                 'expected_tokens': [endpoint],
-                'evidence': [f'{submission.DESIGN_ANSWERS_REL}:{number} sha256:{digest} — {citation}'],
+                'evidence': [f'{submission.DESIGN_ANSWERS_REL}:{number} sha256:{digest} — {literal}'],
             }, endpoint
     raise ValueError('D0102_OWNER_SOURCE_UNBOUND')
 
