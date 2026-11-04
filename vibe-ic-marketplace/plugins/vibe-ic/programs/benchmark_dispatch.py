@@ -356,6 +356,28 @@ def _runner_fresh_reports(before: dict, after: dict) -> list[str]:
             and record["sha256"] != before.get(name, {}).get("sha256")]
 
 
+def _runner_child_report_current(project: Path, binding: dict, receipt: dict,
+                                 *, native_step: str) -> None:
+    """Revalidate a delegated owner against the exact parent that launched it."""
+    expected_parent = {"invocation_id": receipt["invocation_id"], "argv": receipt["argv"],
+                       "project": receipt["project"], "source": receipt["source_before"]}
+    argv = binding["argv"]
+    source = binding["source"]
+    if (binding.get("parent_invocation") != expected_parent
+            or not binding.get("invocation_id")
+            or binding["invocation_id"] == receipt["invocation_id"]
+            or binding.get("schema") != "vibeic.runner_report_binding.v1"
+            or binding.get("project") != str(project)
+            or binding.get("report_name") != "phase2_one_shot.json"
+            or binding.get("material") != receipt["material_after"]
+            or len(argv) < 3 or Path(argv[1]).name != "phase2_one_shot_runner.py"
+            or Path(argv[2]).resolve() != project
+            or argv[argv.index("--entry-step") + 1] != native_step
+            or argv[argv.index("--exit-step") + 1] != native_step
+            or source != _runner_source_snapshot(argv, consumer=source["consumer"]["path"])):
+        raise ValueError("child owner source/generation/material differs")
+
+
 def _runner_owner_report_current(project: Path, binding: dict, receipt: dict) -> None:
     """Reopen the actual child owner behind an outer current publication."""
     owner = binding.get("owner_report")
@@ -373,26 +395,12 @@ def _runner_owner_report_current(project: Path, binding: dict, receipt: dict) ->
     child = _strict_json_loads(raw)
     current = _strict_json_loads((project / "reports/orchestrator/phase2_one_shot.json").read_bytes())
     owned = child["runner_binding"]
-    expected_parent = {"invocation_id": receipt["invocation_id"], "argv": receipt["argv"],
-                       "project": receipt["project"], "source": receipt["source_before"]}
-    argv = owned["argv"]
-    source = owned["source"]
     if (hashlib.sha256(raw).hexdigest() != owner["sha256"]
             or {k:v for k,v in child.items() if k != "runner_binding"}
                 != {k:v for k,v in current.items() if k != "runner_binding"}
-            or owned.get("parent_invocation") != expected_parent
-            or owned.get("schema") != "vibeic.runner_report_binding.v1"
-            or owned.get("project") != str(project)
-            or not owned.get("invocation_id")
-            or owned.get("report_name") != "phase2_one_shot.json"
-            or owned.get("producer") != binding["producer"]
-            or owned.get("material") != receipt["material_after"]
-            or len(argv) < 3 or Path(argv[1]).name != "phase2_one_shot_runner.py"
-            or Path(argv[2]).resolve() != project
-            or argv[argv.index("--entry-step") + 1] != "2"
-            or argv[argv.index("--exit-step") + 1] != "2"
-            or source != _runner_source_snapshot(argv, consumer=source["consumer"]["path"])):
-        raise ValueError("child owner source/generation/material differs")
+            or owned.get("producer") != binding["producer"]):
+        raise ValueError("child owner publication differs")
+    _runner_child_report_current(project, owned, receipt, native_step="2")
 
 
 def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str | None:
@@ -413,11 +421,17 @@ def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str
             return "RUNNER_REPORT_UNBOUND: fresh report has no producer generation binding"
         try:
             if (binding["schema"] != "vibeic.runner_report_binding.v1"
-                    or binding["invocation_id"] != receipt["invocation_id"]
                     or binding["project"] != receipt["project"]
-                    or binding["argv"] != receipt["argv"]
-                    or binding["source"] != receipt["source_before"]
                     or binding["report_name"] != name):
+                raise ValueError("report subject differs")
+            if binding.get("parent_invocation") is not None:
+                # D09 publishes the actual child author report. D11 instead
+                # publishes an outer report pointing to its retained child.
+                _runner_child_report_current(Path(receipt["project"]), binding,
+                                             receipt, native_step="1")
+            elif (binding["invocation_id"] != receipt["invocation_id"]
+                    or binding["argv"] != receipt["argv"]
+                    or binding["source"] != receipt["source_before"]):
                 raise ValueError("report invocation/source differs")
             _runner_owner_report_current(Path(receipt["project"]), binding, receipt)
             producer = binding["producer"]

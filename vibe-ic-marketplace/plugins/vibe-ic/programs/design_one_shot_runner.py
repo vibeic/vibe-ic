@@ -418,15 +418,14 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
                 or not current.resolve().is_relative_to(Path(project).resolve())):
             raise ValueError('D11_CURRENT_REPORT_PATH_UNBOUND')
     parent_context = None
-    if current is not None:
-        from benchmark_dispatch import _RUNNER_PARENT_CONTEXT_ENV
-        parent_raw = os.environ.get(_RUNNER_PARENT_CONTEXT_ENV)
-        if parent_raw is not None:
-            parent_context = json.loads(parent_raw)
-            # Validate the inherited parent source before publishing either
-            # role. The child keeps its own actual launch binding.
-            _bind_runner_report({}, project, __file__, out.name, context=parent_context)
-            summary['runner_binding']['parent_invocation'] = parent_context
+    from benchmark_dispatch import _RUNNER_PARENT_CONTEXT_ENV
+    parent_raw = os.environ.get(_RUNNER_PARENT_CONTEXT_ENV)
+    if parent_raw is not None:
+        parent_context = json.loads(parent_raw)
+        # Every delegated owner keeps its actual launch and its validated
+        # parent, including authoring handoffs that emit no RTL.
+        _bind_runner_report({}, project, __file__, out.name, context=parent_context)
+        summary['runner_binding']['parent_invocation'] = parent_context
     raw = json.dumps(summary, indent=2, ensure_ascii=False) + "\n"
     out.parent.mkdir(parents=True, exist_ok=True)
     _aa.write_text(out, raw)
