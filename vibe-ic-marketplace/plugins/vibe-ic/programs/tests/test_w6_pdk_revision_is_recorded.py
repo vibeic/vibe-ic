@@ -325,7 +325,9 @@ def test_actual_conflicting_tree_is_not_hidden_by_cached_revision(log_safe_tmp):
 
 
 @pytest.mark.parametrize("cache", [_RUNTIME_CALIBRATION, "plugin_work/logs",
-                                  "plugin_copy/calibration"])
+                                  "plugin_copy/calibration",
+                                  "steps/author/outputs/" + _RUNTIME_CALIBRATION,
+                                  "archive/retained/" + _RUNTIME_CALIBRATION])
 def test_excluded_source_logs_do_not_spend_real_log_budget(log_safe_tmp, cache):
     real = _fix.synth_pdk_tree(log_safe_tmp / "actual_pdks", _REV_A)
     cached = _fix.synth_pdk_tree(log_safe_tmp / "cached_pdks", _REV_B)
@@ -339,7 +341,8 @@ def test_excluded_source_logs_do_not_spend_real_log_budget(log_safe_tmp, cache):
 
 @pytest.mark.parametrize("relative", [
     "reports/runtime-program-trees/native.log",
-    ".vibeic/runtime-program-trees-audit/native.log"])
+    ".vibeic/runtime-program-trees-audit/native.log",
+    "steps/author/outputs/.vibeic/runtime-program-trees-audit/native.log"])
 def test_cache_words_outside_owned_source_root_remain_real_logs(log_safe_tmp, relative):
     real = _fix.synth_pdk_tree(log_safe_tmp / "actual_pdks", _REV_A)
     run = log_safe_tmp / "run"
