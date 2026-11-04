@@ -369,6 +369,8 @@ def native_formal_case(project, *, status='PASS', later_synthesis=False):
         harness.write_text('module formal_neutral(input clk); (* anyseq *) wire d; wire q; reg past_valid=0;\n'
             'neutral dut(.clk(clk),.d(d),.q(q)); always @(posedge clk) begin past_valid<=1;\n'
             'if(past_valid) assert(q == $past(d)); end endmodule\n')
+        put(formal/'property_contract.json',{'chip_read_top':'neutral','property_denominator':1,
+            'covered_obligations':[{'id':'fixture.capture','property':'capture'}],'unresolved_obligations':[]})
         if status=='FAIL': rtl.write_text(rtl.read_text().replace('q <= d','q <= ~d'))
         native=producer.run(project,harness=harness,rtl=[rtl],top='formal_neutral',
             container=None,timeout=30,mem_limit_kb=4*1024*1024,prove_engines='direct')
