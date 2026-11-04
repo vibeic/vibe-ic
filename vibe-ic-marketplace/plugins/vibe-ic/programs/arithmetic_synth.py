@@ -241,6 +241,43 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
     in_decls = [_decl(n, w, "input") for n, w in ins]
     out_decls = [_decl(out_name, out_w, "output")]
     body = [f"    assign {out_name} = {a} + {b};"]
+    explicit_full_adders = any(
+        re.search(r"\b(?:use|using|with|from|of|instantiate)\s+"
+                  r"(?:(?:only|multiple|individual|one[-\s]bit|1[-\s]bit)\s+)*full[-\s]+adders?\b", clause, re.I)
+        and not re.search(r"\b(?:not|never|without|avoid)\s+"
+                          r"(?:(?:use|using|build|built|from|with|be|implemented|only|any)\s+)*full[-\s]+adders?\b", clause, re.I)
+        for clause in re.split(r"[.;]", text))
+    if explicit_full_adders:
+        packed = []
+        bullet_ins, bullet_outs = _pp._bullet_ports(text, packed)
+        if not (bullet_ins or bullet_outs):
+            _pp._header_ports(text, packed)
+        spans = {name: (hi, lo) for name, hi, lo in packed}
+        widths = dict(ins + outs)
+
+        def declaration(name, width, direction):
+            if name in spans:
+                hi, lo = spans[name]
+                return f"    {direction} [{hi}:{lo}] {name}"
+            return _decl(name, width, direction)
+
+        def bit(name, offset):
+            if name not in spans and widths[name] == 1:
+                return name
+            hi, lo = spans.get(name, (widths[name] - 1, 0))
+            return f"{name}[{lo + offset * (1 if hi >= lo else -1)}]"
+
+        in_decls = [declaration(n, w, "input") for n, w in ins]
+        out_decls = [declaration(out_name, out_w, "output")]
+        carry = "_vibeic_carry"
+        while carry in widths:
+            carry += "_"
+        body = [f"    wire [{aw}:0] {carry};", f"    assign {carry}[0] = 1'b0;"]
+        for index in range(aw):
+            left, right, incoming = bit(a, index), bit(b, index), f"{carry}[{index}]"
+            body += [f"    assign {bit(out_name, index)} = {left} ^ {right} ^ {incoming};",
+                     f"    assign {carry}[{index+1}] = ({left} & {right}) | (({left} ^ {right}) & {incoming});"]
+        body.append(f"    assign {bit(out_name, aw)} = {carry}[{aw}];")
     return _emit("// program-SOLVED N-bit unsigned adder (carry in MSB); "
                  "deterministic.", top, in_decls, out_decls, body)
 
