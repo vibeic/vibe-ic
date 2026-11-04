@@ -2644,6 +2644,20 @@ def _required_scorer_top(entry: dict, fmt: str | None = None) -> str | None:
     return "TopModule" if strategy == "always_TopModule" else None
 
 
+def _same_candidate_review_key(task: dict, operation_key: str) -> str:
+    """Keep the recorded candidate round when only its review/gates change."""
+    origin = str(task.get("candidate_origin") or "").lower()
+    prior = re.match(r"^(program|ai_backup|ai_repair)-r(\d+)-",
+                     Path(str(task.get("review_path") or "")).stem)
+    if origin in {"program", "ai_backup"}:
+        round_number = int(prior[2]) if prior and prior[1] != "ai_repair" else 0
+    elif origin == "ai_repair" and prior and prior[1] == origin and int(prior[2]) > 0:
+        round_number = int(prior[2])
+    else:
+        return operation_key
+    return f"{origin}-r{round_number}-{operation_key}"
+
+
 def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                          routing: dict, runner_rc: int, run_p: Path,
                          candidate_origin: str, *,
@@ -10326,12 +10340,13 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 result.update({"accepted": False, "candidate_ready": False, "awaiting_ai_review": False})
                 continue
             key = "runner-regate-" + uuid.uuid4().hex
+            review_key = _same_candidate_review_key(task, key)
             archive = run_p / "runner_regates" / _safe_problem_id(pid) / key
             _write_immutable_json(archive / "prior_task.json", task)
             _write_immutable_json(archive / "prior_result.json", result)
             repair_plans.append({
                 "kind": "regate", "id": pid, "task": task, "result": result,
-                "project": proj, "challenge": None, "review_key": key,
+                "project": proj, "challenge": None, "review_key": review_key,
                 "reentry_state": reentry_state,
                 "archive": archive, "repair_parent_candidate": task.get("repair_parent_candidate_snapshot"),
                 "repair_provenance": task.get("repair_provenance"),
@@ -11189,7 +11204,7 @@ def _apply_review_correction(run_p: Path, request_path: Path) -> None:
             hashlib.sha256(prior_challenge_bytes).hexdigest()):
         raise ValueError("REVIEW_CORRECTION_REFUSED: prior challenge changed "
                          "during preparation")
-    key = f"review-correction-{request_sha}"
+    key = _same_candidate_review_key(task, f"review-correction-{request_sha}")
     new_review = _correction_path(
         run_p / "ai_reviews" / _safe_problem_id(pid) / f"{key}.json",
         run_p, exists=False)
@@ -11696,7 +11711,7 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
             inherited.append(current_challenge)
     elif request.get("review_sha256") is not None or request.get("challenge_sha256") is not None:
         refuse("bound current review/test is missing")
-    key = "program-regate-" + request_sha
+    key = _same_candidate_review_key(task, "program-regate-" + request_sha)
     new_review = _regate_path(run_p / "ai_reviews" / _safe_problem_id(pid) / (key + ".json"), run_p, exists=False)
     new_challenge = _regate_path(run_p / "ai_verification_challenges" / _safe_problem_id(pid) / key / "challenge_tb.sv", run_p, exists=False)
     archive = _regate_path(run_p / "program_regates" / _safe_problem_id(pid) / request_sha, run_p, exists=False)
