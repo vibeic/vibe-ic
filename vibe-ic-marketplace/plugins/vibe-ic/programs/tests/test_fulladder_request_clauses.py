@@ -63,3 +63,13 @@ def test_repeated_positive_composition_in_one_statement_stays_valid():
     prompt, _, spans = request(style="using full adders and built from full adders")
     assert_fulladder_composition(arithmetic.synth(prompt, "neutral_sum"), 5,
         ("operand_u", "operand_v", "total"), spans)
+
+
+@pytest.mark.parametrize("style", [
+    "without registers using full adders",
+    ", unlike a previous design that was built from full-adder cells",
+    "and document why the previous design used full adders",
+])
+def test_unqualified_body_cannot_misbind_composition_or_polarity(style):
+    prompt, _, _ = request(style=style)
+    assert arithmetic.synth(prompt, "neutral_sum") is None
