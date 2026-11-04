@@ -148,3 +148,54 @@ def test_section_bounded_numeric_spans_use_existing_port_grammar(span):
             "active-high reset.\n")
     rtl = counter.synth(text, top="DecimalChain")
     assert rtl is not None and f"output {span} upper_tick" in rtl
+
+
+def section_prompt(enable="[8:4] (5 bits)", digits="[23:0] (24 bits)"):
+    return ("### Inputs:\n- `clock`\n- `rst`\n### Outputs:\n"
+            f"- `upper_tick` {enable}\n- `digits` {digits}\n"
+            "Implement a 6-digit BCD counter. Output an enable signal indicating "
+            "when each upper digit should increment. Include a synchronous "
+            "active-high reset.\n")
+
+
+@pytest.mark.parametrize("span", ["[8:4]", "[4:8]"])
+@pytest.mark.parametrize("annotation", ["{} (5 bits)", "(5 bits) {}"])
+def test_section_explicit_span_survives_redundant_width(span, annotation):
+    rtl = counter.synth(section_prompt(annotation.format(span)), top="DecimalChain")
+    assert rtl is not None and f"output {span} upper_tick" in rtl
+
+
+@pytest.mark.parametrize("span", ["[27:4]", "[0:23]"])
+def test_section_annotated_digit_span_keeps_indexed_refusal(span):
+    assert counter.synth(section_prompt(digits=f"{span} (24 bits)"),
+                         top="DecimalChain") is None
+
+
+def test_section_annotated_explicit_span_conflict_is_refused():
+    text = prompt(6, "[8:4]") + "\n" + section_prompt("[7:3] (5 bits)")
+    assert counter.synth(text, top="DecimalChain") is None
+
+
+@pytest.mark.parametrize("header", [False, True])
+@pytest.mark.parametrize("description", [
+    ": 5-bit output, computed from digits[8:4]",
+    "5-bit output, computed from digits[8:4]",
+    "(5 bits): output computed from digits[8:4]",
+])
+def test_section_description_slice_does_not_declare_port_bounds(header, description):
+    text = section_prompt(description, "[23:0]")
+    if header:
+        text = prompt(6, "[4:0]") + "\n" + text
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None and "output [4:0] upper_tick" in rtl
+
+
+@pytest.mark.parametrize("declaration", [
+    "**upper_tick [8:4]** (5 bits): output computed from digits[4:0]",
+    "`output [8:4] upper_tick` (5 bits): enable output",
+    "`upper_tick([8:4])` (5 bits): enable output",
+])
+def test_section_span_stays_adjacent_to_declared_name(declaration):
+    text = section_prompt().replace("`upper_tick` [8:4] (5 bits)", declaration)
+    rtl = counter.synth(text, top="DecimalChain")
+    assert rtl is not None and "output [8:4] upper_tick" in rtl
