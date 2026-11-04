@@ -1925,6 +1925,166 @@ def test_non_sim_gate_failure_keeps_its_repair_instruction(tmp_path, monkeypatch
     assert "reference_model_handoff" not in repair
 
 
+def _native_gate_parent_task(tmp_path, monkeypatch):
+    """Real native lint FAIL with an exhaustive functional PASS, no dataset."""
+    run, _, runner = _dispatched_parent_task(tmp_path)
+    project = run / "projects/p1"
+    rtl = project / "phase2/stage1/rtl/dut.v"
+    rtl.write_text("module dut(input wire a, output wire y); "
+                   "assign y = a == 1'd1?1'b1:1'b0; endmodule\n")
+    runner.write_text('''import pathlib, sys, subprocess, os
+from dataclasses import asdict
+sys.path.insert(0, %r)
+from design_one_shot_runner import _write_phase2_report, _required_site_row, StepResult
+p = pathlib.Path(sys.argv[1]).resolve()
+assert sys.argv[sys.argv.index('--entry-step') + 1] == '2'
+source = (p/'phase2/stage1/rtl/dut.v').read_text()
+container = os.environ.get('VIBEIC_REPAIR_TEST_CONTAINER')
+argv = (['docker','exec','-i',container,'yosys'] if container else ['yosys'])
+lint = subprocess.run(argv + ['-Q','-T','-p',
+    'read_verilog ' + str(p/'phase2/stage1/rtl/dut.v') + '; hierarchy -check -top dut'],
+    text=True, capture_output=True)
+(p/'native_lint.json').write_text(__import__('json').dumps({
+    'argv': argv, 'rc': lint.returncode, 'stdout': lint.stdout, 'stderr': lint.stderr}))
+row = _required_site_row(p, 'rtl_validate', StepResult(
+    'neutral_native_lint', 'PASS' if lint.returncode == 0 else 'FAIL',
+    detail=lint.stderr, extras={'native_rc':lint.returncode}))
+_write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
+    'verdict':row.status,
+    'steps':[{'name':'rtl_gen','status':'PASS','detail':'fixture'},asdict(row)]}, p)
+''' % str(PROGRAMS))
+    argv = bd._resume_solver_argv(runner, project, True, "2", "2", resolve_manifest=False)
+    process = bd._RunnerBudget(1, None, 0).run(argv)
+    assert process.error is None, process.error
+    got = bd._collect_runner_result(process, argv, "rtllm", "p1", project)
+    task = bd._make_ai_review_task("p1", project, got, ROUTING, 0, run,
+                                   "PROGRAM", runner_invocation=process.invocation)
+    task["verification_execution"] = {"backend": "host", "selection": "explicit test host"}
+    _solve_report(run, task, exit_step="2")
+    _stub_dispatched_reentry(monkeypatch)
+    monkeypatch.setenv("VIBEIC_CHALLENGE_BACKEND", "host")
+    real_argv = bd._resume_solver_argv
+    monkeypatch.setattr(bd, "_resume_solver_argv", lambda _runner, *args, **kwargs:
+                        real_argv(runner, *args, **{**kwargs, "resolve_manifest": False}))
+    return run, task, rtl
+
+
+@_NEEDS_SIMULATOR
+@pytest.mark.parametrize("fixed", [True, False], ids=["native-pass", "native-still-fails"])
+def test_required_native_gate_failure_reenters_signed_repair_after_functional_pass(
+        tmp_path, monkeypatch, fixed):
+    run, task, rtl = _native_gate_parent_task(tmp_path, monkeypatch)
+    _write_review(task, _valid_review(task))
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "ACCEPTED", verdict
+    assert verdict["challenge_result"]["status"] == "PASS"
+    lint = json.loads((Path(task["project"]) / "native_lint.json").read_text())
+    assert lint["rc"] != 0 and "decimal constant" in lint["stderr"]
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    repair = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
+    assert repair["status"] == "PROGRAM_GATE_INELIGIBLE"
+    assert repair["required_gate_ledger"]["failed_required"] == ["rtl_validate"]
+    assert not Path(task["response_path"]).exists()
+
+    rtl.write_text(rtl.read_text().replace("1'd1?", "1'd1 ? ")
+                   if fixed else rtl.read_text() + "\n")
+    _write_ai_repair_record(run, task, verdict["verified_challenge"])
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert refreshed["candidate_origin"] == "AI_REPAIR", bd._read_jsonl(run / bd._REPAIR_WORKLIST)
+    assert refreshed["rtl_sha256"] != task["rtl_sha256"]
+    assert refreshed["verification_challenges"][0]["sha256"] == verdict["verified_challenge"]["sha256"]
+    assert (json.loads((Path(task["project"]) / "native_lint.json").read_text())["rc"] == 0) == fixed
+    assert not Path(refreshed["response_path"]).exists()
+    assert not Path(refreshed["review_path"]).exists()
+    _write_review(refreshed, _valid_review(refreshed))
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == (0 if fixed else 2)
+    solve = json.loads((run / "solve_report.json").read_text())
+    assert solve["results"][0]["required_gate_ledger"]["eligibility"] == (
+        "ELIGIBLE" if fixed else "INELIGIBLE")
+    assert solve["results"][0]["program_first_ai_review"]["semantic_verdict"] == "PASS"
+    assert Path(refreshed["response_path"]).exists() == fixed
+    recoveries = [row for row in bd._read_jsonl(run / bd._ENHANCEMENT_WORKLIST)
+                  if row.get("semantic_verdict") == "VERIFIED_RECOVERY"]
+    assert bool(recoveries) == fixed
+
+
+@_NEEDS_SIMULATOR
+def test_native_failure_handoff_supplies_the_normal_signed_repair_requirements(tmp_path, monkeypatch):
+    run, task, rtl = _native_gate_parent_task(tmp_path, monkeypatch)
+    _write_review(task, _valid_review(task))
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    handoff = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
+    assert handoff["status"] == "PROGRAM_GATE_INELIGIBLE"
+    assert handoff["challenge_result"]["status"] == "PASS"
+    assert "write the AI repair record" in handoff["required_next"]
+    rtl.write_text(rtl.read_text().replace("1'd1?", "1'd1 ? "))
+    authored = _write_ai_repair_record(run, task, handoff["verified_challenge"])
+    record = copy.deepcopy(handoff["repair_record_requirements"])
+    for key in ("repaired_rtl_sha256", "author", "rationale", "repair_contract"):
+        record[key] = authored[key]
+    Path(handoff["repair_record_path"]).write_text(json.dumps(record))
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert refreshed["candidate_origin"] == "AI_REPAIR"
+    assert refreshed["repair_provenance"]["path"] == handoff["repair_record_path"]
+    assert refreshed["verification_challenges"][0]["sha256"] == handoff["verified_challenge"]["sha256"]
+    assert not Path(refreshed["review_path"]).exists()
+    assert not Path(refreshed["response_path"]).exists()
+
+
+@_NEEDS_SIMULATOR
+@pytest.mark.parametrize("control", ["PASS", "NOT_MEASURED", "REFUSED", "ERROR",
+                                    "out-of-scope", "stale-gates", "stale-review",
+                                    "no-signature", "no-challenge", "unrunnable",
+                                    "question"])
+def test_native_gate_repair_does_not_authorize_unproven_edits(tmp_path, monkeypatch, control):
+    run, task, rtl = _native_gate_parent_task(tmp_path, monkeypatch)
+    review = _valid_review(task)
+    _write_review(task, review)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "ACCEPTED", verdict
+    project = Path(task["project"])
+    if control in {"PASS", "NOT_MEASURED", "REFUSED", "ERROR", "stale-gates"}:
+        report_path = project / "reports/orchestrator/phase2_one_shot.json"
+        report = json.loads(report_path.read_text())
+        for row in report["steps"]:
+            if row["name"] != "rtl_gen":
+                row["status"] = "PASS" if control == "stale-gates" else control
+        report_path.write_text(json.dumps(report))
+        if control != "stale-gates":
+            _solve_report(run, task, exit_step="2")
+    elif control == "out-of-scope":
+        _solve_report(run, task, exit_step="1")
+    rtl.write_text(rtl.read_text().replace("1'd1?", "1'd1 ? "))
+    _write_ai_repair_record(run, task, verdict["verified_challenge"])
+    if control == "no-signature":
+        bd._repair_record_path(run, task).unlink()
+    elif control == "stale-review":
+        review["rtl_sha256"] = "0" * 64
+    elif control == "no-challenge":
+        review.pop("verification_test")
+    elif control == "unrunnable":
+        _no_simulator(monkeypatch)
+    elif control == "question":
+        review["semantic_review"]["verdict"] = "NEEDS_CLARIFICATION"
+        review["spec_clarification"] = {
+            "schema": "vibeic.spec_clarification.v1",
+            "source_sha256": [task["prompt_sha256"]],
+            "requests": [{"source_sha256": task["prompt_sha256"],
+                "excerpt": Path(task["prompt_path"]).read_text().strip(),
+                "missing_information": "The timing of the requested behavior is unspecified.",
+                "question": "Must output follow input immediately or on a clock edge?"}]}
+    Path(task["review_path"]).write_text(json.dumps(review))
+    def must_not_run(*args, **kwargs):
+        pytest.fail("unproven edit entered the Program runner")
+    monkeypatch.setattr(bd._RunnerBudget, "run", must_not_run)
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]["candidate_origin"] == "PROGRAM"
+    assert bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]["status"] == "RUNNER_REGATE_BLOCKED"
+    assert not Path(task["response_path"]).exists()
+
+
 @pytest.mark.parametrize("original", [False, True])
 @pytest.mark.parametrize("mutation", ["repair_record", "challenge"])
 def test_dispatched_changed_rtl_without_valid_repair_proof_stays_stale(
