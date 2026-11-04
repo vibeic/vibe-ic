@@ -242,3 +242,79 @@ def test_negated_or_conflicting_architecture_declines(change):
 
 def test_negated_literal_sign_assignment_declines():
     assert arithmetic.synth(fixed_prompt(0).replace("is set to", "must not be set to"), top="signed_unit") is None
+
+
+def sequential_product_prompt(width, completion, qualified):
+    guard = 'If start is high and the' if qualified is True else 'The'
+    inactive = ('When start is low, done_r is reset to 0.' if qualified else
+                'The completion register follows its separate counter predicates, independent of start.')
+    return (f'Implement a {width}-bit unsigned sequential shift-and-accumulate multiplier.\n'
+            'Module name:\n product_unit\nInput ports:\n clk: Clock.\n rst: Active-high asynchronous reset.\n'
+            f' start: Datapath enable.\n a[{width - 1}:0]: Operand.\n b[{width - 1}:0]: Operand.\n'
+            f'Output ports:\n p[{2 * width - 1}:0]: Product.\n done: Completion flag.\n'
+            f'When start is high and the counter register (i) is less than {completion + 2}, '
+            'increment i on each rising clock edge; when start is low, reset i to zero.\n'
+            'While start is high, capture a and b and clear the product at i=0, then '
+            f'conditionally add the shifted operand for each of the next {width} counts. '
+            'When start is low, retain the product. Reset clears the counter, datapath and done_r.\n'
+            f'{guard} counter register (i) is equal to {completion}, done_r is set to 1.\n'
+            f'{guard} counter register (i) is equal to {completion + 1}, done_r is reset to 0.\n'
+            f'{inactive} At other enabled counts, done_r holds its value.\n'
+            + ('The done_r register updates only when start is high.\n' if qualified == 'global' else ''))
+
+
+@pytest.mark.parametrize('width,completion', [(3, 5), (5, 8)])
+@pytest.mark.parametrize('qualified', [False, True, 'global'],
+                         ids=['independent', 'enable-qualified', 'global-enable-qualified'])
+def test_sequential_completion_uses_its_own_stated_enable(tmp_path, width, completion, qualified):
+    prompt = sequential_product_prompt(width, completion, qualified)
+    (tmp_path / 'prompt.txt').write_text(prompt)
+    result = chain.try_emit_ex(prompt, top='product_unit')
+    rtl = assert_program_chain_candidate(result, prompt)
+    assert result[0] == 'arithmetic'
+    native(tmp_path, rtl, f'''module check;
+reg clk=0,rst=0,start=0;
+reg [{width - 1}:0] a={width}'d{(1 << width) - 1},b={width}'d{(1 << (width - 1)) + 1};
+wire [{2 * width - 1}:0] p; wire done;
+integer count=0,k; reg expected_done=0;
+product_unit d(.clk(clk),.rst(rst),.start(start),.a(a),.b(b),.p(p),.done(done));
+task reset_unit; begin
+ rst=1; #1; count=0; expected_done=0;
+ if(done!==0 || p!==0) $fatal(1,"asynchronous reset");
+ rst=0; #1;
+end endtask
+task tick(input en); begin
+ start=en;
+ if({int(bool(qualified))} && !en) expected_done=0;
+ else if(count=={completion}) expected_done=1;
+ else if(count=={completion + 1}) expected_done=0;
+ #2; clk=1; #1;
+ if(done!==expected_done) $fatal(1,"completion count=%0d enable=%0d got=%0d expected=%0d",count,en,done,expected_done);
+ if(en && count==0 && p!==0) $fatal(1,"new product must start at zero");
+ if(count>={width} && p!==a*b) $fatal(1,"completed product");
+ if(!en) count=0; else if(count<{completion + 2}) count=count+1;
+ #2; clk=0;
+end endtask
+initial begin
+ reset_unit;
+ for(k=0;k<{completion};k=k+1) tick(1);
+ tick(0); tick(0);
+ for(k=0;k<={completion};k=k+1) tick(1);
+ tick(0); tick(0);
+ reset_unit;
+ for(k=0;k<{completion - 1};k=k+1) tick(1);
+ tick(0);
+ for(k=0;k<={completion};k=k+1) tick(1);
+ reset_unit;
+ $display("CHECK_PASS"); $finish;
+end endmodule''')
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda text: text.replace('If start is high and the counter', 'If start is low and the counter'),
+    lambda text: text.replace('If start is high and the counter register (i) is equal to 6',
+                              'The counter register (i) is equal to 6').replace('When start is low, done_r is reset to 0.', ''),
+], ids=['unsupported-low-enable', 'mixed-qualifiers'])
+def test_sequential_completion_declines_unsupported_enable_rules(mutation):
+    prompt = mutation(sequential_product_prompt(3, 5, True))
+    assert arithmetic.synth(prompt, top='product_unit') is None
