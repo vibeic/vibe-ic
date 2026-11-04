@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1056,6 +1057,8 @@ def main(argv=None) -> int:
     design_label = _l1_ic_name(project) or project.name
 
     handoff_dir = args.out_dir.resolve() if args.out_dir is not None else _pl.foundry_handoff_dir(project)
+    if args.out_dir is None and handoff_dir.exists():
+        shutil.rmtree(handoff_dir)
     handoff_dir.mkdir(parents=True, exist_ok=True)
     audit_dir = (handoff_dir / "archive/project/reports/phase3"
                  if args.out_dir is not None else _pl.reports_phase3_dir(project))
