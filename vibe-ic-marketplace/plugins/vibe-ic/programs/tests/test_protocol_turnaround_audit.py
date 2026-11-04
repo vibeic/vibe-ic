@@ -2,11 +2,119 @@
 import importlib
 import json
 import math
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
 
 import pytest
 
 from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("protocol_turnaround_audit")
+
+
+class TestClocklessApplicability:
+    """Exercise the ordinary CLI, including the shipped flow's invocation."""
+
+    COMBINATIONAL = (
+        "module logic_gate(input wire a, b, output wire y);\n"
+        "  assign y = a & ~b;\nendmodule\n")
+    NO_PROTOCOL = {"protocol_overview": None,
+                   "no_protocol_overview_in_input": True,
+                   "timing_parameters": []}
+
+    def _run(self, tmp_path, *, source=COMBINATIONAL, l2=NO_PROTOCOL,
+             extra=(), flow_command=False):
+        rtl = tmp_path / "phase2/stage1/rtl"
+        rtl.mkdir(parents=True)
+        if source is not None:
+            (rtl / "unit.v").write_text(source)
+        docs = tmp_path / "phase1/generated_docs"
+        docs.mkdir(parents=True)
+        if l2 is not None:
+            (docs / "L2_FRS.json").write_text(
+                l2 if isinstance(l2, str) else json.dumps(l2))
+        if flow_command:
+            from _hostpaths import require_repo
+            flow = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
+                                "flow", "phase1_phase2_phase3.yaml")
+            commands = [line.split('command: "', 1)[1].rstrip('"')
+                        for line in flow.read_text().splitlines()
+                        if 'command: "protocol_turnaround_audit ' in line]
+            assert len(commands) == 1
+            argv = shlex.split(commands[0])[1:]
+        else:
+            argv = ["--rtl-dir", str(rtl), "--l2-json",
+                    str(docs / "L2_FRS.json")]
+        report = tmp_path / "audit.json"
+        result = subprocess.run(
+            [sys.executable, "-B", str(Path(mod.__file__).resolve()), *argv,
+             "--out-json", str(report), *extra], cwd=tmp_path,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            capture_output=True, text=True, timeout=30)
+        return result, json.loads(report.read_text()) if report.exists() else None
+
+    def test_shipped_clockless_call_decides_nonapplicability(self, tmp_path):
+        result, report = self._run(tmp_path, flow_command=True)
+        assert result.returncode == 0, result.stderr
+        import _flow_reason_taxonomy as taxonomy
+        import _structural_absence as absence
+        assert report["verdict"] == absence.NOT_APPLICABLE_BY_STRUCTURE
+        assert absence.is_valid(report["structural_absence"])
+        assert report["clock_period_ns"] is None
+        assert report["findings"] == []
+        assert taxonomy.structural_absence_line(result.stdout)
+
+    @pytest.mark.parametrize("source,l2", [
+        (None, NO_PROTOCOL),
+        ("", NO_PROTOCOL),
+        (COMBINATIONAL, None),
+        (COMBINATIONAL, "{invalid"),
+        (COMBINATIONAL, {}),
+        (COMBINATIONAL, {**NO_PROTOCOL, "protocol_overview": "half-duplex bus"}),
+        (COMBINATIONAL, {**NO_PROTOCOL, "t_turnaround_min": 10}),
+        (COMBINATIONAL, {**NO_PROTOCOL, "turnaround": {"min_ns": None}}),
+        ("`include \"missing.vh\"\n" + COMBINATIONAL, NO_PROTOCOL),
+        ("module bridge(input rx_done, output tx_start); "
+         "assign tx_start = rx_done; endmodule\n", NO_PROTOCOL),
+        ("module storage(input clk, d, output reg q); "
+         "always @(posedge clk) q <= d; endmodule\n", NO_PROTOCOL),
+        ("module external_bus(input a, inout wire p); "
+         "assign p = a; endmodule\n", NO_PROTOCOL),
+        ("module driver(input a, en, output y); "
+         "assign y = en ? a : 1'bz; endmodule\n", NO_PROTOCOL),
+        ("module broken( this is not valid RTL", NO_PROTOCOL),
+        ("module parent(input a, output y); "
+         "missing child(.a(a), .y(y)); endmodule\n", NO_PROTOCOL),
+        (COMBINATIONAL + "module other(input a, output y); "
+         "assign y = a; endmodule\n", NO_PROTOCOL),
+        ("module memory(input a, output y); reg [7:0] unused [0:3]; "
+         "assign y = a; endmodule\n", NO_PROTOCOL),
+        ("module memory(input a, output y); integer unused [0:3]; "
+         "assign y = a; endmodule\n", NO_PROTOCOL),
+    ], ids=["no-source", "empty-source", "no-l2", "malformed-l2", "unknown-l2",
+            "protocol-declared", "timing-obligation", "unknown-timing-obligation", "unresolved-include",
+            "rx-tx-subject", "renamed-sequential", "inout", "tristate",
+            "invalid-source", "unresolved-child", "ambiguous-roots",
+            "unused-packed-memory", "unused-integer-memory"])
+    def test_unknown_or_present_subject_still_requires_clock(self, tmp_path,
+                                                           source, l2):
+        result, report = self._run(tmp_path, source=source, l2=l2)
+        assert result.returncode == 2
+        assert "no clock period" in result.stderr
+        assert report is None
+
+    def test_real_turnaround_with_clock_still_fails_strict_budget(self, tmp_path):
+        source = ("module bridge(input clk, rx_done, output reg tx_start);\n"
+                  "always @(posedge clk) tx_start <= rx_done;\nendmodule\n")
+        l2 = {"delimiter_max_duration": 100,
+              "delimiter_detect_threshold": 50, "t_turnaround_min": 10}
+        result, report = self._run(tmp_path, source=source, l2=l2,
+                                   extra=("--clock-period-ns", "10", "--strict"))
+        assert result.returncode == 1
+        assert report["verdict"] == "ERROR"
+        assert report["findings"][0]["min_safe_cycles"] == 6
 
 
 class TestRegexCatalogs:

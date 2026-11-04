@@ -76,11 +76,13 @@ import argparse
 import json
 import math
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
+import _structural_absence as _sa
 
 
 # ---------------------------------------------------------------------------
@@ -155,15 +157,16 @@ class AuditReport:
     rtl_dir: str
     files_scanned: List[str]
     l2_json_path: str
-    clock_period_ns: float
+    clock_period_ns: Optional[float]
     parameters: Dict[str, Any]   # extracted L2 timing values
     findings: List[AuditFinding]
     error_count: int
     pass_count: int
     unknown_count: int
+    structural_absence: Optional[Dict[str, Any]] = None
 
     def as_dict(self) -> Dict[str, Any]:
-        return {
+        report = {
             "rtl_dir": self.rtl_dir,
             "files_scanned": self.files_scanned,
             "l2_json_path": self.l2_json_path,
@@ -176,6 +179,10 @@ class AuditReport:
             "verdict": "ERROR" if self.error_count else "PASS",
             "emitted_by": _pmd.emitted_by("protocol_turnaround_audit"),
         }
+        if self.structural_absence is not None:
+            report["verdict"] = _sa.NOT_APPLICABLE_BY_STRUCTURE
+            _sa.attach(report, self.structural_absence)
+        return report
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +337,101 @@ def compute_min_safe_cycles(
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
+def _clockless_absence(rtl_dir: Path, l2_json: Path) -> Optional[AuditReport]:
+    """Decide only a closed, stateless source with no turnaround subject.
+
+    An absent L2 overview or an unmatched signal name alone proves nothing.
+    Reuse the bounded source census and checked elaborator used by the RTL
+    audit producers; unsupported source, state, unknown cells or bidirectional
+    ports leave the ordinary clock prerequisite in force.
+    """
+    import _rtl_audit_applicability as rtl
+
+    try:
+        l2 = json.loads(l2_json.read_text(encoding="utf-8"))
+        timing_keys = {part for key in (*DELIMITER_MAX_KEYS,
+                                       *DELIMITER_DETECT_KEYS,
+                                       *TURNAROUND_MIN_KEYS)
+                       for part in key.split(".")}
+
+        def has_timing_field(value):
+            if isinstance(value, dict):
+                return any(key in timing_keys or has_timing_field(item)
+                           for key, item in value.items())
+            return isinstance(value, list) and any(map(has_timing_field, value))
+
+        if (not isinstance(l2, dict)
+                or l2.get("no_protocol_overview_in_input") is not True
+                or "protocol_overview" not in l2
+                or l2["protocol_overview"] is not None
+                or l2.get("timing_parameters") != []
+                or has_timing_field(l2)):
+            return None
+        root = rtl_dir.absolute()
+        sources, records, texts = rtl._census(root)
+        # The frontend may discard unused unpacked memories. Use the existing
+        # source-memory census vocabulary before trusting emitted cell absence,
+        # including unknown storage datatypes that cannot establish no memory.
+        non_types = "|".join(re.escape(word) for word in
+                             sorted(rtl._NON_TYPE_MEMORY_PREFIXES))
+        memory = re.compile(rf"\b(?!(?:{non_types})\b)"
+                            r"(?:reg|logic|wire|integer|[A-Za-z_]\w*)\s+"
+                            r"(?:signed\s+)?(?:\[[^\]]+\]\s*)?"
+                            r"[A-Za-z_]\w*\s*\[")
+        if (any(not text.strip() for text in texts)
+                or rtl._selected_source(texts, None)
+                or any(memory.search(text)
+                       or re.search(r"\]\s*[A-Za-z_]\w*\s*\[", text)
+                       or TX_START_RE.search(text) or RX_TRIGGER_RE.search(text)
+                       or re.search(r"\b(?:inout|tri|tri0|tri1|triand|trior|"
+                                    r"trireg|wand|wor|tran|tranif0|tranif1|"
+                                    r"bufif0|bufif1|notif0|notif1)\b", text)
+                       for text in texts)):
+            return None
+        # Honor the same selected native image as the ordinary checker caller.
+        image = (_os.environ.get("VIBEIC_EDA_IMAGE")
+                 or _os.environ.get("IIC_EDA_IMAGE"))
+        configuration = {"native": {"image": image}} if image else None
+        modules = rtl._elaborate(
+            sources, root=root, source_sha256={
+                str(path): rec["sha256"] for path, rec in zip(sources, records)},
+            executor_configuration=configuration)["modules"]
+        facts = rtl._module_facts(modules)
+        if any(port.get("direction") == "inout"
+               for module in modules.values()
+               for port in module.get("ports", {}).values()):
+            return None
+        if any(cell.get("type") in rtl._STATE_CELLS
+               for module in modules.values()
+               for cell in module.get("cells", {}).values()):
+            return None
+        for module in modules.values():
+            vectors = [n.get("bits", []) for n in
+                       [*module.get("ports", {}).values(),
+                        *module.get("netnames", {}).values()]]
+            vectors += [bits for cell in module.get("cells", {}).values()
+                        for bits in cell.get("connections", {}).values()]
+            if any(bit in ("x", "z") for bits in vectors for bit in bits):
+                return None
+        after_sources, after_records, _ = rtl._census(root)
+        if after_sources != sources or after_records != records:
+            return None
+        evidence = _sa.absence(
+            "elaborated RTL module(s)", len(modules), names=facts["modules"],
+            detail="closed stateless source, no bidirectional ports or "
+                   "RX/TX turnaround subject; L2 declares no protocol overview "
+                   "and carries no turnaround timing obligation")
+        return AuditReport(
+            rtl_dir=str(rtl_dir), files_scanned=[r["path"] for r in records],
+            l2_json_path=str(l2_json), clock_period_ns=None,
+            parameters=extract_l2_parameters(l2), findings=[],
+            error_count=0, pass_count=0, unknown_count=0,
+            structural_absence=evidence)
+    except (OSError, ValueError, UnicodeError, KeyError, TypeError,
+            RecursionError, subprocess.TimeoutExpired):
+        return None
+
+
 def audit_rtl_dir(
     rtl_dir: Path,
     l2_json: Path,
@@ -444,6 +546,9 @@ def report_to_markdown(rep: AuditReport) -> str:
     out.append("")
     out.append("## Summary")
     out.append("")
+    if rep.structural_absence is not None:
+        out.append(_sa.sentence(rep.structural_absence, "protocol turnaround"))
+        out.append("")
     out.append(f"- ERROR : {rep.error_count}")
     out.append(f"- PASS  : {rep.pass_count}")
     out.append(f"- UNKNOWN: {rep.unknown_count}")
@@ -495,11 +600,15 @@ def _cli() -> int:
                    help="Exit non-zero if any ERROR")
     args = p.parse_args()
 
+    # Applicability precedes a clock prerequisite only when the checked source
+    # proves the timing subject absent. Unknown inputs still take the refusal.
+    rep = _clockless_absence(args.rtl_dir, args.l2_json)
+
     # Resolve the period BEFORE anything uses it, and REFUSE rather than guess.
     # rc=2 is this repo's "could not run", which is the honest answer when the
     # design owns no period: a turnaround budget measured against a fabricated
     # clock is worse than no measurement, because it looks like one.
-    if args.clock_period_ns is None:
+    if rep is None and args.clock_period_ns is None:
         _l8p = args.l8_json or Path("phase1/generated_docs/L8_RTL_CONSTANTS.json")
         _mhz = None
         if _l8p.is_file():
@@ -524,7 +633,8 @@ def _cli() -> int:
         print(f"rtl-dir does not exist: {args.rtl_dir}", file=sys.stderr)
         return 2
 
-    rep = audit_rtl_dir(args.rtl_dir, args.l2_json, args.clock_period_ns)
+    if rep is None:
+        rep = audit_rtl_dir(args.rtl_dir, args.l2_json, args.clock_period_ns)
     md = report_to_markdown(rep)
     if args.out_md:
         args.out_md.write_text(md, encoding="utf-8")
