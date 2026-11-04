@@ -174,6 +174,8 @@ def _known_files(project: Path, value):
             except ValueError:
                 pass
         for key, child in value.items():
+            if key == 'documents_scanned':
+                continue  # Census of inspected files, not evidence dependencies.
             if key in ('path', 'sha256') and 'sha256' in value:
                 continue
             yield from _known_files(project, child)
