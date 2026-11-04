@@ -803,10 +803,11 @@ def _cited_text_cell(tmp_path, payloads, reports, *, dry=False):
 
 
 @pytest.mark.parametrize('section', ['libs.ref', 'libs.tech'])
+@pytest.mark.parametrize('prefix', ['/retired-store/kit/procx/', ''])
 @pytest.mark.parametrize('dry', [False, True])
-def test_external_kit_citations_keep_revision_and_location_without_copying(tmp_path, section, dry):
+def test_external_kit_citations_keep_revision_and_location_without_copying(tmp_path, section, prefix, dry):
     import benchmark_evidence_publish as publisher
-    cite = f'/retired-store/kit/procx/{section}/cellsZ/model.lef:40'
+    cite = f'{prefix}{section}/cellsZ/model.lef:40'
     report = 'reports/transport.json'
     body = json.dumps({'verdict': 'PASS', 'source': cite})
     run, cell, result = _cited_text_cell(tmp_path, {}, {report: body}, dry=dry)
@@ -822,6 +823,31 @@ def test_external_kit_citations_keep_revision_and_location_without_copying(tmp_p
         publisher.write_citation_routing(cell, [], closure=result)
         text = (cell / 'CITATION_ROUTING.txt').read_text()
         assert record['kit_relative_path'] in text and record['pdk_revision'] in text
+
+
+def test_citation_matching_does_not_invent_suffix_paths(tmp_path):
+    import benchmark_evidence_publish as publisher
+    full = 'input/current/retained-reports/ambiguous.json'
+    run, cell, result = _cited_text_cell(tmp_path, {full: '{"data": 1}\n'}, {
+        'reports/child.json': json.dumps({'verdict': 'PASS', 'source': full}),
+        'reports/parent.json': json.dumps({'verdict': 'PASS', 'source': 'reports/child.json'})})
+    assert 'reports/ambiguous.json' not in {r['cited'] for r in result['records']}
+    assert (cell / full).read_bytes() == (run / full).read_bytes()
+    assert json.loads((cell / 'reports/parent.json').read_text())['verdict'] == 'PASS'
+    assert publisher._CITED_RE.findall('see reports/real.json, retained-reports/ghost.json') == [
+        'reports/real.json']
+
+
+def test_scan_census_is_not_a_citation_or_a_pass_claim(tmp_path):
+    import benchmark_evidence_publish as publisher
+    data = {'verdict': 'PASS', 'documents_scanned': [
+        {'verdict': 'PASS', 'evidence': 'reports/census.json', 'source': '/old/census.json'}],
+        'derived_answers': {'signal': {'evidence': 'reports/needed.rpt'}}}
+    doc = tmp_path / 'report.json'
+    doc.write_text(json.dumps(data))
+    assert publisher._document_citations(doc) == {'reports/needed.rpt'}
+    assert publisher._absolute_citation_values(doc.read_text()) == set()
+    assert publisher._citations_under_a_pass(doc.read_text()) == {'reports/needed.rpt'}
 
 
 @pytest.mark.parametrize('state', ['missing', 'unresolved'])
@@ -1477,6 +1503,86 @@ def test_external_kit_provenance_preserves_the_release_precheck_and_routing(tmp_
     assert not (cell / 'libs.ref').exists()
     (cell / 'reports/pdk_revision.json').unlink()
     assert key not in citations._disclosed_map(cell, None)
+
+
+@pytest.mark.parametrize('dry', [False, True])
+@pytest.mark.parametrize('case', ['same', 'source-changed', 'unselected', 'snapshot-missing', 'unrecorded'])
+def test_preplanned_native_inputs_are_referenced_from_their_recorded_snapshots(tmp_path, dry, case):
+    import step_output_collector as collector
+    run = _flow109_release_docs(tmp_path)
+    row = {'id': 'D01', 'position': 1, 'name': 'Requirements and delivery route'}
+    context = {'context_sha256': hashlib.sha256(b'public transport fixture').hexdigest()}
+    attempt = collector.begin_flow109_row(run, row, context)
+    paths = ['phase3/native/tool.spice', 'phase3/native/tool.nl.v']
+    for rel in paths:
+        path = run / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('* PUBLIC TRANSPORT FIXTURE ONLY\n' * 36000)
+    proof = {'verdict': 'PASS', 'spice_file': paths[0], 'netlist_file': paths[1],
+             'documents_scanned': paths.copy()}
+    (run / 'reports/phase3/transport_inputs.json').write_text(json.dumps(proof))
+    collector.finish_flow109_row(run, row, context,
+        {'default_row_status': 'PASS', **proof}, attempt)
+    (run / 'reports/flow109/plan.json').write_text(json.dumps({
+        'rows': [] if case == 'unselected' else [row]}))
+    (run / 'reports/phase3/tapeout_precheck.json').write_text(json.dumps({
+        'verdict': 'PASS', 'final_declaration': 'reports/phase3/transport_inputs.json'}))
+    if case == 'source-changed':
+        with (run / paths[1]).open('a') as stream:
+            stream.write('changed source\n')
+    elif case == 'snapshot-missing':
+        (attempt['folder'] / 'outputs' / paths[1]).unlink()
+    elif case == 'unrecorded':
+        other = 'phase3/native/unrecorded.spice'
+        (run / other).write_bytes((run / paths[0]).read_bytes())
+        proof['spice_file'] = other
+        (run / 'reports/phase3/transport_inputs.json').write_text(json.dumps(proof))
+    dest_root = tmp_path / 'benchmark-data'
+    result = _run(_base_args(run, dest_root) + (['--dry-run'] if dry else []))
+    if case not in ('same', 'unselected'):
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert 'published verdict is UNSUBSTANTIATED' in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        if not dry:
+            cell = dest_root / 'ic/widgetmul/v9.9.9_openpdkx'
+            data = json.loads((cell / 'reports/phase3/transport_inputs.json').read_text())
+            for key, original in [('spice_file', paths[0]), ('netlist_file', paths[1])]:
+                assert data[key].startswith('steps/001_')
+                assert (cell / data[key]).read_bytes() == (run / original).read_bytes()
+                assert not (cell / original).exists()
+            assert data['verdict'] == 'PASS'
+            assert data['documents_scanned'] == paths
+            assert json.loads((cell / 'reports/phase3/tapeout_precheck.json').read_text())['verdict'] == 'PASS'
+    if dry:
+        assert not dest_root.exists()
+
+
+@pytest.mark.parametrize('actual_evidence', [False, True])
+@pytest.mark.parametrize('dry', [False, True])
+def test_scan_census_stays_visible_while_real_answer_evidence_stays_required(
+        tmp_path, actual_evidence, dry):
+    run = _flow109_release_docs(tmp_path)
+    old = 'reports/phase2/old_fpga.json'
+    (run / old).parent.mkdir(parents=True, exist_ok=True)
+    (run / old).write_text(json.dumps({'verdict': 'PASS',
+        'source': 'phase2/stage1/fpga/missing.sdc'}))
+    io = {'verdict': 'PASS', 'documents_scanned': [old]}
+    if actual_evidence:
+        io['derived_answers'] = {'signal': {'evidence': old}}
+    (run / 'reports/phase3/transport_io.json').write_text(json.dumps(io))
+    (run / 'reports/phase3/tapeout_precheck.json').write_text(json.dumps({
+        'verdict': 'PASS', 'final_declaration': 'reports/phase3/transport_io.json'}))
+    dest_root = tmp_path / 'benchmark-data'
+    result = _run(_base_args(run, dest_root) + (['--dry-run'] if dry else []))
+    assert result.returncode == (1 if actual_evidence else 0), result.stdout + result.stderr
+    if actual_evidence:
+        assert 'published verdict is UNSUBSTANTIATED' in result.stderr
+    elif not dry:
+        delivered = dest_root / 'ic/widgetmul/v9.9.9_openpdkx/reports/phase3/transport_io.json'
+        assert json.loads(delivered.read_text()) == io
+    if dry:
+        assert not dest_root.exists()
 
 
 @pytest.mark.parametrize('verdict', ['FAIL', 'NOT_MEASURED', 'UNSUBSTANTIATED'])

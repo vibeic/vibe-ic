@@ -658,7 +658,7 @@ def _json_artifact_refs(path: Path,
         return []
     out: List[Tuple[str, str]] = []
     for k, v in data.items():
-        if isinstance(v, str) and _is_citation(v):
+        if k != 'documents_scanned' and isinstance(v, str) and _is_citation(v):
             out.append((str(k), v))
     return out
 
