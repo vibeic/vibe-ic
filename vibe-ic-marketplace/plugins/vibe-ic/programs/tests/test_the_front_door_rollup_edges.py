@@ -443,6 +443,69 @@ def test_bounded_rtl_request_reaches_the_real_lint_consumer(tmp_path):
         assert {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in original} == original
 
 
+@pytest.mark.parametrize('control', ['valid', 'invalid_rtl', 'rejected_d1'])
+def test_explicit_rtl_window_summary_keeps_retained_d1_qualification(tmp_path, control):
+    """Actual D01 provenance and D11 lint through the public bounded caller."""
+    import subprocess
+    import emit_attestation
+    import flow109
+    from programs.tests._hostpaths import require_repo
+    fixture = require_repo() / 'vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/librelane_lint_frontend/plain.v'
+    source = fixture.read_text()
+    project = tmp_path / 'scoped'
+    (project / 'input/rtl').mkdir(parents=True)
+    prompt = project / 'input/phase1_prompt.md'
+    prompt.write_text('Debug this bitwise inverter; deliver only RTL with lint validation.\n'
+                      '```verilog\n' + source + '```\n')
+    supplied = project / 'input/rtl/plain.v'
+    supplied.write_text(source)
+    profile = next(row for row in flow109.load_registry()['reference_profiles']
+                   if row['name'] == 'RTL-only')
+    manifest = project / 'input/flow109-manifest.json'
+    manifest.write_text(json.dumps({'features': profile['features']}))
+    child_env = {key: value for key, value in os.environ.items()
+                 if not key.startswith('VIBEIC_EXECUTION')}
+    command = [sys.executable, str(PROGRAMS / 'vibe_ic_one_shot_runner.py'),
+               str(project), '--route', 'ip', '--delivery-target', 'rtl',
+               '--flow', '109', '--flow109-manifest', str(manifest),
+               '--skip-phase3', '--skip-analog', '--skip-hardware', '--no-dashboard']
+    producer = subprocess.run(command + ['--entry-step', 'D01', '--exit-step', 'D01'],
+                              capture_output=True, text=True, env=child_env, timeout=80)
+    provenance = emit_attestation.phase1_provenance(project)
+    assert provenance.get('ran') is True, producer.stdout + producer.stderr
+    retained_report = _pl.report_path(project, 'phase1_one_shot.json')
+    before = {path: path.read_bytes() for path in (prompt, supplied, manifest, retained_report)}
+    if control == 'rejected_d1':
+        _sign_d1_checkpoint(project)
+        signature = project / 'reports/audit/ai_judgements/D1.json'
+        payload = json.loads(signature.read_text())
+        payload['verdict'] = 'FAIL'
+        signature.write_text(json.dumps(payload))
+    staged = project / 'phase2/stage1/rtl/plain.v'
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(source if control != 'invalid_rtl' else
+                      'module plain(input [7:0] value_i, output [7:0] value_o); assign value_o = ; endmodule\n')
+    result = subprocess.run(command + ['--entry-step', 'D11', '--exit-step', 'D11',
+                                      '--top-name', 'plain', '--max-rtl-repair-retries', '0'],
+                            capture_output=True, text=True, env=child_env, timeout=80)
+    (tmp_path / 'scoped-run.log').write_text(result.stdout + result.stderr)
+    report = json.loads(_pl.report_path(project, 'vibe_ic_one_shot.json').read_text())
+    child = json.loads(_pl.report_path(project, 'phase2_one_shot.json').read_text())
+    row = json.loads(sorted((project / 'steps/019_rtl-validation-and-lint').glob('*/result.json'))[-1].read_text())
+    assert child['verdict'] == ('FAIL' if control == 'invalid_rtl' else 'PASS'), child
+    assert row['default_row_status'] == ('FAIL' if control == 'invalid_rtl' else 'PASS'), row
+    assert row['completed'] is (control != 'invalid_rtl'), row
+    assert row['exit_code'] == (1 if control == 'invalid_rtl' else 0), row
+    assert result.returncode == (0 if control == 'valid' else 1), report
+    assert report['dispatched_verdict'] == ('PASS' if control == 'valid' else 'FAIL'), report
+    assert report['phases'][0] == {
+        'name': 'phase1', 'verdict': 'FAIL' if control == 'rejected_d1' else 'NOT_MEASURED', 'rc': 0}
+    assert report['whole_flow_verdict'] == 'NOT_MEASURED'
+    assert report['verdict'] == ('NOT_MEASURED' if control == 'valid' else 'FAIL')
+    assert emit_attestation.phase1_provenance(project) == provenance
+    assert {path: path.read_bytes() for path in before} == before
+
+
 def test_signed_reused_d1_runs_complete_consumer_and_retains_current_pass(
         tmp_path, monkeypatch):
     import step_output_collector as versions

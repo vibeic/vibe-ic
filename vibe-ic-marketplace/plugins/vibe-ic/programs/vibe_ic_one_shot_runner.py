@@ -5790,6 +5790,7 @@ def _main(args=None) -> int:
                 halted_at = "phase1"
                 advisories.append("phase1 checkpoint handoff refused: " + detail)
 
+    _retained_rtl_phase1_outside_window = False
     if (_rtl_only_request and _p1_design_input
             and args.rtl_input != "original"):
         # A bounded RTL request consumes the original specification and intact
@@ -5802,6 +5803,9 @@ def _main(args=None) -> int:
                 raise ValueError('Phase1 refused or published no current producer report')
             _rtl_provenance = _standalone_rtl_provenance(
                 project, _p1_knobs, _rtl_source_before)
+            _retained_rtl_phase1_outside_window = bool(
+                not run_phase1 and args.delivery_target == 'rtl'
+                and flow109.active_rtl_scope(project))
         except (OSError, ValueError, TypeError, KeyError) as exc:
             halted_at = 'phase1'
             advisories.append('BOUNDED_RTL_PHASE1_PROVENANCE_REFUSED: ' + str(exc))
@@ -6417,7 +6421,13 @@ def _main(args=None) -> int:
             and _pl.published_here(
                 phase2_report,
                 _phase_started["phase2"]))
-        window_rows = [(n, v, rc) for n, v, rc in plan if v != "SKIPPED"]
+        # Intact retained D1 documents supply this explicit RTL request without
+        # qualifying D1. Keep its record in phases, but do not make its absent
+        # qualification a verdict on the selected Phase2 window. Real failures
+        # and any D1 producer dispatched by this request remain in the rollup.
+        window_rows = [(n, v, rc) for n, v, rc in plan if v != "SKIPPED"
+                       and not (_retained_rtl_phase1_outside_window
+                                and (n, v, rc) == ("phase1", "NOT_MEASURED", 0))]
         window_verdict, window_reasons = _roll_up(
             window_rows, audit_axis={"state": "NOT_APPLICABLE",
                                     "reason": "bounded operation; whole-flow audit not refreshed"})
