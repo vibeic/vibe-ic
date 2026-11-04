@@ -95,6 +95,22 @@ def test_agent_answered_route_does_not_create_authority(tmp_path):
     assert not (tmp_path / 'requirements/base_01/requirements_trace.json').exists()
 
 
+def test_first_handoff_frame_survives_pending_candidate_publication(tmp_path, monkeypatch):
+    import phase1_expert_parse_track as expert
+
+    owner_case(tmp_path)
+    frames = []
+
+    def handoff(project):
+        frames.append(expert.input_text_report(project)['source_frame'])
+        return 4
+
+    monkeypatch.setattr(runner, '_run_expert_track', handoff)
+    for _ in range(2):
+        assert inspect.unwrap(runner.run_phase1_second_track)(tmp_path, 0) == 4
+    assert frames[0] == frames[1]
+
+
 def test_existing_external_approval_is_preserved(tmp_path):
     owner_case(tmp_path)
     reference = write(tmp_path, 'input/external.json', {

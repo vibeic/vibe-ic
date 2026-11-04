@@ -1476,8 +1476,6 @@ def run_phase1_second_track(project: Path, rc_in: int) -> int:
     `test_issue2144_expert_track_runs_after_the_l_docs` is the pin; before it,
     that reorder moved no test in the impacted selection.
     """
-    print("[phase1] expert track (second track) ...")
-    rc_track = _run_expert_track(project)
     rc_requirements = 0
     if not rc_in:
         from phase1_base_requirements import publish
@@ -1487,6 +1485,8 @@ def run_phase1_second_track(project: Path, rc_in: int) -> int:
             print(f"INCOMPLETE: {candidates['reason']}")
             print(f"Next action: {candidates['next_action']}")
             rc_requirements = _EXPERT_TRACK_AWAITING_RC
+    print("[phase1] expert track (second track) ...")
+    rc_track = _run_expert_track(project)
     return _phase1_return_code(int(rc_in or 0), rc_track, rc_requirements)
 
 
