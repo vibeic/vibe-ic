@@ -1522,14 +1522,15 @@ def test_external_kit_provenance_preserves_the_release_precheck_and_routing(tmp_
 
 
 @pytest.mark.parametrize('dry', [False, True])
-@pytest.mark.parametrize('case', ['same', 'source-changed', 'unselected', 'snapshot-missing', 'unrecorded'])
+@pytest.mark.parametrize('case', ['same', 'source-changed', 'source-changed-planned', 'unselected', 'snapshot-missing', 'unrecorded'])
 def test_preplanned_native_inputs_are_referenced_from_their_recorded_snapshots(tmp_path, dry, case):
     import step_output_collector as collector
     run = _flow109_release_docs(tmp_path)
     row = {'id': 'D01', 'position': 1, 'name': 'Requirements and delivery route'}
     context = {'context_sha256': hashlib.sha256(b'public transport fixture').hexdigest()}
     attempt = collector.begin_flow109_row(run, row, context)
-    paths = ['phase3/native/tool.spice', 'phase3/native/tool.nl.v']
+    paths = ['phase3/native/tool.spice',
+             'reports/native_view.v' if case == 'source-changed-planned' else 'phase3/native/tool.nl.v']
     for rel in paths:
         path = run / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1543,7 +1544,7 @@ def test_preplanned_native_inputs_are_referenced_from_their_recorded_snapshots(t
         'rows': [] if case == 'unselected' else [row]}))
     (run / 'reports/phase3/tapeout_precheck.json').write_text(json.dumps({
         'verdict': 'PASS', 'final_declaration': 'reports/phase3/transport_inputs.json'}))
-    if case == 'source-changed':
+    if case in ('source-changed', 'source-changed-planned'):
         with (run / paths[1]).open('a') as stream:
             stream.write('changed source\n')
     elif case == 'snapshot-missing':

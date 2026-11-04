@@ -1701,6 +1701,9 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
                     return _CLOSURE_OUTPUT_POLICY, target
         if policy is not None and rung in policy.records:
             if policy.records[rung]['decision'] in ('RAW_CAP', 'OUTSIDE_LATEST_ROW', 'TRUNCATED_REPORT'):
+                if (rel_doc.endswith('.json') and retained
+                        and current_sha not in {digest for _target, digest in retained}):
+                    return 'DEPENDENCY_UNAVAILABLE', rung
                 return _CLOSURE_OUTPUT_POLICY, rung
             return 'UNALLOWED_TEXT', rung
         if rung.startswith(_STEPS_DIRNAME + "/"):
