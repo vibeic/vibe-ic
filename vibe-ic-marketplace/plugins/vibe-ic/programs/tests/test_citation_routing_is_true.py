@@ -239,9 +239,25 @@ def test_a_resolves_row_cannot_suppress_a_finding(tmp_path):
     assert not m
 
 
-def test_the_honoured_set_is_exactly_the_structural_two():
+def test_the_honoured_set_includes_the_conditional_external_kit_decision():
     assert E._DISCLOSURE_DECISIONS == {"OUT_OF_PUBLISHED_SCOPE",
-                                       "UNFOLLOWABLE_ABSOLUTE"}
+                                       "UNFOLLOWABLE_ABSOLUTE", "EXTERNAL_PDK"}
+
+
+@pytest.mark.parametrize('resolved', [False, True])
+@pytest.mark.parametrize('kit_path', [False, True])
+def test_external_kit_disclosure_needs_both_a_kit_path_and_resolved_revision(
+        tmp_path, resolved, kit_path):
+    import _pdk_revision_fixture as pdk
+    cited = ('/retired-store/kit/procx/libs.tech/tool/model.tcl' if kit_path
+             else '/retired-carrier/reports/native.json')
+    repo, cell = _cell(tmp_path, [('reports/a.json', cited, 'EXTERNAL_PDK')])
+    if resolved:
+        pdk.write_run_pdk_revision(cell)
+    rows, unknown = C.parse_routing((cell / 'CITATION_ROUTING.txt').read_text())
+    assert len(rows) == 1 and unknown == []
+    disclosed = E._disclosed_map(repo, None)
+    assert bool(disclosed) == (resolved and kit_path)
 
 
 # ── the publisher and the gate must agree on what a citation IS ────────────

@@ -961,7 +961,9 @@ _CITATION_HEADER = (
     "#\n"
     "#   <doc> :: <cited path> <DECISION>\n"
     "#   DECISION in RESOLVES | OUT_OF_PUBLISHED_SCOPE |\n"
-    "#                DANGLING_UNDER_PASS | DANGLING | UNFOLLOWABLE_ABSOLUTE\n"
+    "#                DANGLING_UNDER_PASS | DANGLING | UNFOLLOWABLE_ABSOLUTE | EXTERNAL_PDK\n"
+    "# EXTERNAL_PDK names an external libs.ref/libs.tech file by kit-relative\n"
+    "# path and this run's resolved revision in the text-evidence comments.\n"
     "#\n"
     "# OUT_OF_PUBLISHED_SCOPE is the one that needed a name. The publisher\n"
     "# copies phase1/, phase2/, phase3/reports/ and reports/ — a run-directory\n"
@@ -1184,6 +1186,10 @@ def collect_citation_records(dest: Path, *,
     out: List[Dict[str, str]] = []
     if not dest.is_dir():
         return out
+    try:
+        pdk_revision = _pdk_revision(dest)
+    except Refuse:
+        pdk_revision = None
     seen = set()
     pending: List[Dict[str, object]] = []
     on_disk: set = set()
@@ -1207,6 +1213,7 @@ def collect_citation_records(dest: Path, *,
         asserted = _citations_under_a_pass(text)
         absolute = _absolute_citation_values(text)
         for cited in sorted(_document_citations(doc) | absolute):
+            kit = {}
             key = (rel_doc, cited)
             if key in seen:
                 continue
@@ -1229,6 +1236,11 @@ def collect_citation_records(dest: Path, *,
                 # is legitimate provenance. Only a path something is expected
                 # to FOLLOW is a defect.
                 decision = "UNFOLLOWABLE_ABSOLUTE"
+                relative = _external_kit_citation(cited, dest)
+                if relative and pdk_revision:
+                    decision = _CLOSURE_EXTERNAL_PDK
+                    kit = {'kit_relative_path': relative,
+                           'pdk_revision': pdk_revision['revision']}
             else:
                 # DEFERRED, all of it. Two facts decide every remaining row and
                 # neither is on this machine's disk: does a CLONE carry this
@@ -1241,6 +1253,7 @@ def collect_citation_records(dest: Path, *,
                                if (dest / rung).is_file())
             pending.append({"doc": rel_doc, "cited": cited,
                             "decision": decision,
+                            **kit,
                             "asserted": cited in asserted})
 
     # SECOND PASS — decided against `git`, not against this machine's disk.
@@ -1265,7 +1278,9 @@ def collect_citation_records(dest: Path, *,
             else:
                 decision = "DANGLING"
         out.append({"doc": str(row["doc"]), "cited": str(row["cited"]),
-                    "decision": str(decision)})
+                    "decision": str(decision),
+                    **{key: row[key] for key in ('kit_relative_path', 'pdk_revision')
+                       if key in row}})
     return out
 
 
@@ -1419,6 +1434,10 @@ def write_citation_routing(dest: Path, records: List[Dict[str, str]],
     body = _CITATION_HEADER + "".join(
         f"{r['doc']} :: {r['cited']} {r['decision']}\n"
         for r in sorted(records, key=lambda r: (r["doc"], r["cited"])))
+    closed = {(r['doc'], r['cited']) for r in (closure or {}).get('records', [])}
+    body += ''.join('# text-evidence ' + json.dumps(r, sort_keys=True) + '\n'
+                    for r in records if r['decision'] == _CLOSURE_EXTERNAL_PDK
+                    and (r['doc'], r['cited']) not in closed)
     if closure is not None:
         # Comments preserve the routing consumer's existing row grammar.
         # The cell itself retains hashes, sizes and named refusal reasons;
@@ -1444,10 +1463,24 @@ _CLOSURE_OVER_CEILING = "OVER_CEILING"
 _CLOSURE_LAYOUT = "LAYOUT_POLICY"
 _CLOSURE_STEP_VIEW = "STEP_VIEW"
 _CLOSURE_ABOVE_CELL = "RESOLVES_ABOVE_CELL"
+_CLOSURE_EXTERNAL_PDK = "EXTERNAL_PDK"
 #: The verdict an amended gate report carries. The gate's own word for a
 #: report whose evidence is disclosed absent (vibe-ic#381).
 _UNSUBSTANTIATED = "UNSUBSTANTIATED"
 _DOC_SUFFIXES = (".json", ".md", ".sby")
+
+
+def _external_kit_citation(cite: str, project: Path) -> Optional[str]:
+    """An external kit reference, without resolving or copying its contents."""
+    path = Path(cite)
+    if (not path.is_absolute() or '..' in path.parts
+            or path.resolve().is_relative_to(project.resolve())):
+        return None
+    for index, part in enumerate(path.parts):
+        if part in ('libs.ref', 'libs.tech') and 1 < index < len(path.parts) - 1:
+            # Keep a line/unit selector in the original citation, not the file path.
+            return Path(*path.parts[index:]).as_posix().split(':', 1)[0]
+    return None
 
 
 def _closure_rungs(rel_doc: str, cite: str) -> List[str]:
@@ -1493,6 +1526,9 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
         try:
             rungs = [Path(cite).resolve().relative_to(run_dir.resolve()).as_posix()]
         except ValueError:
+            relative = _external_kit_citation(cite, run_dir)
+            if relative and text_state.get('pdk_revision'):
+                return _CLOSURE_EXTERNAL_PDK, relative
             return "UNALLOWED_TEXT", cite
         if not rel_doc.endswith(".json") and rungs[0] not in cell_rels:
             return "UNALLOWED_TEXT", cite
@@ -1628,10 +1664,15 @@ def close_citations(run_dir: Path, dest: Path,
     result: Dict[str, object] = {
         "n_documents": 0, "n_citations": 0, "already_in_cell": 0,
         "staged": [], "absent": [], "over_ceiling": [], "layout_policy": [],
-        "step_view": [], "above_cell": [], "amended": [], "unamended": [],
+        "step_view": [], "above_cell": [], "external_pdk": [],
+        "amended": [], "unamended": [],
         "errors": [], "records": [], "text_bytes": 0,
     }
-    text_state = {"files": {}, "bytes": 0}
+    try:
+        pdk_revision = _pdk_revision(run_dir)
+    except Refuse:
+        pdk_revision = None
+    text_state = {"files": {}, "bytes": 0, "pdk_revision": pdk_revision}
     documents = {}
     seen: set = set()
     above = list(above or [])
@@ -1663,13 +1704,17 @@ def close_citations(run_dir: Path, dest: Path,
             decision, path = _close_one(run_dir, dest, dry, rel_doc, cite,
                                         cell_rels, above, text_state)
             row = {"doc": rel_doc, "cited": cite, "path": path}
+            if decision == _CLOSURE_EXTERNAL_PDK:
+                row.update(kit_relative_path=path, pdk_revision=pdk_revision['revision'])
             record = dict(row, decision=decision,
                           destination="in-cell" if decision in (
                               _CLOSURE_STAGED, _CLOSURE_IN_CELL) else "source-run-only")
             if decision == _CLOSURE_ABSENT:
                 record["destination"] = "not-present"
+            elif decision == _CLOSURE_EXTERNAL_PDK:
+                record['destination'] = 'external-kit'
             candidate = run_dir / path
-            if (not Path(path).is_absolute()
+            if (decision != _CLOSURE_EXTERNAL_PDK and not Path(path).is_absolute()
                     and candidate.resolve().is_relative_to(run_dir.resolve())
                     and candidate.is_file()):
                 record["bytes"] = candidate.stat().st_size
@@ -1690,6 +1735,7 @@ def close_citations(run_dir: Path, dest: Path,
                       _CLOSURE_OVER_CEILING: "over_ceiling",
                       _CLOSURE_LAYOUT: "layout_policy",
                       _CLOSURE_STEP_VIEW: "step_view",
+                      _CLOSURE_EXTERNAL_PDK: "external_pdk",
                       _CLOSURE_ABOVE_CELL: "above_cell"}.get(decision)
             if bucket:
                 result[bucket].append(row)
@@ -1700,7 +1746,8 @@ def close_citations(run_dir: Path, dest: Path,
                 worklist.append((run_dir / path, path))
 
     accepted = {_CLOSURE_STAGED, _CLOSURE_IN_CELL, _CLOSURE_ABOVE_CELL,
-                _CLOSURE_LAYOUT, _CLOSURE_STEP_VIEW, "DESCRIPTION_REBOUND"}
+                _CLOSURE_LAYOUT, _CLOSURE_STEP_VIEW, _CLOSURE_EXTERNAL_PDK,
+                "DESCRIPTION_REBOUND"}
     rebound = {}
     for rel_doc, (src_doc, text) in documents.items():
         if src_doc.suffix.lower() != ".json":
@@ -1736,7 +1783,8 @@ def close_citations(run_dir: Path, dest: Path,
     while changed:
         changed = False
         for row in result["records"]:
-            if row["decision"] in accepted and row["path"] in unavailable:
+            if (row["decision"] in accepted - {_CLOSURE_EXTERNAL_PDK}
+                    and row["path"] in unavailable):
                 row["decision"] = "DEPENDENCY_UNAVAILABLE"
                 if row["doc"] not in unavailable:
                     unavailable.add(row["doc"])
@@ -1756,7 +1804,8 @@ def close_citations(run_dir: Path, dest: Path,
         # the published reference is always cell-relative. Never rebase a path
         # outside this project or silently rewrite Markdown / .sby scripts.
         rewrites = {r["cited"]: r["path"] for r in rows
-                    if r["cited"].startswith("/") and r["decision"] in accepted}
+                    if r["cited"].startswith("/")
+                    and r["decision"] in accepted - {_CLOSURE_EXTERNAL_PDK}}
         if (rewrites or rel_doc in rebound) and isinstance(data, dict) and not dry:
             def portable(value):
                 if isinstance(value, dict):
@@ -3377,6 +3426,8 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"the ceiling, {len(cc['layout_policy'])} under layout policy, "
           f"{len(cc['step_view'])} in the step view, {len(cc['above_cell'])} "
           f"resolving above the cell")
+    print(f"  external PDK: {len(cc['external_pdk'])} citation(s), identified "
+          f"by kit-relative path and resolved revision; not copied")
     for r in cc["staged"]:
         print(f"      CLOSED  {r['bytes']} B  {r['path']}  <- {r['doc']} :: "
               f"{r['cited']}")

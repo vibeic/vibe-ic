@@ -163,7 +163,7 @@ _RESOLVES = "RESOLVES"
 # decision word this gate has never seen is reported rather than silently
 # treated as one of them.
 _DISCLOSURES = {"OUT_OF_PUBLISHED_SCOPE", "DANGLING", "DANGLING_UNDER_PASS",
-                "UNFOLLOWABLE_ABSOLUTE"}
+                "UNFOLLOWABLE_ABSOLUTE", "EXTERNAL_PDK"}
 
 PROGRESS_SCOPE = "issue1710:citation-routing-is-true"
 _ACTIVE_PROGRESS = None
