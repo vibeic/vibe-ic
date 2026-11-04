@@ -197,6 +197,44 @@ def test_component_success_is_not_a_metric_completion(tmp_path, monkeypatch):
     assert all(c['completed'] is False for c in result['components'])
 
 
+@pytest.mark.parametrize('analog', [False, True])
+def test_authored_feature_decision_is_observed_from_its_source(tmp_path, monkeypatch, analog):
+    payload, context = case(tmp_path, monkeypatch, analog=analog)
+    source = write(tmp_path, 'input/feature-decisions.json', {
+        'features': {'has_analog': context['features']['has_analog']}})
+    trace = payload['requirements_trace']
+    trace['source_documents'].append(source)
+    item = trace['features'][0]
+    item.update(source=source['path'], field_path='/features/has_analog', evidence=[
+        f"{source['path']}:3 sha256:{source['sha256']} — "
+        + next(line.strip() for line in (tmp_path/source['path']).read_text().splitlines()
+               if 'has_analog' in line)])
+    item.pop('layer')
+    approve(tmp_path, payload)
+    complete(tmp_path)
+    accepted = row(tmp_path, 'D01')
+    assert accepted['default_row_status'] == 'PASS', accepted
+    assert accepted['delivery_accepted'] is False
+
+
+@pytest.mark.parametrize('observed,expected', [(True, 'FAIL'), ('false', 'NOT_MEASURED')])
+def test_authored_feature_disagreement_or_untyped_value_is_not_credited(
+        tmp_path, monkeypatch, observed, expected):
+    payload, _ = case(tmp_path, monkeypatch)
+    source = write(tmp_path, 'input/feature-decisions.json', {'features': {'has_analog': observed}})
+    trace = payload['requirements_trace']
+    trace['source_documents'].append(source)
+    item = trace['features'][0]
+    item.update(source=source['path'], field_path='/features/has_analog', evidence=[
+        f"{source['path']}:3 sha256:{source['sha256']} — "
+        + next(line.strip() for line in (tmp_path/source['path']).read_text().splitlines()
+               if 'has_analog' in line)])
+    item.pop('layer')
+    approve(tmp_path, payload)
+    complete(tmp_path)
+    assert row(tmp_path, 'D01')['default_row_status'] == expected
+
+
 def test_phase1_retained_completion_entry_never_dispatches_a_producer(tmp_path, monkeypatch):
     case(tmp_path, monkeypatch)
     def forbidden(*args, **kwargs):

@@ -7208,7 +7208,8 @@ def _d0102_compare(project: Path, payload: dict, reads: dict) -> tuple:
 
 def _d0102_value(project: Path, item: dict, reads: dict) -> list:
     import phase1_expert_parse_track as expert
-    path = expert.resolve_layer_file(project, item.get('layer', ''))
+    path = (project / item['source'] if item.get('source') == 'input/feature-decisions.json'
+            else expert.resolve_layer_file(project, item.get('layer', '')))
     if path is None:
         raise MetricRefusal('D0102_OBSERVATION_ABSENT', str(item))
     doc = _d0102_read(project, path.relative_to(project).as_posix(), reads)
