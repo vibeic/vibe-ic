@@ -1556,7 +1556,7 @@ def suite_payload_fields(result: Dict[str, Any]) -> Dict[str, Any]:
     measured = result.get("measured") or []
     dats = result.get("dats") or []
     scoped = scope_totals(result.get('cov') or {}, list(result.get('scope_used') or []))
-    return {
+    fields = {
         "testbenches": measured,
         "measurement_scope": ("union-of-suite" if len(dats) > 1
                               else "single-testbench"),
@@ -1568,6 +1568,92 @@ def suite_payload_fields(result: Dict[str, Any]) -> Dict[str, Any]:
         "line_union_cross_check": result.get("line_union_cross_check") or {
             "status": "NOT_MEASURED", "reason": "not recorded by the producer"},
     }
+    if scoped and dats:
+        empty = measured_empty_branch_population({
+            'tool': 'verilator', 'coverage_dat': dats[0],
+            'rtl_sources': list(result.get('scope_used') or []),
+            **scoped, **fields})
+        if empty is not None:
+            fields['branch_applicability'] = empty
+    return fields
+
+
+def _declarative_branch_scope(paths: Sequence[str]) -> bool:
+    """Conservative source proof; macros or procedural constructs are unknown."""
+    tokens = re.compile(r'//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|"(?:\\.|[^"\\])*"'
+                        r'|\\\S+|[A-Za-z_$][A-Za-z0-9_$]*|[^\s]')
+    control = {'if', 'else', 'case', 'casez', 'casex', 'for', 'foreach', 'while',
+               'repeat', 'forever', 'always', 'always_ff', 'always_comb',
+               'always_latch', 'initial', 'final', 'function', 'task', 'generate',
+               'assert', 'assume', 'cover', 'property', 'sequence'}
+    for path in paths:
+        for match in tokens.finditer(Path(path).read_text()):
+            token = match.group()
+            if token.startswith(('//', '/*')):
+                if (token.startswith('/*') and not token.endswith('*/')
+                        or re.search(r'coverage_(?:block_)?off', token, re.I)):
+                    return False
+                continue
+            if (token in control or token == '?' or token[0] in ('"', '\\', '`')
+                    or token.lower().startswith('coverage_')):
+                return False
+    return True
+
+
+def measured_empty_branch_population(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Prove an empty DUT population from the declared suite's live counters.
+
+    Branch points outside the DUT prove that this run actually instrumented
+    branches. They never enter the DUT's coverage numerator or denominator.
+    No points anywhere is insufficient evidence for this applicability result.
+    """
+    try:
+        if data.get('tool') != 'verilator' or data.get('union_refused'):
+            return None
+        declared = data['totals']['branch']
+        if declared != {'covered': 0, 'total': 0, 'pct': 0.0}:
+            return None
+        rtl = [str(Path(p).resolve()) for p in data['rtl_sources']]
+        scope = [str(Path(p).resolve()) for p in data['scope_files']]
+        if (not rtl or len(set(rtl)) != len(rtl) or set(scope) != set(rtl)
+                or len({Path(p).name for p in rtl}) != len(rtl)
+                or any(not Path(p).is_file() for p in rtl)
+                or not _declarative_branch_scope(rtl)):
+            return None
+        members = data.get('testbenches') or [data['testbench']]
+        if len(members) > 1:
+            records = [data['per_testbench'][name] for name in members]
+            if any(row.get('measured') is not True for row in records):
+                return None
+            dats = [row['coverage_dat'] for row in records]
+            if len({str(Path(p).resolve()) for p in dats}) != len(dats):
+                return None
+        else:
+            dats = [data['coverage_dat']]
+        if any(not Path(p).is_file() or Path(p).is_symlink() for p in dats):
+            return None
+        mounts = _mounts_for(os.environ.get('VIBEIC_EDA_CONTAINER')
+                             or os.environ.get('EDA_CONTAINER', ''))
+        cov = (union_coverage_dats(dats, mounts=mounts) if len(dats) > 1
+               else parse_coverage_dat(dats[0], mounts=mounts))
+        if (len(dats) > 1 and not cov.get('unionisable')
+                or cov.get('format_detected') not in ('v4', 'v5')):
+            return None
+        measured = scope_totals(cov, rtl)
+        if (not measured or set(str(Path(p).resolve()) for p in measured['scope_files']) != set(rtl)
+                or measured['line_metric'] != 'executable_line_union'
+                or measured['totals']['branch']['total'] != 0
+                or cov['totals']['branch']['total'] <= 0):
+            return None
+        for category in ('line', 'toggle'):
+            observed = measured['totals'][category]
+            if observed['total'] <= 0 or observed != data['totals'][category]:
+                return None
+        return {'status': 'NOT_APPLICABLE', 'scope_branch_points': 0,
+                'instrumented_branch_points': cov['totals']['branch']['total'],
+                'reason': 'branch instrumentation is observed; the complete declarative RTL scope has no branch points'}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def prepare_professional_coverage_report(path: Path) -> None:
@@ -1681,10 +1767,12 @@ def cmd_measure_tb(args: argparse.Namespace) -> int:
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(out, indent=2))
     t = scoped["totals"]
+    empty_branch = measured_empty_branch_population(out)
+    branch_display = ('NOT_APPLICABLE (0/0)' if empty_branch else f"{t['branch']['pct']}%")
     _how = (f"UNION of {len(dats)} testbench(es)" if len(dats) > 1
             else f"from {dat}")
     print(f"[measure-tb] line={t['line']['pct']}% "
-          f"toggle={t['toggle']['pct']}% branch={t['branch']['pct']}% "
+          f"toggle={t['toggle']['pct']}% branch={branch_display} "
           f"(scope {scoped['scope_files']}, {_how}) -> {args.out}")
     if len(dats) > 1:
         for one_tb in measured:
@@ -1698,7 +1786,7 @@ def cmd_measure_tb(args: argparse.Namespace) -> int:
              for c, th in (("line", args.min_line),
                            ("toggle", args.min_toggle),
                            ("branch", args.min_branch))
-             if t[c]["pct"] < th]
+             if t[c]["pct"] < th and not (c == 'branch' and empty_branch)]
     if below:
         print("[measure-tb] below threshold(s): " + "; ".join(below),
               file=sys.stderr)
@@ -2694,14 +2782,15 @@ def cmd_check(args: argparse.Namespace) -> int:
         below.append(f"line {line_pct}% < {args.min_line}%")
     if toggle_pct < args.min_toggle:
         below.append(f"toggle {toggle_pct}% < {args.min_toggle}%")
-    if branch_pct < args.min_branch:
+    branch_empty = measured_empty_branch_population(data)
+    if branch_pct < args.min_branch and branch_empty is None:
         below.append(f"branch {branch_pct}% < {args.min_branch}%")
     if below:
         print("[check] below threshold(s):", "; ".join(below), file=sys.stderr)
         return 1
-    print(
-        f"[check] PASS  line={line_pct}%  toggle={toggle_pct}%  branch={branch_pct}%"
-    )
+    branch_display = ('NOT_APPLICABLE (0/0; branch instrumentation observed)'
+                      if branch_empty else f'{branch_pct}%')
+    print(f"[check] PASS  line={line_pct}%  toggle={toggle_pct}%  branch={branch_display}")
     return 0
 
 
