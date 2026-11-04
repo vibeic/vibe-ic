@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 import arithmetic_synth as arithmetic
+import general_synth as general
 import canonical_primitive_synth as clocks
 import deterministic_emit_chain as chain
 from _prose_handoff_assertions import assert_program_chain_candidate
@@ -315,6 +316,56 @@ end endmodule''')
     lambda text: text.replace('If start is high and the counter register (i) is equal to 6',
                               'The counter register (i) is equal to 6').replace('When start is low, done_r is reset to 0.', ''),
 ], ids=['unsupported-low-enable', 'mixed-qualifiers'])
-def test_sequential_completion_declines_unsupported_enable_rules(mutation):
+def test_sequential_completion_declines_unsupported_enable_rules(tmp_path, mutation):
     prompt = mutation(sequential_product_prompt(3, 5, True))
+    assert_completion_declines_to_author(tmp_path, prompt)
+
+
+
+@pytest.mark.parametrize('width,completion', [(3, 5), (5, 8)])
+@pytest.mark.parametrize('qualified', [False, True, 'global'])
+def test_general_multiplier_retains_the_shared_completion_predicate(tmp_path, width, completion, qualified):
+    prompt = sequential_product_prompt(width, completion, qualified)
+    rtl = general.synth(prompt, *arithmetic._dia_parse_ports(prompt), top='product_unit')
+    assert rtl is not None
+    native(tmp_path, rtl, f'''module check;
+reg clk=0,rst=0,start=0; reg [{width-1}:0] a=3,b=2;
+wire [{2*width-1}:0] p; wire done; integer k; always #5 clk=~clk;
+product_unit d(.*);
+initial begin #1;rst=1;#1;if(done!==0 || p!==0)$fatal;rst=0;
+for(k=0;k<{completion};k=k+1) begin
+ @(negedge clk);start=1;@(posedge clk);#1;
+ if(done!==0)$fatal(1,"early completion at count %0d, declared completion {completion}",k);
+end
+@(negedge clk);start=0;@(posedge clk);#1;
+if(done!==1'b{int(not bool(qualified))} || p!==6)$fatal(1,"completion enable/product mismatch");
+$display("CHECK_PASS");$finish;end endmodule''')
+
+
+def assert_completion_declines_to_author(tmp_path, prompt):
     assert arithmetic.synth(prompt, top='product_unit') is None
+    assert general.synth(prompt, *arithmetic._dia_parse_ports(prompt), top='product_unit') is None
+    kind, rtl, rejected = chain.try_emit_ex(prompt, top='product_unit')
+    assert (kind, rtl) == (None, None), (kind, rtl, rejected)
+    import _path_layout as layout
+    import design_one_shot_runner as runner
+    source = tmp_path / 'input/phase1_prompt.md'
+    source.parent.mkdir()
+    source.write_text(prompt)
+    previous = layout._RTL_INPUT
+    try:
+        layout.select_rtl_input(tmp_path, 'original', '1', '1')
+        result = runner.step_rtl_gen(tmp_path, 'digital_arithmetic_primitive')
+    finally:
+        layout._RTL_INPUT = previous
+    assert result.status == 'PASS_WITH_WAIVERS', result
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert not result.output_files and not list((tmp_path / 'phase2/stage1/rtl').glob('*.sv'))
+
+
+@pytest.mark.parametrize('width,completion', [(3, 5), (5, 8)])
+def test_continued_unknown_completion_condition_reaches_author(tmp_path, width, completion):
+    prompt = sequential_product_prompt(width, completion, True)
+    prompt = prompt.replace('If start is high and the', 'If start != 0\n and the')
+    prompt = prompt.replace('When start is low, done_r is reset to 0.', '')
+    assert_completion_declines_to_author(tmp_path, prompt)
