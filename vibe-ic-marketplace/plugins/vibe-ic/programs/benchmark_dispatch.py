@@ -435,7 +435,7 @@ def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str
                 # D09 publishes the actual child author report. D11 instead
                 # publishes an outer report pointing to its retained child.
                 _runner_child_report_current(Path(receipt["project"]), binding,
-                                             receipt, native_step="1")
+                                             receipt, native_step="4" if "D13" in receipt["argv"] else "1")
             elif (binding["invocation_id"] != receipt["invocation_id"]
                     or binding["argv"] != receipt["argv"]
                     or binding["source"] != receipt["source_before"]):
@@ -9790,15 +9790,31 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             runner, proj, supplied_rtl, state["effective_entry"],
             state["exit_step"], state["delivery_route"],
             input_contract, _rtl_delivery_target(state["route_receipt"]))
-        if state["activation"] is None:
-            _require_route_admission(run_p, state["task"], state["route_receipt"],
-                                     require_d1=False)
-            process = runner_budget.run(argv)
-        else:
-            process = _run_from_d1_snapshot(
-                runner_budget, argv, d1_snapshot, state["route_receipt"],
-                state["activation"], state["task"]["task_sha256"],
-                expected_repaired_output_sha256=expected_repaired_output_sha256)
+        rows = [None]
+        if supplied_rtl and "--flow" in argv:
+            closed = state["route_receipt"]["verify_closed_steps"]
+            rows = closed[closed.index(state["route_receipt"]["answer_step"]) + 1:] or [None]
+        for step in rows:
+            if step is not None:
+                argv = _solver_argv(runner, proj, step, step, state["delivery_route"],
+                                    input_contract, _rtl_delivery_target(state["route_receipt"]))
+            if state["activation"] is None:
+                _require_route_admission(run_p, state["task"], state["route_receipt"],
+                                         require_d1=False)
+                process = runner_budget.run(argv)
+            else:
+                process = _run_from_d1_snapshot(
+                    runner_budget, argv, d1_snapshot, state["route_receipt"],
+                    state["activation"], state["task"]["task_sha256"],
+                    expected_repaired_output_sha256=expected_repaired_output_sha256)
+            if process.error or process.rc:
+                break
+            if step is not None:
+                import flow109
+                row = argv[argv.index("--entry-step") + 1]
+                if next((item["status"] for item in flow109.whole_run_verdict(proj)["steps"]
+                         if item["id"] == row), _NOT_MEASURED) != "PASS":
+                    break
         diagnostic = _runner_diagnostics(process, argv, proj)
         diagnostics_json = json.dumps(diagnostic) if diagnostic else None
         if process.error is not None:
