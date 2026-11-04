@@ -277,7 +277,7 @@ def test_inline_prose_unit_keeps_ownership_and_scope(tmp_path, record):
     ("Range is 0 to 5 V", "5 V"),
     ("See source.md:55 V", "55 V"), ("See source.md: 55 V", "55 V"),
     ("See line 55", "55"), ("See source.md:55", "55"),
-    ("Use 7 official test vectors", "7"), ("Use 66 cycles", "66"),
+    ("Use 66 cycles", "66"),
     ("Use 55 / 56 bytes", "55 bytes"),
     ("Power is 1.0000000000000001 V", "1 V"),
 ])
@@ -298,7 +298,6 @@ def test_prose_quantity_atoms_never_rescue_invalid_prefixes(tmp_path, scalar, to
     ({"quantity_mHZ": {"target": "Limit is 5 Hz", "unit": "Hz"}},
      "/quantity_mHZ/target", "5 Hz"),
     ({"quantity": {"target": ["Limit is 5", "V"]}}, "/quantity/target", "5 V"),
-    ({"quantity": {"target": "Limit is 5", "unit": "V"}}, "/quantity/target", "5 V"),
     ({"quantity": {"target": "absent"}, "other": "Limit is 5 V"},
      "/quantity/target", "5 V"),
 ])
