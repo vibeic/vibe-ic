@@ -547,6 +547,28 @@ def _parse_done_clear_cycle(text: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+def _completion_enable_qualification(text: str, enable: str) -> Optional[bool]:
+    """Read completion's own enable, including a separately stated qualification."""
+    name = rf"\b{re.escape(enable)}\b"
+
+    def qualifier(clause):
+        if re.search(rf"\b(?:independent(?:ly)?\s+of|regardless\s+of)\s+{name}", clause, re.I):
+            return False
+        if re.search(rf"{name}\s+(?:is\s+)?(?:low|0)\b.*\b(?:reset|set)\s+to\s+0\b", clause, re.I):
+            return True
+        return True if re.search(rf"{name}\s+(?:is\s+)?(?:high|1|asserted)\b", clause, re.I) else None
+
+    rules = re.findall(r"[^.\n]*\bdone\w*\b[^.\n]*", text, re.I)
+    predicates = [rule for rule in rules if re.search(r"\bis\s+equal\s+to\s+\d+\b", rule, re.I)]
+    context = {qualifier(rule) for rule in rules if rule not in predicates
+               and re.search(name, rule, re.I)}
+    if None in context or len(context) > 1:
+        return None
+    default = next(iter(context), False)
+    guards = {qualifier(rule) if re.search(name, rule, re.I) else default for rule in predicates}
+    return next(iter(guards)) if len(guards) == 1 and None not in guards else None
+
+
 def _parse_rdy_raise_count(text: str) -> Optional[int]:
     """The counter value at which the rdy flag is raised, e.g.
     'Once the counter (ctr) reaches 16, ... the ready signal (rdy) is set to 1'.
@@ -892,12 +914,16 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
             "rst_active_high": bool(rst) and not _RE_RST_N.search(rst[0]),
             "clk": clk[0], "ins": ins, "outs": outs}
 
-    if rst and start and done:                      # multi_16bit shape
+    if rst and start and done:
         # §4.05: PARSE the completion cycle from the prose, never guess it.
         bound = _parse_counter_bound(text)           # 'i is less than N'
         raise_at = _parse_done_raise_cycle(text)     # 'i==K -> done=1'
         clear_at = _parse_done_clear_cycle(text)     # 'i==J -> done=0'
+        done_enabled = _completion_enable_qualification(text, start[0])
+        if raise_at is not None and done_enabled is None:
+            return None
         base.update({"op": "mult_seq_done", "start": start[0], "done": done[0],
+                     "done_enabled": done_enabled,
                      "bound": bound, "raise_at": raise_at, "clear_at": clear_at})
         # The product is latched at i==0 and done must rise at the parsed cycle;
         # if the raise cycle is not stated, the latency is a guess -> DEFER.
@@ -1308,7 +1334,7 @@ def _emit_fixed_sub(s, m):
 
 
 def _emit_mult_seq_done(s, m):
-    # Sequential multiplier with start->done handshake (multi_16bit shape). The
+    # Sequential multiplier with start->done handshake. The
     # counter FSM cycle counts are PARSED from the prose (never guessed):
     #   bound    = the 'i is less than N' loop bound,
     #   raise_at = the 'i==K -> done=1' cycle,
@@ -1329,6 +1355,9 @@ def _emit_mult_seq_done(s, m):
     if clear_at is not None:
         done_lines.append(f"            else if (i == {clear_at}) done_r <= 0;")
     body_done = "\n".join(done_lines)
+    if s["done_enabled"]:
+        body_done = (f"            if ({s['start']}) begin\n{body_done}\n"
+                     f"            end else done_r <= 0;")
     aw, bw = s["aw"], s["bw"]
     return (f"{h}\n"
             f"    reg [{cnt_w-1}:0] i;\n"
@@ -1338,12 +1367,17 @@ def _emit_mult_seq_done(s, m):
             f"    reg [{pw-1}:0] yout_r;\n"
             f"    always @(posedge {s['clk']} or {edge}) begin\n"
             f"        if ({rst_test}) begin\n"
-            f"            i <= 0; done_r <= 0;\n"
+            f"            i <= 0;\n"
             f"        end else if ({s['start']}) begin\n"
             f"            if (i < {bound}) i <= i + 1;\n"
-            f"{body_done}\n"
             f"        end else begin\n"
-            f"            i <= 0; done_r <= 0;\n"
+            f"            i <= 0;\n"
+            f"        end\n"
+            f"    end\n"
+            f"    always @(posedge {s['clk']} or {edge}) begin\n"
+            f"        if ({rst_test}) done_r <= 0;\n"
+            f"        else begin\n"
+            f"{body_done}\n"
             f"        end\n"
             f"    end\n"
             f"    always @(posedge {s['clk']} or {edge}) begin\n"
