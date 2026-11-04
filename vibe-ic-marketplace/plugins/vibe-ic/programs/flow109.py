@@ -2787,12 +2787,14 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
                 return None
             import _path_layout as layout
             import _specrtl_common as sources
-            synthesis = json.loads((project / 'phase2/stage2/synth/synth_inputs.json').read_text())
-            rtl = layout.rtl_dir(project)
-            if synthesis['rtl_sha256'] != {
-                    p.relative_to(rtl).as_posix(): _file_digest(p)
-                    for p in sources.rtl_source_files(project)}:
-                return None
+            synthesis_path = project / 'phase2/stage2/synth/synth_inputs.json'
+            if method != 'formal' or synthesis_path.exists():
+                synthesis = json.loads(synthesis_path.read_text())
+                rtl = layout.rtl_dir(project)
+                if synthesis['rtl_sha256'] != {
+                        p.relative_to(rtl).as_posix(): _file_digest(p)
+                        for p in sources.rtl_source_files(project)}:
+                    return None
             if method == 'config':
                 from declared_pdk_is_the_pdk_used_check import declared_distribution
                 config = json.loads(report.read_text())
@@ -2857,7 +2859,10 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
                         status = 'FAIL'
                 result['coverage_scope'] = targets['reason']
             elif method == 'formal':
+                import formal_proof_evidence_check as proof
                 native = json.loads(report.read_text())
+                if proof.proof_source_staleness(project, report.parent, native):
+                    return None
                 required = json.loads((project / 'requirements/base_08/proof_partition_coverage.json').read_text())
                 tasks = {item['task']: item for item in native['properties']}
                 selected = [tasks[item['task']] for item in required['required_items']]
