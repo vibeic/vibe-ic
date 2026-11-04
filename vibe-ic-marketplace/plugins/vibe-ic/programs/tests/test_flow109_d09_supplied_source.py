@@ -108,13 +108,16 @@ def consume(case):
     return front._d09_bound_phase2_evidence(root,report,invocation,published_current=True)
 
 
-@pytest.mark.parametrize('pre_entry', [False, True])
+@pytest.mark.parametrize('pre_entry', [False, True, 'both'])
 def test_supplied_owner_stages_rtl_without_downstream_metrics(tmp_path, monkeypatch, pre_entry):
     def unexpected_metrics(*args, **kwargs):
         raise AssertionError('supplied staging must not run authored metrics')
     monkeypatch.setattr(metrics, '_d09_source_owned_metrics', unexpected_metrics)
     root, report, invocation = case(tmp_path, monkeypatch)
-    if pre_entry:
+    if pre_entry == 'both':
+        report['steps'].insert(0, {**report['steps'][1], 'name': 'reused_ip_consume(pre-entry)'})
+        put(root, 'reports/orchestrator/phase2_one_shot.json', report)
+    elif pre_entry:
         report['steps'][1]['name'] = 'reused_ip_consume(pre-entry)'
         put(root, 'reports/orchestrator/phase2_one_shot.json', report)
     status, evidence, detail = consume((root, report, invocation))

@@ -2009,7 +2009,10 @@ def _d09_bound_phase2_evidence(
     except (ValueError, IndexError, KeyError, TypeError) as exc:
         return 'NOT_MEASURED', {}, 'D09_REPORT_UNBOUND: ' + str(exc)
     supplied = [row for row in steps
-                if row.get('name') in {'reused_ip_consume', 'reused_ip_consume(pre-entry)'}
+                if row.get('name') == 'reused_ip_consume'
+                and row.get('status') == 'PASS' and row.get('extras', {}).get('reused_ip') is True]
+    supplied = supplied or [row for row in steps
+                if row.get('name') == 'reused_ip_consume(pre-entry)'
                 and row.get('status') == 'PASS' and row.get('extras', {}).get('reused_ip') is True]
     authors = supplied or [row for row in steps if row.get('name') == 'rtl_gen']
     if len(authors) != 1:
