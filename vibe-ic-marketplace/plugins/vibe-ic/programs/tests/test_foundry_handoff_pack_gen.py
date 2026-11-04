@@ -174,3 +174,53 @@ def test_unknown_root_is_disclosed_without_guessing_or_new_gate(tmp_path):
         assert spec['design_label'] == 'product_label'
         assert spec['physical_top']['reason'],(kind,spec)
         print('UNKNOWN_ROOT',kind,json.dumps(spec['physical_top']))
+
+
+def test_rerun_rebuilds_only_the_owned_package_directory(tmp_path):
+    project, layout = _labelled_layout(tmp_path, _physical_gds())
+    first = _run(project)
+    assert first.returncode == 0, first.stdout + first.stderr
+    handoff = project / 'phase3/stage4/foundry_handoff'
+    (handoff / 'old_layout.gds').write_bytes(_physical_gds(('old_layout',)))
+    old_archive = handoff / 'archive/project/phase3/stage4/gds/old_layout.gds'
+    old_archive.parent.mkdir(parents=True, exist_ok=True)
+    old_archive.write_bytes(_physical_gds(('old_layout',)))
+    (handoff / 'old_metadata.json').write_text('{"old_attempt": true}')
+    external = tmp_path / 'external'
+    external.mkdir()
+    (external / 'preserve.txt').write_text('outside the owned output\n')
+    (handoff / 'old_external_link').symlink_to(external, target_is_directory=True)
+    retained = project / 'steps/001_previous/retained.txt'
+    retained.parent.mkdir(parents=True)
+    retained.write_text('retained previous row output\n')
+    protected = {p: p.read_bytes() for p in (layout, retained, external / 'preserve.txt')}
+
+    rerun = _run(project)
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    assert not (handoff / 'old_layout.gds').exists()
+    assert not old_archive.exists()
+    assert not (handoff / 'old_metadata.json').exists()
+    assert not (handoff / 'old_external_link').exists()
+    manifest = json.loads((handoff / 'release_manifest.json').read_text())
+    assert not any('old_layout' in entry['path'] or 'old_metadata' in entry['path']
+                   for entry in manifest['files'])
+    assert (handoff / layout.name).read_bytes() == layout.read_bytes()
+    assert {hashlib.sha256(p.read_bytes()).hexdigest() for p in handoff.rglob('*.gds')} == {
+        hashlib.sha256(layout.read_bytes()).hexdigest()}
+    assert all(p.read_bytes() == data for p, data in protected.items())
+
+
+def test_fresh_timestamp_output_preserves_the_canonical_package(tmp_path):
+    project, layout = _labelled_layout(tmp_path, _physical_gds())
+    first = _run(project)
+    assert first.returncode == 0, first.stdout + first.stderr
+    handoff = project / 'phase3/stage4/foundry_handoff'
+    marker = handoff / 'prior_attempt.txt'
+    marker.write_text('canonical package is outside this timestamp destination\n')
+    destination = project / 'release_versions/new_attempt'
+    result = subprocess.run([sys.executable, str(PROG), str(project),
+                             '--out-dir', str(destination)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert marker.read_text() == 'canonical package is outside this timestamp destination\n'
+    assert (destination / layout.name).read_bytes() == layout.read_bytes()
+    assert not (destination / marker.name).exists()
