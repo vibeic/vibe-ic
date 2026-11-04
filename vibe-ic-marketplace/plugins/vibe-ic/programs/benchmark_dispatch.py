@@ -1887,6 +1887,10 @@ def _required_gate_ledger(solve_result: Any) -> dict:
 
     pruned = set(pruned)
     named_exit = ledger["declared_exit"] in {name for name, _ in sites}
+    # Generation may decline when the project already supplies build RTL.
+    requested_endpoint = next((name for name, span in reversed(sites)
+        if name != "rtl_gen" and name not in pruned
+        and (named_exit or span and str(span[0]).isdigit())), None)
     placed = set()
     for name, span in sites:
         scope_known = named_exit or bool(span and str(span[0]).isdigit())
@@ -1907,7 +1911,8 @@ def _required_gate_ledger(solve_result: Any) -> dict:
             ledger["in_scope"][name] = status
             if status.upper() in _GATE_FAILED:
                 ledger["failed_required"].append(name)
-            elif status.upper() in _GATE_UNMEASURED:
+            elif (status.upper() in _GATE_UNMEASURED
+                  or name == requested_endpoint and status.upper() == "NOT_APPLICABLE"):
                 ledger["unmeasured_required"].append(name)
         else:
             ledger["out_of_scope"][name] = status
