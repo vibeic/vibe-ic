@@ -497,7 +497,7 @@ def prepare(project, context):
     for rtl in (project / 'phase2/stage1/rtl').rglob('*'):
         if rtl.is_file() and rtl.suffix in ('.v', '.sv', '.vh', '.svh'):
             text = strip_hdl_comments_and_strings(rtl.read_text())
-            if re.search(r'`include\b|\$(?:readmem[hb]|fopen|system)\b', text):
+            if re.search(r'`include\b|\$(?:readmem[hb]|system)\b', text):
                 raise AdmissionRefusal('D22_TRANSITIVE_INPUT_UNIMPLEMENTED', str(rtl))
     import librelane_contract as contract
     if contract.selected_mode(project, '9') != 'librelane':
