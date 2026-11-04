@@ -830,6 +830,10 @@ def _refresh_stale_observation_binding(project: Path, top: dict, models: list,
     if not model_actual:
         return refuse("selected wrapper has no resolved model population")
 
+    normalized = {source: (source, digest) for source, digest in
+                  arith._relocated_pdk_model_bindings(
+                      {source: item[1] for source, item in normalized.items()},
+                      {source: item[1] for source, item in model_actual.items()}).items()}
     for resolved, (_source, digest) in model_actual.items():
         if resolved not in normalized or normalized[resolved][1] != digest:
             return refuse("declared model binding differs from the selected current model bytes")
@@ -850,7 +854,7 @@ def _refresh_stale_observation_binding(project: Path, top: dict, models: list,
             or stale_digest != sha256_file(wrapper)):
         return refuse("sole extra binding is not the same-byte canonical wrapper at a stale carrier locator")
 
-    replacement = dict(binding)
+    replacement = {source: digest for source, digest in normalized.values()}
     replacement.pop(stale_raw)
     replacement[str(wrapper_rel)] = sha256_file(wrapper)
     expected = {str(wrapper): sha256_file(wrapper),

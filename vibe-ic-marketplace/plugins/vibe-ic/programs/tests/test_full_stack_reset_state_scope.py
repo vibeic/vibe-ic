@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -93,3 +94,51 @@ def test_ambiguous_wrapper_refuses_the_required_reset_scope(tmp_path):
     assert plan is None, plan
     assert request['reason_class'] == full_stack.MISSING_OBSERVATION_CONTRACT
     assert 'one scalar' in '; '.join(request['unsupported_requirements'])
+
+
+@pytest.mark.parametrize('mode', ['same_bytes', 'wrong_hash', 'wrong_kit', 'ambiguous', 'prior_changed'])
+def test_native_wrapped_reset_resolves_only_same_pdk_model_bytes(tmp_path, mode):
+    root, _ = _project(tmp_path, 'wrapped4_zero')
+    model = root / 'input/models/public_delay.v'
+    content = model.read_bytes()
+    suffix = Path('neutral_kit/libs.ref/public_io/verilog/public_delay.v')
+    live = tmp_path / 'active_pdk' / suffix
+    live.parent.mkdir(parents=True)
+    live.write_bytes(content)
+    prior = tmp_path / 'old_pdk' / suffix
+    if mode == 'wrong_kit':
+        prior = tmp_path / 'old_pdk/other_kit/libs.ref/public_io/verilog/public_delay.v'
+    if mode == 'prior_changed':
+        prior.parent.mkdir(parents=True)
+        prior.write_bytes(content + b'// changed prior model\n')
+    declaration_path = root / 'plugin_output/declaration.json'
+    declaration = json.loads(declaration_path.read_text())
+    binding = declaration['verification_stimuli']['arithmetic_observation']['public_surface']['binding']
+    digest = binding.pop(str(model.relative_to(root)))
+    binding[str(prior)] = '0' * 64 if mode == 'wrong_hash' else digest
+    wrapper = root / 'phase3/stage3/pnr/public_surface.v'
+    digest = binding.pop(str(wrapper.relative_to(root)))
+    binding[str(tmp_path / 'old_carrier' / wrapper.relative_to(root))] = digest
+    declaration_path.write_text(json.dumps(declaration))
+    original = declaration_path.read_bytes()
+    models = {str(live): live.read_text()}
+    if mode == 'ambiguous':
+        second = tmp_path / 'second_pdk' / suffix
+        second.parent.mkdir(parents=True)
+        second.write_bytes(content)
+        models[str(second)] = second.read_text()
+    result = full_stack.generate(root, model_resolver=lambda *args: (models, 'neutral relocated models'))
+    assert declaration_path.read_bytes() == original
+    assert not (root / 'plugin_output/declaration_history').exists()
+    if mode == 'same_bytes':
+        assert result['verdict'] == 'PASS', result
+        assert result['observation_provenance_refresh']['state'] == 'RESOLVED'
+        reset = next(c for c in result['cases'] if c['name'] == 'reset_situations')
+        assert reset['state'] == 'passed' and reset['build_rc'] == reset['run_rc'] == 0
+        measured = reset['arithmetic_scenario']
+        assert measured['transactions'] == 180 and measured['errors'] == 0
+        assert measured['reset_observations'][0]['mismatches'] == 0
+    else:
+        assert result['verdict'] == 'NOT_MEASURED', result
+        assert result['counts']['executed'] == 0
+        assert result['reason_class'] == 'MISSING_OBSERVATION_CONTRACT'
