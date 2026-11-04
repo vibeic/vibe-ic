@@ -263,6 +263,8 @@ def test_inline_prose_unit_keeps_ownership_and_scope(tmp_path, record):
 
 @pytest.mark.parametrize("scalar, token", [
     ("Power is 5 mWextra", "5 mW"), ("Power is 5 mW/s", "5 mW"),
+    ("Area is 5 m · m", "5 m"), ("Area is 5 m × m", "5 m"),
+    ("Area is 5 m ⋅ m", "5 m"),
     ("Power is 5 mystery mW", "5 mW"), ("Power is 5 frobs", "5"),
     ("Power is 5 mw", "5 mW"), ("Power is 5 mW", "5"),
     ("Power is -5 mW", "5 mW"), ("Power is 5 mW", "-5 mW"),
