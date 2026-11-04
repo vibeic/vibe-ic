@@ -39,6 +39,42 @@ PROG_S = b"/* a program */\n"
 HDR = b"/* a header */\n"
 
 
+@pytest.mark.parametrize('valid', [True, False])
+def test_local_executor_runs_real_python_job_without_docker(tmp_path, monkeypatch, valid):
+    import _container_exec as transport
+    import p0_tool_frontend_check as frontend
+    monkeypatch.setattr(transport, 'no_container_route', lambda: True)
+    monkeypatch.setattr(frontend, 'default_image', lambda: pytest.fail('LOCAL must not resolve Docker'))
+    job = tmp_path / 'job.json'
+    job.write_text(json.dumps({'work': str(tmp_path), 'march': 'rv32i',
+        'programs': [], 'arms': [], 'rf_reserved_bytes': 0,
+        'memsize_declared': 64, 'init_patterns': []}) if valid else '{')
+    rc, transcript = I.docker_executor(job, tmp_path)
+    assert (rc == 0) is valid, transcript
+    if valid:
+        assert json.loads((tmp_path / 'results.json').read_text())['done'] is True
+    else:
+        assert not (tmp_path / 'results.json').exists()
+
+
+@pytest.mark.parametrize('rc', [0, 23])
+def test_docker_executor_preserves_remote_command_and_return_code(tmp_path, monkeypatch, rc):
+    import _container_exec as transport
+    import p0_tool_frontend_check as frontend
+    import _watchdog as watchdog
+    from types import SimpleNamespace
+    monkeypatch.setattr(transport, 'no_container_route', lambda: False)
+    monkeypatch.setattr(frontend, 'default_image', lambda: 'held:test')
+    calls = []
+    def execute(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(rc=rc, out='transport control', err='')
+    monkeypatch.setattr(watchdog, 'run_host_supervised', execute)
+    actual, _ = I.docker_executor(tmp_path / 'job.json', tmp_path)
+    assert actual == rc
+    assert calls[0][:2] == ['docker', 'run'] and 'held:test' in calls[0]
+
+
 def _sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
