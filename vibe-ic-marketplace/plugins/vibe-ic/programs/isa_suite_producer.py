@@ -1165,9 +1165,16 @@ def inside(job_path: Path) -> int:
 
 
 def docker_executor(job_path: Path, work: Path) -> Tuple[int, str]:
-    """One supervised, memory-capped `docker run` of the resolved image."""
+    """Run the supervised job in the current LOCAL runtime or resolved image."""
     import _docker_memory as _dmem
     import _watchdog as _wd
+    import _container_exec as _ce
+    if _ce.no_container_route():
+        res = _wd.run_host_supervised(
+            [_sys.executable, str(Path(__file__).resolve()), '--inside', str(job_path)],
+            cwd=str(work), stall_grace_s=STALL_GRACE_S,
+            log_path=str(work / 'progress.log'))
+        return res.rc, 'LOCAL ISA job\n' + (res.out or '')[-3000:] + (res.err or '')[-3000:]
     import p0_tool_frontend_check as _p0
     image = _p0.default_image()
     name = f"vibeic_isa_{_os.getpid()}_{uuid.uuid4().hex[:8]}"
