@@ -34,6 +34,81 @@ endmodule
 NATIVE_LEAF = 'module leaf(input a, output y); assign y=a; endmodule\n'
 
 
+@pytest.mark.parametrize('ports,body,blocked,alternate,nonblocking', [
+    ('', '', False, True, False),
+    (', output wire value', 'reg missing; assign value=missing;', True, True, False),
+    (', output wire [3:0] value', "assign value[1:0]=2'b01;", True, True, False),
+    (', output reg value', 'always @(posedge tick) value<=0; '
+     'always @(posedge tick) value<=1;', True, True, False),
+    (', output wire value', 'wire feedback; assign feedback=~value; '
+     'assign value=feedback;', True, True, False),
+    (', output wire value', '/* verilator lint_off UNDRIVEN */ '
+     'reg missing; assign value=missing;', True, False, False),
+    (', output wire value', '`ifdef VERILATOR\nassign value=0;\n`else\n'
+     'reg missing; assign value=missing;\n`endif', True, False, False),
+    ('', '', False, True, True),
+    (', output reg value', 'always @(posedge tick) value<=0; '
+     'always @(posedge tick) value<=1;', True, True, True),
+], ids=['timed-model', 'undriven-reg', 'partial-output', 'same-clock-drivers',
+        'combinational-loop', 'source-warning-suppression', 'tool-conditional',
+        'timed-model-nba', 'nba-same-clock-drivers'])
+def test_native_timed_model_preserves_driver_refusals(tmp_path, ports, body, blocked, alternate, nonblocking):
+    assert shutil.which('yosys') and shutil.which('verilator')
+    source = tmp_path / 'model.v'
+    original = ('module model #(parameter CYCLE=12)(output reg tick' + ports + ');\n'
+                'initial tick=0;\nalways #(CYCLE/2.0) tick=~tick;\n' + body + '\nendmodule\n')
+    if nonblocking:
+        original = original.replace('tick=~tick', 'tick<=~tick')
+    source.write_text(original)
+    report = tmp_path / 'findings.json'
+    result = subprocess.run([sys.executable, str(PROGRAMS / 'rtl_hygiene_lint.py'),
+        str(source), '--top', 'model', '--severity', 'ERROR', '--json', str(report)],
+        capture_output=True, text=True)
+    findings = json.loads(report.read_text())
+    assert source.read_text() == original
+    assert result.returncode == int(blocked), result.stdout + result.stderr
+    contexts = [json.loads(path.read_text()) for path in tmp_path.rglob('context.json')]
+    timed = [context for context in contexts if
+             (context.get('native_command') or [''])[0] == 'verilator']
+    assert bool(timed) is alternate
+    if alternate:
+        assert len(timed) == 1 and timed[0]['status'] == 'MEASURED'
+        assert timed[0]['native_returncode'] == int(blocked)
+    if blocked:
+        assert any(row['rule'] == 'native-elaboration-unresolved' for row in findings)
+    else:
+        assert findings == []
+
+
+def test_timed_model_json_consumer_keeps_yosys_contract(tmp_path):
+    assert shutil.which('yosys')
+    source = tmp_path / 'model.v'
+    original = ('module model(output reg tick); initial tick=0; '
+                'always #3 tick=~tick; endmodule\n')
+    source.write_text(original)
+    with pytest.raises(ValueError, match='native Yosys elaboration failed'):
+        lint._native_driver_view([source], 'model', [], [], [], tmp_path)
+    assert source.read_text() == original
+    assert not any(path.parent.name == 'timed-driver-lint' for path in tmp_path.rglob('context.json'))
+
+
+def test_native_null_yosys_json_never_means_alternate_pass(tmp_path, monkeypatch):
+    source = tmp_path / 'model.v'
+    source.write_text('module model(output reg tick); initial tick=0; '
+                      'always #3 tick=~tick; endmodule\n')
+    def run(script, work, include_dirs, context):
+        (work / 'design.json').write_text('null')
+        return subprocess.CompletedProcess(['yosys'], 0, '', '')
+    monkeypatch.setattr(lint, '_native_driver_run', run)
+    monkeypatch.setattr(sys, 'argv', [str(PROGRAMS / 'rtl_hygiene_lint.py'),
+        str(source), '--top', 'model', '--severity', 'ERROR', '--json', str(tmp_path / 'findings.json')])
+    try:
+        rc = lint.main()
+    except (AttributeError, TypeError, ValueError):
+        return
+    assert rc != 0
+
+
 @pytest.mark.parametrize('relative_report', [True, False], ids=['relative', 'absolute'])
 def test_native_project_report_paths_obey_docker_mount_protocol(
         tmp_path, monkeypatch, relative_report):

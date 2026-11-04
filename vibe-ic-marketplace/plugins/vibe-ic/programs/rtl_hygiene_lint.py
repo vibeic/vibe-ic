@@ -6789,9 +6789,9 @@ def autofix_output_reg_redeclared(path: Path) -> Tuple[int, List[str]]:
 # after ``#delay`` inside ``initial/forever`` or a bare ``always``, and exactly
 # one separate literal initialization.  Ordinary combinational and edge-clocked
 # synthesizable assignments cannot match.
-_DELAYED_BLOCKING_SELF_TOGGLE_RE = re.compile(
+_DELAYED_SELF_TOGGLE_RE = re.compile(
     r'#\s*(?:\([^;]*?\)|(?:\d+(?:\.\d+)?|[A-Za-z_]\w*))\s*'
-    r'(?P<name>[A-Za-z_]\w*)\s*(?P<op>(?<![<>=!])=(?!=))\s*'
+    r'(?P<name>[A-Za-z_]\w*)\s*(?P<op><=|(?<![<>=!])=(?!=))\s*'
     r'~\s*(?P=name)\s*;', re.S)
 _BARE_ALWAYS_RE = re.compile(r'(?<![\w$])always(?![\w$])')
 _FOREVER_RE = re.compile(r'(?<![\w$])forever(?![\w$])')
@@ -6863,7 +6863,7 @@ def _forever_spans(src: str) -> List[Tuple[int, int]]:
     return spans
 
 
-def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]:
+def _delayed_clock_toggle_sites(raw: str, path: str = "", *, blocking_only=True) -> List[Dict]:
     """Return conservative delayed self-toggle sites with raw-text offsets."""
     if _is_testbench(raw, path):
         return []
@@ -6878,7 +6878,9 @@ def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]
         initial_spans = _initial_spans(structural)
         bare_always_spans = _bare_always_spans(structural)
         forever_spans = _forever_spans(structural)
-        for m in _DELAYED_BLOCKING_SELF_TOGGLE_RE.finditer(structural):
+        for m in _DELAYED_SELF_TOGGLE_RE.finditer(structural):
+            if blocking_only and m.group('op') != '=':
+                continue
             name = m.group('name')
             # The toggled signal must be a module output (ANSI or body style).
             if not re.search(r'\boutput\b[^;)]*\b' + re.escape(name) + r'\b',
@@ -6942,13 +6944,13 @@ def rule_delayed_blocking_clock_toggle(src: str, path: str) -> List[Finding]:
         "delay-driven no-input oscillator uses a blocking self-toggle; a "
         "testbench sampling at the same timestamp races the active-region "
         "write. Use `<=` for the delayed toggle (rtl_hygiene_lint --fix).")
-        for site in _delayed_blocking_clock_toggle_sites(src, path)]
+        for site in _delayed_clock_toggle_sites(src, path)]
 
 
 def autofix_delayed_blocking_clock_toggle(path: Path) -> Tuple[int, List[str]]:
     """Change only proven delay-oscillator self-toggle operators from = to <=."""
     raw = path.read_text(errors='replace')
-    sites = _delayed_blocking_clock_toggle_sites(raw, str(path))
+    sites = _delayed_clock_toggle_sites(raw, str(path))
     if not sites:
         return 0, []
     for site in sorted(sites, key=lambda item: int(item['op_start']), reverse=True):
@@ -6962,14 +6964,15 @@ class NativeElaborationCapabilityAbsent(ValueError):
     """The selected execution route has no launchable Yosys binary."""
 
 
-def _native_driver_run(script, work, include_dirs, context, selected_image=None):
+def _native_driver_run(script, work, include_dirs, context, selected_image=None, *, native_command=None):
     """Use this invocation's selected image, or the existing direct tool route."""
     import os
     import shutil
     selected = ((selected_image or '').strip() or
                 (os.environ.get('VIBEIC_EDA_IMAGE') or '').strip() or
                 (os.environ.get('IIC_EDA_IMAGE') or '').strip())
-    command = ['yosys', '-Q', '-s', str(script)]
+    command = native_command or ['yosys', '-Q', '-s', str(script)]
+    tool_name = 'Yosys' if command[0] == 'yosys' else command[0]
     context.update(backend='local', selected_image=selected or None, image=None,
                    command=None, native_command=command,
                    native_returncode=None, transport_returncode=None)
@@ -7041,7 +7044,7 @@ sys.exit(record['native_returncode'] if record['native_returncode'] is not None 
                 atomic_write_text(work / 'native.log', result.stdout + result.stderr)
                 raise NativeElaborationCapabilityAbsent(
                     'NATIVE_TOOL_ABSENT: selected native EDA target could not '
-                    'launch Yosys: ' + process['launch_error'])
+                    f'launch {tool_name}: ' + process['launch_error'])
             if process.get('command') != command or process.get('native_returncode') != result.returncode:
                 atomic_write_text(work / 'native.log', result.stdout + result.stderr)
                 raise ValueError('selected native EDA target/tool result mismatch; ' + str(work))
@@ -7052,7 +7055,7 @@ sys.exit(record['native_returncode'] if record['native_returncode'] is not None 
         result = _pr.run(command, capture_output=True, text=True)
     except FileNotFoundError as exc:
         raise NativeElaborationCapabilityAbsent(
-            f"NATIVE_TOOL_ABSENT: Yosys is not launchable on the selected "
+            f"NATIVE_TOOL_ABSENT: {tool_name} is not launchable on the selected "
             f"local route: {exc}") from exc
     context.update(native_returncode=result.returncode, transport_returncode=result.returncode)
     return result
@@ -7088,12 +7091,11 @@ def _native_driver_script(files, top, defines, parameters, include_dirs, native_
     return ';\n'.join(commands) + '\n'
 
 
-def _native_driver_view(files, top, defines, parameters, include_dirs, output_dir):
+def _native_driver_view(files, top, defines, parameters, include_dirs, output_dir, *, driver_lint=False):
     """Elaborate the selected closure once; never accept an old JSON as proof.
 
     This is the Yosys frontend for driver analysis, not synthesis or tool
     candidate selection. Keep its inputs, log and JSON together for review.
-    Failure leaves the lexical findings intact and adds a blocking disclosure.
     """
     output_dir = Path(output_dir).resolve()
     files = [Path(p).resolve() for p in files]
@@ -7122,7 +7124,7 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
                'native_returncode': None, 'transport_returncode': None}
     # Use the native SystemVerilog frontend for selected .sv sources. Preserve
     # the caller's top, parameters and defines; neither frontend may silently
-    # introduce SYNTHESIS. No fallback may turn an elaboration error into PASS.
+    # introduce SYNTHESIS.
     native_json = work / 'design.json'
     script = work / 'elaborate.ys'
     atomic_write_text(script, _native_driver_script(files, top, defines, parameters,
@@ -7133,12 +7135,39 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
                              'containing whitespace; driver proof NOT_MEASURED')
         result = _native_driver_run(script, work, include_dirs, context)
         atomic_write_text(work / 'native.log', result.stdout + result.stderr)
+        design = None
         if result.returncode != 0:
-            raise ValueError(f'native Yosys elaboration failed (rc={result.returncode}); {work}')
+            reason = f'native Yosys elaboration failed (rc={result.returncode}); {work}'
+            opaque = re.compile(r'`(?!timescale\b|default_nettype\b)\w+|(?:/\*|//)\s*verilator\b', re.I)
+            if not (driver_lint and "in 'check -assert'" in result.stderr + result.stdout
+                    and any(_delayed_clock_toggle_sites(p.read_text(), str(p), blocking_only=False) for p in files)
+                    and not any(opaque.search(p.read_text()) for p in tracked)):
+                raise ValueError(reason)
+            timed = work / 'timed-driver-lint'
+            timed.mkdir()
+            context.update(status='NOT_MEASURED', reason=reason, alternative_report=str(timed / 'context.json'))
+            atomic_write_text(work / 'context.json', json.dumps(context, indent=2))
+            command = ['verilator', '--lint-only', '--timing', '--Wall', '-Wno-fatal',
+                       '-Werror-UNDRIVEN', '-Werror-MULTIDRIVEN', '-Werror-MULTIDRIVENPROC',
+                       '-Werror-UNOPTFLAT', '--top-module', top, '--Mdir', str(timed / 'obj_dir')]
+            command += [f'-D{x}' for x in defines] + [f'-G{x}' for x in parameters]
+            command += [f'-I{x}' for x in include_dirs] + [str(p) for p in files]
+            alternative = {'status': 'NOT_MEASURED'}
+            try:
+                checked = _native_driver_run(script, timed, include_dirs, alternative, native_command=command)
+                atomic_write_text(timed / 'native.log', checked.stdout + checked.stderr)
+                alternative.update(status='MEASURED')
+            except NativeElaborationCapabilityAbsent as exc:
+                raise ValueError(str(exc)) from exc
+            finally:
+                atomic_write_text(timed / 'context.json', json.dumps(alternative, indent=2))
+            if checked.returncode != 0:
+                raise ValueError(f'{reason}; native Verilator driver lint failed; {timed}')
+        else:
+            design = json.loads(native_json.read_text())
         if hashes() != before:
             raise ValueError('native elaboration inputs changed during this invocation')
-        design = json.loads(native_json.read_text())
-        if top not in design.get('modules', {}):
+        if result.returncode == 0 and top not in design.get('modules', {}):
             raise ValueError('native elaboration did not emit the selected top')
     except (OSError, ValueError) as exc:
         context.update(status='NOT_MEASURED', reason=str(exc))
@@ -7148,6 +7177,9 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
         if isinstance(exc, NativeElaborationCapabilityAbsent):
             raise
         raise ValueError(str(exc)) from exc
+    if result.returncode != 0:
+        print(f'native Verilator driver lint PASS; Yosys graph NOT_MEASURED; {timed / "context.json"}', file=sys.stderr)
+        return None
     context.update(status='MEASURED', native_json_sha256=hashlib.sha256(
         native_json.read_bytes()).hexdigest())
     atomic_write_text(work / 'context.json', json.dumps(context, indent=2))
@@ -8344,7 +8376,7 @@ def main():
         try:
             native_design = _native_driver_view(
                 args.files, args.top, args.define, args.parameter, args.include_dir,
-                Path(args.json).parent if args.json else Path.cwd())
+                Path(args.json).parent if args.json else Path.cwd(), driver_lint=True)
         except (OSError, ValueError) as exc:
             if isinstance(exc, NativeElaborationCapabilityAbsent):
                 native_capability_absent = str(exc)
