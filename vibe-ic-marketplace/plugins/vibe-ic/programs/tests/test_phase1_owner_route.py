@@ -42,7 +42,7 @@ def route_statements():
     return selected + [observe(physical.test, 'phase3'), observe(phase2.test, 'phase2')]
 
 
-def exercise(tmp_path, monkeypatch, *, first='D01', last='D02', retained=True, result='PASS', route='ic', legacy_retained=None):
+def exercise(tmp_path, monkeypatch, *, first='D01', last='D02', retained=True, result='PASS', route='ic', legacy_retained=None, resume_plan=None):
     manifest = json.loads(Path(os.environ['PHASE1_ROUTE_MANIFEST']).read_text())
     context = flow109.execution_context(flow109.resolve_plan(manifest['features']), first, last)
     native = context.get('native_entry_step', context.get('entry_step'))
@@ -73,7 +73,8 @@ def exercise(tmp_path, monkeypatch, *, first='D01', last='D02', retained=True, r
     def run_phase(label, program, argv, *, env):
         calls.append(('phase1', list(argv)))
         assert env is phase_env
-        assert '--complete-retained-metrics' in argv if retained else '--complete-retained-metrics' not in argv
+        reuse = retained and (resume_plan or {}).get('selection') != 'explicit_owner_window'
+        assert ('--complete-retained-metrics' in argv) is reuse
         if result != 'MISSING':
             status = result if result in ('PASS', 'FAIL', 'NOT_MEASURED') else 'PASS'
             components = []
@@ -94,7 +95,7 @@ def exercise(tmp_path, monkeypatch, *, first='D01', last='D02', retained=True, r
     env = dict(vars(runner), project=tmp_path, _entry_runner=owner,
         args=SimpleNamespace(entry_step=native, exit_step=end, ic_name='neutral',
             route=route, pdk='gf180mcuD', skip_analog=False),
-        _phase_env=phase_env, halted_at='', later_route=later_route,
+        _phase_env=phase_env, halted_at='', later_route=later_route, _resume_plan=resume_plan,
         _run_phase=run_phase, _phase_runner=lambda _: 'existing-phase1-owner.py',
         _write_runner_summary=lambda path, summary, project: published.append(summary),
         lock=SimpleNamespace(release=lambda: None))
@@ -128,6 +129,14 @@ def test_unretained_phase1_still_routes_to_original_owner(tmp_path, monkeypatch)
     calls, _, rc = exercise(tmp_path, monkeypatch, retained=False)
     assert [x[0] for x in calls] == ['phase1'] and rc == 0
     assert '--complete-retained-metrics' not in calls[0][1]
+
+
+def test_explicit_phase1_rerun_reenters_extraction_with_retained_documents(tmp_path, monkeypatch):
+    calls, published, rc = exercise(tmp_path, monkeypatch, first='D01', last='D01',
+                                  resume_plan={'selection': 'explicit_owner_window'})
+    assert [x[0] for x in calls] == ['phase1'] and rc == 0
+    assert '--complete-retained-metrics' not in calls[0][1]
+    assert published[0]['phase1_retained_metrics'] is False
 
 
 def test_existing_documents_do_not_need_legacy_phase1_approval(tmp_path, monkeypatch):

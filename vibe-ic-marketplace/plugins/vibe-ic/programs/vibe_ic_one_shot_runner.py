@@ -5230,7 +5230,8 @@ def _main(args=None) -> int:
             _p1_result_path = _p1_attempt / 'result.json'
             if _p1_result_path.exists():
                 raise flow109.Flow109Error('FLOW109_ATTEMPT_COMPLETED', str(_p1_attempt))
-            _p1_retained = any(_pl.generated_docs_dir(project).glob('L*.json'))
+            _p1_retained = (any(_pl.generated_docs_dir(project).glob('L*.json'))
+                            and (_resume_plan or {}).get('selection') != 'explicit_owner_window')
             _p1_args = [str(project), '--ic-name', args.ic_name, '--pdk', args.pdk]
             if args.route:
                 _p1_args += ['--route', args.route]
