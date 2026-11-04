@@ -1511,6 +1511,28 @@ def _arithmetic_scenario_intent(case: dict, operand_names: Tuple[str, ...]) -> d
             'random_transactions': stated(r'\brandom(?:ized)?\b|隨機|随机')}
 
 
+def _relocated_pdk_model_bindings(binding: dict, actual: dict) -> dict:
+    """Resolve a moved PDK model by its kit/library path and unchanged bytes."""
+    import hashlib
+    resolved = {}
+    for source, digest in binding.items():
+        target = source
+        parts = Path(source).parts
+        if source not in actual and 'libs.ref' in parts:
+            suffix = parts[max(0, parts.index('libs.ref') - 1):]
+            matches = [path for path, value in actual.items()
+                       if value == digest and Path(path).parts[-len(suffix):] == suffix]
+            if len(matches) == 1 and matches[0] not in binding and matches[0] not in resolved:
+                try:
+                    prior = Path(source)
+                    if not prior.exists() or hashlib.sha256(prior.read_bytes()).hexdigest() == digest:
+                        target = matches[0]
+                except OSError:
+                    pass
+        resolved[target] = digest
+    return resolved
+
+
 def arithmetic_observation(project: Path, spec: dict, *, top: Optional[str] = None,
                            sources: Optional[dict] = None) -> Tuple[Optional[dict], str]:
     """Fixed within-cycle schedule from the selected INPUT interface.
@@ -1573,6 +1595,7 @@ def arithmetic_observation(project: Path, spec: dict, *, top: Optional[str] = No
         return refuse('observation source binding contains an unsupported path')
     if len(binding) != len(choice.get('binding', {})) or len(actual) != len(sources or {}):
         return refuse('observation source binding contains duplicate source locators')
+    binding = _relocated_pdk_model_bindings(binding, actual)
     if selected != spec['top'] and actual and binding != actual:
         # A retained author map may name the same canonical wrapper in its
         # previous carrier. Resolve that sole locator in memory; never edit it.
