@@ -999,7 +999,7 @@ _CITE_KEYS = frozenset({
 
 _CITED_EXT = (".rpt", ".log", ".json", ".txt", ".def", ".spef", ".v", ".sv")
 _CITED_RE = re.compile(
-    r"(?:phase\d/stage\d|phase\d/reports|reports|steps)/[\w./*-]+"
+    r"(?<![\w./-])(?:phase\d/stage\d|phase\d/reports|reports|steps)/[\w./*-]+"
     r"(?:" + "|".join(re.escape(e) for e in _CITED_EXT) + r")")
 
 
@@ -1236,11 +1236,6 @@ def collect_citation_records(dest: Path, *,
                 # is legitimate provenance. Only a path something is expected
                 # to FOLLOW is a defect.
                 decision = "UNFOLLOWABLE_ABSOLUTE"
-                relative = _external_kit_citation(cited, dest)
-                if relative and pdk_revision:
-                    decision = _CLOSURE_EXTERNAL_PDK
-                    kit = {'kit_relative_path': relative,
-                           'pdk_revision': pdk_revision['revision']}
             else:
                 # DEFERRED, all of it. Two facts decide every remaining row and
                 # neither is on this machine's disk: does a CLONE carry this
@@ -1251,6 +1246,11 @@ def collect_citation_records(dest: Path, *,
                 decision = None
                 on_disk.update(rung for rung in _closure_rungs(rel_doc, cited)
                                if (dest / rung).is_file())
+            relative = _external_kit_citation(cited, dest)
+            if relative and pdk_revision:
+                decision = _CLOSURE_EXTERNAL_PDK
+                kit = {'kit_relative_path': relative,
+                       'pdk_revision': pdk_revision['revision']}
             pending.append({"doc": rel_doc, "cited": cited,
                             "decision": decision,
                             **kit,
@@ -1473,8 +1473,14 @@ _DOC_SUFFIXES = (".json", ".md", ".sby")
 def _external_kit_citation(cite: str, project: Path) -> Optional[str]:
     """An external kit reference, without resolving or copying its contents."""
     path = Path(cite)
-    if (not path.is_absolute() or '..' in path.parts
-            or path.resolve().is_relative_to(project.resolve())):
+    if '..' in path.parts or not path.parts:
+        return None
+    if not path.is_absolute():
+        if (path.parts[0] in ('libs.ref', 'libs.tech') and len(path.parts) > 1
+                and not (project / path.as_posix().split(':', 1)[0]).exists()):
+            return path.as_posix().split(':', 1)[0]
+        return None
+    if path.resolve().is_relative_to(project.resolve()):
         return None
     for index, part in enumerate(path.parts):
         if part in ('libs.ref', 'libs.tech') and 1 < index < len(path.parts) - 1:
@@ -1522,13 +1528,13 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
     ABSENT_IN_RUN -- unless it resolves ABOVE the cell, where the gate's
     ladder still reaches (`ic/<IC>/…`, `ic/…`) and this program does not
     stage."""
+    relative = _external_kit_citation(cite, run_dir)
+    if relative and text_state.get('pdk_revision'):
+        return _CLOSURE_EXTERNAL_PDK, relative
     if Path(cite).is_absolute():
         try:
             rungs = [Path(cite).resolve().relative_to(run_dir.resolve()).as_posix()]
         except ValueError:
-            relative = _external_kit_citation(cite, run_dir)
-            if relative and text_state.get('pdk_revision'):
-                return _CLOSURE_EXTERNAL_PDK, relative
             return "UNALLOWED_TEXT", cite
         if not rel_doc.endswith(".json") and rungs[0] not in cell_rels:
             return "UNALLOWED_TEXT", cite
@@ -1542,6 +1548,13 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
         src = run_dir / rung
         if not src.is_file():
             continue
+        if rel_doc.endswith('.json'):
+            retained = text_state.get('retained_outputs', {}).get(rung, ())
+            current_sha = _sha256(src) if retained else None
+            for target, digest in retained:
+                if (target in cell_rels and current_sha == digest
+                        and _sha256(run_dir / target) == digest):
+                    return _CLOSURE_STEP_VIEW, target
         if rung.startswith(_STEPS_DIRNAME + "/"):
             return _CLOSURE_STEP_VIEW, rung
         if is_layout_artefact(src):
@@ -1642,7 +1655,8 @@ def _absent_verdict(data: dict):
 
 def close_citations(run_dir: Path, dest: Path,
                     docs: List[Tuple[Path, str]], cell_rels: set, dry: bool,
-                    above: Optional[List[Path]] = None) -> Dict[str, object]:
+                    above: Optional[List[Path]] = None,
+                    retained_outputs=None) -> Dict[str, object]:
     """Stage every artefact a staged document cites that EXISTS in the run
     (#2007), and disclose every one that does not.
 
@@ -1672,7 +1686,8 @@ def close_citations(run_dir: Path, dest: Path,
         pdk_revision = _pdk_revision(run_dir)
     except Refuse:
         pdk_revision = None
-    text_state = {"files": {}, "bytes": 0, "pdk_revision": pdk_revision}
+    text_state = {"files": {}, "bytes": 0, "pdk_revision": pdk_revision,
+                  'retained_outputs': retained_outputs or {}}
     documents = {}
     seen: set = set()
     above = list(above or [])
@@ -1804,7 +1819,9 @@ def close_citations(run_dir: Path, dest: Path,
         # the published reference is always cell-relative. Never rebase a path
         # outside this project or silently rewrite Markdown / .sby scripts.
         rewrites = {r["cited"]: r["path"] for r in rows
-                    if r["cited"].startswith("/")
+                    if (r["cited"].startswith("/") or
+                        r['decision'] in (_CLOSURE_IN_CELL, _CLOSURE_STEP_VIEW)
+                        and r['path'].startswith('steps/') and r['cited'] != r['path'])
                     and r["decision"] in accepted - {_CLOSURE_EXTERNAL_PDK}}
         if (rewrites or rel_doc in rebound) and isinstance(data, dict) and not dry:
             def portable(value):
@@ -2051,7 +2068,7 @@ def collect_step_records(run_dir: Path, dest: Path) -> Tuple[List[dict], List[di
 
 def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
                   route='not-retained', layout_out=None,
-                  cell_rels=None) -> Dict[str, object]:
+                  cell_rels=None, retained_outputs=None) -> Dict[str, object]:
     """Stage the per-step evidence RECORD into the cell.
 
     Writes `steps/<folder>/STEP_RECORD.json` (self-contained: no host-absolute
@@ -2095,6 +2112,11 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
             continue
     canonical_folders = set()
     attempts = 0
+    plan = run_dir / 'reports/flow109/plan.json'
+    selected = None
+    if plan.is_file():
+        from step_output_collector import flow109_step_folder
+        selected = {flow109_step_folder(row) for row in json.loads(plan.read_text())['rows']}
     for folder in sorted((run_dir / _STEPS_DIRNAME).glob('[0-9][0-9][0-9]_*')):
         if not folder.is_dir() or folder.is_symlink():
             continue
@@ -2112,15 +2134,26 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
         result['n_records_copied'] += count
         if layout_out is not None:
             layout_out.extend(layouts)
+        if retained_outputs is not None:
+            # Reuse the capture's explicit source/snapshot association; never
+            # infer a target from a filename or copy the same evidence again.
+            for listing in sorted(src for src, _rel in copied_here
+                                  if src.name == 'outputs.json' and src.parent.parent == folder):
+                for item in json.loads(listing.read_text()).get('outputs', []):
+                    rel, snapshot = item.get('rel'), item.get('snapshot')
+                    if (not rel or not snapshot or Path(rel).is_absolute()
+                            or Path(snapshot).is_absolute() or '..' in Path(rel).parts
+                            or '..' in Path(snapshot).parts):
+                        continue
+                    target = (listing.parent / 'outputs' / snapshot).relative_to(run_dir).as_posix()
+                    if target in planned:
+                        retained_outputs.setdefault(rel, []).append((target, item.get('sha256')))
 
     # The run's selected rows, not the number of historical attempts or the
     # legacy symlink-view directories. Both histories still ship as before.
-    plan = run_dir / 'reports/flow109/plan.json'
     result['n_legacy_steps'] = len(steps)
     result['n_canonical_attempts'] = attempts
-    if plan.is_file():
-        from step_output_collector import flow109_step_folder
-        selected = {flow109_step_folder(row) for row in json.loads(plan.read_text())['rows']}
+    if selected is not None:
         result['n_selected_rows'] = len(selected)
         result['n_steps'] = len(selected & canonical_folders)
     else:
@@ -2854,8 +2887,10 @@ def publish(args: argparse.Namespace) -> dict:
     # output's decision is "can a reader of THIS cell find it", and that is not
     # answerable until the cell is populated. Publishes records only — no
     # symlink is created and none is copied.
+    retained_outputs = {}
     steps_result = publish_steps(run_dir, dest, dry, route=route,
-                                 layout_out=layout_records, cell_rels=cell_rels)
+                                 layout_out=layout_records, cell_rels=cell_rels,
+                                 retained_outputs=retained_outputs)
     if steps_result["n_steps"]:
         staged.append(f"steps/ ({steps_result['n_steps']} step(s)"
                       + (f" + {steps_result['n_records_copied']} record file(s)"
@@ -2871,7 +2906,8 @@ def publish(args: argparse.Namespace) -> dict:
     # cell root; this program never stages there and must not call a
     # citation absent that a reader can follow.
     closure = close_citations(run_dir, dest, copied_docs, cell_rels, dry,
-                              above=[ic_root, dest_root / "ic"])
+                              above=[ic_root, dest_root / "ic"],
+                              retained_outputs=retained_outputs)
     for r in closure["staged"]:                     # type: ignore[union-attr]
         staged.append(f"{r['path']} (citation closure: cited by {r['doc']})")
 
