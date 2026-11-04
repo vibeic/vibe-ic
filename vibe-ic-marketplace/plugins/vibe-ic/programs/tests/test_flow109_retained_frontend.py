@@ -313,6 +313,60 @@ def test_d12_uses_existing_role_aware_acceptance(tmp_path, monkeypatch, status):
     assert result.extras['metric_acceptance'] == accepted
 
 
+def _native_census_case(project, combinational):
+    import shutil
+    import subprocess
+    import _cdc_netlist as native
+    source = project / 'phase2/stage1/rtl/unit.v'
+    source.parent.mkdir(parents=True)
+    header = 'module unit(input clk,rst,d,output reg q,raw'
+    body = ('always @(posedge clk) if(rst) begin q<=0;raw<=0;end '
+            'else begin q<=d;raw<=q;end assign z=q^raw;' if combinational else
+            'always @(posedge clk) begin if(rst) q<=0;else q<=d;raw<=d;end')
+    source.write_text(header + (',output z);' if combinational else ');') + body + ' endmodule\n')
+    graph = project / native.NETLIST_REL
+    graph.parent.mkdir(parents=True)
+    run = subprocess.run([shutil.which('yosys'), '-Q', '-T', '-p',
+        f'read_verilog {source}; hierarchy -top unit; proc; flatten; write_json {graph}'],
+        capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    nl = native.load(graph)
+    roles = {row['state']: 'synchronous_reset' for row in native.reset_role_candidates(nl)}
+    reset = {}
+    assert native.judge(nl, 'reset_dependency', metadata=reset, reset_roles=roles) == []
+    domains = {n: {'role': r, 'clock': 'clk'} for n,r in
+               [('clk','clock'),('rst','synchronous_reset'),('d','synchronous_data')]}
+    items = [{'kind':'state','name':n,'clock':'clk','detail':'1'} for n in ['q','raw']]
+    items += [{'kind':'clock','name':'clk','clock':'clk','detail':'rising'},
+              {'kind':'reset','name':'rst','clock':'clk','detail':'synchronous_active_high'},
+              {'kind':'input','name':'d','clock':'clk','detail':'synchronous_data'}]
+    items += [{'kind':'output','name':n,'clock':'clk','detail':'registered'} for n in ['q','raw']]
+    if combinational: items.append({'kind':'output','name':'z','clock':'clk','detail':'combinational'})
+    expected = {'clock_reset_crossing_census': {'required_items': items}}
+    observed = {'subject': {'input': {'rtl_files': [source.relative_to(project).as_posix()]}},
+                'reset_analysis': reset, 'roles': roles, 'input_domains': domains}
+    return expected, observed
+
+
+@pytest.mark.parametrize('combinational', [False, True], ids=['partial_reset','combinational_output'])
+def test_native_census_accepts_declared_partial_reset_and_combinational_output(tmp_path, combinational):
+    import flow109_metric_acceptance as metrics
+    source, observed = _native_census_case(tmp_path, combinational)
+    assert metrics._d12_census(tmp_path, source, observed) == source['clock_reset_crossing_census']['required_items']
+
+
+@pytest.mark.parametrize('damage', ['polarity','registered_claim'])
+def test_native_census_preserves_reset_polarity_and_registered_output_refusals(tmp_path, damage):
+    import flow109_metric_acceptance as metrics
+    source, observed = _native_census_case(tmp_path, True)
+    items = source['clock_reset_crossing_census']['required_items']
+    next(x for x in items if x['kind'] == ('reset' if damage == 'polarity' else 'output')
+         and x['name'] == ('rst' if damage == 'polarity' else 'z'))['detail'] = (
+             'synchronous_active_low' if damage == 'polarity' else 'registered')
+    with pytest.raises(metrics.MetricRefusal, match='D12_CENSUS_MAPPING_UNPROVEN'):
+        metrics._d12_census(tmp_path, source, observed)
+
+
 def test_missing_formal_result_reaches_the_native_producer(tmp_path, monkeypatch):
     import design_one_shot_runner as owner
     import formal_harness_gen as generator

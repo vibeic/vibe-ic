@@ -4046,7 +4046,10 @@ def _d12_census(project: Path, source: Mapping, observed: Mapping) -> list:
             if valid:
                 clocks.add(name); ports.add(name)
         elif kind == 'reset':
-            fs = [f for f in nl.flops if nl.domain(f) == clock]
+            fs = [f for f in nl.flops if nl.domain(f) == clock
+                  and any(r is not None and nl.bit_label(nl.root(r)) == name for r in (f.arst, f.srst))
+                  and (f.arst is not None or f.srst_origin == 'native_pin'
+                       or observed['roles'].get(f.name) == 'synchronous_reset')]
             def matches(f):
                 r = f.arst if f.arst is not None else f.srst
                 if r is None or nl.bit_label(nl.root(r)) != name:
@@ -4074,6 +4077,10 @@ def _d12_census(project: Path, source: Mapping, observed: Mapping) -> list:
         elif kind == 'output' and name in nl.ports and nl.ports[name][0] == 'output':
             bits = nl.ports[name][1]
             valid = detail == 'registered' and all(b in q_of and nl.domain(q_of[b]) == clock for b in bits)
+            if detail == 'combinational' and clock in native.clock_domains(nl):
+                driven = set(nl.drivers) | {'0', '1'} | {
+                    b for direction, conn in nl.ports.values() if direction in ('input', 'inout') for b in conn}
+                valid = bool(bits) and all(b in driven for b in bits)
             if valid:
                 ports.add(name)
         if not valid:
