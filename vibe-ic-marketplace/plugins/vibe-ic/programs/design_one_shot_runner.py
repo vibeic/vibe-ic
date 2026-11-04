@@ -381,7 +381,7 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
             extras = row.get("extras") or {}
             if ((row.get('name') == 'reused_ip_consume' and row.get('status') == 'PASS' and extras.get('reused_ip') is True)
                     or (row.get('name') == 'rtl_gen' and row.get('status') in ('PASS_WITH_WAIVERS', 'WAIVED')
-                        and extras.get('fallback_skill') == 'spec-to-rtl')):
+                        and extras.get('fallback_skill') in ('spec-to-rtl', 'catalog-glue-author'))):
                 try:
                     extras['d09_owned_metrics'] = metrics._d09_source_owned_metrics(project, row, publish=True, invocation=invocation_context if invocation_context is not None else _runner_invocation_context())
                     summary['d09_owned_metrics'] = extras['d09_owned_metrics']
