@@ -48276,7 +48276,8 @@ _RE_DOC_TOP_MODULE_INTRO_PHRASE = re.compile(
 # headings without rejecting exact alphabetic identifiers such as RAM/ROM).
 # Chip-AGNOSTIC: pure documentation-convention anchors; no chip literal.
 _RE_DOC_TOP_MODULE_NAME_LABEL = re.compile(
-    r"(?im)^\s*#{0,6}\s*\**\s*(?:top[-_\s]+)?module\s+name\s*\**\s*"
+    r"(?im)^[ \t]*(?:#{1,6}[ \t]*)?(?:\*+[ \t]*)?"
+    r"(?:top[-_ \t]+)?module[ \t]+name[ \t]*(?:\*+[ \t]*)?"
     r"(?:"
     # same-line value — a colon/equals is REQUIRED (so running prose like
     # "Module Name is chosen by ..." never matches). Value optionally quoted.
