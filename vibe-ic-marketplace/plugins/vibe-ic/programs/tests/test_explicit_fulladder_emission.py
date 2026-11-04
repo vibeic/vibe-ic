@@ -1,4 +1,3 @@
-"""Neutral explicit full-adder composition through the existing public emitter."""
 import re
 
 import pytest
@@ -35,7 +34,6 @@ def bit_name(name, spans, offset):
 def assert_fulladder_composition(rtl, width, names, spans):
     a, b, result = names
     equations = assignments(rtl)
-    # A vector addition is not an explicit logical full-adder composition.
     vector_additions = sum(expression.count("+") for expression in equations.values())
     assert vector_additions == 0, equations
     first_sum = equations[bit_name(result, spans, 0)]
