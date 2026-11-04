@@ -2104,7 +2104,7 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
             source = acceptance['native_observation']['upstream']
             answer['scan_cell_list'] = source['scan_cell_list']
             answer['scan_cell_reconciliation'] = acceptance['native_observation']['scan']
-    if row["id"] == "D14" and 'native_measurements' not in answer:
+    if row["id"] == "D14":
         import flow109_metric_acceptance as metrics
         acceptance = metrics.accept_d14(project, context)
         row_status = 'FAIL' if status == 'FAIL' else acceptance['status']
