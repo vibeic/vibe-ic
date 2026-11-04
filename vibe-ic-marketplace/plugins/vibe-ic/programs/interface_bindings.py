@@ -55,7 +55,7 @@ def _path(project, rel, root=None):
     parts = Path(rel).parts
     if any(p in (".", "..") for p in parts) or Path(rel).as_posix() != rel:
         _fail(f"noncanonical path {rel!r}")
-    if root and not rel.startswith(root + "/"):
+    if root and rel != root and not rel.startswith(root + "/"):
         _fail(f"path must be within {root}: {rel!r}")
     here = Path(project)
     for part in parts:
