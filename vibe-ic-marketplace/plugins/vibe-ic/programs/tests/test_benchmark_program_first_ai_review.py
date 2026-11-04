@@ -1902,6 +1902,84 @@ def test_required_sim_failure_reenters_only_for_a_filled_reference_model(
         assert repair["challenge_result"]["status"] == "FAIL"
 
 
+@pytest.mark.parametrize("changed", ["runner", "consumer"])
+def test_source_upgrade_regates_unmeasured_required_gates(tmp_path, monkeypatch, changed):
+    run, task, runner = _dispatched_parent_task(tmp_path)
+    task["candidate_origin"] = "AI_BACKUP"
+    _solve_report(run, task)
+    _stub_dispatched_reentry(monkeypatch)
+    argv_for = bd._resume_solver_argv
+    monkeypatch.setattr(bd, "_resume_solver_argv", lambda _runner, *a, **kw:
+                        argv_for(runner, *a, **{**kw, "resolve_manifest": False}))
+    before = copy.deepcopy(task["program_verification"]["runner_invocation"]["source_before"])
+    source_file = tmp_path / (changed + ".py")
+    source_file.write_bytes(Path(before[changed]["path"]).read_bytes() + b"\n# source upgrade\n")
+    before[changed] = {"path": str(source_file),
+                       "sha256": bd.hashlib.sha256(source_file.read_bytes()).hexdigest()}
+    snapshot = bd._runner_source_snapshot
+    monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
+                        before if len(argv) == 2 else snapshot(argv, **kw))
+    old_material = bd._runner_material_snapshot(Path(task["project"]))
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+
+    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    archives = list((run / "runner_regates" / task["id"]).glob("runner-regate-*"))
+    assert len(archives) == 1, "changed Program must measure its predecessor's required gate holes"
+    assert bd._strict_json_loads((archives[0] / "prior_task.json").read_text()) == task
+    assert current["review_path"] != task["review_path"]
+    assert current["rtl_sha256"] == task["rtl_sha256"]
+    assert current["candidate_origin"] == "AI_BACKUP"
+    assert not Path(current["review_path"]).exists()
+    assert not Path(current["response_path"]).exists()
+    assert bd._runner_material_snapshot(Path(task["project"])) == old_material
+    assert runner.is_file()
+
+
+@pytest.mark.parametrize("control", [
+    "same-source", "no-required-gap", "native-fail", "invalid-evidence",
+    "accepted", "published", "changed-material", "semantic-fail", "clarification",
+])
+def test_source_upgrade_does_not_grant_unrelated_reentry(tmp_path, monkeypatch, control):
+    run, task, _ = _dispatched_parent_task(tmp_path)
+    _solve_report(run, task)
+    _stub_dispatched_reentry(monkeypatch)
+    source = copy.deepcopy(task["program_verification"]["runner_invocation"]["source_before"])
+    if control != "same-source":
+        source["consumer"]["sha256"] = "0" * 64
+    snapshot = bd._runner_source_snapshot
+    monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
+                        source if len(argv) == 2 else snapshot(argv, **kw))
+    if control in {"no-required-gap", "native-fail", "invalid-evidence"}:
+        monkeypatch.setattr(bd, "_required_gate_ledger", lambda _: {
+            "eligibility": "ELIGIBLE" if control == "no-required-gap" else (
+                "INELIGIBLE" if control == "native-fail" else "NOT_MEASURED"),
+            "failed_required": ["sim"] if control == "native-fail" else [],
+            "unmeasured_required": ["invalid required-site evidence"] if control == "invalid-evidence" else [],
+            "in_scope": {"sim": "FAIL" if control == "native-fail" else "PASS"}})
+    if control == "accepted":
+        path = run / "solve_report.json"
+        solve = json.loads(path.read_text())
+        solve["results"][0]["accepted"] = True
+        path.write_text(json.dumps(solve))
+    if control == "published":
+        Path(task["response_path"]).write_text("{}")
+    if control == "changed-material":
+        Path(task["working_rtl_paths"][0]).write_text("module changed; endmodule\n")
+    if control in {"semantic-fail", "clarification"}:
+        Path(task["review_path"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(task["review_path"]).write_text("{}")
+        monkeypatch.setattr(bd, "_validate_ai_review", lambda *a, **kw: {
+            "status": "REPAIR_REQUIRED" if control == "semantic-fail" else "SPEC_CLARIFICATION_REQUIRED",
+            "reasons": [control], "spec_clarification": {"question": control}})
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+
+    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert current["review_path"] == task["review_path"]
+    assert not list((run / "runner_regates" / task["id"]).glob("runner-regate-*"))
+
+
 def test_non_sim_gate_failure_keeps_its_repair_instruction(tmp_path, monkeypatch):
     run, task, _ = _dispatched_parent_task(tmp_path)
     _solve_report(run, task)

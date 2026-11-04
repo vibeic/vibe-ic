@@ -10259,7 +10259,19 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             task, result, allow_repaired_output=repair_state,
             repaired_output_sha256=repair_output_sha256)
         if not invocation_reason and working_hash == task.get("rtl_sha256"):
-            invocation_reason = _reference_model_reentry_reason(proj, result)
+            invocation = (task.get("program_verification") or {}).get("runner_invocation")
+            holes = gate_ledger.get("unmeasured_required") or []
+            if (gate_ledger.get("eligibility") == _NOT_MEASURED and holes
+                    and all(name in gate_ledger["in_scope"] for name in holes)
+                    and isinstance(invocation, dict)):
+                current_source = _runner_source_snapshot([sys.executable, str(runner)])
+                if any(invocation["source_before"][name]["sha256"]
+                       != current_source[name]["sha256"]
+                       for name in ("runner", "consumer")):
+                    invocation_reason = (
+                        "RUNNER_REQUIRED_GATES_NOT_MEASURED: Program source changed")
+            if not invocation_reason:
+                invocation_reason = _reference_model_reentry_reason(proj, result)
             if invocation_reason and Path(str(task.get("review_path") or "")).is_file():
                 # Filling a model cannot erase a proven RTL defect or an
                 # unresolved source question. Keep its existing review and
