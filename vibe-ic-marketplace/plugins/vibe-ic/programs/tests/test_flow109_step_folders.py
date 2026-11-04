@@ -117,6 +117,10 @@ def test_row_folders_are_published_verbatim_with_private_and_size_handling(tmp_p
         stream.truncate(publish._SIZE_CEILING + 1)
     linked = folder / 'outputs/public/linked.def'
     linked.symlink_to(small)
+    plan_path = project / 'reports/flow109/plan.json'
+    plan = json.loads(plan_path.read_text())
+    plan['rows'] = [row for row in plan['rows'] if row['id'] == 'D31']
+    plan_path.write_text(json.dumps(plan))
     layouts = []
     summary = publish.publish_steps(project, dest, False, layout_out=layouts)
     relative = folder.relative_to(project)

@@ -1424,6 +1424,8 @@ def test_dry_run_counts_selected_row_folders_and_the_real_publication_files(tmp_
             folder = run / 'steps' / flow109_step_folder(row) / stamp
             (folder / 'outputs').mkdir(parents=True)
             (folder / 'result.json').write_text('{"status":"PASS"}\n')
+            (folder / 'inputs.json').write_text('[]\n')
+            (folder / 'outputs.json').write_text('{"outputs": []}\n')
             (folder / 'outputs/tool.log').write_text('TRANSPORT FIXTURE\n')
     legacy = run / 'steps/legacy/1_transport'
     legacy.mkdir(parents=True)
@@ -1450,18 +1452,32 @@ def test_dry_run_counts_selected_row_folders_and_the_real_publication_files(tmp_
     for summary in (planned, copied):
         assert summary['step_evidence']['n_steps'] == 2
         assert summary['step_evidence']['n_selected_rows'] == 2
-        assert summary['step_evidence']['n_legacy_steps'] == 1
-        assert summary['step_evidence']['n_canonical_attempts'] == 4
-        assert summary['step_evidence']['n_records_copied'] == 9
+        assert summary['step_evidence']['n_legacy_steps'] == 0
+        assert summary['step_evidence']['n_canonical_attempts'] == 2
+        assert summary['step_evidence']['n_earlier_attempts'] == 1
+        assert summary['step_evidence']['n_records_copied'] == 8
         assert summary['file_count'] == sum(p.is_file() for p in cell.rglob('*'))
         shared = dest_root / 'ic/widgetmul/input'
         assert summary['shared_input_file_count'] == sum(p.is_file() for p in shared.rglob('*'))
         assert summary['total_file_count'] == summary['file_count'] + summary['shared_input_file_count']
+    assert not (cell / 'steps/legacy').exists()
+    assert not (cell / 'steps' / flow109_step_folder(rows[0]) / '20260101').exists()
+    assert not (cell / 'steps/003_unselected').exists()
+    history = json.loads((cell / 'steps' / flow109_step_folder(rows[0]) / 'ATTEMPTS.json').read_text())
+    assert history['attempt_count'] == 2 and history['earlier_attempt_count'] == 1
+    assert [(r['utc'], r['verdict'], r['published']) for r in history['attempts']] == [
+        ('20260101', 'PASS', False), ('20260102', 'PASS', True)]
+    assert (run / 'steps' / flow109_step_folder(rows[0]) / '20260101/result.json').is_file()
     for doc in documents:
         delivered = cell / doc.relative_to(run)
         assert delivered.read_bytes() == doc.read_bytes()
         assert limitations in delivered.read_text()
     assert planned['step_evidence'] == copied['step_evidence']
+    actual_bytes = sum(p.stat().st_size for root in (cell, shared)
+                       for p in root.rglob('*') if p.is_file())
+    assert planned['size'] == copied['size']
+    assert planned['size']['total_bytes'] == actual_bytes
+    assert planned['publication_verdict'] == copied['publication_verdict'] == 'PASS'
 
 
 def test_flow109_self_tapeout_uses_native_precheck_without_legacy_reports(tmp_path):
@@ -1506,14 +1522,15 @@ def test_external_kit_provenance_preserves_the_release_precheck_and_routing(tmp_
 
 
 @pytest.mark.parametrize('dry', [False, True])
-@pytest.mark.parametrize('case', ['same', 'source-changed', 'unselected', 'snapshot-missing', 'unrecorded'])
+@pytest.mark.parametrize('case', ['same', 'source-changed', 'source-changed-planned', 'unselected', 'snapshot-missing', 'unrecorded'])
 def test_preplanned_native_inputs_are_referenced_from_their_recorded_snapshots(tmp_path, dry, case):
     import step_output_collector as collector
     run = _flow109_release_docs(tmp_path)
     row = {'id': 'D01', 'position': 1, 'name': 'Requirements and delivery route'}
     context = {'context_sha256': hashlib.sha256(b'public transport fixture').hexdigest()}
     attempt = collector.begin_flow109_row(run, row, context)
-    paths = ['phase3/native/tool.spice', 'phase3/native/tool.nl.v']
+    paths = ['phase3/native/tool.spice',
+             'reports/native_view.v' if case == 'source-changed-planned' else 'phase3/native/tool.nl.v']
     for rel in paths:
         path = run / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1527,7 +1544,7 @@ def test_preplanned_native_inputs_are_referenced_from_their_recorded_snapshots(t
         'rows': [] if case == 'unselected' else [row]}))
     (run / 'reports/phase3/tapeout_precheck.json').write_text(json.dumps({
         'verdict': 'PASS', 'final_declaration': 'reports/phase3/transport_inputs.json'}))
-    if case == 'source-changed':
+    if case in ('source-changed', 'source-changed-planned'):
         with (run / paths[1]).open('a') as stream:
             stream.write('changed source\n')
     elif case == 'snapshot-missing':
@@ -1539,7 +1556,7 @@ def test_preplanned_native_inputs_are_referenced_from_their_recorded_snapshots(t
         (run / 'reports/phase3/transport_inputs.json').write_text(json.dumps(proof))
     dest_root = tmp_path / 'benchmark-data'
     result = _run(_base_args(run, dest_root) + (['--dry-run'] if dry else []))
-    if case not in ('same', 'unselected'):
+    if case != 'same':
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'published verdict is UNSUBSTANTIATED' in result.stderr
     else:
@@ -1548,8 +1565,12 @@ def test_preplanned_native_inputs_are_referenced_from_their_recorded_snapshots(t
             cell = dest_root / 'ic/widgetmul/v9.9.9_openpdkx'
             data = json.loads((cell / 'reports/phase3/transport_inputs.json').read_text())
             for key, original in [('spice_file', paths[0]), ('netlist_file', paths[1])]:
-                assert data[key].startswith('steps/001_')
-                assert (cell / data[key]).read_bytes() == (run / original).read_bytes()
+                import benchmark_evidence_publish as publisher
+                external = publisher._external_output_records(cell)[data[key]]
+                assert external['bytes'] == (run / original).stat().st_size
+                assert external['sha256'] == hashlib.sha256((run / original).read_bytes()).hexdigest()
+                assert external['manifest'].startswith('steps/001_')
+                assert not (cell / data[key]).exists()
                 assert not (cell / original).exists()
             assert data['verdict'] == 'PASS'
             assert data['documents_scanned'] == paths
@@ -1776,3 +1797,242 @@ def test_publication_requires_the_selected_delivery_document_arm(
         assert len(state["arms"]["ic"]["declared_outputs_enforced"]) == 9
         assert not (cell / _RDC.doc_dir("ip")).exists()
         assert all((cell / rel).is_file() for rel in own)
+
+
+@pytest.mark.parametrize('dry', [False, True])
+def test_publication_size_refuses_large_non_layout_file(tmp_path, dry):
+    # CSV is not layout: the old routing predicate let it through and rc=0
+    # claimed the result was publishable even though git's blob guard refused.
+    run = _make_run(tmp_path)
+    with (run / 'reports/native_currents.csv').open('wb') as stream:
+        stream.truncate(50_000_001)
+    output = tmp_path / 'summary.json'
+    dest = tmp_path / 'benchmark-data'
+    result = _run(_base_args(run, dest) + ['--json', str(output)]
+                  + (['--dry-run'] if dry else []))
+    assert result.returncode == 1, result.stdout + result.stderr
+    summary = json.loads(output.read_text())
+    assert summary['publication_verdict'] == 'FAIL'
+    assert summary['size']['oversized_files'][0]['path'] == 'cell/reports/native_currents.csv'
+    assert summary['size']['oversized_files'][0]['bytes'] == 50_000_001
+    if dry:
+        assert not dest.exists()
+
+
+@pytest.mark.parametrize('limit_delta,expected', [(-1, 'FAIL'), (0, 'PASS'), (1, 'PASS')])
+def test_publication_total_limit_uses_same_finished_bytes_in_both_modes(tmp_path, monkeypatch,
+                                                                      limit_delta, expected):
+    import argparse
+    import benchmark_evidence_publish as publisher
+    run = _make_run(tmp_path)
+    # Real transport inputs exercise portable rewrites and provenance pruning.
+    native = run / 'raw/native.log'
+    native.parent.mkdir(); native.write_text('native transport fixture\n')
+    report = run / 'reports/tool.json'
+    report.write_text(json.dumps({'verdict': 'PASS', 'evidence': str(native)}))
+    source_before = {p: p.read_bytes() for p in run.rglob('*') if p.is_file()}
+    args = argparse.Namespace(run_dir=str(run), ic='widgetmul', pdk='openpdkx',
+        plugin_version='9.9.9', dest_root=str(tmp_path / 'real'), result_md=None,
+        input_docs=None, gds=None, verdict_json=None, oversize_route='not-retained',
+        impl=None, force=False, dry_run=False)
+    real = publisher.publish(args)
+    cell = Path(real['dest']); shared = cell.parent / 'input'
+    actual = sum(p.stat().st_size for root in (cell, shared) for p in root.rglob('*') if p.is_file())
+    monkeypatch.setattr(publisher, '_CELL_SIZE_CEILING', actual + limit_delta, raising=False)
+    args.dest_root, args.dry_run = str(tmp_path / 'dry'), True
+    dry = publisher.publish(args)
+    # A second real run must use precisely the same boundary judgement.
+    args.dest_root, args.dry_run = str(tmp_path / 'real2'), False
+    real2 = publisher.publish(args)
+    assert dry.get('publication_verdict', 'PASS') == expected
+    assert real2.get('publication_verdict', 'PASS') == expected
+    assert dry['size'] == real2['size']
+    assert dry['size']['total_bytes'] == actual
+    assert dry['size']['total_bytes'] == dry['size']['cell_bytes'] + dry['size']['shared_input_bytes']
+    assert {p: p.read_bytes() for p in source_before} == source_before
+    assert not (tmp_path / 'dry').exists()
+
+
+def test_dry_run_preserves_existing_clone_context_for_citations(tmp_path):
+    run = _make_run(tmp_path)
+    (run / 'reports/phase3/sta.json').write_text(json.dumps({
+        'verdict': 'PASS', 'evidence': 'reports/shared_external.json'}))
+    dest = tmp_path / 'benchmark-data'
+    external = dest / 'ic/widgetmul/reports/shared_external.json'
+    external.parent.mkdir(parents=True)
+    external.write_text('{"note":"already carried above this cell"}\n')
+    subprocess.run(['git', 'init', '-q', str(dest)], check=True)
+    (dest / '.gitignore').write_text('*.unused\n')
+    dry_json, real_json = tmp_path / 'dry.json', tmp_path / 'real.json'
+    args = _base_args(run, dest)
+    dry = _run(args + ['--dry-run', '--json', str(dry_json)])
+    assert dry.returncode == 0, dry.stdout + dry.stderr
+    assert not (dest / 'ic/widgetmul/v9.9.9_openpdkx').exists()
+    real = _run(args + ['--json', str(real_json)])
+    assert real.returncode == 0, real.stdout + real.stderr
+    planned, staged = [json.loads(p.read_text()) for p in (dry_json, real_json)]
+    assert planned['citation_closure']['above_cell'] == staged['citation_closure']['above_cell']
+    assert any(r['path'] == 'reports/shared_external.json'
+               for r in planned['citation_closure']['above_cell'])
+    assert planned['size'] == staged['size']
+    assert external.read_text() == '{"note":"already carried above this cell"}\n'
+
+
+def _flow109_payload(run, payloads):
+    from step_output_collector import flow109_step_folder
+    row = {'id': 'D01', 'position': 1, 'name': 'Native transport'}
+    (run / 'reports/flow109/plan.json').write_text(json.dumps({'rows': [row]}))
+    folder = run / 'steps' / flow109_step_folder(row) / '20260101T000000Z'
+    (folder / 'outputs').mkdir(parents=True)
+    (folder / 'result.json').write_text('{"default_row_status":"PASS"}\n')
+    (folder / 'inputs.json').write_text('[]\n')
+    listing = []
+    for rel, body in payloads.items():
+        source = run / rel
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(body)
+        snapshot = folder / 'outputs' / rel
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_bytes(body)
+        listing.append({'rel': rel, 'snapshot': rel, 'bytes': len(body),
+                        'sha256': hashlib.sha256(body).hexdigest()})
+    (folder / 'outputs.json').write_text(json.dumps({'outputs': listing}))
+    return folder
+
+
+@pytest.mark.parametrize('dry', [False, True])
+def test_flow109_keeps_native_reports_and_lists_raw_views_over_one_mb(tmp_path, dry):
+    run = _flow109_release_docs(tmp_path)
+    payloads = {'reports/tool.rpt': b'native timing numbers\n' * 60000,
+                'reports/obj_dir/native.log': b'native build log\n',
+                'reports/embedded.json': json.dumps({'verdict': 'PASS', 'native': {'creator': 'Yosys', 'modules': {'neutral': {'text': 'x' * 1_000_001}}}}).encode(),
+                'raw/view.spef': b'x' * 1_000_001,
+                'raw/current.csv': b'x' * 1_000_001,
+                'raw/compiled.vvp': b'x' * 1_000_001,
+                'raw/source.v': b'x' * 1_000_001,
+                'raw/source_netlist.json': json.dumps({'creator': 'Yosys transport fixture', 'modules': {'neutral': {'text': 'x' * 1_000_001}}}).encode(),
+                'raw/config.json': b'x' * 1_000_001,
+                'raw/at_limit.def': b'x' * 1_000_000,
+                'raw/.hidden/context.txt': b'hidden public transport fixture\n'}
+    folder = _flow109_payload(run, payloads)
+    before = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.rglob('*') if p.is_file()}
+    destination = tmp_path / 'benchmark-data'; summary_path = tmp_path / 'summary.json'
+    result = _run(_base_args(run, destination) + ['--json', str(summary_path)]
+                  + (['--dry-run'] if dry else []))
+    assert result.returncode == 0, result.stdout + result.stderr
+    summary = json.loads(summary_path.read_text())
+    assert summary['step_evidence']['n_steps'] == 1
+    assert summary['step_evidence']['n_legacy_steps'] == 0
+    assert summary['output_policy']['raw_limit_bytes'] == 1_000_000
+    assert summary['size']['total_limit_bytes'] == 500_000_000
+    assert summary['publication_verdict'] == 'PASS'
+    assert {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in before} == before
+    if dry:
+        assert not destination.exists()
+        return
+    cell = Path(summary['dest']); copied = cell / folder.relative_to(run)
+    assert (copied / 'outputs/reports/tool.rpt').read_bytes() == payloads['reports/tool.rpt']
+    assert (copied / 'outputs/reports/embedded.json').read_bytes() == payloads['reports/embedded.json']
+    assert (copied / 'outputs/reports/obj_dir/native.log').read_bytes() == payloads['reports/obj_dir/native.log']
+    assert (copied / 'outputs/raw/at_limit.def').stat().st_size == 1_000_000
+    manifest = [json.loads(line) for line in (copied / 'OUTPUTS_MANIFEST.txt').read_text().splitlines()
+                if line and not line.startswith('#')]
+    for rel in ('raw/view.spef', 'raw/current.csv', 'raw/compiled.vvp', 'raw/source.v', 'raw/source_netlist.json', 'raw/config.json'):
+        assert not (copied / 'outputs' / rel).exists()
+        record = next(row for row in manifest if row['path'] == str(folder.relative_to(run) / 'outputs' / rel))
+        assert record['bytes'] == len(payloads[rel])
+        assert record['sha256'] == hashlib.sha256(payloads[rel]).hexdigest()
+        assert record['decision'] == 'RAW_CAP'
+    assert not (copied / 'outputs/raw/.hidden').exists()
+    assert any(row['decision'] == 'PRIVATE_EVIDENCE' for row in manifest)
+
+
+def test_flow109_native_report_over_universal_ceiling_has_marked_head_tail(tmp_path):
+    run = _flow109_release_docs(tmp_path)
+    folder = _flow109_payload(run, {})
+    source = folder / 'outputs/native.log'
+    with source.open('wb') as stream:
+        stream.write(b'FIRST NATIVE LINE\n')
+        stream.seek(50_000_001)
+        stream.write(b'LAST NATIVE LINE\n')
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    listing = {'outputs': [{'rel': 'native.log', 'snapshot': 'native.log',
+        'bytes': source.stat().st_size, 'sha256': digest}]}
+    (folder / 'outputs.json').write_text(json.dumps(listing))
+    result_path = tmp_path / 'summary.json'
+    result = _run(_base_args(run, tmp_path / 'dest') + ['--json', str(result_path)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    summary = json.loads(result_path.read_text()); cell = Path(summary['dest'])
+    copied = cell / folder.relative_to(run)
+    assert not (copied / 'outputs/native.log').exists()
+    excerpt = (copied / 'outputs/native.log.TRUNCATED.txt').read_bytes()
+    assert len(excerpt) <= 1_000_000
+    assert b'TRUNCATED native report' in excerpt and b'FIRST NATIVE LINE' in excerpt
+    assert excerpt.endswith(b'LAST NATIVE LINE\n')
+    assert digest.encode() in excerpt
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+    assert len(summary['output_policy']['truncated_reports']) == 1
+    assert (copied / 'result.json').read_bytes() == (folder / 'result.json').read_bytes()
+
+
+def test_flow109_raw_citation_stays_external_instead_of_copying_back(tmp_path):
+    import benchmark_evidence_publish as publisher
+    run = _flow109_release_docs(tmp_path)
+    payload = b'module neutral; endmodule\n' * 60000
+    folder = _flow109_payload(run, {'raw/native_netlist.v': payload})
+    report = run / 'reports/tool_evidence.json'
+    report.write_text(json.dumps({'verdict': 'PASS', 'evidence': 'raw/native_netlist.v'}))
+    dest = tmp_path / 'benchmark-data'; output = tmp_path / 'summary.json'
+    result = _run(_base_args(run, dest) + ['--json', str(output)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    summary = json.loads(output.read_text()); cell = Path(summary['dest'])
+    assert not (cell / 'raw/native_netlist.v').exists()
+    assert not (cell / folder.relative_to(run) / 'outputs/raw/native_netlist.v').exists()
+    rows = publisher.collect_citation_records(cell, freshly_staged=True)
+    assert any(row['doc'] == 'reports/tool_evidence.json'
+               and row['decision'] == 'OUT_OF_PUBLISHED_SCOPE' for row in rows)
+    assert json.loads((cell / 'reports/tool_evidence.json').read_text())['verdict'] == 'PASS'
+    assert (cell / folder.relative_to(run) / 'OUTPUTS_MANIFEST.txt').is_file()
+
+
+def test_flow109_metadata_only_view_is_listed_in_each_owning_row(tmp_path):
+    from step_output_collector import flow109_step_folder
+    run = _flow109_release_docs(tmp_path)
+    native = run / 'native/large.def'
+    native.parent.mkdir()
+    with native.open('wb') as stream:
+        stream.truncate(50_000_001)
+    digest = hashlib.sha256(native.read_bytes()).hexdigest()
+    rows = [{'id': f'D{i:02}', 'position': i, 'name': f'Native transport {i}'} for i in (1, 2)]
+    (run / 'reports/flow109/plan.json').write_text(json.dumps({'rows': rows}))
+    for row in rows:
+        folder = run / 'steps' / flow109_step_folder(row) / '20260101T000000Z'
+        folder.mkdir(parents=True)
+        (folder / 'result.json').write_text('{"default_row_status":"PASS"}\n')
+        (folder / 'inputs.json').write_text('[]\n')
+        (folder / 'outputs.json').write_text(json.dumps({'outputs': [{
+            'rel': 'native/large.def', 'bytes': 50_000_001, 'sha256': digest}]}))
+    output = tmp_path / 'summary.json'
+    result = _run(_base_args(run, tmp_path / 'dest') + ['--json', str(output)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    cell = Path(json.loads(output.read_text())['dest'])
+    for row in rows:
+        manifest = cell / 'steps' / flow109_step_folder(row) / '20260101T000000Z/OUTPUTS_MANIFEST.txt'
+        records = [json.loads(line) for line in manifest.read_text().splitlines() if not line.startswith('#')]
+        assert len(records) == 1
+        assert records[0]['path'] == 'native/large.def'
+        assert records[0]['bytes'] == 50_000_001 and records[0]['sha256'] == digest
+    assert native.is_file() and native.stat().st_size == 50_000_001
+
+
+def test_flow109_unselected_step_view_cannot_stand_in_for_current_evidence(tmp_path):
+    run = _flow109_release_docs(tmp_path)
+    old = 'steps/001_old-transport/20250101/outputs/old.log'
+    source = run / old
+    source.parent.mkdir(parents=True)
+    source.write_text('old native transport\n')
+    (run / 'reports/phase3/tapeout_precheck.json').write_text(json.dumps({
+        'verdict': 'PASS', 'evidence': old}))
+    result = _run(_base_args(run, tmp_path / 'dest') + ['--dry-run'])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'published verdict is UNSUBSTANTIATED' in result.stderr

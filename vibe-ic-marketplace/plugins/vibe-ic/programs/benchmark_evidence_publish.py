@@ -312,6 +312,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 
 import _audit_scope
 import _publication_identity as _pub_id
@@ -346,6 +347,10 @@ _LAYOUT_EXTS = (".gds", ".def", ".spef", ".oas")
 # actually blocks the commit. `_size_policy_drift_check` below fails if these
 # two, `.gitignore`, and this module's docstring ever stop agreeing.
 _SIZE_CEILING = 50 * 1000 * 1000
+_CELL_SIZE_CEILING = 1_000_000_000
+_FLOW109_SIZE_TARGET = 500_000_000
+_RAW_VIEW_CEILING = 1_000_000
+_OUTPUT_MANIFEST = "OUTPUTS_MANIFEST.txt"
 # Citation closure is for small public logs and project proof inputs (#3315),
 # not an alternate bulk-data publication path. Count each cell path once.
 _CITED_TEXT_FILE_LIMIT = 1_000_000
@@ -586,28 +591,9 @@ def _audit_verdict(run_dir: Path, verdict_json: Optional[Path]) -> Tuple[str, Pa
 
 
 def _result_md_verdict(result_md: Path) -> Optional[str]:
-    """Best-effort verdict token from a RESULT.md's VERDICT section."""
-    try:
-        upper = result_md.read_text(encoding="utf-8", errors="replace").upper()
-    except Exception:
-        return None
-    m = re.search(r"^#{1,6}\s*VERDICT\b", upper, re.MULTILINE)
-    region = upper
-    if m:
-        start = m.end()
-        nxt = re.search(r"^#{1,6}\s", upper[start:], re.MULTILINE)
-        region = upper[start:start + nxt.start()] if nxt else upper[start:]
-    for tok in ("PASS_WITH_WAIVERS", "PASS", "FAIL"):
-        for tm in re.finditer(r"\b" + re.escape(tok) + r"\b", region):
-            if tok == "PASS" and region[tm.start():tm.start() + 17] == "PASS_WITH_WAIVERS":
-                continue
-            return tok
-    return None
+    from benchmark_evidence_structure_check import _extract_verdict
+    return _extract_verdict(result_md)
 
-
-# --------------------------------------------------------------------------
-# Copy helpers.
-# --------------------------------------------------------------------------
 
 def is_layout_artefact(p: Path) -> bool:
     """True for the four extensions whose routing this program decides."""
@@ -750,12 +736,138 @@ def _record(p: Path, rel_base: Path, decision: str,
     }
 
 
+def _native_report(path: Path) -> bool:
+    """Reports/logs are retained; tool models, numeric CSVs and sources are views."""
+    if path.name in ('config.json', 'config.yaml', 'config.yml', 'state_in.json') or path.name.endswith(('.model.json', '.netlist.json', '.nl.json')):
+        return False
+    if path.suffix.lower() == '.json' and path.stat().st_size > _RAW_VIEW_CEILING:
+        # Yosys writes its creator and modules keys at the start of the
+        # native JSON view. Read that header, not an unbounded netlist.
+        with path.open('rb') as stream:
+            header = stream.read(65536)
+        if re.match(rb'\s*\{\s*"creator"\s*:\s*"Yosys', header) and re.search(rb'"modules"\s*:', header):
+            return False
+    return (path.suffix.lower() in {
+        '.rpt', '.log', '.stderr', '.stdout', '.out', '.err', '.txt', '.json',
+        '.jsonl', '.yaml', '.yml', '.xml', '.drc', '.lvs', '.lyrdb', '.rdb',
+        '.html', '.md', '.pdf', '.power', '.metrics', '.feedback'})
+
+
+class _Flow109Copy:
+    """The owner's Flow109 file policy, applied by the existing staging walk."""
+    def __init__(self, project, dest, copier, preview):
+        self.project, self.dest, self.copier, self.preview = project, dest, copier, preview
+        self.records = {}
+        self.aliases = {}
+        self.truncated = []
+
+    def omit(self, source, target, reason, digest=None):
+        source, target = Path(source), Path(target)
+        rel = target.relative_to(self.dest).as_posix()
+        parts = Path(rel).parts
+        folder = (Path(*parts[:3]) if len(parts) >= 4 and parts[0] == 'steps'
+                  and re.match(r'^\d{3}_', parts[1]) else Path())
+        record = {'path': source.relative_to(self.project).as_posix(),
+                  'bytes': source.stat().st_size,
+                  'sha256': digest if digest else (None if reason == 'PRIVATE_EVIDENCE' else _sha256(source)),
+                  'decision': reason, 'cell_path': rel,
+                  'manifest': (folder / _OUTPUT_MANIFEST).as_posix()}
+        self.records[rel] = record
+        return record
+
+    def keeps_report(self, source, target):
+        parts = Path(target).relative_to(self.dest).parts
+        return (len(parts) >= 4 and parts[0] == 'steps'
+                and re.match(r'^\d{3}_', parts[1]) and _native_report(Path(source)))
+
+    def __call__(self, source, target):
+        source, target = Path(source), Path(target)
+        rel = target.relative_to(self.dest)
+        parts = rel.parts
+        row = len(parts) >= 4 and parts[0] == 'steps' and re.match(r'^\d{3}_', parts[1])
+        metadata = (rel.as_posix() in ('RESULT.md', 'provenance.jsonl',
+                    'reports/pdk_revision.json', 'reports/write_ledger.json', 'reports/flow109/plan.json') or
+                    rel.is_relative_to('reports/audit') or
+                    row and len(parts) == 4 and source.name in ('result.json', 'inputs.json', 'outputs.json') or
+                    rel.is_relative_to(Path(_release_docs_contract.DOC_ROOT)))
+        size = source.stat().st_size
+        report = _native_report(source)
+        if size > _SIZE_CEILING and report and not metadata:
+            record = self.omit(source, target, 'TRUNCATED_REPORT')
+            excerpt = target.with_name(target.name + '.TRUNCATED.txt')
+            header = (f"TRUNCATED native report; full file stays on the carrier.\n"
+                      f"path: {record['path']}\nbytes: {size}\nsha256: {record['sha256']}\n"
+                      "The following is only the head and tail, not the full report.\n").encode()
+            divider = b'\n\n[TRUNCATED: middle omitted]\n\n'
+            budget = _RAW_VIEW_CEILING - len(header) - len(divider)
+            with source.open('rb') as stream:
+                head = stream.read(budget // 2)
+                stream.seek(-(budget - len(head)), 2)
+                tail = stream.read(budget - len(head))
+            excerpt.parent.mkdir(parents=True, exist_ok=True)
+            excerpt.write_bytes(header + head + divider + tail)
+            record['excerpt'] = excerpt.relative_to(self.dest).as_posix()
+            self.truncated.append(record)
+            return False
+        if size > _SIZE_CEILING:
+            if metadata:
+                raise Refuse(f'required publication metadata exceeds 50 MB: {rel}')
+            self.omit(source, target, 'RAW_CAP')
+            return False
+        # Only the canonical row's reports/logs override the raw cap. Larger
+        # optional copies elsewhere are listed, while the owned report stays
+        # intact in the row folder. Required publication documents always stay.
+        if size > _RAW_VIEW_CEILING and not (metadata or row and report):
+            self.omit(source, target, 'RAW_CAP' if not report else 'OUTSIDE_LATEST_ROW')
+            return False
+        result = self.copier(source, target)
+        if not self.preview:
+            # Source modes are untouched. Public copies must remain readable
+            # when their native container writer owns a 0600 source receipt.
+            target.chmod(target.stat().st_mode | 0o444)
+        return result
+
+    def write_manifests(self, cell_rels):
+        groups = {}
+        for record in self.records.values():
+            groups.setdefault(record['manifest'], []).append(record)
+            if record.get('excerpt'):
+                cell_rels.add(record['excerpt'])
+        for rel, records in groups.items():
+            target = self.dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            body = '# Carrier paths are relative to the source run; bytes stay on that carrier.\n'
+            body += '# Full-file sha256; excerpts are explicitly truncated and never full reports.\n'
+            body += ''.join(json.dumps(row, sort_keys=True) + '\n'
+                            for row in sorted(records, key=lambda row: row['path']))
+            target.write_text(body, encoding='utf-8')
+            cell_rels.add(rel)
+
+
+def _external_output_records(dest):
+    """Read the publisher's omission manifests; no tool-result reader is added."""
+    records = {}
+    for path in dest.rglob(_OUTPUT_MANIFEST):
+        for line in path.read_text().splitlines():
+            if not line or line.startswith('#'):
+                continue
+            row = json.loads(line)
+            if row['decision'] not in ('RAW_CAP', 'OUTSIDE_LATEST_ROW', 'TRUNCATED_REPORT'):
+                continue
+            records[row['path']] = row
+            records[row['cell_path']] = row
+            for alias in row.get('aliases', []):
+                records[alias] = row
+    return records
+
+
 def _copy_tree(src: Path, dst: Path, dry: bool,
                rel_base: Optional[Path] = None,
                route: str = "not-retained",
                residue_out: Optional[List[dict]] = None,
                copied_out: Optional[List[Tuple[Path, str]]] = None,
-               public_only: bool = False
+               public_only: bool = False,
+               copier=shutil.copy2
                ) -> Tuple[int, List[dict]]:
     """Copy every non-excluded regular file under src into dst (preserving
     relative layout).
@@ -787,26 +899,36 @@ def _copy_tree(src: Path, dst: Path, dry: bool,
         if public_only and (f.is_symlink() or any(
                 part.startswith('.') or part.lower() in _PRIVATE_EVIDENCE_PARTS
                 for part in rel.parts)):
+            if isinstance(copier, _Flow109Copy):
+                copier.omit(f, dst / rel, 'PRIVATE_EVIDENCE')
             continue
-        if public_only and f.suffix.lower() == '.odb' and over_ceiling(f):
+        if public_only and f.suffix.lower() == '.odb' and over_ceiling(f) and not isinstance(copier, _Flow109Copy):
             if rel_base is not None:
                 records.append(_record(f, rel_base, 'ROUTED_AWAY', route))
             continue
-        if is_build_residue(f):
+        if is_build_residue(f) and not (isinstance(copier, _Flow109Copy)
+                                        and copier.keeps_report(f, dst / rel)):
+            if isinstance(copier, _Flow109Copy):
+                copier.omit(f, dst / rel, 'BUILD_RESIDUE')
             if residue_out is not None:
                 residue_out.append(_residue_record(
                     f, rel_base if rel_base is not None else src))
             continue
         if _excluded(f):
+            if isinstance(copier, _Flow109Copy):
+                copier.omit(f, dst / rel, 'RAW_CAP')
             if rel_base is not None:
                 records.append(_record(f, rel_base, "ROUTED_AWAY", route))
             continue
-        if is_layout_artefact(f) and rel_base is not None:
-            records.append(_record(f, rel_base, "STAGED", route))
         target = dst / rel
         if not dry:
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(f, target)
+            if copier(f, target) is False:
+                if is_layout_artefact(f) and rel_base is not None:
+                    records.append(_record(f, rel_base, "NOT_PUBLISHED", route))
+                continue
+        if is_layout_artefact(f) and rel_base is not None:
+            records.append(_record(f, rel_base, "STAGED", route))
         if copied_out is not None and rel_base is not None:
             copied_out.append((f, f.relative_to(rel_base).as_posix()))
         copied += 1
@@ -1200,6 +1322,7 @@ def collect_citation_records(dest: Path, *,
         pdk_revision = _pdk_revision(dest)
     except Refuse:
         pdk_revision = None
+    external_outputs = _external_output_records(dest)
     seen = set()
     pending: List[Dict[str, object]] = []
     on_disk: set = set()
@@ -1256,6 +1379,9 @@ def collect_citation_records(dest: Path, *,
                 decision = None
                 on_disk.update(rung for rung in _closure_rungs(rel_doc, cited)
                                if (dest / rung).is_file())
+            if decision != 'UNFOLLOWABLE_ABSOLUTE' and any(
+                    rung in external_outputs for rung in _closure_rungs(rel_doc, cited)):
+                decision = 'OUT_OF_PUBLISHED_SCOPE'
             relative = _external_kit_citation(cited, dest)
             if relative and pdk_revision:
                 decision = _CLOSURE_EXTERNAL_PDK
@@ -1475,6 +1601,7 @@ _CLOSURE_LAYOUT = "LAYOUT_POLICY"
 _CLOSURE_STEP_VIEW = "STEP_VIEW"
 _CLOSURE_ABOVE_CELL = "RESOLVES_ABOVE_CELL"
 _CLOSURE_EXTERNAL_PDK = "EXTERNAL_PDK"
+_CLOSURE_OUTPUT_POLICY = "OUTPUT_POLICY"
 #: The verdict an amended gate report carries. The gate's own word for a
 #: report whose evidence is disclosed absent (vibe-ic#381).
 _UNSUBSTANTIATED = "UNSUBSTANTIATED"
@@ -1552,6 +1679,7 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
     else:
         rungs = _closure_rungs(rel_doc, cite)
     for rung in rungs:
+        policy = text_state.get('output_policy')
         if rung in cell_rels:
             if rung.startswith(_STEPS_DIRNAME + "/"):
                 return _CLOSURE_STEP_VIEW, rung
@@ -1566,8 +1694,20 @@ def _close_one(run_dir: Path, dest: Path, dry: bool, rel_doc: str, cite: str,
                 if (target in cell_rels and current_sha == digest
                         and _sha256(run_dir / target) == digest):
                     return _CLOSURE_STEP_VIEW, target
+                if (policy is not None and target in policy.records and current_sha == digest
+                        and policy.records[target]['decision'] in ('RAW_CAP', 'OUTSIDE_LATEST_ROW', 'TRUNCATED_REPORT')
+                        and policy.records[target]['sha256'] == digest):
+                    policy.records[target].setdefault('aliases', []).append(rung)
+                    return _CLOSURE_OUTPUT_POLICY, target
+        if policy is not None and rung in policy.records:
+            if policy.records[rung]['decision'] in ('RAW_CAP', 'OUTSIDE_LATEST_ROW', 'TRUNCATED_REPORT'):
+                if (rel_doc.endswith('.json') and retained
+                        and current_sha not in {digest for _target, digest in retained}):
+                    return 'DEPENDENCY_UNAVAILABLE', rung
+                return _CLOSURE_OUTPUT_POLICY, rung
+            return 'UNALLOWED_TEXT', rung
         if rung.startswith(_STEPS_DIRNAME + "/"):
-            return _CLOSURE_STEP_VIEW, rung
+            return ('UNALLOWED_TEXT' if policy is not None else _CLOSURE_STEP_VIEW), rung
         if is_layout_artefact(src):
             return _CLOSURE_LAYOUT, rung
         if over_ceiling(src):
@@ -1649,7 +1789,7 @@ def _disclose_absent_evidence(doc: Path, absent: Dict[str, str],
         f"The run's other fields are retained as its assertion, not "
         f"claimed here; no replacement artefact was fabricated.")
     try:
-        doc.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        _write_published_text(doc, json.dumps(data, indent=2, ensure_ascii=False) + "\n",
                        encoding="utf-8")
     except OSError as exc:
         return f"could not amend {doc.name}: {exc}"
@@ -1667,7 +1807,7 @@ def _absent_verdict(data: dict):
 def close_citations(run_dir: Path, dest: Path,
                     docs: List[Tuple[Path, str]], cell_rels: set, dry: bool,
                     above: Optional[List[Path]] = None,
-                    retained_outputs=None) -> Dict[str, object]:
+                    retained_outputs=None, output_policy=None) -> Dict[str, object]:
     """Stage every artefact a staged document cites that EXISTS in the run
     (#2007), and disclose every one that does not.
 
@@ -1698,7 +1838,7 @@ def close_citations(run_dir: Path, dest: Path,
     except Refuse:
         pdk_revision = None
     text_state = {"files": {}, "bytes": 0, "pdk_revision": pdk_revision,
-                  'retained_outputs': retained_outputs or {}}
+                  'retained_outputs': retained_outputs or {}, 'output_policy': output_policy}
     documents = {}
     seen: set = set()
     above = list(above or [])
@@ -1748,6 +1888,9 @@ def close_citations(run_dir: Path, dest: Path,
                     record['sha256'] = _sha256(candidate)
             if path in text_state["files"]:
                 record.update(text_state["files"][path])
+            if decision == _CLOSURE_OUTPUT_POLICY:
+                record.update(text_state['output_policy'].records[path])
+                record.update(doc=rel_doc, cited=cite, decision=decision, destination='source-run-only')
             result["records"].append(record)
             if decision == _CLOSURE_IN_CELL:
                 result["already_in_cell"] = int(result["already_in_cell"]) + 1
@@ -1772,7 +1915,7 @@ def close_citations(run_dir: Path, dest: Path,
                 worklist.append((run_dir / path, path))
 
     accepted = {_CLOSURE_STAGED, _CLOSURE_IN_CELL, _CLOSURE_ABOVE_CELL,
-                _CLOSURE_LAYOUT, _CLOSURE_STEP_VIEW, _CLOSURE_EXTERNAL_PDK,
+                _CLOSURE_LAYOUT, _CLOSURE_STEP_VIEW, _CLOSURE_EXTERNAL_PDK, _CLOSURE_OUTPUT_POLICY,
                 "DESCRIPTION_REBOUND"}
     rebound = {}
     for rel_doc, (src_doc, text) in documents.items():
@@ -1846,7 +1989,7 @@ def close_citations(run_dir: Path, dest: Path,
             if rel_doc in rebound:
                 portable_data["evidence_as_run"] = {"description": data["evidence"]}
                 portable_data["evidence"] = rebound[rel_doc]
-            (dest / rel_doc).write_text(json.dumps(portable_data, indent=2) + "\n")
+            _write_published_text(dest / rel_doc, json.dumps(portable_data, indent=2) + "\n")
         if absent_fields:
             prior = data.get("verdict_as_run", data.get("verdict"))
             entry = {"doc": rel_doc, "fields": absent_fields,
@@ -2080,7 +2223,7 @@ def collect_step_records(run_dir: Path, dest: Path) -> Tuple[List[dict], List[di
 
 def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
                   route='not-retained', layout_out=None,
-                  cell_rels=None, retained_outputs=None) -> Dict[str, object]:
+                  cell_rels=None, retained_outputs=None, copier=shutil.copy2) -> Dict[str, object]:
     """Stage the per-step evidence RECORD into the cell.
 
     Writes `steps/<folder>/STEP_RECORD.json` (self-contained: no host-absolute
@@ -2088,7 +2231,8 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
     can find it), `steps/STEP_INDEX.json`, and the flat `STEP_ROUTING.txt` at
     the cell root. Copies verbatim any OTHER record file a step folder holds.
 
-    NEVER creates a symlink and never copies one — see the module docstring.
+    Delivered cells never gain symlinks; dry-run uses private preview links
+    outside the requested destination to read unchanged bytes.
 
     BEST-EFFORT, and legibly so. A malformed steps tree must not cost the cell
     its phase evidence; but a failure that leaves no trace is the shape this
@@ -2103,6 +2247,96 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
         "n_dangling": 0, "n_absent": 0, "n_records_copied": 0,
         "error": None,
     }
+    plan = run_dir / 'reports/flow109/plan.json'
+    if plan.is_file():
+        from step_output_collector import flow109_step_folder
+        planned = cell_rels if cell_rels is not None else set()
+        index = []
+        result.update(n_selected_rows=0, n_legacy_steps=0, n_canonical_attempts=0,
+                      n_earlier_attempts=0)
+        rows = json.loads(plan.read_text())['rows']
+        result['n_selected_rows'] = len(rows)
+        for row in rows:
+            folder = run_dir / 'steps' / flow109_step_folder(row)
+            records = sorted(folder.glob('*/result.json'))
+            if not records:
+                raise Refuse(f"Flow109 row {row['position']} has no retained result")
+            newest = records[-1].parent
+            for name in ('result.json', 'inputs.json', 'outputs.json'):
+                if not (newest / name).is_file():
+                    raise Refuse(f"Flow109 row {row['position']} lacks {name}")
+            history = []
+            for record in records:
+                data = json.loads(record.read_text())
+                history.append({'utc': record.parent.name,
+                                'verdict': data.get('default_row_status', data.get('status', data.get('verdict'))),
+                                'published': record.parent == newest})
+            relative = newest.relative_to(run_dir)
+            copied = []
+            count, layouts = _copy_tree(newest, dest / relative, dry,
+                rel_base=run_dir, route=route, public_only=True, copied_out=copied, copier=copier)
+            planned.update(rel for _src, rel in copied)
+            if layout_out is not None:
+                layout_out.extend(layouts)
+            result['n_records_copied'] += count
+            result['n_steps'] += 1
+            result['n_canonical_attempts'] += 1
+            result['n_earlier_attempts'] += len(history) - 1
+            entry = {key: row.get(key) for key in ('id', 'position', 'name', 'phase', 'stage')}
+            entry.update(folder=relative.as_posix().removeprefix('steps/'),
+                         status=history[-1]['verdict'], n_earlier_attempts=len(history) - 1)
+            index.append(entry)
+            history_rel = Path('steps') / folder.name / 'ATTEMPTS.json'
+            planned.add(history_rel.as_posix())
+            if not dry:
+                target = dest / history_rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps({'attempt_count': len(history),
+                    'earlier_attempt_count': len(history) - 1, 'attempts': history}, indent=2) + '\n')
+            listing = json.loads((newest / 'outputs.json').read_text())
+            for item in listing.get('outputs', []):
+                result['n_declared'] += 1
+                origin, snapshot = item.get('rel'), item.get('snapshot')
+                captured = ((relative / 'outputs' / snapshot).as_posix()
+                            if snapshot else None)
+                if item.get('bytes') == 0:
+                    result['n_zero_byte'] += 1
+                elif captured in planned:
+                    result['n_in_cell'] += 1
+                else:
+                    result['n_out_of_scope'] += 1
+                if not origin or Path(origin).is_absolute() or '..' in Path(origin).parts:
+                    continue
+                if not snapshot:
+                    # The collector may already have retained a large view by
+                    # metadata only; disclose its full source bytes as well.
+                    source = run_dir / origin
+                    if isinstance(copier, _Flow109Copy) and source.is_file():
+                        copier.omit(source, dest / relative / 'outputs' / origin,
+                                    'RAW_CAP', item.get('sha256'))
+                    continue
+                if Path(snapshot).is_absolute() or '..' in Path(snapshot).parts:
+                    continue
+                target = (relative / 'outputs' / snapshot).as_posix()
+                if retained_outputs is not None:
+                    retained_outputs.setdefault(origin, []).append((target, item.get('sha256')))
+                if isinstance(copier, _Flow109Copy) and target in copier.records:
+                    record = copier.records[target]
+                    if record['sha256'] is None:
+                        record['sha256'] = item.get('sha256')
+                    if origin in copier.records and copier.records[origin]['sha256'] == record['sha256']:
+                        record.setdefault('aliases', []).append(origin)
+        index_rel = 'steps/' + _STEP_INDEX_FILENAME
+        planned.update((index_rel, _STEP_ROUTING_FILENAME))
+        if not dry:
+            (dest / 'steps').mkdir(parents=True, exist_ok=True)
+            (dest / index_rel).write_text(json.dumps({'source_run_had_steps_tree': True,
+                'steps': index}, indent=2) + '\n')
+            (dest / _STEP_ROUTING_FILENAME).write_text(
+                '# Flow109: newest selected attempt only; earlier UTC/verdicts are in each ATTEMPTS.json.\n' +
+                ''.join(f"{row['folder']} :: {row['status']}\n" for row in index))
+        return result
+
     steps: List[dict] = []
     verbatim: List[dict] = []
     try:
@@ -2117,7 +2351,7 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
         try:
             if not dry:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(Path(v["src"]), target)
+                copier(Path(v["src"]), target)
             planned.add(v["rel"])
             result["n_records_copied"] = int(result["n_records_copied"]) + 1
         except OSError:
@@ -2135,7 +2369,7 @@ def publish_steps(run_dir: Path, dest: Path, dry: bool, *,
         copied_here = []
         count, layouts = _copy_tree(folder, steps_dest / folder.name, dry,
                                     rel_base=run_dir, route=route, public_only=True,
-                                    copied_out=copied_here)
+                                    copied_out=copied_here, copier=copier)
         planned.update(rel for _src, rel in copied_here)
         retained = sum(1 for _src, rel in copied_here
                        if Path(rel).parent.parent.name == folder.name
@@ -2666,7 +2900,110 @@ def release_docs_invariant(run_dir: Path,
 # Publish.
 # --------------------------------------------------------------------------
 
+def _preview_copy(source, target):
+    """Read source bytes through a private preview link; never modify the run."""
+    # A real copy must be able to open every source, even an unparsed raw view.
+    with Path(source).open('rb'):
+        pass
+    target = Path(target)
+    target.unlink(missing_ok=True)
+    target.symlink_to(Path(source).resolve())
+    return str(target)
+
+
+def _write_published_text(target, text, **kwargs):
+    # A dry-run preview links unchanged files instead of copying gigabytes.
+    # Detach that private link before rewriting the published representation.
+    if target.is_symlink():
+        target.unlink()
+    return target.write_text(text, **kwargs)
+
+
+def _publication_size(dest, shared_input, *, ceiling=None):
+    """BLOCKING: the same finished-tree size judgement in both publish modes."""
+    if ceiling is None:
+        ceiling = _CELL_SIZE_CEILING
+    files = []
+    for root, scope in ((dest, 'cell'), (shared_input, 'shared_input')):
+        for path in root.rglob('*'):
+            if path.is_file():
+                files.append({'path': f'{scope}/{path.relative_to(root).as_posix()}',
+                              'bytes': path.stat().st_size, 'scope': scope})
+    files.sort(key=lambda row: (-row['bytes'], row['path']))
+    total = sum(row['bytes'] for row in files)
+    over = [row for row in files if row['bytes'] > _SIZE_CEILING]
+    return {'verdict': 'FAIL' if over or total > ceiling else 'PASS',
+            'total_bytes': total,
+            'cell_bytes': sum(row['bytes'] for row in files if row['scope'] == 'cell'),
+            'shared_input_bytes': sum(row['bytes'] for row in files if row['scope'] == 'shared_input'),
+            'file_limit_bytes': _SIZE_CEILING, 'total_limit_bytes': ceiling,
+            'oversized_files': over, 'largest_files': files[:30]}
+
+
 def publish(args: argparse.Namespace) -> dict:
+    if not args.dry_run:
+        return _publish(args)
+    # Execute the actual staging walk in a disposable preview. Unchanged views
+    # are links, generated/rewritten reports are real private files. Thus byte
+    # totals include every generated index and portable document without a
+    # second file list, and the carrier and requested destination stay untouched.
+    public_root = Path(args.dest_root).resolve()
+    public_dest = public_root / 'ic' / args.ic / f'v{args.plugin_version}_{args.pdk}'
+    if public_dest.exists() and any(public_dest.iterdir()) and not args.force:
+        raise Refuse(f'destination {public_dest} already exists and is non-empty '
+                     '(pass --force to overwrite)')
+    with tempfile.TemporaryDirectory(prefix='vibeic-publish-preview-') as scratch:
+        preview_root = Path(scratch)
+        # Reuse the clone's read-only index and ignore rules when it has one.
+        try:
+            git = subprocess.run(['git', '-C', str(public_root), 'rev-parse', '--absolute-git-dir'],
+                                 capture_output=True, text=True, check=False, timeout=55)
+        except (OSError, subprocess.SubprocessError):
+            git = None
+        if git is not None and git.returncode == 0:
+            (preview_root / '.git').write_text(f'gitdir: {git.stdout.strip()}\n')
+        for relative in ('.gitignore', 'ic/.gitignore', f'ic/{args.ic}/.gitignore'):
+            source = public_root / relative
+            if source.is_file():
+                target = preview_root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        # Closure may resolve a citation above the cell. Preserve that same
+        # read-only context without copying or walking unrelated cells.
+        for relative, excluded in ((Path(), {'ic'}),
+                                   (Path('ic'), {args.ic}),
+                                   (Path('ic') / args.ic, {public_dest.name, 'input'})):
+            parent = public_root / relative
+            if not parent.is_dir():
+                continue
+            for source in parent.iterdir():
+                if source.name in excluded | {'.git', '.gitignore'}:
+                    continue
+                target = preview_root / relative / source.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(source.resolve(), target_is_directory=source.is_dir())
+        shared = public_root / 'ic' / args.ic / 'input'
+        if shared.is_dir():
+            shutil.copytree(shared, preview_root / 'ic' / args.ic / 'input',
+                            copy_function=_preview_copy, symlinks=True)
+        preview_args = argparse.Namespace(**vars(args))
+        preview_args.dest_root, preview_args.dry_run = str(preview_root), False
+        summary = _publish(preview_args, copier=_preview_copy, preview=True)
+        # Private scratch paths are not publication destinations.
+        def public(value):
+            if isinstance(value, str):
+                return value.replace(str(preview_root), str(public_root))
+            if isinstance(value, list):
+                return [public(item) for item in value]
+            if isinstance(value, dict):
+                return {key: public(item) for key, item in value.items()}
+            return value
+        summary = public(summary)
+        summary['dry_run'] = True
+        return summary
+
+
+def _publish(args: argparse.Namespace, *, copier=shutil.copy2, preview=False) -> dict:
     run_dir = Path(args.run_dir).resolve()
     if not run_dir.is_dir():
         raise Refuse(f"--run-dir {run_dir} is not a directory")
@@ -2730,6 +3067,11 @@ def publish(args: argparse.Namespace) -> dict:
                      f"(pass --force to overwrite)")
 
     dry = args.dry_run
+    flow109 = (run_dir / 'reports/flow109/plan.json').is_file()
+    source_copier = copier
+    policy = _Flow109Copy(run_dir, dest, copier, preview) if flow109 else None
+    if policy is not None:
+        copier = policy
     staged: List[str] = []
     route = getattr(args, "oversize_route", "not-retained")
     layout_records: List[dict] = []
@@ -2748,7 +3090,7 @@ def publish(args: argparse.Namespace) -> dict:
 
     # RESULT.md
     if not dry:
-        shutil.copy2(result_md, dest / "RESULT.md")
+        copier(result_md, dest / "RESULT.md")
     staged.append("RESULT.md")
 
     copied_docs.append((result_md, "RESULT.md"))
@@ -2761,7 +3103,8 @@ def publish(args: argparse.Namespace) -> dict:
             if not dry:
                 target = dest / fname
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, target)
+                if copier(src, target) is False:
+                    continue
             staged.append(fname)
             copied_docs.append((src, fname))
             cell_rels.add(fname)
@@ -2774,7 +3117,7 @@ def publish(args: argparse.Namespace) -> dict:
         n_residue_before = len(residue)
         copied_here: List[Tuple[Path, str]] = []
         c, recs = _copy_tree(src, dest / sub, dry, rel_base=run_dir, route=route,
-                             residue_out=residue, copied_out=copied_here)
+                             residue_out=residue, copied_out=copied_here, copier=copier, public_only=flow109)
         copied_docs.extend(copied_here)
         cell_rels.update(rel for _f, rel in copied_here)
         layout_records.extend(recs)
@@ -2800,7 +3143,9 @@ def publish(args: argparse.Namespace) -> dict:
             continue
         if not dry:
             gds_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(g, gds_dir / g.name)
+            if copier(g, gds_dir / g.name) is False:
+                layout_records.append(_record(g, run_dir, "NOT_PUBLISHED", route, sha=sha))
+                continue
         layout_records.append(_record(g, run_dir, "STAGED", route, sha=sha))
         staged.append(f"phase3/stage4/gds/{g.name}")
         cell_rels.add(f"phase3/stage4/gds/{g.name}")
@@ -2817,11 +3162,16 @@ def publish(args: argparse.Namespace) -> dict:
             if not dry:
                 target = dest / _ROUTED_DEF_RELPATH
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(routed_def, target)
-            layout_records.append(
-                _record(routed_def, run_dir, "STAGED", route))
-            staged.append(_ROUTED_DEF_RELPATH.as_posix())
-            cell_rels.add(_ROUTED_DEF_RELPATH.as_posix())
+                copied_def = copier(routed_def, target)
+            else:
+                copied_def = True
+            if copied_def is not False:
+                layout_records.append(
+                    _record(routed_def, run_dir, "STAGED", route))
+                staged.append(_ROUTED_DEF_RELPATH.as_posix())
+                cell_rels.add(_ROUTED_DEF_RELPATH.as_posix())
+            else:
+                layout_records.append(_record(routed_def, run_dir, "NOT_PUBLISHED", route))
     else:
         # NOTHING AT THE CANONICAL PATH, AND THE RUN HAS ONE SOMEWHERE ELSE.
         # Since the block above exists, `_ROUTED_DEF_RELPATH` is IN published
@@ -2892,7 +3242,7 @@ def publish(args: argparse.Namespace) -> dict:
     # one file whose whole value is that it can be trusted.
     shared_input = ic_root / "input"
     input_result, input_recs, input_count = _stage_shared_input(
-        run_dir, args, shared_input, dry, route, residue_out=residue)
+        run_dir, args, shared_input, dry, route, residue_out=residue, copier=source_copier)
     layout_records.extend(input_recs)
 
     # Per-step evidence. AFTER the subtrees + the GDS, because each declared
@@ -2902,7 +3252,7 @@ def publish(args: argparse.Namespace) -> dict:
     retained_outputs = {}
     steps_result = publish_steps(run_dir, dest, dry, route=route,
                                  layout_out=layout_records, cell_rels=cell_rels,
-                                 retained_outputs=retained_outputs)
+                                 retained_outputs=retained_outputs, copier=copier)
     if steps_result["n_steps"]:
         staged.append(f"steps/ ({steps_result['n_steps']} step(s)"
                       + (f" + {steps_result['n_records_copied']} record file(s)"
@@ -2919,7 +3269,9 @@ def publish(args: argparse.Namespace) -> dict:
     # citation absent that a reader can follow.
     closure = close_citations(run_dir, dest, copied_docs, cell_rels, dry,
                               above=[ic_root, dest_root / "ic"],
-                              retained_outputs=retained_outputs)
+                              retained_outputs=retained_outputs, output_policy=policy)
+    if policy is not None:
+        policy.write_manifests(cell_rels)
     for r in closure["staged"]:                     # type: ignore[union-attr]
         staged.append(f"{r['path']} (citation closure: cited by {r['doc']})")
 
@@ -3032,6 +3384,26 @@ def publish(args: argparse.Namespace) -> dict:
         "release_documentation": docs_state,
         "dry_run": dry,
     }
+
+    summary['size'] = _publication_size(dest, shared_input,
+        ceiling=_FLOW109_SIZE_TARGET if flow109 else _CELL_SIZE_CEILING)
+    if policy is not None:
+        summary['output_policy'] = {'raw_limit_bytes': _RAW_VIEW_CEILING,
+            'omitted_files': len(policy.records), 'truncated_reports': policy.truncated,
+            'citation_routing_bytes': (dest / _CITATION_ROUTING_FILENAME).stat().st_size}
+    summary['publication_verdict'] = summary['size']['verdict']
+    if summary['size']['verdict'] != 'PASS':
+        return summary
+
+    # Real publication would contain regular copies. Materialize only a
+    # successful, bounded preview before running the same downstream checks;
+    # private preview links must never stand in for a delivered symlink.
+    if preview:
+        for target in dest.rglob('*'):
+            if target.is_symlink():
+                source = target.resolve()
+                target.unlink()
+                shutil.copy2(source, target)
 
     # --- post-stage self-check (structure conformance) ---
     if not dry:
@@ -3154,6 +3526,14 @@ def stale_write_ledger(cell: Path) -> List[str]:
                     or finding.get("rule") != _LEDGER_D3_RULE:
                 continue
             spec = str(finding.get("spec"))
+            from flow_artifact_paths import GDS_SPEC
+            # An external, size-routed GDS cannot contradict an absence in
+            # this cell. Resolve its invocation selector only if actual GDS
+            # bytes are present to judge; unknown is not a fabricated top.
+            if spec == GDS_SPEC and not any(
+                    p.is_file() and not p.is_symlink() and p.stat().st_size > 0
+                    for p in cell.glob(GDS_SPEC)):
+                continue
             for rel in _swl._spec_candidates(cell, spec):
                 p = cell / rel
                 if p.is_symlink() or not p.is_file():
@@ -3186,7 +3566,8 @@ def led_captured(cell: Path) -> str:
 def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
                         shared_input: Path, dry: bool,
                         route: str = "not-retained",
-                        residue_out: Optional[List[dict]] = None
+                        residue_out: Optional[List[dict]] = None,
+                        copier=shutil.copy2
                         ) -> Tuple[str, List[dict], int]:
     """Copy the design-input docs to ic/<IC>/input/ once. Non-fatal: on a 2nd/3rd
     PDK for the same IC the shared input already exists and is left untouched.
@@ -3214,7 +3595,7 @@ def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
         return "no design-input docs found to stage (shared input unchanged)", [], 0
     dst = shared_input / "docs"
     c, recs = _copy_tree(src, dst, dry, rel_base=run_dir, route=route,
-                         residue_out=residue_out)
+                         residue_out=residue_out, copier=copier)
     for r in recs:
         if r["decision"] == "STAGED":
             r["destination"] = "shared-input"
@@ -3354,7 +3735,7 @@ def _prune_provenance(run_dir: Path, dest: Path, dry: bool) -> str:
         out_lines.append(json.dumps(entry))
     if malformed:
         return "provenance.jsonl carries malformed line(s); left verbatim"
-    dst.write_text("\n".join(out_lines) + ("\n" if out_lines else ""),
+    _write_published_text(dst, "\n".join(out_lines) + ("\n" if out_lines else ""),
                    encoding="utf-8")
     return (f"{pruned_total} declared output(s) across the ledger disclosed "
             f"as pruned-at-publish (not in this cell's staged subtrees)"
@@ -3426,6 +3807,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  files       : {summary['file_count']} in cell, "
           f"{summary['shared_input_file_count']} shared input, "
           f"{summary['total_file_count']} total")
+    print(f"  size        : {summary['size']['total_bytes']} bytes; "
+          f"{summary['size']['verdict']} (file <= {summary['size']['file_limit_bytes']}, "
+          f"total <= {summary['size']['total_limit_bytes']})")
+    for row in summary['size']['largest_files']:
+        print(f"      {row['bytes']} B  {row['path']}")
+    if summary['publication_verdict'] != 'PASS':
+        if args.json:
+            Path(args.json).write_text(json.dumps(summary, indent=2), encoding='utf-8')
+        print('REFUSED: PUBLICATION_SIZE_LIMIT — no conformant publication; '
+              'do not commit a partial staging tree.', file=sys.stderr)
+        return 1
     print(f"  verdict     : {summary['verdict']} (source: {summary['verdict_source']})")
     print(f"  pdk revision: {summary['pdk_revision']} "
           f"(read from the tree that ran, not from --pdk)")
