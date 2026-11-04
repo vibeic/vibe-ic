@@ -993,6 +993,7 @@ def _l8_literal_owner_emit(tmp_path, text):
     ('Synthesis Constraints(非 SDC)', 'SYNTH_MAX_FANOUT'),
     ('Physical Design Settings', 'EDGE_BUDGET'),
     ('Floorplan Constraints\n\n### Limits', 'DENSITY_CAP'),
+    ('RTL Synthesis Parameters', 'SYNTH_FANOUT_CAP'),
 ])
 def test_parameter_table_ownership_keeps_flow_settings_in_l19(tmp_path, heading, token):
     from programs import phase1_doc_one_shot_runner as producer
