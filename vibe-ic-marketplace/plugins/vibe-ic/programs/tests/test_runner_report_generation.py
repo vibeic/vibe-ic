@@ -25,8 +25,8 @@ def _selected_d09_handoff(tmp_path, monkeypatch, damage=None, *, row_id='D09'):
     (project / 'input').mkdir(parents=True)
     (project / 'input/phase1_prompt.md').write_text('Implement a neutral buffer.')
     argv = [sys.executable, str(runner), str(project), '--flow', '109',
-            '--entry-step', row_id, '--exit-step', 'D11']
-    step = '1' if row_id == 'D09' else '2'
+            '--entry-step', row_id, '--exit-step', row_id if row_id == 'D13' else 'D11']
+    step = {'D09': '1', 'D11': '2', 'D13': '4'}[row_id]
     child_invocation = {}
 
     def fake_run(command, **kwargs):
