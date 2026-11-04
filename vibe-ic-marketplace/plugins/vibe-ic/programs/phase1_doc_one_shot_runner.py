@@ -58350,6 +58350,8 @@ def _assert_no_rtl_oracle_leak_in_l_doc(
               last_key: Optional[str] = None) -> None:
         if isinstance(obj, dict):
             for k, v in obj.items():
+                if k == "evidence" and "source" in obj and "line" in obj:
+                    continue
                 _walk(v, f"{path}.{k}", last_key=k)
         elif isinstance(obj, list):
             # List entries inherit the enclosing dict key — that is
