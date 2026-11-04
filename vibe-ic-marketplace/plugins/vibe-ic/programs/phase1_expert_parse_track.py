@@ -1820,14 +1820,21 @@ def _typed_quantity(node: Any, key: Any,
 
 
 def _prose_quantities(text: str) -> Tuple[Quantity, ...]:
-    """Read complete adjacent number/unit atoms without borrowing prose units."""
     text = text.replace("\u2212", "-")
     quantities = []
     for match in _PROSE_QUANTITY.finditer(text):
-        prefix = text[:match.start()].rstrip()
+        prefix = text[:match.start()].rstrip(" \t\r\n([")
         if re.search(r"(?:[:+\\\-–—]|(?:^|\s)to)$", prefix):
             continue
+        if re.search(r"(?:^|\s)[-+]?\d\S*[eE][-+]?$", prefix):
+            continue
         if match.group(1).startswith(("-", "+")) and re.search(r"\d$", prefix):
+            continue
+        suffix = text[match.end():].lstrip()
+        if re.match(r"(?:[-–—]|\bto\b)\s*[-+.0-9]", suffix):
+            continue
+        if re.match(r"(?:[²^*]|per\b|/\s*(?!" + _QUANTITY_NUMBER
+                    + r")(?:\S|$))", suffix):
             continue
         quantity = parse_quantity(match.group().removesuffix("."))
         if quantity is not None and quantity.dimension is not None:
