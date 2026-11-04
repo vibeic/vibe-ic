@@ -1200,6 +1200,14 @@ def _looks_like_crypto_accelerator(l1, l2) -> bool:
     if not text:
         return False
     hit_names = {name for name, pat in _CRYPTO_FEATURES if pat.search(text)}
+    if (re.search(r"\bECC\b", text, re.IGNORECASE)
+            and not _CRYPTO_FEATURES[0][1].search(
+                re.sub(r"\bECC\b", "", text, flags=re.IGNORECASE))
+            and not {"key_material", "cipher_mechanics"} & hit_names
+            and not re.search(
+                r"\b(?:elliptic[- ]curve|ECDSA|ECDH|(?:public|private)[- ]key|"
+                r"digital\s+signatures?|scalar\s+multiplication)\b", text, re.IGNORECASE)):
+        return False
     if "algorithm_family" not in hit_names:
         return False  # deny-guard: must name a real cipher algorithm
     return len(hit_names) >= 2
