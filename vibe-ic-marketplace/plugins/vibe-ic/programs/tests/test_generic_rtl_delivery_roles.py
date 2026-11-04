@@ -9,6 +9,57 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import task_nature_route as route
 
 
+@pytest.mark.parametrize('description', [
+    pytest.param('tick: Chip clock signal.', id='clock-signal'),
+    pytest.param('clear: Active low; zero requests chip reset.', id='reset-behavior'),
+    pytest.param('release: Defined as 0 for chip reset and 1 for reset inactive.', id='reset-values'),
+    pytest.param('permit: Chip enable signal. done: Chip output flag signal.', id='signal-roles'),
+    pytest.param('request: Chip input port. result: Chip output port.', id='port-roles'),
+])
+@pytest.mark.parametrize('artifact_request', [
+    'Implement the design of a seven-bit event counter. Give me the complete code.',
+    'Write a Verilog module for a seven-bit event counter.',
+])
+def test_logical_interface_description_does_not_request_a_chip(description, artifact_request):
+    prompt = artifact_request + '\nInterface description:\n' + description
+    requirements = route.prompt_delivery_requirements(prompt)
+    resolved = route.resolve_prompt_delivery_target(requirements, 'rtl')
+    assert resolved['ok'] is True, resolved
+    actual = route.delivery_route_for_target(resolved['target'], resolved['route_family'])
+    assert actual == 'ip', requirements
+    assert requirements['status'] == 'UNSPECIFIED'
+    assert requirements['route_family'] is None
+    assert requirements['minimum_target'] is None
+    assert requirements['evidence'] == []
+
+
+@pytest.mark.parametrize('obligation,family,minimum,status', [
+    ('Deliver the complete chip and produce GDS.', 'DIE', 'gds', 'EXPLICIT_ROUTE'),
+    ('Deliver the final chip.', 'DIE', None, 'EXPLICIT_ROUTE'),
+    ('Deliver the complete chip with a reset signal.', 'DIE', None, 'EXPLICIT_ROUTE'),
+    ('Deliver the complete chip\nReset all state elements.', 'DIE', None, 'EXPLICIT_ROUTE'),
+    ('Deliver the complete chip\nClock all state elements.', 'DIE', None, 'EXPLICIT_ROUTE'),
+    ('Deliver the complete chip clock tree as a physical design.', 'DIE', None, 'EXPLICIT_ROUTE'),
+    ('Write a Verilog module. Deliver the complete chip clock and reset infrastructure for fabrication.', 'DIE', None, 'EXPLICIT_ROUTE'),
+    ('delivery: Deliver the complete chip clock signal.', 'DIE', None, 'EXPLICIT_ROUTE'),
+    ('Deliver a standalone IP hardmacro with LEF and Liberty views.', 'HARDMACRO', 'ip_hardmacro', 'EXPLICIT_ROUTE'),
+    ('Deliver a complete chip and separately deliver a standalone IP hardmacro.', None, None, 'CONFLICT'),
+    ('The chip must be delivered in a physical package.', 'DIE', 'gds', 'EXPLICIT_ROUTE'),
+])
+def test_logical_interface_cannot_hide_an_independent_delivery(obligation, family, minimum, status):
+    prompt = ('Implement the design of an event counter. Give me the complete code.\n'
+              'tick: Chip clock signal. clear: Zero requests chip reset.\n' + obligation)
+    requirements = route.prompt_delivery_requirements(prompt)
+    assert requirements['status'] == status
+    assert requirements['route_family'] == family
+    assert requirements['minimum_target'] == minimum
+    resolved = route.resolve_prompt_delivery_target(requirements, 'rtl')
+    if minimum is not None or status == 'CONFLICT':
+        assert resolved['ok'] is False, resolved
+    else:
+        assert route.delivery_route_for_target(resolved['target'], resolved['route_family']) == 'ic'
+
+
 @pytest.mark.parametrize('prompt', [
     pytest.param('The reference chip has two gates. Write a module implementing XOR.', id='background'),
     pytest.param('A chip contains two gates. Write a module implementing XOR.', id='narrated-background'),
