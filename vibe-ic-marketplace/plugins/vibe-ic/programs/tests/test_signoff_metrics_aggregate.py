@@ -548,6 +548,10 @@ def test_d09_deferred_source_item_survives_signoff_without_item_measurement(tmp_
     if contract=='serial':
         owned['responsibility_register']=[{'id':demand['id'],'verification_status':'NOT_MEASURED','targets':[
             {'mapping_status':'DOWNSTREAM_RESPONSIBILITY_PRESERVED','normal_owner':{'steps':{'D22':'Synthesis','D26':'Timing'},'input_authority':'L19_CONSTRAINTS_PDK'}}]}]
+    if contract=='serial':
+        owned['source_demands'].append({'id':'mapped','requirement':'Complete interface','evidence':['input/spec.md:2']})
+        owned['responsibility_register'].append({'id':'mapped','mapping_status':'RTL_MAPPED','verification_status':'NOT_MEASURED',
+            'targets':[{'mapping_status':'MAPPED_TO_EXACT_GENERATOR','normal_owner':{'steps':{'D09':'RTL authoring'}}}]})
     flow109._selected_step_result(tmp_path,{'resolved_row':{'id':'D09'},'context_sha256':'test-only'},
         {'step_id':'D09','component_status':'PASS','default_row_status':'PASS','completed':True,
          'evidence':{'owned_metrics':owned}})
