@@ -2603,7 +2603,6 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
         'D53': {'report': 'reports/phase3/gls_corners.json', 'status': 'verdict'},
         'D03': {'method': 'config', 'report': 'phase3/librelane/02-yosys-synthesis/config.json'},
         'D06': {'method': 'verdict', 'report': 'reports/phase3/io_pad_chip_top.json'},
-        'D09': {'method': 'p0', 'report': 'reports/flow109/default_rows/D10.json'},
         'D10': {'method': 'p0', 'report': 'reports/flow109/default_rows/D10.json'},
         'D11': {'method': 'verdict', 'report': 'reports/phase2/lint/verilator_lint_gate.json'},
         'D13': {'method': 'simulation', 'report': 'reports/phase2/sim/l10_execution.json'},
