@@ -30,6 +30,7 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,7 +81,15 @@ def execute(project: Path, context: dict) -> dict:
               "program": "foundry_handoff_pack_gen", "approval_input": RELEASE_APPROVAL_REL}
     try:
         result["approval"] = read_release_approval(project, final_gds(project))
-        rc = main([str(project)])
+        programs = Path(__file__).resolve().parent
+        rc = subprocess.run([sys.executable, '-B', str(programs / 'tapeout_docs_gen.py'),
+            '--project', str(project), '--out-dir', str(_pl.reports_phase3_dir(project) / 'docs'),
+            '--plugin-version', _pmd.running_plugin_version()], cwd=project).returncode
+        if rc == 0:
+            rc = subprocess.run([sys.executable, '-B', str(programs / 'ic_release_docs_gen.py'),
+                str(project)], cwd=project).returncode
+        if rc == 0:
+            rc = main([str(project)])
         if rc == 0:
             import tapeout_checklist_gen as checklist
             rc = checklist.main([str(project)])

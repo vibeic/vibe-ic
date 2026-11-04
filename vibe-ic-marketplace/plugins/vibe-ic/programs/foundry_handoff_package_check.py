@@ -1331,6 +1331,12 @@ def emit_design_release(project, destination, layout, physical_top, assembly=Non
     project, destination = Path(project).resolve(), Path(destination).resolve()
     source = design_release_sources(project,layout,assembly=assembly) if layout else {
         "files":{},"validation":{},"external_dependencies":{}}
+    from _release_docs_contract import DOC_ROOT
+    for root in (project / DOC_ROOT / 'ic', project / 'reports/phase3/docs'):
+        for path in sorted(root.rglob('*')):
+            if path.is_file():
+                source['files'][str(path)] = {'sha256': sha256_file(path),
+                                             'roles': ['release_documentation']}
     members=[]
     for name, entry in source['files'].items():
         path=Path(name)

@@ -230,6 +230,8 @@ def layer_count(project: Path, stem: str, label: str,
     doc, rel = layer(project, stem)
     if doc is None:
         return unmeasured(label, f"{rel} is absent or unreadable in this run")
+    if doc.get('extraction_status') == 'NOT_YET_EXTRACTED':
+        return unmeasured(label, f"{rel} is NOT_YET_EXTRACTED; skeleton lists are not measurements")
     for key in keys:
         for scope in scopes(doc):
             value = scope.get(key)

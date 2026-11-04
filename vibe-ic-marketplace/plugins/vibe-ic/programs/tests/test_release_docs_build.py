@@ -26,6 +26,7 @@ identifier is a fixture literal invented for this file.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -201,6 +202,16 @@ def test_layer_count_measures_zero_and_distinguishes_it_from_absent(tmp_path):
     assert (empty.measured, empty.value) == (True, "0")
     assert absent.measured is False
     assert (three.measured, three.value) == (True, "3")
+
+
+def test_unextracted_skeleton_lists_are_not_measured_zero(tmp_path):
+    docs = tmp_path / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L21_POWER_INTENT.json').write_text(json.dumps({
+        'extraction_status': 'NOT_YET_EXTRACTED', 'fields': {'power_domains': []}}))
+    field = B.layer_count(tmp_path, 'L21_POWER_INTENT', 'Power domains', ('power_domains',))
+    assert not field.measured and field.value == B.NOT_MEASURED
+    assert 'NOT_YET_EXTRACTED' in field.source
 
 
 @pytest.mark.parametrize("value,expected", [

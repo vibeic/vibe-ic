@@ -77,6 +77,42 @@ def load_metrics(p: Path) -> dict:
         return {}
 
 
+def measurement_scope(project: Path | None, *, html_format=False) -> str:
+    """Render the selected rows' own scope disclosures without judging them."""
+    disclosures = set()
+    def collect(value, source, owner):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in ('unmeasured_obligations', 'unmeasured', 'limitations', 'unsupported_scope') and child:
+                    for text in child if isinstance(child, list) else [child]:
+                        if isinstance(text, str):
+                            label = 'NOT_MEASURED: ' if key.startswith('unmeasured') else 'Scope: '
+                            disclosures.add((owner + label + text, source))
+                elif key.endswith('_status') and child == NOT_MEASURED:
+                    disclosures.add((owner + key.removesuffix('_status').replace('_', ' ') + ': NOT_MEASURED', source))
+                elif isinstance(child, (dict, list)):
+                    collect(child, source, owner)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child, source, owner)
+    if project is not None:
+        plan = load_metrics(project / 'reports/flow109/plan.json')
+        for row in plan.get('rows', []):
+            source = f"reports/flow109/default_rows/{row['id']}.json"
+            owner = f"Step {row['position']} — {row['name']}: "
+            collect(load_metrics(project / source), source, owner)
+    notice = ('This document records only the cited design-verification results. '
+              'It is not a tape-out approval and does not demonstrate a manufactured part, '
+              'silicon characterization, reliability qualification or manufacturing yield. '
+              'CVC electrical-rule checks do not establish ESD simulation or device-physics qualification.')
+    if html_format:
+        items = ''.join(f'<li>{html.escape(text)} — <code>{html.escape(source)}</code></li>'
+                        for text, source in sorted(disclosures))
+        return f'<h2>Measurement scope and limitations</h2><p>{html.escape(notice)}</p><ul>{items}</ul>'
+    items = '\n'.join(f'- {text} — `{source}`' for text, source in sorted(disclosures))
+    return notice + ('\n\n' + items if items else '')
+
+
 def g(m: dict, key: str, fmt=None):
     """Read a metric or return NOT_MEASURED. Never a default."""
     if key not in m or m[key] is None:
@@ -223,7 +259,7 @@ def release_blockers(m: dict) -> list[str]:
     return out
 
 
-def build_signoff(m, design, pdk, plugin_ver, run_id, precheck):
+def build_signoff(m, design, pdk, plugin_ver, run_id, precheck, scope=None):
     w, h, bbox = die_geometry(m)
     man_rows, man_ok, man_bad, man_unk = rows_for(m, MANUFACTURABILITY)
     ele_rows, ele_ok, ele_bad, ele_unk = rows_for(m, ELECTRICAL)
@@ -232,9 +268,9 @@ def build_signoff(m, design, pdk, plugin_ver, run_id, precheck):
     # THE VERDICT IS COMPUTED, NEVER TYPED. A report whose headline is written by
     # hand can disagree with its own table; this one cannot.
     if man_bad == 0 and ele_bad == 0 and man_unk == 0 and ele_unk == 0:
-        vclass, vtitle = "clean", "SIGNED OFF — every checked property is clean"
+        vclass, vtitle = "clean", "MEASURED CHECKS PASS — limited to the reported properties"
     elif man_bad == 0:
-        vclass, vtitle = "part", "PARTIAL — manufacturability is clean, electrical is NOT"
+        vclass, vtitle = "part", "PARTIAL — reported checks incomplete or outside limits"
     else:
         vclass, vtitle = "part", "NOT SIGNED OFF — a manufacturability check is failing"
 
@@ -249,7 +285,7 @@ def build_signoff(m, design, pdk, plugin_ver, run_id, precheck):
         corner_rows += (f'<tr><td><code>{html.escape(name)}</code></td>'
                         f'<td class="n"><span class="{sc}">{val:g}</span></td><td class="n">{hs}</td></tr>')
     if not corner_rows:
-        corner_rows = '<tr><td colspan="3" class="nm">NOT_MEASURED — no per-corner slack in this run</td></tr>'
+        corner_rows = '<tr><td colspan="3" class="nm">NOT_MEASURED in this document: the cited metrics summary carries no per-corner slack.</td></tr>'
 
     pre_rows = ""
     for stage, res in (precheck or []):
@@ -268,13 +304,13 @@ def build_signoff(m, design, pdk, plugin_ver, run_id, precheck):
     # These two are SCOPE, not disclaimer: they name checks that were never run,
     # which is exactly what this section is for. Kept short.
     not_signed.append("<li><b>矽上量測</b>：未進行。無特性化時序、無功耗量測、無溫度範圍、無良率。</li>")
-    not_signed.append("<li><b>功能正確性</b>：不在本報告範圍。本報告簽核的是可製造性。</li>")
+    not_signed.append("<li><b>功能正確性</b>：請查閱本次執行的功能驗證結果；本報告只列出表中已量測的檢查。</li>")
 
-    return f"""<meta charset="utf-8"><title>Sign-off {design} × {pdk}</title><style>{CSS}</style>
+    return f"""<meta charset="utf-8"><title>Design verification {design} × {pdk}</title><style>{CSS}</style>
 <div class="doc">
 <header class="an">
-  <div class="an-kind">TAPE-OUT SIGN-OFF REPORT</div>
-  <h1>{html.escape(design)} — 投片簽核報告</h1>
+  <div class="an-kind">DESIGN VERIFICATION REPORT</div>
+  <h1>{html.escape(design)} — 設計驗證報告</h1>
   <p class="an-sub">製程 {html.escape(pdk)}</p>
   <div class="an-meta">
     <span>文件編號 <b>SO-{html.escape(design)}-{html.escape(pdk)}</b></span>
@@ -303,7 +339,7 @@ def build_signoff(m, design, pdk, plugin_ver, run_id, precheck):
 <tr><th>總功耗（估算）</th><td>{g(m,'power__total')} W　<span class="nm">— 工具估算，非矽上量測</span></td></tr>
 </tbody></table>
 
-<h2>2. 製造性簽核</h2>
+<h2>2. 幾何與連接檢查</h2>
 <p>以下每一項都必須為 0 才算通過。</p>
 <table><thead><tr><th>檢查</th><th>值</th><th>指標名稱</th></tr></thead><tbody>{man_rows}</tbody></table>
 <p class="cap"><b>表 2.1</b>　製造性檢查。指標名稱一併列出，讓任何人都能回到原始 JSON 覆核。</p>
@@ -319,15 +355,16 @@ def build_signoff(m, design, pdk, plugin_ver, run_id, precheck):
 
 <h2>5. 未簽核的部分</h2>
 <ul>{''.join(not_signed)}</ul>
+{scope if scope is not None else measurement_scope(None, html_format=True)}
 
 <footer class="an">
-本報告由 Vibe-IC 流程第 37.5ic 步（送件預檢）產生。每一個數值都可追溯到該次執行自己的
+本報告由 Vibe-IC 設計文件產生器產生。每一個數值都可追溯到該次執行自己的
 產物；讀不到的一律標示 <code>NOT_MEASURED</code>，未以任何預設值填補。
 </footer>
 </div>"""
 
 
-def build_brief(m, design, pdk, plugin_ver, summary, ports):
+def build_brief(m, design, pdk, plugin_ver, summary, ports, scope=None):
     w, h, bbox = die_geometry(m)
     stamp = datetime.now(TPE).strftime("%Y-%m-%d")
     man_bad = sum(1 for _, k, p in MANUFACTURABILITY
@@ -337,9 +374,9 @@ def build_brief(m, design, pdk, plugin_ver, summary, ports):
     port_rows = "".join(
         f"<tr><td><code>{html.escape(n)}</code></td><td class='n'>{wd}</td>"
         f"<td>{html.escape(d)}</td></tr>" for n, wd, d in ports)
-    status = ("製造性簽核全綠；電氣品質尚有未達標項目"
+    status = ("已量測的幾何檢查通過；電氣檢查尚有未達標項目"
               if man_bad == 0 and ele_bad else
-              "製造性與電氣品質皆全綠" if man_bad == 0 and ele_bad == 0 else
+              "表中已量測的檢查通過；請參閱量測範圍與限制" if man_bad == 0 and ele_bad == 0 else
               "尚有製造性檢查未通過")
     return f"""<meta charset="utf-8"><title>Product Brief {design}</title><style>{CSS}</style>
 <div class="doc">
@@ -375,8 +412,9 @@ def build_brief(m, design, pdk, plugin_ver, summary, ports):
 製造性未過 {man_bad} 項　·　電氣品質未過 {ele_bad} 項
 </div>
 
+{scope if scope is not None else measurement_scope(None, html_format=True)}
 <footer class="an">
-由 Vibe-IC 流程第 37.5ic 步產生。數值讀自該次執行自己的產物，未量測者標
+由 Vibe-IC 設計文件產生器產生。數值讀自該次執行自己的產物，未量測者標
 <code>NOT_MEASURED</code>。
 </footer>
 </div>"""
@@ -631,8 +669,9 @@ def main():
     so = a.out_dir / f"SIGNOFF_{a.design}_{a.pdk}.html"
     pb = a.out_dir / f"BRIEF_{a.design}_{a.pdk}.html"
     draft = bool(blockers)
-    so_html = build_signoff(m, a.design, a.pdk, a.plugin_version, a.run_id, pre)
-    pb_html = build_brief(m, a.design, a.pdk, a.plugin_version, a.summary, ports)
+    scope = measurement_scope(a.project, html_format=True)
+    so_html = build_signoff(m, a.design, a.pdk, a.plugin_version, a.run_id, pre, scope)
+    pb_html = build_brief(m, a.design, a.pdk, a.plugin_version, a.summary, ports, scope)
     if draft:
         # A DRAFT that only says so on the console is not a draft -- the FILE is
         # what gets copied and quoted. Stamp the document itself.

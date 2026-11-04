@@ -51,7 +51,10 @@ def test_a_clean_run_is_signed_off(tmp_path):
     r, out = run(tmp_path, CLEAN)
     assert r.returncode == 0, r.stderr
     html = (out / "SIGNOFF_d_pdk.html").read_text(encoding="utf-8")
-    assert "SIGNED OFF" in html and "PARTIAL" not in html
+    assert "MEASURED CHECKS PASS" in html and "PARTIAL" not in html
+    assert "TAPE-OUT SIGN-OFF REPORT" not in html
+    assert "not a tape-out approval" in html
+    assert "manufactured part" in html
 
 
 def test_a_timing_violation_blocks_generation_entirely(tmp_path):
@@ -441,3 +444,32 @@ def test_canonical_gate_preserves_producer_citations_across_clock_change(tmp_pat
     assert not signoff.exists()
     assert record_path.read_bytes() == record_before
     print('READONLY_RELEASE_REFUSED', 'missing_html_by_original_required_output')
+
+
+def test_html_documents_retain_selected_native_scope_and_no_approval_claim(tmp_path):
+    project = tmp_path / 'project'
+    final = project / 'phase3/final'
+    final.mkdir(parents=True)
+    (final / 'metrics.json').write_text(json.dumps(CLEAN))
+    records = project / 'reports/flow109/default_rows'
+    records.mkdir(parents=True)
+    (records.parent / 'plan.json').write_text(json.dumps({'rows': [
+        {'id': 'R1', 'position': 95, 'name': 'Final electrical analysis'}]}))
+    (records / 'R1.json').write_text(json.dumps({
+        'unmeasured_obligations': ['signal EM', 'thermal and aging', 'extractor qualification'],
+        'dynamic_ir_status': 'NOT_MEASURED',
+        'native_result': {'unmeasured_obligations': ['ESD characterization']}}))
+    out = project / 'reports/phase3/docs'
+    result = subprocess.run([sys.executable, str(PROG), '--project', str(project),
+                             '--out-dir', str(out)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    documents = list(out.glob('*.html'))
+    assert len(documents) == 2
+    for path in documents:
+        text = path.read_text()
+        for scope in ('signal EM', 'thermal and aging', 'extractor qualification',
+                      'dynamic ir', 'ESD characterization', 'ESD simulation'):
+            assert scope in text, (path, scope)
+        assert 'Step 95' in text and 'NOT_MEASURED' in text
+        assert 'not a tape-out approval' in text and 'manufactured part' in text
+        assert 'SIGNED OFF — every checked property is clean' not in text
