@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 import arithmetic_synth as arithmetic
+import general_synth as general
 import canonical_primitive_synth as clocks
 import deterministic_emit_chain as chain
 from _prose_handoff_assertions import assert_program_chain_candidate
@@ -78,12 +79,15 @@ def sequential_multiplier_prompt(width, gated=False):
 
 @pytest.mark.parametrize("width", [3, 5])
 @pytest.mark.parametrize("gated", [False, True])
-def test_completion_obeys_its_own_enable_condition(tmp_path, width, gated):
+@pytest.mark.parametrize("consumer", ["chain", "general"])
+def test_completion_obeys_its_own_enable_condition(tmp_path, width, gated, consumer):
     prompt = sequential_multiplier_prompt(width, gated)
     result = chain.try_emit_ex(prompt, top="accumulate_unit")
     assert_program_chain_candidate(result, prompt)
     assert result[1] == arithmetic.synth(prompt, top="accumulate_unit")
-    native(tmp_path, result[1], f'''module check;
+    rtl = general.synth(prompt, *arithmetic._dia_parse_ports(prompt), top="accumulate_unit") if consumer == "general" else result[1]
+    assert rtl is not None
+    native(tmp_path, rtl, f'''module check;
 reg clk=0,rst_n=1,start=0; reg [{width-1}:0] a=3,b=7;
 wire [{2*width-1}:0] product; wire done; always #5 clk=~clk;
 accumulate_unit d(.*);
@@ -100,7 +104,8 @@ reset();$display("CHECK_PASS");$finish;end endmodule''')
 @pytest.mark.parametrize("width", [3, 5])
 @pytest.mark.parametrize("rule", ["equality", "literal_equality", "inactive_clear_only",
                                   "qualified_hold", "unqualified_raise"])
-def test_explicit_completion_control_clauses(tmp_path, width, rule):
+@pytest.mark.parametrize("consumer", ["chain", "general"])
+def test_explicit_completion_control_clauses(tmp_path, width, rule, consumer):
     prompt = sequential_multiplier_prompt(width, rule != "inactive_clear_only")
     inactive_clear = "When start is inactive done_r is reset to 0.\n"
     if rule in ("equality", "literal_equality"):
@@ -118,7 +123,9 @@ def test_explicit_completion_control_clauses(tmp_path, width, rule):
     result = chain.try_emit_ex(prompt, top="accumulate_unit")
     assert_program_chain_candidate(result, prompt)
     assert result[1] == arithmetic.synth(prompt, top="accumulate_unit")
-    native(tmp_path, result[1], f'''module check;
+    rtl = general.synth(prompt, *arithmetic._dia_parse_ports(prompt), top="accumulate_unit") if consumer == "general" else result[1]
+    assert rtl is not None
+    native(tmp_path, rtl, f'''module check;
 reg clk=0,rst_n=1,start=0; reg [{width-1}:0] a=3,b=7;
 wire [{2*width-1}:0] product; wire done; always #5 clk=~clk;
 accumulate_unit d(.*);
@@ -129,10 +136,39 @@ start=0;@(negedge clk);if(done!==1'b{expected})$fatal(1,"explicit completion con
 $display("CHECK_PASS");$finish;end endmodule''')
 
 
+@pytest.mark.parametrize("width", [3, 5])
+@pytest.mark.parametrize("qualification", ["start != 0", "start != 0\n", "start is set to 1", "start follows an external permission rule"])
+def test_unparsed_completion_enable_declines_without_generic_reentry(tmp_path, width, qualification):
+    prompt = sequential_multiplier_prompt(width, True).replace("When start is inactive done_r is reset to 0.\n", "")
+    prompt = prompt.replace("start is active and", qualification + " and")
+    assert arithmetic.synth(prompt, top="accumulate_unit") is None
+    assert general.synth(prompt, *arithmetic._dia_parse_ports(prompt), top="accumulate_unit") is None
+    kind, rtl, rejected = chain.try_emit_ex(prompt, top="accumulate_unit")
+    assert (kind, rtl) == (None, None), (kind, rtl, rejected)
+    import _path_layout as layout
+    import design_one_shot_runner as runner
+    source = tmp_path / "input/phase1_prompt.md"
+    source.parent.mkdir()
+    source.write_text(prompt)
+    previous = layout._RTL_INPUT
+    try:
+        layout.select_rtl_input(tmp_path, "original", "1", "1")
+        result = runner.step_rtl_gen(tmp_path, "digital_arithmetic_primitive")
+    finally:
+        layout._RTL_INPUT = previous
+    assert result.status == "PASS_WITH_WAIVERS", result
+    assert result.extras["fallback_skill"] == "spec-to-rtl"
+    assert not result.output_files and not list((tmp_path / "phase2/stage1/rtl").glob("*.sv"))
+
+
 def test_multiplier_without_stated_completion_or_matching_datapath_declines():
     prompt = sequential_multiplier_prompt(5)
     assert arithmetic.synth(prompt.replace("is set to 1", "indicates completion")) is None
     assert arithmetic.synth(prompt.replace(" a[4:0]", " data[4:0]")) is None
+    no_cycle = prompt.replace("is set to 1", "indicates completion")
+    assert general.synth(no_cycle, *arithmetic._dia_parse_ports(no_cycle), top="accumulate_unit") is None
+    ins, outs = arithmetic._dia_parse_ports(prompt)
+    assert general.synth(prompt, ins + [("unused_control", 1)], outs, top="accumulate_unit") is None
 
 
 def test_reserved_or_case_colliding_opcode_parameters_decline():

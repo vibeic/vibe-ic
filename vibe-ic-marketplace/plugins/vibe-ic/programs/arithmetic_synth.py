@@ -898,7 +898,7 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
         raise_at = _parse_done_raise_cycle(text)     # 'i==K -> done=1'
         clear_at = _parse_done_clear_cycle(text)     # 'i==J -> done=0'
         clauses = re.findall(
-            r"[^.\n]*\bdone\w*\b[^.\n]*\b(?:set|reset)\s+to\s+[01]\b[^.\n]*", text, re.I)
+            r"[^.]*\bdone\w*\b[^.]*\b(?:set|reset)\s+to\s+[01]\b[^.]*", text, re.I)
         enable = (r"\b(?:if|when|while|and)\s+(?:the\s+)?start(?:\s+signal)?"
                   r"(?:\s*\(start\))?\s*")
         active = enable + r"(?:(?:is\s+)?(?:active|high|asserted|1)|={2,3}\s*(?:1'b)?1)\b"
@@ -908,10 +908,13 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
             done_gated[value] = any(re.search(active, clause, re.I) for clause in clauses
                 if re.search(rf"\bis\s+equal\s+to\s+{cycle}\b", clause, re.I)
                 and re.search(rf"\b(?:set|reset)\s+to\s+{value}\b", clause, re.I))
-        disable_clear = any(re.search(inactive +
+        disable = (inactive +
             r"(?:\s*\(!?start\))?\s*,?\s*(?:the\s+)?(?:multiplication\s+)?"
-            r"(?:completion\s+)?(?:flag\s+)?\(?done\w*\)?\s+(?:is\s+)?(?:set|reset)\s+to\s+0\b",
-            clause, re.I) for clause in clauses)
+            r"(?:completion\s+)?(?:flag\s+)?\(?done\w*\)?\s+(?:is\s+)?(?:set|reset)\s+to\s+0\b")
+        if any(re.search(r"\bstart\b", re.sub(active + "|" + disable, "", clause, flags=re.I), re.I)
+               for clause in clauses):
+            return None
+        disable_clear = any(re.search(disable, clause, re.I) for clause in clauses)
         base.update({"op": "mult_seq_done", "start": start[0], "done": done[0],
                      "bound": bound, "raise_at": raise_at, "clear_at": clear_at,
                      "done_start_gated": done_gated, "done_disable_clear": disable_clear})
