@@ -150,3 +150,33 @@ def test_issue1946_skips_out_of_scope_declarations(tmp_path: Path) -> None:
     fixed = _run(["--fix", str(rtl)])
     assert fixed.returncode == 0, fixed.stderr
     assert rtl.read_text() == original
+
+
+@pytest.mark.parametrize("suffix", [".v", ".sv"])
+@pytest.mark.parametrize("sv_only", [False, True], ids=["verilog2005", "sv2012"])
+def test_width_fix_preserves_input_language(tmp_path, suffix, sv_only):
+    rtl = tmp_path / ("ranged_conversion" + suffix)
+    port = "logic" if sv_only else "wire"
+    original = (
+        f"module ranged_conversion #(parameter integer VALUE=17)"
+        f"(output {port} [3:0] q);\n"
+        "localparam [3:0] LOW_BITS=VALUE;\n"
+        "assign q=LOW_BITS;\nendmodule\n"
+    )
+    rtl.write_text(original)
+    legacy = subprocess.run(["iverilog", "-g2005", "-t", "null", str(rtl)],
+                            capture_output=True)
+    assert (legacy.returncode != 0) == sv_only
+    fixed = _run(["--fix", str(rtl)])
+    assert fixed.returncode == 0, fixed.stderr
+    legacy_required = suffix != ".sv" and not sv_only
+    mode = "-g2005" if legacy_required else "-g2012"
+    compiled = subprocess.run(["iverilog", mode, "-t", "null", str(rtl)],
+                              capture_output=True)
+    assert compiled.returncode == 0, compiled.stderr.decode()
+    assert ("fix-reverted-noncompiling" in fixed.stderr) == legacy_required
+    if legacy_required:
+        assert rtl.read_text() == original
+        assert "width-trunc-localparam" in _run([str(rtl)]).stdout
+    else:
+        assert "4'(VALUE)" in rtl.read_text()

@@ -8213,7 +8213,7 @@ def main():
         import shutil as _sh
         _iv = _sh.which("iverilog")
 
-        def _compiles(fp: Path) -> bool:
+        def _compiles(fp: Path, dialect: str = "-g2012") -> bool:
             # -i ignores missing submodules so the net also protects
             # hierarchical/multi-file RTL (review round-2: a file
             # instantiating an elsewhere-defined submodule failed the
@@ -8222,7 +8222,7 @@ def main():
             # generate-scoped reg) is an elaboration error -i does NOT
             # suppress, so the net still catches real bugs.
             try:
-                return _pr.run([_iv, "-g2012", "-i", "-t", "null", str(fp)],
+                return _pr.run([_iv, dialect, "-i", "-t", "null", str(fp)],
                                capture_output=True, text=False
                                ).returncode == 0
             except Exception:
@@ -8266,7 +8266,8 @@ def main():
                       "rtl_hygiene_lint source transaction holds the lock")
                 continue
             pre_bytes = p.read_bytes()
-            pre_ok = _compiles(p) if _iv else False
+            pre_v2005 = p.suffix.lower() != ".sv" and _compiles(p, "-g2005") if _iv else False
+            pre_ok = pre_v2005 or (_compiles(p) if _iv else False)
             ur, urnames = (autofix_unread_local_sink(
                 p, unread_native_design, unread_native_top,
                 _source_lock_fd=source_lock_fd)
@@ -8324,7 +8325,7 @@ def main():
                 print(f"INFO unread-sink-fix-refused: {f}: complete elaborated source/include "
                       "read and ownership census unavailable; findings retained")
             post_fix_bytes = p.read_bytes()
-            if _iv and pre_ok and (ur or ir or orr or n or g or w or s or ct or ac) and not _compiles(p):
+            if _iv and pre_ok and (ur or ir or orr or n or g or w or s or ct or ac) and not _compiles(p, "-g2005" if pre_v2005 else "-g2012"):
                 # Roll back only the exact bytes this locked transaction left.
                 # A writer ignoring advisory locks must never have its bytes
                 # replaced by our stale pre-fix snapshot.
