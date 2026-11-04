@@ -46,3 +46,20 @@ def test_qualified_attached_composition_keeps_existing_chain(style):
 def test_mixed_negated_constraint_and_composition_is_explicitly_unqualified():
     prompt, _, _ = request(style="not using registers, but using full adders")
     assert arithmetic.synth(prompt, "neutral_sum") is None
+
+
+def test_same_statement_later_composition_denial_is_not_ignored():
+    prompt, _, _ = request(style="using full adders but do not build it from full adders")
+    ordinary, _, _ = request(style="")
+    assert arithmetic.synth(prompt, "neutral_sum") == arithmetic.synth(ordinary, "neutral_sum")
+
+
+def test_same_statement_opposed_directions_are_unqualified():
+    prompt, _, _ = request(style="not built from full adders but using full adders")
+    assert arithmetic.synth(prompt, "neutral_sum") is None
+
+
+def test_repeated_positive_composition_in_one_statement_stays_valid():
+    prompt, _, spans = request(style="using full adders and built from full adders")
+    assert_fulladder_composition(arithmetic.synth(prompt, "neutral_sum"), 5,
+        ("operand_u", "operand_v", "total"), spans)
