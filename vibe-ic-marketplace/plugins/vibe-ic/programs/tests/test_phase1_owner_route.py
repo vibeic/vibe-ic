@@ -157,3 +157,43 @@ def test_project_admitted_route_may_omit_cli_override(tmp_path, monkeypatch):
     assert [x[0] for x in calls] == ['phase1'] and rc == 0
     assert '--route' not in calls[0][1] and None not in calls[0][1]
     assert '--complete-retained-metrics' in calls[0][1]
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_public_phase1_resume_survives_actual_row_driver(tmp_path, monkeypatch, explicit):
+    import sys
+    manifest = tmp_path / 'manifest.json'
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Digital hard-IP')
+    manifest.write_text(json.dumps({'features': features}))
+    source = tmp_path / 'input'
+    source.mkdir()
+    (source / 'step_0_5ic_answers.json').write_text(json.dumps({
+        'answers': {'deliverable': 'HARDMACRO'}, 'answer_provenance': {
+            'deliverable': {'answered_by': 'owner', 'citation': 'Deliver an IP hard macro.'}}}))
+    docs = runner._pl.generated_docs_dir(tmp_path)
+    docs.mkdir(parents=True)
+    (docs / 'L1_DATASHEET.json').write_text('{}')
+    argv = ['runner', str(tmp_path), '--route', 'ip', '--flow109-manifest', str(manifest),
+            '--no-dashboard']
+    if explicit:
+        request = tmp_path / 'resume.json'
+        request.write_text(json.dumps({'schema': 'vibeic/minimal-resume-request/1',
+            'consumer_step': 'D01', 'explicit_rerun_steps': ['D01'], 'reason': 'Updated design input.'}))
+        argv += ['--resume-request', str(request)]
+    else:
+        argv += ['--entry-step', 'D01', '--exit-step', 'D01']
+    monkeypatch.setattr(sys, 'argv', argv)
+    monkeypatch.setattr(runner, '_activate_runtime_program_tree', lambda *_: None)
+    monkeypatch.setattr(runner, '_line_buffer_own_stream', lambda: None)
+    calls = []
+    class NativeBoundary(Exception):
+        pass
+    def native(label, program, args, **kwargs):
+        calls.append(args)
+        raise NativeBoundary
+    monkeypatch.setattr(runner, '_run_phase', native)
+    with pytest.raises(NativeBoundary):
+        runner._main()
+    assert len(calls) == 1
+    assert ('--complete-retained-metrics' in calls[0]) is not explicit
