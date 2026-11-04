@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shutil
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,172 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import benchmark_dispatch as bd
 import benchmark_io_adapter as bio
+
+def _selected_d09_handoff(tmp_path, monkeypatch, damage=None, *, row_id='D09'):
+    import design_one_shot_runner as author
+    import execution_policy
+    import vibe_ic_one_shot_runner as wrapper
+    from _hostpaths import require_repo
+
+    runner = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                          'programs', 'vibe_ic_one_shot_runner.py')
+    project = tmp_path / 'subject'
+    (project / 'input').mkdir(parents=True)
+    (project / 'input/phase1_prompt.md').write_text('Implement a neutral buffer.')
+    argv = [sys.executable, str(runner), str(project), '--flow', '109',
+            '--entry-step', row_id, '--exit-step', 'D11']
+    step = '1' if row_id == 'D09' else '2'
+    child_invocation = {}
+
+    def fake_run(command, **kwargs):
+        env = kwargs['env']
+        if Path(command[1]).name == 'vibe_ic_one_shot_runner.py':
+            if damage == 'pre_gate':
+                return SimpleNamespace(returncode=1, stdout='', stderr='REFUSED: NEUTRAL_PRE_GATE unavailable\n')
+            wrapper._run_phase('neutral author', runner.with_name('phase2_one_shot_runner.py'),
+                [str(project), '--entry-step', step, '--exit-step', step],
+                env=env, invocation=child_invocation)
+            summary = {'project': str(project), 'verdict': 'NOT_MEASURED'}
+            if row_id == 'D09':
+                report = json.loads((project / 'reports/orchestrator/phase2_one_shot.json').read_text())
+                summary['d09_finalization'] = wrapper._finish_d09_selected_owner(
+                    project, report, child_invocation, published_current=True)
+                if damage == 'launched_child':
+                    summary['d09_finalization']['launched_invocation_id'] = 'foreign-child'
+                elif damage == 'missing_finalization':
+                    summary.pop('d09_finalization')
+            summary = bd._bind_runner_report(summary,
+                project, str(runner), 'vibe_ic_one_shot.json',
+                context=json.loads(env[bd._RUNNER_CONTEXT_ENV]))
+            (project / 'reports/orchestrator/vibe_ic_one_shot.json').write_text(json.dumps(summary))
+            return SimpleNamespace(returncode=1, stdout='', stderr='')
+        assert Path(command[1]).name == 'phase2_one_shot_runner.py'
+        row = {'name': 'rtl_gen', 'status': 'NOT_MEASURED',
+               'program_status': 'PASS_WITH_WAIVERS', 'reason_class': 'awaiting_signed_judgement',
+               'detail': 'SPEC_SENTENCES_UNACCOUNTED; invoke spec-to-rtl',
+               'extras': {'fallback_skill': 'spec-to-rtl'}}
+        summary = {'project': str(project), 'verdict': 'NOT_MEASURED', 'steps': [row],
+                   'declared_window': {'entry_step': step, 'exit_step': step,
+                                       'dispatched_step_ids': [step], 'flags': []}}
+        path = project / 'reports/orchestrator/phase2_one_shot.json'
+        with monkeypatch.context() as child_env:
+            child_env.setenv(bd._RUNNER_PARENT_CONTEXT_ENV, env[bd._RUNNER_PARENT_CONTEXT_ENV])
+            if row_id == 'D11':
+                import flow109
+                import flow109_engineering as engineering
+                context = {'resolved_row': {'id': 'D11'}}
+                context_path = project / 'context.json'
+                context_path.write_text(json.dumps(context))
+                attempt = project / 'reports/flow109/attempts/neutral'
+                child_env.setenv(flow109.CONTEXT_ENV, str(context_path))
+                child_env.setattr(flow109, 'validate_execution_context', lambda value: value)
+                child_env.setattr(flow109, '_bound_attempt', lambda *args: attempt)
+                child_env.setattr(engineering, 'selected_original', lambda *args: True)
+                path = attempt / path.name
+            author._write_phase2_report(path, summary, project,
+                invocation_context=json.loads(env[bd._RUNNER_CONTEXT_ENV]),
+                publish_current=row_id == 'D11')
+        document = json.loads(path.read_text())
+        binding = document['runner_binding']
+        if damage == 'parent':
+            binding.setdefault('parent_invocation', {})['invocation_id'] = 'foreign-parent'
+        elif damage == 'missing_parent':
+            binding.pop('parent_invocation', None)
+        elif damage == 'source':
+            binding['source']['runner']['sha256'] = '0' * 64
+        elif damage == 'argv':
+            binding['argv'][-1] = '2'
+        elif damage == 'material':
+            binding['material']['input'] = {}
+        elif damage == 'producer':
+            binding['producer']['sha256'] = '0' * 64
+        elif damage == 'unknown_child':
+            binding['argv'][1] = str(runner.with_name('phase1_one_shot_runner.py'))
+            binding['source'] = bd._runner_source_snapshot(binding['argv'])
+        if damage not in (None, 'report_hash', 'replay'):
+            path.write_text(json.dumps(document))
+        return SimpleNamespace(returncode=1, stdout='', stderr='')
+
+    monkeypatch.setattr(bd.subprocess, 'run', fake_run)
+    monkeypatch.setattr(wrapper, '_verify_runtime_command', lambda command: None)
+    monkeypatch.setattr(wrapper, '_flow109_selected_row', lambda row: None)
+    monkeypatch.setattr(execution_policy, 'child_arguments', lambda args, **kwargs: args)
+    monkeypatch.setattr(execution_policy, 'child_pass_fds', lambda: ())
+    monkeypatch.setattr(bd, '_install_orphan_guard', lambda: None)
+    process = bd._RunnerBudget(1, 1, 0).run(argv)
+    return project, argv, process, child_invocation
+
+
+@pytest.mark.parametrize('row_id', ['D09', 'D11'])
+def test_selected_d09_child_handoff_reaches_parent_collection(tmp_path, monkeypatch, row_id):
+    project, argv, process, child = _selected_d09_handoff(tmp_path, monkeypatch, row_id=row_id)
+    got = bd._collect_runner_result(process, argv, 'neutral', 'neutral', project)
+    assert got['runner_diagnostics']['status'] == 'REPORTS_AVAILABLE', got
+    assert 'reason' not in got['runner_diagnostics']
+    assert process.rc == 1 and process.error is None and not got['ok']
+    handoff = bd._rtl_gen_waive(project)
+    task = bd._make_ai_backup_task('neutral', project, [handoff['fallback_skill']],
+        'rtl_gen_waive', handoff['detail'], 'neutral', tmp_path / 'synthetic-source', tmp_path)
+    assert task['skill'] == 'spec-to-rtl' and task['handoff_source'] == 'rtl_gen_waive'
+    assert task['initial_output_manifest'] == []
+    assert (tmp_path / 'ai_backup_tasks' / (task['task_sha256'] + '.json')).is_file()
+    report = json.loads((project / 'reports/orchestrator/phase2_one_shot.json').read_text())
+    if row_id == 'D09':
+        assert report['runner_binding']['invocation_id'] == child['invocation_id']
+    else:
+        assert report['runner_binding']['invocation_id'] == process.invocation_id
+        owned = project / report['runner_binding']['owner_report']['path']
+        assert json.loads(owned.read_text())['runner_binding']['invocation_id'] == child['invocation_id']
+    assert child['invocation_id'] != process.invocation_id
+    assert report['steps'][0]['status'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('damage', ['parent', 'missing_parent', 'source', 'argv',
+                                    'material', 'producer', 'pre_gate', 'report_hash',
+                                    'unknown_child', 'replay',
+                                    'launched_child', 'missing_finalization'])
+def test_selected_d09_handoff_rejects_foreign_or_changed_evidence(tmp_path, monkeypatch, damage):
+    project, argv, process, _ = _selected_d09_handoff(tmp_path, monkeypatch, damage)
+    if damage == 'report_hash':
+        report = project / 'reports/orchestrator/phase2_one_shot.json'
+        document = json.loads(report.read_text())
+        document['runner_binding']['invocation_id'] = 'changed-child'
+        report.write_text(json.dumps(document))
+    elif damage == 'replay':
+        monkeypatch.setattr(bd.subprocess, 'run', lambda *args, **kwargs:
+                            SimpleNamespace(returncode=1, stdout='', stderr=''))
+        process = bd._RunnerBudget(1, 1, 0).run(argv)
+    got = bd._collect_runner_result(process, argv, 'neutral', 'neutral', project)
+    assert got['ok'] is False and got['runner_diagnostics'].get('reason'), got
+    assert 'completion' not in got
+
+
+@pytest.mark.parametrize('outer_launch', ['absent', 'different_child', 'replayed_child'])
+def test_selected_d09_cannot_reparent_a_prior_child_report(tmp_path, monkeypatch, outer_launch):
+    import copy
+    project, argv, old, child = _selected_d09_handoff(tmp_path, monkeypatch)
+    report_path = project / 'reports/orchestrator/phase2_one_shot.json'
+    old_report = json.loads(report_path.read_text())
+
+    def replay(command, **kwargs):
+        context = json.loads(kwargs['env'][bd._RUNNER_CONTEXT_ENV])
+        report = copy.deepcopy(old_report)
+        report['runner_binding']['parent_invocation'] = context
+        report_path.write_text(json.dumps(report))
+        outer = {'project': str(project), 'verdict': 'NOT_MEASURED'}
+        if outer_launch != 'absent':
+            outer['d09_finalization'] = {'verdict': 'NOT_MEASURED',
+                'launched_invocation_id': child['invocation_id'] if outer_launch == 'replayed_child' else 'new-child'}
+        outer = bd._bind_runner_report(outer, project, argv[1], 'vibe_ic_one_shot.json', context=context)
+        (project / 'reports/orchestrator/vibe_ic_one_shot.json').write_text(json.dumps(outer))
+        return SimpleNamespace(returncode=1, stdout='', stderr='')
+
+    monkeypatch.setattr(bd.subprocess, 'run', replay)
+    current = bd._RunnerBudget(1, 1, 0).run(argv)
+    assert current.invocation_id != old.invocation_id
+    got = bd._collect_runner_result(current, argv, 'neutral', 'neutral', project)
+    assert got['runner_diagnostics']['status'] == 'REPORT_BINDING_MISMATCH', got
+    assert got['ok'] is False and got['runner_diagnostics'].get('reason')
 
 WIRE = "module neutral(input a,output y); assign y=a; endmodule\n"
 
