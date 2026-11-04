@@ -528,3 +528,87 @@ def test_historical_native_proof_refuses_changed_archive_or_subject(tmp_path, mo
 def test_source_change_during_native_execution_remains_unbound(tmp_path, monkeypatch):
     _, _, _, got = _retained_compiled_task(tmp_path, monkeypatch, change_during_execution=True)
     assert got["ok"] is False and got["runner_diagnostics"]["reason_class"] == "RUNNER_SOURCE_UNBOUND"
+
+
+@pytest.fixture(scope="module")
+def delegated_author_handoff(tmp_path_factory):
+    """Actual D09 front door, child author and collector; no generated RTL."""
+    from _hostpaths import require_repo
+    root = tmp_path_factory.mktemp("delegated-author")
+    project = root / "run/projects/neutral"
+    prompt = project / "input/phase1_prompt.md"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Implement neutral with input a and output y.\n")
+    bio._stage_public_original("neutral", prompt.read_text(), {}, project)
+    registry = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow", "flow109.json")
+    features = next(p["features"] for p in json.loads(registry.read_text())["reference_profiles"]
+                    if p["name"] == "RTL-only")
+    manifest = project / "input/flow109-manifest.json"
+    manifest.write_text(json.dumps({"features": features}))
+    argv = [sys.executable, str(PROGRAMS / "vibe_ic_one_shot_runner.py"), str(project),
+            "--route", "ip", "--skip-analog", "--skip-hardware", "--skip-phase3",
+            "--no-dashboard", "--rtl-input", "original", "--flow", "109",
+            "--flow109-manifest", str(manifest), "--entry-step", "D09", "--exit-step", "D11"]
+    process = bd._RunnerBudget(1, 1, 1).run(argv)
+    assert process.rc == 1 and process.error is None, (process.stdout, process.stderr)
+    return project, argv, process
+
+
+def test_actual_delegated_author_handoff_reaches_collection(delegated_author_handoff):
+    project, argv, process = delegated_author_handoff
+    got = bd._collect_runner_result(process, argv, "verilogeval", "neutral", project)
+    # The old consumer observes REPORT_BINDING_MISMATCH for a real child
+    # author handoff and prevents collection before the missing-RTL decision.
+    assert got["runner_diagnostics"]["status"] == "REPORTS_AVAILABLE", got
+    assert got["ok"] is False and "RUNNER_REPORT_UNBOUND" not in got.get("reason", "")
+    report = json.loads((project / "reports/orchestrator/phase2_one_shot.json").read_text())
+    binding = report["runner_binding"]
+    assert binding["invocation_id"] != process.invocation_id
+    assert binding["parent_invocation"]["invocation_id"] == process.invocation_id
+    assert Path(binding["argv"][1]).name == "phase2_one_shot_runner.py"
+    assert binding["material"]["output_rtl"] == {}
+    assert not (project / "phase2/stage1/rtl").exists()
+
+
+@pytest.mark.parametrize("damage", ["drop_parent", "parent_generation", "parent_source",
+                                  "parent_options", "parent_project", "child_source",
+                                  "child_options", "child_generation", "child_material",
+                                  "child_project", "child_report_name"])
+def test_delegated_author_rejects_grafted_parent_or_child(delegated_author_handoff, damage):
+    import copy
+    from dataclasses import replace
+    project, argv, process = delegated_author_handoff
+    current = project / "reports/orchestrator/phase2_one_shot.json"
+    receipt_path = Path(process.receipt_path)
+    originals = {p: p.read_bytes() for p in (current, receipt_path)}
+    try:
+        report = json.loads(current.read_bytes())
+        binding = report["runner_binding"]
+        # On BASE the producer omits the parent. Insert it only in these bad
+        # controls so they exercise the consumer independently of that omission.
+        parent = binding.setdefault("parent_invocation", {
+            "invocation_id": process.invocation_id, "argv": list(argv),
+            "project": str(project), "source": copy.deepcopy(process.invocation["source_before"])})
+        if damage == "drop_parent": del binding["parent_invocation"]
+        elif damage == "parent_generation": parent["invocation_id"] = "foreign-parent"
+        elif damage == "parent_source": parent["source"]["runner"]["sha256"] = "0" * 64
+        elif damage == "parent_options": parent["argv"].append("--foreign-option")
+        elif damage == "parent_project": parent["project"] = str(project.parent)
+        elif damage == "child_source": binding["source"]["runner"]["sha256"] = "0" * 64
+        elif damage == "child_options":
+            binding["argv"][binding["argv"].index("--exit-step") + 1] = "2"
+        elif damage == "child_generation": binding["invocation_id"] = process.invocation_id
+        elif damage == "child_material": binding["material"]["input"] = {}
+        elif damage == "child_project": binding["project"] = str(project.parent)
+        else: binding["report_name"] = "vibe_ic_one_shot.json"
+        current.write_text(json.dumps(report))
+        receipt = copy.deepcopy(process.invocation)
+        receipt["reports_after"] = bd._runner_report_snapshot(project)
+        receipt_path.write_text(json.dumps(receipt))
+        candidate = replace(process, invocation=receipt,
+            receipt_sha256=hashlib.sha256(receipt_path.read_bytes()).hexdigest())
+        got = bd._collect_runner_result(candidate, argv, "verilogeval", "neutral", project)
+        assert got["ok"] is False and "completion" not in got
+        assert got["runner_diagnostics"]["reason_class"] == "RUNNER_REPORT_UNBOUND", got
+    finally:
+        for path, raw in originals.items(): path.write_bytes(raw)
