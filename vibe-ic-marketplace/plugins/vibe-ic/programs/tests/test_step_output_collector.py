@@ -562,3 +562,41 @@ def test_successful_producer_retains_failing_canonical_child_consumer(tmp_path, 
     assert saved['result']['rows'][0]['status'] == 'PASS'
     assert not saved['canonical_pass']
     assert SOC.latest_pass(tmp_path, '7') is None
+
+
+@pytest.mark.parametrize('directory_key', ['step_dir', 'directory', 'folder'])
+def test_flow109_captures_native_filename_hash_map(tmp_path, directory_key):
+    project = tmp_path / 'project'
+    native = project / 'native' / 'lint'
+    native.mkdir(parents=True)
+    transcript = native / 'lint.log'
+    transcript.write_text('native lint completed: zero errors\n')
+    (native / 'unreferenced.log').write_text('another invocation\n')
+    original = transcript.read_bytes()
+    result = {'native': {directory_key: str(native),
+                         'sha256': {'lint.log': SOC._sha(transcript)}},
+              'default_row_status': 'PASS'}
+    row = {'id': 'R1', 'position': 1, 'name': 'Native lint'}
+    attempt = SOC.begin_flow109_row(project, row, {'context_sha256': 'context'})
+    SOC.finish_flow109_row(project, row, {}, result, attempt)
+    listing = json.loads((attempt['folder'] / 'outputs.json').read_text())
+    assert listing['capture_errors'] == []
+    assert [item['rel'] for item in listing['outputs']] == ['native/lint/lint.log']
+    item = listing['outputs'][0]
+    captured = attempt['folder'] / 'outputs' / item['snapshot']
+    assert captured.read_bytes() == original
+    assert item['sha256'] == SOC._sha(captured)
+    transcript.write_text('a later native invocation\n')
+    assert captured.read_bytes() == original
+
+
+def test_flow109_native_filename_hash_map_keeps_external_files_external(tmp_path):
+    project = tmp_path / 'project'
+    project.mkdir()
+    external = tmp_path / 'pdk'
+    external.mkdir()
+    model = external / 'model.lib'
+    model.write_text('external PDK model\n')
+    result = {'native': {'step_dir': str(external),
+                         'sha256': {'model.lib': SOC._sha(model)}}}
+    assert list(SOC._known_files(project, result)) == []
