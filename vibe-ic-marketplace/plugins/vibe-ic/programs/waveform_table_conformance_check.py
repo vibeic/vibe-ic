@@ -1,39 +1,5 @@
 #!/usr/bin/env python3
-"""waveform_table_conformance_check.py — plugin gate (ORGANIC #716 / Prob098_circuit7).
-
-DETERMINISTIC waveform-table conformance gate for "read the simulation waveform,
-then implement it" prompts (the VerilogEval circuitN family). When a prompt
-embeds a literal ``time [clk] <input...> [internal...] <output>`` simulation
-table, the candidate RTL MUST reproduce that table's OUTPUT column under the
-input column. A blind agent that MIS-COUNTS pipeline stages (e.g. reads an early
-X-window — actually an input-sampling race — as an extra register stage and
-authors a TWO-stage ``q1<=~a; q<=q1`` pipeline where the spec is a ONE-stage
-``q<=~a``) produces RTL whose self-TB still "passes" but which FAILS the hidden
-scorer. This program is the independent yard-stick: it replays the table the way
-the scorer compares (X in the golden/table matches anything; X in the DUT only
-matches a table X) and BLOCKS on any mismatch.
-
-THE FAILURE THIS CLOSES
------------------------
-Prob098_circuit7: prompt waveform settles q=1 at the SECOND posedge (t=15) with
-a=0; the agent reverse-engineered a TWO-stage delay (``q1<=~a; q<=q1``). The
-real reference is ONE-stage ``q<=~a`` — the t=5..t=10 X-window is the TB's
-NBA input-sampling race (``@(posedge) a<=0`` leaves a=x at the first edge), NOT
-a second pipeline stage. The two-stage RTL scores 58/123 mismatches on the
-hidden TB; the one-stage scores 0. No single-self-TB flow catches this; this
-program does.
-
-§4.05 SAFETY — PROVEN-FAITHFUL ENVELOPE ONLY (no false-block)
--------------------------------------------------------------
-A blind table-replay CANNOT faithfully reconstruct the dataset generator's exact
-edge scheduling across EVERY sequential idiom. Empirically (10 waveform goldens),
-a generic replay false-blocks correct NEGEDGE/level-sensitive-LATCH designs
-(Prob145_circuit8) and COMBINATIONAL-output Moore FSMs that expose an INTERNAL
-state column (Prob147_circuit10), and mis-handles MULTI-BIT/hex output columns
-(Prob117/Prob126). So this gate runs ONLY inside the envelope where its replay
-is PROVABLY faithful — and SKIPs (rc 0, NEVER blocks) everywhere else:
-
-  ENVELOPE A — COMBINATIONAL truth-table: NO clk column AND no register idiom in
+"""  ENVELOPE A — COMBINATIONAL truth-table: NO clk column AND no register idiom in
     the table. Pure input→output value match per row; zero timing ambiguity.
   ENVELOPE B — SINGLE-CLOCK POSEDGE-REGISTERED, single-bit output, every table
     column is a declared module port (no internal-observability column), output
@@ -454,14 +420,6 @@ def build_tb(envelope, cols, rows, out_col, in_cols, top, clk_name):
     return "\n".join(L) + "\n"
 
 
-# A waveform table EXPLICITLY attributed to a named module — "Module B can be
-# described by the following simulation waveform". When that module is NOT the top,
-# the table is that SUB-MODULE's function, not the top's I/O; the top is built FROM
-# it (a structural composition). Replaying a sub-module's table against the top
-# false-blocks a correct design (Prob131_mt2015_q4: top z = (A1|B1)^(A2&B2), but the
-# table describes Module B = XNOR). §4.05-narrow: fires ONLY on an explicit
-# "Module <X> ... waveform" attribution with X != top — the circuitN family
-# describes the waveform as the TOP's own behaviour and is unaffected.
 _SUBMOD_WAVEFORM_RE = re.compile(
     r'\bModule\s+([A-Za-z]\w*)\b[^.\n]{0,80}?\b(?:simulation\s+waveform|waveform|timing\s+diagram)',
     re.I)
@@ -487,8 +445,6 @@ def main():
     a = ap.parse_args()
 
     src = open(a.prompt or a.table_file).read()
-    # SKIP when a --prompt attributes the waveform to a named SUB-module (not the top):
-    # the table is that sub-module's function, not the top's I/O (Prob131_mt2015_q4).
     if a.prompt:
         other = table_scoped_to_other_module(src, a.top)
         if other:

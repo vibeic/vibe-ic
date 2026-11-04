@@ -2,34 +2,6 @@
 """behavioral_fsm_synth.py — deterministic SOLVER for three GENERAL, mechanically-
 parseable BEHAVIORAL-PROSE Moore-FSM shapes that NO sibling solver covers.
 
-WHY (§4.2 absorption, "bucket-② -> bucket-①" / spec-extraction completeness):
-the prose/behavioral FSM family (Prob127/142/152/155 "Lemmings", PS/2 framing,
-serial start/stop, counting/sequence FSMs) is the canonical HARD case — most of it
-genuinely needs natural-language understanding and MUST stay an AI-floor (a wrong FSM
-is far worse than a SKIP, §4.05). But a STRICT subset of that family carries a
-COMPLETE, mechanically-extractable rule that determines the whole Moore machine,
-blind, with a FREE internal encoding (the TB observes only the output). This solver
-recognises exactly that subset and EMITS the RTL deterministically:
-
-  (A) Moore-LATCHED sequence detector. The prompt states a unique binary target
-      sequence ("searches for the sequence 1101 in an input bit stream") AND a
-      LATCHED Moore output ("set <out> to 1, forever, until reset"). This is the
-      Moore twin that mealy_sequence_synth.py DELIBERATELY excludes — its
-      _is_latching_output() bails on "forever/until reset", leaving the latched
-      recogniser "to other solvers". The whole machine is the standard KMP
-      prefix-matching automaton: state = length of the longest pattern-prefix that
-      is a suffix of the bit-stream so far; the accepting state (full match) is
-      ABSORBING and the Moore output is exactly `state == accept`. KMP makes the
-      overlap behaviour DETERMINISTIC, so the usual "state the overlap semantics"
-      requirement that a Mealy pulse needs is moot here (a latched output asserts
-      once the pattern is first seen and never de-asserts — post-match transitions
-      are unobservable). Covers Prob096_review2015_fsmseq.
-
-  (B) reset-PULSE counter. The prompt states "whenever the FSM is reset, assert
-      <out> for <N> cycles, then 0 forever (until reset)". The machine is a length-N
-      shift through N+1 states (B0..B(N-1), Done): the output is 1 in the first N
-      states and 0 in the absorbing Done. Covers Prob095_review2015_fsmshift.
-
   (C) directional bump+fall walker. The prompt completely states two walking
       directions, obstacle-side mapping (left bump -> walk right; right bump ->
       walk left; both -> switch), falling when support is absent, resume-in-the-
@@ -56,23 +28,7 @@ priority, memory, output-style, and reset fact above is explicit. FLOOR-proof fo
 each residual SKIP lives in test_v1_1_76_behavioral_fsm.py. Every firing shape is
 host-verified against its dataset test before being claimed.
 
-API: synth(prompt_text, top="TopModule") -> RTL string | None
-
-RTLLM-PROSE DIALECT (folded 2026-06-23): the same Moore STATED-SEQUENCE detector
-stated in the RTLLM structured-prose dialect ("Module name:/Input ports:" + a
-"detect a specific N-bit binary sequence <bits>" sentence) that the native shapes
-above do not phrase. synth() tries the NATIVE shapes FIRST (byte-identical) and only
-falls through to the dialect (_dia_synth) when the native path returns None. The
-dialect is GATED to the structured-prose form (it REQUIRES a literal "Module name:" +
-"Input ports:" header), so it never re-fires on a VE bullet prompt the native path
-deliberately SKIPs. Ports are read through the RTLLM prose bridge (a no-op on the VE
-forms). The dialect builds the standard Moore KMP detector and implements a GENERAL
-"latch-until-reset" rule: if the prose says the output stays asserted "forever / until
-reset" the accept state is ABSORBING (self-loops); otherwise the ordinary OVERLAPPING
-detector with a non-absorbing accept state (the RTLLM `sequence_detector` shape).
-Every dialect fire is §4.05 parse-or-SKIP (sequence + reset polarity PARSED) and
-host-verified against the dataset TB.
-"""
+API: synth(prompt_text, top="TopModule") -> RTL string | None"""
 from __future__ import annotations
 
 import re
@@ -203,9 +159,6 @@ def _synth_latched_sequence(prompt, top, clk, rst, in_name, out_name):
     if lvl is None:
         return None
     is_async, active_high = lvl
-    # A latched detector that the dataset reset-tests asynchronously would still be
-    # fine, but we never emit an async edge unless async is stated; the reset clause
-    # is honoured exactly as written.
     L = len(pat)
     trans = _kmp_transitions(pat)
     width = max(1, L.bit_length())
@@ -965,17 +918,6 @@ def _dia_reset_polarity(rst_name, text):
     return True
 
 
-def _dia_reset_port_name(rst_name):
-    """Bind to the canonical active-low reset port the RTLLM testbench drives. The
-    RTLLM `sequence_detector` prose names the reset `reset_n` but its testbench
-    instantiates `.rst_n(...)`; the `_n`-suffixed active-low reset's conventional
-    Verilog port name is `rst_n`. This normalization keys ONLY on the reset ROLE +
-    the active-low `_n` suffix — never on a design name — so it is GENERAL."""
-    if re.fullmatch(r"reset_?n", rst_name, re.I):
-        return "rst_n"
-    return rst_name
-
-
 def _dia_synth(prompt_text, top):
     # GATE: the RTLLM structured-prose header pair must both be present.
     if not (_DIA_MODNAME_RE.search(prompt_text)
@@ -1004,9 +946,8 @@ def _dia_synth(prompt_text, top):
     # here `latched` selects ABSORBING (forever/until-reset) vs the ordinary
     # OVERLAPPING (non-absorbing) accept state.
     active_high = _dia_reset_polarity(rst, prompt_text)
-    rst_port = _dia_reset_port_name(rst)
     module = _dia_module_name(prompt_text, top)
-    return _dia_emit_moore_sequence(module, clk, rst_port, in_name, out_name,
+    return _dia_emit_moore_sequence(module, clk, rst, in_name, out_name,
                                     pat, latched, active_high)
 
 

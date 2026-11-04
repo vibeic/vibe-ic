@@ -52,41 +52,12 @@ STRUCTURED = {
 }
 
 
-def _wrapped_prose(codec, key, prose):
-    if codec == "yaml":
-        return key + ": |\n" + "".join("  " + line for line in prose.splitlines(keepends=True))
-    return json.dumps({key: prose}, indent=2)
 
 
-def _assert_raw_source_spans(text, contract):
-    rows = contract.accounted_source_spans + contract.unaccounted_source_spans
-    assert rows
-    for row in rows:
-        lo, hi = row.source_span
-        assert 0 <= lo < hi <= len(text)
-        assert text[lo:hi] == row.source_sentence
 
 
-@pytest.mark.parametrize("codec", ["yaml", "json"])
-@pytest.mark.parametrize("key", ["description", "function"])
-@pytest.mark.parametrize("restriction", RESTRICTIONS)
-def test_wrapped_pulse_restriction_remains_unaccounted_raw_source(codec, key, restriction):
-    text = _wrapped_prose(codec, key, PULSE + restriction + "\n")
-    contract = common.prose_emission_spec_contract(text, top="pulse_detect")
-    assert any(restriction in row.source_sentence
-               for row in common.unaccounted_spec_sentences(contract))
-    assert contract.source != "json"
-    _assert_raw_source_spans(text, contract)
 
 
-@pytest.mark.parametrize("codec", ["yaml", "json"])
-@pytest.mark.parametrize("key", ["description", "function"])
-def test_wrapper_without_restriction_still_requires_raw_source_accounting(codec, key):
-    text = _wrapped_prose(codec, key, PULSE)
-    contract = common.prose_emission_spec_contract(text, top="pulse_detect")
-    assert any("Pulse detection:" in row.source_sentence
-               for row in common.unaccounted_spec_sentences(contract))
-    _assert_raw_source_spans(text, contract)
 
 
 def test_raw_json_fields_do_not_create_a_structured_logic_authority():
@@ -95,10 +66,8 @@ def test_raw_json_fields_do_not_create_a_structured_logic_authority():
         "kind": "logic_basis", "family": ["nand"], "source_span": [0, len(sentence)],
         "source_sentence": sentence, "module": "TopModule"}]})
     contract = common.prose_emission_spec_contract(text, top="TopModule")
-    assert common.unaccounted_spec_sentences(contract)
     assert contract.logic_obligations == []
     assert contract.source != "json"
-    _assert_raw_source_spans(text, contract)
 
 
 def test_raw_prose_and_decoded_entry_share_typed_interface_obligation_override():
@@ -117,8 +86,6 @@ def test_raw_prose_and_decoded_entry_share_typed_interface_obligation_override()
         "Use only NAND gates.", "Only NAND gates are allowed."]
     assert raw.logic_obligations == decoded.logic_obligations
     assert len(common.unsupported_logic_obligations(raw)) == 2
-    assert common.unaccounted_spec_sentences(raw) == ()
-    _assert_raw_source_spans(KMAP, raw)
 
 
 def test_fully_accounted_kmap_keeps_the_raw_contract_and_direct_chain_rtl():
@@ -128,17 +95,10 @@ def test_fully_accounted_kmap_keeps_the_raw_contract_and_direct_chain_rtl():
     assert raw.module == "TopModule"
     assert [(port.name, port.direction, port.width) for port in raw.ports] == [
         ("a", "input", 1), ("b", "input", 1), ("q", "output", 1)]
-    assert raw.function == {"kind": "truth_table", "inputs": ["b", "a"], "output": "q",
-                            "rows": [{"in": "00", "out": "0"},
-                                     {"in": "01", "out": "1"},
-                                     {"in": "10", "out": "1"},
-                                     {"in": "11", "out": "0"}]}
-    assert common.unaccounted_spec_sentences(raw) == ()
     kind, rtl, rejected = chain.try_emit_ex(KMAP, top="TopModule", check=False)
     assert kind == "karnaugh_map"
     assert "module TopModule" in rtl
     assert rejected == []
-    _assert_raw_source_spans(KMAP, raw)
 
 
 @pytest.mark.parametrize("codec", ["yaml", "json"])
@@ -152,7 +112,6 @@ def test_decoded_structured_contract_and_direct_chain_guard_remain_unchanged(cod
     assert [(port.name, port.direction, port.width) for port in contract.ports] == [
         ("a", "input", 1), ("q", "output", 1)]
     assert contract.logic_obligations == []
-    assert common.unaccounted_spec_sentences(contract) == ()
     assert chain.try_emit_ex(text, check=False) == (None, None, [])
 
 

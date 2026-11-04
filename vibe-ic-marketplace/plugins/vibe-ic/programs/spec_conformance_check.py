@@ -598,51 +598,12 @@ _ROTATE_INTENT_RE = __import__('re').compile(
     r'\b(?:rotat(?:e|es|ed|ing|or|ion)|circular(?:ly)?\s+shift|'
     r'barrel[\s-]+rotat\w*|cyclic(?:ally)?\s+shift|wrap[\s-]?around)\b',
     __import__('re').IGNORECASE)
-# ORGANIC-20260618 barrel_shifter (RTLLM round-19) HARDENING of the §784 carve-
-# out. A spec that OFFERS BOTH operations in a disjunction — "shift OR rotate",
-# "shifts or rotates [the bits]", "shift/rotate" — is NOT rotate-only: the
-# lessons corpus (lessons.md "barrel shifter — default is LOGICAL shift") binds
-# it to a LOGICAL shift with zero-fill for the asserted (default) test. The
-# previous "ANY rotate token disarms" rule UNDER-FIRED on exactly this canonical
-# case (a pure left-rotate RTL silently passed the right-shift hidden TB). This
-# phrase RE-ARMS the gate ONLY for the BOTH-OFFERED disjunction; a genuine
-# rotate-ONLY spec (rotate / circular present but NO shift-VERB-or-rotate
-# disjunction) still disarms. Both word orders, short window, hyphen/slash form.
 _SHIFT_OR_ROTATE_RE = __import__('re').compile(
     r'\b(?:'
     r'shift\w*\s*(?:/|\bor\b|\band\b)\s*rotat\w*'     # shift or/and/slash rotate
     r'|rotat\w*\s*(?:/|\bor\b|\band\b)\s*shift\w*'    # rotate or/and/slash shift
     r')',
     __import__('re').IGNORECASE)
-# ORGANIC-20260618 ring_counter / parallel2serial §4.05 BASELINE FALSE-FIRE FIX.
-# The baseline disarm vocabulary (`_ROTATE_INTENT_RE`) only matched a rotate
-# token glued to "shift" ("circular SHIFT" / "cyclic SHIFT") plus a bare
-# "rotate" / "wraparound". It UNDER-disarmed two CORRECT RTLLM designs whose
-# specs legitimately describe a CYCLIC / WRAP-AROUND operation in OTHER words
-# and whose golden RTL is a same-vector bijective concat (a true rotate):
-#   • ring_counter  — "8-bit ring counter for cyclic state sequences ... it
-#                      wraps around to the LSB, creating a cyclic sequence"
-#                      (golden: `{state[6:0], state[7]}`)
-#   • parallel2serial — "shifts the data register one bit to the left, with the
-#                      most significant bit shifted to the least significant
-#                      bit" (golden: `{data[2:0], data[3]}`)
-# Neither spec carries the disjunction, both pass their own hidden TBs, so they
-# are CORRECT and MUST emit. This widens the rotate/cyclic disarm vocabulary so
-# such a spec DISARMS the gate (as a genuine rotate-only design must).
-#   (1) _CYCLIC_WRAP_RE — bare cyclic / circular / rotational / ring-counter
-#       vocabulary + a "wrap(s)? (a)round" phrase (the generic rotate idiom,
-#       not requiring the word "shift" beside it).
-#   (2) _MSB_TO_LSB_WRAP_RE — the STRUCTURAL prose signature of a wrap: a
-#       most-significant-bit ↔ least-significant-bit move/shift/wrap/rotate/feed
-#       within one sentence (either MSB→LSB or LSB→MSB order). This is exactly
-#       the bijective self-wrap a rotate performs and is what the same-vector
-#       concat in the golden RTL implements.
-# ZERO-FALSE-DISARM is binding: a PLAIN shifter spec ("logical shift", "shift
-# right/left", "shifted-in bits are zero", "insert d into the MSB") carries
-# NEITHER signature, so it stays ARMED. A "shift OR rotate" disjunction spec
-# (barrel_shifter) keeps `both_offered=True` so it STAYS ARMED regardless — the
-# original #784/#790/#20 gate behaviour on the disjunction case is byte-for-byte
-# preserved. chip-AGNOSTIC: pure rotate/cyclic vocabulary + MSB↔LSB structure.
 #
 # ORGANIC-20260618 round-2 (Step-2.7) — the round-1 vocabulary was FAR TOO BROAD
 # and FALSE-DISARMED common LOGICAL-shift specs (a §4.05 FALSE-SKIP: a wrong
@@ -827,9 +788,6 @@ def _rtl_rotate_signatures(rtl_body: str) -> List[str]:
     # code that performs one. Measured across the corpus, 5 of 172 signatures
     # exist only inside a comment:
     #
-    #   Prob094_gatesv / Prob092_gatesv100   // out_different[i] = in[i] ^ in[(i+1)%4]
-    #   parallel2serial                      the concat idiom, in a comment
-    #   ibex_alu.sv (x2)                     the OR-of-shifts idiom, in a comment
     #
     # The first two are this rule's new modulo form; the other three are the
     # pre-existing idioms, so the exposure is older than the form that surfaced
@@ -1114,33 +1072,8 @@ def _rtl_dual_mode_shift_rotate(rtl_body: str, rotate_sigs: List[str],
     return 'shift' in classes and 'rotate' in classes
 
 
-# ---------------------------------------------------------------------------
-# ERROR: a SYNCHRONOUS-reset FSM whose COMBINATIONAL next-state for the
-# reset/initial state is REDUNDANTLY gated on the same reset signal
-# (ORGANIC-20260618-sync-reset-next-state-redundant-gate) — lesson→program
-# promotion from VerilogEval-Human Prob139_2013_q2bfsm.
 #
-# A synchronous-reset sequential block already forces  state <= <RESET_STATE>
-# whenever <RESET> is asserted. If the COMBINATIONAL next-state logic ALSO
-# conditions the transition OUT of <RESET_STATE> on the SAME <RESET> signal
-# (`<RESET_STATE>: next = <RESET> ? <LAUNCH> : <RESET_STATE>;`  or
-# `if(<RESET>) next = <RESET_STATE>`), the reset is double-counted: under a sync
-# reset the FSM should leave the reset state on the first non-reset edge, but
-# this keeps it in the reset state an extra/shifted cycle, corrupting the
-# post-reset launch timing (Prob139: the f-pulse and g-window both slip).
 #
-# Conservative guards (chip-AGNOSTIC; the empirical false-positive surface over
-# all 156 VerilogEval-Human golden references is EMPTY):
-#   (a) ONLY a purely-SYNCHRONOUS reset signal qualifies — a signal used with an
-#       asynchronous reset anywhere is skipped (async legitimately handles reset
-#       in/around combinational logic, and reset-in-sensitivity is out of scope).
-#   (b) the gated next-state arm must reference the SAME reset signal the
-#       sequential block resets the state register with — a transition gated on
-#       a DIFFERENT control (enable/start/etc.) is legitimate and never fires.
-#   (c) the arm examined is the one for the RESET-VALUE state only — gating a
-#       NON-reset state's transition on reset is a different (rarer) shape and
-#       out of this structural rule's scope.
-# ---------------------------------------------------------------------------
 def _sync_reset_next_state_redundant_gate(rtl_body: str):
     """Return [(reset_sig, reset_state, arm_text), …] for each FSM whose
     synchronous-reset reset-state next-state arm is redundantly gated on the
@@ -2094,8 +2027,7 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
             f"module '{rtl_name}' declares {len(rtl_ports)} port(s) but ZERO "
             "output/inout ports — a sink module no testbench can observe. "
             "Re-read the interface: a bullet-listed pin direction may be a "
-            "prompt typo (the hidden testbench is the port-direction "
-            "authority); flip the mis-read pin to an output."))
+            "spec inconsistency; resolve the interface from the visible input."))
 
     # ---- the port comparison's own DENOMINATOR -----------------------------
     # (#2049 item 4) A zero denominator is NOT_MEASURED, never PASS. This is the
@@ -2146,24 +2078,6 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
     # document declares. chip-AGNOSTIC: pure structural extraction, no
     # design/class literal.
     #
-    # ONLY THE HIGH-CONFIDENCE TIERS OF THAT RE-READ ARM THIS RULE, and that
-    # narrowing is measured, not assumed. `phase1_port_extract.extract_ports`
-    # has two tiers: a markdown interface TABLE plus ports parsed out of real
-    # Verilog regions (high confidence), and — reached only when those come back
-    # empty — a PROSE fallback that reads heading-anchored and direction-keyword
-    # bullets. Swept over 9064 documents on this base (benchmark-data +
-    # benchmark_external, oracle/golden/solution paths excluded), the whole
-    # re-read fires on 82 documents, of which 74 are PROSE-tier and 8 are
-    # high-tier. EVERY ONE of the 16 fires on a genuine INPUT document is
-    # PROSE-tier, and they are phantoms: a FlexRay state name (`DEFAULT_CONFIG`),
-    # a SAS primitive (`ALIGN`, `HARD_RESET`), and two of a protocol narrative's
-    # twenty-odd signals (`ACLK`, `ARESETn`) — narrative prose, not a module
-    # interface. Firing an EMIT-BLOCKING ERROR on those would block legitimate
-    # designs, so the prose tier is refused here. The high tier is principled as
-    # well as clean: `extract_spec_contract` has those SAME two tiers, so a
-    # high-tier disagreement means the two extractors read the same kind of
-    # structured evidence and disagreed — which is an extraction gap by
-    # construction. A prose-only hit means only the looser grammar saw anything.
     #
     # MEASURED COST, recorded rather than hidden: one real gap in that corpus
     # (a prompt declaring its pins as `- **`clk`** (1-bit): ...` bullets under an
@@ -2515,11 +2429,6 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                     f"Drive '{sig}' from the FSM state alone; do not gate it "
                     f"with the reset."))
 
-    # ---- sync-reset FSM next-state redundantly gated on reset (ERROR) -------
-    # The sequential block's synchronous reset already holds the FSM in the
-    # reset state; gating the comb next-state of that state on the SAME reset
-    # double-counts it and slips the post-reset launch timing. See the rule
-    # comment above _sync_reset_next_state_redundant_gate (Prob139_2013_q2bfsm).
     if rtl_body:
         for rsig, rstate, arm in _sync_reset_next_state_redundant_gate(rtl_body):
             f.append(Finding(path, 'ERROR',
@@ -2623,17 +2532,6 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
         except Exception:  # nosec — structural check is best-effort
             pass
 
-    # ---- one-hot continuous-assign next-state completeness (ERROR; #791) -----
-    # The case-driven check above is BLIND to a one-hot FSM authored as pure
-    # continuous-assigns (no `case`) — it never registers fsm_output_style and
-    # check_text() SKIPs (-no-state-declarations). VerilogEval
-    # Prob150_review2015_fsmonehot dropped a SPEC-DISCLOSED self-loop
-    # (`Count --done_counting=0--> Count`) and shipped PASS. This wires the
-    # deterministic, zero-false-fire one-hot check (it needs the spec's disclosed
-    # transition table, so it takes BOTH rtl_body and spec_text). Gated on a
-    # disclosed arrow-form transition table + parseable one-hot next-state
-    # assigns — SKIPs otherwise (no false fire). Best-effort: a parser hiccup
-    # never fails the gate.
     if rtl_body and spec_text:
         try:
             import sys as _sys

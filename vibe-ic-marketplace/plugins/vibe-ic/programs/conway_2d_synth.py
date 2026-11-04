@@ -2,16 +2,6 @@
 """conway_2d_synth.py — DETERMINISTIC 2-D cellular-automaton (Conway's Game of
 Life-class) -> RTL synth.
 
-THE GAP THIS CLOSES
--------------------
-The 2-D cellular-automaton family (Conway's "Game of Life" and its B.../S...
-generalizations) is a CLOSED-FORM spec, exactly like the 1-D Wolfram Rule-N
-family that `cellular_automaton_synth` already covers — but over a 2-D grid with
-an 8-cell (Moore) neighbourhood instead of a 1-D 3-cell one. Once the STATED
-rule pins which neighbour-counts cause BIRTH (a dead cell turning alive) and
-which cause SURVIVAL (a live cell staying alive), the next state of every cell is
-fully determined with zero ambiguity and no hidden oracle:
-
     next(cell) = 1   iff   (cell alive   and  count in SURVIVAL)
                        or   (cell dead    and  count in BIRTH)
 
@@ -26,13 +16,6 @@ recovery MUST be absorbed as a deterministic PROGRAM. This is that absorption: i
 reads the grid geometry (HxW), the row-major packed-vector mapping, the toroidal
 boundary, the 8-neighbour (Moore) neighbourhood, the birth/survival sets, and the
 clk/load/data[N]/q[N] interface STRAIGHT from the prompt and emits exact RTL.
-
-It is chip-AGNOSTIC and name-AGNOSTIC: it keys on the STATED rule (the
-neighbour-count -> next-state table the prompt spells out), grid dimensions,
-packed mapping and boundary — NOT on any problem name ("conwaylife", "Prob144",
-"Game of Life"). Any HxW toroidal Moore CA with a row-major packed grid and a
-clearly stated B/S rule synthesizes; the canonical Conway rule (B3 / S23) is just
-one point in that envelope.
 
 §4.05 NO-LEAK — EXACT, UNAMBIGUOUS 2-D CA SPECS ONLY
 ---------------------------------------------------

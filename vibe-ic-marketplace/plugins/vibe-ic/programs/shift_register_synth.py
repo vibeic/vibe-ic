@@ -14,17 +14,6 @@ extract_shift_register (which only returns FACTS); it reuses port_parser.parse_p
 so it fires on BOTH the VerilogEval-v2 bullet twin and the VerilogEval-human module
 header twin.
 
-It covers four shapes, all deterministic:
-  1. plain shift register  (Prob060: 4-bit, shift-in a 1-bit input, sync active-low
-     reset; Prob061: single 1-bit stage with load/enable priority)
-  2. shift register + random-access read mux (Prob084: shift-in S to Q[0], read
-     Z = q[{A,B,C}])
-  3. load / shift register with areset + load>ena priority + zero shift-in
-     (Prob085: 4-bit right shift)
-  4. left/right rotator selected by a 2-bit enable (Prob105: 100-bit)
-  5. arithmetic/logical barrel shifter selected by an "amount" code (Prob115:
-     64-bit, ±1 / ±8, arithmetic right shift)
-
 §4.05 NO-LEAK doctrine — a wrong shift register is far worse than a skip, because it
 silently passes lint/synth and only the testbench (which we may not have) catches it.
 So this SKIPs (returns None) whenever ANY of the following is not UNAMBIGUOUSLY
@@ -75,10 +64,6 @@ def _is_shift_family(text: str) -> bool:
         text, re.I))
 
 
-# --------------------------------------------------------------------------- #
-# Shape 5: arithmetic / logical barrel shifter with an "amount" / mode code that
-# enumerates direction + magnitude per code (Prob115).
-# --------------------------------------------------------------------------- #
 def _try_barrel(text, ins, outs, top):
     sel = _find(ins, "amount", "mode", "sel", "select")
     if not sel:
@@ -159,9 +144,6 @@ def _try_barrel(text, ins, outs, top):
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------- #
-# Shape 4: left/right rotator selected by a 2-bit enable (Prob105).
-# --------------------------------------------------------------------------- #
 def _try_rotator(text, ins, outs, top):
     if not re.search(r"rotat(?:e|or|ing)", text, re.I):
         return None
@@ -232,10 +214,6 @@ def _try_rotator(text, ins, outs, top):
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------- #
-# Shape 3: load / shift register with reset + load>ena priority + zero shift-in
-# (Prob085 — 4-bit right shift, async areset).
-# --------------------------------------------------------------------------- #
 def _try_load_shift(text, ins, outs, top):
     clk = _find(ins, "clk", "clock")
     if not clk:
@@ -257,9 +235,6 @@ def _try_load_shift(text, ins, outs, top):
     is_left = bool(re.search(r"left[\s/-]*shift|shift\s+left", text, re.I))
     if is_right == is_left:                  # neither or both -> ambiguous direction
         return None
-    # shift-in value must be stated as zero (a plain logical shifter fills 0).
-    # Prob085: "q[3] becomes zero" / "shifts in a zero". If a non-zero or unstated
-    # shift-in, SKIP.
     if not re.search(r"becomes?\s+zero|shifts?\s+in\s+(?:a\s+)?zero|fill\w*\s+with\s+zero|"
                      r"zero\s+is\s+shifted\s+in", text, re.I):
         return None
@@ -284,8 +259,6 @@ def _try_load_shift(text, ins, outs, top):
     if not re.search(r"load\s+(?:input\s+)?has\s+higher\s+priority|"
                      r"load\s+(?:has|takes)\s+priority|load\s+.*\s+priority", text, re.I):
         return None
-    # right shift, fill q[w-1] with 0, drop q[0]: q <= {1'b0, q[w-1:1]}  but Prob085
-    # ref writes q <= q[3:1] (3 bits into [3:0] => q[3] becomes 0 via zero-extend).
     if is_right:
         shift_expr = f"{{1'b0, {q_name}[{w-1}:1]}}"
     else:
@@ -312,10 +285,6 @@ def _try_load_shift(text, ins, outs, top):
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------- #
-# Shape 2: shift register + random-access read mux (Prob084).
-# Shift-in S to Q[0], enable=sync active-high shift, read Z = q[{A,B,C}].
-# --------------------------------------------------------------------------- #
 def _try_shift_mux(text, ins, outs, top):
     clk = _find(ins, "clk", "clock")
     if not clk:
@@ -387,10 +356,6 @@ def _try_shift_mux(text, ins, outs, top):
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------- #
-# Shape 1: plain serial shift register (Prob060: width-N, shift-in a 1-bit input,
-# 1-bit out = the far end; Prob061: a single 1-bit stage with load/enable).
-# --------------------------------------------------------------------------- #
 def _try_plain_shift(text, ins, outs, top):
     clk = _find(ins, "clk", "clock")
     if not clk:
@@ -401,12 +366,6 @@ def _try_plain_shift(text, ins, outs, top):
         return None
     out_name = outs[0][0]
 
-    # -- Prob061: single-stage shift register with explicit load/enable priority. -- #
-    #    "Input E is for enabling shift, R for value to load, L is asserted when it
-    #     should load, and w is the input from the previous stage." (VE-human) — the
-    #    VE-v2 twin describes the SAME serial-data port w as "the input TO the FIRST
-    #    stage of the shift register" instead of "from the previous stage". Both pin w
-    #    as the shift-in serial data of this stage; accept either phrasing.
     L = _find(ins, "l")
     R = _find(ins, "r")
     E = _find(ins, "e")
@@ -440,7 +399,6 @@ def _try_plain_shift(text, ins, outs, top):
         ]
         return "\n".join(lines)
 
-    # -- Prob060: width-N serial shift register, shift-in a 1-bit input, out = end. -- #
     m = re.search(r"shift\s+register\s+with\s+(?:(\w+)|(\d+))\s+D\s*[- ]?flops?", text, re.I)
     width = None
     if m:

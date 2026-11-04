@@ -12,17 +12,6 @@ means — never on the problem name.
 
 Families it solves (each proven host-0-mismatch on its VerilogEval-Human target):
 
-  * plain D flip-flop, width N            q <= d;                 (Prob031, Prob034)
-  * sync reset to 0 / to a stated value   if(rst) q<=VAL; else..  (Prob041,46,48,73)
-  * async reset to 0 / to a stated value  @(posedge clk,posedge…) (Prob047, Prob049)
-  * XOR-self-feedback D flip-flop         q <= in ^ q;            (Prob053)
-  * byte-enable register                  if(be[k]) q[..]<=d[..]  (Prob073)
-  * positive-edge detect  (0->1)          pedge <= in & ~prev;    (Prob054)
-  * any-edge   detect                     any  <= in ^ prev;      (Prob045)
-  * negative-edge detect  (1->0)          nedge <= ~in & prev;
-  * edge CAPTURE (set-and-hold to reset)  out <= out|(~in&prev);  (Prob066)
-  * dual-edge triggered flip-flop         qp/qn + mux on clk      (Prob078)
-
 §4.05 NO-LEAK: a wrong sample is strictly worse than a SKIP, so this SKIPs on ANY
 ambiguity — unknown width, unstated/contradictory edge polarity, unclear reset
 behaviour, capture-vs-detect ambiguity, unstated enable semantics, or any prompt
@@ -90,17 +79,12 @@ def _detect_reset(prompt: str, ins) -> object:
             cand = (n, w)
             break
     if cand is None:
-        # a bare single-char reset port (e.g. `r`) is accepted ONLY when the prose
-        # explicitly calls it a "reset" — keeps a stray data line `r` from being
-        # mistaken for a reset (Prob048: input `r`, prose "synchronous reset").
         if re.search(r"\breset\b", prompt, re.I):
             singles = [(n, w) for n, w in ins
                        if w == 1 and n.lower() in ("r", "rst", "rn", "n")]
             if len(singles) == 1:
                 cand = singles[0]
     if cand is None:
-        # no reset port -> a reset-less register (legal: Prob031/34/53/54/45/78)
-        # but if the prose loudly claims a reset yet no port matches, SKIP.
         if re.search(r"\breset\b", prompt, re.I) and not re.search(
                 r"\bno\s+reset\b|without\s+(a\s+)?reset|there\s+is\s+no\s+reset",
                 prompt, re.I):
@@ -125,12 +109,6 @@ def _detect_reset(prompt: str, ins) -> object:
     if active_high is None:
         if rl.endswith("n") and rl not in ("reset",):   # resetn / rst_n / arstn
             active_high = False
-    # bare "reset"/"areset"/"ar"/"r" with no polarity prose: VerilogEval refs
-    # treat an un-qualified active-high reset as the default ONLY when the prose
-    # says "reset" without "active low". To stay safe we require either a prose
-    # polarity OR a name ending in n. Otherwise — for a bare name with no prose —
-    # default active-high is the universal convention here (Prob047 "active high
-    # asynchronous reset", Prob049 bare "asynchronous reset ar"). Pin it:
     if active_high is None:
         # bare reset name, no polarity word -> assume active-high (industry default
         # for an un-suffixed reset). Both VE refs (ar, areset) do exactly this.
@@ -171,12 +149,6 @@ def _detect_reset(prompt: str, ins) -> object:
     elif mdec:
         rval = int(mdec.group(1))
     else:
-        # reset present but no NUMERIC value clause. Two cases:
-        #   (a) no value clause at all -> the universal convention is reset-to-0
-        #       (Prob073 "active-low reset", no value -> 0).
-        #   (b) a value clause EXISTS but is non-numeric ("reset to some configured
-        #       value", "reset to the seed", "reset to the default") -> the reset
-        #       value is NOT pinned -> AMBIGUOUS, must SKIP (§4.05 no-leak).
         if re.search(r"reset(?:\s+\w+){0,4}?\s+to\s+(?!0\b|zero\b|0x|\d)", prompt, re.I):
             return _AMBIG
         rval = 0
@@ -248,9 +220,6 @@ def synth(prompt_text: str, top: str = "TopModule") -> Optional[str]:
         if re.search(pat, low):
             return None
 
-    # =========================================================================
-    # 1) DUAL-EDGE triggered flip-flop (Prob078)
-    # =========================================================================
     if re.search(r"dual[\s-]*edge", low) or (
             re.search(r"both\s+edges?\s+of\s+the\s+clock", low) and
             re.search(r"flip[\s-]*flop", low)):
@@ -434,19 +403,10 @@ def _synth_dff(prompt_text, top, ins, outs, clk) -> Optional[str]:
     # ---- enumerate non-clk, non-reset inputs ---- #
     other = [(n, w) for n, w in ins if n != clk and (rst_name is None or n != rst_name)]
 
-    # ======================================================================= #
-    # BYTE-ENABLE register (Prob073): a byteena (k bits) + d (N bits) + q (N).
-    # The prose explicitly maps each enable bit to a byte slice.
-    # ======================================================================= #
     be = _find(ins, "byteena", "byte_enable", "byteen", "be")
     if be is not None and re.search(r"byte[\s-]*enable|byteena", low):
         return _synth_byteena(prompt_text, top, ins, outs, clk, edge, reset, be)
 
-    # ======================================================================= #
-    # XOR-self-feedback DFF (Prob053): q <= in ^ q, no reset, 1-bit.
-    # Recognized only when the prose explicitly says the FF input is an XOR of
-    # an input with the FF's own output.
-    # ======================================================================= #
     if re.search(r"\bxor\b", low) and ow == 1 and reset is None:
         # need exactly one 1-bit data input that is the non-feedback XOR operand
         d1 = [(n, w) for n, w in other if w == 1]
@@ -460,11 +420,6 @@ def _synth_dff(prompt_text, top, ins, outs, clk) -> Optional[str]:
             return _emit_header(top, ins, outs) + "\n" + body + "\nendmodule\n"
         return None
 
-    # ======================================================================= #
-    # ENABLE-style with load priority (Prob061: L load R else E shift w) — OUT
-    # of the proven plain-DFF envelope; SKIP (it's a shift-register stage).
-    # Generic "enable" not matching a clean single-data-in DFF -> SKIP.
-    # ======================================================================= #
     if re.search(r"\bload\b|\benable\b|\bshift\b", low) and len(other) > 1:
         # multiple control inputs with load/enable semantics -> not a plain DFF
         return None
@@ -524,9 +479,6 @@ def _synth_dff(prompt_text, top, ins, outs, clk) -> Optional[str]:
     return _emit_header(top, ins, outs) + "\n" + body + "\nendmodule\n"
 
 
-# --------------------------------------------------------------------------- #
-# byte-enable register synthesizer (Prob073)
-# --------------------------------------------------------------------------- #
 def _synth_byteena(prompt_text, top, ins, outs, clk, edge, reset, be) -> Optional[str]:
     low = prompt_text.lower()
     oname, ow = outs[0]

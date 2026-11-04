@@ -21,11 +21,6 @@ VerilogEval twin exists). It fires ONLY on STATED structure:
   * the cascade order is read from the stated dependency prose ("when X=max, Y
     increases"); an unresolvable order is an honest SKIP — never guess the direction.
 
-§4.05 NO-LEAK — return None (SKIP) on ANY ambiguity: a missing clock/reset, any data
-input present (a pure free-running cascade has none), an unstated rollover range, or
-an unresolvable cascade order. It NEVER reads a golden/reference solution: input is
-the prompt text only. It is keyed on STRUCTURE, never on a design NAME.
-
 API:  synth(prompt_text, top=None) -> RTL string | None
       (top defaults to the prompt's "Module name:" line — the name the testbench
        instantiates by; an explicit top overrides it.)

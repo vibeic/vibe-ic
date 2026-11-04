@@ -10,11 +10,6 @@ GATE. This module turns that SAME parse into a SOLVER: it EMITS the RTL that
 implements the table directly (a `case` over the inputs), so the problem is
 program-GENERATED (zero authoring variance) instead of AI-authored-then-gated.
 
-The existing `kmap_grid_synth` / `waveform_truth_table_synth` solvers cover the
-K-map/waveform SOP cases; this one additionally covers the truth-table and
-binary-encoded FSM-next-state-bit cases the gate parses but those solvers miss
-(e.g. Prob069_truthtable1, Prob135_m2014_q6b).
-
 §4.05 NO-LEAK: returns None (SKIP — leaves the author's sample untouched) whenever
 the oracle is not unambiguously complete, inheriting build_oracle's conservative
 envelope verbatim. A fired synth is exhaustively faithful to the parsed table;

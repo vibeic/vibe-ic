@@ -2,32 +2,6 @@
 """mealy_sequence_synth.py — deterministic SOLVER for the MEALY FSM table /
 sequence-detector family (the Mealy twin of full_moore_fsm_synth).
 
-WHY (§4.2 absorption, "bucket-② -> bucket-①"): a VerilogEval prompt that fully
-specifies a MEALY machine — one whose output depends on (state, input) rather than
-on state alone — determines the whole machine, blind, so a single-shot author only
-introduces variance. We RECOGNISE the spec and EMIT the RTL deterministically. Two
-written sub-shapes are accepted. Internal encoding is free only when the input
-does not constrain it. Explicit maps are preserved; a bare one-hot class request
-on an owned register may choose bit positions after all state references close.
-No assumption about which signals a testbench observes relaxes that contract.
-
-  (a) Mealy transition+output table — the output annotation sits on the TRANSITION,
-      i.e. `state --in=V (out=V)--> next` (Prob088_ece241_2014_q5b, the 2's
-      complementer). This is the structural distinction from the Moore solver, whose
-      annotation `STATE (out) --in--> next` sits on the STATE. We REFUSE any prompt
-      that says "Moore" and leave the STATE-annotated arrow form to the Moore solver.
-
-  (b) Stated target bit sequence — "recognizes the sequence \"101\"" / "searches for
-      the sequence 1101", WITH the overlap semantics STATED (overlapping vs
-      non-overlapping) AND a Mealy output (asserted-when-the-next-bit-completes,
-      i.e. depends on the incoming bit, e.g. Prob129_ece241_2013_q8). We build the
-      standard KMP prefix-matching automaton deterministically: state = "length of
-      the longest pattern-prefix that is a suffix of the input so far", and the
-      Mealy output z asserts exactly when (current matched-prefix length, next input
-      bit) would complete the full pattern. Overlapping -> after a match the next
-      state is the KMP failure-overlap; non-overlapping -> after a match restart at
-      the prefix implied by the just-consumed bit from state 0.
-
 §4.05 NO-LEAK — returns None (SKIP, author untouched) on ANY ambiguity. In
 particular it SKIPs when: the prompt says "Moore" (never steal a Moore problem); the
 ports aren't (clk + reset + ≥1 1-bit input + exactly one 1-bit output); a non-clk/
@@ -294,9 +268,7 @@ def _build_sequence_fsm(pat: str, overlapping: bool):
 
 
 def _is_latching_output(prompt: str) -> bool:
-    """A 'set the output to 1, forever, until reset' detector is a MOORE-style
-    latched recognizer (output depends only on a sticky state), NOT a Mealy pulse —
-    SKIP it (Prob096_review2015_fsmseq), it is not this family."""
+
     return bool(re.search(
         r"\b(?:forever|until\s+reset)\b", prompt, re.I)) and bool(
         re.search(r"\bset\b|\bassert(?:ed)?\b|\bstays?\b|\bremain", prompt, re.I))

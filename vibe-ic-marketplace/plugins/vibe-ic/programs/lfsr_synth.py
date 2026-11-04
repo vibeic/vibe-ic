@@ -17,11 +17,6 @@ output bus q[N-1:0] and taps stated as 1-based bit POSITIONS:
     q_next       = {q[0], q[N-1:1]};        // shift right; MSB <- feedback bit q[0]
     q_next[p-1] ^= q[0];   for every tap position p whose index p-1 is NOT the MSB
 
-Position p maps to bus index p-1 (the spec states positions 1..N; the top position
-p=N is the MSB fill already supplied by the {q[0], ...} concatenation, so only the
-NON-top taps add an XOR term). This reproduces the VerilogEval Galois references
-(Prob082 lfsr32 taps 32/22/2/1; Prob086 lfsr5 taps 5/3) exactly.
-
 §4.05 NO-LEAK — return None (SKIP) unless ALL hold:
   * the shared port_parser yields exactly the (clk, reset)->q-bus interface (an LFSR
     with no usable parsed interface, e.g. a prose "Input ports:" block the parser

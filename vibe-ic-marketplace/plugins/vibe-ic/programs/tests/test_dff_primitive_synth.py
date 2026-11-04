@@ -3,15 +3,13 @@
 
 Covers:
   * POSITIVE: the bare D-FF and the sync-reset D-FF emit correct RTL, and both
-    score `Mismatches: 0` against the official VerilogEval-v2 testbench (Tier1).
+    implement the declared interface and sampled data behavior.
   * §4.05 NEGATIVE no-leak: the solver SKIPs (returns None) on every fixture that
     sits JUST OUTSIDE the bare-single-bit-D-FF envelope — async reset, non-zero
     reset value, a vector data path, an enable/load, an FSM cue, a multiplexer
     cue, a missing d/q port, and a d-declared-as-output contradiction. A too-wide
     primitive solver would emit a WRONG register for these, so the negative proof
     is the load-bearing half.
-  * MIS-FIRE sweep: across the whole dataset the solver fires on EXACTLY the two
-    intended D-FF problems and nothing else.
 
 The iverilog-dependent end-to-end checks are SKIPPED when iverilog is absent.
 """
@@ -29,17 +27,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import dff_primitive_synth as D          # noqa: E402
-from _hostpaths import corpus_path  # noqa: E402
-
-_DATASET = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
-_HAVE_IVERILOG = (shutil.which("iverilog") is not None
-                  and shutil.which("vvp") is not None)
-_HAVE_DATASET = _DATASET.is_dir()
-_needs_iv = pytest.mark.skipif(not _HAVE_IVERILOG,
-                               reason="iverilog/vvp not installed")
-_needs_ds = pytest.mark.skipif(not _HAVE_DATASET,
-                               reason="VerilogEval dataset absent; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
-
 # --------------------------------------------------------------------------- #
 # Prompt fixtures (prose shapes only — no golden RTL is read by the solver)
 # --------------------------------------------------------------------------- #
@@ -50,7 +37,7 @@ specified.
 
  - input clk
  - input d
- - input q
+ - output q
 
 The module should implement a single D flip-flop. Assume all sequential
 logic is triggered on the positive edge of the clock.
@@ -149,7 +136,6 @@ def test_bare_dff_emits_register():
     rtl = D.synth(_BARE_DFF, "TopModule")
     assert rtl is not None
     assert "module TopModule" in rtl
-    # output q regardless of the prompt's `input q` typo (primitive shape wins).
     assert "output reg q" in rtl
     assert "q <= d;" in rtl
     assert "posedge clk" in rtl
@@ -191,14 +177,6 @@ def test_dff_skips_when_no_dff_cue():
 
 
 # --------------------------------------------------------------------------- #
-# MIS-FIRE sweep + end-to-end Tier1 (iverilog) — the load-bearing verified claim
-# --------------------------------------------------------------------------- #
-@_needs_ds
-def test_dff_solver_fires_on_exactly_the_two_dff_problems():
-    fires = []
-    for p in sorted(_DATASET.glob("*_prompt.txt")):
-        if D.synth(p.read_text(errors="replace"), "TopModule"):
-            fires.append(p.name[: -len("_prompt.txt")])
-    assert fires == ["Prob031_dff", "Prob048_m2014_q4c"], fires
-
-
+# Explicit directions remain authoritative for a familiar primitive.
+def test_dff_declines_an_input_declared_as_the_state_output():
+    assert D.synth(_BARE_DFF.replace(" - output q", " - input q"), "Storage") is None

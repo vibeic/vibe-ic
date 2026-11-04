@@ -655,7 +655,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `git_prohibition_guard` | any | — | deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions). |
 | `gitignore_scratch_guard` | any | — | ORGANIC #720 |
 | `graycode_parity_synth` | any | — | a DETERMINISTIC solver for the CVDP gray-code and parity families. |
-| `gshare_predictor_synth` | any | — | deterministic SOLVER for the gshare branch-predictor datapath family (VerilogEval Prob153_gshare and any prompt of the same SHAPE). |
+| `gshare_predictor_synth` | any | — | A gshare predictor DECOMPOSES into structural parts, each of which a fully-stated prompt determines blind: |
 | `half_duplex_frame_end_idle_reset_check` | any | — | structural-RTL gate for half-duplex frame-end gap counters. |
 | `half_duplex_response_window_check` | any | — | LL-4. |
 | `half_duplex_wrapper_open_drain_check` | any | — | structural-RTL gate that catches the FPGA-wrapper anti-pattern for half-duplex open-drain pins. |
@@ -1538,7 +1538,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `watchdog_ceiling_semantics_check` | any | — | supervision is not a SHAPE, it is a SEMANTICS. THIS GATE BLOCKS (rc=1). |
 | `waveform_artifact_hygiene_check` | any | — | no sim waveform dumps in the bundle. |
 | `waveform_ext_synth` | any | — | DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption). |
-| `waveform_table_conformance_check` | any | — | plugin gate (ORGANIC #716 / Prob098_circuit7). |
+| `waveform_table_conformance_check` | any | — | ENVELOPE A — COMBINATIONAL truth-table: NO clk column AND no register idiom in the table. Pure input→output value match per row; zero tim... |
 | `waveform_truth_table_synth` | any | — | DETERMINISTIC combinational-waveform → RTL synthesizer (v1.1.38 clean-room §4.2 absorption). |
 | `wishbone_protocol_synth` | any | v0.1.85 | Wishbone B4 protocol synth helper. |
 | `worked_example_sequence_oracle_check` | any | — | deterministic emit gate that turns a spec's PROSE input→output worked example into a self-checking oracle. |
@@ -2223,7 +2223,7 @@ _(no programs in this group)_
 - `git_prohibition_guard` — deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions).
 - `gitignore_scratch_guard` — ORGANIC #720
 - `graycode_parity_synth` — a DETERMINISTIC solver for the CVDP gray-code and parity families.
-- `gshare_predictor_synth` — deterministic SOLVER for the gshare branch-predictor datapath family (VerilogEval Prob153_gshare and any prompt of the same SHAPE).
+- `gshare_predictor_synth` — A gshare predictor DECOMPOSES into structural parts, each of which a fully-stated prompt determines blind:
 - `half_duplex_frame_end_idle_reset_check` — structural-RTL gate for half-duplex frame-end gap counters.
 - `half_duplex_response_window_check` — LL-4.
 - `half_duplex_wrapper_open_drain_check` — structural-RTL gate that catches the FPGA-wrapper anti-pattern for half-duplex open-drain pins.
@@ -3102,7 +3102,7 @@ _(no programs in this group)_
 - `watchdog_ceiling_semantics_check` — supervision is not a SHAPE, it is a SEMANTICS. THIS GATE BLOCKS (rc=1).
 - `waveform_artifact_hygiene_check` — no sim waveform dumps in the bundle.
 - `waveform_ext_synth` — DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption).
-- `waveform_table_conformance_check` — plugin gate (ORGANIC #716 / Prob098_circuit7).
+- `waveform_table_conformance_check` — ENVELOPE A — COMBINATIONAL truth-table: NO clk column AND no register idiom in the table. Pure input→output value match per row; zero tim...
 - `waveform_truth_table_synth` — DETERMINISTIC combinational-waveform → RTL synthesizer (v1.1.38 clean-room §4.2 absorption).
 - `wishbone_protocol_synth` — Wishbone B4 protocol synth helper.  _[v0.1.85]_
 - `worked_example_sequence_oracle_check` — deterministic emit gate that turns a spec's PROSE input→output worked example into a self-checking oracle.

@@ -77,15 +77,6 @@ specific one already SKIPped on its own signature):
        ONLY on the literal "D latch" + (data,enable) 2-input signature; every other
        inferred latch stays a §4.05 bug.
 
-FLOOR (attempted, rejected): a mux-input K-map decomposition shape (Prob093) was
-prototyped — read the K-map, emit each `mux_in[i]` as the per-column function over
-the row inputs. It is NOT mechanically determinable: the benchmark's reference
-`mux_in` is one of MANY valid 4:1-mux decompositions and does not even reproduce the
-literal K-map at every cell (e.g. ref `mux_in[2]=~d` evaluates to 0 at ab=10,cd=11
-where the K-map cell is 1), and the test compares `mux_in` bit-for-bit. No
-deterministic K-map reading reproduces the exact reference bits, so per §4.05 NO-LEAK
-this module does NOT fire on it.
-
 API: synth(prompt_text, top="TopModule") -> str | None ; plus a __main__ CLI.
 Pure regex + small deterministic builders. No external state. Deterministic.
 """
@@ -439,13 +430,6 @@ def _neighbour_vector(text: str, ins: List[Port], outs: List[Port],
     # both[i] = in[i] & in[i+1] for i in 0..N-2 ; both[N-1] = 0 (stated obvious/x).
     # any[i]  = in[i] | in[i-1] for i in 1..N-1 ; any[0]  = 0.
     # different[i] = in[i] ^ in[(i-1) mod N]   (wrap).
-    # PRESERVE each output's DECLARED port range (#4). The VE-v2 twin declares all
-    # three FULL width [N-1:0] (boundary bit present, set to 0); the VE-Human twin
-    # OMITS the don't-care boundary bit from the port range: out_both[N-2:0] (lo=0,
-    # hi=N-2) and out_any[N-1:1] (lo=1, hi=N-1). Emitting full-width for a [N-1:1]
-    # port mis-aligns: the body's LSB 0-bit lands at the TB's bit 1 (the hidden TB
-    # connects an [N-1:1] net LSB-first), corrupting every bit. So emit each output
-    # at its DECLARED [hi:lo] with the body aligned to that range.
     rb_lo, rb_hi = _decl_out_range(text, ob, N)   # out_both
     ra_lo, ra_hi = _decl_out_range(text, oa, N)   # out_any
     rd_lo, rd_hi = _decl_out_range(text, od, N)   # out_different (no don't-care: full)
@@ -904,16 +888,6 @@ def _d_latch(text: str, ins: List[Port], outs: List[Port],
 # --------------------------------------------------------------------------- #
 
 
-# --------------------------------------------------------------------------- #
-# dispatcher                                                                   #
-# --------------------------------------------------------------------------- #
-# v1.1.76 integration DEDUP: S3 (_adder) and S5 (_onehot_fsm_nextstate) are REMOVED
-# from the live dispatch — the dedicated `arithmetic_synth` (adders) and
-# `nextstate_misc_synth` (named one-hot next-state-by-inspection) own those shapes
-# in the registry. Keeping them here too made two generators fire on the same
-# prompt (Prob016/024/027/033 + Prob091/099) — redundant. comb_advanced now owns
-# ONLY the shapes no dedicated solver covers. (The _adder / _onehot_fsm_nextstate
-# functions remain defined for their unit tests but are not dispatched.)
 _SHAPES = (
     _neighbour_vector,       # S4 — out_both/out_any/out_different
     _pairwise_equality,      # S10 — N*N pairwise-equality vector (example-pinned)

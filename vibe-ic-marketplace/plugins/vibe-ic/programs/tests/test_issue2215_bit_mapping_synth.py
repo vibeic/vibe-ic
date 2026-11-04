@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from _prose_handoff_assertions import assert_prose_chain_handoff
+from _prose_handoff_assertions import assert_program_chain_candidate
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
@@ -312,10 +312,9 @@ def test_the_one_shared_chain_reaches_the_generator():
     import deterministic_emit_chain as C                # noqa: PLC0415
     assert "bit_mapping_synth" in C.which_emitters()
     result = C.try_emit_ex(CONDITIONAL, "", "TopModule")
-    assert_prose_chain_handoff(result, CONDITIONAL)
-    sentence = "Convert a 12-bit width to a larger width of 20-bit."
-    assert f"[0:{len(sentence)}] {sentence}" in dict(result[2])["SPEC_SENTENCES_UNACCOUNTED"]
-    rtl = S.emit_rtl(_plan(module="TopModule"))
+    assert_program_chain_candidate(result, CONDITIONAL)
+    rtl = result[1]
+    assert rtl == S.emit_rtl(_plan(module="TopModule"))
     assert "module TopModule (" in rtl
 
 
@@ -340,8 +339,7 @@ def test_a_prompt_that_states_no_complete_mapping_does_not_fire(prompt):
 def test_the_emitted_module_takes_the_name_the_caller_asked_for():
     import deterministic_emit_chain as C                # noqa: PLC0415
     result = C.try_emit_ex(CONDITIONAL, "", "some_other_top")
-    assert_prose_chain_handoff(result, CONDITIONAL)
-    sentence = "Convert a 12-bit width to a larger width of 20-bit."
-    assert f"[0:{len(sentence)}] {sentence}" in dict(result[2])["SPEC_SENTENCES_UNACCOUNTED"]
-    rtl = S.emit_rtl(_plan(module="some_other_top"))
+    assert_program_chain_candidate(result, CONDITIONAL)
+    rtl = result[1]
+    assert rtl == S.emit_rtl(_plan(module="some_other_top"))
     assert "module some_other_top (" in rtl

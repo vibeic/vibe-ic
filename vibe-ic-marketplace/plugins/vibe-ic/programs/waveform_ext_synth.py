@@ -7,37 +7,6 @@ WHAT THIS ADDS (and why the SIBLING solver SKIPs it)
 ``waveform_truth_table_synth.py`` is the canonical waveform synth. It fires only
 inside two narrow proven-faithful envelopes and SKIPs the rest:
 
-  * Its COMBINATIONAL path requires the LITERAL word ``combinational`` in the
-    prompt (``_is_combinational``). VerilogEval problems whose function IS purely
-    combinational but whose prose merely says "described by the following
-    simulation waveform" (Prob083_mt2015_q4b: ``z = ~(x^y)``) are SKIPped — the
-    word is absent. They are nonetheless a COMPLETE, ZERO-AMBIGUITY combinational
-    truth table: no clock column, no sequential idiom, every input combination
-    maps to one consistent output. This module fires on that
-    COMBINATIONAL-BY-CONSISTENCY case the sibling's keyword gate misses.
-
-  * Its SEQUENTIAL path (``_synth_sequential_1ff``) fires ONLY when the prompt
-    contains the EXACT phrase "...observable through the output <name>"
-    (``_FF_OBSERVABLE``). The plain single-flip-flop circuitN problems
-    (Prob098_circuit7: ``q <= ~a``) say only "This is a sequential circuit ...
-    triggered on the positive edge of the clock" — no "observable" phrasing — so
-    the sibling SKIPs them. This module fires on the GENERAL single-posedge-FF,
-    single-bit registered-output case: next-state read directly from the table
-    across consecutive posedges.
-
-HONESTLY-SKIPPED GAP MEMBERS (deliberately NOT closed here — §4.05 no-leak)
---------------------------------------------------------------------------
-  * Prob117_circuit9 — ``output q (3 bits)`` 3-bit counter (reset-to-4, wrap-at-6,
-    else ``q+1``). The value column is multi-bit decimal, and the next state is an
-    ARITHMETIC function (``q+1``) with a wrap condition. The observed sequence does
-    not exercise all 8 states, so an arithmetic-counter reading is NOT uniquely
-    forced by the table (a pure lookup over observed states would mis-predict
-    unobserved ones). AMBIGUOUS ⇒ SKIP.
-  * Prob145_circuit8 — ``negedge clock`` registered ``q`` PLUS a level-sensitive
-    transparent latch ``always @(*) if (clock) p = a``. Two different timing
-    semantics in one module, X-windows, and comb-vs-registered + posedge-vs-negedge
-    ambiguity. The table does not force one faithful reading ⇒ SKIP.
-
 ENVELOPES (PROVEN-FAITHFUL ONLY — §4.05 no-leak: SKIP on ANY ambiguity)
 -----------------------------------------------------------------------
 Path 1 — COMBINATIONAL-BY-CONSISTENCY. Fires ONLY when ALL hold (else None):
@@ -79,11 +48,7 @@ USAGE
 EXIT CODES
 ----------
     0  synthesized + emitted
-    2  SKIP — outside the proven-faithful envelope (no emit; not an error)
-
-chip-AGNOSTIC: pure boolean/next-state synthesis from the prompt's own table; no
-chip / SKU / oracle / hidden-testbench data of any kind.
-"""
+    2  SKIP — outside the proven-faithful envelope (no emit; not an error)"""
 from __future__ import annotations
 
 import argparse
@@ -131,18 +96,6 @@ def _table_complete(prompt: str, cols: List[str], n_rows: int) -> bool:
     return _wts._table_is_complete(prompt, cols, n_rows)
 
 
-# A waveform GENUINELY attributed to a named sub-module: "Module <Label> ...
-# waveform", where <Label> is a real module identifier (a short uppercase tag like
-# B / A2 / FOO), NOT an English word. The conformance gate's own detector
-# (``_SUBMOD_WAVEFORM_RE``) over-matches "The module can be described ..." (it
-# captures "can" as the module name) — harmless for that gate (it only SKIPs) but
-# it would WRONGLY suppress a legitimate SYNTH fire (Prob083: "The module can be
-# described by the following simulation waveform"). So this synth uses a TIGHTER,
-# general rule: capital-M ``Module`` + an identifier-looking label, CORROBORATED by
-# that same label being referenced as a structural sub-module ("... <Label>
-# submodule(s)" / "... <Label> module(s)") elsewhere in the prompt. That makes the
-# suppression fire on the real composition case (Prob131: "two B submodules") and
-# never on the top-self phrasing.
 _MODULE_LABEL_RE = re.compile(
     r"\bModule\s+([A-Za-z][A-Za-z0-9_]{0,7})\b[^.\n]{0,80}?"
     r"(?:simulation\s+waveform|waveform|timing\s+diagram)")
@@ -155,15 +108,7 @@ _NOT_A_LABEL = {
 
 
 def _table_describes_other_module(prompt: str, top: str) -> bool:
-    """True if the waveform is GENUINELY attributed to a named SUB-module that is
-    NOT the top (Prob131_mt2015_q4: "Module B can be described by the following
-    simulation waveform" + "two B submodules"; the top is the structural
-    composition z = (A1|B1)^(A2&B2) = x|~y, so synthesizing z DIRECTLY from B's
-    table emits a WRONG function → 60/200 host mismatches). General + tight: the
-    label must look like a module identifier (not an English word) AND be
-    corroborated as a structural sub-module reference in the prompt — so the
-    top-self phrasing "The module can be described ..." (Prob083) is NOT
-    suppressed. (§4.05 no-leak.)"""
+
     topl = (top or "").lower()
     for m in _MODULE_LABEL_RE.finditer(prompt or ""):
         label = m.group(1)
@@ -262,12 +207,6 @@ def _emit_combinational(top, body, ports, in_cols, out_cols, out_one) -> str:
     return "\n".join(lines) + "\n"
 
 
-# Any prose / RTL idiom implying a FALLING-edge (negedge) clock. This path models
-# a POSEDGE register and reads the table across genuine 0→1 edges; a design clocked
-# on the falling edge registers on the 1→0 edges instead, so a posedge reading
-# would emit WRONG next-state logic. SKIP whenever negedge is implied — both the
-# bare `negedge` token AND the natural-language "negative/falling edge of the
-# clock" phrasing (Prob145_circuit8: `always @(negedge clock)`). (§4.05 no-leak.)
 _NEGEDGE_HINT = re.compile(
     r"\bnegedge\b|\b(?:negative|falling|trailing)\s+edge\b", re.IGNORECASE)
 

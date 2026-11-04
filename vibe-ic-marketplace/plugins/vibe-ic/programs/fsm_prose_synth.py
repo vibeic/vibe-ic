@@ -3,14 +3,6 @@
 FSM-DECODE subset of the prose/tabular FSM family that full_moore_fsm_synth.py
 does NOT cover.
 
-WHY (§4.2 absorption, "bucket-② -> bucket-①" / spec-extraction completeness):
-full_moore_fsm_synth.py solves the *sequential* Moore FSM (clk + reset + a state
-register it OWNS, so the internal encoding is FREE because the TB observes only the
-output). It deliberately SKIPs a DIFFERENT mechanically-complete shape that appears
-in VerilogEval: the "implement only the state-transition logic and output logic (the
-combinational portion) by inspection assuming a one-hot encoding" problem
-(Prob079_fsm3onehot, Prob143_fsm_onehot). There:
-
   * the module has NO clk/reset and NO state register — the FSM's `state` is a
     PRIMARY INPUT (the TB drives it directly), and the module is PURE COMBINATIONAL;
   * the encoding is therefore NOT free — the prompt PINS an explicit one-hot map
@@ -70,9 +62,6 @@ def _parse_decode_table(prompt, n_outputs):
     per-state Moore output bits (length == n_outputs), default all-zero unless the
     state is annotated. Two written forms are accepted, mirroring the sibling solver:
 
-      (a) arrow, K-tuple output:  `S8 (1, 0) --0--> S0`   (Prob143; K outputs in order)
-      (b) tabular:                `A | A, B | 0`           (Prob079; single output col)
-
     SKIPs (returns None) on any conflict / incompleteness / inconsistent annotation.
     """
     trans, souts, states = {}, {}, []
@@ -130,12 +119,6 @@ def _parse_onehot_map(prompt, states, *, codes=False):
 
     The encoding is the load-bearing fact the TB pins, so we never guess it. Two
     explicit forms are recognised:
-
-      (a) per-state literal assignment, e.g.
-          `A=4'b0001, B=4'b0010, C=4'b0100, D=4'b1000` (Prob079) — each state mapped
-          to a one-hot binary literal; the index is the position of the single 1.
-      (b) the "state[0] through state[N-1] correspond to the states S0 .. S(N-1),
-          respectively" positional form (Prob143) — bit k <-> the k-th listed state.
 
     Validates that the result is a clean one-hot bijection over EXACTLY the table's
     states (distinct indices, every state covered, indices in 0..N-1). Anything short

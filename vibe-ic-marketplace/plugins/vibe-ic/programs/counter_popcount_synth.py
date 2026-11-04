@@ -5,26 +5,6 @@ parity-reduction family (bucket-② spec -> bucket-① RTL, blind).
 Three STATED-structure shapes are fully determined by the prompt, so they can be
 EMITTED deterministically without any model judgment:
 
-  (a) POPCOUNT  — "population count" / "counts the number of '1's" over an N-bit
-        input bus, combinational `out = sum(in[i])`. The output width must be
-        STATED and wide enough to hold 0..N (>= ceil(log2(N+1))); else SKIP.
-        e.g. Prob009_popcount3 (in[2:0] -> out[1:0]), Prob030_popcount255
-        (in[254:0] -> out[7:0]).
-
-  (b) PARITY / REDUCTION-XOR — a single 1-bit `parity`/`out` that is the XOR
-        (EVEN parity, `^in`) or XNOR (ODD parity, `~^in`) of every bit of one
-        input bus. The even-vs-odd SENSE must be STATED; else SKIP.
-        e.g. Prob025_reduction (even parity of an 8-bit byte).
-
-  (c) MODULO-N UP COUNTER — a clocked register `q` that counts START..END
-        inclusive then wraps to START, with a STATED synchronous active-high
-        reset (to a STATED reset value) and an OPTIONAL single count-enable.
-        The modulus (count range / period) AND reset value AND direction (up)
-        must all be UNAMBIGUOUSLY stated; else SKIP.
-        e.g. Prob038_count15 (0..15), Prob040_count10 (0..9), Prob035_count1to10
-        (1..10 reset->1), Prob037_review2015_count1k (0..999), Prob067_countslow
-        (0..9 with slowena enable).
-
 This is the EMITTER. parametric_spec_extractor may hold counter FACTS; this
 module turns the stated structure into RTL. It REUSES port_parser.parse_ports
 (bullet form OR Verilog module header — the VerilogEval v2/human twins).

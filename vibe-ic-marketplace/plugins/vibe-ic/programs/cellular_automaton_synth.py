@@ -1,26 +1,6 @@
 #!/usr/bin/env python3
 """cellular_automaton_synth.py — DETERMINISTIC 1-D cellular-automaton → RTL synth.
 
-THE GAP THIS CLOSES
--------------------
-The 1-D cellular-automaton family (Wolfram "Rule N", e.g. Rule 90 / Rule 110) is
-a CLOSED-FORM spec: the STATED rule number is an 8-bit lookup that fully pins the
-next state of every cell, with zero ambiguity and no hidden oracle. For each of
-the 8 three-cell neighbourhood patterns (Left, Center, Right), bit
-`(L<<2)|(C<<1)|R` of the rule number IS the center cell's next value. A blind RTL
-author re-derives the per-cell boolean by eye and can flip the left/right
-neighbour wiring or mis-transcribe the 8-row table per round (single-shot
-variance). Per open-benchmark-methodology §4.2, a GENERAL no-cheat recovery MUST
-be absorbed as a deterministic PROGRAM. This is that absorption: it reads the
-rule number, the array width, the load/data/q ports, and the boundary convention
-straight from the prompt and emits the exact next-state logic.
-
-It is chip-AGNOSTIC and name-AGNOSTIC: it keys on the STATED rule number +
-3-cell neighbourhood + boundary convention, NOT on any problem name ("rule90",
-"Prob108", "Wolfram"). Any rule 0..255 over a 3-cell neighbourhood with the
-standard {left=higher-index, right=lower-index} array and 0-valued off-array
-boundaries is synthesizable.
-
 §4.05 NO-LEAK — EXACT, UNAMBIGUOUS CA SPECS ONLY
 ------------------------------------------------
 Wrong RTL is far worse than a SKIP. This synthesizer FIRES only when EVERY one

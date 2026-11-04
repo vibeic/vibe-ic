@@ -42,27 +42,7 @@ FORMS recognized (keyed on stated STRUCTURE, never on chip names):
       whose two polarities are EXPLICITLY mapped to add vs subtract (a Verilog
       `case(ctrl) 0: out=a+b; 1: out=a-b;` embedded in a "fix-this-buggy-module"
       prompt, or prose stating the same), two N-bit operands, an N-bit result. If a
-      "*_is_zero" / zero-flag output is declared it is driven by (out == 0).
-
-§4.05 NO-LEAK — return None unless EVERY relevant condition holds:
-  * a truth/timing/waveform table or a K-map present => SKIP (table-owning path);
-  * an FSM / state-machine / serial-by-bit cue (state, posedge ... case(state),
-    "one bit per clock cycle", "serial", Mealy/Moore) => SKIP (FSM path);
-  * a multiply / divide / modulo / shift-as-the-operation cue => SKIP (out of scope);
-  * an adder whose overflow is requested but whose SIGNEDNESS is NOT stated => SKIP
-    (signed vs unsigned overflow logic differ — never guess);
-  * an add/subtract datapath whose control POLARITY is not explicitly mapped
-    (which value adds, which subtracts) => SKIP (never guess the polarity);
-  * a carry-in / borrow whose convention is not stated => SKIP;
-  * port arity / widths that don't match the stated operation => SKIP;
-  * Prob132-style "adder-subtractor" HEADER text that the body contradicts (the
-    body is pure conditional latch logic, no +/-) => SKIP (recognizers demand the
-    actual +/- structure, so the lying header never fires this path).
-
-API: synth(prompt_text, top="TopModule") -> str | None ; plus a __main__ CLI.
-chip-AGNOSTIC, pure regex over the declared interface + function-fixing prose.
-Deterministic. Every fire is host-verified (iverilog vs the dataset ref+test).
-"""
+      "*_is_zero" / zero-flag output is declared it is driven by (out == 0)."""
 from __future__ import annotations
 
 import re
@@ -92,9 +72,6 @@ _TABLE_OR_WAVEFORM = re.compile(
     """,
 )
 
-# An FSM / serial-bit-stream cue means this is a state machine, not a parallel
-# adder.  The "2's complementer" benchmarks (Prob088/Prob089) are Mealy/Moore FSMs
-# — they MUST land on the FSM path, never here.
 _FSM_OR_SERIAL = re.compile(
     r"""(?xi)
       \bfinite[-\s]state\b | \bstate\s+machine\b | \bmealy\b | \bmoore\b |
@@ -204,8 +181,6 @@ _FULL_ADDER = re.compile(r"(?i)\bfull[-\s]?adder\b")
 
 
 def _full_adder(text: str, ins, outs, top: str) -> Optional[str]:
-    # a *4-bit adder built from full adders* (Prob016) is NOT this scalar form;
-    # that is FORM C — require a carry-in input to distinguish a true 1-bit FA.
     if not _FULL_ADDER.search(text):
         return None
     if len(ins) != 3 or len(outs) != 2:
@@ -1304,9 +1279,6 @@ def _emit_fixed_add(s, m):
 
 
 def _emit_fixed_sub(s, m):
-    # Parameterized fixed-point subtractor: a - b in sign-magnitude. Reproduces
-    # the stated semantics (same-sign subtract; different-sign add-or-subtract by
-    # magnitude), matching the testbench golden.
     return (
         f"module {m} #(parameter Q = 15, parameter N = 32) (\n"
         f"    input  [N-1:0] {s['a']},\n"

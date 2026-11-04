@@ -2,20 +2,6 @@
 """waveform_truth_table_synth.py — DETERMINISTIC combinational-waveform → RTL
 synthesizer (v1.1.38 clean-room §4.2 absorption).
 
-THE GAP THIS CLOSES
--------------------
-VerilogEval's `circuitN` family says "read the simulation waveforms to determine
-what the circuit does, then implement it" and embeds a LITERAL truth table in the
-prompt (`time <inputs...> <output>`). For a COMBINATIONAL circuit the table is a
-complete input→output specification — there is ZERO ambiguity, no oracle, no
-judgement: the answer is the sum-of-products over the rows where the output is 1.
-Yet a blind author re-derives the boolean function by eye and flips it per round
-(Prob102_circuit3, Prob103_circuit2, … alternate PASS/FAIL across clean-room
-rounds = single-shot variance). The §4.2 doctrine: a GENERAL no-cheat recovery
-MUST be absorbed as a PROGRAM. This program IS that absorption — it reads the
-SAME table the author reads and emits the EXACT minimal-correct RTL
-deterministically, so the next clean-room run gets it first-pass.
-
 `waveform_table_conformance_check.py` is the CHECK (it BLOCKS a wrong sample);
 this is the SYNTH (it EMITS the right one). They share `parse_table`.
 
@@ -45,11 +31,7 @@ USAGE
 EXIT CODES
 ----------
     0  synthesized + emitted (combinational table fully resolved)
-    2  SKIP — outside the proven-faithful envelope (no emit; not an error)
-
-chip-AGNOSTIC: pure boolean synthesis from the prompt's own table; no chip / SKU /
-oracle / hidden-testbench data of any kind.
-"""
+    2  SKIP — outside the proven-faithful envelope (no emit; not an error)"""
 from __future__ import annotations
 
 import argparse
@@ -70,13 +52,6 @@ CLOCK_NAMES = _wtc.CLOCK_NAMES
 _PORT_BULLET = re.compile(
     r"^\s*[-*]\s*(input|output)\s+([A-Za-z_]\w*)\s*(?:\(\s*(\d+)\s*bits?\s*\))?\s*$",
     re.IGNORECASE | re.MULTILINE)
-# Code-complete (iccad2023) module-header decl: "  input a," / "  input [3:0] a," /
-# "  output reg q" — a Verilog port declaration line inside the embedded header.
-# A trailing line comment (`// 10-bit one-hot current state`) or block comment is
-# tolerated: VerilogEval code-complete headers routinely annotate a port line, and
-# the `$`-anchored decl must not be broken by it (else e.g. the `state` port of
-# Prob150_review2015_fsmonehot is dropped and the one-hot synth SKIPs a solvable
-# problem). chip-AGNOSTIC: pure Verilog port-decl grammar.
 _PORT_DECL = re.compile(
     r"^\s*(input|output)\b\s*(?:wire|reg|logic|signed|unsigned)?\s*"
     r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?([A-Za-z_]\w*)\s*,?\s*"

@@ -11,34 +11,6 @@ enable, direction, modulus/clamp) is UNAMBIGUOUSLY stated; else SKIP.
 
 Five STATED-structure shapes:
 
-  (a) MULTI-DIGIT BCD UP COUNTER — N 4-bit decimal digits 0..9 with ripple
-        carry (a digit wraps 9->0 and enables the next digit), plus a stated
-        per-upper-digit enable output. Sync active-high reset to 0.
-        e.g. Prob068_countbcd (4 digits, q[15:0], ena[3:1]).
-
-  (b) SATURATING UP/DOWN COUNTER — increments toward a stated MAX and
-        decrements toward a stated MIN but CLAMPS at both ends (no wrap),
-        gated by a stated valid + a stated direction bit, async-reset to a
-        stated weak value.
-        e.g. Prob075_counter_2bc (2-bit, max 3 / min 0, areset->2'b01).
-
-  (c) DOWN-COUNTER TIMER w/ TERMINAL COUNT + SYNCHRONOUS LOAD — load a stated
-        reload bus when load=1; else decrement; stop (stay 0) at 0; tc = (cnt
-        == 0).
-        e.g. Prob080_timer (10-bit data, tc).
-
-  (d) 12-HOUR BCD CLOCK — hh/mm/ss as two BCD digits each (12/60/60 rollover),
-        a pm toggle on the 11:59:59->12:00:00 boundary, a per-tick enable, and
-        a sync active-high reset to 12:00:00 AM with reset > enable priority.
-        e.g. Prob141_count_clock.
-
-  (e) SHIFT-OR-(DECREMENT/SHIFT) DUAL-FUNCTION REGISTER — one clocked vector
-        that EITHER shifts in a serial bit (MSB- or LSB-first, stated) on one
-        enable OR performs a stated alternate op (decrement, or a roll-back
-        load) on another control, with the stated priority.
-        e.g. Prob063_review2015_shiftcount (shift MSB-first | down-count),
-             Prob118_history_shift (LSB-shift | mispredict roll-back load).
-
 This is the EMITTER. It REUSES port_parser.parse_ports (bullet form OR Verilog
 module header — the v2/human twins).
 
@@ -485,9 +457,6 @@ def _try_shift_dual(prompt, ins, outs, top):
     if clk is None:
         return None
 
-    # ---- variant E1: shift-MSB-first OR down-count (Prob063) ----
-    # "four-bit shift register that also acts as a down counter" + a shift_ena +
-    # a count_ena + a serial 'data' bit. Both ops on the SAME q.
     if re.search(r"down[- ]?count", low) and re.search(r"shift[_ ]?ena|shift\s+enable",
                                                        low):
         shift_en = next((n for n in in_names
@@ -528,10 +497,6 @@ def _try_shift_dual(prompt, ins, outs, top):
                             )
                             return _emit(top, ports, body)
 
-    # ---- variant E2: LSB-shift history OR misprediction rollback-load (Prob118)
-    # 32-bit history reg: predict_valid -> shift predict_taken in from LSB;
-    # train_mispredicted -> load {train_history, train_taken}; mispredict has
-    # precedence; areset (posedge, async) -> 0.
     if re.search(r"history\s+(?:shift\s+)?register|history\s+register|"
                  r"global history", low) and re.search(r"shift\s+in", low):
         pv = next((n for n in in_names
@@ -877,13 +842,7 @@ def _dia_up_down(prompt, ins, outs, top):
 
 # --- (5) frequency dividers ------------------------------------------------- #
 def _declared_counter_width(prompt: str) -> int | None:
-    """Return a counter width the specification states explicitly.
-
-    The width belongs to the legal parameter domain, not merely to the default
-    parameter value. For example, RTLLM's even divider defaults NUM_DIV to 6
-    but says a *4-bit counter* supports even values 2..32. Deriving three bits
-    from the default makes legal overrides 18..32 overflow.
-    """
+    """Return a counter width the specification states explicitly."""
     text = prompt or ""
     patterns = (
         r"\b(?:with\s+the\s+|uses?\s+(?:a\s+)?)?(\d+)\s*[- ]\s*bit\s+counter\b",
@@ -1008,7 +967,6 @@ def _dia_freq_div(prompt, ins, outs, top):
         re.search(r"divides?\s+[^.]{0,40}?\bby\s+(\d+)\b", low)
     if not mnum:
         return None  # divide value unstated (e.g. an even divider that names no
-        #              concrete NUM_DIV) -> §4.05 SKIP, never a guessed/golden value.
     N = int(mnum.group(1))
     if N < 2:
         return None

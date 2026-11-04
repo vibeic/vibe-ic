@@ -2,8 +2,7 @@
 """moore_arrow_fsm_synth.py — DETERMINISTIC Moore-FSM emitter for the ARROW
 transition-diagram artifact.
 
-A common spec form (VerilogEval-v2 `m2014_q6` family, classic textbook FSM
-diagrams) states a Moore machine as an arrow list:
+A complete Moore machine can be stated as an arrow list:
 
     A (0) --0--> B
     A (0) --1--> A
@@ -24,21 +23,6 @@ keys are exactly {'0','1'} and whose ports resolve cleanly to clk / reset / one
 data input / one output. On ANY deviation it returns None (SKIP, §4.05) so it can
 never emit a wrong machine.
 
-WHY this is general (not problem-id / name keyed):
-  * the recognizer is the shipped registry's `fsm_transition_table` — content
-    only, no design name.
-  * port roles are inferred by GENERIC structure: clk = a port named clk/clock,
-    reset = a port whose name carries rst/reset/clr, the single remaining 1-bit
-    input is the FSM input, the single 1-bit output is the Moore output.
-  * the reset state is the FIRST state in the recognized ordering — the diagram's
-    initial/leftmost state, the universal FSM-diagram convention for the reset
-    state. This is checked to be SOUND (a state that actually appears) before use.
-  * synchronous active-high reset to the reset state is emitted; this matches the
-    "triggered on the positive edge of the clock" + "Resets into state <first>"
-    convention of this dataset family. The emit is VERIFIED against the official
-    testbench by the caller (verilogeval_tier_pipeline --verify) — an emit that
-    does not score is dropped, so a convention mismatch can never be banked.
-
 Public API
     synth(text, top="TopModule") -> str|None        # the registry generator shape
 """
@@ -58,13 +42,6 @@ from _specrtl_common import extract_spec_contract    # noqa: E402  port roles
 
 _CLK_RE = re.compile(r"^(clk|clock)$", re.I)
 _RST_RE = re.compile(r"rst|reset|clr|clear", re.I)
-# The DEFINING arrow form this solver is scoped to: `<state> (<output_bit>)
-# --<input_bit>--> <next_state>`. The per-state Moore OUTPUT is carried in the
-# `(0)/(1)` group right after the source state — this is what makes the arrow
-# diagram self-contained (no separate "output is 1 in states ..." sentence). The
-# table forms (Prob119/121: `state | next ... | output` rows) and the partial
-# arrow forms do NOT carry the output this way; they are out of envelope and the
-# existing solvers / the AI-gate tier own them.
 _ARROW_MOORE_RE = re.compile(
     r"\b(\w+)\s*\(\s*([01])\s*\)\s*--\s*([01])\s*-->\s*(\w+)")
 # ASYNCHRONOUS reset markers — this solver emits ONLY a SYNCHRONOUS reset, so an
@@ -154,11 +131,10 @@ def synth(text: str, top: str = "TopModule") -> Optional[str]:
         return None
     clk, rst, din, out = roles
 
-    # reset target: an explicit "Resets into state X" sentence is authoritative;
-    # else the diagram's first/leftmost state (the arrow-diagram initial-state
-    # convention). Either way it MUST be a state that exists, else SKIP.
     m_rs = _RESET_STATE_RE.search(text)
-    reset_state = m_rs.group(1) if m_rs else states[0]
+    if m_rs is None:
+        return None
+    reset_state = m_rs.group(1)
     if reset_state not in state_set:
         return None
 

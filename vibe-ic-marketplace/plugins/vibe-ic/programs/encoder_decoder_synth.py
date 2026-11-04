@@ -17,11 +17,6 @@ The recognized STRUCTURE (keyed on stated behavior, NOT on port names):
     index N-1 (i.e. W == ceil(log2(N))) — otherwise the stated interface and
     the stated behavior disagree and we SKIP.
 
-  * DIRECTION must be unambiguously stated as LSB-first — the FIRST / LEAST
-    SIGNIFICANT set bit wins (the dataset's two members, Prob071 casez and
-    Prob112 dense-case, are both LSB-first). An MSB-first / "highest set bit"
-    request, or an unstated direction, => SKIP (we do not guess).
-
   * ZERO-INPUT DEFAULT must be explicitly stated (e.g. "report zero if the
     input has no bits set", "if none of the input bits are high, output zero").
     Priority-encoder convention is NOT universal (some designs add a separate
@@ -36,11 +31,6 @@ The emitted RTL is the canonical width-robust casez priority encoder:
       ...
       N'b1zz...zz : pos = N-1;        // MSB set         -> position N-1
     endcase
-
-The first matching casez arm wins in source order; listing low positions first
-makes the lowest (least-significant) set bit win, which IS LSB-first priority.
-This is functionally identical to Prob112's fully-enumerated dense `case` for an
-LSB-first encoder, and identical to Prob071's casez, for any width N.
 
 §4.05 NO-LEAK — SKIP (return None) unless EVERY one of these is unambiguous:
   * the prose actually describes a priority encoder / "position of the first
@@ -109,13 +99,7 @@ def _has_disqualifying_function(text: str) -> bool:
 
 
 def _direction_is_lsb_first(text: str):
-    """Return True (LSB-first), False (MSB-first), or None (unstated/ambiguous).
-
-    LSB-first: the FIRST / LEAST-SIGNIFICANT / LOWEST set bit wins.
-    MSB-first: the HIGHEST / MOST-SIGNIFICANT set bit wins (we SKIP those — we
-    do not author a direction the dataset members don't share, but we DETECT it
-    so we never mis-emit an LSB encoder for an MSB request).
-    """
+    """Return True (LSB-first), False (MSB-first), or None (unstated/ambiguous)."""
     t = text.lower()
     lsb = bool(
         re.search(
@@ -250,12 +234,6 @@ def _emit_casez_priority_encoder(top, in_name, n, out_name, w):
         f"        casez ({in_name})",
         f"            default    : {out_name} = {w}'h0;",
     ]
-    # One arm per position 0..N-1: bit k is the explicit '1', EVERY other bit is
-    # a casez don't-care ('z'). Priority comes purely from SOURCE ORDER — arms
-    # are listed lowest-position-first, so for an input with several set bits the
-    # FIRST matching arm is the lowest set bit (LSB-first priority). This is the
-    # exact form the dataset reference uses (e.g. 8'bzzzzzzz1 -> 0, 8'bzzzzzz1z
-    # -> 1, ...), generalized to any width N.
     for k in range(n):
         bits = ["z"] * n
         bits[n - 1 - k] = "1"           # index 0 == MSB in the string layout

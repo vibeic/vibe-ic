@@ -2,13 +2,6 @@
 """comb_state_table_synth.py — deterministic SOLVER for a COMBINATIONAL state
 transition + output table (the Moore-FSM "combinational portion").
 
-A prompt that gives a complete Moore transition table + a GIVEN state encoding and
-asks ONLY for the combinational next_state + output logic (ports: a `state` input
-bus, a 1-bit FSM input, a `next_state` output bus, a 1-bit `out`; NO clock) is
-fully determined, blind — e.g. Prob100_fsm3comb with `A=2'b00, B=2'b01, C=2'b10,
-D=2'b11`. Here the encoding IS observable (next_state is an output), so it must be
-the DECLARED one, not free. Emits a combinational case over {state, in}.
-
 §4.05 SKIP (None) unless: no clk; exactly one state-bus input + one 1-bit input;
 exactly one next_state-bus output (same width) + one 1-bit output; a complete
 table; and an explicit code for EVERY state (all within the bus width).

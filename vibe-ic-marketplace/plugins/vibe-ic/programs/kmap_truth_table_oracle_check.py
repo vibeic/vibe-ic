@@ -1,20 +1,6 @@
 #!/usr/bin/env python3
 """kmap_truth_table_oracle_check.py — prompt-disclosed combinational oracle gate.
 
-WHY (ORGANIC #716 — Prob122_kmap4 scored FAIL, plugin program-first absorption):
-A VerilogEval-class prompt that hands the design a FULLY-SPECIFIED K-map or
-truth table IS a complete functional oracle: every input combination's required
-output is disclosed in the prompt itself, blind. Yet the Shape-C emit gate
-(`gates_atomic.py`) only ran phase1 + iverilog-compile + structural lints — no
-step ever simulated the authored RTL against that prompt-disclosed oracle. So a
-careless K-map misread shipped: Prob122_kmap4's author wrote `out = a ^ b ^ d`
-("independent of c") when the K-map decodes to `out = a ^ b ^ c ^ d`; the design
-compiled clean, passed every structural rule, emitted, and then FAILED the hidden
-TB 121/232. An independent prompt-only blind solve gets `a^b^c^d` (0/232), and the
-dataset golden is self-consistent — so this is NOT a floor and NOT a dataset
-defect: it is a recoverable authoring slip whose general, no-cheat fix is to make
-the prompt's own oracle an EMIT GATE.
-
 WHAT this program does — given the prompt + the authored RTL:
   1. Parse a HIGH-CONFIDENCE, COMPLETE, UNAMBIGUOUS oracle from the prompt
      (truth-table OR standard Gray-code K-map with scalar 1-bit named axes and
@@ -22,22 +8,6 @@ WHAT this program does — given the prompt + the authored RTL:
   2. Build a tiny exhaustive testbench over all 2^N input combinations and run
      `iverilog`/`vvp`; compare the DUT output to the oracle.
   3. BLOCK (rc=1) on any mismatch; PASS (rc=0) on a clean match.
-
-§4.05 SAFETY — the gate must NEVER false-block a correct design, so it builds an
-oracle ONLY when it can do so unambiguously, and SKIPs (rc=0, advisory) otherwise:
-  - single 1-bit output only (multi-bit output / mux-selector transform such as
-    Prob093 ece241_2014_q3 where the output is `mux_in` NOT the K-map value → SKIP);
-  - inputs all 1-bit SCALARS whose names are the K-map axes (a multi-bit bus axis
-    like `x[0]x[1]` is SKIPped in this conservative cut — Prob113/Prob116);
-  - K-map columns/rows in standard 2-var Gray order (00,01,11,10) — a reordered
-    header (Prob125_kmap3's `01 00 10 11`) → SKIP;
-  - NO don't-care ('d'/'x') cells — a minimized correct design may legally drop a
-    variable when don't-cares are present (Prob125_kmap3 / Prob116_m2014_q3) → SKIP;
-  - the parsed table must be COMPLETE (every 2^N combination exactly once) → else SKIP.
-A SKIP is always non-blocking. A BLOCK fires only when the parsed oracle is exact
-(validated: the oracle reconstructed for Prob122_kmap4 / Prob057_kmap2 matches the
-dataset golden truth-table 16/16). Under-firing (a safe SKIP) is always preferred
-over any risk of a false block.
 
 chip-AGNOSTIC, prompt-blind (reads only the prompt the author already reads),
 deterministic.
@@ -187,18 +157,7 @@ def parse_kmap(prompt: str, ins, outs):
 
 
 def _parse_state_encoding(prompt: str, states):
-    """Return {state_name: int code} from the prompt's DECLARED code map, or None.
-
-    Handles two forms and SKIPs (None) on anything else so a non-sequential /
-    sparse / out-of-order encoding can NEVER be silently mis-assumed (the §4.05
-    HIGH the adversarial review caught — the old code used listing order):
-      (a) EXPLICIT list — `state codes y = 000, 001, 010, 100, 011, 110 for
-          states A, B, C, D, E, F`: zip names<->codes by NAME order (so a table
-          that lists states out of order, or a sparse/Gray map, encodes right).
-      (b) ELLIPSIS form — `y = 000, 001, ..., 101 for states A, B, ..., F`:
-          sequential A=0,B=1,... by NAME (the canonical Prob135 case), validated
-          by a 000,001 start + single-letter states counted from the first.
-    """
+    """Return {state_name: int code} from the prompt's DECLARED code map, or None."""
     m = re.search(r"state codes?\s+\w+\s*=\s*([^\n]+?)\s+for\s+states?\s+([^\n]+)",
                   prompt, re.I)
     if not m:
@@ -251,13 +210,7 @@ def _parse_state_encoding(prompt: str, states):
 
 
 def parse_fsm_next_state_bit(prompt: str, ins, outs):
-    """FSM next-state-BIT oracle (Prob135_m2014_q6b class). A prompt that hands a
-    COMPLETE state-transition table + a sequential state encoding + asks for ONE
-    next-state bit (`output Y1 is y[1]`, combinational in (state-bus, scalar-input))
-    IS a complete combinational oracle, blind. Build the (state_code, input) ->
-    next-state-bit truth table and gate the authored RTL against it.
-
-    §4.05 SAFETY — fires ONLY when fully unambiguous, SKIPs (None) otherwise:
+    """    §4.05 SAFETY — fires ONLY when fully unambiguous, SKIPs (None) otherwise:
       - exactly ONE multi-bit input bus (the state vector) + exactly ONE 1-bit
         scalar input (the FSM input); a single 1-bit output;
       - the requested bit `<bus>[N]` is named in the prompt and N < bus width;

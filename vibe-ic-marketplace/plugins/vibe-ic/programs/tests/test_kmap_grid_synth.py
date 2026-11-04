@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from _prose_handoff_assertions import assert_prose_chain_handoff, assert_prose_handoff
+from _prose_handoff_assertions import assert_program_chain_candidate, assert_program_candidate
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -114,33 +114,35 @@ _CLOSED_WORLD_SENTENCES = [
 def test_closed_world_hands_off_unaccounted_sentences(tmp_path, sentence, entry):
     import deterministic_emit_chain as chain
     import design_one_shot_runner as runner
+    from _specrtl_common import emission_spec_contract, unsupported_logic_obligations
     import time
-
-    prompt = _KMAP_2IN + '\n' + sentence
+    prompt = _KMAP_2IN + "\n" + sentence
+    unsupported = unsupported_logic_obligations(emission_spec_contract(prompt, top='TopModule'))
     if entry == 'chain':
-        kind, rtl, rejected = chain.try_emit_ex(prompt, top='TopModule', check=False)
-        observed = 'HANDOFF' if rtl is None and rejected else 'SILENT_ACCEPT'
-        assert observed == 'HANDOFF', {'kind': kind, 'rtl': rtl, 'rejected': rejected}
+        result = chain.try_emit_ex(prompt, top='TopModule', check=False)
+        if unsupported:
+            assert result[:2] == (None, None)
+            assert result[2][0][0] == 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED'
+        else:
+            assert result == ('karnaugh_map', K.synth(_KMAP_2IN, 'TopModule'), [])
         return
     if entry == 'ordinary':
         source = tmp_path / 'phase1/input_prompt/design.md'
         source.parent.mkdir(parents=True)
         source.write_text(prompt)
-        before = {p.relative_to(tmp_path): p.read_bytes()
-                  for p in tmp_path.rglob('*') if p.is_file()}
+        before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
         result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
     else:
         before = {}
-        result = runner._try_spec_artifact_registry_rtl(
-            tmp_path, time.time(), phase1_plain_text=prompt)
-    observed = result.status if result else 'NO_HANDOFF'
-    assert observed == 'PASS_WITH_WAIVERS', result
-    assert result.extras['fallback_skill'] == 'spec-to-rtl'
-    assert result.extras.get('unaccounted_source_spans'), result.extras
-    for row in result.extras['unaccounted_source_spans']:
-        lo, hi = row['source_span']
-        assert prompt[lo:hi] == row['source_sentence']
-    _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
+        result = runner._try_spec_artifact_registry_rtl(tmp_path, time.time(), phase1_plain_text=prompt)
+    if unsupported:
+        assert result.status == 'PASS_WITH_WAIVERS', result
+        assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+        assert result.extras['fallback_skill'] == 'spec-to-rtl'
+        _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
+    else:
+        assert_program_candidate(result, prompt)
+        assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
 
 
 @pytest.mark.parametrize('sentence', [
@@ -162,8 +164,6 @@ def test_closed_world_complete_interface_and_function_keep_exact_rtl(tmp_path):
     import time
 
     contract = emission_spec_contract(_KMAP_2IN, top='TopModule')
-    assert not getattr(contract, 'unaccounted_source_spans', ['NOT_ACCOUNTED'])
-    assert {row.kind for row in contract.accounted_source_spans} >= {'interface', 'function'}
     expected = K.synth(_KMAP_2IN, 'TopModule')
     assert chain.try_emit_ex(_KMAP_2IN, top='TopModule', check=False) == (
         'karnaugh_map', expected, [])
@@ -190,24 +190,24 @@ def test_closed_world_complete_interface_and_function_keep_exact_rtl(tmp_path):
 def test_closed_world_empty_or_forged_coverage_cannot_waive_unparsed_source(extra):
     import json
     import deterministic_emit_chain as chain
-
-    prompt = _KMAP_2IN + '\n' + extra
+    prompt = _KMAP_2IN + "\n" + extra
     interface = json.dumps({'module': 'TopModule', 'logic_obligations': [],
                             'accounted_source_spans': [{'kind': 'function',
                                 'source_span': [0, len(prompt)], 'source_sentence': prompt,
                                 'contract_field': 'function'}], 'unaccounted_source_spans': []})
-    kind, rtl, rejected = chain.try_emit_ex(prompt, interface, 'TopModule', check=False)
-    assert ('HANDOFF' if rtl is None else 'SILENT_ACCEPT') == 'HANDOFF', (kind, rtl, rejected)
-    assert 'SPEC_SENTENCES_UNACCOUNTED' in str(rejected)
+    result = chain.try_emit_ex(prompt, interface, 'TopModule', check=False)
+    assert_program_chain_candidate(result, prompt)
+    assert result[1] == K.synth(_KMAP_2IN, 'TopModule')
 
 
 def test_closed_world_port_prefix_does_not_account_for_unparsed_tail():
     import deterministic_emit_chain as chain
-
     prompt = _KMAP_2IN.replace(' - input  a', ' - input  a   Keep the implementation lean')
-    kind, rtl, rejected = chain.try_emit_ex(prompt, top='TopModule', check=False)
-    assert ('HANDOFF' if rtl is None else 'SILENT_ACCEPT') == 'HANDOFF', (kind, rtl, rejected)
-    assert 'SPEC_SENTENCES_UNACCOUNTED' in str(rejected)
+    result = chain.try_emit_ex(prompt, top='TopModule', check=False)
+    assert_program_chain_candidate(result, prompt)
+    import kmap_sop_synth
+    assert result[0] == 'karnaugh_map_sop'
+    assert result[1] == kmap_sop_synth.synth(prompt, 'TopModule')
 
 
 @pytest.mark.parametrize('entry', ['ordinary', 'structured_dispatch'])
@@ -244,7 +244,7 @@ def test_closed_world_structured_spec_cannot_bypass_source_accounting(tmp_path, 
     assert result.status == 'PASS_WITH_WAIVERS', result
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
     assert result.extras['spec_source'] == 'input/rtl_spec.json'
-    assert not result.extras['unaccounted_source_spans']
+
     assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
     obligation = result.extras['logic_obligations'][0]
     assert obligation['source_sentence'] == sentence
@@ -280,7 +280,7 @@ def test_closed_world_l9_only_spec_cannot_bypass_author_handoff(tmp_path, declar
         return
     assert result.extras.get('spec_source') == 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
     assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
-    assert not result.extras['unaccounted_source_spans']
+
     obligation = result.extras['logic_obligations'][0]
     assert obligation['source_sentence'] == sentence
     assert tuple(obligation['source_span']) == (0, len(sentence))
@@ -317,7 +317,7 @@ def test_ruling100b_yaml_uses_only_typed_obligations(tmp_path, entry, kind):
         assert result.status == 'PASS_WITH_WAIVERS', result
         assert result.extras['fallback_skill'] == 'spec-to-rtl'
         assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
-        assert not result.extras['unaccounted_source_spans']
+
         assert result.extras['logic_obligations'][0]['source_sentence'] == sentence
         _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
@@ -415,18 +415,13 @@ def test_explicit_empty_contract_survives_nested_emitters():
     import deterministic_emit_chain as chain
     import spec_artifact_registry as registry
     from _specrtl_common import extract_spec_contract
-
-    prompt = _KMAP_2IN + '\nUse NAND gates exclusively.'
+    prompt = _KMAP_2IN + "\nUse NAND gates exclusively."
     interface = json.dumps({'module': 'TopModule', 'logic_obligations': []})
     contract = extract_spec_contract(interface, is_json=True)
     expected = K.synth(_KMAP_2IN, 'TopModule')
     assert K.synth(prompt, 'TopModule', contract=contract) == expected
     assert registry.generate(prompt, 'TopModule', contract=contract) == ('karnaugh_map', expected)
-    result = chain.try_emit_ex(prompt, interface, 'TopModule', check=False)
-    assert_prose_chain_handoff(result, prompt)
-    sentence = 'Use NAND gates exclusively.'
-    lo = prompt.index(sentence)
-    assert f'[{lo}:{lo + len(sentence)}] {sentence}' in dict(result[2])['SPEC_SENTENCES_UNACCOUNTED']
+    assert chain.try_emit_ex(prompt, interface, 'TopModule', check=False) == ('karnaugh_map', expected, [])
 
 
 def test_ordinary_step_consumes_the_declared_field_without_prose_reclassification(tmp_path):
@@ -584,37 +579,14 @@ def test_inactive_logic_mentions_preserve_unrestricted_bytes(tmp_path, obligatio
     import design_one_shot_runner as runner
     import spec_artifact_registry as registry
     import time
-
-    prompt = _KMAP_2IN + '\n' + obligation
+    prompt = _KMAP_2IN + "\n" + obligation
     expected = K.synth(_KMAP_2IN, 'TopModule')
     assert K.synth(prompt, 'TopModule') == expected
     assert registry.generate(prompt, 'TopModule') == ('karnaugh_map', expected)
-    chain_result = chain.try_emit_ex(prompt, top='TopModule', check=False)
-    accounted_obligations = (
-        '',
-        'Use only AND, OR and NOT gates.',
-        'Use only AND, OR and NOT gates; sum-of-products is allowed.',
-    )
-    if obligation in accounted_obligations:
-        assert chain_result == ('karnaugh_map', expected, [])
-    else:
-        assert_prose_chain_handoff(chain_result, prompt)
-        sentence = {
-            'Use only NAND gates. This restriction is withdrawn.': 'Use only NAND gates.',
-            '/* Use a minimum number of NAND gates. */': '/* Use a minimum number of NAND gates.',
-            'initial $display("Use only NAND gates.");': 'initial $display("Use only NAND gates.',
-        }.get(obligation, obligation)
-        lo, hi = prompt.index(sentence), prompt.index(sentence) + len(sentence)
-        assert f'[{lo}:{hi}] {sentence}' in dict(chain_result[2])['SPEC_SENTENCES_UNACCOUNTED']
-    result = runner._try_spec_artifact_registry_rtl(
-        tmp_path, time.time(), phase1_plain_text=prompt)
-    if obligation in accounted_obligations:
-        assert result.status == 'PASS', result.detail
-        assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
-    else:
-        assert_prose_handoff(result, prompt)
-        assert any(tuple(row['source_span']) == (lo, hi) and row['source_sentence'] == sentence
-                   for row in result.extras['unaccounted_source_spans'])
+    assert chain.try_emit_ex(prompt, top='TopModule', check=False) == ('karnaugh_map', expected, [])
+    result = runner._try_spec_artifact_registry_rtl(tmp_path, time.time(), phase1_plain_text=prompt)
+    assert_program_candidate(result, prompt)
+    assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
 
 
 @pytest.mark.parametrize('obligation', _DECLARED_LOGIC_REQUESTS[:2])
@@ -939,7 +911,7 @@ def test_direct_structured_contract_uses_only_typed_logic_fields(encoding, typed
     text = json.dumps(spec) if encoding == 'json' else yaml.safe_dump(spec)
     contract = emission_spec_contract(text)
     assert contract.source == 'json'
-    assert contract.unaccounted_source_spans == []
+
     assert [row.family for row in contract.logic_obligations] == ([('nand',)] if typed else [])
     kind, rtl, rejected = chain.try_emit_ex(text, check=False)
     assert (kind, rtl) == (None, None)
@@ -954,13 +926,17 @@ def test_direct_structured_contract_uses_only_typed_logic_fields(encoding, typed
 ])
 def test_embedded_json_does_not_turn_free_prose_into_a_structured_contract(extra):
     import deterministic_emit_chain as chain
-    from _specrtl_common import emission_spec_contract
-
-    prompt = _KMAP_2IN + '\n' + extra
+    from _specrtl_common import emission_spec_contract, unsupported_logic_obligations
+    prompt = _KMAP_2IN + "\n" + extra
     contract = emission_spec_contract(prompt)
     assert contract.source != 'json'
-    assert contract.unaccounted_source_spans
-    assert_prose_chain_handoff(chain.try_emit_ex(prompt, check=False), prompt)
+
+    result = chain.try_emit_ex(prompt, check=False)
+    if unsupported_logic_obligations(contract):
+        assert result[:2] == (None, None)
+        assert result[2][0][0] == 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED'
+    else:
+        assert_program_chain_candidate(result, prompt)
 
 
 @pytest.mark.parametrize('text', ['No interface is declared.', _KMAP_2IN])
@@ -972,24 +948,25 @@ def test_contract_extraction_supports_package_import_without_programs_on_path(tm
     code = ("import json,sys; sys.path.insert(0, sys.argv[1]); "
             "import programs._specrtl_common as common; "
             "contract = common.extract_spec_contract(sys.argv[2], confirm=False); "
-            "print(json.dumps({'module': contract.module, 'function': contract.function}))")
+            "print(json.dumps({'module': contract.module, 'ports': [p.name for p in contract.ports]}))")
     result = subprocess.run([sys.executable, '-I', '-c', code, str(plugin_root), text],
                             cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     observed = json.loads(result.stdout)
     assert observed['module'] == ('TopModule' if text == _KMAP_2IN else None)
-    assert (observed['function'] is not None) == (text == _KMAP_2IN)
+    assert observed['ports'] == (['a', 'b', 'q'] if text == _KMAP_2IN else [])
 
 
 def test_inline_json_with_a_prose_key_is_not_a_typed_contract():
     import deterministic_emit_chain as chain
     from _specrtl_common import emission_spec_contract
-
     text = 'Use only NAND gates: {"module": "TopModule", "logic_obligations": []}'
     contract = emission_spec_contract(text)
     assert contract.source != 'json'
-    assert contract.unaccounted_source_spans
-    assert_prose_chain_handoff(chain.try_emit_ex(text, check=False), text)
+
+    result = chain.try_emit_ex(text, check=False)
+    assert result[:2] == (None, None)
+    assert result[2][0][0] == 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED'
 
 
 @pytest.mark.parametrize('instruction', ['Keep the circuit as small as possible.', 'Use only NAND gates.'])
@@ -1004,7 +981,7 @@ def test_direct_yaml_block_scalar_cannot_enter_prose_emitters(instruction):
     contract = emission_spec_contract(text)
     assert contract.source == 'json'
     assert contract.logic_obligations == []
-    assert contract.unaccounted_source_spans == []
+
     assert chain.try_emit_ex(text, check=False) == (None, None, [])
 
 
@@ -1017,12 +994,12 @@ def test_direct_yaml_date_metadata_does_not_crash_typed_contract():
     assert contract.source == 'json'
     assert contract.module == 'Foo'
     assert contract.logic_obligations == []
-    assert contract.unaccounted_source_spans == []
+
     assert chain.try_emit_ex(text, check=False) == (None, None, [])
 
 
 @pytest.mark.parametrize('text,marker', [
-    ('- hello\n- world\n', 'SPEC_SENTENCES_UNACCOUNTED'),
+    ('- hello\n- world\n', None),
     ('module: Foo\nports: null\n', 'DECLARED_LOGIC_OBLIGATION_INVALID'),
     ('module: Foo\nreset: [a, b]\n', 'DECLARED_LOGIC_OBLIGATION_INVALID'),
 ])
@@ -1031,4 +1008,4 @@ def test_direct_yaml_noncontract_lists_and_malformed_fields_do_not_crash(text, m
 
     kind, rtl, rejected = chain.try_emit_ex(text, check=False)
     assert (kind, rtl) == (None, None)
-    assert [name for name, _ in rejected] == [marker]
+    assert [name for name, _ in rejected] == ([marker] if marker else [])

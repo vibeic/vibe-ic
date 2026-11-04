@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from _prose_handoff_assertions import assert_prose_chain_handoff
+from _prose_handoff_assertions import assert_program_chain_candidate
 
 HERE = Path(__file__).resolve().parent
 PROGRAMS = HERE.parent
@@ -263,12 +263,8 @@ def test_doubled_prompt_emits_compilable_rtl(tmp_path):
 
     doubled = _PROSE_SPEC + "\nAppendix (interface restated):\n" + _PROSE_SPEC
     result = chain.try_emit_ex(doubled, "", "TopModule", None, False)
-    assert_prose_chain_handoff(result, doubled)
-    sentence = 'Please write a verilog module that compares two values.'
-    assert f'[0:{len(sentence)}] {sentence}' in dict(result[2])['SPEC_SENTENCES_UNACCOUNTED']
-    kind, rtl = registry.generate(doubled, "TopModule")
-    assert kind is not None and rtl, (
-        "the component generator must still emit on a restated interface")
+    assert_program_chain_candidate(result, doubled)
+    kind, rtl = result[:2]
     src = tmp_path / "top.sv"
     src.write_text(rtl)
     proc = subprocess.run(

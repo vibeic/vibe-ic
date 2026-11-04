@@ -2,19 +2,6 @@
 """onehot_fsm_synth.py — DETERMINISTIC one-hot FSM next-state/output synthesizer
 (v1.1.38 clean-room §4.2 absorption).
 
-THE GAP THIS CLOSES
--------------------
-The VerilogEval one-hot-FSM "derive next-state logic by inspection" prompts
-(Prob150_review2015_fsmonehot) give EVERYTHING deterministically: the one-hot
-encoding (state→bit index) is written out in the prompt, the state-transition
-table is listed line by line, and each state's asserted Moore outputs are
-annotated. For a one-hot encoding the next-state equation is mechanical —
-``X_next = OR over every edge into X of (state[from] & condition)`` — and the
-Moore outputs are ``OR of state[bit]`` over the asserting states. No oracle, no
-judgement. Yet a blind author hand-derives it and flips a bit-ordering or an edge
-per round (single-shot variance). Per open-benchmark-methodology §4.2 a GENERAL
-no-cheat recovery MUST be absorbed as a PROGRAM. This is that absorption.
-
 §4.05 NO-LEAK
 -------------
 Fires ONLY when the prompt carries (a) an explicit one-hot encoding tuple mapping
