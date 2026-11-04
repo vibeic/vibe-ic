@@ -17,16 +17,18 @@ captured in the corpus.
 
 This module hoists the digest renderer out of `benchmark_dispatch.py` so BOTH
 the benchmark setup AND the production runner WAIVE surface the SAME corpus.
-The render is fully deterministic (no LLM), and the corpus is by-construction
-chip-AGNOSTIC (no design identifiers, no oracle data) — so surfacing it
-preserves blindness while preventing already-captured recoveries from
-recurring. It is NOT a per-genre filter: it surfaces the WHOLE general corpus
-(every active `### Skill:`), so it can never leak a dataset-specific answer and
-can never mis-route by guessing a genre.
+The render is deterministic (no LLM) and surfaces every active Skill section,
+without per-design or genre selection. The existing corpus consistency boundary
+also checks explicit oracle-authority claims before publication. A refusal
+withholds the knowledge artifact and its callers report the named reason.
+This lexical check is bounded: source review still owns other paraphrases.
+
 """
 from __future__ import annotations
 import re
 from pathlib import Path
+from lessons_corpus_consistency_check import (
+    LessonSourceRefusal, _split_skill_sections, require_author_source)
 
 EXPERT_AGENT_MD = Path(__file__).resolve().parent.parent / "agents" / "ic-expert-agent.md"
 
@@ -40,16 +42,10 @@ EXPERT_AGENT_MD = Path(__file__).resolve().parent.parent / "agents" / "ic-expert
 # content is untouched; only the leaking provenance token is neutralised. This
 # protects BOTH the Shape-C and the production spec-to-rtl digests, and guards
 # future lessons that name a design.
-# Case-INSENSITIVE (Step-2.7: PROB099 / Circuit7 / FREQ_DIVBYODD case-variants
-# must scrub too). Robustly neutralising the STRUCTURED dataset identifiers also
-# defangs an oracle-value leak: a concrete value is only a cheat when BOUND to a
-# named design ("Prob099 expects 0xF2"); strip the name and "a benchmark design
-# expects 0xF2" carries no usable association. Bare ad-hoc design leafs (a raw
-# module name) and standalone general constants are deliberately NOT scrubbed
-# here — they cannot be enumerated mechanically and a value-class scrub would
-# over-scrub general protocol facts (e.g. the public eSPI error code 0x02); their
-# blindness is the CAPTURE-TIME policy's job (a `### Skill:` section is a GENERAL
-# pattern by construction, verified blindness-clean on the live 83-lesson corpus).
+# Identifier masking is an additional presentation safeguard, not proof of
+# source purity. Removing a name cannot neutralise an answer carried by genre,
+# waveform values, reference filenames, or scorer-backed authority. Those
+# claims belong at the shared author-source boundary before this substitution.
 _DESIGN_ID_RE = re.compile(
     r"\b(?:"
     r"cvdp_[A-Za-z0-9_]+"               # CVDP cid (cvdp_copilot_<x>_0007)
@@ -85,10 +81,10 @@ _DIGEST_HEAD = (
     "Rendered deterministically from the general-pattern `### Skill:` sections\n"
     "of the IC-expert corpus — plugin source, NOT shipped in this run tree:\n"
     "vibe-ic-marketplace/plugins/vibe-ic/agents/ic-expert-agent.md\n"
-    "These are chip-AGNOSTIC patterns captured\n"
-    "from prior close-loop recoveries — no design identifiers, no oracle data —\n"
-    "so reading them preserves blindness while preventing already-captured\n"
-    "recoveries from recurring.\n\n"
+    "These are chip-AGNOSTIC construction and spec-reading patterns.\n"
+    "Use only this task's permitted inputs to choose observable behaviour.\n"
+    "Explicit input requirements and declared source precedence govern;\n"
+    "report unresolved conflicts rather than borrowing hidden answers.\n\n"
     "MANDATORY (#733 — staged != consumed): BEFORE authoring EACH design you MUST\n"
     "(1) open this digest, (2) keyword-match the design GENRE against each\n"
     "section's '**When to apply**' line, and (3) APPLY every matched\n"
@@ -116,26 +112,14 @@ def render_lesson_digest(run_p: Path,
     """
     if not expert_md.is_file():
         return 0
-    lessons: list[str] = []
-    cur: list[str] | None = None
-    for line in expert_md.read_text(errors="replace").splitlines():
-        if line.startswith("### "):
-            if cur:
-                lessons.append("\n".join(cur).rstrip())
-            cur = [line] if line.startswith("### Skill:") else None
-            continue
-        if line.startswith("## ") or line.startswith("# "):
-            if cur:
-                lessons.append("\n".join(cur).rstrip())
-            cur = None
-            continue
-        if cur is not None:
-            cur.append(line)
-    if cur:
-        lessons.append("\n".join(cur).rstrip())
+    lessons = [f"### Skill: {heading}\n{body}".rstrip()
+               for heading, body in _split_skill_sections(
+                   expert_md.read_text(errors="replace"))]
     if not lessons:
         return 0
-    body = _scrub_design_identifiers("\n\n".join(lessons))
+    source = "\n\n".join(lessons)
+    require_author_source(source, "lessons.md", run_p / "lessons.md")
+    body = _scrub_design_identifiers(source)
     run_p.mkdir(parents=True, exist_ok=True)
     (run_p / "lessons.md").write_text(_DIGEST_HEAD + body + "\n")
     return len(lessons)
@@ -169,5 +153,7 @@ def render_ic_expert_db_digest(run_p: Path, prompt_text: str, k: int = 5,
     if not hits:
         return 0
     run_p.mkdir(parents=True, exist_ok=True)
-    (run_p / "ic_expert_db.md").write_text(_db.render(hits))
+    text = _db.render(hits)
+    require_author_source(text, "ic_expert_db.md", run_p / "ic_expert_db.md")
+    (run_p / "ic_expert_db.md").write_text(text)
     return len(hits)

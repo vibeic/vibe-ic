@@ -55,6 +55,7 @@ import argparse, json, re, sys
 from pathlib import Path
 
 from ic_expert_db_query import lesson_groups
+from lessons_corpus_consistency_check import author_source_findings
 
 _DEFAULT_DB = (Path(__file__).resolve().parent.parent
                / "agents" / "ic_expert_db" / "ic_expert_db.json")
@@ -101,6 +102,8 @@ def _scan_text(text: str, label: str) -> list:
     the second surface (`registered_class_profiles`, below) calls THIS, and the
     entry loop's own finding strings are produced here unchanged."""
     out = []
+    for rule in author_source_findings(text):
+        out.append(f"[{label}] AUTHOR_LESSON_ORACLE_AUTHORITY: {rule}")
     for rx in _ID_RES:
         m = rx.search(text)
         if m:

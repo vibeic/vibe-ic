@@ -488,15 +488,13 @@ When the prompt embeds a **literal simulation table** — rows of
 `time [clk] <input...> [internal...] <output>` under a "**Read the simulation
 waveforms to determine what the circuit does, then implement it**" instruction
 (the VerilogEval `circuitN` family) — the table **IS** a directed test vector you
-must reproduce **exactly**. The trap that fails the hidden scorer is
-**MIS-COUNTING PIPELINE STAGES**: the early rows where the output reads `x` are
-the **input-sampling NBA race** (`@(posedge) a<=val` leaves the input `x` on the
-first edge), **NOT** an extra register stage. An agent who reads that X-window as
-a second stage authors a TWO-stage `q1<=~a; q<=q1` pipeline when the spec is the
-ONE-stage `q<=~a`; its self-TB still "passes" but it scores ~58/123 mismatches on
-the hidden TB (Prob098_circuit7, the round-18 FAIL). The X-window is consumed by
-the X-match convention — it does **not** license an added latency stage. Count
-stages from the **first DEFINED output transition**, not from the first `x`.
+must reproduce **exactly**. Derive pipeline depth from the table's defined input
+and output transitions. An early `x` can reflect unspecified initialization or a
+sampling race; it does not by itself establish another register stage. Compare
+candidate cycle schedules against every defined row and the supplied sampling
+convention. If multiple schedules remain possible, report that ambiguity rather
+than import a pipeline depth from a hidden reference. The published table's
+X-match convention applies only to the rows it leaves unconstrained.
 
 `waveform_table_conformance_check.py` is the independent yard-stick. It parses the
 table, replays it the way the scorer compares (X in the table matches anything;
