@@ -125,14 +125,22 @@ def _bullet_ports(text: str, packed=None) -> Tuple[List[Tuple[str, Optional[int]
             name = _bullet_port_name(line)
             if not name:
                 continue
+            if packed is not None:
+                flat = line.replace("**", "").replace("`", "").strip()
+                prefix = r"(?:(?:input|output|wire|reg|logic|signed|unsigned)\s+)*"
+                span = r"\[\s*(\d+)\s*:\s*(\d+)\s*\]"
+                label = re.escape(name) + r"\b"
+                sm = re.match(prefix + span + r"\s*" + label, flat, re.I) \
+                    or re.match(prefix + label + r"\s*(?:\(\s*\d+\s*-?\s*bits?\s*\)\s*)?"
+                                r"(?:\(\s*)?" + span, flat, re.I)
+                if sm:
+                    packed.append((name, int(sm.group(1)), int(sm.group(2))))
             # width: an explicit `(N-bit)` / `[hi:lo]` / a same-line "N-bit".
             wm = re.search(r"\(\s*(\d+)\s*-?\s*bits?\s*\)", line, re.I) \
                 or re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", line) \
                 or re.search(r"\b(\d+)\s*-?\s*bits?\b", line, re.I)
             if wm and wm.lastindex == 2:
                 w = abs(int(wm.group(1)) - int(wm.group(2))) + 1
-                if packed is not None:
-                    packed.append((name, int(wm.group(1)), int(wm.group(2))))
             elif wm:
                 w = int(wm.group(1))
             else:
