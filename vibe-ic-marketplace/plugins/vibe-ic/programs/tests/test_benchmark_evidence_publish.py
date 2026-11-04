@@ -1004,7 +1004,7 @@ def test_cited_text_hash_binds_the_published_document_after_path_rewrite(tmp_pat
 
 
 @pytest.mark.parametrize("case", ["copied-binary", "outside-project", "absolute-sby"])
-def test_cited_text_cannot_bypass_packaging_through_existing_paths(tmp_path, case):
+def test_cited_text_respects_planned_files_and_restricts_extra_paths(tmp_path, case):
     import benchmark_evidence_publish as publisher
     run = _make_run(tmp_path)
     cell = tmp_path / "published"
@@ -1035,9 +1035,69 @@ def test_cited_text_cannot_bypass_packaging_through_existing_paths(tmp_path, cas
     (cell / report).write_bytes(doc.read_bytes())
     summary = publisher.close_citations(run, cell, [(doc, report)], rels, False)
     data = json.loads((cell / report).read_text())
+    if case == 'copied-binary':
+        # Citation closure cannot revoke a file selected by the copy plan.
+        assert data['verdict'] == 'PASS'
+        assert (cell / rel).read_bytes() == payload.read_bytes()
+        assert summary['records'][0]['decision'] == 'ALREADY_IN_CELL'
+        return
     assert data["verdict"] == "UNSUBSTANTIATED", (case, data, summary)
     if case != "absolute-sby":
         assert not (cell / rel).exists()
+
+
+@pytest.mark.parametrize('dry', [False, True])
+def test_planned_release_documents_survive_citations_without_spending_extra_budget(
+        tmp_path, monkeypatch, dry):
+    import benchmark_evidence_publish as publisher
+    monkeypatch.setattr(publisher, '_CITED_TEXT_FILE_LIMIT', 7)
+    monkeypatch.setattr(publisher, '_CITED_TEXT_CELL_BUDGET', 7)
+    paths = ['reports/docs/RELEASE.html', 'phase3/documentation/manifest.yaml',
+             'phase3/documentation/RELEASE_NOTES.md']
+    planned = {rel: 'Required release document with signal EM NOT_MEASURED.\n'
+               for rel in paths}
+    planned['reports/release.json'] = json.dumps({
+        'verdict': 'PASS', 'html_path': paths[0], 'yaml_path': paths[1],
+        'document_path': paths[2], 'extra_log': 'raw/tool.log'})
+    run, cell, summary = _cited_text_cell(
+        tmp_path, {'raw/tool.log': '12345678'}, planned, dry=dry)
+    decisions = {(r['doc'], r['cited']): r['decision'] for r in summary['records']}
+    for rel in paths:
+        assert decisions[('reports/release.json', rel)] == 'ALREADY_IN_CELL'
+        if not dry:
+            assert (cell / rel).read_bytes() == (run / rel).read_bytes()
+    assert publisher._close_one(run, cell, dry, 'reports/absolute.md',
+        str(run / paths[0]), set(planned), [], {'bytes': 0, 'files': {}}) == (
+            'ALREADY_IN_CELL', paths[0])
+    assert decisions[('reports/release.json', 'raw/tool.log')] == 'TEXT_FILE_LIMIT'
+    assert summary['text_bytes'] == 0
+    assert not (cell / 'raw/tool.log').exists()
+    if dry:
+        assert list(cell.iterdir()) == []
+
+
+@pytest.mark.parametrize('dry', [False, True])
+def test_captured_row_documents_keep_their_step_view_policy(tmp_path, dry):
+    import benchmark_evidence_publish as publisher
+    run = _make_run(tmp_path)
+    captured = 'steps/001_transport/20260101/result.json'
+    source = run / captured
+    source.parent.mkdir(parents=True)
+    original = '{"verdict":"FAIL","evidence":"missing-original.log"}\n'
+    source.write_text(original)
+    report = run / 'reports/transport.json'
+    report.write_text(json.dumps({'captured_path': captured}))
+    cell = tmp_path / 'cell'
+    if not dry:
+        (cell / captured).parent.mkdir(parents=True)
+        (cell / captured).write_text(original)
+    result = publisher.close_citations(run, cell, [(report, 'reports/transport.json')],
+        {captured, 'reports/transport.json'}, dry)
+    assert [r['decision'] for r in result['records']] == ['STEP_VIEW']
+    assert result['n_documents'] == 1
+    assert result['amended'] == []
+    if not dry:
+        assert (cell / captured).read_text() == original
 
 
 @pytest.mark.parametrize("state_present", [True, False])
@@ -1277,6 +1337,61 @@ def _release_docs_check(run):
         {p.relative_to(run).as_posix() for p in run.rglob('*') if p.is_file()})
 
 
+def test_dry_run_counts_selected_row_folders_and_the_real_publication_files(tmp_path):
+    # Synthetic transport only: compare the plan with an actual fixture copy,
+    # including repeated attempts, an unselected row and legacy history.
+    from step_output_collector import flow109_step_folder
+    run = _flow109_release_docs(tmp_path)
+    rows = [{'position': 1, 'name': 'First tool'},
+            {'position': 2, 'name': 'Second tool'}]
+    (run / 'reports/flow109/plan.json').write_text(json.dumps({'rows': rows}))
+    for row, stamps in [(rows[0], ['20260101', '20260102']),
+                        (rows[1], ['20260101']),
+                        ({'position': 3, 'name': 'Unselected'}, ['20260101'])]:
+        for stamp in stamps:
+            folder = run / 'steps' / flow109_step_folder(row) / stamp
+            (folder / 'outputs').mkdir(parents=True)
+            (folder / 'result.json').write_text('{"status":"PASS"}\n')
+            (folder / 'outputs/tool.log').write_text('TRANSPORT FIXTURE\n')
+    legacy = run / 'steps/legacy/1_transport'
+    legacy.mkdir(parents=True)
+    (legacy / 'outputs.json').write_text('{"outputs": []}')
+    (legacy / 'note.txt').write_text('Historical transport record\n')
+    limitations = 'signal EM, ESD simulation, dynamic IR, thermal and aging: NOT_MEASURED'
+    documents = list((run / _RDC.doc_dir('ic')).rglob('*.*'))
+    documents += list((run / 'reports/phase3/docs').glob('*.html'))
+    for doc in documents:
+        doc.write_text(doc.read_text() + '\n' + limitations + '\n')
+    references = {f'document_{i}_path': doc.relative_to(run).as_posix()
+                  for i, doc in enumerate(documents)}
+    (run / 'reports/release_documents.json').write_text(json.dumps(references))
+    dest_root = tmp_path / 'benchmark-data'
+    dry_summary, real_summary = tmp_path / 'dry.json', tmp_path / 'real.json'
+    args = _base_args(run, dest_root)
+    dry = _run(args + ['--dry-run', '--json', str(dry_summary)])
+    assert dry.returncode == 0, dry.stdout + dry.stderr
+    assert not dest_root.exists()
+    real = _run(args + ['--json', str(real_summary)])
+    assert real.returncode == 0, real.stdout + real.stderr
+    planned, copied = [json.loads(path.read_text()) for path in (dry_summary, real_summary)]
+    cell = Path(copied['dest'])
+    for summary in (planned, copied):
+        assert summary['step_evidence']['n_steps'] == 2
+        assert summary['step_evidence']['n_selected_rows'] == 2
+        assert summary['step_evidence']['n_legacy_steps'] == 1
+        assert summary['step_evidence']['n_canonical_attempts'] == 4
+        assert summary['step_evidence']['n_records_copied'] == 9
+        assert summary['file_count'] == sum(p.is_file() for p in cell.rglob('*'))
+        shared = dest_root / 'ic/widgetmul/input'
+        assert summary['shared_input_file_count'] == sum(p.is_file() for p in shared.rglob('*'))
+        assert summary['total_file_count'] == summary['file_count'] + summary['shared_input_file_count']
+    for doc in documents:
+        delivered = cell / doc.relative_to(run)
+        assert delivered.read_bytes() == doc.read_bytes()
+        assert limitations in delivered.read_text()
+    assert planned['step_evidence'] == copied['step_evidence']
+
+
 def test_flow109_self_tapeout_uses_native_precheck_without_legacy_reports(tmp_path):
     run = _flow109_release_docs(tmp_path)
     for name in ('general_precheck.json', 'shuttle_precheck.json'):
@@ -1288,6 +1403,40 @@ def test_flow109_self_tapeout_uses_native_precheck_without_legacy_reports(tmp_pa
     assert 'reports/phase3/general_precheck.json' not in declared
     assert 'reports/phase3/shuttle_precheck.json' not in declared
     assert len(declared) == len(set(declared))
+
+
+@pytest.mark.parametrize('verdict', ['FAIL', 'NOT_MEASURED', 'UNSUBSTANTIATED'])
+def test_release_requires_pass_in_the_published_precheck_too(tmp_path, verdict):
+    import benchmark_evidence_publish as publisher
+    run = _flow109_release_docs(tmp_path)
+    rels = {p.relative_to(run).as_posix() for p in run.rglob('*') if p.is_file()}
+    _, violations = publisher.release_docs_invariant(run, rels,
+        published_verdicts={'reports/phase3/tapeout_precheck.json': verdict})
+    assert any(f'published verdict is {verdict}' in v for v in violations), violations
+
+
+@pytest.mark.parametrize('dry', [False, True])
+def test_source_pass_cannot_hide_a_published_unsubstantiated_release_precheck(tmp_path, dry):
+    run = _flow109_release_docs(tmp_path)
+    native = run / 'reports/phase3/tapeout_precheck.json'
+    native.write_text(json.dumps({'verdict': 'PASS',
+        'final_declaration': 'reports/phase3/transport_declaration.json'}))
+    (run / 'reports/phase3/transport_declaration.json').write_text(json.dumps({
+        'verdict': 'PASS', 'source': str(tmp_path / 'historical-absent-source.json')}))
+    before = native.read_bytes()
+    dest_root = tmp_path / 'benchmark-data'
+    args = _base_args(run, dest_root) + (['--dry-run'] if dry else [])
+    result = _run(args)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'native verdict is PASS, published verdict is UNSUBSTANTIATED' in result.stderr
+    assert 'step folders;' in result.stderr and 'cell file(s)' in result.stderr
+    assert '#2017' in result.stderr
+    assert native.read_bytes() == before
+    if dry:
+        assert not dest_root.exists()
+    else:
+        delivered = dest_root / 'ic/widgetmul/v9.9.9_openpdkx' / native.relative_to(run)
+        assert json.loads(delivered.read_text())['verdict'] == 'UNSUBSTANTIATED'
 
 
 @pytest.mark.parametrize('verdict', ['FAIL', 'NOT_MEASURED', None, 'invalid-json'])
