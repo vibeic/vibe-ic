@@ -56910,6 +56910,7 @@ def gen_l12_behavioral(project: Path,
                     continue
                 for seq in hits:
                     seq_with_evidence = dict(seq)
+                    seq_with_evidence['name'] = f'usage_sequence_{len(sequences) + 1}'
                     seq_with_evidence["evidence"] = (
                         f"input/docs/{fname}:line "
                         f"{seq['steps'][0]['evidence_line']}"
@@ -56922,6 +56923,7 @@ def gen_l12_behavioral(project: Path,
                         "literal": "numbered usage sequence",
                         "label": "README usage-sequence (Bug 2 picker)",
                     })
+                if len(sequences) >= 8:
                     break
 
     # v1.6.67 — closes issue #8 Bug B (L12 half). Mirror the
