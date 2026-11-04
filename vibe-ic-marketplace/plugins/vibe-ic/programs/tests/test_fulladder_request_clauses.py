@@ -1,0 +1,48 @@
+import pytest
+
+import arithmetic_synth as arithmetic
+from test_explicit_fulladder_emission import request, assert_fulladder_composition
+
+
+@pytest.mark.parametrize("style", ["not built from full-adder cells", "never built from full-adder cells"])
+def test_attached_composition_denial_is_ordinary(style):
+    prompt, _, _ = request(style=style)
+    ordinary, _, _ = request(style="")
+    assert arithmetic.synth(prompt, "neutral_sum") == arithmetic.synth(ordinary, "neutral_sum")
+
+
+@pytest.mark.parametrize("statement", [
+    "Do not construct the implementation from full adders.",
+    "Never build the adder using full adders.",
+    "A different design was built from full-adder cells.",
+    "Another implementation was constructed using full adders.",
+])
+def test_governing_denial_or_past_description_cannot_activate_style(statement):
+    prompt, _, _ = request(style="")
+    assert arithmetic.synth(prompt + "\n" + statement, "neutral_sum") == arithmetic.synth(prompt, "neutral_sum")
+
+
+@pytest.mark.parametrize("statement", [
+    "Construct the implementation from full adders.",
+    "Build the adder using full adders.",
+    "Please construct\nthe implementation from full\nadders.",
+    "Do not add registers. Construct the implementation from full adders.",
+    "Construct the implementation from full adders. Never add registers.",
+    "Use\nfull adders.",
+])
+def test_current_request_binds_style_across_wraps_and_separate_statements(statement):
+    prompt, _, spans = request(style="")
+    rtl = arithmetic.synth(prompt + "\n" + statement, "neutral_sum")
+    assert_fulladder_composition(rtl, 5, ("operand_u", "operand_v", "total"), spans)
+
+
+@pytest.mark.parametrize("style", ["built from full-adder cells", "using full\nadders", "using full adders without registers"])
+def test_qualified_attached_composition_keeps_existing_chain(style):
+    prompt, _, spans = request(style=style)
+    assert_fulladder_composition(arithmetic.synth(prompt, "neutral_sum"), 5,
+        ("operand_u", "operand_v", "total"), spans)
+
+
+def test_mixed_negated_constraint_and_composition_is_explicitly_unqualified():
+    prompt, _, _ = request(style="not using registers, but using full adders")
+    assert arithmetic.synth(prompt, "neutral_sum") is None
