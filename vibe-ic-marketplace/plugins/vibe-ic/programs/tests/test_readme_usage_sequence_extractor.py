@@ -40,6 +40,34 @@ def test_canonical_sequence():
     assert all("evidence_line" in s for s in seq["steps"])
 
 
+def test_automatic_markers_and_indented_prose_reach_l12_consumer(tmp_path):
+    import json
+    import phase1_doc_one_shot_runner as producer
+    import l12_sequences_in_consumed_layer_check as consumer
+    text = ('1. Write CONTROL = 1\n'
+            '   The update is accepted only while idle.\n'
+            '1. Wait for READY\n'
+            '1. Read RESULT = 0\n')
+    source = tmp_path / 'input/docs/usage.md'
+    source.parent.mkdir(parents=True)
+    source.write_text(text)
+    result = producer.gen_l12_behavioral(tmp_path, {'usage.md': text}, {})
+    doc = json.loads(result.path.read_text())
+    assert len(doc['behavioral_sequences']) == 1
+    steps = doc['behavioral_sequences'][0]['steps']
+    assert [s['step'] for s in steps] == [1, 2, 3]
+    assert [s['evidence_line'] for s in steps] == [1, 3, 4]
+    assert 'accepted only while idle' in steps[0]['action']
+    report = consumer.audit(result.path.parent)
+    assert report['summary']['l12_sequences_checked'] == 1
+    assert not [f for f in report['findings'] if f['severity'] == 'ERROR']
+
+
+def test_automatic_markers_preserve_source_item_minimum():
+    assert _extract('1. Write CONTROL = 1\n1. Read RESULT = 0\n') == []
+    assert _extract('1. Write CONTROL = 1\n   Wait for READY\n   Read RESULT = 0\n') == []
+
+
 def test_counter_reset_splits_into_two_sequences():
     readme = (
         "1. Load aaaaaa\n"
