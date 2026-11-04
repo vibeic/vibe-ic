@@ -480,13 +480,19 @@ def _reset_context(text: str) -> str:
 
 def _initial_state_clauses(text: str) -> List[str]:
     """Explicit pre-operation state assumptions are not runtime reset inputs."""
-    return [clause.strip() for clause in re.findall(r"[^.;\n]+[.;\n]?", text)
-            if re.search(r"\binitially\b|\binitial\s+state\b", clause, re.I)
-            and re.search(r"\b(?:zero|one)\b|(?<!\w)[01](?!\w)", clause, re.I)
-            and re.search(r"\bbefore\b[^.;\n]*\b(?:begins?|starts?|first\s+"
-                          r"(?:clock\s+)?edge)\b", clause, re.I)
-            and not _prose_is_denied(clause)
-            and not re.search(r"\b(?:assert|deassert|input|port)\b", clause, re.I)]
+    clauses = []
+    for clause in re.findall(r"[^.;]+[.;]?", text):
+        before = re.search(r"\bbefore\b[^.;]*?\b(?:begins?|starts?|first\s+"
+                           r"(?:clock\s+)?edge)\b", clause, re.I)
+        if before is None:
+            continue
+        assumption = clause[:before.end()].strip()
+        if (re.search(r"\binitially\b|\binitial\s+state\b", assumption, re.I)
+                and re.search(r"\b(?:zero|one)\b|(?<!\w)[01](?!\w)", assumption, re.I)
+                and not _prose_is_denied(assumption)
+                and not re.search(r"\b(?:assert|deassert|input|port)\b", assumption, re.I)):
+            clauses.append(assumption)
+    return clauses
 
 
 def _detect_reset_mode_polarity(text: str):
@@ -2398,6 +2404,87 @@ def _tb_exercises_overflow_region(tb_clean: str) -> bool:
     return bool(_TB_RANGE_DECISION_RE.search(t))
 
 
+def _fatal_branch_end(code: str, after: int) -> Optional[int]:
+    branch, end = _SRC._extract_block(code, after)
+    branch = re.sub(r"^begin\b|\bend$", "", branch).strip()
+    return end if re.fullmatch(r"(?:\$display\s*\([^;]*\)\s*;\s*)?"
+                               r"\$fatal\s*(?:\([^;]*\))?\s*;", branch, re.I) else None
+
+
+def _tb_fatal_reference_check(tb_code: str, output: str, reference: str) -> bool:
+    """Only direct finishing-initial checks and tasks that fatally reject false."""
+    helpers = []
+    tasks = list(re.finditer(r"\btask\s+(?:automatic\s+)?(\w+)\s*\(\s*input\s+"
+                             r"(?:(?:bit|logic|reg)\s+)?(\w+)\s*\)\s*;(.*?)\bendtask\b",
+                             tb_code, re.I | re.S))
+    for task in tasks:
+        if sum(other[1].lower() == task[1].lower() for other in tasks) != 1:
+            continue
+        body = re.sub(r"^begin\b|\bend$", "", task[3].strip()).strip()
+        condition = re.match(rf"if\s*\(\s*!\s*{re.escape(task[2])}\s*\)", body, re.I)
+        end = _fatal_branch_end(body, condition.end()) if condition else None
+        if end is not None and not body[end:].strip():
+            helpers.append(task[1])
+    left = re.escape(output)
+    right = re.escape(reference) + r"(?:\s*\[[^\]\n]+\])?"
+    proof = re.compile(rf"\bif\s*\(\s*{left}\s*!==\s*{right}\s*\)"
+                       + (rf"|\b(?:{'|'.join(map(re.escape, helpers))})\s*\(\s*"
+                          rf"{left}\s*===\s*{right}\s*\)\s*;" if helpers else ""), re.I)
+    for initial in re.finditer(r"\binitial\s+(?=begin\b)", tb_code, re.I):
+        block, _ = _SRC._extract_block(tb_code, initial.end())
+        body = re.sub(r"^begin\b|\bend$", "", block).strip()
+        finish = re.search(r"\$finish\b", body, re.I)
+        if not finish:
+            continue
+        for check in proof.finditer(body[:finish.start()]):
+            prefix = body[:check.start()]
+            depth = sum(1 if t[0].lower() == 'begin' else -1
+                        for t in re.finditer(r"\bbegin\b|\bend\b", prefix, re.I))
+            if depth or not re.search(r"(?:^|;|\bend\b)\s*$", prefix, re.I):
+                continue
+            if not check[0].lower().startswith('if') or _fatal_branch_end(body, check.end()) is not None:
+                return True
+    return False
+
+
+def _tb_exercises_saturation_region(tb_code: str, rtl_text: Optional[str]) -> bool:
+    """Bounded reference-counter attribution; loop bounds are not clamp probes."""
+    roles = _tb_bound_port_roles(rtl_text, tb_code)
+    if not roles:
+        return False
+    types = _tb_instantiated_module_types(tb_code, set(
+        re.findall(r"\bmodule\s+(\w+)", _HDL.strip_hdl_comments_and_strings(rtl_text))))
+    if len(types) != 1:
+        return False
+    _, ports = _SRC.parse_rtl_ports(rtl_text, types[0])
+    outputs = {roles[p.name.lower()] for p in ports if p.direction == "output"
+               and p.name.lower() in roles}
+    if any(_assigned_expressions(tb_code, signal)
+           or re.search(rf"\bforce\s+{re.escape(signal)}\b", tb_code, re.I)
+           or _tb_has_other_clock_driver(rtl_text, tb_code, tb_code, signal)
+           for signal in outputs):
+        return False
+    compact = re.sub(r"\s+", "", tb_code)
+    target = r"[A-Za-z_]\w*(?:\[[^\]\n]+\])?"
+    update = re.compile(
+        rf"if\((?P<counter>{target})(?P<op>!=|<|>)(?P<limit>{_HDL_INT})\)"
+        rf"(?:begin)?(?P=counter)=(?P=counter)(?P<step>[+-])(?P<amount>{_HDL_INT});")
+    guards = {}
+    for match in update.finditer(compact):
+        if _parse_hdl_int(match['amount']) != 1:
+            continue
+        if match['op'] not in ('!=', '<' if match['step'] == '+' else '>'):
+            continue
+        guards.setdefault(match['counter'], {})[match['step']] = _parse_hdl_int(match['limit'])
+    for counter, limits in guards.items():
+        if (None in limits.values() or not {'+', '-'} <= limits.keys()
+                or limits['+'] <= limits['-']):
+            continue
+        if any(_tb_fatal_reference_check(tb_code, signal, counter) for signal in outputs):
+            return True
+    return False
+
+
 # ORGANIC-20260618 (car_parking_management_0015) — `rounding` and `truncation`
 # are lumped into the overflow family by `_OVERFLOW_RE`, but they are NOT a
 # saturation/wrap value-region decision: a ceil/floor-division design has no
@@ -3052,7 +3139,8 @@ def _tb_has_other_clock_driver(rtl_text: str, tb_code: str,
     return False
 
 
-def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
+def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
+                            endpoint_checks: Optional[set] = None) -> tuple:
     """Bounded inline initial/clocked output witnesses, not general SV execution.
 
     Reuse DUT binding and the HDL block parser. Only a single finishing initial
@@ -3096,9 +3184,13 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
     if len(edges) != 1:
         return False, False
     active = 1 if next(iter(edges)).lower() == "posedge" else 0
-    declarations = list(re.finditer(
-        rf"\b(?:reg|logic|bit)\s+{re.escape(clock)}\s*=\s*({_HDL_INT})\s*;",
-        outside, re.I))
+    declarations = []
+    for declaration in re.finditer(r"\b(?:reg|logic|bit)\s+([^;]+);", outside, re.I):
+        for scalar in _split_top_level_args(declaration.group(1)):
+            match = re.fullmatch(
+                rf"{re.escape(clock)}\s*=\s*({_HDL_INT})", scalar, re.I)
+            if match:
+                declarations.append(match)
     if len(_assigned_expressions(outside, clock)) != len(declarations) or len(declarations) > 1:
         return False, False
     level = _parse_hdl_int(declarations[0].group(1)) if declarations else None
@@ -3106,9 +3198,11 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
         return False, False  # X -> active at time zero already clocks the DUT
     time, edge_time, count = 0.0, 0.0, 0
     before, after = False, False
+    checked = {}
     delay_pattern = re.compile(r"#\s*(\d+(?:\.\d+)?)\s*;?")
     assignment_pattern = re.compile(r"(\w+)\s*=(?!=)\s*([^;]+);")
-    check_pattern = re.compile(rf"if\s*\(\s*(\w+)\s*!==\s*({_HDL_INT})\s*\)", re.I)
+    output_expression = r"(?:\w+|\{\s*\w+(?:\s*,\s*\w+)+\s*\})"
+    check_pattern = re.compile(rf"if\s*\(\s*({output_expression})\s*!==\s*({_HDL_INT})\s*\)", re.I)
     system_pattern = re.compile(r"\$(display|finish)\b\s*(?:\([^;]*\))?\s*;", re.I)
     cursor = 0
     while cursor < len(body):
@@ -3133,16 +3227,37 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
                 level = value
             consumed = assignment.end()
         elif check:
-            branch, consumed = _SRC._extract_block(body, check.end())
-            branch = re.sub(r"^begin\b|\bend$", "", branch).strip()
-            if not re.fullmatch(r"(?:\$display\s*\([^;]*\)\s*;\s*)?"
-                                r"\$fatal\s*(?:\([^;]*\))?\s*;", branch, re.I):
+            consumed = _fatal_branch_end(body, check.end())
+            if consumed is None:
                 return False, False
-            if check.group(1).lower() in outputs and level is not None:
+            observed = re.findall(r"\w+", check.group(1).lower())
+            if observed and set(observed) <= outputs and level is not None:
                 before |= count == 0 and time > 0
                 after |= count > 0 and time > edge_time
+                value = _parse_hdl_int(check.group(2))
+                if count > 0 and time > edge_time and len(observed) == 1 and value is not None:
+                    checked.setdefault(observed[0], {})[count] = value
         elif system:
             if system.group(1).lower() == "finish":
+                if endpoint_checks is not None:
+                    for port in ports:
+                        signal = roles.get(port.name.lower())
+                        values = list(checked.get(signal, {}).values())
+                        if port.direction != "output" or not values or port.width < 2:
+                            continue
+                        maximum = (1 << port.width) - 1
+                        guards = {_parse_hdl_int(m.group(1)) for m in re.finditer(
+                            rf"\b{re.escape(port.name)}\s*(?:!=|<|>)\s*({_HDL_INT})",
+                            _HDL.strip_hdl_comments_and_strings(rtl_text))}
+                        if not {0, maximum} <= guards:
+                            continue  # unrelated public outputs cannot stand in for a clamped value
+                        # Both limits must hold on separate edges and recover
+                        # into the interior; naming a limit is not exercising it.
+                        if (any(0 < value < maximum for value in values)
+                                and all(any(a == b == limit and 0 <= c <= maximum and c != limit
+                                            for a, b, c in zip(values, values[1:], values[2:]))
+                                        for limit in (0, maximum))):
+                            endpoint_checks.add(signal)
                 return before, after
             consumed = system.end()
         else:
@@ -3314,9 +3429,10 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
     register_loop_attempted, register_loop_offsets = \
         _tb_register_loop_coverage(
             _HDL.strip_hdl_comments_and_strings(tb_text), rtl_text)
+    endpoint_checks = set()
     initial_observed, clocked_observed = (
-        _tb_direct_state_checks(rtl_text, _HDL.strip_hdl_comments_and_strings(tb_text))
-        if any(it.kind in {"initial_state", "latency"} for it in items)
+        _tb_direct_state_checks(rtl_text, _HDL.strip_hdl_comments_and_strings(tb_text), endpoint_checks)
+        if any(it.kind in {"initial_state", "latency", "overflow", "saturation"} for it in items)
         else (False, False))
 
     members_norm = {_norm_value(m) for m in enum_members_all
@@ -3432,13 +3548,15 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
         # necessary (so a genuine exhaustive truncation TB that names its var
         # differently no longer BLOCKs). A real uncovered-overflow TB — one that
         # never drives the region (no range decision) — still GAPs / BLOCKs.
-        if it.kind == "overflow":
+        if it.kind in {"overflow", "saturation"}:
             token_hit = any(
                 tok.strip()
                 and re.search(r"\b" + re.escape(tok.strip().lower()) + r"\b",
                               tb_low)
                 for tok in it.coverage_tokens)
-            region = _tb_exercises_overflow_region(tb_clean)
+            region = (_tb_exercises_saturation_region(
+                _HDL.strip_hdl_comments_and_strings(tb_text), rtl_text)
+                if it.kind == "saturation" else _tb_exercises_overflow_region(tb_clean))
             # ORGANIC-20260618 — a rounding/truncation trigger (NOT saturate/
             # overflow/wrap/clip) is not a value-region decision; accept the
             # ceil/floor-division idiom or a reference-model equality as covering.
@@ -3446,8 +3564,13 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
                 re.fullmatch(r"rounding|truncat\w*", (tok or "").strip().lower())
                 for tok in it.coverage_tokens)
             rounding = _is_rounding and _tb_exercises_rounding(tb_clean)
-            it.covered = bool(region or rounding)
-            if rounding and not region:
+            endpoints = it.kind == "saturation" and bool(endpoint_checks)
+            it.covered = bool(region or rounding or endpoints)
+            if endpoints:
+                it.coverage_note = "fatal-backed bound output checks exercise both limits, hold and recovery"
+            elif region and it.kind == "saturation":
+                it.coverage_note = "bound DUT output comparison with a reference counter guarded at both limits"
+            elif rounding and not region:
                 it.coverage_note = ("TB exercises rounding/truncation (ceil/floor "
                                     "division idiom or reference-model equality)")
             elif region and token_hit:
