@@ -495,8 +495,8 @@ def test_d13_without_synthesis_runs_native_functional_owner_and_counts_current_r
         return SimpleNamespace(returncode=0 if summary['verdict']=='PASS' else 1)
     monkeypatch.setattr(public.subprocess,'run',child)
     rc=public._main()
-    assert len(calls)==1, 'D13 must reach its current functional producer before synthesis'
     assert rc==(0 if expected=='PASS' else 1)
+    assert len(calls)==1, 'D13 must reach its current functional producer before synthesis'
     row=json.loads((tmp_path/'reports/flow109/default_rows/D13.json').read_text())
     assert row['default_row_status']==expected and row['completed'] is (expected=='PASS'),row
     assert row['delivery_accepted'] is False and row['whole_flow_acceptance']=='NOT_MEASURED'
