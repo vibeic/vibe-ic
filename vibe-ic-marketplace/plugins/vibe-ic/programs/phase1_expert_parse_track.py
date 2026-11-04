@@ -1634,10 +1634,13 @@ _SOURCE_POSITION_SUFFIXES = ("_line", "_lineno", "_line_no", "_line_number")
 #: hex prefix can be all digits (`91094619`) and would otherwise read as a
 #: number. The digest word must END the name: `digest_bits` is a width.
 _DIGEST_KEY = re.compile(r"(?:^|_)(?:sha\d*|digest|hash|checksum)$")
-_QUANTITY = re.compile(
-    r"([-+]?(?:(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]*)?"
-    r"|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)"
-    r"(?:\s*-?\s*(\S.*))?", re.S)
+_QUANTITY_NUMBER = (r"[-+]?(?:(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]*)?"
+                    r"|\.[0-9]+)(?:[eE][-+]?[0-9]+)?")
+_QUANTITY = re.compile("(" + _QUANTITY_NUMBER + r")(?:\s*-?\s*(\S.*))?", re.S)
+_QUANTITY_ATOM = r"[^\s,;|()\[\]<>]+"
+_PROSE_QUANTITY = re.compile(
+    r"(?<![^\s(\[|<>=])(" + _QUANTITY_NUMBER + r")\s*-?\s*"
+    r"(deg\s+" + _QUANTITY_ATOM + "|" + _QUANTITY_ATOM + ")")
 _HEX_LITERAL = re.compile(r"(?:0[xX][0-9a-fA-F]+|"
                           r"(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{8,})")
 
@@ -1791,14 +1794,17 @@ def _source_position_key(key: Any) -> bool:
     return k in _SOURCE_POSITION_KEYS or k.endswith(_SOURCE_POSITION_SUFFIXES)
 
 
+def _quantity_eligible(node: Any, key: Any, unit: Optional[Tuple[str, int]]) -> bool:
+    return not (unit == _INVALID_FIELD_UNIT or isinstance(node, bool)
+                or (key is not None and _source_position_key(key))
+                or (isinstance(node, str) and key is not None
+                    and _DIGEST_KEY.search(str(key).strip().lower())))
+
+
 def _typed_quantity(node: Any, key: Any,
                     unit: Optional[Tuple[str, int]]) -> Optional[Quantity]:
     """The typed numeric VALUE this scalar is, or None when it is not one."""
-    if unit == _INVALID_FIELD_UNIT:
-        return None
-    if key is not None and _source_position_key(key):
-        return None
-    if isinstance(node, bool):
+    if not _quantity_eligible(node, key, unit):
         return None
     if isinstance(node, (int, float, Decimal)):
         value = Decimal(str(node)) if isinstance(node, float) else Decimal(node)
@@ -1806,8 +1812,6 @@ def _typed_quantity(node: Any, key: Any,
             return None
         return Quantity(value, *unit) if unit else Quantity(value)
     if isinstance(node, str):
-        if key is not None and _DIGEST_KEY.search(str(key).strip().lower()):
-            return None
         q = parse_quantity(node)
         if q is not None and q.dimension is None and unit:
             return Quantity(q.value, *unit)
@@ -1815,16 +1819,38 @@ def _typed_quantity(node: Any, key: Any,
     return None
 
 
+def _prose_quantities(text: str) -> Tuple[Quantity, ...]:
+    """Read complete adjacent number/unit atoms without borrowing prose units."""
+    text = text.replace("\u2212", "-")
+    quantities = []
+    for match in _PROSE_QUANTITY.finditer(text):
+        prefix = text[:match.start()].rstrip()
+        if re.search(r"(?:[:+\\\-–—]|(?:^|\s)to)$", prefix):
+            continue
+        if match.group(1).startswith(("-", "+")) and re.search(r"\d$", prefix):
+            continue
+        quantity = parse_quantity(match.group().removesuffix("."))
+        if quantity is not None and quantity.dimension is not None:
+            quantities.append(quantity)
+    return tuple(quantities)
+
+
 class _ValueUnit(str):
     """A haystack unit that is a scalar VALUE: its text, plus the typed value
     a numeric token is compared with (`quantity`, None when it is not one).
     A key stays a plain `str`, so a key can never satisfy a number."""
     quantity: Optional[Quantity]
+    quantities: Tuple[Quantity, ...]
 
     def __new__(cls, node: Any, key: Any = None,
                 unit: Optional[Tuple[str, int]] = None) -> "_ValueUnit":
         self = super().__new__(cls, str(node))
         self.quantity = _typed_quantity(node, key, unit)
+        self.quantities = ()
+        if self.quantity is not None:
+            self.quantities = (self.quantity,)
+        elif isinstance(node, str) and _quantity_eligible(node, key, unit):
+            self.quantities = _prose_quantities(node)
         return self
 
 
@@ -1845,8 +1871,7 @@ def token_in_unit(token: str, unit: str) -> bool:
                        re.finditer(r"(?<![\w+\-−])" + re.escape(token.strip())
                                    + r"(?!\w)", unit, re.I))
         return phrase_present(token, unit)
-    have = getattr(unit, "quantity", None)
-    return have is not None and want.matches(have)
+    return any(want.matches(have) for have in getattr(unit, "quantities", ()))
 
 
 def present_in_units(phrase: str, units: List[str]) -> bool:
