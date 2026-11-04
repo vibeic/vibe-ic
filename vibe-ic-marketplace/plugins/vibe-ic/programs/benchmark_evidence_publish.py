@@ -1003,6 +1003,16 @@ _CITED_RE = re.compile(
     r"(?:" + "|".join(re.escape(e) for e in _CITED_EXT) + r")")
 
 
+def _without_scan_census(value):
+    """A citation view only; the published report keeps its original census."""
+    if isinstance(value, dict):
+        return {key: _without_scan_census(item) for key, item in value.items()
+                if key != 'documents_scanned'}
+    if isinstance(value, list):
+        return [_without_scan_census(item) for item in value]
+    return value
+
+
 def _gate_citations(doc: Path) -> set:
     """The citations `evidence_citation_resolves_check` would find in `doc`.
 
@@ -1315,9 +1325,10 @@ def _document_citations(doc: Path) -> set:
     if doc.suffix.lower() != ".json":
         return found
     try:
-        data = json.loads(text)
+        data = _without_scan_census(json.loads(text))
     except ValueError:
         return found
+    found = set(_CITED_RE.findall(json.dumps(data))) | _gate_citations(doc)
 
     def walk(value):
         if isinstance(value, dict):
@@ -1348,7 +1359,7 @@ def _absolute_citation_values(text: str) -> set:
     """
     out: set = set()
     try:
-        doc = json.loads(text)
+        doc = _without_scan_census(json.loads(text))
     except Exception:
         return out
 
@@ -1387,7 +1398,7 @@ def _citations_under_a_pass(text: str) -> set:
     """
     found: set = set()
     try:
-        doc = json.loads(text)
+        doc = _without_scan_census(json.loads(text))
     except Exception:
         return found
 
@@ -1826,7 +1837,8 @@ def close_citations(run_dir: Path, dest: Path,
         if (rewrites or rel_doc in rebound) and isinstance(data, dict) and not dry:
             def portable(value):
                 if isinstance(value, dict):
-                    return {key: portable(item) for key, item in value.items()}
+                    return {key: item if key == 'documents_scanned' else portable(item)
+                            for key, item in value.items()}
                 if isinstance(value, list):
                     return [portable(item) for item in value]
                 return rewrites.get(value, value) if isinstance(value, str) else value

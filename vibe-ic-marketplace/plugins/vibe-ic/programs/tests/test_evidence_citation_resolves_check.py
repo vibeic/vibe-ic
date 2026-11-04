@@ -49,6 +49,14 @@ def _doc(root: Path, rel: str, body: str) -> Path:
     return p
 
 
+@pytest.mark.parametrize('census', ['reports/scanned.rpt', ['reports/scanned.rpt'],
+                                  {'source': 'reports/scanned.rpt'}])
+def test_documents_scanned_is_a_census_not_a_proof_dependency(tmp_path, census):
+    doc = _doc(tmp_path, 'reports/tool.json', json.dumps({
+        'verdict': 'PASS', 'documents_scanned': census, 'source': 'reports/real.rpt'}))
+    assert E._json_artifact_refs(doc) == [('source', 'reports/real.rpt')]
+
+
 # ── the defect itself ────────────────────────────────────────────────────────
 
 def test_dangling_citation_fails(tmp_path):
