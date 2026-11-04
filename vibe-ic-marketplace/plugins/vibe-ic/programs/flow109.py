@@ -2840,6 +2840,12 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
                     status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
                 for category, limits in targets['limits'].items():
                     observed = coverage['totals'][category]
+                    if category == 'branch':
+                        from verilator_coverage_measure import measured_empty_branch_population
+                        empty_branch = measured_empty_branch_population(coverage)
+                        if empty_branch is not None:
+                            measurements['branch_applicability'] = empty_branch
+                            continue
                     if observed['total'] <= 0 or not math.isfinite(observed['pct']):
                         status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
                     elif targets['acceptance_applicable'] and (

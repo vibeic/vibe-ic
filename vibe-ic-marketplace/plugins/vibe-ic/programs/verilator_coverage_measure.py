@@ -1225,6 +1225,9 @@ def cmd_measure(args: argparse.Namespace) -> int:
         **(scoped or {}),
         "per_file_metric": "category_points",
     }
+    empty_branch = measured_empty_branch_population(out)
+    if empty_branch:
+        out['branch_applicability'] = empty_branch
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(out, indent=2))
     if not scoped or scoped['line_metric'] != 'executable_line_union':
@@ -1234,11 +1237,13 @@ def cmd_measure(args: argparse.Namespace) -> int:
     line_pct = totals["line"]["pct"]
     toggle_pct = totals["toggle"]["pct"]
     branch_pct = totals["branch"]["pct"]
+    branch_display = 'NOT_APPLICABLE (0/0)' if empty_branch else f'{branch_pct}%'
     print(
-        f"[measure] line={line_pct}% toggle={toggle_pct}% branch={branch_pct}% "
+        f"[measure] line={line_pct}% toggle={toggle_pct}% branch={branch_display} "
         f"→ {args.out}"
     )
-    if any(p < t for p, t in [(line_pct, args.min_line), (toggle_pct, args.min_toggle), (branch_pct, args.min_branch)]):
+    if (line_pct < args.min_line or toggle_pct < args.min_toggle
+            or branch_pct < args.min_branch and not empty_branch):
         print("[measure] below one or more thresholds", file=sys.stderr)
         return 1
     return 0
@@ -1556,7 +1561,7 @@ def suite_payload_fields(result: Dict[str, Any]) -> Dict[str, Any]:
     measured = result.get("measured") or []
     dats = result.get("dats") or []
     scoped = scope_totals(result.get('cov') or {}, list(result.get('scope_used') or []))
-    return {
+    fields = {
         "testbenches": measured,
         "measurement_scope": ("union-of-suite" if len(dats) > 1
                               else "single-testbench"),
@@ -1568,6 +1573,24 @@ def suite_payload_fields(result: Dict[str, Any]) -> Dict[str, Any]:
         "line_union_cross_check": result.get("line_union_cross_check") or {
             "status": "NOT_MEASURED", "reason": "not recorded by the producer"},
     }
+    if scoped and dats:
+        empty = measured_empty_branch_population({
+            'tool': 'verilator', 'totals': scoped['totals']})
+        if empty is not None:
+            fields['branch_applicability'] = empty
+    return fields
+
+
+def measured_empty_branch_population(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A measured empty branch population has no coverage denominator."""
+    totals = data.get('totals', {})
+    if (data.get('tool') == 'verilator'
+            and totals.get('branch', {}).get('total') == 0
+            and totals.get('line', {}).get('total', 0) > 0
+            and totals.get('toggle', {}).get('total', 0) > 0):
+        return {'status': 'NOT_APPLICABLE',
+                'reason': 'zero branch points; line and toggle instrumentation are present'}
+    return None
 
 
 def prepare_professional_coverage_report(path: Path) -> None:
@@ -1681,10 +1704,12 @@ def cmd_measure_tb(args: argparse.Namespace) -> int:
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(out, indent=2))
     t = scoped["totals"]
+    empty_branch = measured_empty_branch_population(out)
+    branch_display = ('NOT_APPLICABLE (0/0)' if empty_branch else f"{t['branch']['pct']}%")
     _how = (f"UNION of {len(dats)} testbench(es)" if len(dats) > 1
             else f"from {dat}")
     print(f"[measure-tb] line={t['line']['pct']}% "
-          f"toggle={t['toggle']['pct']}% branch={t['branch']['pct']}% "
+          f"toggle={t['toggle']['pct']}% branch={branch_display} "
           f"(scope {scoped['scope_files']}, {_how}) -> {args.out}")
     if len(dats) > 1:
         for one_tb in measured:
@@ -1698,7 +1723,7 @@ def cmd_measure_tb(args: argparse.Namespace) -> int:
              for c, th in (("line", args.min_line),
                            ("toggle", args.min_toggle),
                            ("branch", args.min_branch))
-             if t[c]["pct"] < th]
+             if t[c]["pct"] < th and not (c == 'branch' and empty_branch)]
     if below:
         print("[measure-tb] below threshold(s): " + "; ".join(below),
               file=sys.stderr)
@@ -2694,14 +2719,15 @@ def cmd_check(args: argparse.Namespace) -> int:
         below.append(f"line {line_pct}% < {args.min_line}%")
     if toggle_pct < args.min_toggle:
         below.append(f"toggle {toggle_pct}% < {args.min_toggle}%")
-    if branch_pct < args.min_branch:
+    branch_empty = measured_empty_branch_population(data)
+    if branch_pct < args.min_branch and branch_empty is None:
         below.append(f"branch {branch_pct}% < {args.min_branch}%")
     if below:
         print("[check] below threshold(s):", "; ".join(below), file=sys.stderr)
         return 1
-    print(
-        f"[check] PASS  line={line_pct}%  toggle={toggle_pct}%  branch={branch_pct}%"
-    )
+    branch_display = ('NOT_APPLICABLE (0/0)'
+                      if branch_empty else f'{branch_pct}%')
+    print(f"[check] PASS  line={line_pct}%  toggle={toggle_pct}%  branch={branch_display}")
     return 0
 
 
