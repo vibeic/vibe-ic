@@ -989,6 +989,76 @@ def _l8_literal_owner_emit(tmp_path, text):
             ("L8_RTL_CONSTANTS.json", "L9_INTEGRATION_SPEC.json")]
 
 
+@pytest.mark.parametrize('heading,token', [
+    ('Synthesis Constraints(非 SDC)', 'SYNTH_MAX_FANOUT'),
+    ('Physical Design Settings', 'EDGE_BUDGET'),
+    ('Floorplan Constraints\n\n### Limits', 'DENSITY_CAP'),
+    ('RTL Synthesis Parameters', 'SYNTH_FANOUT_CAP'),
+])
+def test_parameter_table_ownership_keeps_flow_settings_in_l19(tmp_path, heading, token):
+    from programs import phase1_doc_one_shot_runner as producer
+    import subprocess
+    import sys
+    fixture = Path(__file__).parent / 'fixtures/phase1_local/parameter_table_ownership/constraint_table.md'
+    text = fixture.read_text().replace('Synthesis Constraints(非 SDC)', heading).replace('SYNTH_MAX_FANOUT', token)
+    source = tmp_path / 'input/docs/L9_integration.md'
+    source.parent.mkdir(parents=True)
+    source.write_text(text)
+    result = subprocess.run([sys.executable, str(Path(producer.__file__)), str(tmp_path),
+                             '--ic-name', 'neutral_parameter_table'], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = tmp_path / 'phase1/generated_docs'
+    l8, l9, l19 = [json.loads((generated / (name + '.json')).read_text()) for name in
+                   ('L8_RTL_CONSTANTS', 'L9_INTEGRATION_SPEC', 'L19_CONSTRAINTS_PDK')]
+    rows = [row for row in l19['fields']['constraint_declarations'] if row.get('token') == token]
+    assert len(rows) == 1 and rows[0]['value'] == '8', rows
+    assert rows[0]['source'] == 'phase1/input_doc/L9_integration.txt'
+    assert rows[0]['evidence'] in source.read_text()
+    assert rows[0]['evidence'] in (tmp_path / rows[0]['source']).read_text()
+    assert f'`{token}` | **8**' in rows[0]['evidence']
+    assert l8['parameters'] == [], l8.get('parameters')
+    assert l9['parameters'] == [], l9.get('parameters')
+
+
+@pytest.mark.parametrize('module_heading,constraint_first', [
+    ('## Synthesis\n\n### RTL module parameters', False),
+    ('## Synthesis\n\n### RTL module parameters', True),
+    ('## Synthesis\n\n### Top Entity - Generics', None),
+    ('## Physical Integration\n\n### RTL\n\n#### Parameters', None),
+    ('## Integration\n\n### Parameters', None),
+    ('## Synthesis\n\n### Module\n\n#### Parameters', None),
+    ('## Physical Integration\n\n### Entity\n\n#### Generics', None),
+    ('## Synthesis\n\n### Module `neutral`\n\n#### Parameters', None),
+])
+def test_parameter_table_ownership_preserves_neighboring_rtl_parameters(tmp_path, module_heading, constraint_first):
+    fixture = Path(__file__).parent / 'fixtures/phase1_local/parameter_table_ownership/constraint_table.md'
+    constraint = fixture.read_text().split('## Synthesis', 1)[1]
+    constraint = '## Synthesis' + constraint
+    module = (module_heading + '\n\n'
+              '| Parameter | Default | Description |\n|---|---|---|\n'
+              '| DATA_WIDTH | 24 | Module data width |\n')
+    sections = ([module] if constraint_first is None else
+                [constraint, module] if constraint_first else [module, constraint])
+    for doc in _l8_literal_owner_emit(tmp_path, '# Integration\n\n' + '\n\n'.join(sections)):
+        assert [(p['name'], str(p['default'])) for p in doc['parameters']] == [('DATA_WIDTH', '24')]
+
+
+@pytest.mark.parametrize('producer_record', [None, {}, {'parameters': None},
+    {'parameters': 'unknown'}, {'parameters': [None]},
+    {'parameters': [], 'phase1_step_error': True}])
+def test_parameter_table_ownership_does_not_project_unknown_as_empty(tmp_path, producer_record):
+    from programs import phase1_doc_one_shot_runner as producer
+    generated = tmp_path / 'phase1/generated_docs'
+    generated.mkdir(parents=True)
+    if producer_record is not None:
+        (generated / 'L8_RTL_CONSTANTS.json').write_text(json.dumps(producer_record))
+    l9 = generated / 'L9_INTEGRATION_SPEC.json'
+    l9.write_text(json.dumps({'top_module': 'neutral'}))
+    original = l9.read_bytes()
+    producer._post_emit_mirror_parameters_to_l9_v1_6_327(tmp_path)
+    assert l9.read_bytes() == original
+
+
 @pytest.mark.parametrize("filename, expected", [
     ("literal_parameters.md", {"TAG_BITS": "80", "DIGEST_BITS": "224"}),
     ("03-declared-rtl-widths.md", {"TAG_BITS": "80", "DIGEST_BITS": "224"}),
