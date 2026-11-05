@@ -2287,6 +2287,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         project / rel for rel, _, _ in _iter_doc_texts(project)))
     if args.from_json:
         publication_sources.append(Path(args.from_json).resolve())
+    decision = explicit_non_scan_decision(project)
+    if decision is not None and existing.get("dft") == decision:
+        publication_sources.append(project / "input/feature-decisions.json")
     publication_sources.extend(p for p in (out_path, sidecar) if p.is_file())
     try:
         publication_inputs = {
