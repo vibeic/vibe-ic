@@ -1043,10 +1043,9 @@ def design_release_sources(project, layout, assembly=None):
                 keep(path, role)
         config_path = folder / 'config.json'
         config = json.loads(config_path.read_text())
-        switch_path = owner_project / 'phase3/librelane_switch.json'
-        switch = json.loads(switch_path.read_text()) if switch_path.is_file() else {}
-        mounts = native._pdk_mounts(owner_project, switch, folder,
-                                    native._image(owner_project, switch))
+        mapping_path = folder / 'pdk_root.json'
+        mapping = json.loads(mapping_path.read_text()) if mapping_path.is_file() else {}
+        mounts = mapping.get('requested_mounts') or mapping.get('mounts_under_it') or []
         for source in lc._walk_paths(config):
             path = lc.resolve_state_pdk_asset(source, pdk=config.get('PDK'), mounts=mounts)
             if path is None:
