@@ -86,9 +86,10 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     reason = ""
     if drop is None:
         reason = "Native transient IR produced no dynamic drop."
-    elif scaled != 0:
-        reason = "Native transient IR is a scaled static bound; dynamic response was not measured."
     else:
+        model = "scaled_static_bound" if scaled else "transient"
+        result.metrics["dynamic_model"] = model
+        result.detail += f" dynamic_model={model}."
         libraries = chain.toolbox.filter_views(chain.owner.config, chain.owner.config["LIB"])
         voltage = chain.toolbox.get_lib_voltage(str(libraries[0])) if libraries else None
         if voltage is None or not math.isfinite(float(voltage)) or voltage <= 0:
