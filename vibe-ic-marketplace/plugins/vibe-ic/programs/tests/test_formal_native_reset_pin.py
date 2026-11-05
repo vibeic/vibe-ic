@@ -96,6 +96,13 @@ def test_non_boolean_native_polarity_is_unknown(polarity):
     assert [fsc.check_claim(model, "neutral", c)["verdict"] for c in CLAIMS] == [fsc.NOT_DISCHARGED] * 3
 
 
+@pytest.mark.parametrize("pin", [[2, "x"], [2, "0"], [2, "1"], [2, 3]])
+def test_reset_pin_is_scalar_in_native_connections(pin):
+    model = native_model()
+    model["modules"]["neutral"]["cells"]["state"]["connections"]["SRST"] = pin
+    assert [fsc.check_claim(model, "neutral", c)["verdict"] for c in CLAIMS] == [fsc.NOT_DISCHARGED] * 3
+
+
 def binding_fixture(tmp_path, monkeypatch, rtl=RTL):
     no_transition_sat(monkeypatch)
     docs = tmp_path / "phase1/generated_docs"
