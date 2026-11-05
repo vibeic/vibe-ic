@@ -753,7 +753,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if tool.get("adapter") == "final_patterns":
         from flow_atpg import final_patterns
         return final_patterns(project, work, state=state, config=config)
-    if tool.get("adapter") == "security_requirements":
+    if tool.get("adapter") in {"security_requirements", "implemented_security"}:
         from flow_security import requirements
         return requirements(project, work, tool)
     if tool.get("adapter") == "safety_injection":
