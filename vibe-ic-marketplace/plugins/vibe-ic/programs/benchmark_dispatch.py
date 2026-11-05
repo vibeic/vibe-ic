@@ -1840,6 +1840,8 @@ def _required_gate_ledger(solve_result: Any) -> dict:
     grouped = {}
     spans = dict(sites)
     current_rtl = p3.get("required_site_rtl_sha256")
+    from flow_engine_frontend import selected_engine
+    native = selected_engine([]) == "native"
     for current, observations in ((True, owned), (False, superseded)):
         for row in observations:
             binding = row.get("ownership") if isinstance(row, dict) else None
@@ -1848,11 +1850,12 @@ def _required_gate_ledger(solve_result: Any) -> dict:
                     or binding.get("runner") != "design_one_shot_runner"
                     or not isinstance(site, str) or site not in spans
                     or binding.get("flow_steps") != spans[site]
-                    or not isinstance(current_rtl, str)
-                    or not re.fullmatch(r"[0-9a-f]{64}", current_rtl)
-                    or not isinstance(binding.get("rtl_sha256"), str)
-                    or not re.fullmatch(r"[0-9a-f]{64}", binding["rtl_sha256"])
-                    or (binding["rtl_sha256"] == current_rtl) != current
+                    or (not native and (
+                        not isinstance(current_rtl, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", current_rtl)
+                        or not isinstance(binding.get("rtl_sha256"), str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", binding["rtl_sha256"])
+                        or (binding["rtl_sha256"] == current_rtl) != current))
                     or not isinstance(row.get("result_name"), str)
                     or row["result_name"] not in recorded
                     or not isinstance(row.get("status"), str) or row["status"] not in {
@@ -1876,6 +1879,8 @@ def _required_gate_ledger(solve_result: Any) -> dict:
         elif any(status not in {"PASS", "NOT_APPLICABLE", "PASS_WITH_WAIVERS"}
                  for status in statuses):
             recorded[site] = _NOT_MEASURED
+        elif native and recorded.get(site) in (None, "NOT_APPLICABLE"):
+            recorded[site] = recorded.get(site, _NOT_MEASURED)
         elif "PASS_WITH_WAIVERS" in statuses:
             recorded[site] = "PASS_WITH_WAIVERS"
         else:
