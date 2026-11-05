@@ -138,3 +138,40 @@ def test_implemented_cdc_does_not_stub_connected_unknown_storage(tmp_path):
     assert result["metrics"] == {}, result
     logs = "\n".join(Path(p).read_text() for p in result["reports"] if p.endswith(".log"))
     assert "unknown_storage" in logs and "not part of the design" in logs
+
+
+@pytest.mark.parametrize("kind,unresolved", [
+    ("alias", 0), ("latched", 0), ("opposite_phase", 1),
+    ("other_latch_clock", 1), ("raw_gate", 1), ("independent", 1),
+])
+def test_rtl_cdc_clock_ancestry_uses_native_latch_phase(tmp_path, kind, unresolved):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    import _cdc_netlist as native
+    gate = {
+        "alias": "assign clocked=clk_i;",
+        "latched": "reg held; always @* if(!clk_i) held=enable_i; assign clocked=clk_i & held;",
+        "opposite_phase": "reg held; always @* if(clk_i) held=enable_i; assign clocked=clk_i & held;",
+        "other_latch_clock": "reg held; always @* if(!other_i) held=enable_i; assign clocked=clk_i & held;",
+        "raw_gate": "assign clocked=clk_i & enable_i;",
+        "independent": "assign clocked=other_i;",
+    }[kind]
+    rtl = tmp_path / "unit.v"
+    rtl.write_text("module leaf(input clk,d,output reg q); always @(posedge clk) q<=d; endmodule\n"
+                   "module unit(input clk_i,other_i,enable_i,d,output q,r); wire clocked; "
+                   + gate + " leaf launch(.clk(clocked),.d(d),.q(q)); "
+                   "leaf receive(.clk(clk_i),.d(q),.q(r)); endmodule\n")
+    result = execute(tmp_path, tmp_path / "output", {
+        "adapter": "cdc", "rtl": [str(rtl)], "top": "unit"}, {})
+    assert result["exit_code"] == 0, result
+    assert result["metrics"]["unresolved_crossings"] == unresolved, result
+    graph = next(Path(path) for path in result["reports"] if path.endswith("graph.json"))
+    model = native.load(graph, "unit")
+    assert len(model.flops) == 2
+    if kind == "latched":
+        assert native.reg_crossing_findings(model, calibrate=False)
+        native._load_latched_clock_gates(model)
+        bit = next(f.clk for f in model.flops if f.clk != model.ports["clk_i"][1][0])
+        assert model.root(bit) == bit
+        assert model.root(bit, clock=True) == model.ports["clk_i"][1][0]
+        assert native.reg_crossing_findings(model, calibrate=False) == []
