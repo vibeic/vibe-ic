@@ -873,7 +873,7 @@ def _d_latch(text: str, ins: List[Port], outs: List[Port],
     if en is None or data is None or len(ins) != 2:
         return None
     out_name = outs[0][0]
-    body = [f"    always @(*) if ({en}) {out_name} = {data};"]
+    body = [f"    always_latch if ({en}) {out_name} = {data};"]
     return "\n".join(
         ["// program-SOLVED transparent D latch (explicit, intentional); deterministic."]
         + _header(top, ins, outs, out_reg=True) + body + ["endmodule", ""])

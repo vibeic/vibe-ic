@@ -582,7 +582,7 @@ def _synth_negedge_ff_latch(prompt: str, top: str) -> Optional[str]:
     lines = [f"module {top} (", ",\n".join(decl), ");", "",
              f"  always @(negedge {clko})",
              f"    {qo} <= {ao};", "",
-             "  always @(*)",
+             "  always_latch",
              f"    if ({clko})",
              f"      {po} = {ao};",
              "endmodule"]
