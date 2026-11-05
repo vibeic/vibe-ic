@@ -48,11 +48,11 @@ def _bits(port: dict) -> list[str]:
     return [f"{port['name']}[{i}]" for i in range(port["msb"], port["lsb"] + step, step)]
 
 
-def _native_core(project: Path, core_config: dict, destination: Path):
+def _native_core(project: Path, core_config: dict, destination: Path, on_tool_run=None):
     from librelane.common import Toolbox
     from librelane.flows import Flow
     from librelane.state import DesignFormat, State
-    from librelane.steps import Step
+    from librelane.steps import Step, StepError, StepException
 
     os.environ["_OPENLANE_MAX_CORES"] = "8"
     owner = Flow.factory.get("Chip")(core_config, design_dir=str(project),
@@ -68,12 +68,29 @@ def _native_core(project: Path, core_config: dict, destination: Path):
             directory.mkdir(parents=True, exist_ok=True)
             started = time.monotonic()
             cwd = Path.cwd()
+            code, ran, status, detail = None, False, "NOT_MEASURED", ""
             try:
                 os.chdir(directory)
                 state = step.start(toolbox=toolbox, step_dir=str(directory))
+                code, ran, status = 0, True, "PASS"
+            except StepException as exc:
+                detail = str(exc)
+                raise
+            except StepError as exc:
+                code = getattr(getattr(exc, "underlying_error", None), "returncode", None)
+                ran, status, detail = True, "FAIL", str(exc)
+                raise
+            except Exception as exc:
+                detail = str(exc)
+                raise
             finally:
                 os.chdir(cwd)
-                runs.append({"name": name, "tool_seconds": time.monotonic() - started})
+                elapsed = time.monotonic() - started
+                runs.append({"name": name, "tool_seconds": elapsed})
+                if on_tool_run is not None:
+                    on_tool_run({"name": name, "ran": ran, "exit_code": code,
+                                 "status": status, "tool_seconds": elapsed,
+                                 "detail": detail, "reports": str(directory)})
     finally:
         (destination / "sizing.json").write_text(json.dumps({"runs": runs,
             "tool_seconds": sum(run["tool_seconds"] for run in runs)}, indent=2) + "\n")
@@ -132,12 +149,13 @@ def _library(native: dict):
     lefs = _paths(_required(native, "PAD_LEFS"))
     libs = _paths(_required(native, "PAD_LIBS"))
     configs = pads.discover_io_library_configs(root, pdk)
-    sizes, classes, roles, sources = {}, {}, {}, {}
+    sizes, classes, roles, sources, pin_ports = {}, {}, {}, {}, {}
     for path in lefs:
         text = path.read_text()
         sizes.update(pads.parse_lef_macros(text))
         classes.update(pads.parse_lef_macro_classes(text))
         roles.update(pads.parse_lef_pin_roles(text))
+        pin_ports.update(pads.parse_lef_pin_ports(text))
         for master in pads.parse_lef_macros(text):
             sources.setdefault(master, []).append(path)
     corners = _required(native, "PAD_CORNER")
@@ -154,7 +172,7 @@ def _library(native: dict):
             "prefix": prefix, "terminals": terminals, "cells": cells,
             "conflicts": conflicts, "lefs": lefs, "libs": libs,
             "configs": configs, "root": root, "pdk": pdk, "verilog": verilog,
-            "pg_pins": pg_pins}
+            "pg_pins": pg_pins, "pin_ports": pin_ports}
 
 
 def _ring(project: Path, native: dict, ports: list[dict], library: dict):
@@ -340,7 +358,7 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
         ties[level] = {"master": master, "pin": pin}
     aux, used = electrical._auxiliary_pin_signal_connections(chosen, ties)
     ranges = lambda port: f"[{port['msb']}:{port['lsb']}] " if port["indexed"] else ""
-    declarations = [f"    inout wire {ranges(port)}{_identifier(port['name'])}" for port in ports]
+    declarations = [f"    {port['direction']} wire {ranges(port)}{_identifier(port['name'])}" for port in ports]
     declarations += [f"    inout wire {_identifier(name)}" for name in supplies]
     lines = [f"module {_identifier(top)} (", ",\n".join(declarations), ");"]
     net_for_bit = {}
@@ -387,7 +405,7 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
     return "\n".join(lines)
 
 
-def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
+def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str] | None = None) -> str:
     directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
     collection = lambda names: "[get_ports -regexp {^(" + "|".join(re.escape(name) for name in names) + ")$}]"
     original = config.get("PNR_SDC_FILE")
@@ -416,21 +434,66 @@ def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
     lines = ["set_units -time ns"]
     for index, clock in enumerate(clocks):
         lines.append(f"create_clock -name core_clock_{index} -period {period:g} {collection([clock])}")
+        for key, command in (("CLOCK_UNCERTAINTY_CONSTRAINT", "set_clock_uncertainty"),
+                             ("CLOCK_TRANSITION_CONSTRAINT", "set_clock_transition")):
+            if config.get(key) is not None:
+                lines.append(f"{command} {float(config[key]):g} [get_clocks core_clock_{index}]")
         for direction, command in (("input", "set_input_delay"), ("output", "set_output_delay")):
             names = [bit for bit, value in directions.items() if value == direction and bit not in clocks]
             if names:
                 additive = " -add_delay" if index else ""
                 lines.append(f"{command} {budget:g} -clock core_clock_{index}{additive} {collection(names)}")
+    for key, command in (("MAX_FANOUT_CONSTRAINT", "set_max_fanout"),
+                         ("MAX_TRANSITION_CONSTRAINT", "set_max_transition"),
+                         ("MAX_CAPACITANCE_CONSTRAINT", "set_max_capacitance")):
+        if config.get(key) is not None:
+            lines.append(f"{command} {float(config[key]):g} [current_design]")
+    if config.get("TIME_DERATING_CONSTRAINT") is not None:
+        fraction = float(config["TIME_DERATING_CONSTRAINT"]) / 100
+        lines.extend((f"set_timing_derate -early {1 - fraction:.17g}",
+                      f"set_timing_derate -late {1 + fraction:.17g}"))
+    outputs = [bit for bit, value in directions.items() if value == "output"]
+    if outputs and config.get("OUTPUT_CAP_LOAD") is not None:
+        lines.append(f"set_load {float(config['OUTPUT_CAP_LOAD']) / 1000:g} {collection(outputs)}")
+    if input_masters:
+        from sdc_environment import _io_pad_view
+        views = [_io_pad_view(path.read_text(), input_masters) for path in _paths(config.get("PAD_LIBS"))]
+        views = [view for view in views if view.get("selected_cells_present")]
+        covered = {pin["pin"].rsplit("/", 1)[0] for view in views for pin in view.get("pins", [])}
+        if (not views or input_masters - covered
+                or any(view.get("slow_ns") is None or view.get("fast_ns") is None
+                       or view.get("pins_without_bound") for view in views)):
+            raise FileNotFoundError("Input-pad Liberty has no characterized off-chip edge bracket")
+        slow = min(float(view["slow_ns"]) for view in views)
+        fast = max(float(view["fast_ns"]) for view in views)
+        if slow < fast:
+            raise ValueError("Input-pad Liberty edge brackets do not overlap")
+        def word(value):
+            return "".join({"\n": r"\n", "\r": r"\r", "\t": r"\t"}.get(char,
+                "\\" + char if char in '\\ $;{}[]"' else char) for char in str(value))
+        entries = " ".join("[list " + word(view["library"]) + f" {view['slow_ns']:g} {view['fast_ns']:g}]"
+                           for view in views)
+        lines.extend([f"set _chip_pad_views [list {entries}]", "set _chip_pad_linked {}",
+            "foreach _chip_pad_view $_chip_pad_views {",
+            "  if {[llength [get_libs -quiet [lindex $_chip_pad_view 0]]]} {lappend _chip_pad_linked $_chip_pad_view}",
+            "}", f"set _chip_pad_max {slow:g}", f"set _chip_pad_min {fast:g}",
+            "if {[llength $_chip_pad_linked]} {",
+            "  set _chip_pad_max [lindex [lsort -real [lmap v $_chip_pad_linked {lindex $v 1}]] 0]",
+            "  set _chip_pad_min [lindex [lsort -real -decreasing [lmap v $_chip_pad_linked {lindex $v 2}]] 0]",
+            "}"])
+        inputs = collection([bit for bit, value in directions.items() if value == "input"])
+        lines.extend((f"set_input_transition -max $_chip_pad_max {inputs}",
+                      f"set_input_transition -min $_chip_pad_min {inputs}"))
     return "\n".join(lines) + "\n"
 
 
-def prepare(project: Path, core_config: dict[str, Any]) -> dict[str, Any]:
+def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dict[str, Any]:
     """Return a native Chip config, with all generated inputs under work/flow/chip."""
     project = Path(project).resolve()
     destination = project / "work/flow/chip"
     destination.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    native, ports, area, runs = _native_core(project, core_config, destination)
+    native, ports, area, runs = _native_core(project, core_config, destination, on_tool_run)
     library = _library(native)
     chosen, ordered, supplies, power, ground, placement = _ring(project, native, ports, library)
     die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement)
@@ -439,7 +502,8 @@ def prepare(project: Path, core_config: dict[str, Any]) -> dict[str, Any]:
     wrapper.write_text(_wrapper(core_config["DESIGN_NAME"], top, ports, chosen, ordered,
                                 supplies, native, library))
     sdc = destination / "constraints.sdc"
-    sdc.write_text(_sdc(project, {**native, **core_config}, ports))
+    input_masters = {entry["master"] for entry in chosen.values() if entry.get("direction") == "input"}
+    sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters))
     result = dict(core_config)
     for axis in ("VERTICAL", "HORIZONTAL"):
         key = f"PDN_CORE_{axis}_LAYER"
@@ -449,6 +513,32 @@ def prepare(project: Path, core_config: dict[str, Any]) -> dict[str, Any]:
                   FP_SIZING="absolute", DIE_AREA=die, CORE_AREA=core,
                   PDN_ENABLE_PINS=False, MAGIC_EXT_USE_GDS=True,
                   VDD_NETS=[power], GND_NETS=[ground], PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+    if native.get("PDN_CORE_RING") and native.get("PDN_CORE_RING_CONNECT_TO_PADS"):
+        ring_layers = {native.get(f"PDN_CORE_{axis}_LAYER") or native[f"PDN_{axis}_LAYER"]
+                       for axis in ("VERTICAL", "HORIZONTAL")}
+        connected_layers = ring_layers | {native[f"PDN_{axis}_LAYER"]
+                                         for axis in ("VERTICAL", "HORIZONTAL")}
+        if native.get("PDN_ENABLE_RAILS"):
+            connected_layers.add(native["PDN_RAIL_LAYER"])
+        access_layers = {layer for entry in chosen.values()
+                         for key in ("power_connections", "supply_connections")
+                         for pin, net in entry.get(key, {}).items()
+                         if net in (power, ground)
+                         and library["roles"].get(entry["master"], {}).get(pin, (None, None))[1]
+                         in ("POWER", "GROUND")
+                         for layer, _ in library["pin_ports"].get(entry["master"], {}).get(pin, [])}
+        access_layers -= connected_layers
+        if access_layers:
+            text = Path(str(_required(native, "PDN_CFG"))).read_text()
+            ring_layer = native.get("PDN_CORE_VERTICAL_LAYER") or native["PDN_VERTICAL_LAYER"]
+            for layer in sorted(access_layers):
+                command = "add_pdn_connect -grid stdcell_grid -layers {" + layer + " " + ring_layer + "}"
+                reverse = "add_pdn_connect -grid stdcell_grid -layers {" + ring_layer + " " + layer + "}"
+                if command not in text and reverse not in text:
+                    text += "\n" + command + "\n"
+            pdn = destination / "pdn_cfg.tcl"
+            pdn.write_text(text)
+            result["PDN_CFG"] = str(pdn)
     result.update({"PAD_" + full: ordered[side] for side, full in SIDES.items()})
     tool_seconds = sum(run["tool_seconds"] for run in runs)
     report = {"ports": ports, "pads": chosen, "pad_sides": ordered,

@@ -248,3 +248,94 @@ def test_retained_physical_report_needs_an_explicit_rerun(tmp_path):
     with patch.object(frontend.subprocess, "run", return_value=SimpleNamespace(returncode=2)) as execute:
         frontend.OwnerSession(tmp_path, selected, force=True).result(tmp_path / "steps/definition", "phase1")
     execute.assert_called_once()
+
+
+@pytest.mark.parametrize("input_contract", ["original", "structured"])
+def test_debug_closure_runs_only_owner_backed_dependencies(tmp_path, input_contract):
+    route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
+             "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    def publish(command, **kwargs):
+        assert json.loads(command[-2])["entry_step"] == "1"
+        assert json.loads(command[-2])["verify_through"] == "2"
+        assert command[-1] == "rtl"
+        report.parent.mkdir(parents=True)
+        report.write_text(json.dumps({"steps": [
+            {"name": "rtl_gen", "status": "PASS", "extras": {"deterministic_generator": "existing_program"}},
+            {"name": "rtl_validate", "status": "PASS"}]}))
+        rtl = tmp_path / "phase2/stage1/rtl"
+        rtl.mkdir(parents=True)
+        (rtl / "unit.v").write_text("module unit; endmodule\n")
+        return SimpleNamespace(returncode=0)
+    with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
+        session = frontend.OwnerSession(tmp_path, route, table=json.loads(
+            (Path(frontend.__file__).parents[1] / "flow/steps.json").read_text()))
+        requirements = session.result(tmp_path / "steps/requirements", "phase1")
+        assert execute.call_count == 0
+        authored = session.result(tmp_path / "steps/author", "rtl_gen")
+        checked = session.result(tmp_path / "steps/lint", "rtl_validate")
+    execute.assert_called_once()
+    assert requirements["native_steps"][0]["source"].startswith("task_nature_route.")
+    assert authored["metrics"]["rtl_gen"] == "PASS"
+    assert checked["metrics"]["rtl_validate"] == "PASS"
+    assert session.route == route
+    assert not (tmp_path / "reports/orchestrator/phase1_one_shot.json").exists()
+
+
+@pytest.mark.parametrize("input_contract", ["original", "structured"])
+def test_debug_resume_keeps_ai_canonical_rtl_and_lints_only(tmp_path, input_contract):
+    route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
+             "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit(input a,output y); assign y=~a; endmodule\n")
+    original = rtl.read_bytes()
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    report.parent.mkdir(parents=True)
+    previous = {"steps": [{"name": "rtl_gen", "status": "WAIVED",
+                           "extras": {"fallback_skill": "spec-to-rtl", "candidate_origin": "AI_BACKUP"}}]}
+    report.write_text(json.dumps(previous))
+    def publish(command, **kwargs):
+        assert json.loads(command[-2])["entry_step"] == "2"
+        assert json.loads(command[-2])["verify_through"] == "2"
+        assert rtl.read_bytes() == original
+        report.write_text(json.dumps({"steps": [
+            {"name": "rtl_gen", "status": "NOT_APPLICABLE"},
+            {"name": "rtl_validate", "status": "PASS"}]}))
+        return SimpleNamespace(returncode=0)
+    with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
+        session = frontend.OwnerSession(tmp_path, route, force=True)
+        result = session.result(tmp_path / "steps/author", "rtl_gen")
+        session.result(tmp_path / "steps/lint", "rtl_validate")
+    execute.assert_called_once()
+    assert rtl.read_bytes() == original
+    assert result["native_steps"][-1]["reused"] is True
+    assert "C7" in result["detail"]
+    assert json.loads((tmp_path / "steps/author/reused_authoring.json").read_text()) == previous
+
+
+def test_bounded_native_lint_does_not_import_librelane(tmp_path, monkeypatch):
+    import builtins
+    original_import = builtins.__import__
+    def guarded(name, *args, **kwargs):
+        if name == "librelane" or name.startswith("librelane."):
+            raise AssertionError("Bounded native lint imported LibreLane")
+        return original_import(name, *args, **kwargs)
+    rtl = tmp_path / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "unit.v").write_text("module unit(input a,output y); assign y=a; endmodule\n")
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    result = frontend.native_lint(tmp_path, "unit")
+    assert result.name == "rtl_validate"
+
+
+def test_public_native_resume_forwards_pdk_and_from_without_rerouting(tmp_path, monkeypatch):
+    observed = []
+    engine = SimpleNamespace(run=lambda project, **kwargs: observed.append(kwargs) or {})
+    monkeypatch.setitem(sys.modules, "flow_engine", engine)
+    args = SimpleNamespace(project=tmp_path, entry_step="1", exit_step="2", rtl_input="original",
+                           delivery_target="rtl", route="ip", from_name="rtl_validation_and_lint", pdk="sky130A")
+    assert frontend.run_public(args) == 0
+    assert observed[0]["from_name"] == "rtl_validation_and_lint"
+    assert observed[0]["pdk"] == "sky130A"
+    assert observed[0]["route"]["verify_closed_steps"] == ["1", "2"]

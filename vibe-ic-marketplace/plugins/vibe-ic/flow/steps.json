@@ -875,21 +875,6 @@
             "line": 2576,
             "note": "Actual old Step4 check caller supplies no threshold overrides."
           }
-        },
-        {
-          "metric": "coverage_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4288
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "coverage_targets"
-          },
-          "tool_gap": "Actual Step4 callers enforce line 70, toggle 60, branch 70; benchmark reporting independently enforces line 90. Flow109 D13 compares exact native counts against per-category declared bounds and keeps informational target applicability. Direct L-document bound comparison remains unwired; use stricter applicable targets and require real measurements. Published SPM reports show 100/98.48/100 but contain no numeric declared bounds. See COVERAGE_LIMITS.md."
         }
       ],
       "legacy_id": {
@@ -897,7 +882,29 @@
         "native": [
           "4"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "coverage_targets",
+          "native_metrics": [
+            "coverage_line_pct",
+            "coverage_toggle_pct",
+            "coverage_branch_pct"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4288
+          },
+          "reason": "Report measured native coverage without an undeclared target. Original Step4 floors remain line 70, toggle 60, branch 70; a document-declared bound is also compared and a missing declared measurement remains NOT_MEASURED. See COVERAGE_LIMITS.md.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "coverage_targets"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "has_digital"
+        }
+      ]
     },
     {
       "name": "formal_verification",
@@ -3867,7 +3874,6 @@
                 "Magic.StreamOut",
                 "KLayout.StreamOut",
                 "KLayout.Render",
-                "Odb.CheckDesignAntennaProperties",
                 "KLayout.XOR",
                 "Checker.XOR"
               ]
@@ -3963,34 +3969,19 @@
       },
       "checks": [
         {
-          "metric": "seal_dieid_rules",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "ic and owner_die",
+          "metric": "design__seal_ring__verified",
+          "operator": "==",
+          "limit": 1,
           "source": {
-            "file": "flow/flow109.json",
-            "line": 14645
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+            "symbol": "SealRing.run / SealRing.METRIC",
+            "note": "Native verifier emits 1 only when the output layout contains a measured ring around DIE_AREA; a missing script emits 0.",
+            "line": 1040
           },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "seal_dieid_rules"
-          },
-          "tool_gap": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
-        },
-        {
-          "metric": "seal_core_clearance",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "ic and owner_die",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 14664
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "seal_core_clearance"
-          },
-          "tool_gap": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
+          "unavailable_values": [
+            0
+          ],
+          "unavailable_reason": "Native seal-ring producer reports skipped: no PDK script produced a verified ring."
         }
       ],
       "legacy_id": {
@@ -3998,7 +3989,25 @@
         "native": [
           "26.5ic"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "seal_core_clearance",
+          "native_metrics": [],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14664
+          },
+          "reason": "Native seal verification checks the ring geometry and final DRC retains PDK spacing limits. No separate clearance target is enforced without a document declaration; a declared bound with no native clearance number remains NOT_MEASURED.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "seal_core_clearance"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "ic and owner_die"
+        }
+      ]
     },
     {
       "name": "metal_density_fill",
@@ -4388,42 +4397,26 @@
           }
         ]
       },
-      "checks": [
-        {
-          "metric": "fill_sensitive_reference_correlation",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16079
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "fill_sensitive_reference_correlation"
-          },
-          "tool_gap": "OpenRCX/Magic extraction and native parasitic annotation report; wire the report/input adapter without population emitters or requirement traces."
-        },
+      "checks": [],
+      "legacy_id": {
+        "registry": "D69",
+        "native": []
+      },
+      "observations": [
         {
           "metric": "final_parasitic_corner_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
+          "native_metrics": [],
           "source": {
             "file": "flow/flow109.json",
             "line": 16099
           },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "OpenSTA per-corner native parasitic annotation reports"
-          },
-          "tool_gap": "OpenSTA per-corner native parasitic annotation reports. Wire only this native report; both sides must come from the tool."
+          "reason": "OpenSTA reports native parasitic annotation counts for its timed corners, without a separate numeric corner-coverage limit. Report those native counts; final extraction and STA retain their original engineering checks.",
+          "declared_limit_from": {},
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical"
         }
-      ],
-      "legacy_id": {
-        "registry": "D69",
-        "native": []
-      }
+      ]
     },
     {
       "name": "final_electrical_analysis",

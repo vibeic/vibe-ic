@@ -25,6 +25,12 @@ SETTINGS = {
     "PDN_CORE_RING_CONNECT_TO_PADS", "PDN_VWIDTH", "PDN_HWIDTH",
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
 }
+IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_REPAIR",
+                           "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
+
+
+def implementation_setting(key: str) -> bool:
+    return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -74,10 +80,8 @@ def _chip_pdn(project: Path, pdk: str) -> dict:
     registry = _load(PROGRAMS / "pdk_registry.json")
     ring = next((row.get("pdn_ring", {}) for row in registry.get("pdks", [])
                  if row.get("name") == pdk), {})
-    result: dict[str, Any] = {"PDN_SKIPTRIM": True}
-    if ring:
-        result.update(PDN_CORE_RING=True,
-                      PDN_CORE_RING_CONNECT_TO_PADS=bool(ring.get("connect_to_pad_layers")))
+    result: dict[str, Any] = {"PDN_SKIPTRIM": True, "PDN_CORE_RING": True,
+                              "PDN_CORE_RING_CONNECT_TO_PADS": True}
     for field, keys in {
         "layers": ("PDN_CORE_VERTICAL_LAYER", "PDN_CORE_HORIZONTAL_LAYER"),
         "widths": ("PDN_CORE_RING_VWIDTH", "PDN_CORE_RING_HWIDTH"),
@@ -150,14 +154,14 @@ def resolve_rtl_inputs(project: Path | str) -> tuple[list[Path], str]:
     return _resolve_rtl_inputs(Path(project).resolve(), {})
 
 
-def build_config(project: Path | str, *, route: str | None = None) -> dict[str, Any]:
+def build_config(project: Path | str, *, route: str | None = None, pdk: str | None = None) -> dict[str, Any]:
     """Read L documents and produced RTL; route is supplied by the Router caller."""
     project = Path(project).resolve()
     docs = project / "phase1/generated_docs"
     l8 = _load(docs / "L8_TIMING_WAVEFORM.json")
     l19 = _load(docs / "L19_CONSTRAINTS_PDK.json")
     fields = l19.get("fields", {})
-    pdk = fields.get("pdk_target") or l19.get("pdk_target")
+    pdk = pdk or fields.get("pdk_target") or l19.get("pdk_target")
     rtl_root = project / "phase2/stage1/rtl"
     inputs = _input_docs(project)
     sources: dict[str, Any] = {}
@@ -174,6 +178,8 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
                 break
     if not pdk:
         raise FileNotFoundError("Top module and PDK must be declared in design documents")
+    registered = [row["name"] for row in _load(PROGRAMS / "pdk_registry.json").get("pdks", [])]
+    pdk = next((name for name in registered if name.casefold() == str(pdk).strip().casefold()), str(pdk).strip())
     config: dict[str, Any] = {"DESIGN_NAME": top, "PDK": pdk,
                               "VERILOG_FILES": [str(path) for path in rtl]}
     config["VERILOG_INCLUDE_DIRS"] = sorted({str(path.parent) for path in
@@ -218,7 +224,7 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
         config.update(_chip_pdn(project, pdk))
     implementation = _load(project / "plugin_output/declaration.json")
     config.update({key: value for key, value in implementation.items()
-                   if key == "RUN_POST_GRT_RESIZER_TIMING" or key.startswith("CTS_")})
+                   if implementation_setting(key)})
     config.update(_settings(fields, pdk))
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
@@ -229,11 +235,13 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
     return config
 
 
-def build_native_config(project: Path | str, *, route: str | None = None) -> dict[str, Any]:
-    config = build_config(project, route=route)
+def build_native_config(project: Path | str, *, route: str | None = None, pdk: str | None = None,
+                        on_tool_run=None) -> dict[str, Any]:
+    config = build_config(project, route=route, **({"pdk": pdk} if pdk else {}))
     if route in {"ic", "DIE"}:
         from flow_chip_inputs import prepare
-        config = prepare(Path(project).resolve(), config)
+        config = prepare(Path(project).resolve(), config,
+                         **({"on_tool_run": on_tool_run} if on_tool_run is not None else {}))
     return config
 
 
@@ -252,8 +260,34 @@ def main() -> int:
     parser.add_argument("--project", required=True, type=Path)
     parser.add_argument("--route", choices=("ic", "ip", "DIE", "HARDMACRO"))
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=JSON",
+                        help="Record an implementation setting in the existing declaration.")
     args = parser.parse_args()
-    print(write_config(args.project, route=args.route, output=args.output))
+    previous = None
+    if args.set:
+        declaration = args.project.resolve() / "plugin_output/declaration.json"
+        previous = declaration.read_bytes() if declaration.exists() else None
+        choices = _load(declaration)
+        for item in args.set:
+            key, separator, raw = item.partition("=")
+            if not separator or not implementation_setting(key):
+                parser.error(f"Unsupported implementation setting: {item}")
+            try:
+                choices[key] = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                parser.error(f"Invalid JSON for {key}: {exc}")
+        declaration.parent.mkdir(parents=True, exist_ok=True)
+        declaration.write_text(json.dumps(choices, indent=2) + "\n")
+    try:
+        output = write_config(args.project, route=args.route, output=args.output)
+    except Exception:
+        if args.set:
+            if previous is None:
+                declaration.unlink()
+            else:
+                declaration.write_bytes(previous)
+        raise
+    print(output)
     return 0
 
 

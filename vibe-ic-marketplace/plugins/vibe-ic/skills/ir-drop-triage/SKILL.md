@@ -5,7 +5,7 @@ description: Triage static and dynamic IR-drop and electromigration (EM) reports
 
 # IR-Drop / EM Triage
 
-Power integrity failures can turn a timing-clean chip into a field failure. This skill reads IR-drop and EM reports, pinpoints hot regions, and proposes power-grid fixes. Sign-off stays in commercial tools; this is the triage / copilot layer.
+Power integrity failures can turn a timing-clean chip into a field failure. This skill reads native IR-drop and EM reports, pinpoints hot regions, and proposes power-grid fixes. The native tool result against its original limit determines signoff.
 
 ## When to use
 
@@ -45,6 +45,25 @@ Power integrity failures can turn a timing-clean chip into a field failure. This
    resources, congestion, and which net is most critical).
 5. **Re-run guidance**: minimum P&R steps needed to re-evaluate (JUDGMENT —
    depends on whether the fix touched PDN only vs placement/routing).
+
+## Native PDN implementation choices
+
+Read the failing segment's layer, coordinates, current, cross-section and
+original limit from the native EM report. Distinguish a metal-width violation
+from a per-cut via violation before choosing a repair. A width-scaled utilization
+is only a prediction; rebuilding the grid can redistribute current.
+
+For the native flow, use `programs/flow_config.py --project <project> --route ic
+--set KEY=JSON` to record the selected `PDN_*` setting. The program preserves
+other choices in the existing `plugin_output/declaration.json` and emits the
+configuration that consumes the move. This is an implementation choice, not a
+new specification limit or a required declaration contract. Do not change the
+user's prompt or generated L documents to express it.
+
+Keep the original report and the rollback value. Resume through the public
+entry from PDN generation, then remeasure EM, IR, timing and physical verification
+with their original limits. A changed declaration alone does not invalidate a
+retained result or establish that the candidate ran.
 
 ## Output format
 

@@ -8,6 +8,87 @@ import pytest
 import flow_chip_inputs as chip
 
 
+@pytest.fixture
+def native_inputs(tmp_path):
+    pytest.importorskip("librelane")
+    pdk_root = os.environ.get("PDK_ROOT")
+    if not pdk_root or not (Path(pdk_root) / "sky130A").is_dir():
+        pytest.skip("native Chip preparation requires the installed sky130A PDK")
+    rtl = _write(tmp_path / "broken.v", "module unit(input clk); invalid syntax; endmodule\n")
+    return {"DESIGN_NAME": "unit", "PDK": "sky130A", "VERILOG_FILES": [str(rtl)],
+            "CLOCK_PORT": "clk", "CLOCK_PERIOD": 10}
+
+
+def test_native_sizing_reports_failed_yosys_run_to_observer(tmp_path, native_inputs):
+    from librelane.steps import StepError
+
+    runs = []
+    cwd = Path.cwd()
+
+    with pytest.raises(StepError) as caught:
+        chip.prepare(tmp_path, native_inputs, on_tool_run=runs.append)
+
+    assert Path.cwd() == cwd
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["name"] == "Yosys.JsonHeader"
+    assert run["ran"] is True
+    assert run["status"] == "FAIL"
+    assert run["exit_code"] == caught.value.underlying_error.returncode
+    assert run["exit_code"] != 0
+    assert run["tool_seconds"] > 0
+    assert Path(run["reports"]).is_dir()
+    assert any(Path(run["reports"]).glob("*.log"))
+    sizing = json.loads((tmp_path / "work/flow/chip/sizing.json").read_text())
+    assert sizing == {"runs": [{"name": run["name"], "tool_seconds": run["tool_seconds"]}],
+                      "tool_seconds": run["tool_seconds"]}
+
+
+@pytest.mark.parametrize("failure", [None, "missing_input", "tool_failure"])
+def test_native_sizing_observer_keeps_completed_runs_on_later_failure(
+        tmp_path, native_inputs, monkeypatch, failure):
+    import subprocess
+    from librelane.state import DesignFormat, State
+    from librelane.steps import Step, StepError, StepException
+
+    header = _write(tmp_path / "header.json", json.dumps({"modules": {"unit": {"ports": {}}}}))
+    error = (StepException("missing required input") if failure == "missing_input" else
+             StepError("native tool failed", underlying_error=subprocess.CalledProcessError(7, "yosys")))
+
+    def start(self, **kwargs):
+        if self.id == "Yosys.Synthesis" and failure:
+            raise error
+        return State({DesignFormat.JSON_HEADER: str(header)},
+                     metrics={"design__instance__area": 1})
+
+    monkeypatch.setattr(Step, "start", start)
+    destination = tmp_path / "sizing"
+    destination.mkdir()
+    runs = []
+    cwd = Path.cwd()
+    if failure:
+        with pytest.raises(type(error)) as caught:
+            chip._native_core(tmp_path, native_inputs, destination, on_tool_run=runs.append)
+        assert caught.value is error
+    else:
+        _, ports, area, sizing_runs = chip._native_core(
+            tmp_path, native_inputs, destination, on_tool_run=runs.append)
+        assert ports == []
+        assert area == 1
+        assert sizing_runs == [{"name": run["name"], "tool_seconds": run["tool_seconds"]}
+                               for run in runs]
+
+    assert Path.cwd() == cwd
+    assert [run["name"] for run in runs] == ["Yosys.JsonHeader", "Yosys.Synthesis"]
+    assert runs[0]["status"] == "PASS"
+    assert runs[0]["exit_code"] == 0
+    assert runs[0]["ran"] is True
+    assert runs[1]["status"] == {None: "PASS", "missing_input": "NOT_MEASURED",
+                                  "tool_failure": "FAIL"}[failure]
+    assert runs[1]["exit_code"] == {None: 0, "missing_input": None, "tool_failure": 7}[failure]
+    assert runs[1]["ran"] is (failure != "missing_input")
+
+
 def test_native_pathlike_config_values_are_single_paths():
     class NativePath(os.PathLike):
         def __fspath__(self):
@@ -193,6 +274,12 @@ SITE IO_SITE
 END IO_SITE
 """)
     lib = _write(tmp_path / "pads.lib", """library (fixture) {
+ time_unit : "1ns";
+ default_max_transition : 1;
+ lu_table_template (input_edge) {
+  variable_1 : input_net_transition;
+  index_1 ("0.08, 1.0");
+ }
  cell (fixture_io__input) {
   pin (PAD) {
    direction : input;
@@ -201,6 +288,12 @@ END IO_SITE
   pin (Y) {
    direction : output;
    function : "PAD";
+   timing () {
+    related_pin : "PAD";
+    cell_rise (input_edge) {
+     values ("0.1, 0.2");
+    }
+   }
   }
  }
  cell (fixture_io__output) {
@@ -253,7 +346,8 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     for key in ("PDN_CFG", "PDN_VOFFSET", "PDN_HOFFSET", "PDN_SKIPTRIM"):
         assert result[key] == config[key]
     wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
-    assert "inout wire [5:2] data" in wrapper
+    assert "input wire [5:2] data" in wrapper
+    assert "output wire result" in wrapper
     assert "wire [5:2] _core_port_2;" in wrapper
     assert ".PAD(data[5])" in wrapper
     assert ".Y(_core_port_2[5])" in wrapper
@@ -274,6 +368,69 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert result["CORE_AREA"][0] == 22
 
 
+def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
+    project, config, native, _, _ = inputs
+    native.update(CLOCK_UNCERTAINTY_CONSTRAINT=0.25, CLOCK_TRANSITION_CONSTRAINT=0.15,
+                  TIME_DERATING_CONSTRAINT=5, MAX_FANOUT_CONSTRAINT=4,
+                  MAX_TRANSITION_CONSTRAINT=3, MAX_CAPACITANCE_CONSTRAINT=0.2, OUTPUT_CAP_LOAD=10)
+    result = chip.prepare(project, config)
+    text = Path(result["PNR_SDC_FILE"]).read_text()
+    assert "set_timing_derate -late 1.05" in text
+    assert "set_timing_derate -early 0.949999" in text
+    assert "set_clock_uncertainty 0.25" in text
+    assert "set_clock_transition 0.15" in text
+    assert "set_max_transition 3 [current_design]" in text
+    assert "set_max_capacitance 0.2 [current_design]" in text
+    assert "set_load 0.01" in text
+    assert "set _chip_pad_max 1" in text
+    assert "set _chip_pad_min 0.08" in text
+
+
+@pytest.mark.parametrize("linked, maximum, minimum", [("fast_view", "0.8", "0.04"),
+                                                       ("slow_view", "1.3", "0.1")])
+def test_pad_edges_follow_the_native_linked_corner(inputs, tmp_path, linked, maximum, minimum):
+    import shutil
+    import subprocess
+
+    interpreter = shutil.which("tclsh")
+    command = [interpreter] if interpreter else [shutil.which("openroad"), "-no_init", "-no_splash", "-exit"]
+    if command[0] is None:
+        pytest.skip("A native Tcl interpreter is required")
+    project, config, native, _, _ = inputs
+    original = Path(native["PAD_LIBS"]["*"][0]).read_text()
+    paths = []
+    for name, bounds in (("fast_view", "0.04, 0.8"), ("slow_view", "0.10, 1.3")):
+        path = tmp_path / (name + ".lib")
+        text = original.replace("library (fixture)", f"library ({name})")
+        text = text.replace("0.08, 1.0", bounds).replace("default_max_transition : 1;", "default_max_transition : 2;")
+        path.write_text(text)
+        paths.append(str(path))
+    native["PAD_LIBS"] = {"*": paths}
+    result = chip.prepare(project, config)
+    script = tmp_path / "read.sdc.tcl"
+    script.write_text('''proc get_ports args {return PORTS}
+proc get_clocks args {return CLOCKS}
+proc create_clock args {}
+proc set_units args {}
+proc set_input_delay args {}
+proc set_output_delay args {}
+proc set_input_transition args {puts "EDGE $args"}
+proc get_libs args {
+    if {[lindex $args end] eq $::linked} {return LIB}
+    return {}
+}
+''' + f"set ::linked {linked}\nsource {{{result['PNR_SDC_FILE']}}}\n")
+    completed = subprocess.run([*command, str(script)], capture_output=True, text=True, check=True)
+    assert f"EDGE -max {maximum} PORTS" in completed.stdout
+    assert f"EDGE -min {minimum} PORTS" in completed.stdout
+
+
+def test_input_pad_edge_coverage_cannot_omit_a_selected_master(inputs):
+    project, config, native, ports, _ = inputs
+    with pytest.raises(FileNotFoundError, match="characterized off-chip"):
+        chip._sdc(project, {**native, **config}, ports, {"fixture_io__input", "missing_receiver"})
+
+
 def test_bus_order_offset_and_single_index_are_preserved():
     header = {"modules": {"core": {"ports": {
         "ascending": {"direction": "input", "offset": 4, "upto": 1, "bits": [2, 3, 4]},
@@ -292,6 +449,45 @@ def test_ring_layers_equal_to_mesh_layers_use_native_connection_once(inputs):
     result = chip.prepare(project, config)
     assert "PDN_CORE_VERTICAL_LAYER" not in result
     assert "PDN_CORE_HORIZONTAL_LAYER" not in result
+
+
+@pytest.mark.parametrize("access,vertical,horizontal,ring", [
+    ("pad_access", "mesh_vertical", "mesh_horizontal", None),
+    ("lower_contact", "outer_vertical", "outer_horizontal", "ring_vertical"),
+])
+@pytest.mark.parametrize("existing", [False, True])
+def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical, horizontal, ring, existing):
+    project, config, native, _, _ = inputs
+    native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=True,
+                  PDN_VERTICAL_LAYER=vertical, PDN_HORIZONTAL_LAYER=horizontal,
+                  PDN_CORE_RING_VOFFSET=1, PDN_CORE_RING_HOFFSET=1,
+                  PDN_CORE_RING_VWIDTH=1, PDN_CORE_RING_HWIDTH=1,
+                  PDN_CORE_RING_VSPACING=1, PDN_CORE_RING_HSPACING=1)
+    if ring:
+        native["PDN_CORE_VERTICAL_LAYER"] = ring
+    target = ring or vertical
+    lef = Path(native["PAD_LEFS"][0])
+    text = lef.read_text()
+    for pin, use, layer in (("VSS", "GROUND", access), ("VDD", "POWER", vertical),
+                            ("PAD", "SIGNAL", "signal_access")):
+        declaration = f" PIN {pin}\n  DIRECTION INOUT ;\n  USE {use} ;"
+        text = text.replace(declaration, declaration + f"\n  PORT\n   LAYER {layer} ;"
+                            "\n   RECT 0 0 10 1 ;\n  END")
+    lef.write_text(text)
+    original = "source $::env(SCRIPTS_DIR)/openroad/common/pdn_cfg.tcl\n"
+    reverse = f"add_pdn_connect -grid stdcell_grid -layers {{{target} {access}}}"
+    if existing:
+        original += reverse + "\n"
+    pdn = _write(project / "input/pdn.tcl", original)
+    config["PDN_CFG"] = native["PDN_CFG"] = str(pdn)
+    result = chip.prepare(project, config)
+    generated = Path(result["PDN_CFG"]).read_text()
+    command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {target}}}"
+    assert generated.count(command) + generated.count(reverse) == 1
+    assert "signal_access" not in generated
+    assert f"-layers {{{vertical} {vertical}}}" not in generated
+    assert generated.startswith(original)
+    assert pdn.read_text() == original
 
 
 def test_dynamic_inout_is_refused():
@@ -410,6 +606,6 @@ def test_escaped_core_identifiers_have_legal_verilog_names(inputs):
     ports[2]["name"] = "data.value"
     result = chip.prepare(project, config)
     wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
-    assert "inout wire [5:2] \\data.value " in wrapper
+    assert "input wire [5:2] \\data.value " in wrapper
     assert ".\\data.value (_core_port_2)" in wrapper
     assert ".PAD(\\data.value [5])" in wrapper

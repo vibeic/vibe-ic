@@ -201,12 +201,35 @@ def finish_frontend(project, plan, args, ic_class, evidence):
 class OwnerSession:
     """One selected owner invocation shared by all its native result readers."""
 
-    def __init__(self, project, route, force=False):
+    def __init__(self, project, route, force=False, table=None):
         self.project, self.route = Path(project).resolve(), route
+        self.table = table
         self.force = force
         self.executed = False
         self.phase1_executed = False
         self.log = None
+        self.reused_rtl = []
+        self.reused_authoring = {}
+
+    def table_steps(self):
+        if self.table is None:
+            self.table = json.loads((Path(__file__).parents[1] / "flow/steps.json").read_text())
+        return self.table["steps"]
+
+    def bounded_owner_rows(self):
+        rows = self.table_steps()
+        def addresses(row):
+            legacy = row.get("legacy_id", {})
+            return {row.get("name"), legacy.get("registry"), *legacy.get("native", [])}
+        closed = set(self.route.get("verify_closed_steps", []))
+        if closed:
+            selected = [row for row in rows if closed.intersection(addresses(row))]
+        else:
+            first = next(i for i, row in enumerate(rows) if str(self.route["entry_step"]) in addresses(row))
+            last = next(i for i, row in enumerate(rows) if str(self.route["verify_through"]) in addresses(row))
+            selected = rows[first:last + 1]
+        return [row for row in selected if row["tool"].get("function") == "step_rtl_gen"
+                or "Verilator.Lint" in row["tool"].get("steps", [])]
 
     def _command(self, kind, route=None):
         code = ("import json,sys; from pathlib import Path; "
@@ -223,18 +246,33 @@ class OwnerSession:
         name = "phase1_one_shot.json" if kind == "phase1" else "phase2_one_shot.json"
         path = self.project / "reports/orchestrator" / name
         bounded = self.route["delivery_target"] == "rtl"
+        if bounded and kind == "phase1":
+            source = directory / "router_selection.json"
+            source.write_text(json.dumps(self.route, indent=2) + "\n")
+            return {"ran": True, "exit_code": 0, "metrics": {}, "reports": [str(source)],
+                    "tool_seconds": 0.0, "native_steps": [{"name": "router_selection", "ran": True,
+                        "exit_code": 0, "status": "PASS", "reused": True,
+                        "source": "task_nature_route.route_decision_receipt supplied output"}],
+                    "detail": "C7 reuse of the unchanged Router selection for bounded requirements; no physical document extraction."}
         command = None
         if kind == "phase1" and not self.phase1_executed and (rerun or not path.is_file()):
             command = self._command("phase1")
             self.phase1_executed = True
         elif kind != "phase1" and not self.executed and (bounded or rerun or not path.is_file()):
             if bounded:
-                first, last = self.route["entry_step"], self.route["verify_through"]
+                owner_rows = self.bounded_owner_rows()
+                from _rtl_include_hub import silicon_rtl_selection
+                produced = list(silicon_rtl_selection(self.project / "phase2/stage1/rtl"))
+                if produced:
+                    self.reused_rtl = produced
+                    self.reused_authoring = json.loads(path.read_text()) if path.is_file() else {}
+                    owner_rows = [row for row in owner_rows if row["tool"].get("function") != "step_rtl_gen"]
+                first = owner_rows[0]["legacy_id"]["native"][0] if owner_rows else None
+                last = owner_rows[-1]["legacy_id"]["native"][0] if owner_rows else None
             else:
-                table = json.loads((Path(__file__).parents[1] / "flow/steps.json").read_text())
-                author = next(row for row in table["steps"] if row["tool"].get("function") == "step_rtl_gen")
+                author = next(row for row in self.table_steps() if row["tool"].get("function") == "step_rtl_gen")
                 first = last = author["legacy_id"]["native"][0]
-            command = self._command("rtl", {**self.route, "entry_step": first, "verify_through": last})
+            command = self._command("rtl", {**self.route, "entry_step": first, "verify_through": last}) if first is not None else None
             self.executed = True
         if command is not None:
             path.unlink(missing_ok=True)
@@ -252,7 +290,8 @@ class OwnerSession:
         if kind == "phase1":
             own = rows
         elif kind in ("rtl", "rtl_gen"):
-            own = [row for row in rows if row["name"] == "rtl_gen"]
+            author_rows = self.reused_authoring.get("steps", []) if self.reused_rtl else rows
+            own = [row for row in author_rows if row["name"] == "rtl_gen"]
         elif kind == "rtl_validate":
             own = [row for row in rows if row["name"] in ("rtl_validate", "rtl_lint_tool", "determinism_gates")]
         else:
@@ -269,12 +308,21 @@ class OwnerSession:
         if authoring:
             from _rtl_include_hub import silicon_rtl_selection
             produced = list(silicon_rtl_selection(self.project / "phase2/stage1/rtl"))
-            native = [row for row in native if row["status"] not in ("WAIVED", "PASS_WITH_WAIVERS")]
+            native = ([] if self.reused_rtl else
+                      [row for row in native if row["status"] not in ("WAIVED", "PASS_WITH_WAIVERS")])
             native.append({"name": "rtl_output", "ran": True, "exit_code": 0 if produced else 1,
                            "status": "PASS" if produced else "FAIL",
-                           "detail": "Owner produced RTL." if produced else "The owner produced no RTL."})
+                           "detail": ("C7 reused existing canonical RTL; its authoring owner was not rerun."
+                                      if self.reused_rtl else "Owner produced RTL.") if produced else "The owner produced no RTL.",
+                           **({"reused": True, "source": list(map(str, self.reused_rtl))} if self.reused_rtl else {})})
         metrics.update({row["name"]: row["status"] for row in own})
         sources = [path, *([lint_path] if measured else [])]
+        if authoring and self.reused_rtl:
+            sources.extend(self.reused_rtl)
+            if self.reused_authoring:
+                source = directory / "reused_authoring.json"
+                source.write_text(json.dumps(self.reused_authoring, indent=2) + "\n")
+                sources.append(source)
         for row in own:
             for output in row.get("output_files", []):
                 source = Path(output)
@@ -291,7 +339,8 @@ class OwnerSession:
         return {"ran": bool(own) or authoring, "exit_code": None, "metrics": metrics,
                 "reports": reports, "tool_seconds": sum(item["tool_seconds"] for item in tools),
                 "native_steps": [*native, *tools],
-                "detail": "Existing owner report; native verdicts remain in its steps."}
+                "detail": ("C7 reused canonical RTL and retained its original author report; native lint uses the current RTL."
+                           if self.reused_rtl else "Existing owner report; native verdicts remain in its steps.")}
 
 
 def run_owner(project, route, directory, kind, *, rerun=False):
@@ -349,10 +398,11 @@ def run_public(args):
     for name, default in (("ic_name", "UNNAMED_CHIP"), ("top_name", "chip_top")):
         if getattr(args, name, default) != default:
             route[name] = getattr(args, name)
+    engine_options = {"pdk": args.pdk} if getattr(args, "pdk", "auto") != "auto" else {}
     scope = getattr(args, "scope", "all")
     if (scope == "all" and not any(getattr(args, flag, False)
             for flag in ("skip_phase1", "skip_phase2", "skip_phase3"))):
-        options = {"route": route}
+        options = {"route": route, **engine_options}
         for name in ("from_name", "to_name"):
             if getattr(args, name, None):
                 options[name] = getattr(args, name)
@@ -377,7 +427,7 @@ def run_public(args):
         raise ValueError("The selected phase does not intersect the Router window")
     first = getattr(args, "from_name", None) or (requested[0]["name"] if lower else None)
     last = getattr(args, "to_name", None) or (requested[-1]["name"] if upper < len(table["steps"]) - 1 else None)
-    options = {"route": route}
+    options = {"route": route, **engine_options}
     if first:
         options["from_name"] = first
     if last:
