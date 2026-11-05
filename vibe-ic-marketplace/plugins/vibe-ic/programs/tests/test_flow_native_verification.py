@@ -302,7 +302,7 @@ def test_actual_eqy_uses_documented_reset_state(tmp_path, different, domain_alia
 
 
 @pytest.mark.parametrize("different", [False, True])
-@pytest.mark.parametrize("physical", [False, True])
+@pytest.mark.parametrize("physical", [False, True, pytest.param("CORE WELLTAP", id="welltap")])
 def test_actual_eqy_detects_unequal_logic(tmp_path, different, physical):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
@@ -316,7 +316,8 @@ def test_actual_eqy_detects_unequal_logic(tmp_path, different, physical):
     if physical:
         gate.write_text(gate.read_text().replace("endmodule", "\nFRAME frame();\nendmodule"))
         lef = tmp_path / "cells.lef"
-        lef.write_text("MACRO FRAME\n CLASS CORE SPACER ;\nEND FRAME\n")
+        kind = "CORE SPACER" if physical is True else physical
+        lef.write_text(f"MACRO FRAME\n CLASS {kind} ;\nEND FRAME\n")
         config["CELL_LEFS"] = {"typical": [str(lef)]}
     result = eqy(tmp_path, tmp_path, {"metric": "final_lec_unproved"}, Commands(tmp_path),
                  state={"nl": str(gate)}, config=config)
@@ -487,7 +488,8 @@ def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
 @pytest.mark.parametrize("change", ["none", "unused_models", "renamed_core_ports", "open_pad_pins", "unknown_core",
     "inline_unknown_core", "inline_z_core", "inline_undriven_core", "core", "core_pin", "terminal", "instance", "type",
     "direct_output", "direct_bad_output", "direct_unknown_output", "physical_corner", "physical_spacer",
-    "physical_core_spacer", "unclassified_physical", "functional_filler_name", "physical_with_rewire"])
+    "physical_core_spacer", "physical_welltap", "welltap_with_rewire", "welltap_with_core",
+    "unclassified_physical", "functional_filler_name", "physical_with_rewire"])
 @pytest.mark.parametrize("package_output", [False, True])
 @pytest.mark.parametrize("logical_pad_ports", [False, True])
 def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, package_output, logical_pad_ports):
@@ -512,7 +514,7 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
     if change == "renamed_core_ports":
         core.write_text(core.read_text().replace("clk", "core_clk").replace("rst_n", "core_rst_n"))
         gold.write_text(gold.read_text().replace(".clk(", ".core_clk(").replace(".rst_n(", ".core_rst_n("))
-    behavior = "~ia" if change == "core" else "ir" if change == "core_pin" else "ia"
+    behavior = "~ia" if change in {"core", "welltap_with_core"} else "ir" if change == "core_pin" else "ia"
     implemented = (wrapper + "reg state;\nassign oq=state;\n"
                    f"always @(posedge ic) if(!ir)state<=1;else state<={behavior};\nendmodule\n")
     if change == "terminal":
@@ -551,7 +553,9 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
             .replace("INPAD_ALT(inout PAD", "INPAD_ALT(input PAD")
             .replace("OUTPAD(input A,inout PAD", "OUTPAD(input A,output PAD"))
     physical = {"physical_corner": "ENDCAP TOPRIGHT", "physical_spacer": "PAD SPACER",
-                "physical_core_spacer": "CORE SPACER", "unclassified_physical": "PAD INOUT",
+                "physical_core_spacer": "CORE SPACER", "physical_welltap": "CORE WELLTAP",
+                "welltap_with_rewire": "CORE WELLTAP", "welltap_with_core": "CORE WELLTAP",
+                "unclassified_physical": "PAD INOUT",
                 "functional_filler_name": "PAD INPUT", "physical_with_rewire": "PAD SPACER"}
     if change in physical:
         lef = models / "cells.lef"
@@ -563,7 +567,7 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
             pads.write_text(pads.read_text() + "module FRAME(inout VDD,VSS); endmodule\n")
             instance = "FRAME inserted(.VDD(clk),.VSS(rst_n));"
         gate.write_text(gate.read_text().replace("endmodule", instance + "\nendmodule"))
-        if change == "physical_with_rewire":
+        if change in {"physical_with_rewire", "welltap_with_rewire"}:
             gate.write_text(gate.read_text().replace(".PAD(a)", ".PAD(rst_n)"))
     config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(core), str(gold)],
               "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(cells)]},
@@ -573,15 +577,16 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
     rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
     wrapper_failures = {"terminal", "instance", "type", "direct_bad_output", "unclassified_physical",
-                        "functional_filler_name", "physical_with_rewire"}
+                        "functional_filler_name", "physical_with_rewire", "welltap_with_rewire"}
     assert rows.get("Yosys.Wrapper") == ("FAIL" if change in wrapper_failures else "PASS"), result
-    if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin", "direct_output", "direct_bad_output"}:
-        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin", "direct_bad_output"} else "PASS"), result
+    if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin", "direct_output",
+                  "direct_bad_output", "physical_welltap", "welltap_with_core"}:
+        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin", "direct_bad_output", "welltap_with_core"} else "PASS"), result
     if change in {"unknown_core", "inline_unknown_core", "inline_z_core", "inline_undriven_core", "direct_unknown_output"}:
         assert rows.get("Yosys.EQY.Core") == "PASS" and result["exit_code"] == 0, result
         assert result["metrics"]["unproved_equivalence"] == 0, result
     elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "direct_output",
-                    "physical_corner", "physical_spacer", "physical_core_spacer"}:
+                    "physical_corner", "physical_spacer", "physical_core_spacer", "physical_welltap"}:
         assert result["metrics"]["unproved_equivalence"] == 0, result
     else:
         assert result["metrics"].get("unproved_equivalence", 0) > 0, result
