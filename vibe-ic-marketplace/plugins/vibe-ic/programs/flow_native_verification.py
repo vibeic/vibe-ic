@@ -437,6 +437,7 @@ def gls(project, directory, tool, commands, *, state, config):
             work.mkdir(parents=True, exist_ok=True)
             row = {"corner": corner, "testbench": str(bench), "status": "NOT_MEASURED",
                    "ran": False, "exit_code": None}
+            clock_unmeasured = False
             models = [str(netlist), *closure["files"], str(stub_file)]
             flags = shlex.split(native._IVERILOG_FLAGS)
             for parent in dict.fromkeys([str(bench.parent), *(str(Path(p).parent) for p in models)]):
@@ -462,14 +463,42 @@ def gls(project, directory, tool, commands, *, state, config):
                 sources = " ".join(shlex.quote(path).replace("$", "$$") for path in [*models, str(shim)])
                 compile_flags = " ".join(shlex.quote(flag).replace("$", "$$") for flag in flags)
                 module = shlex.quote(bench.stem).replace("$", "$$")
+                if sdc:
+                    try:
+                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                    except (OSError, ValueError) as exc:
+                        row["detail"] = str(exc)
+                        rows.append(row)
+                        continue
+                    if clocks["clocks_s"]:
+                        periods = {name: format(value / 1e-9, ".12g")
+                                   for name, value in clocks["clocks_s"].items()}
+                        entry = work / "flow_clocked_suite.py"
+                        entry.write_text("from decimal import Decimal\nfrom importlib import import_module\n"
+                            f"suite = import_module({bench.stem!r})\nperiods = {periods!r}\n"
+                            "clock = getattr(suite, 'CLK', None)\n"
+                            "if (clock in periods and hasattr(suite, 'HALF_NS')\n"
+                            "        and callable(getattr(suite, '_start_clock', None))):\n"
+                            "    suite.HALF_NS = Decimal(periods[clock]) / 2\n"
+                            "    print(f'COCOTB_CLOCK_NS {clock}={periods[clock]}', flush=True)\n"
+                            "else:\n    clock = None\n"
+                            "if set(periods) != ({clock} if clock else set()):\n"
+                            "    print('COCOTB_CLOCK_UNBOUND: suite has no supported clock setting', flush=True)\n"
+                            "globals().update({name: value for name, value in vars(suite).items()\n"
+                            "                  if not name.startswith('__')})\n")
+                        module = entry.stem
+                        row["clock"] = clocks
+                        reports.append(entry)
                 makefile.write_text("SIM = icarus\nTOPLEVEL_LANG = verilog\n"
                     f"VERILOG_SOURCES = {sources}\nCOCOTB_TOPLEVEL = flow_sdf_tb\n"
                     f"COCOTB_TEST_MODULES = {module}\n"
                     f"COMPILE_ARGS += {compile_flags}\n"
                     "COCOTB_PLUSARGS += -sdf-info\nSIM_BUILD = build\nCOCOTB_RESULTS_FILE = results.xml\n"
-                    f"export PYTHONPATH := {str(bench.parent).replace('$', '$$')}:$(PYTHONPATH)\n"
+                    f"export PYTHONPATH := {str(work).replace('$', '$$')}:{str(bench.parent).replace('$', '$$')}:$(PYTHONPATH)\n"
                     "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
                 completed = commands.run(["make", "-f", makefile, "-j8"], cwd=work)
+                clock_unmeasured = (completed is not None and "COCOTB_CLOCK_UNBOUND:" in
+                                    completed.stdout + completed.stderr)
                 summary = parse_junit(work / "results.xml")
                 functional = (summary if summary and summary["tests"] > 0 and not summary["skipped"] else None)
                 failures = functional["failures"] + functional["errors"] if functional else None
@@ -579,8 +608,10 @@ def gls(project, directory, tool, commands, *, state, config):
             applied = len(native._SDF_APPLIED_RE.findall(transcript))
             errors = len(native._SDF_ERROR_RE.findall(transcript))
             status = ("FAIL" if completed.returncode or errors or failures else
-                      "PASS" if applied and failures == 0 else "NOT_MEASURED")
+                      "PASS" if applied and failures == 0 and not clock_unmeasured else "NOT_MEASURED")
             detail = ("Icarus reported no applied SDF delay records. " if not applied else "")
+            if clock_unmeasured:
+                detail += "The Python suite has no supported setting for every native SDC clock. "
             if failures is None:
                 detail += "No native self-check or complete JUnit functional verdict was produced. "
             row.update(ran=True, exit_code=completed.returncode, status=status, tests=total,

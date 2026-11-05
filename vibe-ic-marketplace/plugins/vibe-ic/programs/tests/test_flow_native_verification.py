@@ -784,3 +784,92 @@ def test_generated_serial_clock_preserves_picosecond_precision(tmp_path):
     run = subprocess.run(["vvp", str(executable)], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "PERIOD_NS=2000.002" in run.stdout
+
+
+@pytest.mark.parametrize("outcome,expected", [("skip", "NOT_MEASURED"), ("fail", "FAIL"), ("pass", "PASS")])
+@pytest.mark.parametrize("virtual_clock", [False, True])
+def test_native_cocotb_gls_distinguishes_skipped_reference(tmp_path, outcome, expected, virtual_clock):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=True)
+    if virtual_clock:
+        sdc = project / "virtual.sdc"
+        sdc.write_text("create_clock -name virtual -period 20\n")
+        state["sdc"] = str(sdc)
+    bench = project / "phase2/stage1/sim/tb_unit.py"
+    action = {"skip": 'pytest.skip("reference model unfilled")',
+              "fail": 'assert int(dut.y.value)==1, "functional mismatch"',
+              "pass": "assert int(dut.y.value)==0"}[outcome]
+    bench.write_text("import cocotb\nimport pytest\nfrom cocotb.triggers import Timer\n"
+        "@cocotb.test()\nasync def reference(dut):\n"
+        "    dut.a.value=0\n    await Timer(3,unit='ns')\n"
+        f"    {action}\n")
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == expected, result
+    if outcome == "skip":
+        assert "gls_failures" not in result["metrics"], result
+    else:
+        assert result["metrics"]["gls_failures"] == int(outcome == "fail"), result
+
+
+@pytest.mark.parametrize("outcome,expected", [("skip", "NOT_MEASURED"), ("fail", "FAIL"), ("pass", "PASS")])
+@pytest.mark.parametrize("period", [20, 2000.002])
+def test_generated_cocotb_chip_clock_uses_native_sdc(tmp_path, outcome, expected, period):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    from professional_tb_gen import _emit_common_header
+
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=True)
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("module unit(input a", "module neutral_chip(inout clk, input a"))
+    sdf = Path(state["sdf"]["typical"])
+    sdf.write_text(sdf.read_text().replace('"unit"', '"neutral_chip"'))
+    config["DESIGN_NAME"] = "neutral_chip"
+    sdc = project / "clock.sdc"
+    sdc.write_text(f"create_clock -name clock -period {period} [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    bench = project / "phase2/stage1/sim/tb_unit.py"
+    header = _emit_common_header({"top": "logical_unit", "cr": {
+        "clk": "clk", "rst": None, "period_ns": 10, "active_high": False},
+        "ports": [{"name": "clk", "dir": "input"}, {"name": "a", "dir": "input"}]})
+    action = {"skip": 'pytest.skip("reference model unfilled")',
+              "fail": 'assert int(dut.y.value)==1, "functional mismatch"',
+              "pass": "assert int(dut.y.value)==0"}[outcome]
+    bench.write_text(header + "\nimport pytest\nfrom cocotb.utils import get_sim_time\n"
+        "@cocotb.test()\nasync def reference(dut):\n"
+        "    dut.a.value=0\n    _start_clock(dut)\n    await RisingEdge(dut.clk)\n"
+        "    first=get_sim_time(unit='ps')\n    await RisingEdge(dut.clk)\n"
+        "    measured=get_sim_time(unit='ps')-first\n"
+        "    print(f'ACTUAL_CLOCK_NS={measured/1000}',flush=True)\n"
+        f"    assert measured == {round(period * 1000)}\n"
+        f"    {action}\n")
+    original = bench.read_bytes()
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == expected, result
+    assert bench.read_bytes() == original
+    logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
+                     if str(path).endswith(".log"))
+    assert f"ACTUAL_CLOCK_NS={period}" in logs
+    if outcome == "skip":
+        assert "gls_failures" not in result["metrics"], result
+
+
+def test_python_suite_without_clock_setting_is_not_native_clock_replay(tmp_path):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=True)
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("input a", "input clk, input a"))
+    sdc = project / "clock.sdc"
+    sdc.write_text("create_clock -name clock -period 20 [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
+    assert "no supported setting" in result["native_steps"][0]["detail"]
+    assert "gls_failures" not in result["metrics"], result
