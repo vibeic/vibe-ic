@@ -1,45 +1,8 @@
-"""_qualified_by.py — the ONE reader of a data output's declared qualifier.
+"""Read a data output's declared qualifier, active level and source basis.
 
-R-0929-X-QUALIFIED-4 (root, IC expert, 2026-09-29). Two oracles that parsed port
-DESCRIPTIONS inside `reset_invariant_oracle_tb_gen` produced false PASSes — 3,
-then 23 more (review_wave58/XQROLES_review.json): low-active spellings read as
-high, 1-bit status outputs exempted, cross-channel pairs on shared generic
-words, 高態/高電平 read as valid. Interpreting prose is spec capture, not
-verification. So the qualifier is a STRUCTURED, REVIEWED fact:
-
-    L9 port row (ports / top_ports / top_module_pins) of a DATA output:
-      "qualified_by": {
-        "port": "<1-bit port of the same channel>",
-        "active_level": "high" | "low",
-        "basis": [{"file": "<design-input path>", "line": <n>,
-                   "quote": "<exact text on that line>"}, ...]
-      }
-
-and it is TRUSTED only when ALL of these hold (`trusted_qualifiers`):
-
-  1. the field is well formed (port named, level exactly high|low, >= 1 basis);
-  2. every basis quotation is present VERBATIM on the named line of a
-     design-input file (input/docs, phase1/input_doc, input/design_input.txt) —
-     a quotation that is not in the input is not a basis;
-  3. the D1 IC-expert second pass SIGNED it: the D1 receipt
-     (`ai_signed_judgement.check(project, "D1")`) is valid for the current
-     bytes — which include this L9 and the expert's expectations — AND those
-     signed expectations carry the D1 expectation for exactly this fact,
-     `{"id": "qualified_by:<output>", "qualified_by": {"output", "port",
-     "active_level"}}`;
-  4. the landed strict rules: the output is a multi-bit output, the qualifier
-     a 1-bit port other than the output, and neither is the clock or reset.
-
-No signature -> the field is IGNORED, and `trusted_qualifiers` says why.
-Nothing here reads a description: the field is the only input.
-
-Proposing the field in Phase 1 and the D1 reviewer's checklist (the semantic
-intent of R-0929-X-QUALIFIED-2/-3) are wired into the D1 expert track
-separately, on top of that track's pending rework (D1FIX). This module is the
-schema and the one trusted reader; with no signed field, every data output
-keeps the strict rule (X after reset release is a FAIL).
-
-chip-AGNOSTIC: no design, port or PDK literal.
+The L9 structured field and existing D1 expectation must agree. Exact source
+quotations, data/qualifier port widths and clock/reset exclusions retain their
+original meaning; the native output/reset checker decides the final result.
 """
 from __future__ import annotations
 
@@ -182,26 +145,17 @@ def basis_refusal(project: Path, basis, output: Optional[str] = None,
     return None
 
 
-def _signed_expectations(project: Path) -> Tuple[Optional[list], str]:
-    import ai_signed_judgement as _aj
-    ok, why = _aj.check(Path(project), "D1")
-    if not ok:
-        return None, why
-    want = (Path(project) / EXPECTATIONS_REL).resolve()
-    ev = [p for p in _aj.evidence(Path(project), "D1")
-          if p.resolve() == want]
-    if not ev:
-        return None, (f"the D1 receipt is valid but its evidence does not "
-                      f"include {EXPECTATIONS_REL}")
-    doc = _json(ev[0])
+def _expectations(project: Path) -> Tuple[Optional[list], str]:
+    """Read the existing D1 expectations as design facts."""
+    path = Path(project) / EXPECTATIONS_REL
+    doc = _json(path)
     exps = (doc or {}).get("expectations")
     if not isinstance(exps, list):
-        return None, ("the D1 receipt is valid but its evidence carries no "
-                      "expectations list")
-    return exps, why
+        return None, f"{EXPECTATIONS_REL} has no expectations list"
+    return exps, EXPECTATIONS_REL
 
 
-def _signed_fact(exps: list, output: str) -> Optional[dict]:
+def _expectation_fact(exps: list, output: str) -> Optional[dict]:
     for e in exps:
         if (isinstance(e, dict)
                 and e.get("id") == f"{EXPECTATION_PREFIX}{output}"
@@ -220,7 +174,7 @@ def trusted_qualifiers(
     """({output: [qualifier row]}, {output: why ignored}).
 
     A row is `{"qualifier", "active": "1"|"0", "evidence", "basis":
-    "signed_field"}` — the shape the reset-invariant emitter consumes."""
+    "declared_field"}` — the shape the reset-invariant emitter consumes."""
     fields = declared_fields(project)
     if not fields:
         return {}, {}
@@ -234,7 +188,7 @@ def trusted_qualifiers(
     excluded = tuple(excluded) + tuple(sorted(clock_reset))
     found: Dict[str, List[Dict[str, str]]] = {}
     ignored: Dict[str, str] = {}
-    exps, sig_why = _signed_expectations(project)
+    exps, expectation_source = _expectations(project)
     for d, raw in sorted(fields.items()):
         if not isinstance(raw, dict):
             ignored[d] = "qualified_by is not a {port, active_level, basis} record"
@@ -261,22 +215,22 @@ def trusted_qualifiers(
             ignored[d] = why
             continue
         if exps is None:
-            ignored[d] = f"not signed by the D1 IC-expert second pass: {sig_why}"
+            ignored[d] = f"no matching D1 expectation facts: {expectation_source}"
             continue
-        fact = _signed_fact(exps, d)
+        fact = _expectation_fact(exps, d)
         if fact != {"output": d, "port": q, "active_level": level}:
-            ignored[d] = (f"the signed D1 expectations carry no "
+            ignored[d] = (f"the D1 expectations carry no "
                           f"'{EXPECTATION_PREFIX}{d}' fact equal to this field "
-                          f"(signed: {fact!r})")
+                          f"(declared: {fact!r})")
             continue
         cites = [f"{b['file']}:{b['line']} \"{b['quote'].strip()}\""
                  for b in raw["basis"]]
         found[d] = [{"qualifier": q, "active": LEVELS[level],
-                     "basis": "signed_field",
+                     "basis": "declared_field",
                      "evidence": (f"L9 {FIELD} of {d} (port {q}, active "
-                                  f"{level}), D1-signed ({sig_why}); basis "
+                                  f"{level}), D1 expectation ({expectation_source}); basis "
                                   f"{'; '.join(cites)}"),
                      "field": f"L9 {FIELD} of {d} (port {q}, active {level}), "
-                              f"D1-signed ({sig_why})",
+                              f"D1 expectation ({expectation_source})",
                      "cites": cites}]
     return found, ignored

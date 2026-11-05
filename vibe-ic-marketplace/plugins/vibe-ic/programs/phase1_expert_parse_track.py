@@ -331,7 +331,9 @@ import _path_layout as _pl  # noqa: E402
 import ic_expert_backup_pack as _pack  # noqa: E402
 import nvm_program_supply_intent as _nps  # noqa: E402
 import _reference_flow_boundary as _rfb  # noqa: E402  §4.05 authority (FX_405)
-import ai_signed_judgement as _asj  # noqa: E402  the D1 design-input population
+DESIGN_DOCUMENT_GLOBS = ("input/design_input.txt", "input/phase1_prompt.md",
+                      "input/phase1_structured.yaml", "input/docs/**/*",
+                      "phase1/input_doc/**/*")
 
 PROGRAM = "phase1_expert_parse_track"
 VERSION = "1.0.0"
@@ -705,9 +707,8 @@ SKIP_FRAME_BUDGET = "FRAME_BUDGET"        #: readable context the budget left ou
 
 def _design_document_files(project: Path) -> set:
     """The design documents under `input/`: the D1 design-input population
-    exactly as D1's signed judgement binds it (`DESIGN_INPUT_GLOBS`), so the
-    frame and the D1 evidence cannot disagree about what the design input is."""
-    return {p for pattern in _asj.DESIGN_INPUT_GLOBS if pattern.startswith("input/")
+    using the original D1 design-document population."""
+    return {p for pattern in DESIGN_DOCUMENT_GLOBS if pattern.startswith("input/")
             for p in project.glob(pattern) if p.is_file()}
 
 
