@@ -216,6 +216,66 @@ def test_native_windows_capture_before_the_next_row_overwrites_a_report(tmp_path
     assert (tmp_path / 'native.rpt').read_text() == exit_
 
 
+@pytest.mark.parametrize('lint_status', ['PASS', 'FAIL', 'NOT_MEASURED'])
+def test_phase2_consumers_read_the_whole_current_window(tmp_path, lint_status):
+    import benchmark_io_adapter as adapter
+    from _hostpaths import require_repo
+    registry = json.loads(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                                      'flow', 'flow109.json').read_text())
+    features = next(p['features'] for p in registry['reference_profiles']
+                    if p['name'] == 'RTL-only')
+    manifest = put(tmp_path, 'selection.json', {'features': features})
+    args = SimpleNamespace(flow109_manifest=manifest, entry_step='D09', exit_step='D11',
+                           rtl_input='original', delivery_target='rtl')
+    rtl = tmp_path / 'phase2/stage1/rtl/neutral.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module neutral(input a, output y); assign y=a; endmodule\n')
+    source_steps = {}
+
+    def native(selected):
+        authoring = selected.entry_step == 'D09'
+        steps = ([{'name': 'rtl_gen', 'status': 'PASS', 'detail': 'native author'}]
+                 if authoring else [
+                     {'name': 'rtl_gen', 'status': 'NOT_APPLICABLE', 'detail': 'upstream'},
+                     {'name': 'rtl_validate', 'status': lint_status, 'detail': 'native lint'}])
+        source_steps[selected.entry_step] = steps
+        put(tmp_path, 'reports/orchestrator/phase2_one_shot.json', {
+            'steps': steps, 'verdict': 'PASS' if authoring else lint_status,
+            'declared_window': {'entry_step': '1' if authoring else '2',
+                                'exit_step': '1' if authoring else '2',
+                                'dispatched_step_ids': ['1' if authoring else '2']}})
+        return 0 if authoring or lint_status == 'PASS' else 1 if lint_status == 'FAIL' else 2
+
+    assert flow109.run_rows(args, tmp_path, native) == {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[lint_status]
+    observed = adapter._rtl_gen_verdict(tmp_path)
+    assert observed['status'] == 'PASS', observed
+    report = json.loads((tmp_path / 'reports/orchestrator/phase2_one_shot.json').read_text())
+    assert {r['name']: r['status'] for r in report['steps']} == {
+        'rtl_gen': 'PASS', 'rtl_validate': lint_status}
+    assert report['verdict'] == lint_status
+    assert report['declared_window'] == {'entry_step': '1', 'exit_step': '2',
+                                        'dispatched_step_ids': ['1', '2']}
+    for step, expected in source_steps.items():
+        retained = versions(tmp_path, step)[0].parent / 'outputs/reports/orchestrator/phase2_one_shot.json'
+        assert json.loads(retained.read_text())['steps'] == expected
+
+
+def test_phase2_window_does_not_adopt_an_old_author_result(tmp_path):
+    import benchmark_io_adapter as adapter
+    args = case(tmp_path, 'D11')
+    put(tmp_path, 'reports/orchestrator/phase2_one_shot.json', {
+        'steps': [{'name': 'rtl_gen', 'status': 'PASS'}], 'verdict': 'PASS'})
+
+    def native(_):
+        put(tmp_path, 'reports/orchestrator/phase2_one_shot.json', {
+            'steps': [{'name': 'rtl_gen', 'status': 'NOT_APPLICABLE', 'detail': 'supplied'},
+                      {'name': 'rtl_validate', 'status': 'PASS'}], 'verdict': 'PASS'})
+        return 0
+
+    assert flow109.run_rows(args, tmp_path, native) == 0
+    assert adapter._rtl_gen_verdict(tmp_path)['status'] == 'NOT_APPLICABLE'
+
+
 def test_inputs_are_only_paths_already_exposed_in_row_result(tmp_path, monkeypatch):
     args = case(tmp_path, 'D31')
     source = put(tmp_path, 'input/neutral.json', {'limit': 0})
