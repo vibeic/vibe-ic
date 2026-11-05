@@ -138,7 +138,7 @@ def _scan_sections(project: Path) -> List[dict]:
     out: List[dict] = []
     seen_files: Set[Path] = set()
     seen_slugs: Set[str] = set()
-    references = _load_reference_doc_globs(project)
+    references = _load_reference_doc_globs(project, auto_enabled=False)
     for sub in _DOC_DIRS:
         d = project / sub
         if not d.is_dir():
