@@ -418,31 +418,14 @@ the sim value during simulation — only the synthesis instantiation is
 pinned to the synth-safe value. Document the applied pins in
 `declaration.json` (e.g. `synth_safe_params_applied`).
 
-## SystemVerilog conversion is IN-RUNNER — do not pre-convert (#587)
+## SystemVerilog inputs
 
-When a pulled IP is assertion-macro SystemVerilog (the `prim_assert`
-pattern: a header whose `` `ifdef VERILATOR / `elsif SYNTHESIS / `else ``
-chain `` `include ``s a macros file, plus packages and `.svh` headers),
-**stage the files as-is and let the runner convert them**. As of
-v0.3.41 `design_one_shot_runner._phase2_sv_synth_fallback` does the full
-recipe in-container:
-
-- stages the FULL closure — `.sv` sources **plus** `.svh`/`.vh`/`.h`
-  headers and `*_pkg.*` package files found under `rtl/`;
-- passes `-I <workdir>` so `` `include `` resolves;
-- converts with **`-DSYNTHESIS`** (so the `` `elsif SYNTHESIS `` arm
-  takes the synthesisable dummy-macros header, never the sim-only
-  `` `else `` arm) — the TB/sim path separately keeps `-DSIMULATION`;
-- chains `sv2v_mixed_driver_fixup` over the converted Verilog before
-  yosys reads it.
-
-Do **NOT** hand-roll `sv2v -DSYNTHESIS -I . …` outside the runner and
-delete the `.sv` from `rtl/` (the round-6 work-around). Stage every
-source + header + package the IP ships and let `step_yosys_synth` drive
-the conversion; that is the supported, tested path. If synth still fails
-with `Module 'X' referenced … is not part of the design`, run
-`staged_rtl_closure_preflight.py <rtl_dir>` (#586) — a parameter DEFAULT
-likely selects an excluded variant.
+Stage the IP's complete SystemVerilog sources, packages, and include headers.
+The public runner passes those sources to native LibreLane/Yosys synthesis.
+Keep the original files so the simulation and synthesis tools can each apply
+their intended language and macro settings. Read the native compiler report
+for unresolved modules, includes, and unsupported syntax, then fix the source
+selection or the local tool fork.
 
 ## License compliance gate
 

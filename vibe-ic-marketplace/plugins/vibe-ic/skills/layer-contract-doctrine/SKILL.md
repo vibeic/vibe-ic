@@ -68,7 +68,7 @@ knowing because they tell you what a layered IR is *for*:
 Assertion-based design is the third: SVA/PSL as the machine-executable form of
 design intent, reusable in both simulation and formal. We already emit some of
 this (`assertion_covers_l3_constraints_check`, `assertion_property_check`,
-`protocol_timeline_assert_gen`, `formal_property_run`); we do not emit a
+`formal_property_run`); we do not emit a
 C/SystemC golden model, so sequential and transaction equivalence are not
 available to us. Say so when someone claims the flow is "formally verified".
 

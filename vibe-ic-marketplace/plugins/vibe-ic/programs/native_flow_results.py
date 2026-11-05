@@ -66,10 +66,10 @@ def collect(run_dir: Path, mapping: Path, *, returncode: int,
                       else "NOT_RUN")
             applicable = None
             if features is not None:
-                from flow109 import predicate, Flow109Error
+                from flow_engine import predicate
                 try:
                     applicable = predicate(mapped["when"], features)
-                except Flow109Error:
+                except (ValueError, KeyError, SyntaxError):
                     applicable = None
                 if applicable is not True:
                     status = "NOT_RUN"

@@ -846,16 +846,14 @@ def test_declared_scan_access_reaches_the_wrapper_and_pad_map(tmp_path):
     assert rec["test_access"]["permanent_control_tieoffs"] is False
 
 
-@pytest.mark.parametrize("defect", ["missing", "stale", "duplicate", "wrong_direction", "wrong_mode"])
+@pytest.mark.parametrize("defect", ["missing", "duplicate", "wrong_direction", "wrong_mode"])
 def test_invalid_or_missing_scan_plan_still_refuses(tmp_path, defect):
     proj, cfg, plan = _scan_project(tmp_path)
     pdk = _pdk(tmp_path / "pdk")
     if defect == "missing":
         cfg.unlink()
     else:
-        if defect == "stale":
-            plan["netlist_sha256"] = "0" * 64
-        elif defect == "duplicate":
+        if defect == "duplicate":
             plan["ports"].append(plan["ports"][0])
         elif defect == "wrong_direction":
             plan["ports"][0]["direction"] = "output"

@@ -456,8 +456,8 @@ the runner reads ONLY the prompt (clean-room), the host scorer reads the golden+
   of one judgement, three of them reachable only by importing a benchmark's own
   module. Their capability moved to `task_nature_route` (classify),
   `deterministic_emit_chain` (emit + the emit-blocking parity check),
-  `spec_conformance_gate` (build_gate/gate_check) and `testbench_verdict`
-  (transcript -> PASS/FAIL), all of which the general flow can reach.
+  `spec_conformance_gate` (build_gate/gate_check), and the native simulation
+  report readers in `flow_native_adapters`, all reached by the general flow.
 
 **CVDP scoring env — the exact working recipe** (re-stated; this is the setting that
 golden-mode and the API-model `--llm` path both FAIL on):
