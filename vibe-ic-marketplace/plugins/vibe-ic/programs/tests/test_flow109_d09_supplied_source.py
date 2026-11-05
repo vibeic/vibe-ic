@@ -21,7 +21,7 @@ def put(root, rel, body):
     return path
 
 
-def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, deferred=None, mixed=False, debug=None, interface=None):
+def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, deferred=None, mixed=False, debug=None, interface=None, parameter_contract=None):
     # Exact original two-module D15 carrier, including its genuine empty
     # parameter and clock/reset populations. Not a serial benchmark fixture.
     assert hashlib.sha256(RTL.encode()).hexdigest() == '931ac7bddbfa37b3a7d3c98942387b068b389e295dad1664468facee015b5be9'
@@ -30,12 +30,16 @@ def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, defer
         source += ('module debug_only; generate if (' + str(int(debug)) + ') begin '
                    'integer fd; initial fd=$fopen("debug.log","w"); end endgenerate endmodule\n')
     put(root,'phase2/stage1/rtl/unit.sv' if authored else 'input/rtl/unit.sv',source)
+    if parameter_contract is not None:
+        source = source.replace('module unit(input', 'module unit #(parameter CHOICE=0)(input')
+        put(root,'phase2/stage1/rtl/unit.sv' if authored else 'input/rtl/unit.sv',source)
     ports=[{'name':n,'direction':d,'width':w} for n,d,w in [('on','input',1),('iso','input',1),('y','output',8)]]
     if interface == 'optional':
         ports.append({'name':'optional_status','direction':'input','optional':True})
     elif interface == 'chosen_width':
         ports[-1]['width'] = None
-    put(root,'phase1/generated_docs/L9_INTEGRATION_SPEC.json',{'top_module':'unit','top_ports':ports,'parameters':[]})
+    parameters = [] if parameter_contract is None else [{'name':'CHOICE','default':parameter_contract['default']}]
+    put(root,'phase1/generated_docs/L9_INTEGRATION_SPEC.json',{'top_module':'unit','top_ports':ports,'parameters':parameters})
     put(root,'input/spec.md','q initializes to A5. u_state.q connects to y. Interface is on,iso,y with no parameters.')
     facts=[{'constant':{'module':'cell_keep','port':'q','bits':['1','0','1','0','0','1','0','1']}},
            {'connection':{'module':'unit','cell':'u_state','type':'cell_keep','cell_port':'q','top_port':'y'}}]
@@ -91,6 +95,8 @@ def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, defer
             put(root,'phase2/stage1/rtl/unit.sv',RTL.replace('input on, iso,','input on,'))
         elif damage=='no_rtl':
             (root/'phase2/stage1/rtl/unit.sv').unlink()
+        if parameter_contract is not None and 'selected' in parameter_contract:
+            put(root,'plugin_output/declaration.json',{'core_parameters':{'CHOICE':parameter_contract['selected']}})
         if damage!='no_review':
             put(root,'reports/audit/ai_judgements/1.json',{'schema':judgement.SCHEMA,'step_id':'1',
                 'evidence_sha256':judgement.evidence_sha256(root,'1'),'verdict':'PASS',
@@ -280,3 +286,22 @@ def test_author_uses_canonical_optional_and_unspecified_port_contract(tmp_path, 
     status, _, detail = consume(owned)
     assert status == 'PASS', detail
     assert owned[1]['d09_owned_metrics']['declared_ports_parameters'] == 'PASS'
+
+
+@pytest.mark.parametrize('contract', [
+    {'default':'`0x0`'},
+    {'default':'1 (reference default only; optional selection)', 'selected':0},
+])
+def test_author_uses_integer_literal_and_explicit_parameter_choice(tmp_path, monkeypatch, contract):
+    owned = case(tmp_path, monkeypatch, authored='catalog-glue-author', parameter_contract=contract)
+    status, _, detail = consume(owned)
+    assert status == 'PASS', detail
+    assert owned[1]['d09_owned_metrics']['declared_ports_parameters'] == 'PASS'
+
+@pytest.mark.parametrize('contract', [
+    {'default':1}, {'default':0, 'selected':1}, {'default':1, 'selected':0},
+])
+def test_author_parameter_disagreement_remains_failure(tmp_path, monkeypatch, contract):
+    owned = case(tmp_path, monkeypatch, authored='catalog-glue-author', parameter_contract=contract)
+    status, _, detail = consume(owned)
+    assert status == 'FAIL' and 'D09_DECLARED_PORTS_PARAMETERS_MISMATCH' in detail, detail
