@@ -84,6 +84,18 @@ def test_pass_well_formed_layer(tmp_path):
     assert rep["violations"] == []
 
 
+def test_logical_request_response_interface_is_not_a_physical_bus_pin(tmp_path):
+    _write_input(tmp_path, "vendor_rtl/synth_block.v", _SYNTH_RTL)
+    logical = {"name": "link", "mode": "interface", "interface_type": "req_rsp",
+               "interface_role": "rsp", "package_struct": "link_pkg::link",
+               "instance_count": 1, "width_unresolved": True, "width": None}
+    _write_l1(tmp_path, [*_GOOD_PINS, logical])
+    rc, rep = _run(tmp_path)
+    assert rc == 0, rep
+    assert rep["bus_confirmed"] == 2
+    assert rep["violations"] == []
+
+
 # ------------------------------- NEGATIVE CONTROL: numeric bus, no width
 def test_fail_gutted_numeric_bus_width_missing(tmp_path):
     """Gutted layer: the 24-bit bus loses its width -> must FAIL."""
