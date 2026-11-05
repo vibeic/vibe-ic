@@ -184,6 +184,8 @@ def test_sim_attribution_uses_the_selected_engine_verdict(
     phase = fpa.attribute(p)["phase3_verifying"]
     expected = (native_status if native_status in {"PASS", "FAIL"} else "NOT_MEASURED"
                 ) if engine == "native" else owner_status
+    if engine == "native" and owner_status is None and native_status.startswith("missing-"):
+        expected = None
     assert {**phase["not_attempted"], **phase["ran"]}.get("sim") == expected
     assert ("sim" in phase["ran"]) + ("sim" in phase["not_attempted"]) == (expected is not None)
     assert phase["failed"] == sorted(["rtl_validate"] + (["sim"] if expected == "FAIL" else []))
