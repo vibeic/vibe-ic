@@ -217,7 +217,8 @@ class OwnerSession:
             own = [row for row in rows if row["name"] == kind]
         lint_path = self.project / "reports/phase2/lint/native_lint.json"
         measured = json.loads(lint_path.read_text()) if kind == "rtl_validate" and lint_path.is_file() else {}
-        metrics = dict(measured.get("metrics", {}))
+        metrics = {key: value for row in own for key, value in row.get("extras", {}).get("metrics", {}).items()}
+        metrics.update(measured.get("metrics", {}))
         tools = measured.get("tools", [])
         native = [{"name": row["name"], "ran": row["status"] in ("PASS", "FAIL"),
                    "exit_code": row.get("extras", {}).get("exit_code"), "status": row["status"]}

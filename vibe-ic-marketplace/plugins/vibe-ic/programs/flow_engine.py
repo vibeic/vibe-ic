@@ -348,7 +348,7 @@ class NativeChain:
             text.append("NOT_MEASURED views: " + ", ".join(missing))
         (destination / "README.md").write_text("\n".join(text) + "\n")
         reports = [str(path) for path in destination.rglob("*") if path.is_file()]
-        metrics = {**dict(self.state.metrics), "ip_endpoint_views": {
+        metrics = {**dict(self.state.metrics), tool.get("metric", "ip_endpoint_views"): {
             "required": list(formats), "observed": exported}}
         return ToolResult(True, 0, metrics, reports,
                           detail="Missing native views: " + ", ".join(missing) if missing else "Native views exported")
@@ -446,7 +446,10 @@ def evaluate(tool: ToolResult, measurements: list) -> str:
     if any((not item["ran"] or item.get("status") == "NOT_MEASURED")
            and not item.get("native_config_disabled") for item in tool.native_steps):
         return "NOT_MEASURED"
-    if not tool.ran or not measurements or any(item["status"] == "NOT_MEASURED" for item in measurements):
+    if any(item["status"] == "NOT_MEASURED" for item in measurements):
+        return "NOT_MEASURED"
+    if not measurements and tool.exit_code is None and not any(
+            item.get("status") == "PASS" or item.get("exit_code") == 0 for item in tool.native_steps):
         return "NOT_MEASURED"
     return "PASS"
 
@@ -481,6 +484,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                                         time.perf_counter() - before)
     features = design_features(project, route, table)
     selected = select_steps(table, route, features, from_name, to_name)
+    complete_selection = select_steps(table, route, features, None, None)
     chain = NativeChain(project, route)
     positions = {row["name"]: i + 1 for i, row in enumerate(table["steps"])}
     results: dict[str, dict] = {}
@@ -502,6 +506,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         beginning = time.perf_counter()
         directory = step_root / row["name"]
         tool = choose_tool(row["tool"], features)
+        if route.get("input_contract") == "original" and "Verilator.Lint" in tool.get("steps", []):
+            tool = {"kind": "adapter", "function": "rtl_validate"}
         kind = tool["kind"]
         saved = read_json(directory / "result.json")
         extra_tool_seconds = 0.0
@@ -543,7 +549,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             native = prepared[row["name"]][0]
         elif tool.get("function") == "step_rtl_gen":
             native = ToolResult(**owner_session.result(directory, "rtl_gen"))
-        elif route.get("input_contract") == "original" and "Verilator.Lint" in tool.get("steps", []):
+        elif tool.get("function") == "rtl_validate":
             native = ToolResult(**owner_session.result(directory, "rtl_validate"))
         elif kind == "command":
             native = command_tool(project, directory, tool)
@@ -551,6 +557,15 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             native = chain.execute(directory, tool)
         elif kind == "snapshot":
             native = chain.snapshot(directory, tool)
+        elif kind == "aggregate":
+            earlier = [item for item in complete_selection
+                       if positions[item["name"]] < positions[row["name"]]]
+            statuses = {item["name"]: read_json(step_root / item["name"] / "result.json").get("status", "NOT_MEASURED")
+                        for item in earlier}
+            report_path = directory / "aggregate.json"
+            write_json(report_path, statuses)
+            native = ToolResult(True, 0, {"non_passing_steps": sum(value != "PASS" for value in statuses.values())},
+                                [str(report_path)])
         elif kind == "native_report":
             previous = results.get(tool["from"]) or read_json(step_root / tool["from"] / "result.json")
             native = ToolResult(bool(previous.get("tool_ran")), None,

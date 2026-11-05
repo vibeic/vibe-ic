@@ -80,6 +80,21 @@ def test_missing_limit_never_becomes_pass(tmp_path):
     assert execute(tmp_path, [row])["steps"][0]["status"] == "NOT_MEASURED"
 
 
+def test_successful_tool_without_remaining_checks_passes(tmp_path):
+    row = command_row("native_exit")
+    row["checks"] = []
+    assert execute(tmp_path, [row])["steps"][0]["status"] == "PASS"
+
+
+def test_aggregate_counts_earlier_selected_failures(tmp_path):
+    row = command_row("summary")
+    row["tool"] = {"kind": "aggregate"}
+    row["checks"] = [{"metric": "non_passing_steps", "operator": "==", "limit": 0}]
+    report = execute(tmp_path, [command_row("bad", value=1), row])
+    assert report["steps"][-1]["status"] == "FAIL"
+    assert report["steps"][-1]["native_metrics"]["non_passing_steps"] == 1
+
+
 def test_native_decimal_and_infinite_path_group_values(tmp_path):
     checks = [{"metric": "slack", "operator": ">=", "limit": Decimal("0")}]
     measured = engine.measure(checks, {"slack": Decimal("1.2")}, {}, {"always": True})
@@ -112,6 +127,28 @@ def test_existing_native_results_survive_an_added_table_entry(tmp_path):
     result = execute(tmp_path, [row, command_row("added")])
     assert counter.read_text() == "1"
     assert result["pass"] == 2
+
+
+def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, monkeypatch):
+    import flow_engine_frontend
+    calls = []
+
+    def lint(self, directory, kind):
+        calls.append(kind)
+        return {"ran": True, "exit_code": 0, "metrics": {"errors": 0},
+                "native_steps": [{"name": "verilator", "ran": True,
+                                  "exit_code": 0, "status": "PASS"}]}
+
+    def unavailable(self):
+        raise ModuleNotFoundError("No module named 'librelane'")
+
+    monkeypatch.setattr(flow_engine_frontend.OwnerSession, "result", lint)
+    monkeypatch.setattr(engine.NativeChain, "initialize", unavailable)
+    row = command_row("lint")
+    row["tool"] = {"kind": "librelane", "steps": ["Verilator.Lint", "Checker.LintErrors"]}
+    assert execute(tmp_path, [row])["pass"] == 1
+    assert execute(tmp_path, [row])["pass"] == 1
+    assert calls == ["rtl_validate", "rtl_validate"]
 
 
 def test_document_owner_runs_before_feature_selection(tmp_path, monkeypatch):
