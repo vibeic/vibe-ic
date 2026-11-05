@@ -209,6 +209,7 @@ def simulation(project, directory, tool, commands):
             "reason": generated.get("reason") or "Native functional verification has not completed."}, indent=2) + "\n")
         handoff = generated.get("reference_model_handoff")
         if handoff:
+            Path(handoff["artifact_path"]).parent.mkdir(parents=True, exist_ok=True)
             return commands.result(reports=[producer_report], detail=
                 "The existing professional testbench producer requires its reference model: "
                 + json.dumps(handoff))
