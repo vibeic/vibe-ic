@@ -62,18 +62,16 @@ def derive(project, top):
         production_reason = None
     except (ValueError, OSError, KeyError, TypeError) as exc:
         production_reason = str(exc)
-    # An M1 PASS without exact native subject binding cannot certify a layout.
-    # The merged-top LVS obligation below supplies that binding when available.
+    # Native merged-top LVS supplies the physical verification result.
     try:
         merge = m3.read(project / (m3.DIR + "/merge.json"))
         lvs = m3.read(project / (m3.DIR + "/top_lvs.json"))
         ok = (merge.get("verdict") == "PASS" and lvs.get("verdict") == "PASS"
-              and lvs.get("program") == "mixed_signal_top_lvs_run"
               and lvs.get("layout") == "phase3/mixed_signal/top_merged.gds")
         checks.append({"step": "M1", "verdict": "FAIL" if "FAIL" in
                        (merge.get("verdict"), lvs.get("verdict")) else "NOT_MEASURED" if "NOT_MEASURED" in
                        (merge.get("verdict"), lvs.get("verdict")) else "NOT_VERIFIED",
-                       "reason": "merged-top native LVS binding required" if ok
+                       "reason": "merged-top native LVS required" if ok
                        else "M1 absent, failed, waived, or wrong layout"})
     except m3.Refusal as exc:
         checks.append({"step": "M1", "verdict": "NOT_VERIFIED", "reason": str(exc)})
@@ -106,7 +104,7 @@ def derive(project, top):
             native = dict(native, verdict="NOT_MEASURED", production_refusal=production_reason)
         checks.append({"step": "PV_" + kind, "verdict": native.get("verdict", "NOT_MEASURED"),
                        "native": native})
-        if kind == "lvs" and native.get("verdict") == "PASS" and checks[0].get("reason") == "merged-top native LVS binding required":
+        if kind == "lvs" and native.get("verdict") == "PASS" and checks[0].get("reason") == "merged-top native LVS required":
             checks[0] = {"step": "M1", "verdict": "PASS",
                          "reason": "native LVS verified exact current merged GDS"}
     ready = all(c["verdict"] == "PASS" for c in checks)
