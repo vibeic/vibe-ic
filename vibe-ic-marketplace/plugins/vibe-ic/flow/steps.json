@@ -3714,21 +3714,31 @@
           {
             "when": "ic",
             "tool": {
-              "kind": "librelane",
+              "kind": "adapter",
               "steps": [
-                "VibeIC.IRDropCorners"
+                "VibeIC.IRDropCorners",
+                "Vibeic.TransientIR"
               ],
               "imports": [
-                "flow_ir_corners"
-              ]
+                "flow_ir_corners",
+                "librelane_plugins.librelane_plugin_vibeic.ir_drop"
+              ],
+              "adapter": "ir_drop",
+              "parallel": true
             }
           },
           {
             "when": "otherwise",
             "tool": {
-              "kind": "librelane",
+              "kind": "adapter",
               "steps": [
-                "OpenROAD.IRDropReport"
+                "OpenROAD.IRDropReport",
+                "Vibeic.TransientIR"
+              ],
+              "adapter": "ir_drop",
+              "parallel": true,
+              "imports": [
+                "librelane_plugins.librelane_plugin_vibeic.ir_drop"
               ]
             }
           }
