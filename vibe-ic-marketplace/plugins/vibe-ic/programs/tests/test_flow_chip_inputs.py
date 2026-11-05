@@ -456,7 +456,8 @@ def test_ring_layers_equal_to_mesh_layers_use_native_connection_once(inputs):
     ("lower_contact", "outer_vertical", "outer_horizontal", "ring_vertical"),
 ])
 @pytest.mark.parametrize("existing", [False, True])
-def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical, horizontal, ring, existing):
+@pytest.mark.parametrize("owned", [False, True])
+def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical, horizontal, ring, existing, owned):
     project, config, native, _, _ = inputs
     native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=True,
                   PDN_VERTICAL_LAYER=vertical, PDN_HORIZONTAL_LAYER=horizontal,
@@ -478,10 +479,16 @@ def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical
     reverse = f"add_pdn_connect -grid stdcell_grid -layers {{{target} {access}}}"
     if existing:
         original += reverse + "\n"
-    pdn = _write(project / "input/pdn.tcl", original)
+    pdn = _write(project / ("work/flow/pdn_cfg.tcl" if owned else "input/pdn.tcl"), original)
     config["PDN_CFG"] = native["PDN_CFG"] = str(pdn)
     result = chip.prepare(project, config)
     generated = Path(result["PDN_CFG"]).read_text()
+    if owned:
+        assert "--config [file join $::env(STEP_DIR) config.json]" in generated
+        assert "pdn__requested_width__um__variable:" in generated
+        selected = project / "work/flow/chip/pdn_cfg.tcl"
+        assert "source " + str(selected) in generated
+        generated = selected.read_text()
     command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {target}}}"
     assert generated.count(command) + generated.count(reverse) == 1
     assert "signal_access" not in generated

@@ -540,6 +540,8 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
             pdn.write_text(text)
             result["PDN_CFG"] = str(pdn)
     result.update({"PAD_" + full: ordered[side] for side, full in SIDES.items()})
+    from flow_pdn_current import attach
+    attach(project, result, destination, core_config.get("PDN_CFG"))
     tool_seconds = sum(run["tool_seconds"] for run in runs)
     report = {"ports": ports, "pads": chosen, "pad_sides": ordered,
               "geometry": geometry, "die_area_um": die, "core_area_um": core,
