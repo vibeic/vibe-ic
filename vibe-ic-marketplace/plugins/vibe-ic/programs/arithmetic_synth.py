@@ -248,13 +248,15 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
                               r"(?:(?:it|the\s+(?:adder|implementation))\s+)?(?:from|using)\s+)?"
                               r"(?:(?:only|multiple|individual|one[-\s]bit|1[-\s]bit|a|network|of)\s+)*"
                               r"full[-\s]+adders?(?:\s+cells)?(?:\s+without\s+registers)?", re.I)
-    for clause in re.split(r"[.;]", text):
-        request = re.match(r"\s*(?:please\s+)?(?:do\s+)?(?:(?P<deny>not|never|avoid)\s+)?"
-                           r"(?:implement|construct|build|use|instantiate)\b(?P<body>[\s\S]*)", clause, re.I)
-        if request is None or not re.search(r"\bfull[-\s]+adders?\b", request["body"], re.I):
+    for clause in re.findall(r"[^.;]*\bfull[-\s]+adders?\b[^.;]*", text, re.I):
+        if re.fullmatch(r"\s*(?:a\s+different|another|the\s+previous)\s+(?:design|implementation)\s+"
+                        r"(?:uses?|was\s+(?:built|constructed))\s+(?:(?:from|using)\s+)?(?:a\s+network\s+of\s+)?full[-\s]+adders?(?:\s+cells)?\s*", clause, re.I):
             continue
-        requested_style = re.sub(r"^\s*" + target + r"\s*", "", request["body"], count=1, flags=re.I).strip()
-        for piece in re.split(r"\s+(?:and|but)\s+", requested_style, flags=re.I):
+        request = re.match(r"\s*(?:please\s+)?(?:do\s+)?(?:(?P<deny>not|never|avoid)\s+)?"
+                           r"(?:implement|construct|build|use|instantiate)\b\s*(?:" + target + r"\s*)?(?P<body>[\s\S]*)", clause, re.I)
+        if request is None:
+            return None
+        for piece in re.split(r"\s+(?:and|but)\s+", request["body"].strip(), flags=re.I):
             parsed = construction.fullmatch(piece.strip())
             if parsed is None or request["deny"] and parsed["deny"]:
                 return None
@@ -262,8 +264,7 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
             if requests and positive != requests[-1]:
                 return None
             requests.append(positive)
-    explicit_full_adders = bool(requests) and all(requests)
-    if explicit_full_adders:
+    if requests and requests[0]:
         packed = []
         _pp._bullet_ports(text, packed)
         header_ins, header_outs = _pp._header_ports(text, packed)
