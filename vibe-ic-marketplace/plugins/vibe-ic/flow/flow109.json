@@ -2606,7 +2606,9 @@
                 "analog_digital_interface_check"
               ]
             },
-            "operation_scope": "source_bound_mixed_signal_interface_contract"
+            "operation_scope": "source_bound_mixed_signal_interface_contract",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only"
           }
         }
       ],
@@ -5220,7 +5222,9 @@
                 "mixed_signal_cosim_check"
               ]
             },
-            "operation_scope": "current_pre_layout_mixed_partition"
+            "operation_scope": "current_pre_layout_mixed_partition",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only"
           }
         }
       ],
@@ -13925,7 +13929,9 @@
                 "mixed_signal_interface_si_check"
               ]
             },
-            "operation_scope": "read_only_substrate_supply_capability_refusal"
+            "operation_scope": "read_only_substrate_supply_capability_refusal",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only"
           }
         }
       ],

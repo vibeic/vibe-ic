@@ -60,21 +60,12 @@ def execute(project, context):
         raise Flow109Error("FLOW109_M05_WRONG_COMPONENT", str(context["requested_step"]))
     require_launch_admission(project, "flow109.M05", {"flow109_context": context})
     sources = operation_sources()
-    uses = context["runtime_tool_uses"]
-    if (len(uses) != 1 or uses[0].get("tool_id") != "python3"
-            or (uses[0].get("semantics") or {}).get("operation_sources") != sources):
-        raise AdmissionRefusal("QUALIFICATION_OPERATION_SOURCE_MISMATCH",
-                               "M05 must bind the inherited SI consumer")
     manifest_path = project / INPUT
     manifest = _read(manifest_path)
     unavailable = {"applicable": False,
                    "reason": "no qualified open substrate extraction/model"}
-    identity = uses[0]
-    if (manifest != {"schema": SCHEMA, "basis": "open_default_capability_probe",
-                     "substrate_model": unavailable}
-            or identity.get("config") != _record(project, manifest_path)
-            or identity.get("deck") != unavailable or identity.get("pdk") != unavailable
-            or identity.get("corner") != ["unsupported"]):
+    if manifest != {"schema": SCHEMA, "basis": "open_default_capability_probe",
+                    "substrate_model": unavailable}:
         raise AdmissionRefusal("M05_RUNTIME_SCOPE_MISMATCH",
                                "unsupported capability probe must not claim a substrate model")
     parent = project / "reports/flow109/attempts"
@@ -100,6 +91,7 @@ def execute(project, context):
               "whole_flow_acceptance": "NOT_MEASURED", "consumer": consumer,
               "consumer_returncode": rc,
               "capability_input": _record(project, manifest_path),
+              "qualification_status": "NOT_MEASURED",
               "operation_sources": sources, "metric_acceptance_status": "UNIMPLEMENTED",
               "unsupported_scope": ("no qualified PDK substrate extraction/model; ordinary SPEF "
                                     "wire RC and advisory crosstalk are insufficient"),

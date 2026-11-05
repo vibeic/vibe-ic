@@ -33,7 +33,7 @@ def _bound(value, source, line, quote):
     return {'status': 'BOUND', 'value': value, 'basis': _basis(source, line, quote)}
 
 
-def _case(project):
+def _case(project, *, qualified=True):
     lines = {
         'analog': ('Analog input pins AIN1..AIN2 use analog domain ANA and rail VDDA; '
                    'direction input; unit V.'),
@@ -105,6 +105,10 @@ def _case(project):
     features = next(row['features'] for row in flow109.load_registry()['reference_profiles']
                     if row['name'] == 'Mixed hard-IP')
     plan = flow109.resolve_plan(features)
+    if not qualified:
+        (project / 'manifest.json').write_text(json.dumps({'features': features}))
+        return {'requirements': requirements, 'config': config,
+                'context': flow109.execution_context(plan, 'M01', 'M01'), 'lines': lines}
     use = flow109.resolve_step(plan, 'M01')['tool_uses'][0]
     binary = Path(shutil.which('python3')).resolve()
     executable = {'path': str(binary), 'sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}
@@ -333,3 +337,13 @@ def test_m01_inherited_rail_producer_reads_checked_in_interface_source():
     assert derived['rails']
     assert all(row['evidence']['file'] == str(source.relative_to(source.parents[3]))
                for row in derived['rails'])
+
+
+def test_m01_native_entry_without_qualification_material(tmp_path):
+    _case(tmp_path, qualified=False)
+    result = _run(tmp_path)
+    assert 'QUALIFICATION_RUNTIME_ABSENT' not in result.stdout + result.stderr
+    report = json.loads((tmp_path / 'reports/flow109/components/M01.json').read_text())
+    assert report['component_status'] == report['consumer']['verdict'] == 'PASS'
+    assert report['qualification_status'] == 'NOT_MEASURED'
+    assert report['flow109_acceptance'] == 'NOT_MEASURED'

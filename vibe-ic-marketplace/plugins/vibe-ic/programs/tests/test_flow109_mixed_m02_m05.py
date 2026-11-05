@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 
 import pytest
@@ -32,8 +33,10 @@ def _features():
                 if row["name"] == "Mixed hard-IP")
 
 
-def _qualified_context(project, step, module, *, config, deck, pdk, corner):
+def _qualified_context(project, step, module, *, config, deck, pdk, corner, qualified=True):
     plan = flow109.resolve_plan(_features())
+    if not qualified:
+        return flow109.execution_context(plan, step, step)
     use = flow109.resolve_step(plan, step)["tool_uses"][0]
     binary = Path(shutil.which("python3")).resolve()
     executable = {"path": str(binary),
@@ -54,7 +57,7 @@ def _qualified_context(project, step, module, *, config, deck, pdk, corner):
                                      qualification_registry="qualifications.json")
 
 
-def _m02_case(project, *, scope="declared_model_component"):
+def _m02_case(project, *, scope="declared_model_component", qualified=True):
     shutil.copytree(FIXTURE, project, dirs_exist_ok=True)
     if scope != "declared_model_component":
         native_path = project / m02.NATIVE_CONTRACT
@@ -77,7 +80,7 @@ def _m02_case(project, *, scope="declared_model_component"):
         "native_contract": deck, "scenario_plan": plan, "pdk": pdk,
         "predecessor_receipts": receipts})
     return _qualified_context(project, "M02", m02, config=config, deck=deck,
-                              pdk=pdk, corner=["pre_layout"])
+                              pdk=pdk, corner=["pre_layout"], qualified=qualified)
 
 
 def test_registry_selects_existing_mixed_adapters():
@@ -186,13 +189,13 @@ def test_m02_refuses_input_drift_after_prepare(tmp_path):
         m02._before(tmp_path, context, prepared)
 
 
-def _m05_context(project):
+def _m05_context(project, *, qualified=True):
     pdk = {"applicable": False,
            "reason": "no qualified open substrate extraction/model"}
     config = _put(project, m05.INPUT, {"schema": m05.SCHEMA,
         "basis": "open_default_capability_probe", "substrate_model": pdk})
     return _qualified_context(project, "M05", m05, config=config, deck=pdk,
-                              pdk=pdk, corner=["unsupported"])
+                              pdk=pdk, corner=["unsupported"], qualified=qualified)
 
 
 @pytest.mark.parametrize("consumer_verdict,rc,rule,expected", [
@@ -212,3 +215,29 @@ def test_m05_preserves_unsupported_scope_and_measured_fail(
     assert report["component_status"] == expected
     assert report["flow109_acceptance"] == "NOT_MEASURED"
     assert "substrate" in report["unsupported_scope"]
+
+
+@pytest.mark.parametrize('step,setup,expected', [
+    ('M02', _m02_case, None),
+    ('M05', _m05_context, 'NOT_MEASURED'),
+])
+def test_mixed_native_entry_without_qualification_material(tmp_path, step, setup, expected):
+    context = setup(tmp_path, qualified=False)
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps({'features': context['features']}))
+    result = subprocess.run([
+        sys.executable, str(m02.HERE / 'vibe_ic_one_shot_runner.py'), str(tmp_path),
+        '--flow', '109', '--flow109-manifest', str(manifest),
+        '--entry-step', step, '--exit-step', step, '--route', 'ip', '--no-dashboard'],
+        capture_output=True, text=True, timeout=120)
+    assert 'QUALIFICATION_RUNTIME_ABSENT' not in result.stdout + result.stderr
+    report = json.loads((tmp_path / f'reports/flow109/components/{step}.json').read_text())
+    if step == 'M02':
+        # Exercise the real producer; missing image utilities remain native FAIL.
+        producer = report['producer_receipt']
+        audit = report['cosim_audit']
+        assert producer is not None and audit is not None
+        expected = 'FAIL' if 'FAIL' in (producer['cosim_verdict'], audit['verdict']) else 'PASS'
+    assert report['component_status'] == expected, result.stdout + result.stderr
+    assert report['qualification_status'] == 'NOT_MEASURED'
+    assert report['flow109_acceptance'] == ('FAIL' if expected == 'FAIL' else 'NOT_MEASURED')
