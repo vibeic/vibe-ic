@@ -87,3 +87,31 @@ Requirements-engineering principles (IEEE 29148). For hardware specifically: ARM
 - Hardened spec → `/spec-to-rtl`
 - Testable claims → `/assertion-gen`
 - Architecture trade-offs → `/architecture-explore`
+
+### Skill: Reconcile conflicting statements using admitted authority
+
+Read the entire current input before treating a short, repeated sentence as a
+replacement for a complete behavioral contract. Compare declared interfaces,
+required state capacity, timing, explicit comparisons and any stated priority.
+An extreme-zone override governs that zone; it does not reverse an explicit
+previous/current comparison elsewhere. A defined functional requirement must
+not be replaced by a convention merely because the latter is familiar.
+
+If the current request permits engineering assumptions and the admitted
+evidence supports a unique intended interpretation, record the precise
+conflicting excerpts, the assumption and every literal requirement displaced.
+Do not claim literal conformance to an inconsistent input. Otherwise retain a
+source-bound clarification question; multiple plausible interpretations are
+not resolved by guessing. A later authorized clarification uses the existing
+review-correction/fresh-review path, preserving consumed questions and tests.
+
+A prior PASS bit does not prove an implementation or supply a missing fact.
+Fresh blind authoring/review must not read prior solutions, scores, sibling
+problems, hidden tests or references. An expressly authorized history-informed
+continuation is a different evidence scope and must be disclosed as such.
+Neither a lesson nor a golden result can override a current explicit input.
+
+**Why not Bucket A:** detecting inconsistent meaning, authority and a unique
+intended interpretation is not a closed syntax transformation. Existing
+`spec_review_lint.py` and review-correction validation enforce the structural
+and provenance portions; no automatic contradiction waiver is introduced.

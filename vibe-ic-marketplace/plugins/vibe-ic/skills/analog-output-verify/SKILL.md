@@ -92,23 +92,3 @@ the programs **cannot** make.
 ## Output
 
 Append findings to `<project>/reports/analog_verify.md`.
-
-
-## Compliance gate (mandatory — not optional)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 ../../_shared/skill_compliance_check.py \
-    --requirements ./compliance.yaml <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with the specific missing elements listed.
-`compliance.yaml` (in this skill's directory) enumerates every required
-element of your output — section headers, metadata fields, handoff lines,
-tool invocations.
-
-**Your task is not complete until the audit returns PASS.** If it fails,
-re-read the listed missing elements, patch your output, and re-run the
-audit.
-

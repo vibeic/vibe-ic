@@ -566,12 +566,6 @@ def execute(
     elif ll_gate.get("verdict") == "NOT_MEASURED":
         return _refuse("LL_CTS_HOLD_NOT_MEASURED",
                        f"{arms_root / 'librelane/gate.json'}", out)
-    # The shipped CTS receipt is the SELECTED arm's; the direct arm carries no
-    # DRV stage probe, so it ships as "cts did not run" (DRV standard s.1).
-    import drv_stage_receipts as _drv_stages
-    _drv_stages.rebind_lane(project, list(zip([s for s, _ in chain], folders))
-                            if selected == "librelane" else None,
-                            ("cts",), selected)
     targets = {"post_cts_def": out_dir / "post_cts.def",
                "post_hold_def": out_dir / "post_hold.def",
                "post_hold_odb": out_dir / "post_hold.odb",

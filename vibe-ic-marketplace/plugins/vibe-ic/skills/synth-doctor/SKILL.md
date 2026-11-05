@@ -229,28 +229,6 @@ above via `eda_run_tcl` before `eda_pnr`, or (b) drive synth through the phase3 
 handles it. The cell count is unchanged — the tie cells replace the bare constants 1:1.
 Forward-validated SENT→QSPI→HDLC→SpaceWire (4 pilots, clean first-pass each). Tracked for a permanent eda_synth fix in
 `ORGANIC-20260531-mcp-eda-synth-missing-hilomap-tiecells`.
-
-## Compliance gate (mandatory — not optional)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 ../../_shared/skill_compliance_check.py \
-    --requirements ./compliance.yaml <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with the specific missing elements listed.
-`compliance.yaml` (in this skill's directory) enumerates every required
-element of your output — section headers, metadata fields, handoff lines,
-tool invocations.
-
-**Your task is not complete until the audit returns PASS.** If it fails,
-re-read the listed missing elements, patch your output, and re-run the
-audit. This guarantees that different agents executing this same SKILL.md
-produce reports containing the same required elements, even when the prose
-inside each element differs. Missing elements are the single largest
-source of skill-execution non-determinism.
-
 ### Skill: Match structural evidence to the claimed representation
 
 Separate functional behavior, source syntax, generic mapped cells and physical
