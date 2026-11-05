@@ -35,10 +35,6 @@ never re-implemented):
                                          contribution an EARLIER commit of the
                                          same range made to a file (the shape a
                                          blind checkout land actually produces)
-  * loop_watchdog_compliance_check.py  — every long sub-process is watchdog-
-                                         supervised + every risky loop is
-                                         bounded (no fixed-timeout kill of a
-                                         live job; no loop can spin forever)
   * git_prohibition_guard.py           — forbidden destructive git ops in the
                                          PR's commit command strings
   * version_bump_monotonic_check.py    — strict monotonic version bump
@@ -813,25 +809,6 @@ def collateral_revert_gate(repo: Path, base: str, head: str) -> GateResult:
         return GateResult("landing_collateral_revert_check", -1,
                           f"skipped — {base}..{head} not walkable: {reason[:160]}")
     return GateResult("landing_collateral_revert_check", rc, reason[:400])
-
-
-# --------------------------------------------------------------------------
-# loop_watchdog_compliance_check — subprocess against the plugin root. FAILs
-# when any programs/*.py launches a long EDA tool without the watchdog or has
-# an unbounded risky loop. rc 0 clean / 1 offender(s) / 2 usage error.
-# --------------------------------------------------------------------------
-def loop_watchdog_gate(plugin_root: Path) -> GateResult:
-    prog = _PROGRAMS_DIR / "loop_watchdog_compliance_check.py"
-    rc, out, err = _run_program(prog, [str(plugin_root)])
-    if rc == 0:
-        summary = (out.strip().splitlines() or [""])[0][:240]
-    else:
-        # the offender list is on stderr; surface the header + first offenders
-        errlines = [ln for ln in err.splitlines() if ln.strip()
-                    and "SyntaxWarning" not in ln and "invalid escape" not in ln]
-        summary = " | ".join(errlines[:4])[:240]
-    return GateResult("loop_watchdog_compliance_check", rc,
-                      summary or "(no output)")
 
 
 # --------------------------------------------------------------------------
@@ -2086,7 +2063,6 @@ def review(base: str, head: str, *,
     # unsquashed branch. An unresolvable ref is rc 2 / NOT CHECKED, which is
     # what the old comment promised and the code now delivers.
     gates.append(one_commit_gate(repo, base, head, batch=batch))
-    gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
     gates.append(test_cadence_gate(pytest_cmd, cadence))

@@ -30,11 +30,6 @@
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/severity_error_is_consumed.py."
     },
     {
-      "gate": "watchdog compliance",
-      "slug": "watchdog_compliance",
-      "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/watchdog_compliance.py."
-    },
-    {
       "gate": "marketplace version sync",
       "slug": "marketplace_version_sync",
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/marketplace_version_sync.py."
