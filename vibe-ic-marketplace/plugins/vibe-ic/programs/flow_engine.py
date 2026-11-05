@@ -103,7 +103,7 @@ def select_route(project: Path) -> dict:
         text, nature=proposal["entry_nature"], delivery_target=target)
 
 
-def design_features(project: Path, route: dict, table: dict) -> dict:
+def design_features(project: Path, route: dict, table: dict, *, sources: dict | None = None) -> dict:
     names = set()
     expressions = [row["when"] for row in table["steps"]]
     expressions += [check["when"] for row in table["steps"] for check in row.get("checks", [])
@@ -121,16 +121,83 @@ def design_features(project: Path, route: dict, table: dict) -> dict:
     features.update(always=True, ic=target in {"gds", "shippable_gds", "foundry_handoff"}, hard_ip=target == "ip_hardmacro",
                     soft_ip=target == "ip_soft", model_ip=target == "ip_model",
                     rtl_only=target == "rtl", has_digital=True)
-    explicit = set()
+    sources = sources if sources is not None else {}
+    sources.update({key: "No structured Phase 1 declaration; defaults to false." for key in names})
+    sources.update({key: f"Router delivery_target={target}" for key in
+                    ("ic", "hard_ip", "soft_ip", "model_ip", "rtl_only")})
+    sources.update(always="Step-table constant", has_digital="Digital task entry; pure-analog classification can disable it.")
+    explicit, layers = set(), {}
     for path in sorted(docs.glob("L*.json")):
         document = read_json(path)
-        for container in (document, document.get("fields", {}), document.get("features", {})):
+        layers.setdefault(path.stem.split("_", 1)[0],
+                          (document["fields"] if isinstance(document.get("fields"), dict) else document,
+                           str(path.relative_to(project)),
+                           "fields/" if isinstance(document.get("fields"), dict) else ""))
+        for prefix, container in (("", document), ("fields/", document.get("fields", {})),
+                                  ("features/", document.get("features", {}))):
             if not isinstance(container, dict):
                 continue
             declared = {key: value for key, value in container.items()
                         if key in names and type(value) is bool}
             features.update(declared)
             explicit.update(declared)
+            sources.update({key: str(path.relative_to(project)) + "#/" + prefix + key for key in declared})
+
+    def present(value):
+        return (value is True or isinstance(value, (list, dict)) and bool(value)
+                or type(value) in (int, float)
+                or isinstance(value, str) and value.strip().upper() not in {
+                    "", "NONE", "NULL", "N/A", "FALSE", "NO", "UNKNOWN",
+                    "NOT_APPLICABLE", "NOT_DETERMINED", "NOT_STATED", "NOT_YET_EXTRACTED"})
+
+    def observe(name, layer, *fields):
+        payload, path, prefix = layers.get(layer, ({}, layer + " (absent)", ""))
+        if name not in explicit and not features.get(name):
+            sources[name] = "No positive declaration in " + path + "#/" + prefix + ",".join(fields)
+        for field in fields:
+            if name not in explicit and present(payload.get(field)):
+                features[name] = True
+                sources[name] = path + "#/" + prefix + field
+
+    profile = read_json(project / "reports/ic_class.json")
+    if "has_analog" not in explicit and type(profile.get("has_analog")) is bool:
+        features["has_analog"] = profile["has_analog"]
+        sources["has_analog"] = "reports/ic_class.json#/has_analog"
+    elif "has_analog" not in explicit:
+        observe("has_analog", "L5", "analog_blocks_detected")
+    if "has_digital" not in explicit and profile.get("is_pure_analog") is True:
+        features["has_digital"] = bool(profile.get("is_data_converter") or profile.get("is_mixed_signal"))
+        sources["has_digital"] = "reports/ic_class.json#/is_pure_analog,is_data_converter,is_mixed_signal"
+    observe("has_power_intent", "L21", "power_intent_present", "power_domains", "upf_path",
+            "isolation_cells", "level_shifters")
+    observe("requires_scan", "L20", "scan_required", "scan_chains")
+    observe("requires_dft", "L20", "dft_present", "scan_chains", "bist_mbist", "jtag_tap", "test_compression")
+    if layers.get("L20", ({}, ""))[0].get("dft_intent_status") == "PLANNED_UNMEASURED":
+        observe("requires_dft", "L20", "dft_intent_status")
+    observe("requires_security", "L23", "security_requirements_present", "secure_boot",
+            "key_handling", "attack_surface", "side_channel_mitigation")
+    observe("uses_macros", "L9", "hard_macros", "macro_instances", "macros")
+    observe("uses_macros", "L21", "hard_macro_supplies")
+    observe("multidie", "L18", "dies", "chiplets")
+    observe("package_model_required", "L1", "package_model")
+    package = layers.get("L1", ({}, ""))[0].get("package_info")
+    if isinstance(package, dict) and present(package.get("package_type")):
+        observe("package_declared", "L1", "package_info")
+        observe("package_interface", "L1", "package_info")
+        observe("package_model_required", "L1", "package_info")
+    elif not features.get("package_model_required") and "package_model_required" not in explicit:
+        sources["package_model_required"] = "No declared package type or model in L1 package_info/package_type or package_model."
+    observe("requires_aging", "L25", "aging_margin")
+    observe("requires_em", "L25", "em_budget")
+    observe("requires_system_scenarios", "L22", "system_scenarios")
+    for item in layers.get("L24", ({}, ""))[0].get("signoff_requirements", []):
+        name = {"IR_drop": "requires_ir", "EM": "requires_em", "SI": "requires_si"}.get(item.get("check"))
+        if name and item.get("stated") is True:
+            observe(name, "L24", "signoff_requirements")
+    for item in layers.get("L25", ({}, ""))[0].get("unmeasured_obligations", []):
+        name = {"aging": "requires_aging", "EM": "requires_em", "ESD": "requires_perc"}.get(item.get("subject"))
+        if name:
+            observe(name, "L25", "unmeasured_obligations")
     features.update(ic=target in {"gds", "shippable_gds", "foundry_handoff"},
                     hard_ip=target == "ip_hardmacro", rtl_only=target == "rtl")
     if "requires_cts" not in explicit:
@@ -138,15 +205,23 @@ def design_features(project: Path, route: dict, table: dict) -> dict:
             (features["ic"] or features["hard_ip"] or features.get("assembly_only"))
             and (read_json(docs / "L8_TIMING_WAVEFORM.json").get("clock_domains")
                  or read_json(docs / "L8_RTL_CONSTANTS.json").get("clock_domains")))
+        if features["requires_cts"]:
+            sources["requires_cts"] = "L8 timing/RTL constants #/clock_domains"
     pending = dict(table.get("predicates", {}))
     for _ in range(len(pending) + 1):
         for key, expression in pending.items():
             features[key] = predicate(expression, features)
+            sources[key] = "Derived from " + expression
         for source, implied in table.get("implications", {}).items():
             if features.get(source):
-                features.update(dict.fromkeys(implied, True))
+                for key in implied:
+                    if not features.get(key):
+                        sources[key] = "Implied by " + source + ": " + sources.get(source, "")
+                    features[key] = True
         for key, default in table.get("feature_defaults", {}).items():
             if key not in explicit and predicate(default["when"], features):
+                if features[key] != default["value"]:
+                    sources[key] = "Native tool default: " + json.dumps(default.get("source", {}))
                 features[key] = default["value"]
     return features
 
@@ -676,7 +751,7 @@ def keep_author_failure(directory: Path) -> None:
 
 def run(project: Path | str, *, table: dict | None = None, route: dict | None = None,
         from_name: str | None = None, to_name: str | None = None,
-        budget_seconds: float | None = None, pdk: str | None = None) -> dict:
+        pdk: str | None = None) -> dict:
     invocation_started_at = time.time()
     project = Path(project).resolve()
     table = table or read_json(TABLE)
@@ -703,7 +778,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             directory = project / "steps" / entry["name"]
             prepared[entry["name"]] = (ToolResult(**owner_session.result(directory, "phase1")),
                                         time.perf_counter() - before)
-    features = design_features(project, route, table)
+    feature_sources = {}
+    features = design_features(project, route, table, sources=feature_sources)
     selected = select_steps(table, route, features, from_name, to_name)
     complete_selection = select_steps(table, route, features, None, None)
     chain = NativeChain(project, route, pdk=pdk)
@@ -744,9 +820,11 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
     def write_summary(completed=False):
         nonlocal summary
         rows = [read_json(step_root / name / "result.json") for name in sorted(results, key=positions.get)]
-        summary = {"route": route, "selected": len(selected), "selected_names": [row["name"] for row in selected],
+        summary = {"route": route, "features": features, "feature_sources": feature_sources,
+                   "selected": len(selected), "selected_names": [row["name"] for row in selected],
                    "not_selected": [{"name": row["name"], "condition": row["when"],
                        "features": {node.id: features[node.id] for node in ast.walk(ast.parse(row["when"], mode="eval")) if isinstance(node, ast.Name)},
+                       "feature_sources": {node.id: feature_sources[node.id] for node in ast.walk(ast.parse(row["when"], mode="eval")) if isinstance(node, ast.Name)},
                        "reason": row.get("applicability_reason")} for row in table["steps"] if row["name"] not in selected_names],
                    "run": len(rows), "steps": rows,
                    **{key: sum(item["status"] == value for item in rows)
@@ -759,7 +837,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                    "common_tools_complete": common_names <= set(results),
                    "timing_scope": "selected_subwindow" if from_name or to_name else "full_router_window",
                    "pending_steps": [row["name"] for row in selected if row["name"] not in results],
-                   "background_pending": jobs.pending, "budget_seconds": budget_seconds}
+                   "background_pending": jobs.pending}
         summary.update(timing_summary(summary))
         write_json(project / "reports/flow_engine.json", summary)
         return summary
@@ -954,7 +1032,7 @@ def record_review(project: Path, name: str, seconds: float, finding: str | None 
     write_json(path, result)
 
 
-def refresh_report(project: Path, budget_seconds: float | None = None) -> dict:
+def refresh_report(project: Path) -> dict:
     path = project / "reports/flow_engine.json"
     report = read_json(path)
     names = report.get("selected_names", [row["name"] for row in report["steps"]])
@@ -963,8 +1041,11 @@ def refresh_report(project: Path, budget_seconds: float | None = None) -> dict:
     report.update(steps=rows, run=len(rows), updated_at=time.time(),
                   **{key: sum(row["status"] == value for row in rows)
                      for key, value in (("pass", "PASS"), ("fail", "FAIL"), ("not_measured", "NOT_MEASURED"))})
-    if budget_seconds is not None:
-        report["budget_seconds"] = budget_seconds
+    legacy_completed_at = report.pop("common_budget_completed_at", None)
+    if report.get("common_completed_at") is None and legacy_completed_at is not None:
+        report["common_completed_at"] = legacy_completed_at
+    for key in ("budget_seconds", "runtime_status"):
+        report.pop(key, None)
     report.update(timing_summary(report))
     report["slowest_steps"] = [row["name"] for row in sorted(rows, key=lambda row: row.get("tool_seconds", 0), reverse=True)[:5]]
     write_json(path, report)
@@ -978,7 +1059,6 @@ def main() -> int:
     command.add_argument("--project", type=Path, required=True)
     command.add_argument("--from", dest="from_name")
     command.add_argument("--to", dest="to_name")
-    command.add_argument("--budget-seconds", type=float)
     command.add_argument("--pdk")
     review = sub.add_parser("review")
     review.add_argument("--project", type=Path, required=True)
@@ -987,17 +1067,15 @@ def main() -> int:
     review.add_argument("--finding")
     report = sub.add_parser("report")
     report.add_argument("--project", type=Path, required=True)
-    report.add_argument("--budget-seconds", type=float)
     args = parser.parse_args()
     try:
         if args.action == "review":
             record_review(args.project, args.step, args.seconds, args.finding)
             return 0
         if args.action == "report":
-            print(json.dumps(refresh_report(args.project, args.budget_seconds), default=str))
+            print(json.dumps(refresh_report(args.project), default=str))
             return 0
-        result = run(args.project, from_name=args.from_name, to_name=args.to_name,
-                     budget_seconds=args.budget_seconds, pdk=args.pdk)
+        result = run(args.project, from_name=args.from_name, to_name=args.to_name, pdk=args.pdk)
     except (ValueError, FileNotFoundError, KeyError) as exc:
         print(f"NOT_MEASURED: {exc}", file=sys.stderr)
         return 2

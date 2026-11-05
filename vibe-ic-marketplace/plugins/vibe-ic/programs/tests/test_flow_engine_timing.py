@@ -8,7 +8,7 @@ from flow_engine_timing import timing_summary
 def report():
     return {"started_at": 0, "updated_at": 250, "completed_at": 230,
             "native_common_started_at": 10, "native_common_completed_at": 20,
-            "common_tools_complete": True, "budget_seconds": 15,
+            "common_tools_complete": True,
             "steps": [
                 {"name": "native", "timing_group": "librelane", "tool_ran": True,
                  "started_at": 10, "completed_at": 20, "tool_seconds": 9,
@@ -23,16 +23,18 @@ def test_independent_job_and_review_do_not_extend_common_window():
     assert measured["common_wall_seconds"] == 10
     assert measured["other_execution_wall_seconds"] == 200
     assert measured["wall_seconds"] == 230
-    assert measured["runtime_status"] == "IN_BUDGET"
+    assert measured["common_completed_at"] == 20
+    assert measured["common_timing_complete"] is True
 
 
-def test_common_review_remains_in_budget_and_pending_review_is_incomplete():
+def test_common_review_extends_reported_span_and_pending_review_is_incomplete():
     value = report()
     value["steps"][0]["reviewed_at"] = 30
-    assert timing_summary(value)["runtime_status"] == "OVER_BUDGET"
+    assert timing_summary(value)["common_wall_seconds"] == 20
+    assert timing_summary(value)["common_completed_at"] == 30
     value["steps"][0].update(ai_seconds=None, reviewed_at=None)
     measured = timing_summary(value)
-    assert measured["runtime_status"] == "NOT_MEASURED"
+    assert measured["common_timing_complete"] is False
     assert measured["common_reviews_pending"] == ["native"]
 
 
@@ -58,15 +60,17 @@ def test_terminal_refresh_does_not_extend_run_and_missing_legacy_bounds_are_unme
     del value["native_common_started_at"]
     measured = timing_summary(value)
     assert measured["common_wall_seconds"] is None
-    assert measured["runtime_status"] == "NOT_MEASURED"
+    assert measured["common_timing_complete"] is False
 
 
-def test_supplied_budget_boundary_and_pending_common_tools():
+def test_long_common_span_is_informational_and_pending_common_tools_remain_visible():
     value = report()
-    value["budget_seconds"] = 10
-    assert timing_summary(value)["runtime_status"] == "IN_BUDGET"
+    value["native_common_completed_at"] = 100000
+    measured = timing_summary(value)
+    assert measured["common_wall_seconds"] == 99990
+    assert measured["common_timing_complete"] is True
     value["common_tools_complete"] = False
-    assert timing_summary(value)["runtime_status"] == "NOT_MEASURED"
+    assert timing_summary(value)["common_timing_complete"] is False
 
 
 def test_missing_common_adapter_cannot_qualify_timing_but_native_disabled_is_distinct():
@@ -75,8 +79,8 @@ def test_missing_common_adapter_cannot_qualify_timing_but_native_disabled_is_dis
                            "tool_kind": "adapter", "tool_ran": False,
                            "native_steps": [], "ai_seconds": 0})
     measured = timing_summary(value)
-    assert measured["runtime_status"] == "NOT_MEASURED"
+    assert measured["common_timing_complete"] is False
     assert measured["common_timing_unmeasured_steps"] == ["equivalence"]
     value["steps"][-1]["native_steps"] = [{"name": "native optional check", "ran": False,
                                            "native_config_disabled": True}]
-    assert timing_summary(value)["runtime_status"] == "IN_BUDGET"
+    assert timing_summary(value)["common_timing_complete"] is True
