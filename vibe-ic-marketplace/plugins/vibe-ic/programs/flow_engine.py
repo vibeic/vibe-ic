@@ -597,12 +597,18 @@ def finish_step(project, row, tool, native, config, features, *, elapsed, starte
         native.metrics.update(report.get("metrics", {}))
         native.reports.extend(report.get("reports", []))
         native.detail += " " + report.get("detail", "")
+    reader_observations = []
     checks = [check for check in row["checks"] if check.get("when") != "otherwise"
               or tool.get("selected_profile", "otherwise") == "otherwise"]
     for reader in tool.get("check_readers", []):
         module, function = reader.rsplit(".", 1)
-        checks.extend(getattr(importlib.import_module(module), function)(project))
+        for check in getattr(importlib.import_module(module), function)(project, config=config, metrics=native.metrics):
+            if check.get("applicable") is False:
+                reader_observations.append({**check, "status": "NOT_APPLICABLE"})
+            else:
+                checks.append(check)
     observations, declared_checks = report_observations(row, directory, native, config, features, project)
+    observations.extend(reader_observations)
     checks.extend(declared_checks)
     if "Checker.SetupViolations" in tool.get("steps", []):
         from flow_native_adapters import declared_electrical_checks
