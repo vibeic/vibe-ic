@@ -43,7 +43,6 @@ _SAT_TIMEOUT_S = 60
 
 def test_dt1_batch_emits_select_solver_when_chosen():
     s = tdf._build_batch_script("f.v", "m.v", "top", _FAULTS, ["a", "b"],
-                                sat_timeout=_SAT_TIMEOUT_S,
                                 select_solver="kissat")
     # every per-fault prove routes at the chosen external solver
     proves = [ln for ln in s.splitlines() if ln.startswith("sat -prove trig 0")]
@@ -58,9 +57,10 @@ def test_dt1_batch_omits_select_solver_by_default():
     # Fallback path (no external backend) must be byte-for-byte the old command:
     # NO -select-solver token at all, so behaviour on a stale image is unchanged.
     s = tdf._build_batch_script("f.v", "m.v", "top", _FAULTS, ["a"],
-                                sat_timeout=_SAT_TIMEOUT_S, select_solver="")
+                                select_solver="")
     assert "-select-solver" not in s
-    assert f"sat -prove trig 0 -timeout {_SAT_TIMEOUT_S} -set f1." in s
+    assert "sat -prove trig 0 -set f1." in s
+    assert "-timeout" not in s
 
 
 # ── DT2 (path-delay; DT3/SDD reuses these verdicts) ─────────────────────────
