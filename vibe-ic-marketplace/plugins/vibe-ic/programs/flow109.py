@@ -691,12 +691,22 @@ def _complete_preroute_chain(project: Path, context: Mapping, admission: Mapping
 def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     """Re-open D24/D25/D26's actual consumers before D30 native handoff."""
     project = Path(project).resolve()
-    intent = dft_source_intent(project, context)
+    import spec_declaration_emit as declaration
+    contract, _, _ = declaration.select_contract(project)
+    ordinary = (all(context.get('features', {}).get(key) is False
+                    for key in ('requires_dft', 'requires_scan'))
+                and declaration.explicit_non_scan_decision(project) is not None
+                and (not contract or not any(f['name'] == 'dft' for f in contract['fields'])))
+    intent = {'requires_scan': False} if ordinary else dft_source_intent(project, context)
     plan_ref = dft_plan_reference(intent)
     _d25, d25_ref = _accepted_row(project, _D25_RESULT, "D25")
     _d26, d26_ref = _accepted_row(project, _D26_RESULT, "D26")
-    manifest, _ = _bound_project_json(
-        project, Path("input/flow109/D22.json"), "FLOW109_D30_SYNTHESIS_IDENTITY_MISSING")
+    if ordinary:
+        import synth_handoff_netlist_check as handoff
+        manifest = handoff.bound_handoff(project) or {}
+    else:
+        manifest, _ = _bound_project_json(
+            project, Path("input/flow109/D22.json"), "FLOW109_D30_SYNTHESIS_IDENTITY_MISSING")
     top = manifest.get("top")
     if not isinstance(top, str) or not top:
         raise Flow109Error("FLOW109_D30_SYNTHESIS_IDENTITY_MISSING", "D22 top")
