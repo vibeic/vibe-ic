@@ -18,6 +18,9 @@ prompt-stated truth on any DEFINED (non-don't-care) cell.
 Zero-false-positive by construction: it fires ONLY when it can fully and
 unambiguously extract the K-map AND map every K-map variable to a module port (or
 a prompt-described mux select). Any ambiguity -> returns None (NOT a floor).
+An implementation explicitly supplied for bug repair is not an independent
+correctness contract. Its existing logic cannot certify the intended repair's
+polarity or turn a different repair into an unsatisfiable prompt.
 
 CLI:
     python3 semantic_spec_floor_check.py --prompt P.txt --ref R.sv [--json OUT]
@@ -216,13 +219,7 @@ def semantic_floor_evidence(prompt: str, ref_text: str,
     """Return a CITED reason iff the golden contradicts the prompt's K-map on a
     defined cell; else None. Never raises — any uncertainty returns None."""
     try:
-        r = _semantic_floor_evidence(prompt, ref_text, timeout)
-        if r:
-            return r
-    except Exception:
-        pass
-    try:
-        return embedded_mux_polarity_floor(prompt, ref_text, timeout)
+        return _semantic_floor_evidence(prompt, ref_text, timeout)
     except Exception:
         return None
 
@@ -301,104 +298,6 @@ def _semantic_floor_evidence(prompt: str, ref_text: str, timeout: int) -> Option
 
 def km_cols_pow(extra: List[str]) -> List[int]:
     return list(range(1 << len(extra)))
-
-
-# --------------------------------------------------------------------------- #
-# (4b) embedded-snippet floor — a "fix the bug" prompt whose embedded reference
-#      snippet is a 2:1-mux sum-of-products idiom `(~sel & a) | (sel & b)` whose
-#      ONLY behavioural intent (sel=1 selects b) the golden INVERTS. A width-only
-#      fix can never change the select polarity, so an inverted golden contradicts
-#      the prompt's sole behavioural hint. Conservative: fires only on the exact
-#      idiom + a golden that is a CLEAN but inverted 2:1 mux of the same operands.
-# --------------------------------------------------------------------------- #
-_MUX_SOP = re.compile(
-    r"\(\s*~\s*(\w+)\s*&\s*(\w+)\s*\)\s*\|\s*\(\s*(\w+)\s*&\s*(\w+)\s*\)")
-
-
-def _probe_golden_mux(ref_text: str, sel: str, a: str, b: str,
-                      timeout: int = 60) -> Optional[str]:
-    """Drive distinct a/b vectors at sel=0 and sel=1; return 'a'/'b'/None for which
-    operand the golden's output FOLLOWS at sel=1 (None if not a clean mux)."""
-    ports, seq = parse_ports(ref_text)
-    if seq:
-        return None
-    pmap = {p["name"]: p for p in ports}
-    if not all(n in pmap for n in (sel, a, b)):
-        return None
-    outs = [p for p in ports if p["dir"] == "output"]
-    if len(outs) != 1:
-        return None
-    o = outs[0]
-    w = o["width"]
-    # distinct bitwise-complementary patterns: a=0xAA.., b=0x55..
-    va = int("10" * ((w // 2) + 1), 2) & ((1 << w) - 1)
-    vb = (~va) & ((1 << w) - 1)
-    golden_top = re.sub(r"\bRefModule\b", "DUT", ref_text)
-    decl = (f"  reg [{pmap[sel]['width']-1}:0] {sel};\n"
-            f"  reg [{pmap[a]['width']-1}:0] {a};\n"
-            f"  reg [{pmap[b]['width']-1}:0] {b};\n"
-            f"  wire [{w-1}:0] {o['name']};")
-    conns = ", ".join(f".{p['name']}({p['name']})" for p in ports)
-    tb = f"""{golden_top}
-module tb;
-{decl}
-  DUT dut({conns});
-  initial begin
-    {a} = {va}; {b} = {vb};
-    {sel} = 0; #1 $display("S0 %0d", {o['name']});
-    {sel} = 1; #1 $display("S1 %0d", {o['name']});
-    $finish;
-  end
-endmodule
-"""
-    with tempfile.TemporaryDirectory() as td:
-        f = Path(td) / "m.sv"; f.write_text(tb)
-        binp = Path(td) / "m.out"
-        try:
-            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
-            c = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(f)],
-                               capture_output=True, text=True, timeout=timeout)
-            if c.returncode != 0:
-                return None
-            r = subprocess.run(["vvp", str(binp)], capture_output=True, text=True,
-                               timeout=timeout, cwd=td)
-        except Exception:
-            return None
-    s1 = None
-    for ln in r.stdout.splitlines():
-        if ln.startswith("S1"):
-            try:
-                s1 = int(ln.split()[1])
-            except (ValueError, IndexError):
-                return None
-    if s1 is None:
-        return None
-    if s1 == va:
-        return "a"
-    if s1 == vb:
-        return "b"
-    return None
-
-
-def embedded_mux_polarity_floor(prompt: str, ref_text: str,
-                                timeout: int = 60) -> Optional[str]:
-    if not re.search(r"\bbug\b|\bfix\b", prompt, re.I):
-        return None
-    m = _MUX_SOP.search(prompt)
-    if not m:
-        return None
-    sel1, a, sel2, b = m.group(1), m.group(2), m.group(3), m.group(4)
-    if sel1 != sel2 or len({sel1, a, b}) != 3:
-        return None
-    # embedded idiom intent: sel=1 -> b. Probe the golden's actual polarity.
-    follows = _probe_golden_mux(ref_text, sel1, a, b, timeout)
-    if follows == "a":          # golden picks `a` at sel=1 -> inverted vs the snippet
-        return (f"golden contradicts the prompt's only behavioural hint: the embedded "
-                f"reference `(~{sel1} & {a}) | ({sel1} & {b})` selects `{b}` when "
-                f"{sel1}=1, but the golden selects `{a}` when {sel1}=1 (select polarity "
-                f"inverted). A width-only bug-fix cannot invert the select; the "
-                f"spec-faithful answer can never match this golden")
-    return None
 
 
 # --------------------------------------------------------------------------- #

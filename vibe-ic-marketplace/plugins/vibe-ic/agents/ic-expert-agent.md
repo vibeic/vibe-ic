@@ -640,17 +640,18 @@ is combination 10, never 10 then 11.
 **Generality.** Applies to every Karnaugh-map-to-logic task at any input width;
 the Gray-code ordering of the labels is universal to the notation.
 
-### Skill: FSM output assertion-cycle timing — match the spec's named cycle, no spurious extra stage
-When a spec says an output (`done`/`valid`/…) asserts "in the cycle immediately after <event>", model
-the event as a STATE the FSM is in that cycle and drive the output COMBINATIONALLY from that state
-(`assign done = (state == DONE);`). Do NOT register the already-state-derived output a second time —
-a `done_r <= (state==DONE)` adds an extra pipeline stage and asserts one cycle too late. Likewise emit
-the captured data so it is valid in the SAME cycle the output asserts (read the pre-edge capture
-registers combinationally; a same-cycle next-message byte landing in a capture reg via nonblocking
-does not corrupt the current read). Cross-check the first asserted cycle against the spec waveform.
-*Worked pattern (anonymized):* a PS/2-style framer with `done` + `out_bytes` outputs registered the
-already-state-derived signals a second time, asserting one cycle late; switching to combinational
-`done = (state == DONE)` matched the spec's stated assertion cycle.
+### Skill: FSM output assertion-cycle timing — count from the sampled event
+Define the event edge as the edge that actually consumes the final input. If that edge enters a
+completion state, a combinational decode of the updated state is already valid in the following
+cycle. Registering the old completion-state decode adds another full clock; registering a terminal
+input condition can instead assert at the event edge. Count these edges explicitly and keep data
+and its valid indication aligned. An explicitly requested extra output latency still governs.
+
+A waveform input changing at an active edge may be a newly launched NBA value, not the value the
+receiver sampled at that edge. Reconcile input launch and output observation with the entire prose
+before inferring another pipeline stage from an apparent table lag. When neither convention is
+specified, record the engineering timing assumption and preserve compatible alternatives; that
+ambiguity alone cannot prove a functional defect or an unsatisfiable source/golden conflict.
 
 ### Skill: one-hot next-state = exactly the incoming transition edges (no invented self-loop)
 For a one-hot FSM where the spec gives the transition table, each `*_next` bit is the OR over EVERY

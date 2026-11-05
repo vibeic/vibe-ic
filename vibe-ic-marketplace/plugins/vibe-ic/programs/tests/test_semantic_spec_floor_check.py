@@ -63,15 +63,20 @@ GOLD_MUX_FAITHFUL = "module RefModule(input sel,input [7:0] a,input [7:0] b,outp
 GOLD_MUX_INVERTED = "module RefModule(input sel,input [7:0] a,input [7:0] b,output [7:0] out);\n  assign out = sel ? a : b;\nendmodule\n"
 
 
-def test_mux_faithful_polarity_no_fire():
-    # golden keeps the snippet's polarity (sel=1 -> b): NOT a floor.
-    assert S.semantic_floor_evidence(MUX_BUG_PROMPT, GOLD_MUX_FAITHFUL) is None
+@pytest.mark.parametrize("reference", [GOLD_MUX_FAITHFUL, GOLD_MUX_INVERTED])
+def test_buggy_source_does_not_define_required_repair_polarity(reference):
+    assert S.semantic_floor_evidence(MUX_BUG_PROMPT, reference) is None
 
 
-def test_mux_inverted_polarity_fires():
-    # golden inverts the select (sel=1 -> a): a semantic floor.
-    r = S.semantic_floor_evidence(MUX_BUG_PROMPT, GOLD_MUX_INVERTED)
-    assert r is not None and "polarity" in r.lower()
+def test_ambiguous_bug_repair_cli_does_not_certify_floor(tmp_path):
+    import json
+
+    prompt, reference, report = [tmp_path / name for name in ("input.txt", "ref.v", "result.json")]
+    prompt.write_text(MUX_BUG_PROMPT)
+    reference.write_text(GOLD_MUX_INVERTED)
+    assert S.main(["--prompt", str(prompt), "--ref", str(reference),
+                   "--json", str(report)]) == 0
+    assert json.loads(report.read_text()) == {"semantic_floor": False, "reason": None}
 
 
 # --- negatives: nothing extractable -> never fires ------------------------ #
