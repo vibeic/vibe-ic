@@ -218,7 +218,8 @@ def test_existing_native_results_survive_an_added_table_entry(tmp_path):
     assert result["pass"] == 2
 
 
-def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, monkeypatch):
+@pytest.mark.parametrize("input_contract", ["original", "structured"])
+def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, monkeypatch, input_contract):
     import flow_engine_frontend
     calls = []
 
@@ -235,8 +236,10 @@ def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, mon
     monkeypatch.setattr(engine.NativeChain, "initialize", unavailable)
     row = command_row("lint")
     row["tool"] = {"kind": "librelane", "steps": ["Verilator.Lint", "Checker.LintErrors"]}
-    assert execute(tmp_path, [row])["pass"] == 1
-    assert execute(tmp_path, [row])["pass"] == 1
+    route = {"entry_step": "lint", "verify_through": "lint",
+             "delivery_target": "rtl", "input_contract": input_contract}
+    assert engine.run(tmp_path, table={"steps": [row]}, route=route)["pass"] == 1
+    assert engine.run(tmp_path, table={"steps": [row]}, route=route)["pass"] == 1
     assert calls == ["rtl_validate", "rtl_validate"]
 
 

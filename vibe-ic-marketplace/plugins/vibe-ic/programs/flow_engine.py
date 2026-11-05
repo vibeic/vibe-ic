@@ -613,7 +613,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             restore_directory = None
         directory = step_root / row["name"]
         tool = choose_tool(row["tool"], features)
-        if route.get("input_contract") == "original" and "Verilator.Lint" in tool.get("steps", []):
+        if ((route.get("input_contract") == "original" or route["delivery_target"] == "rtl")
+                and "Verilator.Lint" in tool.get("steps", [])):
             tool = {"kind": "adapter", "function": "rtl_validate"}
         kind = tool["kind"]
         saved = read_json(directory / "result.json")
