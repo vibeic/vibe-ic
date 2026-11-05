@@ -436,7 +436,7 @@ def test_native_real_header_options_top_and_partial_inputs_still_refuse(tmp_path
     l9 = tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     l9.parent.mkdir(parents=True)
     l9.write_text(json.dumps({"top_module": "different_top"}))
-    with pytest.raises(cdc.Refusal, match="CDC_NETLIST_TOP_MISMATCH"):
+    with pytest.raises(cdc.Refusal, match="CDC_NETLIST_STALE"):
         cdc.require_binding(tmp_path, netlist, cdc.load(netlist))
 
 

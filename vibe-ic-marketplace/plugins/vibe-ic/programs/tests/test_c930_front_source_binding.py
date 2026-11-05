@@ -102,7 +102,7 @@ def test_current_declared_top_and_switch_options_invalidate_a_prior_binding(tmp_
     docs.mkdir(parents=True)
     (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "other_top"}))
     result = crossing.audit(str(project))
-    assert not result.passed and "CDC_NETLIST_TOP_MISMATCH" in _rules(result)
+    assert not result.passed and "CDC_NETLIST_STALE" in _rules(result)
     project = _fresh(tmp_path / "switch")
     (project / "phase3").mkdir()
     (project / "phase3/librelane_switch.json").write_text(json.dumps(
