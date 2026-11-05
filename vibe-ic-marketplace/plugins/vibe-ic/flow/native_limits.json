@@ -4417,6 +4417,25 @@
     "system_and_software_scenarios": {
       "kind": "adapter",
       "adapter": "system_scenarios"
+    },
+    "requirement_derived_security_verification": {
+      "kind": "profiles",
+      "profiles": [
+        {
+          "when": "has_analog and not has_digital",
+          "tool": {
+            "kind": "adapter",
+            "adapter": "security_requirements"
+          }
+        },
+        {
+          "when": "otherwise",
+          "tool": {
+            "kind": "adapter",
+            "adapter": "security_requirements"
+          }
+        }
+      ]
     }
   },
   "report_check_readers": {
