@@ -331,7 +331,10 @@ def build_native_config(project: Path | str, *, route: str | None = None, pdk: s
         owner = Flow.factory.get("Classic")(config, design_dir=str(Path(project).resolve()),
                                             pdk_root=os.environ.get("PDK_ROOT"))
         resolved = owner.config.to_raw_dict()
-        config.update(current_settings(Path(project).resolve(), resolved, parallel_length_um=None))
+        extent = resolved.get("DIE_AREA") or resolved.get("CORE_AREA")
+        span = (max(float(extent[2]) - float(extent[0]), float(extent[3]) - float(extent[1]))
+                if extent else None)
+        config.update(current_settings(Path(project).resolve(), resolved, parallel_length_um=span))
     return config
 
 
