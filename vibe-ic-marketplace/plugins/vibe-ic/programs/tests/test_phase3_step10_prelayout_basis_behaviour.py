@@ -1,72 +1,16 @@
-"""Step 10 must not publish a POST_ROUTE body under its PRE-LAYOUT header when
-a forced pre-layout corner re-emit FAILS — and must not call that state PASS.
+"""Explicit Step10 must measure the current mapped design and compose fresh STA.
 
-WHAT THIS FILE IS FOR (2026-08-05 review, BLOCKING 1 + BLOCKING 2)
-=================================================================
-The sibling file `test_phase3_step10_prelayout_basis_is_forced.py` pins the
-RESOLVER contract (`_multi_corner_sta_inputs(..., force_prelayout=True)`). It
-cannot pin the STEP's behaviour, because every one of its forward assertions
-dies on the pre-fix file with `TypeError: unexpected keyword argument
-'force_prelayout'` — a missing symbol fails whatever the behaviour is, so those
-three are a TAUTOLOGICAL control, not a behavioural one.
-
-Every test here drives the REAL `step_prelayout_signoff(project, top, pdk,
-container)` — a function whose name and signature are IDENTICAL on both sides
-of the fix — and asserts on an OBSERVED VALUE: the `STA_BASIS` the published
-`pre_pnr_timing.rpt` declares about itself, which corner reports survive on
-disk, and the StepResult status. Nothing here can fail for want of a symbol.
-
-THE HOLE (BLOCKING 1)
----------------------
-Forcing the basis only re-stamps the corners whose OpenSTA run SUCCEEDS. On a
-re-run, `per_corner/` already holds POST_ROUTE reports from an earlier round.
-When one corner's forced re-emit failed:
-
-  * `rc != 0 or not rpt.is_file()` took the failure branch — but `rpt` was
-    still the STALE POST_ROUTE file, untouched on disk;
-  * the composer picked its source by FILENAME (`sta_SS.rpt`, then `sta_TT`,
-    then `sta_FF`), so it reached for exactly that stale report first;
-  * `pre_pnr_timing.rpt` was rewritten with the PRE-LAYOUT header over the
-    POST_ROUTE body — the contradiction the step exists to remove;
-  * and `ok` never looked at the basis, so the step returned **PASS**.
-
-That is the could-not-measure state resolving to measured-clean.
-
-The fix is three-part and each part has its own test below: quarantine a stale
-corner report BEFORE the re-emit (so a failed run leaves NO report rather than a
-mislabelled one), choose the compose source by what it DECLARES rather than by
-its name, and refuse to call the step clean while the published pre-layout
-report does not declare a pre-layout basis.
-
-THE OVER-CORRECTION (what the reverse cases below stop)
--------------------------------------------------------
-* `test_reverse_*_healthy_*` — a re-run whose reports are ALREADY pre-layout
-  must be left BYTE-IDENTICAL, must not spend an OpenSTA run, and must PASS. A
-  guard that quarantines or re-emits unconditionally passes every forward test
-  here and destroys the healthy path.
-* `test_reverse_whitespace_variant_stamp_is_still_pre_layout` — the guard reads
-  the stamp through `_sta_basis`, the tree's ONE reader, NOT by substring. A
-  substring guard (`"STA_BASIS: PRE_LAYOUT" in text`) is evaded by one extra
-  space and would condemn a healthy report as stale.
-* `test_reverse_post_route_caller_is_untouched` — the DEFAULT (post-route)
-  caller must still reuse an existing report by existence alone and must never
-  quarantine one. A tightening that reached the post-route producer would
-  delete real sign-off data.
-* `test_undeclared_pre_pnr_is_reported_not_deleted` — pins the exact policy
-  word. `ok` requires the basis to BE `PRE_LAYOUT`; flipping that to "is not
-  POST_ROUTE" would let an unstamped report through, and quarantining on an
-  absent stamp would delete a file on a question it never answered.
-
-chip/PDK/vendor-AGNOSTIC: an invented top (`widget`), invented corner-lib names
-carrying only the flow's own `_ss`/`_tt` process tokens, and the runner's own
-`<top>_synth.v` / `<top>_pnr.v` / `<top>.spef` path grammar. No SKU, node or
-part number appears.
+Native transport is substituted here; no device timing is claimed. Prior
+reports remain available as history. A failed remeasurement, including a
+partially written report, cannot reuse an earlier clean result. The shared
+post-route caller keeps its existing reuse behavior.
 """
 from __future__ import annotations
 
 import json
 import re
 import sys
+import pytest
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
@@ -264,10 +208,10 @@ def test_every_corner_failing_is_a_warn_not_a_pass(tmp_path, monkeypatch):
     assert _sta_basis.declared_basis(published) != "POST_ROUTE", (
         "a POST_ROUTE body is published under the PRE-LAYOUT header: "
         + published)
-    assert res.status == "PASS_WITH_WAIVERS", (
+    assert res.status == "NOT_MEASURED", (
         "the step could not substantiate its pre-layout artefact and still "
         f"reported {res.status}: {res.detail}")
-    assert "UNSUBSTANTIATED" in res.detail, res.detail
+    assert "REPORT_ABSENT" in res.detail, res.detail
     # degrade LOUDLY: the displaced bytes are kept, under a non-.rpt suffix so
     # nothing globbing sta/*.rpt can re-adopt them
     assert (R._pl.sta_dir(proj) / "pre_pnr_timing.rpt.stale_basis").is_file()
@@ -325,11 +269,10 @@ def test_undeclared_pre_pnr_is_reported_not_deleted(tmp_path, monkeypatch):
     res = _run_step(proj)
 
     pre_pnr = R._pl.sta_dir(proj) / "pre_pnr_timing.rpt"
-    assert pre_pnr.is_file(), "an UNDECLARED report was deleted, not reported"
-    assert pre_pnr.read_text() == undeclared, "an UNDECLARED report was edited"
-    assert not (R._pl.sta_dir(proj)
-                / "pre_pnr_timing.rpt.stale_basis").is_file()
-    assert res.status == "PASS_WITH_WAIVERS", (res.status, res.detail)
+    assert not pre_pnr.exists()
+    assert pre_pnr.with_name(pre_pnr.name + '.stale_basis').read_text() == undeclared
+    assert res.status == "NOT_MEASURED", (res.status, res.detail)
+
 
 
 # ---------------------------------------------------------------------------
@@ -360,63 +303,35 @@ def _healthy_body(stamp_line: str, *, slack=0.42) -> str:
     return ''.join(sections)
 
 
-def test_reverse_healthy_pre_layout_rerun_is_left_byte_identical(tmp_path,
-                                                                 monkeypatch):
-    """The over-correction this stops: quarantine/re-emit unconditionally.
-
-    A re-run whose corner reports and composed report ALREADY declare a
-    pre-layout basis must spend NO OpenSTA run, must leave every byte alone,
-    and must PASS. Passes on both sides of the fix by construction — that is
-    what makes it a reverse case rather than a second forward one.
-    """
-    calls: list = []
-    body = _healthy_body("STA_BASIS: PRE_LAYOUT_ESTIMATE")
-    tt_body = _healthy_body("STA_BASIS: PRE_LAYOUT_ESTIMATE", slack=0.52)
+@pytest.mark.parametrize('failed', [False, True])
+def test_explicit_prelayout_rerun_remeasures_changed_mapped_logic(tmp_path, monkeypatch, failed):
+    calls = []
+    body = _healthy_body("STA_BASIS: PRE_LAYOUT_ESTIMATE", slack=0.52)
     pre = _PRE_LAYOUT_HEADER + body
-    proj = _rerun_project(
-        tmp_path,
-        per_corner_bodies={"sta_SS.rpt": body, "sta_TT.rpt": tt_body},
-        pre_pnr_body=pre)
-    _hermetic(monkeypatch, calls)
-
-    res = _run_step(proj)
-
+    proj = _rerun_project(tmp_path,
+        per_corner_bodies={"sta_SS.rpt": body, "sta_TT.rpt": body}, pre_pnr_body=pre)
+    _write(R._pl.synth_dir(proj) / f"{TOP}_synth.v", "// changed mapped logic\n")
+    _hermetic(monkeypatch, calls, fail_corners=("SS", "TT") if failed else ())
+    transport = R._docker_exec
+    def failed_partial(*args, **kwargs):
+        result = transport(*args, **kwargs)
+        if failed and result[0] != 0:
+            Path(kwargs['marker']).with_suffix('.rpt').write_text(body)
+        return result
+    monkeypatch.setattr(R, '_docker_exec', failed_partial)
+    result = _run_step(proj)
     sta = R._pl.sta_dir(proj)
-    assert calls == [], f"burned an OpenSTA run on healthy reports: {calls}"
-    assert (sta / R.STEP10_CORNER_DIR / "sta_SS.rpt").read_text() == body
-    assert (sta / R.STEP10_CORNER_DIR / "sta_TT.rpt").read_text() == tt_body
-    assert (sta / "pre_pnr_timing.rpt").read_text() == pre
-    assert not list(sta.rglob("*.stale_basis")), "quarantined a healthy report"
-    assert res.status == "PASS", (res.status, res.detail)
-
-
-def test_reverse_whitespace_variant_stamp_is_still_pre_layout(tmp_path,
-                                                              monkeypatch):
-    """The stamp must be read by the shared reader, not by substring.
-
-    `#   STA_BASIS:   PRE_LAYOUT_ESTIMATE` is the same declaration with
-    different whitespace. A guard written as
-    `"STA_BASIS: PRE_LAYOUT" not in text` calls this stale and re-runs the
-    tool over a perfectly good report every single time — the same class of
-    fragility as a guard that a single-vs-double quote defeats.
-    """
-    calls: list = []
-    body = _healthy_body("#   STA_BASIS:   PRE_LAYOUT_ESTIMATE")
-    tt_body = _healthy_body("STA_BASIS: PRE_LAYOUT_ESTIMATE", slack=0.52)
-    pre = _PRE_LAYOUT_HEADER + body
-    proj = _rerun_project(
-        tmp_path,
-        per_corner_bodies={"sta_SS.rpt": body, "sta_TT.rpt": tt_body},
-        pre_pnr_body=pre)
-    _hermetic(monkeypatch, calls)
-
-    res = _run_step(proj)
-
-    sta = R._pl.sta_dir(proj)
-    assert calls == [], f"re-ran the tool over a healthy report: {calls}"
-    assert (sta / "pre_pnr_timing.rpt").read_text() == pre
-    assert not list(sta.rglob("*.stale_basis"))
-    assert res.status == "PASS", (res.status, res.detail)
+    assert sorted(calls) == ['SS', 'TT']
+    assert (sta / 'pre_pnr_timing.rpt.stale_basis').read_text() == pre
+    for corner in ['SS', 'TT']:
+        assert (sta / R.STEP10_CORNER_DIR / f'sta_{corner}.rpt.stale_basis').read_text() == body
+    if failed:
+        assert not (sta / 'pre_pnr_timing.rpt').exists()
+        assert len(list((sta / R.STEP10_CORNER_DIR).glob('*.rpt.failed'))) == 2
+        assert result.status != 'PASS'
+    else:
+        assert (sta / 'pre_pnr_timing.rpt').read_text() != pre
+        assert result.status == 'PASS', result.detail
 
 
 def test_reverse_post_route_caller_is_untouched(tmp_path, monkeypatch):
