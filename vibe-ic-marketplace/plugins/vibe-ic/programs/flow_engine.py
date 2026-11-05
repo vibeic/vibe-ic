@@ -479,6 +479,13 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
         if not matches:
             matches = {check["metric"]: None}
         for name, value in matches.items():
+            points = metrics.get(name.removesuffix("_pct") + "_points")
+            if (re.fullmatch(r"coverage_(line|toggle|branch)_pct", name)
+                    and type(points) is int and points == 0):
+                observed.append({**check, "metric": name, "value": None, "limit": limit,
+                    "status": "NOT_APPLICABLE", "points": points,
+                    "reason": "Owner ruling: a measured category with zero coverage points has no percentage floor."})
+                continue
             status = "NOT_MEASURED"
             compare = COMPARE.get(check.get("operator"))
             if check.get("operator") == "covers_all":
@@ -590,12 +597,18 @@ def finish_step(project, row, tool, native, config, features, *, elapsed, starte
         native.metrics.update(report.get("metrics", {}))
         native.reports.extend(report.get("reports", []))
         native.detail += " " + report.get("detail", "")
+    reader_observations = []
     checks = [check for check in row["checks"] if check.get("when") != "otherwise"
               or tool.get("selected_profile", "otherwise") == "otherwise"]
     for reader in tool.get("check_readers", []):
         module, function = reader.rsplit(".", 1)
-        checks.extend(getattr(importlib.import_module(module), function)(project))
+        for check in getattr(importlib.import_module(module), function)(project, config=config, metrics=native.metrics):
+            if check.get("applicable") is False:
+                reader_observations.append({**check, "status": "NOT_APPLICABLE"})
+            else:
+                checks.append(check)
     observations, declared_checks = report_observations(row, directory, native, config, features, project)
+    observations.extend(reader_observations)
     checks.extend(declared_checks)
     if "Checker.SetupViolations" in tool.get("steps", []):
         from flow_native_adapters import declared_electrical_checks
