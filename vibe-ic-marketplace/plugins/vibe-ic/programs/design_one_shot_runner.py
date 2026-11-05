@@ -30238,7 +30238,11 @@ def _aggregate_verdict(plan: List[StepResult], *, project: Optional[Path] = None
     # same functional responsibility. Partial populations and measured FAIL
     # remain effective, and Step5's logical-pad population is independent.
     if (aggregate_project is not None and started_at is not None
-            and _current_phase2_consumer(aggregate_project, '4', started_at) is not None):
+            and (_current_phase2_consumer(aggregate_project, '4', started_at) is not None
+                 or (any(s.name == 'step4_functional_evidence' and s.status == 'PASS' for s in plan)
+                     and _current_professional_reference(aggregate_project,
+                         next((s for s in plan if s.name == 'professional_tb_gen'), None),
+                         started_at) is not None))):
         effective = [s for s in effective if not (
             s.name == 'full_stack_tb_gen' and s.status == 'NOT_MEASURED'
             and s.reason_class == _V.ReasonClass.NO_POPULATION)]
