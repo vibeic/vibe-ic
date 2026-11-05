@@ -16,6 +16,8 @@ The generated script differs from LibreLane's generic one in these measured ways
   the step skips itself.
 * `read_verilog -icells`, so a netlist that still carries Yosys internal cells
   (`$_DFF_P_`) reads.
+* Map RAM and inferred ROM to registers and logic in both views before
+  partitioning, so the SAT and ABC engines receive supported proof cells.
 * Amend each partition with the gold definitions of its matched inputs. A
   synthesis-merged alias must retain the state relation of the original
   registers: treating the other alias as an arbitrary partition input can
@@ -70,7 +72,7 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str) -> str:
         "[gate]", f"read_liberty -ignore_miss_func {liberty}",
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
-        "memory -nomap", "async2sync", "setundef -init -zero", "splitnets",
+        "memory", "async2sync", "setundef -init -zero", "splitnets",
         observable_matchpoint_names(top).rstrip(), "",
         "[match *]", "gold-nomatch /^_[0-9]+_$/",
         "gate-nomatch /^_[0-9]+_$/", "",

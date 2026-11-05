@@ -478,6 +478,53 @@ def test_eqy_native_keeps_cutpoint_definitions(tmp_path, case, expected):
         assert " _0000_ " not in matched and " _0001_ " not in matched
 
 
+@pytest.mark.skipif(shutil.which("eqy") is None, reason="native EQY is required")
+@pytest.mark.parametrize("memory", ["ram", "case_rom"])
+@pytest.mark.parametrize("corrupt,expected", [(False, "PASS"), (True, "FAIL")])
+def test_eqy_native_memory_against_flattened_gate(tmp_path, memory, corrupt, expected):
+    """Lower real RAM and inferred ROM without losing output obligations or CEX."""
+    if memory == "ram":
+        body = ("reg [7:0] words [0:3]; "
+                "initial begin words[0]=0; words[1]=0; words[2]=0; words[3]=0; end "
+                "always @(posedge clk) if (we) words[wa] <= d; "
+                "wire [7:0] value = words[ra]; ")
+    else:
+        body = ("reg [7:0] value; always @* case ({we,ra}) "
+                "0: value=8'h96; 1: value=8'h3c; 2: value=8'ha5; 3: value=8'h17; "
+                "4: value=8'hd2; 5: value=8'h69; 6: value=8'h4b; 7: value=8'he1; "
+                "endcase ")
+    header = ("module neutral(input clk, we, input [1:0] wa, ra, "
+              "input [7:0] d, output [7:0] y); ")
+    rtl = put(tmp_path / "rtl.v", header + body + "assign y=value; endmodule\n")
+    revised = put(tmp_path / "revised.v", header + body
+                  + f"assign y=value ^ 8'h{int(corrupt):02x}; endmodule\n")
+    netlist = tmp_path / "netlist.v"
+    mapped = subprocess.run(["yosys", "-Q", "-T", "-p",
+        f"read_verilog {revised}; synth -top neutral; "
+        f"select -assert-none t:$mem*; write_verilog -noattr {netlist}"],
+        capture_output=True, text=True, timeout=60)
+    assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+    liberty = put(tmp_path / "neutral.lib", "library(neutral) {}\n")
+    script = put(tmp_path / "proof.eqy",
+                 eqy.eqy_script("neutral", [rtl], netlist, str(liberty)))
+    folder = tmp_path / "step"
+    result = subprocess.run(["eqy", "-j", "1", "-d", str(folder / "scratch"),
+                             str(script)], capture_output=True, text=True, timeout=60)
+    put(tmp_path / "native.log", result.stdout + result.stderr)
+    report = eqy.judge_eqy(folder, tmp_path / "report.json")
+    assert report["verdict"] == expected, result.stdout + result.stderr
+    assert result.returncode == (0 if expected == "PASS" else 2)
+    compared = set()
+    for partition in (folder / "scratch/partitions").glob("*.json"):
+        compared.update(json.loads(partition.read_text())["partition"]["outbits"].get("y", []))
+    assert compared == set(range(8))
+    if corrupt:
+        assert report["non_equivalent_points"]
+        assert list((folder / "scratch/strategies").glob("*/sat/trace.vcd"))
+    else:
+        assert report["unproven_points"] == report["xbits_partitions"] == []
+
+
 @pytest.mark.parametrize("a,b,expect", [
     ("PASS", "PASS", ("PASS", "lec_run")),
     ("PASS", "FAIL", ("FAIL", None)),
