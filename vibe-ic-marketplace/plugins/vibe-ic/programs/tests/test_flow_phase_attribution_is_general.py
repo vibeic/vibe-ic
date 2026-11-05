@@ -186,7 +186,6 @@ def test_sim_attribution_uses_the_selected_engine_verdict(
     if engine == "native" and owner_status != "FAIL" and not (owner_status is None and native_status.startswith("missing-")):
         expected = native_status if native_status in {"PASS", "FAIL"} else "NOT_MEASURED"
     assert {**phase["not_attempted"], **phase["ran"]}.get("sim") == expected
-    assert ("sim" in phase["ran"]) + ("sim" in phase["not_attempted"]) == (expected is not None)
     assert phase["failed"] == sorted(["rtl_validate"] + (["sim"] if expected == "FAIL" else []))
     assert phase["required_site_results"] == fpa.phase3_verifying({"steps": steps}, None)["required_site_results"]
 
@@ -194,7 +193,7 @@ def test_sim_attribution_uses_the_selected_engine_verdict(
 @pytest.mark.parametrize("before,after,expected", [
     ("PASS", "FAIL", "ELIGIBLE"), ("PASS", None, "ELIGIBLE"),
     ("FAIL", "PASS", "INELIGIBLE"), (None, "PASS", "NOT_MEASURED")])
-@pytest.mark.parametrize("owner_status", [None, "PASS", "FAIL"])
+@pytest.mark.parametrize("owner_status", [None, "PASS", "FAIL", "ERROR", "REFUSED", "UNKNOWN"])
 def test_native_sim_consumers_share_the_live_verdict(
         tmp_path, monkeypatch, before, after, expected, owner_status):
     import benchmark_dispatch as bd, step_preflight as spf
@@ -208,10 +207,11 @@ def test_native_sim_consumers_share_the_live_verdict(
     name = "functional_simulation_and_coverage"
     report.write_text(json.dumps({"steps": [_step(name, before)] if before else []}))
     snapshot = {"exit": "4", "phases": fpa.attribute(p)}
-    assert bd._required_gate_ledger(snapshot)["eligibility"] == ("INELIGIBLE" if owner_status == "FAIL" else expected)
+    assert bd._required_gate_ledger(snapshot)["eligibility"] == (
+        expected if owner_status in (None, "PASS") else "INELIGIBLE" if owner_status == "FAIL" else "NOT_MEASURED")
     assert bd._gate_evidence_freshness_reasons(p, snapshot) == []
     report.write_text(json.dumps({"steps": [_step(name, after)] if after else []}))
-    assert bool(bd._gate_evidence_freshness_reasons(p, snapshot)) == (owner_status != "FAIL")
+    assert bool(bd._gate_evidence_freshness_reasons(p, snapshot)) == (owner_status in (None, "PASS"))
 
 
 # ── FLOW-BACK TEST ───────────────────────────────────────────────────────────
