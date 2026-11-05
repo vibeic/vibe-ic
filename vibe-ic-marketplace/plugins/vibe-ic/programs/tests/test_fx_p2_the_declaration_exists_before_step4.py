@@ -433,3 +433,25 @@ def test_logical_pad_owner_keeps_non_delegated_functional_dispatch(tmp_path, mon
                      ['neutral.v'], {'synth_top': 'neutral_core'}), None, None)
     assert dispatched == ['functional']
     assert [row.name for row in rows] == ['io_pad_chip_top_gen', 'full_stack_functional_tb']
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_late_declaration_uses_the_declared_artifact(tmp_path, monkeypatch, changed):
+    import fault_scan_chain_insert as scan
+    import spec_declaration_emit as emit
+    docs = tmp_path / 'input/docs'
+    docs.mkdir(parents=True)
+    rel = 'phase2/stage1/build_options.json'
+    (docs / 'options.md').write_text(
+        f'The Plugin MUST declare `{rel}` before authoring:\n'
+        '| Field | Required | Example |\n|---|---|---|\n| `dft` | Yes | object |\n')
+    choice = {'requires_scan': False, 'reason': 'Functional core without scan insertion.'}
+    assert emit.main([str(tmp_path), '--set', 'dft=' + json.dumps(choice)]) == 0
+    # Transport probe for prior D01 admission; actual producer and consumers run.
+    monkeypatch.setattr(scan, 'load_d09_dft_contract', lambda *_: ({'path': rel}, []))
+    early = D.declaration_before_step4(tmp_path)
+    assert early['emitted'], early
+    if changed:
+        (tmp_path / rel).write_text(json.dumps({'dft': {'requires_scan': True}}))
+    row = D._refuse_a_disagreeing_declaration(D.StepResult('arith_declaration_emit', 'PASS', 0, ''), early, tmp_path)
+    assert row.status == ('FAIL' if changed else 'PASS'), vars(row)

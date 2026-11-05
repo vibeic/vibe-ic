@@ -25688,7 +25688,8 @@ def declaration_before_step4(project: Path) -> Dict[str, Any]:
                 active.require_current()
                 source.require_current()
             fields = json.loads(path.read_text())
-            return {'producer': 'D01', 'emitted': True, 'fields': fields}
+            return {'producer': 'D01', 'emitted': True, 'fields': fields,
+                    'artifact_path': binding['path']}
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {'producer': 'D01', 'emitted': False, 'reason': str(exc)}
     prog = PROGRAMS_DIR / "spec_declaration_emit.py"
@@ -25747,7 +25748,7 @@ def _refuse_a_disagreeing_declaration(row: "StepResult", early: Any,
     if not (isinstance(early, dict) and early.get("emitted")):
         return row
     try:
-        late = json.loads((Path(project) / DECLARATION_REL).read_text())
+        late = json.loads((Path(project) / early.get("artifact_path", DECLARATION_REL)).read_text())
     except (OSError, ValueError):
         late = None
     diff = declaration_disagreement(early.get("fields") or {}, late)
