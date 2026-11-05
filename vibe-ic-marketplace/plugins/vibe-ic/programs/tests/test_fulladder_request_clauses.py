@@ -115,3 +115,30 @@ def test_construction_admission_truth_table_stays_qualified_and_order_independen
     results = tuple("REFUSE" if arithmetic.synth(request(style=style)[0], "neutral_sum") is None
         else "EMIT" for style in styles)
     assert results == ("EMIT", "EMIT", "EMIT", "EMIT", "REFUSE", "REFUSE")
+
+
+@pytest.mark.parametrize("opening", [
+    "For this module, implement", "Design", "The design must be",
+])
+def test_unrecognized_current_fulladder_direction_refuses(opening):
+    prompt, _, _ = request(style="using full adders")
+    assert arithmetic.synth(prompt.replace("Implement", opening, 1), "neutral_sum") is None
+
+
+def test_known_previous_design_description_keeps_exact_ordinary_output():
+    prompt, _, _ = request(style="")
+    assert arithmetic.synth(prompt + "\nThe previous design was built from full-adder cells.",
+        "neutral_sum") == arithmetic.synth(prompt, "neutral_sum")
+
+
+def test_current_request_admission_truth_table_does_not_fall_through_or_always_refuse():
+    positive, _, _ = request(style="using full adders")
+    negative, _, _ = request(style="without full adders")
+    ordinary, _, _ = request(style="")
+    prompts = [positive, negative,
+        ordinary + "\nThe previous design was built from full-adder cells.",
+        *[positive.replace("Implement", opening, 1) for opening in
+            ("For this module, implement", "Design", "The design must be")]]
+    results = tuple("REFUSE" if arithmetic.synth(prompt, "neutral_sum") is None else "EMIT"
+        for prompt in prompts)
+    assert results == ("EMIT", "EMIT", "EMIT", "REFUSE", "REFUSE", "REFUSE")
