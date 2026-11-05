@@ -388,9 +388,16 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
     return "\n".join(lines)
 
 
+def _tcl_word(value):
+    return "".join({"\n": r"\n", "\r": r"\r", "\t": r"\t"}.get(char,
+        "\\" + char if char in '\\ $;{}[]"' else char) for char in str(value))
+
+
 def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str] | None = None) -> str:
     directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
-    collection = lambda names: "[get_ports -regexp {^(" + "|".join(re.escape(name) for name in names) + ")$}]"
+    def collection(names):
+        ports = ["[[[sta::top_instance] cell] find_port " + _tcl_word(name) + "]" for name in names]
+        return "[get_ports [list " + " ".join(ports) + "]]"
     original = config.get("PNR_SDC_FILE")
     if original:
         text = Path(str(original)).read_text()
@@ -413,7 +420,6 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
     budget = period * float(delay) / 100
     if any(clock not in directions or directions[clock] != "input" for clock in clocks):
         raise ValueError("CLOCK_PORT must name an elaborated core input")
-    # -regexp with anchored escaped names keeps bus brackets literal in OpenSTA.
     lines = ["set_units -time ns"]
     for index, clock in enumerate(clocks):
         lines.append(f"create_clock -name core_clock_{index} -period {period:g} {collection([clock])}")
@@ -451,10 +457,7 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
         fast = max(float(view["fast_ns"]) for view in views)
         if slow < fast:
             raise ValueError("Input-pad Liberty edge brackets do not overlap")
-        def word(value):
-            return "".join({"\n": r"\n", "\r": r"\r", "\t": r"\t"}.get(char,
-                "\\" + char if char in '\\ $;{}[]"' else char) for char in str(value))
-        entries = " ".join("[list " + word(view["library"]) + f" {view['slow_ns']:g} {view['fast_ns']:g}]"
+        entries = " ".join("[list " + _tcl_word(view["library"]) + f" {view['slow_ns']:g} {view['fast_ns']:g}]"
                            for view in views)
         lines.extend([f"set _chip_pad_views [list {entries}]", "set _chip_pad_linked {}",
             "foreach _chip_pad_view $_chip_pad_views {",
