@@ -261,8 +261,9 @@ def test_fresh_physical_author_uses_only_the_table_author_window(tmp_path, monke
     with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
         observed = frontend.OwnerSession(tmp_path, selected).result(tmp_path / "steps/author", "rtl_gen")
     execute.assert_called_once()
-    assert observed["native_steps"][0]["status"] == "PASS_WITH_WAIVERS"
-    assert not observed["native_steps"][0]["ran"]
+    assert observed["metrics"]["rtl_gen"] == "PASS_WITH_WAIVERS"
+    assert observed["native_steps"][0]["status"] == "FAIL"
+    assert observed["native_steps"][0]["detail"] == "The owner produced no RTL."
 
 
 def test_retained_physical_report_needs_an_explicit_rerun(tmp_path):

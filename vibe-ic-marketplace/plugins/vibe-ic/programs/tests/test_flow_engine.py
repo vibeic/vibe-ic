@@ -105,6 +105,33 @@ def test_report_only_row_reuses_its_producer_verdict(tmp_path, code, inputs, sta
     assert [row["status"] for row in result["steps"]] == [status, status]
 
 
+@pytest.mark.parametrize("declared,status", [(False, "PASS"), (True, "FAIL")])
+def test_intermediate_number_blocks_only_on_a_declared_bound(tmp_path, declared, status):
+    row = command_row("intermediate", value=7)
+    row["checks"] = []
+    row["observations"] = [{"metric": "intermediate_bound", "native_metrics": ["errors"],
+                             "operator": "<=", "limit": None,
+                             "declared_limit_from": {"metric": "intermediate_bound"}}]
+    if declared:
+        docs = tmp_path / "phase1/generated_docs"
+        docs.mkdir(parents=True)
+        (docs / "L19.json").write_text(json.dumps({"fields": {"intermediate_bound": 5}}))
+    result = execute(tmp_path, [row])["steps"][0]
+    assert result["status"] == status
+    assert result["observations"][0]["values"] == {"errors": 7}
+
+
+def test_declared_observation_cannot_drop_a_missing_native_number(tmp_path):
+    native = engine.ToolResult(True, 0, {"setup": 1})
+    row = {"observations": [{"metric": "timing", "native_metrics": ["setup", "hold"],
+                            "operator": "within_declared_bounds",
+                            "limit": {"setup": {"min": 0}, "hold": {"min": 0}}}]}
+    _, checks = engine.report_observations(row, tmp_path, native, {}, {"always": True}, tmp_path)
+    measured = engine.measure(checks, native.metrics, {}, {"always": True}, tmp_path)
+    assert [item["status"] for item in measured] == ["PASS", "NOT_MEASURED"]
+    assert engine.evaluate(native, measured) == "NOT_MEASURED"
+
+
 def test_native_decimal_and_infinite_path_group_values(tmp_path):
     checks = [{"metric": "slack", "operator": ">=", "limit": Decimal("0")}]
     measured = engine.measure(checks, {"slack": Decimal("1.2")}, {}, {"always": True})

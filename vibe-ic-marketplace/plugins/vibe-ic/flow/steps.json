@@ -1490,10 +1490,10 @@
       "title": "Netlist equivalence",
       "when": "digital_netlist",
       "tool": {
-        "kind": "librelane",
-        "steps": [
-          "Yosys.EQY"
-        ]
+        "kind": "adapter",
+        "adapter": "eqy",
+        "program": "flow_native_verification.py",
+        "metric": "unproved_equivalence"
       },
       "checks": [
         {
@@ -2974,10 +2974,10 @@
       "title": "Final adopted netlist equivalence",
       "when": "digital_physical",
       "tool": {
-        "kind": "librelane",
-        "steps": [
-          "Yosys.EQY"
-        ]
+        "kind": "adapter",
+        "adapter": "eqy",
+        "program": "flow_native_verification.py",
+        "metric": "final_lec_unproved"
       },
       "checks": [
         {
@@ -4060,26 +4060,10 @@
       "title": "Finishing geometry fidelity",
       "when": "physical",
       "tool": {
-        "kind": "profiles",
-        "profiles": [
-          {
-            "when": "digital_physical",
-            "tool": {
-              "kind": "adapter",
-              "program": "flow109_final_geometry.py",
-              "function": "execute",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
-            }
-          },
-          {
-            "when": "otherwise",
-            "tool": {
-              "kind": "native_report",
-              "from": "stream_out",
-              "scope": "Native streamer agreement before finishing. Finishing-only geometry fidelity has no numeric native check in Classic or Chip."
-            }
-          }
-        ]
+        "kind": "adapter",
+        "adapter": "xor",
+        "program": "flow_native_verification.py",
+        "metric": "unexplained_stream_xor"
       },
       "checks": [
         {

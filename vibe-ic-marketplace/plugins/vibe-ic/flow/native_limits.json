@@ -3474,5 +3474,25 @@
       "Density D applies only when the native density metric measures the same final GDS as final physical verification."
     ],
     "unresolved": []
+  },
+  "tool_overrides": {
+    "netlist_equivalence": {
+      "kind": "adapter",
+      "adapter": "eqy",
+      "program": "flow_native_verification.py",
+      "metric": "unproved_equivalence"
+    },
+    "final_adopted_netlist_equivalence": {
+      "kind": "adapter",
+      "adapter": "eqy",
+      "program": "flow_native_verification.py",
+      "metric": "final_lec_unproved"
+    },
+    "finishing_geometry_fidelity": {
+      "kind": "adapter",
+      "adapter": "xor",
+      "program": "flow_native_verification.py",
+      "metric": "unexplained_stream_xor"
+    }
   }
 }

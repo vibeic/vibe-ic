@@ -165,6 +165,8 @@ def classify_checks(table, native):
                 dropped.append({"step": row["name"], "old_name": check["metric"],
                                 "class": category, "what_still_protects": fact["reason"]})
         row["checks"] = retained
+        if row["name"] in native.get("tool_overrides", {}):
+            row["tool"] = native["tool_overrides"][row["name"]]
         if observations:
             row["observations"] = observations
         if row["name"] in native.get("row_applicability", {}):
