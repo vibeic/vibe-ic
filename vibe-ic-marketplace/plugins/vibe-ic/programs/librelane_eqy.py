@@ -91,7 +91,7 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
                     if synthesis.get('USE_SLANG') else 'read_verilog -sv')
         read = f"{frontend} {defines} {includes} {gold}"
     return "\n".join([
-        "[gold]", read, *gold_prep, "",
+        "[gold]", read, *([f"read_liberty -ignore_miss_func {liberty}"] if synthesis is not None else []), *gold_prep, "",
         "[gate]", f"read_liberty -ignore_miss_func {liberty}",
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
