@@ -370,6 +370,45 @@ def test_ring_layers_equal_to_mesh_layers_use_native_connection_once(inputs):
     assert "PDN_CORE_HORIZONTAL_LAYER" not in result
 
 
+@pytest.mark.parametrize("access,vertical,horizontal,ring", [
+    ("pad_access", "mesh_vertical", "mesh_horizontal", None),
+    ("lower_contact", "outer_vertical", "outer_horizontal", "ring_vertical"),
+])
+@pytest.mark.parametrize("existing", [False, True])
+def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical, horizontal, ring, existing):
+    project, config, native, _, _ = inputs
+    native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=True,
+                  PDN_VERTICAL_LAYER=vertical, PDN_HORIZONTAL_LAYER=horizontal,
+                  PDN_CORE_RING_VOFFSET=1, PDN_CORE_RING_HOFFSET=1,
+                  PDN_CORE_RING_VWIDTH=1, PDN_CORE_RING_HWIDTH=1,
+                  PDN_CORE_RING_VSPACING=1, PDN_CORE_RING_HSPACING=1)
+    if ring:
+        native["PDN_CORE_VERTICAL_LAYER"] = ring
+    target = ring or vertical
+    lef = Path(native["PAD_LEFS"][0])
+    text = lef.read_text()
+    for pin, use, layer in (("VSS", "GROUND", access), ("VDD", "POWER", vertical),
+                            ("PAD", "SIGNAL", "signal_access")):
+        declaration = f" PIN {pin}\n  DIRECTION INOUT ;\n  USE {use} ;"
+        text = text.replace(declaration, declaration + f"\n  PORT\n   LAYER {layer} ;"
+                            "\n   RECT 0 0 10 1 ;\n  END")
+    lef.write_text(text)
+    original = "source $::env(SCRIPTS_DIR)/openroad/common/pdn_cfg.tcl\n"
+    reverse = f"add_pdn_connect -grid stdcell_grid -layers {{{target} {access}}}"
+    if existing:
+        original += reverse + "\n"
+    pdn = _write(project / "input/pdn.tcl", original)
+    config["PDN_CFG"] = native["PDN_CFG"] = str(pdn)
+    result = chip.prepare(project, config)
+    generated = Path(result["PDN_CFG"]).read_text()
+    command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {target}}}"
+    assert generated.count(command) + generated.count(reverse) == 1
+    assert "signal_access" not in generated
+    assert f"-layers {{{vertical} {vertical}}}" not in generated
+    assert generated.startswith(original)
+    assert pdn.read_text() == original
+
+
 def test_dynamic_inout_is_refused():
     with pytest.raises(ValueError, match="inout.*output-enable"):
         chip._ports({"modules": {"core": {"ports": {
