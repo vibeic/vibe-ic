@@ -472,6 +472,33 @@ def audit(project: Path) -> AuditResult:
             res.findings.append(Finding(rule=getattr(exc, 'code', 'D25_NATIVE_UNBOUND'),
                 severity='ERROR', message=str(exc), file='reports/lec_eqy_execution.json'))
         return res
+    if (project / 'reports/lec_eqy.json').is_file() and _os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+        import flow109
+        import flow109_metric_acceptance as metrics
+        try:
+            owner = flow109.validate_execution_context(json.loads(
+                Path(_os.environ[flow109.CONTEXT_ENV]).read_text()))
+            if all(owner['features'].get(key) is False for key in ('requires_dft', 'requires_scan')):
+                plan = flow109.resolve_plan(owner['features'], owner['step_profiles'])
+                context = flow109.component_context(flow109.execution_context(plan, 'D25', 'D25'),
+                                                     requested_step='D25')
+                accepted = metrics.accept_d25(project, context)
+                proof = accepted.get('native_consumer') or {}
+                res.evidence_source = 'native_eqy'
+                res.passed = res.equivalent = accepted['status'] == 'PASS'
+                res.not_measured = accepted['status'] not in ('PASS', 'FAIL')
+                res.compared_points = proof.get('compared_points')
+                res.non_equivalent_points = len(proof.get('non_equivalent_points', []))
+                res.unproven_points = len(proof.get('unproven_points', []))
+                res.summary = {'metric_acceptance': accepted}
+                if not res.passed:
+                    res.findings.append(Finding(accepted['reason'], 'ERROR', 'native EQY consumer did not accept'))
+                return res
+        except (flow109.Flow109Error, metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            res.evidence_source = 'native_eqy'
+            res.not_measured = True
+            res.findings.append(Finding(getattr(exc, 'code', 'D25_NATIVE_UNBOUND'), 'ERROR', str(exc)))
+            return res
     json_path = project / LEC_JSON_REL
     rpt_path = project / LEC_RPT_REL
 
@@ -1098,8 +1125,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 300 chars of stdout and requires the token at line-start, so a long line
     # would be sliced mid-string and the disclosure would be lost.
     if result.not_measured:
-        if result.evidence_source == 'adopted_native_eqy':
-            print('NOT_MEASURED_NON_WAIVABLE: named native LEC consumer did not accept')
+        if result.evidence_source in ('adopted_native_eqy', 'native_eqy'):
+            print('NOT_MEASURED_NON_WAIVABLE: native LEC consumer did not accept')
             return 1
         print(f"LEC NOT_MEASURED: step budget exhausted "
               f"(resource: {result.exhausted_resource}) with no verdict — "
