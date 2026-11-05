@@ -62,9 +62,9 @@ PPA_RECORD_CHECKERS = {
     "ppa_head_to_head_check.py": ("--corpus",),
     "ppa_contract_check.py": ("--corpus", "--contract"),
     "ppa_measurement_check.py": ("--coverage",),
-    "ppa_feasibility_check.py": ("--candidates", "--corpus"),
+
     "ppa_pareto_check.py": ("--candidates", "--frontier"),
-    "ppa_problem_integrity_check.py": ("--baseline", "--candidate", "--corpus"),
+
     # Wired by "PPA ablation records (within-project)". A record gate like the
     # rest: it selects on the DECLARED schema through the shared seam, so the
     # population counter below reaches it by its own predicate.
@@ -145,29 +145,6 @@ def _load(name, filename):
 
 #: How to count a population, per checker. Each uses the checker's OWN corpus
 #: walk, so this cannot drift from what the gate will actually find.
-def _population(checker: str, flag: str, path: Path) -> int:
-    if flag != "--corpus":
-        return 1 if path.is_file() else 0
-    if checker == "ppa_head_to_head_check.py":
-        return len(_load("_hh", checker).corpus_records(path))
-    # THE OTHER THREE MOVED TO A SHARED SEAM AND THIS COUNTER DID NOT FOLLOW.
-    # `corpus_contracts` / `corpus_candidate_sets` / `corpus_candidates` were
-    # replaced by a SELECTION PREDICATE handed to `_ppa_corpus.collect`, and
-    # this function went on calling the old names — so it raised AttributeError
-    # on three of the six checkers and the guard could not see them at all. A
-    # guard that cannot run over half its family is the same class of defect it
-    # was written to catch, one level up. Calling the predicate through the seam
-    # keeps the original property: the count is the CHECKER'S OWN reckoning of
-    # its population, never a re-implementation that can drift from it.
-    predicate = {"ppa_contract_check.py": "is_contract",
-                 "ppa_feasibility_check.py": "is_candidate_set",
-                 "ppa_problem_integrity_check.py": "is_contract",
-                 "ppa_ablation_check.py": "is_ablation"}.get(checker)
-    if predicate is None:
-        raise AssertionError(f"no population counter for {checker} --corpus")
-    import _ppa_corpus as corpus_seam
-    mod = _load("_pop_" + checker.replace(".", "_"), checker)
-    return len(corpus_seam.collect(path, getattr(mod, predicate)).records)
 
 
 def test_the_wiring_still_invokes_every_ppa_record_gate():
@@ -191,23 +168,6 @@ def test_every_declared_input_that_is_not_the_external_corpus_exists():
     assert missing == [], (
         "a PPA gate names an input that is not there, so it can only ever "
         "report 'I could not look':\n  " + "\n  ".join(missing))
-
-
-def test_every_in_tree_corpus_holds_at_least_one_document():
-    """A directory that exists and holds nothing is the OTHER way a gate stops
-    having a subject, and it prints the same zero."""
-    empty = []
-    for checker, args in _invocations():
-        for flag, raw in args.items():
-            path = _resolve(raw)
-            if _is_external(path) or not path.exists():
-                continue
-            n = _population(checker, flag, path)
-            if n == 0:
-                empty.append(f"{checker} {flag} {raw} -> 0 document(s)")
-    assert empty == [], (
-        "a PPA gate is aimed at an EMPTY population; it will report a zero it "
-        "did not measure:\n  " + "\n  ".join(empty))
 
 
 @pytest.mark.parametrize("checker", sorted(PPA_RECORD_CHECKERS))

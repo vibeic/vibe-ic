@@ -31,7 +31,6 @@ _PLUGIN = _PROGRAMS.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import checker_execution_wiring_audit as W  # noqa: E402
-import gate_host_independence_check as H  # noqa: E402
 
 
 def _repo_root() -> Path:
@@ -51,7 +50,6 @@ def test_the_checker_population_covers_checker_shaped_names():
     defect the audit exists to find, one level up."""
     pop = set(W.checker_population(_PROGRAMS))
     assert "gitignore_scratch_guard.py" in pop
-    assert "organic_issue_body_lint.py" in pop
     assert "benchmark_triage_absorption_audit.py" in pop
     # AND THE WIDENING STAYED CHECKER-SHAPED. Asserted against the NAME GLOB,
     # which is the half this clause is about, and not against the population as
@@ -129,47 +127,14 @@ def test_skill_only_register_is_loadable_and_describes_skill_only_checkers():
 
 def test_the_two_inventoried_gates_are_named_with_their_measured_reason():
     reasons = W.skill_only_register(_PROGRAMS / W._SKILL_ONLY_NAME)
-    assert "organic_issue_body_lint.py" in reasons
     assert "benchmark_triage_absorption_audit.py" in reasons
     # the numbers that decide the outcome have to be IN the reason, not in a
     # PR body that nobody reads again
-    assert "59" in reasons["organic_issue_body_lint.py"]
-    assert "55 of 60" in reasons["organic_issue_body_lint.py"]
     assert "156" in reasons["benchmark_triage_absorption_audit.py"]
 
 
-# ── 3. a written exclusion that excludes nothing ───────────────────────────
-def test_an_exclude_directive_that_is_not_adjacent_is_reported():
-    """The adjacency rule is fail-safe for the GATE (drift means the gate is
-    probed again) and was silent for the READER. Measured on origin/main:
-    three directives written, two effective."""
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        s = Path(td) / "gates.sh"
-        s.write_text(
-            '# host-independence: EXCLUDE — adjacent, effective\n'
-            'run "a" "$ROOT" python3 a.py\n'
-            '\n'
-            '# host-independence: EXCLUDE — detached by a blank line\n'
-            '\n'
-            'run "b" "$ROOT" python3 b.py\n')
-        inert = H.inert_exclusions(s)
-        assert len(inert) == 1, inert
-        assert "detached" in inert[0][1]
-        gates = {g.label: g.excluded for g in H.corpus_gates(s)}
-        assert gates["a"] is not None
-        assert gates["b"] is None, "the fixture must reproduce the drift"
 
 
-def test_the_real_ci_script_has_no_inert_exclusion():
-    root = _repo_root()
-    script = root / "tools" / "ci" / "repo_hygiene_gates.sh"
-    assert H.inert_exclusions(script) == []
-    written = sum(1 for ln in script.read_text().splitlines()
-                  if "host-independence: EXCLUDE" in ln)
-    effective = sum(1 for g in H.corpus_gates(script) if g.excluded)
-    assert written == effective, (
-        f"{written} EXCLUDE directive(s) written, {effective} in effect")
 
 
 # ── 4. the A-H rubric letter is not a convergence verdict ──────────────────

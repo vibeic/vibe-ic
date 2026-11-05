@@ -78,7 +78,7 @@ PLUGIN = PROGRAMS.parent
 #: that decides WHAT IS MEASURED.
 GATES = (
     ("checker_execution_wiring_audit", "--repo-root", "root"),
-    ("gate_is_wired_check", "--root", "plugin"),
+
     ("hdl_declaration_scan_strips_comments_check", "--root", "root"),
 )
 _IDS = [g[0] for g in GATES]

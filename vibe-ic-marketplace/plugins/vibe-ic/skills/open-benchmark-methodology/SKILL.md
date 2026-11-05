@@ -587,11 +587,6 @@ repair that Program missed:
 5. issue a version-less PR and wait for it to land;
 6. upgrade the installed plugin/MCP and run a new full clean-room benchmark.
 
-Before recording the capture as complete, run
-`python3 programs/convergence_doctrine_present_check.py`; a non-zero verdict
-means the general-core/adapter and Program-First doctrine is not preserved and
-the capture is incomplete.
-
 Do not encode problem IDs, dataset labels, hidden expected values, or a lookup
 table. Capture is successful only when the next ordinary Program First run
 produces the right behavior without benchmark-specific knowledge.

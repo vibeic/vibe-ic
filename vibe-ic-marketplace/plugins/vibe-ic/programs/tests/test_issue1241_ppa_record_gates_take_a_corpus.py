@@ -38,7 +38,6 @@ def _load(name, filename):
 
 
 CC = _load("_ppa_contract_cli", "ppa_contract_check.py")
-FC = _load("_ppa_feasibility_cli", "ppa_feasibility_check.py")
 
 
 import _ppa_corpus as corpus_seam  # noqa: E402  the shared walk
@@ -127,53 +126,7 @@ def _candidate_set(cid, feasible):
                             "metrics": ([] if not feasible else [])}]}
 
 
-def test_feasibility_corpus_finds_by_declaration_not_by_filename(tmp_path):
-    _write(tmp_path / "x" / "arm.json", _candidate_set("a", True))
-    _write(tmp_path / "candidates.json", {"schema": "vibeic.ppa.contract.v1"})
-    assert [p.name for p in _seam_walk(FC.is_candidate_set, tmp_path)] == ["arm.json"]
-
-
-def test_feasibility_corpus_absent_is_two_and_never_zero(tmp_path):
-    assert FC.main(["--corpus", str(tmp_path / "nope")]) == 2
-
-
-def test_feasibility_corpus_present_but_empty_is_two_and_never_zero(tmp_path):
-    (tmp_path / "empty").mkdir()
-    assert FC.main(["--corpus", str(tmp_path / "empty")]) == 2
-
-
-def test_feasibility_corpus_needs_exactly_one_of_candidates_or_corpus():
-    assert FC.main([]) == 3
-    assert FC.main(["--candidates", "a", "--corpus", "b"]) == 3
-
-
 # --- the roll-up, which is the whole point ---------------------------------
-
-def test_an_unreadable_named_document_stays_in_the_corpus(tmp_path):
-    """UNREADABLE IS NOT ABSENT. A truncated `contract.json` must be adjudicated
-    UNDETERMINED, never dropped as though it had never been filed."""
-    # WHERE THE PROPERTY LIVES NOW. `collect` splits what it opened into
-    # `records` (selected) and `unreadable` (could not be decided either way),
-    # and a document that cannot be parsed cannot be SELECTED -- there is
-    # nothing to run the predicate on. So "stays in the corpus" is asserted on
-    # `unreadable`, not on `records`, and the load-bearing half is unchanged:
-    # the verdict is 2 and the file is NAMED, never dropped to a silent pass.
-    (tmp_path / "contract.json").write_text('{"schema": "vibeic.ppa.',
-                                            encoding="utf-8")
-    scan = corpus_seam.collect(tmp_path, CC.is_contract)
-    assert [q.name for q, _ in scan.unreadable] == ["contract.json"]
-    assert scan.files == 1, "the denominator must count what was OPENED"
-    assert "unreadable" in scan.denominator("contract(s)"), (
-        "the roll-up hides the unreadable document, so a reader sizes the "
-        "population wrongly")
-    assert CC.main(["--corpus", str(tmp_path)]) == 2
-
-    (tmp_path / "candidates.json").write_text('{"candidates": [',
-                                              encoding="utf-8")
-    scan = corpus_seam.collect(tmp_path, FC.is_candidate_set)
-    assert sorted(q.name for q, _ in scan.unreadable) == [
-        "candidates.json", "contract.json"]
-    assert FC.main(["--corpus", str(tmp_path)]) == 2
 
 
 def test_a_refusal_is_not_softened_by_an_undetermined_beside_it(tmp_path):

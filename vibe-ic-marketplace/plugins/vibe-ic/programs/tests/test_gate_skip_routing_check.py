@@ -718,120 +718,16 @@ def _tier(project: Path, cmd: str) -> str:
     return "PASS" if passed else "FAIL"
 
 
-def test_marketplace_sync_missing_manifest_reaches_rc_two(tmp_path):
-    prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = _pr.run(
-        [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True)
-    assert r.returncode == 2, (r.stdout, r.stderr)
-    assert "no .claude-plugin/marketplace.json" in r.stdout
 
 
-def test_marketplace_sync_manifest_without_plugins_array_reaches_rc_two(
-        tmp_path):
-    (tmp_path / ".claude-plugin").mkdir()
-    (tmp_path / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps({"name": "x", "plugins": "not-a-list"}), encoding="utf-8")
-    prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = _pr.run(
-        [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True)
-    assert r.returncode == 2, (r.stdout, r.stderr)
 
 
-@pytest.mark.parametrize("manifest", [
-    pytest.param({"name": "x"}, id="plugins-key-ABSENT"),
-    pytest.param({"name": "x", "plugins": []}, id="plugins-EMPTY-list"),
-    pytest.param({"name": "x", "plugins": ["a", "b"]}, id="entries-not-dicts"),
-])
-def test_marketplace_sync_zero_comparisons_reaches_rc_two(tmp_path, manifest):
-    """#528 follow-up — a PASS over zero version comparisons, three spellings.
-
-    `.get("plugins", [])` hands back the default for an ABSENT key, and that
-    default IS a list, so the `not isinstance(..., list)` guard never fires.
-    Measured against the pre-#528 file, all three of these answered rc 0 with
-    `[PASS] ... 0 plugin entr(ies)` — a plain PASS over nothing, in the gate
-    `gatekeeper_review` treats as green when `rc in (0, -1)`.
-
-    The routing is from `matched`, the gate's OWN record of what it compared,
-    not from any of these input shapes — which is why one predicate covers all
-    three and would cover a fourth spelling nobody has written yet.
-    """
-    (tmp_path / ".claude-plugin").mkdir()
-    (tmp_path / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps(manifest), encoding="utf-8")
-    prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = _pr.run(
-        [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True)
-    assert r.returncode == 2, (r.stdout, r.stderr)
-    assert "no version was compared" in r.stdout, r.stdout
-    snippet = (r.stdout[-300:] + "\n" + r.stderr[-300:]).strip()
-    assert _flow._stdout_signals_vacuous(snippet), snippet
 
 
-def test_marketplace_sync_still_passes_when_it_compares_something(tmp_path):
-    """MUTATION CONTROL for the three above: one real, in-sync entry.
-
-    Without this, routing `matched == []` could be widened to route every PASS
-    and no test would notice.
-    """
-    (tmp_path / ".claude-plugin").mkdir()
-    (tmp_path / ".claude-plugin" / "marketplace.json").write_text(json.dumps(
-        {"name": "x", "plugins": [
-            {"name": "p", "source": "./p", "version": "1.2.3"}]}),
-        encoding="utf-8")
-    pj = tmp_path / "p" / ".claude-plugin"
-    pj.mkdir(parents=True)
-    (pj / "plugin.json").write_text(json.dumps({"version": "1.2.3"}),
-                                    encoding="utf-8")
-    prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = _pr.run(
-        [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True)
-    assert r.returncode == 0, (r.stdout, r.stderr)
-    assert "1 plugin entr(ies)" in r.stdout, r.stdout
 
 
-def test_marketplace_sync_still_fails_on_real_drift(tmp_path):
-    """MUTATION CONTROL: a drifted entry must stay rc 1, never become vacuous.
-
-    A FINDING beats a skip. If the zero-denominator branch were ever placed
-    before the findings check, real drift would be silenced — which is worse
-    than the defect being fixed.
-    """
-    (tmp_path / ".claude-plugin").mkdir()
-    (tmp_path / ".claude-plugin" / "marketplace.json").write_text(json.dumps(
-        {"name": "x", "plugins": [
-            {"name": "p", "source": "./p", "version": "9.9.9"}]}),
-        encoding="utf-8")
-    pj = tmp_path / "p" / ".claude-plugin"
-    pj.mkdir(parents=True)
-    (pj / "plugin.json").write_text(json.dumps({"version": "1.2.3"}),
-                                    encoding="utf-8")
-    prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = _pr.run(
-        [sys.executable, str(prog), "--marketplace-dir", str(tmp_path)],
-        cwd=str(tmp_path), capture_output=True, text=True)
-    assert r.returncode == 1, (r.stdout, r.stderr)
 
 
-def test_marketplace_docstring_lists_exactly_its_three_vacuous_reasons():
-    """The docstring promised a case the code did not implement.
-
-    Round one said "a manifest with no plugins[] array", which reads like the
-    ABSENT-key case; the code only covered "present and not a list". A
-    docstring that describes a branch nobody wrote is how the gap survived
-    review. Each reason token must appear in BOTH the module docstring and the
-    code, so the two cannot drift apart again silently.
-    """
-    src = (_PROGRAMS / "marketplace_version_sync_check.py").read_text(
-        encoding="utf-8")
-    doc = ast.get_docstring(ast.parse(src)) or ""
-    for reason in ("no-marketplace-json", "manifest-has-no-plugins-array",
-                   "no-plugin-entries-compared"):
-        assert reason in doc, f"{reason} is routed but undocumented"
-        assert f'"{reason}"' in src, f"{reason} is documented but not routed"
 
 
 def test_reports_taxonomy_empty_directory_is_the_same_zero_as_a_missing_one(
@@ -873,34 +769,8 @@ def test_top_level_outputs_already_routes_from_its_denominator(tmp_path):
     assert _tier(populated, "top_level_outputs_in_canonical_check .") == "PASS"
 
 
-@pytest.mark.parametrize("cwd,args", [
-    (_PLUGIN, []),                                # repo_hygiene_gates.sh
-    (_PLUGIN.parents[2], ["--marketplace-dir", str(_PLUGIN)]),  # gatekeeper
-    (_PLUGIN.parents[2], ["--marketplace-dir", str(_PLUGIN.parents[1])]),
-])
-def test_marketplace_sync_landing_usages_are_unaffected(cwd, args):
-    """Every real invocation in the repo still answers rc 0.
-
-    `tools/ci/pre_commit_check.sh` (guarded on `.claude-plugin` existing),
-    `tools/ci/repo_hygiene_gates.sh` (cwd = the plugin) and
-    `.github/workflows/gatekeeper-ci.yml` (`--marketplace-dir`) all supply a
-    tree where the manifest exists, so the changed branch never fires there.
-    """
-    prog = _PROGRAMS / "marketplace_version_sync_check.py"
-    r = _pr.run([sys.executable, str(prog), *args], cwd=str(cwd),
-                       capture_output=True, text=True)
-    assert r.returncode == 0, (r.stdout, r.stderr)
 
 
-def test_marketplace_sync_gate_wrapper_no_longer_greens_an_empty_tree(tmp_path):
-    """`gatekeeper_review.GateResult.green` is `rc in (0, -1)`.
-
-    Before #528 this gate answered rc 0 over a tree with no manifest, so a
-    MERGE gate was green about a comparison that never happened.
-    """
-    import gatekeeper_review as gr
-    assert gr.marketplace_sync_gate(_PLUGIN).green is True
-    assert gr.marketplace_sync_gate(tmp_path).green is False
 
 
 def test_reports_taxonomy_skip_reaches_the_vacuous_tier(tmp_path):

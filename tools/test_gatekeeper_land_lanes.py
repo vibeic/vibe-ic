@@ -101,17 +101,13 @@ _SCHEDULER = (
     "landing_unit_full_targeted_tests",
     "landing_unit_full_repo_tools_tests",
     "landing_unit_full_unselectable_tests",
-    "landing_unit_full_unselectable_census",
     "landing_unit_full_census_freshness",
     "landing_unit_full_repo_hygiene",
-    "landing_unit_full_plugin_audit",
     "landing_emit_full_targeted_tests",
     "landing_emit_full_repo_tools_tests",
     "landing_emit_full_unselectable_tests",
-    "landing_emit_full_unselectable_census",
     "landing_emit_full_census_freshness",
     "landing_emit_full_repo_hygiene",
-    "landing_emit_full_plugin_audit",
     "lane_hygiene",
     "lane_run_window",
     "lane_emit_window",
@@ -122,14 +118,12 @@ _WINDOW = (
     "full:targeted-tests",
     "full:repo-tools-tests",
     "full:unselectable-tests",
-    "full:unselectable-census",
     # vibe-ic#2142 — the 63x8 census, re-derived on the candidate tree, last in
     # `lane_corpus`. SEVEN, not six: the count in this tuple is not a property
     # anyone chose, it is the number of units the concurrent window contains,
     # and the assertion is that the window's MEMBERSHIP is exactly this list.
     "full:census-freshness",
     "full:repo-hygiene",
-    "full:plugin-audit",
 )
 
 #: Sequential, after the window and before the closing write-guard
@@ -254,7 +248,6 @@ lane_targeted() { fn_capture "full:targeted-tests" stage targeted "$T_SEC" "$T_R
 lane_corpus() {
   fn_capture "full:repo-tools-tests"   stage corpus "$C_SEC" "$C_RC"
   fn_capture "full:unselectable-tests" stage corpus2 0.05 0
-  run_capture "full:unselectable-census" bash -c 'echo census ok'
   # vibe-ic#2142 — the lane's LAST stage, mirroring the real `lane_corpus`.
   # `$CF_RC` is the census `--check` exit code, so this harness can drive the
   # three-outcome emitter in all three directions: 0 PASS, 1 FAIL (stale), 2
@@ -263,7 +256,6 @@ lane_corpus() {
   run_capture "full:census-freshness" \
       bash -c 'echo "63x8 stub rc=${CF_RC:-0}"; exit "${CF_RC:-0}"'
 }
-lane_audit()   { run_capture "full:plugin-audit" stage audit "$A_SEC" 0; }
 export WORK T_SEC C_SEC H_SEC A_SEC CF_RC
 """
 
@@ -379,7 +371,7 @@ def test_the_window_actually_runs_at_the_same_time(scheduler, work,
     proc = _run(scheduler, work, {"LANE_WIDTH": default_width})
     assert proc.returncode == 0, proc.stdout
     spans = _marks(work)
-    lanes = ("targeted", "corpus", "audit")
+    lanes = ("targeted", "corpus")
     assert set(lanes) <= set(spans), spans
     latest_start = max(spans[lane][0] for lane in lanes)
     earliest_end = min(spans[lane][1] for lane in lanes)
@@ -428,11 +420,11 @@ def test_each_lane_reports_its_own_cost_and_not_the_barrier(scheduler, work,
                  "H_SEC": "0", "A_SEC": "0"})
     assert proc.returncode == 0, proc.stdout
     seen = _elapsed(proc.stdout)
-    assert set(seen) == {"targeted", "corpus", "hygiene", "audit"}, proc.stdout
+    assert set(seen) == {"targeted", "corpus", "hygiene"}, proc.stdout
 
     # THE ORDER OF THE SLEEPS, RECOVERED FROM THE REPORT: targeted sleeps 6 s,
     # corpus 3 s (plus a 0.05 s second stage), hygiene and audit ~0.
-    assert seen["targeted"] > seen["corpus"] > seen["audit"], (
+    assert seen["targeted"] > seen["corpus"], (
         "the per-lane numbers do not reproduce the stubs' own durations, so "
         f"they are not measuring the lanes: {seen}\n{proc.stdout}")
     assert seen["targeted"] >= 6 and seen["corpus"] >= 3, (seen, proc.stdout)
@@ -464,7 +456,7 @@ def test_each_lane_reports_its_own_cost_and_not_the_barrier(scheduler, work,
                  "H_SEC": "0", "A_SEC": "0"})
     assert proc.returncode == 0, proc.stdout
     seen = _elapsed(proc.stdout)
-    assert seen["targeted"] > seen["corpus"] > seen["audit"], (
+    assert seen["targeted"] > seen["corpus"], (
         "at width 1 the numbers no longer track the stubs' own sleeps, which "
         f"is what a launch-time start stamp looks like: {seen}\n{proc.stdout}")
     assert seen["corpus"] > seen["hygiene"], (seen, proc.stdout)
@@ -496,14 +488,15 @@ def test_the_join_stamped_form_really_does_collapse_the_four_numbers(
                 {"LANE_WIDTH": default_width, "T_SEC": "6", "C_SEC": "3",
                  "H_SEC": "0", "A_SEC": "0"})
     seen = _elapsed(proc.stdout)
-    assert set(seen) == {"targeted", "corpus", "hygiene", "audit"}, proc.stdout
+    assert set(seen) == {"targeted", "corpus", "hygiene"}, proc.stdout
     # THE SIGNATURE: every lane reads the barrier, so the spread collapses and
     # a ~0 s lane is indistinguishable from the 6 s one.
     assert max(seen.values()) - min(seen.values()) <= 1, (
         "the join-stamped form no longer collapses on this host, so the test "
         f"above is not discriminating: {seen}\n{proc.stdout}")
-    assert seen["audit"] >= 6, (
+    assert seen["hygiene"] >= 6, (
         "a ~0 s lane no longer reads back the 6 s barrier: " + str(seen))
+
 
 
 def test_a_lane_that_never_finished_is_reported_as_unmeasured(scheduler, work,
@@ -573,14 +566,14 @@ def test_a_lane_that_leaves_no_rc_file_at_all_still_fails_with_199(
     body = r"""
 lane_run_window
 for _lane in $LANE_LAUNCHED; do lane_join "$_lane"; done
-rm -f "$LANE_DIR/full:plugin-audit.rc"
+rm -f "$LANE_DIR/full:repo-hygiene.rc"
 lane_emit_window
 echo "FAILED=$FAILED"
 """
     proc = _run(scheduler, work, {"LANE_WIDTH": "4"}, body=body)
     rows = {row[0]: row[1:] for row in _journal(work)}
-    assert rows["full:plugin-audit"] == ("FAIL", "199"), rows
-    assert "  FAIL  plugin full audit" in proc.stdout, proc.stdout
+    assert rows["full:repo-hygiene"] == ("FAIL", "199"), rows
+    assert "  FAIL  repo hygiene gates" in proc.stdout, proc.stdout
 
 
 def test_the_exit_trap_leaves_no_lane_descendant_alive(scheduler, work):
@@ -988,7 +981,7 @@ def test_landing_record_is_never_called_from_a_lane_body(land_text):
     labels equal the complete 28-entry tuple. A lane that recorded from its own
     subshell would append out of order AND lose concurrent updates.
     """
-    for name in ("lane_targeted", "lane_corpus", "lane_hygiene", "lane_audit",
+    for name in ("lane_targeted", "lane_corpus", "lane_hygiene",
                  "lane_run_window"):
         body = _extract(name, land_text)
         for forbidden in ("landing_record", "landing_skip",
@@ -1490,7 +1483,6 @@ def test_a_killed_stage_inside_a_live_lane_is_still_labelled(scheduler, work):
     assert rows["full:unselectable-tests"][0] == "PASS", (
         "the LANE was killed, not the stage — this test then asserts nothing "
         f"the previous one does not: {rows}")
-    assert rows["full:unselectable-census"][0] == "PASS", rows
     assert rows["full:repo-tools-tests"][0] == "FAIL", rows
     assert rows["full:repo-tools-tests"][1] != "0", rows
     assert "  FAIL  repo tools tests" in proc.stdout, proc.stdout

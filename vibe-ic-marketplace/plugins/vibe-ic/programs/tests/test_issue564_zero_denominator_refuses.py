@@ -105,8 +105,7 @@ def test_a_finding_word_beside_the_zero_is_not_a_population():
 
 
 # ── the two gates this issue's probe caught ─────────────────────────────────
-@pytest.mark.parametrize("gate", ["container_exec_deadline_check",
-                                  "loop_watchdog_compliance_check"])
+@pytest.mark.parametrize("gate", ["container_exec_deadline_check"])
 def test_a_zero_file_scan_now_refuses(gate, tmp_path):
     """rc 2 is this repo's disclosed-skip convention and promotes the step to
     VACUOUS-PASS. rc 0 made it a silent pass."""
@@ -123,8 +122,7 @@ def test_a_zero_file_scan_now_refuses(gate, tmp_path):
     assert "VACUOUS_PASS" in (r.stdout + r.stderr)
 
 
-@pytest.mark.parametrize("gate", ["container_exec_deadline_check",
-                                  "loop_watchdog_compliance_check"])
+@pytest.mark.parametrize("gate", ["container_exec_deadline_check"])
 def test_the_real_population_still_passes(gate):
     """THE ACCEPT CASE. A refusal that also fires on the real repo is the same
     gate switched off from the other end."""

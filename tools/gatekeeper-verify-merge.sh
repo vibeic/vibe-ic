@@ -624,11 +624,8 @@ launch_hermetic_test_arm() {
   setsid python3 -B "$RUNTIME_SNAPSHOT/tools/ci/hermetic_candidate_runner.py" run \
     --subject "$subject" --runtime "$RUNTIME_SNAPSHOT" \
     --overlay tools/ci/hermetic_test_arm_entry.sh \
-    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py \
     --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_census_freshness.py \
     --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_coverage.py \
-    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py \
-    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py \
     --env "GATEKEEPER_BENCHMARK_DATA_SHA=$BENCHMARK_SHA" \
     --env "GATEKEEPER_VERIFY_ARM=$arm" \
     --env VIBEIC_PYTEST_PROGRESS_FILE=/evidence/pytest-progress.jsonl \

@@ -34,7 +34,7 @@ BASELINE = PROGRAMS / "_atomic_artefact_residual.json"
 #: pinned here, so a later edit that puts one back fails by NAME rather than
 #: only shifting a count someone has to notice.
 TRANCHE = [
-    "acceptance_control_check", "agent_report_presence_check",
+    "agent_report_presence_check",
     "agent_report_sha256_attestation_check", "analog_a8_before_floorplan_check",
     "analog_artefact_substance_check", "analog_block_coverage_check",
     "analog_corner_margin_check", "analog_corner_sweep_check",

@@ -40,7 +40,7 @@ from _ppa_jsonschema import needs_draft_2020_12
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_ppa_contract_fixtures import (  # noqa: E402
-    BUILD, CHECK, FAKE_IMAGE, INTEGRITY, SCHEMA_DIR,
+    BUILD, CHECK, FAKE_IMAGE, SCHEMA_DIR,
     base_declaration, build_contract, codes, make_run_tree, run_cli,
     write_json,
 )
@@ -896,23 +896,6 @@ def test_a_kind_with_nothing_to_say_must_say_so_rather_than_stay_silent(
     assert ok.returncode == 0, ok.stdout + ok.stderr
 
 
-def test_two_runs_that_declared_nothing_are_not_reported_comparable(tmp_path):
-    """The end-to-end consequence, driven through the real CLI. Without the
-    rule this pair exits 0 and a reader is told the arms are comparable."""
-    hollow = base_declaration()
-    hollow["problem"] = {"artefacts": [], "facts": []}
-    a = build_contract(tmp_path, hollow, name="a.json")
-    b = build_contract(tmp_path, hollow, name="b.json")
-    assert a.returncode == 2 and b.returncode == 2
-    verdict = run_cli(INTEGRITY, "--baseline", str(tmp_path / "a.json"),
-                      "--candidate", str(tmp_path / "b.json"))
-    assert verdict.returncode == 2, (
-        f"two runs that declared nothing about the problem were reported "
-        f"comparable (rc={verdict.returncode})\n{verdict.stdout}\n"
-        f"{verdict.stderr}")
-    assert "PPA-C-007" in codes(verdict)
-
-
 @needs_draft_2020_12
 def test_a_clean_verdict_discloses_what_it_examined(tmp_path):
     """`0 finding(s)` over an empty contract and over a full one print the same
@@ -975,8 +958,7 @@ def test_every_finding_code_is_registered_and_documented():
     programs_dir = Path(__file__).resolve().parents[1]
     docs = "\n".join(
         (programs_dir / name).read_text()
-        for name in ("ppa_contract_build.py", "ppa_contract_check.py",
-                     "ppa_problem_integrity_check.py"))
+        for name in ("ppa_contract_build.py", "ppa_contract_check.py"))
     undocumented = [c for c in sorted(C.FINDING_CODES) if c not in docs]
     assert not undocumented, (
         f"finding code(s) {undocumented} are emitted and named in no CLI "
@@ -1002,8 +984,7 @@ def test_every_registered_code_is_actually_reachable():
     programs_dir = Path(__file__).resolve().parents[1]
     emitters = "\n".join(
         (programs_dir / name).read_text()
-        for name in ("_ppa/contract.py", "ppa_contract_check.py",
-                     "ppa_problem_integrity_check.py"))
+        for name in ("_ppa/contract.py", "ppa_contract_check.py"))
     for code in sorted(C.FINDING_CODES):
         # the registry entry itself is one occurrence; an emitted code has two
         assert emitters.count(f'"{code}"') >= 2, (

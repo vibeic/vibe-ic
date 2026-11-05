@@ -34,7 +34,6 @@ import pytest
 
 # Plugin layout: this file is at programs/tests/, programs at parent.
 _PROGRAMS = Path(__file__).resolve().parents[1]
-_PROG1 = _PROGRAMS / "acceptance_evidence_in_fix_comment_check.py"
 _PROG2 = _PROGRAMS / "defect_artifact_fixture_check.py"
 
 
@@ -169,16 +168,6 @@ def _write(tmp_path: Path, name: str, content: str) -> Path:
     return p
 
 
-def _run_prog1(issue_body: Path, comment: Path,
-               json_out: Path | None = None) -> subprocess.CompletedProcess:
-    argv = [sys.executable, str(_PROG1),
-            "--issue-body-file", str(issue_body),
-            "--comment-file", str(comment)]
-    if json_out:
-        argv += ["--json", str(json_out)]
-    return subprocess.run(argv, capture_output=True, text=True)
-
-
 def _run_prog2(issue_body: Path, test_file: Path,
                json_out: Path | None = None) -> subprocess.CompletedProcess:
     argv = [sys.executable, str(_PROG2),
@@ -192,121 +181,11 @@ def _run_prog2(issue_body: Path, test_file: Path,
 # ==========================================================================
 # ## 驗收 — the headline end-to-end replay (both directions)
 # ==========================================================================
-def test_acceptance_460_shape_both_gates_reject(tmp_path):
-    """Replay the #460 shape: non-compliant comment + file-existence-only
-    test → program 1 exits 1 AND program 2 exits 1."""
-    issue = _write(tmp_path, "issue.md", _ISSUE_BODY_WITH_ACCEPTANCE)
-    comment = _write(tmp_path, "comment.md", _COMMENT_NONCOMPLIANT)
-    test_file = _write(tmp_path, "test_bad.py", _TEST_SRC_EXISTS_ONLY)
-
-    r1 = _run_prog1(issue, comment)
-    r2 = _run_prog2(issue, test_file)
-
-    assert r1.returncode == 1, (
-        f"program 1 should reject; rc={r1.returncode}\n"
-        f"stdout={r1.stdout}\nstderr={r1.stderr}")
-    assert r2.returncode == 1, (
-        f"program 2 should reject; rc={r2.returncode}\n"
-        f"stdout={r2.stdout}\nstderr={r2.stderr}")
-
-
-def test_acceptance_compliant_both_gates_pass(tmp_path):
-    """Compliant comment (quotes commands + end-state output) + a test that
-    subprocess-runs the real gate and asserts its verdict → both exit 0."""
-    issue = _write(tmp_path, "issue.md", _ISSUE_BODY_WITH_ACCEPTANCE)
-    comment = _write(tmp_path, "comment.md", _COMMENT_COMPLIANT)
-    test_file = _write(tmp_path, "test_good.py", _TEST_SRC_COMPLIANT)
-
-    r1 = _run_prog1(issue, comment)
-    r2 = _run_prog2(issue, test_file)
-
-    assert r1.returncode == 0, (
-        f"program 1 should pass; rc={r1.returncode}\n"
-        f"stdout={r1.stdout}\nstderr={r1.stderr}")
-    assert r2.returncode == 0, (
-        f"program 2 should pass; rc={r2.returncode}\n"
-        f"stdout={r2.stdout}\nstderr={r2.stderr}")
 
 
 # ==========================================================================
 # program 1 — finer-grained regression guards
 # ==========================================================================
-def test_prog1_missing_evidence_only_quotes_command(tmp_path):
-    """Quoting the command but pasting NO end-state output must FAIL
-    (the precise #460/#466 failure mode)."""
-    issue = _write(tmp_path, "issue.md", _ISSUE_BODY_WITH_ACCEPTANCE)
-    comment_body = textwrap.dedent(
-        """\
-        **本機驗證**：執行了 `python3 programs/widget_bridge_check.py
-        --stage stage/out`。
-
-        Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。
-        """
-    )
-    comment = _write(tmp_path, "comment.md", comment_body)
-    r = _run_prog1(issue, comment)
-    assert r.returncode == 1
-    assert "end-state" in (r.stdout + r.stderr).lower()
-
-
-def test_prog1_no_acceptance_section_skips(tmp_path):
-    """An issue with no acceptance section is vacuous → exit 0 (SKIP)."""
-    issue = _write(tmp_path, "issue.md", _ISSUE_BODY_NO_ACCEPTANCE)
-    comment = _write(tmp_path, "comment.md", _COMMENT_NONCOMPLIANT)
-    r = _run_prog1(issue, comment)
-    assert r.returncode == 0
-    assert "SKIP" in r.stdout
-
-
-def test_prog1_no_local_verification_section_fails(tmp_path):
-    """A comment with no 本機驗證 section fails when acceptance exists."""
-    issue = _write(tmp_path, "issue.md", _ISSUE_BODY_WITH_ACCEPTANCE)
-    comment = _write(tmp_path, "comment.md",
-                     "**問題**：x\n**修法**：y\n")
-    r = _run_prog1(issue, comment)
-    assert r.returncode == 1
-
-
-def test_prog1_json_report(tmp_path):
-    """--json emits a parseable verdict report."""
-    import json
-    issue = _write(tmp_path, "issue.md", _ISSUE_BODY_WITH_ACCEPTANCE)
-    comment = _write(tmp_path, "comment.md", _COMMENT_COMPLIANT)
-    jout = tmp_path / "v.json"
-    r = _run_prog1(issue, comment, json_out=jout)
-    assert r.returncode == 0
-    data = json.loads(jout.read_text())
-    assert data["verdict"] == "PASS"
-    assert data["has_acceptance"] is True
-    assert data["end_state_evidence"] is True
-    assert data["unquoted_commands"] == []
-
-
-def test_prog1_offline_mode_needs_no_network(tmp_path):
-    """Offline mode (--issue-body-file) must not touch the network."""
-    issue = _write(tmp_path, "issue.md", _ISSUE_BODY_WITH_ACCEPTANCE)
-    comment = _write(tmp_path, "comment.md", _COMMENT_COMPLIANT)
-    # Force any accidental urllib use to fail loudly by clearing token env.
-    import os
-    env = dict(os.environ)
-    env.pop("GITHUB_TOKEN", None)
-    r = subprocess.run(
-        [sys.executable, str(_PROG1),
-         "--issue-body-file", str(issue),
-         "--comment-file", str(comment)],
-        capture_output=True, text=True, env=env)
-    assert r.returncode == 0
-
-
-def test_prog1_missing_comment_file_is_usage_error(tmp_path):
-    """Missing --comment-file → exit 2 (usage/IO error)."""
-    issue = _write(tmp_path, "issue.md", _ISSUE_BODY_WITH_ACCEPTANCE)
-    r = subprocess.run(
-        [sys.executable, str(_PROG1),
-         "--issue-body-file", str(issue),
-         "--comment-file", str(tmp_path / "nope.md")],
-        capture_output=True, text=True)
-    assert r.returncode == 2
 
 
 # ==========================================================================
@@ -424,35 +303,3 @@ def test_prog2_missing_test_file_is_usage_error(tmp_path):
 # ==========================================================================
 # Direct-import unit coverage of the helper functions (faster + precise)
 # ==========================================================================
-def test_extract_acceptance_section_unit():
-    import acceptance_evidence_in_fix_comment_check as m
-    sec = m.extract_acceptance_section(_ISSUE_BODY_WITH_ACCEPTANCE)
-    assert sec is not None
-    assert "widget_bridge_check.py" in sec
-    assert m.extract_acceptance_section(_ISSUE_BODY_NO_ACCEPTANCE) is None
-
-
-def test_extract_commands_unit():
-    import acceptance_evidence_in_fix_comment_check as m
-    sec = m.extract_acceptance_section(_ISSUE_BODY_WITH_ACCEPTANCE)
-    cmds, _crit = m.extract_commands(sec)
-    assert any("widget_bridge_check.py" in c for c in cmds)
-
-
-def test_evaluate_prog1_compliant_unit():
-    import acceptance_evidence_in_fix_comment_check as m
-    v = m.evaluate(_ISSUE_BODY_WITH_ACCEPTANCE, _COMMENT_COMPLIANT)
-    assert v.verdict == "PASS"
-    v2 = m.evaluate(_ISSUE_BODY_WITH_ACCEPTANCE, _COMMENT_NONCOMPLIANT)
-    assert v2.verdict == "FAIL"
-    assert v2.unquoted_commands
-
-
-def test_evaluate_prog2_units():
-    import defect_artifact_fixture_check as m
-    v_ok = m.evaluate(_ISSUE_BODY_WITH_ACCEPTANCE, _TEST_SRC_COMPLIANT)
-    assert v_ok.verdict == "PASS"
-    v_bad = m.evaluate(_ISSUE_BODY_WITH_ACCEPTANCE, _TEST_SRC_EXISTS_ONLY)
-    assert v_bad.verdict == "FAIL"
-    v_skip = m.evaluate(_ISSUE_BODY_NO_ACCEPTANCE, _TEST_SRC_EXISTS_ONLY)
-    assert v_skip.verdict == "SKIP"

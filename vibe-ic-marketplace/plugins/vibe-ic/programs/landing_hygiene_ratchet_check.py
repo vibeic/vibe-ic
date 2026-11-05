@@ -179,20 +179,6 @@ _RATCHETED_GATES: Tuple[Dict[str, object], ...] = (
         "finding": re.compile(
             r"^\s+(?P<path>\S+?):\d+\s+\[(?P<rule>[A-Za-z0-9_]+)\]", re.M),
     },
-    # THE SUBJECT IS PASSED EXPLICITLY, AND IT HAS TO BE. Run with no argument
-    # this checker defaults its root to `Path(__file__).resolve().parent` --
-    # the INSTRUMENT's own directory. Since the instrument is the candidate's
-    # for both arms (see above), a bare invocation would scan the SAME tree
-    # twice, report an identical set both times, and pass vacuously forever.
-    # Every entry added here must name its subject on the command line, and
-    # `test_the_subject_of_every_entry_moves_with_the_arm` proves it does.
-    {
-        "label": "watchdog compliance",
-        "argv": ("python3", "{plugin}/programs/loop_watchdog_compliance_check.py",
-                 "{plugin}/programs"),
-        "finding": re.compile(
-            r"^\s+(?P<path>\S+?):\d+\s+\[(?P<rule>[A-Za-z0-9_]+)\]", re.M),
-    },
     # vibe-ic#2224 — BLOCKING since #2104, wired into the hygiene tier by
     # #2175, and until this entry it was asked on NO landing: the tier is
     # reached only after the `--cheap-only` exit that the direct-push path

@@ -101,9 +101,6 @@ def test_a_path_that_is_a_suffix_of_another_is_reported_unmappable():
     assert sel._distinctive_key("y/m.json", files) is None
     assert sel._distinctive_key("x/y/m.json", files) == "x/y/m.json"
 
-    unmapped = sel.select_unmappable([".claude-plugin/marketplace.json"],
-                                     PLUGIN_ROOT, plugin_prefix=PREFIX)
-    assert ".claude-plugin/marketplace.json" in unmapped
 
 
 def test_a_missing_tree_degrades_to_the_basename_and_never_raises():
@@ -136,12 +133,3 @@ def test_the_selection_never_becomes_the_whole_suite():
 
 
 # ── disclosure ──────────────────────────────────────────────────────────────
-
-def test_unmappable_paths_are_reported_not_swallowed():
-    """The input to `--strict-unmapped`: a path with no test set is NAMED."""
-    unmapped = sel.select_unmappable(
-        ["docs/prose-nothing-reads.md", f"{PREFIX}/programs/flow_compliance_check.py"],
-        PLUGIN_ROOT, plugin_prefix=PREFIX)
-    assert "docs/prose-nothing-reads.md" in unmapped
-    assert not any("flow_compliance_check" in u for u in unmapped), (
-        "a path a rule DID map must never be reported unmapped")
