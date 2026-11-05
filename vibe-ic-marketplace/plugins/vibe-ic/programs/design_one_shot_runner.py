@@ -24762,6 +24762,22 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                            "no phase2/stage2/synth/netlist.v (synth produced no "
                            "mapped netlist) — DFT/post-DFT/LEC not applicable", reason_class=_V.ReasonClass.INPUT_ABSENT)]
 
+    raw = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if raw:
+        import flow109
+        import spec_declaration_emit as declaration
+        owner = flow109.validate_execution_context(json.loads(Path(raw).read_text()))
+        rows = owner.get('resolved_rows') or [owner['resolved_row']]
+        contract, _, _ = declaration.select_contract(project)
+        if (any(row['id'] == 'D25' for row in rows)
+                and all(owner['features'].get(k) is False for k in ('requires_dft', 'requires_scan'))
+                and declaration.explicit_non_scan_decision(project) is not None
+                and (not contract or not any(f['name'] == 'dft' for f in contract['fields']))):
+            lec_top = (_lec_gns.step15_top(project, top_name, rederive_ic_name=rederive_ic_name)
+                       if phase2_request else top_name)
+            return step_lec_equivalence(project, lec_top, container, results,
+                                        lec_max_completed_rungs=lec_max_completed_rungs)
+
     # ---- clock derivation (Fault ATPG needs the primary clock name) ----
     # Simple, robust: scan the RTL for input ports whose name looks like a
     # clock. Prefer the conventional short names; else the first clock-like
@@ -24919,23 +24935,11 @@ def step_lec_equivalence(project: Path, top_name: str, container: str,
     if (d25_context is not None and not named_d25
             and all(d25_context['features'].get(key) is False
                     for key in ('requires_dft', 'requires_scan'))):
-        try:
-            flow109.dft_source_intent(project, d25_context)
-            flow109._accepted_row(
-                project, Path('reports/flow109/default_rows/D22.json'), 'D22')
-            manifest, _ = flow109._bound_project_json(
-                project, Path('input/flow109/D22.json'), 'D25_NATIVE_SUBJECT_UNBOUND')
-            if (bound is None or bound.get('verdict') != 'PASS'
-                    or manifest.get('top') != top_name or _lec_subject_is_scan
-                    or Path(bound['mapped']).resolve() != (project / gate_netlist).resolve()):
-                raise flow109.Flow109Error('D25_NATIVE_SUBJECT_UNBOUND',
-                                          'functional LEC requires the accepted D22 mapped subject')
-            synthesis = json.loads((Path(bound['native']).parent / 'config.json').read_text())
-            if manifest.get('pdk') != synthesis.get('PDK'):
-                raise flow109.Flow109Error('D25_NATIVE_SUBJECT_UNBOUND', 'D22 PDK differs')
-        except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
-            return results + [StepResult(
-                'lec_equivalence', 'NOT_MEASURED', time.time() - t0, str(exc),
+        if (bound is None or bound.get('verdict') != 'PASS'
+                or _lec_subject_is_scan
+                or Path(bound['mapped']).resolve() != (project / gate_netlist).resolve()):
+            return results + [StepResult('lec_equivalence', 'NOT_MEASURED', time.time() - t0,
+                'functional LEC requires the current native mapped subject',
                 reason_class=_V.ReasonClass.INPUT_ABSENT)]
         return _lec_eqy_arm(project, top_name, gate_netlist, results,
                             functional_context=d25_context)
