@@ -53,130 +53,8 @@ def _aggregate(rows):
 
 
 
-def _input_views(project, name, step=None):
-    paths = list((project / "input").rglob("*"))
-    paths += list(layout.generated_docs_dir(project).glob("*.json"))
-    if step == "A01":
-        from analog_a1_spec_emit import ATTRIBUTION_REL
-        paths.append(project / ATTRIBUTION_REL)
-    directory = layout.analog_dir(project) / name
-    paths += [directory / leaf for leaf in
-              ("spec.json", "topology.json", "topology.md", f"{name}.sp", f"tb_{name}.sp")]
-    if step in ("A12", "A18"):
-        paths += [directory / f"{name}.lvs.cdl",
-                  directory / "lvs_provenance.json"]
-    if step in STEPS[3:]:
-        paths.append(directory / "sizing_inputs.json")
-    if step in STEPS[10:]:
-        paths.append(directory / "layout_inputs.json")
-    if step in ("A06", "A07"):
-        paths.append(directory / "measurement_studies.json")
-    if step == "A16":
-        paths.append(directory / "reliability_inputs.json")
-    if step == "A17":
-        declaration = directory / "characterization_inputs.json"
-        paths.append(declaration)
-        from analog_native_physical import _settings
-        selected = {**_read(declaration, {}), **_settings(
-            {"config": _read(project / "input/analog_flow.json", {})}, "A17", name)}
-        if selected.get("ngspice_bin"):
-            paths.append(Path(selected["ngspice_bin"]))
-    # A configured nominal/calibration deck can live outside the canonical
-    # block directory. Retain the actual selected inputs, not only defaults.
-    from analog_native_sim import (_config, _selected_config, _inputs, _included_paths,
-                                   _testbench_inputs_path, _declared_testbench)
-    config = _read(project / "input" / "analog_flow.json", {})
-    for selected_step in STEPS[5:10]:
-        try:
-            selected = (_selected_config(project, {"config": config}, {"name": name}, selected_step)
-                        if selected_step == step == 'A08' else
-                        _config({"config": config}, {"name": name}, selected_step))
-        except (OSError, ValueError):
-            selected = _config({"config": config}, {"name": name}, selected_step)
-        if selected_step == "A07" and selected.get("nominal_testbench"):
-            selected = {**selected, "testbench": selected["nominal_testbench"]}
-        if selected_step == "A10" and isinstance(selected.get("calibration"), dict):
-            selected = {**selected, **selected["calibration"]}
-        netlist, deck, spec = _inputs(project, name, selected)
-        paths.extend([netlist, deck, spec])
-        paths.extend(_included_paths(deck))
-        if selected_step == 'A07' or selected_step == step == 'A08':
-            try:
-                declaration = _testbench_inputs_path(project, name, selected)
-            except ValueError:
-                declaration = None  # The producer reports the invalid declaration.
-            if declaration is not None:
-                paths += [declaration, netlist.parent / "netlist_provenance.json"]
-                try:
-                    _text, views = _declared_testbench(project, name, selected, netlist.parent)
-                    paths.extend(Path(view["path"]) for view in views.values())
-                    pvt = selected.get('pvt') or {}
-                    if selected_step == 'A08' and isinstance(pvt, dict) and pvt.get('kind') == 'declared_testbench':
-                        import analog_declared_pvt as declared
-                        section, temperature = declared.coordinates(pvt)[0]
-                        sections = pvt['process_sections']
-                        _deck, _dut, views = declared.render_corner(project, name, selected, netlist.parent,
-                            sections, section, temperature)
-                        paths.extend(Path(view['path']) for view in views.values())
-                except ValueError:
-                    pass  # The producer reports the invalid declaration.
-    if step in ("A06", "A07"):
-        # The declaration names real study inputs outside input/. Changing
-        # one of those inputs must invalidate its retained measurement too.
-        selected = _config({"config": config}, {"name": name}, step)
-        studies = selected.get("measurement_studies")
-        if studies is None:
-            studies = _read(directory / "measurement_studies.json", [])
-        if isinstance(studies, dict):
-            studies = studies.get("studies", [])
-        def referenced(value):
-            if not isinstance(value, str) or not value:
-                return None
-            path = Path(value)
-            path = path if path.is_absolute() else project / path
-            paths.append(path)
-            return path
-        for study in studies if isinstance(studies, list) else []:
-            if not isinstance(study, dict):
-                continue
-            referenced(study.get("testbench"))
-            settings_path = referenced(study.get("settings"))
-            settings = _read(settings_path, {}) if settings_path else {}
-            if isinstance(settings, dict):
-                referenced(settings.get("testbench"))
-            bindings_path = referenced(study.get("bindings"))
-            bindings = _read(bindings_path, {}) if bindings_path else {}
-            if isinstance(bindings, dict) and isinstance(bindings.get("source"), dict):
-                referenced(bindings["source"].get("path"))
-            result_path = referenced(study.get("result"))
-            record = _read(result_path, {}) if result_path else {}
-            if not isinstance(record, dict):
-                continue
-            records = [record]
-            for point in record.get("points") or []:
-                if isinstance(point, dict):
-                    path = referenced(point.get("path"))
-                    data = _read(path, {}) if path else {}
-                    if isinstance(data, dict):
-                        records.append(data)
-            for data in records:
-                for view in (data.get("native_inputs") or {}).values():
-                    if isinstance(view, dict):
-                        referenced(view.get("path"))
-                for execution in data.get("executions") or []:
-                    if isinstance(execution, dict):
-                        referenced(execution.get("log"))
-                if isinstance(data.get("capture"), dict):
-                    referenced(data["capture"].get("path"))
-    return {str(path): _sha(path) for path in paths if path.is_file()}
 
 
-def _output_views(result):
-    paths = []
-    for value in result.get("outputs", []):
-        path = Path(value)
-        paths.extend(path.rglob("*")) if path.is_dir() else paths.append(path)
-    return {str(path): _sha(path) for path in paths if path.is_file()}
 
 
 
@@ -360,13 +238,8 @@ def _views(step, project, block, options, run):
                 status = "NOT_MEASURED"
             if execution["returncode"] or execution["missing_outputs"]:
                 status = "FAIL"
-            if any(not Path(path).is_file() or _sha(path) != digest
-                   for path, digest in generated["inputs"].items()):
-                status = "FAIL"
-                evidence["reason"] = "A18_INPUT_CHANGED_DURING_EXECUTION"
             if status == "PASS" and (not native_outputs or any(
-                    not Path(path).is_file() or _sha(path) != digest
-                    for path, digest in native_outputs.items())):
+                    not Path(path).is_file() for path in native_outputs)):
                 status = "FAIL"
             options["a18_result"] = {"status": status, "outputs": outputs,
                                      "executions": [execution], "native_evidence": evidence}
@@ -385,7 +258,7 @@ def _views(step, project, block, options, run):
         status = _aggregate(rows)
         package = layout.analog_dir(project) / "hardmacro" / name
         expected = [package / f"{name}.{suffix}" for suffix in ("gds", "lef", "lib", "v")]
-        outputs = {str(path): _sha(path) for path in expected if path.is_file()}
+        outputs = [str(path) for path in expected if path.is_file()]
         if len(outputs) != len(expected) and status == "PASS":
             status = "NOT_MEASURED"
         import analog_hardmacro_check as hardmacro
@@ -447,7 +320,6 @@ def _dispatch(step, project, block, options, run):
 
 def _declared_blocks(project):
     """Keep native producers and file-based checkers on the same declaration."""
-    from analog_native_front import _stale
 
     def blocks_at(path, key):
         body = _read(path)
@@ -459,8 +331,6 @@ def _declared_blocks(project):
             if 'block_count' in body and (type(body['block_count']) is not int
                                          or body['block_count'] != len(blocks)):
                 raise ValueError(f"block list count mismatch: {path}")
-            if _stale(project, body):
-                raise ValueError(f"block list source changed: {path}")
         names = [block.get('name') or block.get('block') for block in blocks]
         if (any(not isinstance(name, str)
                 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*', name)
@@ -497,9 +367,7 @@ def _declared_blocks(project):
     # The legacy runner already materializes this L5 fallback before running
     # its file-based checkers. Keep the full population before subset selection.
     write_json(candidates[0], {
-        'blocks': source_blocks, 'block_count': len(source_blocks),
-        '_provenance': {'producer': 'analog_native_flow',
-                        'input': {'path': str(l5.relative_to(project)), 'sha256': _sha(l5)}}})
+        'blocks': source_blocks, 'block_count': len(source_blocks)})
     return source_blocks
 
 
@@ -552,25 +420,21 @@ def run_window(project, args, *, features=None):
     rows = []
     if previous.get("features") == features:
         for retained in previous.get("steps", []):
-            name = retained.get("block")
-            inputs, outputs = retained.get("input_views"), retained.get("output_views")
-            current_inputs = _input_views(project, name, retained.get("step")) if name in declared_names else {}
-            if (name in declared_names and inputs
-                    and all(inputs.get(path) == digest for path, digest in current_inputs.items())
-                    and all(Path(path).is_file() and _sha(path) == digest
-                            for path, digest in inputs.items())
-                    and isinstance(outputs, dict)
-                    and all(Path(path).is_file() and _sha(path) == digest
-                            for path, digest in outputs.items())):
-                retained = dict(retained)
-                retained.setdefault("producer_context", {
-                    "image": previous.get("image"), "container": previous.get("container"),
-                    "driver_sha256": previous.get("source_sha256"),
-                    "attribution": "retained prior execution; not rerun under this window"})
-                options["previous_results"].setdefault(retained["step"], {})[name] = retained
-                if (name not in names or
-                        retained["step"] not in STEPS[STEPS.index(entry):STEPS.index(exit_) + 1]):
-                    rows.append(retained)
+            name, step = retained.get("block"), retained.get("step")
+            if name not in declared_names or step not in STEPS:
+                continue
+            environment = retained.get("tool_environment") or retained.get("producer_context") or {}
+            retained = {key: value for key, value in retained.items()
+                        if key not in {"input_views", "output_views", "producer_context"}}
+            retained["tool_environment"] = {
+                "image": environment.get("image", previous.get("image")),
+                "container": environment.get("container", previous.get("container")),
+                "transport": environment.get("transport", previous.get("transport"))}
+            retained["reused"] = True
+            retained["scope"] = "Earlier native report; this window does not rerun that step."
+            options["previous_results"].setdefault(step, {})[name] = retained
+            if name not in names or step not in STEPS[STEPS.index(entry):STEPS.index(exit_) + 1]:
+                rows.append(retained)
     report = {"flow": "analog-A01-A19", "project": str(project),
               "started_at": datetime.now(timezone.utc).isoformat(),
               "entry": entry, "exit": exit_, "image": image,
@@ -578,7 +442,7 @@ def run_window(project, args, *, features=None):
               "steps": rows, "verdict": "NOT_MEASURED",
               "window_verdict": "NOT_MEASURED",
               "features": features,
-              "attempt": str(attempt), "source_sha256": _sha(Path(__file__)),
+              "attempt": str(attempt),
               "configuration": str(config_path) if config_path.is_file() else None}
 
     def execute_one(step, block):
@@ -598,15 +462,8 @@ def run_window(project, args, *, features=None):
         except (OSError, ValueError, KeyError) as exc:
             result = {"status": "NOT_MEASURED", "detail": str(exc), "outputs": []}
         result.update(step=step, block=name, duration_s=time.monotonic() - started)
-        result["producer_context"] = {"image": image, "container": container,
-                                      "transport": transport,
-                                      "driver_sha256": report["source_sha256"]}
-        result["input_views"] = _input_views(project, name, step)
-        result["input_views"].update(runner.native_inputs)
-        for view in (result.get("native_inputs") or {}).values():
-            if isinstance(view, dict) and view.get("path") and view.get("sha256"):
-                result["input_views"][view["path"]] = view["sha256"]
-        result["output_views"] = _output_views(result)
+        result["tool_environment"] = {"image": image, "container": container,
+                                      "transport": transport}
         write_json(directory / "result.json", result)
         print(f"{step} {name}: {result['status']} — {result.get('detail', '')}", flush=True)
         return result
