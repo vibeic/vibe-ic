@@ -245,6 +245,7 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     result = chip.prepare(project, config)
     assert result["DESIGN_NAME"] == "logic_chip"
     assert result["PDN_ENABLE_PINS"] is False
+    assert result["MAGIC_EXT_USE_GDS"] is True
     assert len(result["PAD_NORTH"]) == 4
     assert len(result["PAD_EAST"]) == 3
     assert len(result["PAD_SOUTH"]) == 1

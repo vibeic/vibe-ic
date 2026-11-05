@@ -447,7 +447,7 @@ def prepare(project: Path, core_config: dict[str, Any]) -> dict[str, Any]:
             result.pop(key, None)
     result.update(DESIGN_NAME=top, VERILOG_FILES=[*core_config["VERILOG_FILES"], str(wrapper)],
                   FP_SIZING="absolute", DIE_AREA=die, CORE_AREA=core,
-                  PDN_ENABLE_PINS=False,
+                  PDN_ENABLE_PINS=False, MAGIC_EXT_USE_GDS=True,
                   VDD_NETS=[power], GND_NETS=[ground], PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
     result.update({"PAD_" + full: ordered[side] for side, full in SIDES.items()})
     tool_seconds = sum(run["tool_seconds"] for run in runs)
