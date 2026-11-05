@@ -18,7 +18,7 @@ def slug(title):
 
 
 def generate(registry, native):
-    steps, dropped, unresolved = [], [], []
+    steps, dropped, unmeasured = [], [], []
     known = native["steps"]
     for row in registry["rows"]:
         name = slug(row["name"])
@@ -46,6 +46,8 @@ def generate(registry, native):
                     profiles.append({"when": condition, "tool": replacement})
                 if name in native.get("report_rows", {}):
                     tool = {"kind": "native_report", "from": native["report_rows"][name]}
+                    if name in native.get("report_scopes", {}):
+                        tool["scope"] = native["report_scopes"][name]
             profiles.append({"when": profile["select_when"], "tool": tool})
 
         checks = []
@@ -57,7 +59,6 @@ def generate(registry, native):
                         checks.append(item)
         checks.extend(native.get("row_checks", {}).get(name, []))
 
-        remaining = []
         for obligation in row["obligations"]:
             metric = obligation["metric"]
             operator = obligation["expectation"]["operator"]
@@ -70,16 +71,30 @@ def generate(registry, native):
                 reason = native["deleted_metrics"][metric]
             if reason:
                 dropped.append({"step": name, "metric": metric, "operator": operator, "reason": reason})
-            else:
-                remaining.append(metric)
-        if not checks:
-            checks = [{"metric": metric, "operator": None, "limit": None,
-                       "source": None, "decision_request": "No numeric native limit found in the current implementation."}
-                      for metric in remaining]
-            if not checks:
-                checks = [{"metric": "native_measurement", "operator": None, "limit": None,
-                           "source": None, "decision_request": "This step has no numeric native limit."}]
-            unresolved.extend({"step": name, "metric": c["metric"], "reason": c["decision_request"]} for c in checks)
+                continue
+            if any(c["metric"] == metric for c in checks):
+                continue
+            expectation = obligation["expectation"]
+            check = {"metric": metric, "operator": operator, "limit": None,
+                     "when": obligation.get("when", row["when"]),
+                     "source": native.get("operator_sources", {}).get(name + "." + metric,
+                                                                           native.get("operator_source", {}))}
+            if operator == "eq":
+                check.update(operator="==", limit=expectation["value"], unit=expectation.get("unit"))
+            elif re.search(r"errors|violations|mismatches|unconnected|unresolved|unowned|unassigned|illegal|unreachable|missing", metric):
+                check.update(operator="==", limit=0, unit="count", source=native.get("defect_source", {}))
+            elif operator == "covers_all":
+                check["required_from"] = native.get("required_sets", {}).get(metric, {
+                    "kind": "design_or_tool_population", "metric": metric})
+            elif operator == "within_declared_bounds":
+                check["limit_from"] = native.get("declared_bounds", {}).get(metric, {
+                    "kind": "design_or_pdk", "metric": metric})
+            checks.append(check)
+        for check in checks:
+            if check["limit"] is None:
+                unmeasured.append({"step": name, "metric": check["metric"], "operator": check["operator"],
+                                   "required_source": json.dumps(check.get("required_from", check.get("limit_from", {}))),
+                                   "searched_sources": json.dumps(native.get("searched_sources", {}).get(name, []))})
         tool = profiles[0]["tool"] if len(profiles) == 1 else {"kind": "profiles", "profiles": profiles}
         item = {"name": name, "title": row["name"], "when": row["when"], "tool": tool,
                 "checks": checks, "legacy_id": {"registry": row["id"],
@@ -87,7 +102,8 @@ def generate(registry, native):
         steps.append(item)
     return {"predicates": registry["predicate_definitions"],
             "implications": registry["feature_implications"],
-            "exclusions": registry["feature_exclusions"], "steps": steps}, dropped, unresolved
+            "exclusions": registry["feature_exclusions"],
+            "feature_defaults": native.get("feature_defaults", {}), "steps": steps}, dropped, unmeasured
 
 
 def write_tsv(path, rows, fields):
@@ -104,17 +120,31 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "flow" / "steps.json")
     parser.add_argument("--reports", type=Path)
     args = parser.parse_args()
-    table, dropped, unresolved = generate(json.loads(args.registry.read_text()), json.loads(args.native.read_text()))
+    raw = args.registry.read_text()
+    registry, native = json.loads(raw), json.loads(args.native.read_text())
+    native["operator_sources"] = {}
+    for row in registry["rows"]:
+        start = raw.find('"name": ' + json.dumps(row["name"]))
+        for item in row["obligations"]:
+            position = raw.find('"metric": ' + json.dumps(item["metric"]), start)
+            position = raw.find('"operator":', position)
+            if item["expectation"]["operator"] == "eq":
+                position = raw.find('"value":', position)
+            native["operator_sources"][slug(row["name"]) + "." + item["metric"]] = {
+                "file": str(args.registry.relative_to(ROOT)) if args.registry.is_relative_to(ROOT) else str(args.registry),
+                "line": raw.count("\n", 0, position) + 1}
+    table, dropped, unmeasured = generate(registry, native)
     args.output.write_text(json.dumps(table, indent=2) + "\n")
     if args.reports:
         args.reports.mkdir(parents=True, exist_ok=True)
         write_tsv(args.reports / "DROPPED.tsv", dropped, ["step", "metric", "operator", "reason"])
-        write_tsv(args.reports / "DECISION_REQUESTS.tsv", unresolved, ["step", "metric", "reason"])
+        write_tsv(args.reports / "UNMEASURED_METRICS.tsv", unmeasured,
+                  ["step", "metric", "operator", "required_source", "searched_sources"])
         rows = [{"step": s["name"], "metric": c["metric"], "operator": c["operator"],
                  "limit": json.dumps(c["limit"]), "source": json.dumps(c["source"])}
                 for s in table["steps"] for c in s["checks"]]
         write_tsv(args.reports / "LIMITS.tsv", rows, ["step", "metric", "operator", "limit", "source"])
-    print(f"Wrote {len(table['steps'])} steps; dropped {len(dropped)} wrapper obligations; {len(unresolved)} unresolved limits.")
+    print(f"Wrote {len(table['steps'])} steps; dropped {len(dropped)} wrapper obligations; preserved the original operators.")
 
 
 if __name__ == "__main__":

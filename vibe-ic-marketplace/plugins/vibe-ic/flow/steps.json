@@ -153,6 +153,26 @@
       "requires_scan"
     ]
   ],
+  "feature_defaults": {
+    "requires_ir": {
+      "value": true,
+      "when": "digital_physical",
+      "native_config": "RUN_IRDROP_REPORT",
+      "source": {
+        "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/flows/classic.py",
+        "line": 207
+      }
+    },
+    "requires_cts": {
+      "value": true,
+      "when": "digital_physical",
+      "native_config": "RUN_CTS",
+      "source": {
+        "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/flows/classic.py",
+        "line": 148
+      }
+    }
+  },
   "steps": [
     {
       "name": "requirements_and_delivery_route",
@@ -167,24 +187,37 @@
       "checks": [
         {
           "metric": "unresolved_route_facts",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 7368
+          }
         },
         {
           "metric": "observed_vs_declared_features",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 7368
+          }
         },
         {
           "metric": "requirements_trace",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "always",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 1472
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "requirements_trace"
+          }
         }
       ],
       "legacy_id": {
@@ -206,18 +239,28 @@
       },
       "checks": [
         {
-          "metric": "endpoint_delivery_items",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "metric": "unassigned_requirements",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 7368
+          }
         },
         {
-          "metric": "unassigned_requirements",
-          "operator": null,
+          "metric": "endpoint_delivery_items",
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "always",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 1564
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "endpoint_delivery_items"
+          }
         }
       ],
       "legacy_id": {
@@ -237,15 +280,7 @@
         "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "native_measurement",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "This step has no numeric native limit."
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D03",
         "native": []
@@ -264,10 +299,17 @@
       "checks": [
         {
           "metric": "safety_goals_allocation",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_functional_safety",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 1794
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "safety_goals_allocation"
+          }
         }
       ],
       "legacy_id": {
@@ -288,24 +330,42 @@
       "checks": [
         {
           "metric": "semantic_demand_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_power_intent",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 1915
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "semantic_demand_coverage"
+          }
         },
         {
           "metric": "illegal_power_states",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "has_power_intent",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 1935
+          },
+          "unit": "count"
         },
         {
           "metric": "supply_cell_assignments",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_power_intent",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 1954
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "supply_cell_assignments"
+          }
         }
       ],
       "legacy_id": {
@@ -326,24 +386,33 @@
       "checks": [
         {
           "metric": "pad_bump_interface_constraints",
-          "operator": null,
+          "operator": "native_pad_constraints_resolved",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "package_interface",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2073
+          }
         },
         {
           "metric": "package_escape_feasibility",
-          "operator": null,
+          "operator": "native_bare_die_interface_covered",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "package_interface",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2092
+          }
         },
         {
           "metric": "test_access_plan",
-          "operator": null,
+          "operator": "native_functional_access_covered",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "package_interface",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2111
+          }
         }
       ],
       "legacy_id": {
@@ -364,24 +433,42 @@
       "checks": [
         {
           "metric": "child_ownership",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "multidie",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2199
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "child_ownership"
+          }
         },
         {
           "metric": "d2d_budgets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "multidie",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2218
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "d2d_budgets"
+          }
         },
         {
           "metric": "unassigned_links",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "multidie",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2239
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -402,17 +489,31 @@
       "checks": [
         {
           "metric": "analog_specs_with_units",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2345
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "analog_specs_with_units"
+          }
         },
         {
           "metric": "required_measurements",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2365
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "required_measurements"
+          }
         }
       ],
       "legacy_id": {
@@ -435,17 +536,28 @@
       "checks": [
         {
           "metric": "device_model_load_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2481
+          },
+          "unit": "count"
         },
         {
           "metric": "model_corner_statistics_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2501
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "model_corner_statistics_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -468,17 +580,28 @@
       "checks": [
         {
           "metric": "noise_supply_budgets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2646
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "noise_supply_budgets"
+          }
         },
         {
           "metric": "unowned_crossings",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "mixed",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2668
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -502,24 +625,42 @@
       "checks": [
         {
           "metric": "observable_test_nodes",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_testability",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2773
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "observable_test_nodes"
+          }
         },
         {
           "metric": "trim_range_resolution",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_testability",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2793
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "trim_range_resolution"
+          }
         },
         {
           "metric": "test_access_unreachable",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "analog_testability",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2815
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -540,17 +681,31 @@
       "checks": [
         {
           "metric": "allocated_gain_noise_power_budgets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2934
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "allocated_gain_noise_power_budgets"
+          }
         },
         {
           "metric": "topology_constraints",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 2955
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "topology_constraints"
+          }
         }
       ],
       "legacy_id": {
@@ -573,17 +728,28 @@
       "checks": [
         {
           "metric": "operating_point_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3073
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "operating_point_targets"
+          }
         },
         {
           "metric": "netlist_connectivity_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3095
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -607,24 +773,39 @@
       "checks": [
         {
           "metric": "measurement_window_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3213
+          },
+          "unit": "count"
         },
         {
           "metric": "known_stimulus_calibration",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3233
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "known_stimulus_calibration"
+          }
         },
         {
           "metric": "unit_mismatches",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3255
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -648,17 +829,31 @@
       "checks": [
         {
           "metric": "nominal_performance",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3364
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "nominal_performance"
+          }
         },
         {
           "metric": "early_model_correlation",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3385
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "early_model_correlation"
+          }
         }
       ],
       "legacy_id": {
@@ -681,17 +876,31 @@
       "checks": [
         {
           "metric": "required_macro_views",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "uses_macros",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3514
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "paths": [
+              "phase1/generated_docs/L9_INTEGRATION_SPEC.json#/submodules"
+            ],
+            "metric": "required_macro_views"
+          }
         },
         {
           "metric": "unresolved_macro_instances",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "uses_macros",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3534
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -712,10 +921,17 @@
       "checks": [
         {
           "metric": "rtl_requirement_mapping",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3642
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "rtl_requirement_mapping"
+          }
         }
       ],
       "legacy_id": {
@@ -738,17 +954,23 @@
       "checks": [
         {
           "metric": "elaboration_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 2841
+          }
         },
         {
           "metric": "unexpected_blackboxes",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 2841
+          }
         }
       ],
       "legacy_id": {
@@ -822,6 +1044,17 @@
           "enabled_by": "ERROR_ON_LINTER_WARNINGS",
           "enabled_default": false,
           "when": "otherwise"
+        },
+        {
+          "metric": "required_lint_violations",
+          "operator": "==",
+          "limit": 0,
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 3913
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -837,31 +1070,54 @@
       "when": "has_digital",
       "tool": {
         "kind": "adapter",
-        "program": "design_one_shot_runner.py",
-        "function": "step_d12_cdc_rdc",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "cdc",
+        "program": "flow_native_adapters.py",
+        "function": "execute",
+        "native_helpers": [
+          "_cdc_netlist.yosys_script",
+          "_cdc_netlist.normalization_script",
+          "_cdc_netlist.load",
+          "_cdc_netlist.judge"
+        ]
       },
       "checks": [
         {
-          "metric": "clock_reset_crossing_census",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "metric": "unresolved_crossings",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 4154
+          }
         },
         {
-          "metric": "unresolved_crossings",
-          "operator": null,
+          "metric": "clock_reset_crossing_census",
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4053
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "clock_reset_crossing_census"
+          }
         },
         {
           "metric": "cdc_protocol_results",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4092
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "cdc_protocol_results"
+          }
         }
       ],
       "legacy_id": {
@@ -877,31 +1133,88 @@
       "when": "has_digital",
       "tool": {
         "kind": "adapter",
-        "program": "design_one_shot_runner.py",
-        "function": "step_d13_simulation",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "simulation",
+        "program": "flow_native_adapters.py",
+        "function": "execute",
+        "native_helpers": [
+          "verilator_coverage_measure.verilate_tb_and_run",
+          "verilator_coverage_measure.parse_coverage_dat",
+          "verilator_coverage_measure.scope_totals",
+          "_sim_results_bridge.parse_junit"
+        ]
       },
       "checks": [
         {
-          "metric": "required_function_scenarios",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "metric": "assertion_failures",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 4828
+          }
         },
         {
-          "metric": "assertion_failures",
-          "operator": null,
+          "metric": "coverage_line_pct",
+          "operator": ">=",
+          "limit": 70.0,
+          "unit": "percent",
+          "source": {
+            "file": "programs/verilator_coverage_measure.py",
+            "line": 2766
+          },
+          "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+        },
+        {
+          "metric": "coverage_toggle_pct",
+          "operator": ">=",
+          "limit": 60.0,
+          "unit": "percent",
+          "source": {
+            "file": "programs/verilator_coverage_measure.py",
+            "line": 2767
+          },
+          "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+        },
+        {
+          "metric": "coverage_branch_pct",
+          "operator": ">=",
+          "limit": 70.0,
+          "unit": "percent",
+          "source": {
+            "file": "programs/verilator_coverage_measure.py",
+            "line": 2768
+          },
+          "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+        },
+        {
+          "metric": "required_function_scenarios",
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4249
+          },
+          "required_from": {
+            "paths": [
+              "phase1/generated_docs/L7_TEST_DEBUG.json#/test_scenarios"
+            ]
+          }
         },
         {
           "metric": "coverage_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4288
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "coverage_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -917,31 +1230,48 @@
       "when": "has_digital",
       "tool": {
         "kind": "adapter",
-        "program": "design_one_shot_runner.py",
-        "function": "sim",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "formal",
+        "program": "flow_native_adapters.py",
+        "function": "execute",
+        "native_commands": [
+          "sby --dumptasks INPUT",
+          "sby -f -d OUTPUT INPUT TASK"
+        ]
       },
       "checks": [
         {
           "metric": "unproved_required_properties",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 6599
+          }
         },
         {
           "metric": "vacuous_required_proofs",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 6600
+          }
         },
         {
           "metric": "proof_partition_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4527
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "proof_partition_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -964,17 +1294,28 @@
       "checks": [
         {
           "metric": "required_power_transitions",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_power_intent and has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4634
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "required_power_transitions"
+          }
         },
         {
           "metric": "isolation_retention_behavior_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "has_power_intent and has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4654
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -995,31 +1336,53 @@
       "checks": [
         {
           "metric": "required_fullchip_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_system_scenarios",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4776
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "required_fullchip_scenarios"
+          }
         },
         {
           "metric": "boot_workload_protocol_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "requires_system_scenarios",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4797
+          },
+          "unit": "count"
         },
         {
           "metric": "blocking_system_scenario_failures",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "requires_system_scenarios",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4818
+          },
+          "unit": "count"
         },
         {
           "metric": "system_signoff_required_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_system_scenarios",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4838
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "system_signoff_required_scenarios"
+          }
         }
       ],
       "legacy_id": {
@@ -1057,24 +1420,42 @@
       "checks": [
         {
           "metric": "threat_requirements_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_security",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4973
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "threat_requirements_coverage"
+          }
         },
         {
           "metric": "security_counterexample_failures",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "requires_security",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4993
+          },
+          "unit": "count"
         },
         {
           "metric": "security_metric_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_security",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5012
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "security_metric_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -1095,10 +1476,17 @@
       "checks": [
         {
           "metric": "prototype_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "fpga_early",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5115
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "prototype_scenarios"
+          }
         }
       ],
       "legacy_id": {
@@ -1121,24 +1509,45 @@
       "checks": [
         {
           "metric": "ams_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5243
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "ams_scenarios"
+          }
         },
         {
           "metric": "prelayout_interface_performance",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5263
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "prelayout_interface_performance"
+          }
         },
         {
           "metric": "model_correlation",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5284
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "model_correlation"
+          }
         }
       ],
       "legacy_id": {
@@ -1162,17 +1571,31 @@
       "checks": [
         {
           "metric": "pvt_load_modes",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5394
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "pvt_load_modes"
+          }
         },
         {
           "metric": "prelayout_performance",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5414
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "prelayout_performance"
+          }
         }
       ],
       "legacy_id": {
@@ -1195,10 +1618,17 @@
       "checks": [
         {
           "metric": "mismatch_confidence_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_statistics",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5543
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "mismatch_confidence_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -1221,24 +1651,42 @@
       "checks": [
         {
           "metric": "finite_code_convergence",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_trim",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5658
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "finite_code_convergence"
+          }
         },
         {
           "metric": "calibration_time_error",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_trim",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5679
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "calibration_time_error"
+          }
         },
         {
           "metric": "oracle_code_selection",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "analog_trim",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5701
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -1259,17 +1707,32 @@
       "checks": [
         {
           "metric": "scenario_constraints",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_netlist or (soft_ip and has_digital)",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5831
+          },
+          "required_from": {
+            "paths": [
+              "phase1/generated_docs/L8_TIMING_WAVEFORM.json#/clock_domains"
+            ]
+          }
         },
         {
           "metric": "exception_justification",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_netlist or (soft_ip and has_digital)",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 5868
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "exception_justification"
+          }
         }
       ],
       "legacy_id": {
@@ -1292,10 +1755,13 @@
       "checks": [
         {
           "metric": "invalid_timing_exceptions",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 1032
+          }
         }
       ],
       "legacy_id": {
@@ -1318,17 +1784,28 @@
       "checks": [
         {
           "metric": "portable_sdc_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "soft_ip and has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6095
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "portable_sdc_coverage"
+          }
         },
         {
           "metric": "required_config_synthesis_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "soft_ip and has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6115
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -1383,6 +1860,31 @@
           "enabled_by": "ERROR_ON_SYNTH_CHECKS",
           "enabled_default": true,
           "when": "otherwise"
+        },
+        {
+          "metric": "unexpected_latch_blackbox",
+          "operator": "==",
+          "limit": 0,
+          "when": "digital_netlist",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6278
+          },
+          "unit": "count"
+        },
+        {
+          "metric": "synthesis_constraints",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_netlist",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6298
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "synthesis_constraints"
+          }
         }
       ],
       "legacy_id": {
@@ -1405,17 +1907,28 @@
       "checks": [
         {
           "metric": "dft_architecture_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_scan",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6416
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "dft_architecture_coverage"
+          }
         },
         {
           "metric": "scan_test_protocol_integrity",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "requires_scan",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6436
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -1439,10 +1952,13 @@
       "checks": [
         {
           "metric": "scan_preservation_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 1089
+          }
         }
       ],
       "legacy_id": {
@@ -1464,18 +1980,28 @@
       },
       "checks": [
         {
-          "metric": "required_lec_partitions",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "metric": "unproved_equivalence",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 1628
+          }
         },
         {
-          "metric": "unproved_equivalence",
-          "operator": null,
+          "metric": "required_lec_partitions",
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_netlist",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6680
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "required_lec_partitions"
+          }
         }
       ],
       "legacy_id": {
@@ -1499,68 +2025,38 @@
       },
       "checks": [
         {
-          "metric": "timing__setup_vio__count__corner:*",
-          "operator": "<=",
+          "metric": "unconstrained_required_paths",
+          "operator": "==",
           "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 674
-          },
           "unit": "count",
-          "match": "all",
-          "corner_config": "SETUP_VIOLATION_CORNERS"
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 1832
+          }
         },
         {
-          "metric": "timing__hold_vio__count__corner:*",
-          "operator": "<=",
+          "metric": "unconstrained_endpoints",
+          "operator": "==",
           "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 706
-          },
           "unit": "count",
-          "match": "all",
-          "corner_config": "HOLD_VIOLATION_CORNERS"
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 1838
+          }
         },
         {
-          "metric": "design__max_slew_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "prelayout_timing_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_netlist",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 6851
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 695
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
-        },
-        {
-          "metric": "design__max_cap_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 684
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "prelayout_timing_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -1583,24 +2079,45 @@
       "checks": [
         {
           "metric": "fault_population_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_functional_safety",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6981
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "fault_population_coverage"
+          }
         },
         {
           "metric": "diagnostic_coverage_latency",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_functional_safety",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7001
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "diagnostic_coverage_latency"
+          }
         },
         {
           "metric": "fmeda_fault_classification",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_functional_safety",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7022
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "fmeda_fault_classification"
+          }
         }
       ],
       "legacy_id": {
@@ -1621,10 +2138,17 @@
       "checks": [
         {
           "metric": "early_fault_coverage",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "early_atpg",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7137
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "early_fault_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -1647,10 +2171,17 @@
       "checks": [
         {
           "metric": "required_onboard_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "fpga_final",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7244
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "required_onboard_scenarios"
+          }
         }
       ],
       "legacy_id": {
@@ -1673,10 +2204,17 @@
       "checks": [
         {
           "metric": "post_synth_crossing_power_changes",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_netlist",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7391
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "post_synth_crossing_power_changes"
+          }
         }
       ],
       "legacy_id": {
@@ -1699,17 +2237,28 @@
       "checks": [
         {
           "metric": "matching_symmetry_guard_constraints",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7516
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "matching_symmetry_guard_constraints"
+          }
         },
         {
           "metric": "analog_layout_connectivity",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7539
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -1785,6 +2334,31 @@
           "enabled_by": "ERROR_ON_LVS_ERROR",
           "enabled_default": true,
           "when": "otherwise"
+        },
+        {
+          "metric": "block_drc_lvs_erc_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7668
+          },
+          "unit": "count"
+        },
+        {
+          "metric": "device_extraction_coverage",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7689
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "device_extraction_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -1807,10 +2381,17 @@
       "checks": [
         {
           "metric": "pex_annotation_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7804
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "pex_annotation_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -1833,17 +2414,31 @@
       "checks": [
         {
           "metric": "postlayout_pvt_performance",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7945
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "postlayout_pvt_performance"
+          }
         },
         {
           "metric": "calibration_replay",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 7967
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "calibration_replay"
+          }
         }
       ],
       "legacy_id": {
@@ -1866,17 +2461,31 @@
       "checks": [
         {
           "metric": "postlayout_statistical_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical and analog_statistics",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8083
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "postlayout_statistical_targets"
+          }
         },
         {
           "metric": "required_sample_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical and analog_statistics",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8105
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "required_sample_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -1899,17 +2508,31 @@
       "checks": [
         {
           "metric": "device_stress_lifetime",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8237
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "device_stress_lifetime"
+          }
         },
         {
           "metric": "analog_ir_em_aging",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8259
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "analog_ir_em_aging"
+          }
         }
       ],
       "legacy_id": {
@@ -1934,17 +2557,31 @@
       "checks": [
         {
           "metric": "postlayout_view_correlation",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8406
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "postlayout_view_correlation"
+          }
         },
         {
           "metric": "model_corner_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8428
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "model_corner_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -1968,10 +2605,14 @@
       "checks": [
         {
           "metric": "unresolved_top_interfaces",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8610
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -2033,18 +2674,28 @@
       },
       "checks": [
         {
-          "metric": "floorplan_boundary_pin_feasibility",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "metric": "illegal_macro_overlap",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 182
+          }
         },
         {
-          "metric": "illegal_macro_overlap",
-          "operator": null,
+          "metric": "floorplan_boundary_pin_feasibility",
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "die_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8792
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "floorplan_boundary_pin_feasibility"
+          }
         }
       ],
       "legacy_id": {
@@ -2086,24 +2737,42 @@
       "checks": [
         {
           "metric": "pad_io_esd_pg_inventory",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "die_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8995
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "pad_io_esd_pg_inventory"
+          }
         },
         {
           "metric": "pg_supply_connectivity_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "die_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9016
+          },
+          "unit": "count"
         },
         {
           "metric": "pad_access_spacing",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "die_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9036
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "pad_access_spacing"
+          }
         }
       ],
       "legacy_id": {
@@ -2126,10 +2795,14 @@
       "checks": [
         {
           "metric": "crossdomain_integration_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9186
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -2153,24 +2826,39 @@
       "checks": [
         {
           "metric": "bump_alignment_rules",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9271
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "bump_alignment_rules"
+          }
         },
         {
           "metric": "assembly_connectivity_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9292
+          },
+          "unit": "count"
         },
         {
           "metric": "assembly_drc_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9312
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -2189,10 +2877,17 @@
       "checks": [
         {
           "metric": "skew_insertion_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9436
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "skew_insertion_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -2283,6 +2978,45 @@
           "enabled_by": "ERROR_ON_PDN_VIOLATIONS",
           "enabled_default": true,
           "when": "otherwise"
+        },
+        {
+          "metric": "placement_legality_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9568
+          },
+          "unit": "count"
+        },
+        {
+          "metric": "pre_cts_setup_drv_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9588
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "pre_cts_setup_drv_targets"
+          }
+        },
+        {
+          "metric": "congestion_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9609
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "congestion_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -2305,10 +3039,13 @@
       "checks": [
         {
           "metric": "scan_flush_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 6539
+          }
         }
       ],
       "legacy_id": {
@@ -2329,17 +3066,28 @@
       "checks": [
         {
           "metric": "required_spare_distribution",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_physical and requires_spares",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9854
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "required_spare_distribution"
+          }
         },
         {
           "metric": "spare_tie_connectivity_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "digital_physical and requires_spares",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9876
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -2362,68 +3110,32 @@
       },
       "checks": [
         {
-          "metric": "timing__setup_vio__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "clock_tree_sink_coverage",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "digital_physical and requires_cts",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 10005
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 674
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "SETUP_VIOLATION_CORNERS"
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "clock_tree_sink_coverage"
+          }
         },
         {
-          "metric": "timing__hold_vio__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "clock_skew_insertion_drv",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical and requires_cts",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 10025
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 706
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "HOLD_VIOLATION_CORNERS"
-        },
-        {
-          "metric": "design__max_slew_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 695
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
-        },
-        {
-          "metric": "design__max_cap_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 684
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "clock_skew_insertion_drv"
+          }
         }
       ],
       "legacy_id": {
@@ -2446,68 +3158,32 @@
       },
       "checks": [
         {
-          "metric": "timing__setup_vio__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "post_cts_setup_hold_drv",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical and requires_cts",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 10141
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 674
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "SETUP_VIOLATION_CORNERS"
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "post_cts_setup_hold_drv"
+          }
         },
         {
-          "metric": "timing__hold_vio__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "repair_stagnation_iterations",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical and requires_cts",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 10162
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 706
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "HOLD_VIOLATION_CORNERS"
-        },
-        {
-          "metric": "design__max_slew_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 695
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
-        },
-        {
-          "metric": "design__max_cap_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 684
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "repair_stagnation_iterations"
+          }
         }
       ],
       "legacy_id": {
@@ -2541,17 +3217,28 @@
       "checks": [
         {
           "metric": "routed_net_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10311
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "routed_net_coverage"
+          }
         },
         {
           "metric": "routing_drc_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10332
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -2574,17 +3261,28 @@
       "checks": [
         {
           "metric": "analog_top_pad_core_connectivity_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "analog_physical and not digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10451
+          },
+          "unit": "count"
         },
         {
           "metric": "analog_sensitive_route_constraints",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "analog_physical and not digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10472
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "analog_sensitive_route_constraints"
+          }
         }
       ],
       "legacy_id": {
@@ -2605,68 +3303,43 @@
       },
       "checks": [
         {
-          "metric": "timing__setup_vio__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "post_repair_timing_drv",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 10592
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 674
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "SETUP_VIOLATION_CORNERS"
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "post_repair_timing_drv"
+          }
         },
         {
-          "metric": "timing__hold_vio__count__corner:*",
-          "operator": "<=",
+          "metric": "filler_restore_errors",
+          "operator": "==",
           "limit": 0,
+          "when": "digital_physical",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 10614
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 706
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "HOLD_VIOLATION_CORNERS"
+          "unit": "count"
         },
         {
-          "metric": "design__max_slew_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "repair_iteration_budget",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 10634
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 695
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
-        },
-        {
-          "metric": "design__max_cap_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 684
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "repair_iteration_budget"
+          }
         }
       ],
       "legacy_id": {
@@ -2769,6 +3442,28 @@
           "enabled_default": true,
           "limit_config": "WIRE_LENGTH_THRESHOLD",
           "when": "otherwise"
+        },
+        {
+          "metric": "disconnected_required_pins",
+          "operator": "==",
+          "limit": 0,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10799
+          },
+          "unit": "count"
+        },
+        {
+          "metric": "route_short_overlap_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10820
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -2841,6 +3536,31 @@
           },
           "unit": "count",
           "when": "digital_physical"
+        },
+        {
+          "metric": "antenna_net_pin_violations",
+          "operator": "==",
+          "limit": 0,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10978
+          },
+          "unit": "count"
+        },
+        {
+          "metric": "antenna_rule_coverage",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10998
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "antenna_rule_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -2863,10 +3583,13 @@
       "checks": [
         {
           "metric": "final_lec_unproved",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 5377
+          }
         }
       ],
       "legacy_id": {
@@ -2887,17 +3610,28 @@
       "checks": [
         {
           "metric": "implemented_crossing_census",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11287
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "implemented_crossing_census"
+          }
         },
         {
           "metric": "new_unexplained_crossings",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11307
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -2918,31 +3652,53 @@
       "checks": [
         {
           "metric": "implemented_upf_semantics",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_power_intent and physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11429
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "implemented_upf_semantics"
+          }
         },
         {
           "metric": "aon_supply_path_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "has_power_intent and physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11450
+          },
+          "unit": "count"
         },
         {
           "metric": "power_sequence_behavior_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "has_power_intent and physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11471
+          },
+          "unit": "count"
         },
         {
           "metric": "multivoltage_timing",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_power_intent and physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11491
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "multivoltage_timing"
+          }
         }
       ],
       "legacy_id": {
@@ -2987,17 +3743,31 @@
       "checks": [
         {
           "metric": "candidate_parasitic_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11676
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "candidate_parasitic_coverage"
+          }
         },
         {
           "metric": "si_applicability_evidence",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11715
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "si_applicability_evidence"
+          }
         }
       ],
       "legacy_id": {
@@ -3046,17 +3816,31 @@
       "checks": [
         {
           "metric": "si_required_windows",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_si",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11874
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "si_required_windows"
+          }
         },
         {
           "metric": "coupling_noise_delay_bounds",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_si",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11894
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "coupling_noise_delay_bounds"
+          }
         }
       ],
       "legacy_id": {
@@ -3076,68 +3860,32 @@
       },
       "checks": [
         {
-          "metric": "timing__setup_vio__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "candidate_setup_hold_drv",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 12025
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 674
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "SETUP_VIOLATION_CORNERS"
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "candidate_setup_hold_drv"
+          }
         },
         {
-          "metric": "timing__hold_vio__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
+          "metric": "candidate_sdf_generation",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "digital_physical",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 12046
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 706
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "HOLD_VIOLATION_CORNERS"
-        },
-        {
-          "metric": "design__max_slew_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 695
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
-        },
-        {
-          "metric": "design__max_cap_violation__count__corner:*",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 684
-          },
-          "unit": "count",
-          "match": "all",
-          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "candidate_sdf_generation"
+          }
         }
       ],
       "legacy_id": {
@@ -3160,10 +3908,17 @@
       "checks": [
         {
           "metric": "path_fault_coverage",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_path_atpg",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12184
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "path_fault_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -3186,10 +3941,17 @@
       "checks": [
         {
           "metric": "sdd_graded_fault_coverage",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_sdd",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12343
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "sdd_graded_fault_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -3212,17 +3974,28 @@
       "checks": [
         {
           "metric": "final_test_pattern_coverage",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_dft",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12474
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "final_test_pattern_coverage"
+          }
         },
         {
           "metric": "test_protocol_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "requires_dft",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12515
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3243,24 +4016,42 @@
       "checks": [
         {
           "metric": "candidate_gls_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12645
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "candidate_gls_scenarios"
+          }
         },
         {
           "metric": "candidate_sdf_annotation",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12665
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "candidate_sdf_annotation"
+          }
         },
         {
           "metric": "gls_failures",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12686
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3300,17 +4091,31 @@
       "checks": [
         {
           "metric": "postlayout_spice_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_spice",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12852
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "postlayout_spice_targets"
+          }
         },
         {
           "metric": "critical_path_correlation",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_spice",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 12873
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "critical_path_correlation"
+          }
         }
       ],
       "legacy_id": {
@@ -3333,10 +4138,17 @@
       "checks": [
         {
           "metric": "functional_mission_modes",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13026
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "functional_mission_modes"
+          }
         }
       ],
       "legacy_id": {
@@ -3381,17 +4193,31 @@
       "checks": [
         {
           "metric": "power_activity_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13237
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "power_activity_coverage"
+          }
         },
         {
           "metric": "per_mode_rail_average_peak_power",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13257
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "per_mode_rail_average_peak_power"
+          }
         }
       ],
       "legacy_id": {
@@ -3448,6 +4274,34 @@
           },
           "unit": "%",
           "limit_note": "Native PSM worst drop divided by the Liberty supply voltage."
+        },
+        {
+          "metric": "rail_source_coverage",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical and requires_ir",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13440
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "rail_source_coverage"
+          }
+        },
+        {
+          "metric": "static_dynamic_ir_limits",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical and requires_ir",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13460
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "static_dynamic_ir_limits"
+          }
         }
       ],
       "legacy_id": {
@@ -3495,18 +4349,42 @@
       },
       "checks": [
         {
+          "metric": "em_violations",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_final_electrical.py",
+            "line": 123
+          }
+        },
+        {
           "metric": "em_current_lifetime_limits",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_em",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13638
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "em_current_lifetime_limits"
+          }
         },
         {
           "metric": "current_temperature_model_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_em",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13659
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "current_temperature_model_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -3529,17 +4407,28 @@
       "checks": [
         {
           "metric": "candidate_esd_supply_paths",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_perc",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13793
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "candidate_esd_supply_paths"
+          }
         },
         {
           "metric": "candidate_perc_latchup_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "physical and requires_perc",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13814
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3562,17 +4451,31 @@
       "checks": [
         {
           "metric": "substrate_supply_model_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13956
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "substrate_supply_model_coverage"
+          }
         },
         {
           "metric": "noise_budget_limits",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13978
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "noise_budget_limits"
+          }
         }
       ],
       "legacy_id": {
@@ -3593,17 +4496,31 @@
       "checks": [
         {
           "metric": "candidate_ams_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14148
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "candidate_ams_scenarios"
+          }
         },
         {
           "metric": "candidate_ams_performance",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14170
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "candidate_ams_performance"
+          }
         }
       ],
       "legacy_id": {
@@ -3647,7 +4564,9 @@
                 "Magic.StreamOut",
                 "KLayout.StreamOut",
                 "KLayout.Render",
-                "Odb.CheckDesignAntennaProperties"
+                "Odb.CheckDesignAntennaProperties",
+                "KLayout.XOR",
+                "Checker.XOR"
               ]
             }
           },
@@ -3660,7 +4579,9 @@
                 "KLayout.StreamOut",
                 "KLayout.Render",
                 "Magic.WriteLEF",
-                "Odb.CheckDesignAntennaProperties"
+                "Odb.CheckDesignAntennaProperties",
+                "KLayout.XOR",
+                "Checker.XOR"
               ]
             }
           }
@@ -3668,11 +4589,49 @@
       },
       "checks": [
         {
+          "metric": "design__xor_difference__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 321
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_XOR_ERROR",
+          "enabled_default": true,
+          "when": "ic"
+        },
+        {
+          "metric": "design__xor_difference__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 321
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_XOR_ERROR",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
           "metric": "unresolved_gds_cells",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14372
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3695,10 +4654,14 @@
       "checks": [
         {
           "metric": "missing_duplicate_macro_instances",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14521
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3721,17 +4684,31 @@
       "checks": [
         {
           "metric": "seal_dieid_rules",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "ic and owner_die",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14645
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "seal_dieid_rules"
+          }
         },
         {
           "metric": "seal_core_clearance",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "ic and owner_die",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14664
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "seal_core_clearance"
+          }
         }
       ],
       "legacy_id": {
@@ -3767,7 +4744,7 @@
             }
           },
           {
-            "when": "otherwise",
+            "when": "ic",
             "tool": {
               "kind": "librelane",
               "steps": [
@@ -3775,6 +4752,13 @@
                 "KLayout.Density",
                 "Checker.KLayoutDensity"
               ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "native_report",
+              "from": "stream_out"
             }
           }
         ]
@@ -3795,7 +4779,32 @@
           "unit": "count",
           "enabled_by": "ERROR_ON_KLAYOUT_DENSITY",
           "enabled_default": true,
-          "when": "otherwise"
+          "when": "ic"
+        },
+        {
+          "metric": "fill_density_rules",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14877
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "fill_density_rules"
+          }
+        },
+        {
+          "metric": "fill_keepout_violations",
+          "operator": "==",
+          "limit": 0,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14897
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3810,25 +4819,38 @@
       "title": "Design for manufacturability",
       "when": "physical",
       "tool": {
-        "kind": "librelane",
-        "steps": [
-          "Misc.ReportManufacturability"
-        ]
+        "kind": "native_report",
+        "from": "final_electrical_analysis",
+        "scope": "Native summary is emitted after the final native checkers, following Classic and Chip."
       },
       "checks": [
         {
           "metric": "dfm_density_lithography_cmp_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15053
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "dfm_density_lithography_cmp_targets"
+          }
         },
         {
           "metric": "advanced_dfm_provider_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_advanced_dfm",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15090
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "advanced_dfm_provider_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -3857,32 +4879,24 @@
           {
             "when": "otherwise",
             "tool": {
-              "kind": "librelane",
-              "steps": [
-                "KLayout.XOR",
-                "Checker.XOR"
-              ]
+              "kind": "native_report",
+              "from": "stream_out",
+              "scope": "Native streamer agreement before finishing. Finishing-only geometry fidelity has no numeric native check in Classic or Chip."
             }
           }
         ]
       },
       "checks": [
         {
-          "metric": "design__xor_difference__count",
-          "operator": "<=",
+          "metric": "unexplained_stream_xor",
+          "operator": "==",
           "limit": 0,
+          "when": "physical",
           "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 113
+            "file": "flow/flow109.json",
+            "line": 15246
           },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 321
-          },
-          "unit": "count",
-          "enabled_by": "ERROR_ON_XOR_ERROR",
-          "enabled_default": true,
-          "when": "otherwise"
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3977,6 +4991,45 @@
           "enabled_by": "ERROR_ON_LVS_ERROR",
           "enabled_default": true,
           "when": "otherwise"
+        },
+        {
+          "metric": "final_drc_lvs_erc_antenna_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15427
+          },
+          "unit": "count"
+        },
+        {
+          "metric": "full_device_coverage",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15446
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "full_device_coverage"
+          }
+        },
+        {
+          "metric": "final_density_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15465
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "final_density_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -3998,18 +5051,28 @@
       },
       "checks": [
         {
-          "metric": "final_esd_supply_topology",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "metric": "final_perc_latchup_errors",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 7013
+          }
         },
         {
-          "metric": "final_perc_latchup_errors",
-          "operator": null,
+          "metric": "final_esd_supply_topology",
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical and requires_perc",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15608
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "final_esd_supply_topology"
+          }
         }
       ],
       "legacy_id": {
@@ -4030,10 +5093,17 @@
       "checks": [
         {
           "metric": "package_rc_thermal_validity",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "package_model_required",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15778
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "package_rc_thermal_validity"
+          }
         }
       ],
       "legacy_id": {
@@ -4054,17 +5124,31 @@
       "checks": [
         {
           "metric": "interdie_rc_rlc_thermal_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15868
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "interdie_rc_rlc_thermal_coverage"
+          }
         },
         {
           "metric": "assembly_model_correlation",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15887
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "assembly_model_correlation"
+          }
         }
       ],
       "legacy_id": {
@@ -4111,17 +5195,31 @@
       "checks": [
         {
           "metric": "fill_sensitive_reference_correlation",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16079
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "fill_sensitive_reference_correlation"
+          }
         },
         {
           "metric": "final_parasitic_corner_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16099
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "final_parasitic_corner_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -4163,7 +5261,8 @@
                 "Checker.SetupViolations",
                 "Checker.HoldViolations",
                 "Checker.MaxSlewViolations",
-                "Checker.MaxCapViolations"
+                "Checker.MaxCapViolations",
+                "Misc.ReportManufacturability"
               ]
             }
           }
@@ -4237,6 +5336,146 @@
           "match": "all",
           "corner_config": "MAX_CAP_VIOLATION_CORNERS",
           "when": "otherwise"
+        },
+        {
+          "metric": "final_mission_scenario_coverage",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16351
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "final_mission_scenario_coverage"
+          }
+        },
+        {
+          "metric": "final_timing_si_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical or (assembly_only and child_has_digital)",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16374
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "final_timing_si_targets"
+          }
+        },
+        {
+          "metric": "final_analog_mission_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "analog_physical or (assembly_only and child_has_analog)",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16398
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "final_analog_mission_targets"
+          }
+        },
+        {
+          "metric": "final_ir_em_thermal_aging_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical and (requires_ir or requires_em or requires_thermal or requires_aging)",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16422
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "final_ir_em_thermal_aging_targets"
+          }
+        },
+        {
+          "metric": "final_sdf_annotation",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16446
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "final_sdf_annotation"
+          }
+        },
+        {
+          "metric": "thermal_temperature_gradient_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical and requires_thermal",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16469
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "thermal_temperature_gradient_targets"
+          }
+        },
+        {
+          "metric": "thermal_aware_em_timing_feedback",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical and requires_thermal",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16492
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "thermal_aware_em_timing_feedback"
+          }
+        },
+        {
+          "metric": "aged_timing_margin_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "requires_aging and (digital_physical or (assembly_only and child_has_digital))",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16514
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "aged_timing_margin_targets"
+          }
+        },
+        {
+          "metric": "aged_analog_margin_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "requires_aging and (analog_physical or (assembly_only and child_has_analog))",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16537
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "aged_analog_margin_targets"
+          }
+        },
+        {
+          "metric": "aging_mission_coverage",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical and requires_aging",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16560
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "aging_mission_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -4256,25 +5495,42 @@
       },
       "checks": [
         {
+          "metric": "final_gls_function_timing_errors",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 199
+          }
+        },
+        {
           "metric": "final_sdf_annotation",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16702
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "final_sdf_annotation"
+          }
         },
         {
           "metric": "final_gls_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
-        },
-        {
-          "metric": "final_gls_function_timing_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "digital_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16722
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "final_gls_scenarios"
+          }
         }
       ],
       "legacy_id": {
@@ -4295,17 +5551,31 @@
       "checks": [
         {
           "metric": "final_ams_scenarios",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16893
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "final_ams_scenarios"
+          }
         },
         {
           "metric": "final_ams_noise_settling_calibration",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed_physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 16915
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "final_ams_noise_settling_calibration"
+          }
         }
       ],
       "legacy_id": {
@@ -4326,17 +5596,25 @@
       "checks": [
         {
           "metric": "final_pattern_good_machine_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "requires_dft",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17047
+          },
+          "unit": "count"
         },
         {
           "metric": "export_roundtrip_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "requires_dft",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17086
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -4374,24 +5652,42 @@
       "checks": [
         {
           "metric": "final_security_requirements",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_security and physical",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17239
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "final_security_requirements"
+          }
         },
         {
           "metric": "scan_debug_access_violations",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "requires_security and (digital_physical or (assembly_only and child_has_digital))",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17262
+          },
+          "unit": "count"
         },
         {
           "metric": "final_analog_security_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_security and (analog_physical or (assembly_only and child_has_analog))",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17284
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "final_analog_security_targets"
+          }
         }
       ],
       "legacy_id": {
@@ -4412,10 +5708,17 @@
       "checks": [
         {
           "metric": "analog_endpoint_evidence",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "has_analog",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17435
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "analog_endpoint_evidence"
+          }
         }
       ],
       "legacy_id": {
@@ -4438,10 +5741,17 @@
       "checks": [
         {
           "metric": "mixed_requirement_evidence",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "mixed",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17600
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "mixed_requirement_evidence"
+          }
         }
       ],
       "legacy_id": {
@@ -4464,38 +5774,67 @@
       "checks": [
         {
           "metric": "crossdie_system_dft_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17723
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "crossdie_system_dft_coverage"
+          }
         },
         {
           "metric": "assembly_pv_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17745
+          },
+          "unit": "count"
         },
         {
           "metric": "interdie_timing_pi_thermal_targets",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17766
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "interdie_timing_pi_thermal_targets"
+          }
         },
         {
           "metric": "assembly_alignment_stackup_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17789
+          },
+          "unit": "count"
         },
         {
           "metric": "whole_assembly_connectivity_pv_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "assembly_only",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17810
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "whole_assembly_connectivity_pv_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -4516,31 +5855,56 @@
       "checks": [
         {
           "metric": "escape_bond_feasibility",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "package_interface",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 17993
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "escape_bond_feasibility"
+          }
         },
         {
           "metric": "package_feedback_unresolved",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "package_interface",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18016
+          },
+          "unit": "count"
         },
         {
           "metric": "test_access_ready",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "package_interface",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18037
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "test_access_ready"
+          }
         },
         {
           "metric": "package_electrical_feedback_coverage",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "package_model_required",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18058
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "package_electrical_feedback_coverage"
+          }
         }
       ],
       "legacy_id": {
@@ -4561,17 +5925,31 @@
       "checks": [
         {
           "metric": "safety_evidence_trace",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_functional_safety",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18167
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "safety_evidence_trace"
+          }
         },
         {
           "metric": "redundancy_separation_dfa",
-          "operator": null,
+          "operator": "within_declared_bounds",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "requires_functional_safety",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18188
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "redundancy_separation_dfa"
+          }
         }
       ],
       "legacy_id": {
@@ -4589,15 +5967,7 @@
         "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "native_measurement",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "This step has no numeric native limit."
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D77",
         "native": [
@@ -4615,15 +5985,7 @@
         "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "native_measurement",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "This step has no numeric native limit."
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D78",
         "native": [
@@ -4636,25 +5998,43 @@
       "title": "IP release views and documentation",
       "when": "ip",
       "tool": {
-        "kind": "adapter",
-        "program": "flow109_ip_release.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "snapshot",
+        "destination": "phase3/stage4/hardmacro",
+        "formats": {
+          "lef": ".lef",
+          "lib": ".lib",
+          "gds": ".gds",
+          "nl": ".v"
+        }
       },
       "checks": [
         {
           "metric": "ip_endpoint_views",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "ip",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18720
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "ip_endpoint_views"
+          }
         },
         {
           "metric": "ip_integration_limits_documented",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "ip",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18739
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "ip_integration_limits_documented"
+          }
         }
       ],
       "legacy_id": {
@@ -4677,17 +6057,28 @@
       "checks": [
         {
           "metric": "provider_design_rule_errors",
-          "operator": null,
-          "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18870
+          },
+          "unit": "count"
         },
         {
           "metric": "provider_delivery_items",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "ic",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18889
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "provider_delivery_items"
+          }
         }
       ],
       "legacy_id": {
@@ -4710,10 +6101,17 @@
       "checks": [
         {
           "metric": "release_required_items",
-          "operator": null,
+          "operator": "covers_all",
           "limit": null,
-          "source": null,
-          "decision_request": "No numeric native limit found in the current implementation."
+          "when": "always",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 19013
+          },
+          "required_from": {
+            "kind": "design_or_tool_population",
+            "metric": "release_required_items"
+          }
         }
       ],
       "legacy_id": {

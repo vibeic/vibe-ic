@@ -1035,8 +1035,6 @@ def reg_crossing_findings(nl: Netlist,
                           lookup: Optional[_LookupSnapshot] = None, *,
                           metadata: Optional[dict] = None) -> List[dict]:
     """A flop of domain A read by a flop of domain B (clock_domain_reg_crossing)."""
-    import instrument_calibration
-    instrument_calibration.assert_calibrated("_cdc_netlist::reg_crossing_findings")
     lookup = lookup or _LookupSnapshot(nl)
     domains = clock_domains(nl, lookup)
     if len(domains) < 2 and metadata is None:
@@ -1110,8 +1108,6 @@ def async_input_findings(nl: Netlist, is_candidate,
     candidate set is drawn from the netlist's PORTS only, so an internal net is
     never an async input whatever it is called (#2063).
     """
-    import instrument_calibration
-    instrument_calibration.assert_calibrated("_cdc_netlist::async_input_findings")
     lookup = lookup or _LookupSnapshot(nl)
     clock_or_reset = {nl.root(f.clk) for f in nl.flops} | \
         {nl.root(f.arst) for f in nl.flops if f.arst is not None}
@@ -1158,8 +1154,6 @@ def reset_dependency_findings(
     examine each node/edge exactly twice. Witness walks examine at most one
     further graph's worth of edges, with no recursion limit.
     """
-    import instrument_calibration
-    instrument_calibration.assert_calibrated("_cdc_netlist::reset_dependency_findings")
     lookup = lookup or _LookupSnapshot(nl)
     reset_roles = reset_roles or {}
     unresolved = [r for r in reset_role_candidates(nl)
