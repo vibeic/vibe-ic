@@ -135,7 +135,7 @@ def test_ic_profile_keeps_published_engineering_tools_and_original_limits(tmp_pa
     ip = design_features(tmp_path, {"delivery_target": "ip_hardmacro"}, table)
     for feature in ("requires_si", "requires_spice", "requires_perc"):
         assert ic[feature] is True
-        assert ip[feature] is False
+        assert ip[feature] is (feature == "requires_si")
     expected = {
         "candidate_signal_integrity": ({"si_setup_slack_ns": (">=", 0), "si_hold_slack_ns": (">=", 0)}, "VibeIC.SignalIntegrity"),
         "post_layout_spice_correlation": ({"spice_correlation_errors": ("==", 0)}, "VibeIC.SpiceCorrelation"),

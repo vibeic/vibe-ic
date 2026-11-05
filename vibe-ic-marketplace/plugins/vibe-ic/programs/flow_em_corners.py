@@ -87,7 +87,10 @@ foreach net [concat $::env(VDD_NETS) $::env(GND_NETS)] {
 puts "%OL_END_REPORT"
 ''')
         views, metrics = super().run(state_in, env=env, **kwargs)
-        nets = list(self.config["VDD_NETS"]) + list(self.config["GND_NETS"])
+        nets = []
+        for supply in ("VDD", "GND"):
+            configured = self.config[f"{supply}_NETS"]
+            nets.extend(configured if configured is not None else [self.config[f"{supply}_PIN"]])
         metrics.update(current_density_metrics((root / "em.rpt").read_text(), nets))
         return views, metrics
 
