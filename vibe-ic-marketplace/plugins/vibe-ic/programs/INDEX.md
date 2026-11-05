@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1476
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1476)
+- **Total programs (excluding helpers / shims):** 1477
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1477)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1467 |
+| `any` | 1468 |
 
 ## Alphabetical listing
 
@@ -560,6 +560,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_output_substance` | any | — | did the run actually produce this output, or only a file? |
 | `flow_pdn_current` | any | — | flow_pdn_current |
 | `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
+| `flow_power` | any | — | Call the existing power-intent tools without initializing the physical chain. |
 | `flow_spare_cells` | any | — | flow_spare_cells |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
 | `flow_stage_membership_single_declaration_check` | any | — | stage membership is declared once. |
@@ -766,7 +767,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l21_hard_macro_supply_bind` | any | — | Bind each analog/hard-macro supply PIN to the rail the design's own documents say feeds it — the Phase-1 PRODUCER of `L21.fields.hard_mac... |
 | `l21_macro_supply_rail_declared_check` | any | — | L21 SEMANTIC completeness gate. |
 | `l21_macro_supply_rail_synth` | any | — | Derive the power-intent rail set from the design's OWN hard-macro LEFs. |
-| `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1). |
+| `l21_to_upf_emit` | any | — | Render documented power domains and strategies into UPF. |
 | `l22_analog_verification_plan_emit` | any | — | Project the analog/mixed-signal verification contract into L22. |
 | `l22_checklist_milestone_emit` | any | — | the verification checklist's own milestones. |
 | `l22_coverage_goal_emit` | any | — | lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them. |
@@ -1548,7 +1549,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1467 programs)
+### `any` (1468 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2080,6 +2081,7 @@ _(no programs in this group)_
 - `flow_output_substance` — did the run actually produce this output, or only a file?
 - `flow_pdn_current` — flow_pdn_current
 - `flow_phase_attribution` — WHO did each of the four phases, and HOW.
+- `flow_power` — Call the existing power-intent tools without initializing the physical chain.
 - `flow_spare_cells` — flow_spare_cells
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
 - `flow_stage_membership_single_declaration_check` — stage membership is declared once.
@@ -2286,7 +2288,7 @@ _(no programs in this group)_
 - `l21_hard_macro_supply_bind` — Bind each analog/hard-macro supply PIN to the rail the design's own documents say feeds it — the Phase-1 PRODUCER of `L21.fields.hard_mac...
 - `l21_macro_supply_rail_declared_check` — L21 SEMANTIC completeness gate.
 - `l21_macro_supply_rail_synth` — Derive the power-intent rail set from the design's OWN hard-macro LEFs.
-- `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1).  _[v0.1.51]_
+- `l21_to_upf_emit` — Render documented power domains and strategies into UPF.
 - `l22_analog_verification_plan_emit` — Project the analog/mixed-signal verification contract into L22.
 - `l22_checklist_milestone_emit` — the verification checklist's own milestones.
 - `l22_coverage_goal_emit` — lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them.
