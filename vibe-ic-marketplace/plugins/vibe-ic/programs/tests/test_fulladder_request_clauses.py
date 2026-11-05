@@ -106,3 +106,12 @@ def test_repeated_separate_construction_directions_stay_qualified(positive):
         assert_fulladder_composition(rtl, 5, ("operand_u", "operand_v", "total"), spans)
     else:
         assert rtl == arithmetic.synth(prompt, "neutral_sum")
+
+
+def test_construction_admission_truth_table_stays_qualified_and_order_independent():
+    styles = ["with full adders", "without full adders",
+        "with full adders and with full adders", "without full adders and without full adders",
+        "with full adders and without full adders", "without full adders and with full adders"]
+    results = tuple("REFUSE" if arithmetic.synth(request(style=style)[0], "neutral_sum") is None
+        else "EMIT" for style in styles)
+    assert results == ("EMIT", "EMIT", "EMIT", "EMIT", "REFUSE", "REFUSE")
