@@ -18,6 +18,8 @@ def _attribute(body, name):
 
 
 def _buffer_input_caps(text, excluded):
+    text = re.sub(r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\r\n]*',
+                  lambda token: token[0] if token[0].startswith('"') else " ", text, flags=re.S)
     if not re.search(r"\bcapacitive_load_unit\s*\(\s*[\d.]+\s*,\s*(?:ff|pf|nf)\s*\)", text, re.I):
         return None
     scale = parse_liberty_header(text)["cap_unit_pf"]

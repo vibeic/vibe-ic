@@ -78,6 +78,26 @@ def test_clock_wire_budget_excludes_identity_cells_with_extra_inout(native):
     assert clock_settings(native) == {"CTS_CLK_MAX_WIRE_LENGTH": 80}
 
 
+@pytest.mark.parametrize("comment", ["block", "line"])
+def test_clock_wire_budget_ignores_commented_buffers(native, comment):
+    path = Path(native["LIB"]["*slow"][0])
+    text = buffer("documented_buffer", .21)
+    text = f"/* {text} */" if comment == "block" else "\n".join(
+        "// " + line for line in text.splitlines())
+    path.write_text(path.read_text().rsplit("}", 1)[0] + text + "\n}")
+    assert clock_settings(native) == {"CTS_CLK_MAX_WIRE_LENGTH": 80}
+
+
+@pytest.mark.parametrize("description", ["literal // text", r'literal \" // text',
+                                         "literal /* text */ // text"])
+def test_clock_wire_budget_preserves_comment_markers_in_quoted_attributes(native, description):
+    path = Path(native["LIB"]["*slow"][0])
+    path.write_text(path.read_text().replace(
+        "direction : input; capacitance : 0.04;",
+        f'comment : "{description}"; direction : input; capacitance : 0.04;'))
+    assert clock_settings(native) == {"CTS_CLK_MAX_WIRE_LENGTH": 80}
+
+
 @pytest.mark.parametrize("override", [{"CTS_CLK_MAX_WIRE_LENGTH": 12},
                                       {"CTS_CLK_MAX_WIRE_LENGTH": -1},
                                       {"PNR_SDC_FILE": "operator.sdc"},
