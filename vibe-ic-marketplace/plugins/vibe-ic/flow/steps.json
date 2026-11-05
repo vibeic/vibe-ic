@@ -4221,59 +4221,6 @@
       }
     },
     {
-      "name": "design_for_manufacturability",
-      "title": "Design for manufacturability",
-      "when": "physical",
-      "tool": {
-        "kind": "native_report",
-        "from": "final_electrical_analysis",
-        "scope": "Native summary is emitted after the final native checkers, following Classic and Chip."
-      },
-      "checks": [],
-      "legacy_id": {
-        "registry": "D63",
-        "native": [
-          "35"
-        ]
-      },
-      "observations": [
-        {
-          "metric": "dfm_density_lithography_cmp_targets",
-          "native_metrics": [
-            "*__density_error__count"
-          ],
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 15053
-          },
-          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
-          "declared_limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "dfm_density_lithography_cmp_targets"
-          },
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical"
-        },
-        {
-          "metric": "advanced_dfm_provider_targets",
-          "native_metrics": [],
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 15090
-          },
-          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
-          "declared_limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "advanced_dfm_provider_targets"
-          },
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical and requires_advanced_dfm"
-        }
-      ]
-    },
-    {
       "name": "finishing_geometry_fidelity",
       "title": "Finishing geometry fidelity",
       "when": "physical",
@@ -4768,6 +4715,59 @@
         "registry": "D70",
         "native": []
       }
+    },
+    {
+      "name": "design_for_manufacturability",
+      "title": "Design for manufacturability",
+      "when": "physical",
+      "tool": {
+        "kind": "native_report",
+        "from": "final_electrical_analysis",
+        "scope": "Native summary is emitted after the final native checkers, following Classic and Chip."
+      },
+      "checks": [],
+      "legacy_id": {
+        "registry": "D63",
+        "native": [
+          "35"
+        ]
+      },
+      "observations": [
+        {
+          "metric": "dfm_density_lithography_cmp_targets",
+          "native_metrics": [
+            "*__density_error__count"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15053
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "dfm_density_lithography_cmp_targets"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical"
+        },
+        {
+          "metric": "advanced_dfm_provider_targets",
+          "native_metrics": [],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15090
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "advanced_dfm_provider_targets"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical and requires_advanced_dfm"
+        }
+      ]
     },
     {
       "name": "final_sdf_gate_level_replay",
