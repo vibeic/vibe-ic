@@ -100,3 +100,53 @@ def test_chip_pdn_uses_native_script_and_registry_connections(project, monkeypat
 def test_config_cli_output_is_the_config_the_caller_receives(project):
     output = write_config(project, route="HARDMACRO")
     assert json.loads(output.read_text()) == build_config(project, route="HARDMACRO")
+
+
+def test_original_prompt_recovers_lost_pdk_and_invalid_top(project):
+    (project / "input").mkdir()
+    (project / "input/phase1_prompt.md").write_text(
+        "Implement on sky130A.\n- Top module: `unit`.\n")
+    docs = project / "phase1/generated_docs"
+    (docs / "L9_INTEGRATION_SPEC.json").write_text('{"top_module": "missing"}')
+    (docs / "L19_CONSTRAINTS_PDK.json").write_text('{"fields":{"pdk_target":null}}')
+    config = build_config(project)
+    assert config["PDK"] == "sky130A"
+    assert config["DESIGN_NAME"] == "unit"
+    assert config["CLOCK_PERIOD"] == 17.5
+    assert json.loads((project / "work/flow/config_sources.json").read_text())["sources"] == {
+        "PDK": "input/phase1_prompt.md", "DESIGN_NAME": "input/phase1_prompt.md"}
+
+
+def test_primary_clock_without_period_keeps_native_default_and_records_assumption(project):
+    (project / "phase1/generated_docs/L8_TIMING_WAVEFORM.json").write_text("{}")
+    docs = project / "input/docs"
+    docs.mkdir(parents=True)
+    (docs / "interfaces.md").write_text(
+        "- Primary Clock: **`clk`**\n- Other Clocks: **`entropy_clk`**\n"
+        "Entropy is supplied at 100 MHz.\n")
+    config = build_config(project)
+    assert config["CLOCK_PORT"] == "clk"
+    assert "CLOCK_PERIOD" not in config
+    notes = json.loads((project / "work/flow/config_sources.json").read_text())
+    assert notes["sources"]["CLOCK_PORT"] == "input/docs/interfaces.md"
+    assert "not a design timing target" in notes["assumptions"][0]
+
+
+def test_nested_generated_modules_and_headers_are_native_inputs(project):
+    rtl = project / "phase2/stage1/rtl"
+    nested = rtl / "cells"
+    nested.mkdir()
+    (nested / "cell.v").write_text("module cell; endmodule\n")
+    (nested / "types.svh").write_text("`define WIDTH 8\n")
+    (rtl / "types_pkg.sv").write_text("package types_pkg; parameter N=8; endpackage\n")
+    config = build_config(project)
+    assert str(nested / "cell.v") in config["VERILOG_FILES"]
+    assert str(nested) in config["VERILOG_INCLUDE_DIRS"]
+    assert config["USE_SLANG"] is True
+
+
+def test_missing_declared_top_is_not_replaced_by_an_unrelated_module(project):
+    (project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").write_text(
+        '{"top_module":"missing"}')
+    with pytest.raises(FileNotFoundError, match="Declared top module missing"):
+        build_config(project)

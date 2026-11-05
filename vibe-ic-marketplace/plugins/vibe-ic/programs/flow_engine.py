@@ -115,6 +115,8 @@ def design_features(project: Path, route: dict, table: dict) -> dict:
     for path in sorted(docs.glob("L*.json")):
         document = read_json(path)
         for container in (document, document.get("fields", {}), document.get("features", {})):
+            if not isinstance(container, dict):
+                continue
             declared = {key: value for key, value in container.items()
                         if key in names and type(value) is bool}
             features.update(declared)
