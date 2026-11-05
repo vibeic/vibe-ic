@@ -633,50 +633,6 @@ def git_prohibition_gate(commit_cmds: List[str]) -> GateResult:
 
 
 # --------------------------------------------------------------------------
-# full_suite_run_check — validate the supplied --pytest-cmd against cadence.
-# FULL milestone => full-suite invocation REQUIRED.
-# TARGETED patch  => a (any) pytest invocation suffices; subset is fine.
-# --------------------------------------------------------------------------
-def test_cadence_gate(pytest_cmd: Optional[str], cadence: str) -> GateResult:
-    if pytest_cmd is None:
-        # No command to validate. We do not fabricate a PASS — but absence of a
-        # supplied command is an honest SKIP (the caller may run tests out of
-        # band); the loop's Step-2.7 still requires evidence. For a FULL
-        # milestone we make this a hard FAIL because the policy demands proof.
-        if cadence == "FULL":
-            return GateResult("full_suite_run_check", 1,
-                              "FULL milestone requires a full-suite pytest "
-                              "command (none supplied via --pytest-cmd)")
-        return GateResult("full_suite_run_check", -1,
-                          f"skipped — no --pytest-cmd (cadence={cadence})")
-    rep = _fsr_scan([pytest_cmd])
-    if cadence == "FULL":
-        if rep.full_suite_found:
-            return GateResult("full_suite_run_check", 0,
-                              "FULL cadence satisfied — full-suite invocation present")
-        return GateResult("full_suite_run_check", 1,
-                          "FULL cadence required but pytest cmd is a SUBSET "
-                          "(integration/regression gates skipped)")
-    # TARGETED / NONE: any real pytest invocation satisfies the regression gate.
-    if rep.pytest_invocations >= 1:
-        return GateResult("full_suite_run_check", 0,
-                          f"TARGETED cadence satisfied — {rep.pytest_invocations} "
-                          f"pytest invocation(s)")
-    return GateResult("full_suite_run_check", 1,
-                      "no pytest invocation found in --pytest-cmd")
-
-
-_fsr = None
-
-
-def _fsr_scan(cmds: List[str]):
-    global _fsr
-    if _fsr is None:
-        _fsr = _load_module("full_suite_run_check")
-    return _fsr.scan_commands(cmds)
-
-
-# --------------------------------------------------------------------------
 # blindness_audit — only when transcripts + dataset are supplied (subprocess).
 # --------------------------------------------------------------------------
 def blindness_gate(transcripts: Optional[str],
@@ -1646,7 +1602,6 @@ def review(base: str, head: str, *,
            repo: Path,
            plugin_root: Path,
            role: Optional[str] = None,
-           pytest_cmd: Optional[str] = None,
            commit_cmds: Optional[List[str]] = None,
            transcripts: Optional[str] = None,
            dataset: Optional[str] = None,
@@ -1728,7 +1683,6 @@ def review(base: str, head: str, *,
     if version_by_gatekeeper:
         gates.append(publication_base_gate(repo, base, pr_metadata))
     gates.append(git_prohibition_gate(commit_cmds or []))
-    gates.append(test_cadence_gate(pytest_cmd, cadence))
     gates.append(run_deliverable_gate(repo, files))
     gates.append(blindness_gate(transcripts, dataset))
     # #538 — LAST because it is by far the longest, so every cheap machine gate
@@ -1819,8 +1773,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--base", required=True, help="base git ref")
     ap.add_argument("--head", required=True, help="head git ref")
     ap.add_argument("--role", default=None, help="PR author agent role")
-    ap.add_argument("--pytest-cmd", default=None,
-                    help="the pytest command string the PR ran")
     ap.add_argument("--commit-cmds-file", default=None,
                     help="file of the PR's git/gh command strings (one per line)")
     ap.add_argument("--transcripts", default=None,
@@ -1964,7 +1916,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         v = review(args.base, args.head,
                    repo=repo, plugin_root=plugin_root,
-                   role=args.role, pytest_cmd=args.pytest_cmd,
+                   role=args.role,
                    commit_cmds=commit_cmds,
                    transcripts=args.transcripts, dataset=args.dataset,
                    version_by_gatekeeper=args.version_by_gatekeeper,

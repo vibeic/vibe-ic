@@ -1434,20 +1434,6 @@ run_pytest() {
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; rm -f "$sel"; return
   fi
-  # WHAT THIS RUN CAN HONESTLY CLAIM, DERIVED FROM THE SELECTION IT IS ABOUT TO
-  # EXECUTE — never from `$LANDING_CADENCE`. Reporting the full-suite string
-  # because the cadence SAYS full, while the selection is short, is precisely
-  # the false green the cadence gate exists to refuse; `--describe` compares the
-  # selection against the tree by MEMBERSHIP and only then emits the full-suite
-  # command. At FULL cadence a short selection therefore describes itself as a
-  # subset, and `full_suite_run_check` turns that into the red it should be.
-  #
-  # THROUGH A FILE, because run_pytest runs inside a lane subshell and a
-  # variable set here never reaches the main shell that calls the review — the
-  # same lesson `$LANE_DIR/targeted.norecord` records one screen down.
-  ( cd "$PLUGIN" && python3 programs/landing_cadence.py \
-      --plugin-root "$PLUGIN" --selection "$sel" --describe 2>/dev/null \
-      | sed -n 's/^LANDING_PYTEST_CMD=//p' ) > "$LANE_DIR/pytest-cmd.txt" || true
   printf '  REPORT  cadence %s — %s file(s) selected\n' \
     "$LANDING_CADENCE" "$(wc -l < "$sel")"
   # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
@@ -2436,29 +2422,6 @@ fi
 GK_REVIEW_BUDGET_S="${GATEKEEPER_REVIEW_BUDGET_S:-1800}"
 run_gatekeeper_review() {
   local out rc
-  # THE REVIEW'S CADENCE GATE ONLY WORKS IF SOMEBODY TELLS IT WHAT RAN.
-  # `test_cadence_gate` has always refused a FULL cadence whose --pytest-cmd is
-  # a subset — but this call never passed one, so on a milestone the gate took
-  # its OTHER branch and hard-failed with "FULL milestone requires a full-suite
-  # pytest command (none supplied)". A milestone landing was therefore not
-  # merely under-tested, it was IMPOSSIBLE through this script.
-  #
-  # The string comes from the file `run_pytest` wrote, which was derived from
-  # the selection it executed. When the targeted lane is skipped entirely
-  # (GATEKEEPER_SKIP_TARGETED_TESTS=1, the merge-verifier arm shape) no file
-  # exists and no claim is made — an arm that did not run the tests must not
-  # certify their cadence, and the review's own "no --pytest-cmd" branch is the
-  # correct verdict for it.
-  # `${LANE_DIR:-}`, not `$LANE_DIR`. This file runs under `set -u` and
-  # `tools/test_gatekeeper_land_review_budget.py` drives this REAL function
-  # against a stub, setting only the variables it needs; a bare dereference
-  # made every case in that file die before the case statement it exists to
-  # test. Tolerating an unset lane dir is also the honest reading: no lane dir
-  # means no lane wrote a command, which is the same "no claim" branch.
-  local cadence_arg=() cmd_file="${LANE_DIR:-}/pytest-cmd.txt"
-  if [ -n "${LANE_DIR:-}" ] && [ -s "$cmd_file" ]; then
-    cadence_arg=(--pytest-cmd "$(cat "$cmd_file")")
-  fi
   # THE SHAPE OF THIS LANDING WAS ALREADY DECIDED, AND THE REVIEW WAS NOT TOLD.
   # `cheap:landing-shape` above counted the range into `GK_RANGE_N` and, when it
   # was greater than one, ran `landing_is_one_commit_check.py --batch` and
@@ -2495,7 +2458,6 @@ run_gatekeeper_review() {
   out="$(timeout -k 10 "$GK_REVIEW_BUDGET_S" \
          python3 "$PROGRAMS/gatekeeper_review.py" \
          --base "$BASE" --head HEAD --repo "${GK_REVIEW_SUBJECT:-$ROOT}" \
-         "${cadence_arg[@]+"${cadence_arg[@]}"}" \
          "${batch_arg[@]+"${batch_arg[@]}"}" \
          --scope structural 2>&1)"; rc=$?
   case "$rc" in

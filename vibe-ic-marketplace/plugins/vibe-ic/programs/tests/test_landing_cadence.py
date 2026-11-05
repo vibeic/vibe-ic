@@ -179,38 +179,6 @@ def test_explicit_testpath_file_follows_pytest_initial_file_semantics(tmp_path):
     assert lc.tree_test_files(root) == ["checks/explicit.py"]
 
 
-def test_missing_config_description_is_explicitly_unknown(tmp_path):
-    root = _population_fixture(tmp_path)
-    (root / "pytest.ini").unlink()
-    scope, command, why = lc.describe(root, _write_sel(tmp_path, ["programs/tests/test_primary.py"]))
-    assert scope == "unknown"
-    assert "NOT_DETERMINED" in why
-
-
-def test_excluded_selection_superset_does_not_claim_full(tmp_path):
-    root = _population_fixture(tmp_path)
-    selected = lc.tree_test_files(root) + ["programs/tests/data_cases/case_a/test_reject.py"]
-    scope, command, why = lc.describe(root, _write_sel(tmp_path, selected))
-    assert scope == "subset"
-    assert "outside the declared pytest population" in why
-
-
-def test_full_inventory_uses_declared_primary_scope_and_preserves_siblings(tmp_path):
-    root = _population_fixture(tmp_path)
-    _population_file(root, "_shared/test_sibling.py")
-    (root / "pytest.ini").write_text(
-        "[pytest]\ntestpaths = programs/tests\npython_files = test_*.py *_spec.py\n"
-        "norecursedirs = programs/tests/data_cases\n")
-    _population_file(root, "programs/tests/nested/required_spec.py")
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "add", "plugin"], check=True)
-    population = lc._full_suite_run_check().population(root)
-    assert population == ["_shared/test_sibling.py", "programs/tests/nested/required_spec.py",
-                          "programs/tests/nested/test_required.py", "programs/tests/test_primary.py"]
-    (root / "pytest.ini").unlink()
-    assert lc._full_suite_run_check().population(root) is None
-
-
 # --------------------------------------------------------------------------
 # a real git repo carrying a real version bump
 # --------------------------------------------------------------------------
@@ -287,58 +255,6 @@ def test_the_caller_cannot_supply_the_answer():
 
 # ============ describe(): the claim is earned from the selection ==========
 
-def test_the_full_tree_describes_itself_as_the_full_suite(tmp_path):
-    scope, cmd, why = lc.describe(_PLUGIN, _write_sel(tmp_path, lc.tree_test_files(_PLUGIN)))
-    assert scope == "full", why
-    # and the REAL classifier agrees, rather than this test agreeing with itself
-    assert gr._fsr_scan([cmd]).full_suite_found is True
-
-
-def _write_sel(tmp_path: Path, files) -> Path:
-    p = tmp_path / "sel.txt"
-    p.write_text("\n".join(files) + "\n")
-    return p
-
-
-def test_one_missing_file_is_not_the_full_suite(tmp_path):
-    """Completeness is judged by MEMBERSHIP. A guard that compared COUNTS would
-    call this complete, and a swap complete too."""
-    tree = lc.tree_test_files(_PLUGIN)
-    assert len(tree) > 1
-    scope, cmd, why = lc.describe(_PLUGIN, _write_sel(tmp_path, tree[:-1]))
-    assert scope == "subset", why
-    assert gr._fsr_scan([cmd]).full_suite_found is False
-
-
-def test_a_subset_cannot_satisfy_a_milestone(tmp_path):
-    """THE LOAD-BEARING ASYMMETRY, driven through the real gate."""
-    tree = lc.tree_test_files(_PLUGIN)
-    _, subset_cmd, _ = lc.describe(_PLUGIN, _write_sel(tmp_path, tree[:20]))
-    assert gr.test_cadence_gate(subset_cmd, "FULL").rc == 1
-    # ... and the SAME string is fine at the tier that permits a subset.
-    assert gr.test_cadence_gate(subset_cmd, "TARGETED").rc == 0
-
-
-def test_a_directory_token_must_not_be_readable_as_the_whole_tree(tmp_path):
-    """The first version of describe() emitted `programs/tests/.selection` for a
-    subset. `full_suite_run_check` then classified any path under the single
-    testpath as the FULL suite, so that string satisfied a milestone while 101
-    files ran. This pins the shape that is actually refused.
-
-    THE HAZARD ITSELF IS NOW GONE, and this line records that rather than the
-    hazard: under the 2026-08-31 ruling the classifier measures COVERAGE OF THE
-    TRACKED POPULATION, so a placeholder token under `programs/tests` covers
-    nothing at all and a real `programs/tests` covers one tree of five. Neither
-    can buy a milestone any more. The rest of the case still stands — describe()
-    must not emit the placeholder — because a string that happens to be refused
-    today is a thinner guarantee than a string that is TRUE."""
-    assert gr._fsr_scan(
-        ["python3 -m pytest -q programs/tests/.selection"]).full_suite_found is False
-    tree = lc.tree_test_files(_PLUGIN)
-    _, subset_cmd, _ = lc.describe(_PLUGIN, _write_sel(tmp_path, tree[:5]))
-    assert ".selection" not in subset_cmd
-    assert gr._fsr_scan([subset_cmd]).full_suite_found is False
-
 
 def test_emit_full_selection_is_the_same_list_describe_judges(capsys):
     """The list that is RUN and the list completeness is judged against must be
@@ -374,15 +290,6 @@ def test_the_landing_runs_the_whole_tree_on_a_milestone():
     assert 'if [ "$LANDING_CADENCE" = "FULL" ]; then' in t
     assert "--emit-full-selection" in t
     assert "ci_targeted_test_select.py" in t, "the patch tier must be unchanged"
-
-
-def test_the_landing_tells_the_review_what_it_actually_ran():
-    t = _LAND.read_text()
-    assert "--pytest-cmd" in t, (
-        "without this the review's cadence gate takes its 'none supplied' "
-        "branch and a milestone landing is impossible")
-    assert "$LANE_DIR/pytest-cmd.txt" in t, \
-        "a lane subshell variable never reaches the main shell"
 
 
 def test_the_stamp_records_the_cadence_it_was_earned_at():

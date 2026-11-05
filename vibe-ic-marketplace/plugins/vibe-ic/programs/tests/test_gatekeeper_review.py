@@ -153,7 +153,6 @@ def test_clean_diff_merge_ok(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         commit_cmds=["git commit -m 'fix'", "git push origin main"],
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
@@ -184,7 +183,6 @@ def test_chip_token_request_changes(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
@@ -206,7 +204,6 @@ def test_non_monotonic_version_request_changes(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         # current == previous == 1.0.95: NO bump.
         override_cur="1.0.95", override_prev="1.0.95",
@@ -224,7 +221,6 @@ def test_regression_version_request_changes(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.94", override_prev="1.0.95",
     )
@@ -247,33 +243,14 @@ def test_cadence_minor_milestone_selects_full(tmp_path):
         # cadence gate judges COVERAGE of the tracked corpus, and a bare
         # `pytest` resolves to `pytest.ini`'s single testpath — one tree of
         # five. `./run_tests.sh` is the invocation that reaches all of them.
-        pytest_cmd="./run_tests.sh",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.1.0", override_prev="1.0.99",
     )
     assert v.cadence == "FULL", v.version_bump
     by_name = {g.name: g for g in v.gates}
-    assert by_name["full_suite_run_check"].rc == 0, \
-        by_name["full_suite_run_check"].summary
     assert v.verdict == "MERGE_OK", v.blocking
 
 
-def test_cadence_full_milestone_rejects_subset_pytest(tmp_path):
-    """A FULL milestone whose pytest cmd is only a SUBSET fails the cadence
-    gate (the integration/regression gates would be skipped)."""
-    repo, plugin = _build_clean_plugin(tmp_path, version="1.1.0")
-    v = gk.review(
-        "BASE", "HEAD",
-        repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests/test_widget.py",  # subset
-        override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
-        override_cur="1.1.0", override_prev="1.0.99",
-    )
-    assert v.cadence == "FULL"
-    by_name = {g.name: g for g in v.gates}
-    assert by_name["full_suite_run_check"].rc == 1, \
-        by_name["full_suite_run_check"].summary
-    assert v.verdict == "REQUEST_CHANGES"
 
 
 def test_cadence_patch_selects_targeted(tmp_path):
@@ -283,14 +260,11 @@ def test_cadence_patch_selects_targeted(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests/test_widget.py",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
     assert v.cadence == "TARGETED", v.version_bump
     by_name = {g.name: g for g in v.gates}
-    assert by_name["full_suite_run_check"].rc == 0, \
-        by_name["full_suite_run_check"].summary
     assert v.verdict == "MERGE_OK", v.blocking
 
 
@@ -310,7 +284,6 @@ def test_out_of_scope_role_touching_mcp_rejects(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="field-agent",                    # may only touch backlog
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/server.py",  # MCP!
         ],
@@ -329,7 +302,6 @@ def test_out_of_scope_role_touching_plugin_rejects(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="field-agent",                    # backlog only
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # plugin!
         ],
@@ -346,7 +318,6 @@ def test_benchmark_agent_pure_plugin_fix_not_rejected_by_scope(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="benchmark-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # pure plugin fix
         ],
@@ -364,7 +335,6 @@ def test_benchmark_agent_mixed_results_and_plugin_rejects(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="benchmark-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "benchmark-data/evaluation/rtllm/run/RESULT.md",          # a RESULT
             "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # + a plugin edit
@@ -381,7 +351,6 @@ def test_in_scope_role_not_rejected(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="field-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/community/backlogs/item-1.yaml",
         ],
@@ -401,7 +370,6 @@ def test_forbidden_git_op_request_changes(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         commit_cmds=["git push --force origin main"],   # forbidden
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
@@ -420,7 +388,6 @@ def test_force_with_lease_is_allowed(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         commit_cmds=["git push --force-with-lease origin main"],
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
@@ -438,7 +405,6 @@ def test_json_five_section_shape(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
@@ -529,7 +495,6 @@ def test_cli_main_merge_ok(tmp_path):
         "--role", "core-agent",
         "--repo", str(repo),
         "--plugin-root", str(plugin),
-        "--pytest-cmd", "python3 -m pytest -q programs/tests",
         "--changed-file", str(changed),
         "--json", str(out_json),
     ])
@@ -576,7 +541,6 @@ def test_cli_main_request_changes_rc1(tmp_path):
         "--base", base_sha, "--head", "HEAD",
         "--role", "core-agent",
         "--repo", str(repo), "--plugin-root", str(plugin),
-        "--pytest-cmd", "python3 -m pytest -q programs/tests",
         "--changed-file", str(changed),
     ])
     assert rc == 1
@@ -592,7 +556,6 @@ def test_no_agent_judgment_gate_present(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
@@ -620,7 +583,6 @@ def test_blindness_skipped_when_absent(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )

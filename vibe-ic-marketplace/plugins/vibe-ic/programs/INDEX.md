@@ -606,7 +606,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fsm_vector_rtl_emit` | any | — | supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline. |
 | `full_moore_fsm_synth` | any | — | deterministic SOLVER for a full Moore FSM. |
 | `full_stack_functional_tb` | any | — | the FUNCTIONAL full-stack population (Step 5). |
-| `full_suite_run_check` | any | — | is the invocation the FULL suite, or a subset? |
+| `full_suite_run_check` | any | — | full_suite_run_check |
 | `function_void_with_output_check` | any | Wave 29 | Wave 29 (v0.119.61) gate. |
 | `functional_state_transition_coverage_check` | any | — | Verify TBs exercise the state-changing side-effects of every cmd opcode, not just byte-stream correctness. |
 | `gameable_placeholder_scan` | any | — | deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets). |
@@ -2119,7 +2119,7 @@ _(no programs in this group)_
 - `fsm_vector_rtl_emit` — supplemental DETERMINISTIC Tier-1 emitters for the VerilogEval-HUMAN (code-complete, ICCAD-2023) tier pipeline.
 - `full_moore_fsm_synth` — deterministic SOLVER for a full Moore FSM.
 - `full_stack_functional_tb` — the FUNCTIONAL full-stack population (Step 5).
-- `full_suite_run_check` — is the invocation the FULL suite, or a subset?
+- `full_suite_run_check` — full_suite_run_check
 - `function_void_with_output_check` — Wave 29 (v0.119.61) gate.  _[Wave 29]_
 - `functional_state_transition_coverage_check` — Verify TBs exercise the state-changing side-effects of every cmd opcode, not just byte-stream correctness.
 - `gameable_placeholder_scan` — deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets).
