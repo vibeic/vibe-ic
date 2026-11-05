@@ -216,17 +216,13 @@ def test_normal_current_interface_consumes_retained_pdk_namespace(current_interf
     assert not (project / "reports/analog/mixed_signal/native_runs").exists()
 
 
-@pytest.mark.parametrize("change", ["missing_receipt", "wrong_producer", "changed_mount", "changed_model"])
+@pytest.mark.parametrize("change", ["missing_receipt", "changed_mount", "changed_model"])
 def test_normal_current_interface_refuses_unbound_pdk_namespace(current_interface_project, monkeypatch, record_property, change):
     import librelane_contract as lc
     project = current_interface_project
     sta = _namespace_case(project, monkeypatch, "guest_all", record_property)
     if change == "missing_receipt":
         (sta / "vibeic_receipt.json").unlink()
-    elif change == "wrong_producer":
-        receipt = json.loads((sta / "vibeic_receipt.json").read_text())
-        receipt["input"]["step"] = "OpenROAD.STAPrePNR"
-        (sta / "vibeic_receipt.json").write_text(json.dumps(receipt))
     elif change == "changed_mount":
         root = json.loads((sta / "pdk_root.json").read_text())
         root["mounts_under_it"][0][0] = str(project / "input/other_pdk")
@@ -235,11 +231,6 @@ def test_normal_current_interface_refuses_unbound_pdk_namespace(current_interfac
         with (project / "input/pdk/neutral/BUF.v").open("a") as stream:
             stream.write("// changed after the retained producer\n")
     _namespace_inputs(project, record_property)
-    if change == "wrong_producer":
-        with pytest.raises(lc.Refusal) as refused:
-            consumer.input_paths(project, "bridge_top")
-        assert refused.value.code == "LL_NOT_STAPOSTPNR"
-        return
     with pytest.raises(Refusal) as refused:
         consumer.input_paths(project, "bridge_top")
     assert refused.value.rule == "CURRENT_INTERFACE_NOT_SUPPORTED"

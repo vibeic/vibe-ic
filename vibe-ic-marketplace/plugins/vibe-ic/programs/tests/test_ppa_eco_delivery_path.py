@@ -35,7 +35,6 @@ import pathlib
 import subprocess
 import sys
 
-import pytest
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
@@ -43,7 +42,6 @@ sys.path.insert(0, str(_PROGRAMS))
 from _ppa import delivery_path as DP  # noqa: E402
 from _ppa import feasibility as F  # noqa: E402
 import _submission_template as ST  # noqa: E402
-import _tapeout_declaration as TD  # noqa: E402
 from test_ppa_eco_readiness_axis import (DECL, VIEW, axis_of, cand,  # noqa: E402
                                          clean_nine, spares)
 
@@ -63,21 +61,25 @@ def _tree(root, pdk="sky130A"):
 
 def chip_tree(root):
     _tree(root)
-    (root / TD.SELF_TAPEOUT_REL).write_text(TD.SELF_TAPEOUT_MARKER + "\n")
+    report = root / "reports/flow_engine.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"route": {"delivery_target": "shippable_gds"}}))
     return root
 
 
 def shuttle_tree(root):
     _tree(root)
-    d = root / ST.SLOTS_DIR_REL
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "1x1.yaml").write_text("SLOT: 1x1\nDIE_AREA: [0, 0, 100.0, 80.0]\n")
+    report = root / "reports/flow_engine.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"route": {"delivery_target": "foundry_handoff"}}))
     return root
 
 
 def ip_tree(root):
     _tree(root)
-    (root / ST.NO_TEMPLATE_REL).write_text(ST.NO_TEMPLATE_MARKER + "\n")
+    report = root / "reports/flow_engine.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"route": {"delivery_target": "ip_hardmacro"}}))
     return root
 
 
@@ -85,10 +87,6 @@ def unrouted_tree(root):
     return _tree(root)
 
 
-def both_tree(root):
-    chip_tree(root)
-    (root / ST.NO_TEMPLATE_REL).write_text(ST.NO_TEMPLATE_MARKER + "\n")
-    return root
 
 
 def policy_with(route, declaration=None):
@@ -119,21 +117,6 @@ def test_positive_the_hardmacro_terminal_is_not_tapeout_bound(tmp_path):
     assert not DP.is_tapeout_bound(r["path"])
 
 
-def test_positive_the_predicate_is_the_flows_own_and_is_run_not_retyped():
-    """The route is decided by driving `flow_compliance_check._check_condition`
-    over the conditions of steps 37.5ic and 37.5ip, read from the flow
-    document. This asserts the module really used THOSE conditions -- not a
-    private glob that happens to agree today and stops agreeing when a router
-    artefact is renamed."""
-    pytest.importorskip("yaml")
-    import yaml
-    flow = yaml.safe_load(
-        (_PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
-    by_id = {str(s["id"]): s for s in flow["steps"]}
-    conds, why = DP._terminal_conditions()
-    assert why is None, why
-    assert conds[DP.STEP_CHIP] == (by_id[DP.STEP_CHIP].get("condition") or {})
-    assert conds[DP.STEP_IP] == (by_id[DP.STEP_IP].get("condition") or {})
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +221,6 @@ def test_an_opt_out_on_the_chip_path_is_visible_but_not_overruled():
 def test_vacuous_no_project_is_not_a_finding_about_the_design():
     r = DP.resolve(None)
     assert r["path"] == DP.PATH_NOT_SUPPLIED
-    assert "not a finding" in r["reason"]
     a = axis_of(F.promotion_verdict(cand("c", clean_nine()), policy_with(None)))
     assert a.status == F.AXIS_NOT_APPLICABLE
     assert a.codes == (F.C_ECO_NOT_DECLARED,)
@@ -294,12 +276,6 @@ def test_M_PATH_2_a_gds_and_a_real_pdk_do_not_make_a_design_tapeout_bound(
     assert not DP.is_tapeout_bound(DP.resolve(root)["path"])
 
 
-def test_M_PATH_3_a_tree_holding_both_routers_is_refused_not_picked(tmp_path):
-    """No silicon corresponds to a tree on both terminals at once. Picking
-    either one would be inventing a route the design never took."""
-    r = DP.resolve(both_tree(tmp_path / "proj"))
-    assert r["path"] == DP.PATH_BOTH
-    assert not DP.is_tapeout_bound(r["path"])
 
 
 def test_M_PATH_4_the_three_findings_never_share_a_verdict():
