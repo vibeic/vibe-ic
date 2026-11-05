@@ -835,9 +835,6 @@ def main(argv: list = None) -> int:
     p.add_argument("--no-extresist", action="store_true",
                    help="Do not arm/run magic's resistance extractor "
                         "(capacitance-only extraction, honestly declared)")
-    p.add_argument("--extresist-mindelay-ps", type=float, default=None,
-                   help="Native Magic minimum RC delay in ps; 0 retains small "
-                        "signal networks, omitted preserves Magic's default")
     p.add_argument("--out", type=Path, default=None,
                    help="Write the emitted TCL here; default stdout (emit mode)")
     p.add_argument("--json", default=None,
@@ -923,7 +920,6 @@ def main(argv: list = None) -> int:
         ext2spice_scale_off=not args.no_scale_off,
         extract_style=args.extract_style,
         extresist=not args.no_extresist,
-        extresist_mindelay_ps=args.extresist_mindelay_ps,
     )
     try:
         tcl = build_extraction_tcl(args.block, args.out_spice, opts)

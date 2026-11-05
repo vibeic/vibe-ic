@@ -504,39 +504,6 @@ def subckt_devices(text: str) -> Dict[str, Tuple[List[str], int]]:
     return out
 
 
-def _resistive_internal_ports(body: str, extra: set, public: set) -> bool:
-    """Magic may expose resistance-split contact nodes as extra ports.
-
-    They can stay internal to the original public cell interface only when
-    each has a positive-resistance path to exactly one public port. Keep
-    the native node names and all resistor/device lines unchanged.
-    """
-    graph: Dict[str, set] = {}
-    for line in body.splitlines():
-        words = line.split()
-        if len(words) != 4 or not words[0].lower().startswith('r'):
-            continue
-        try:
-            value = float(words[3])
-        except ValueError:
-            continue
-        if not math.isfinite(value) or value <= 0:
-            continue
-        a, b = words[1:3]
-        graph.setdefault(a, set()).add(b)
-        graph.setdefault(b, set()).add(a)
-    for node in extra:
-        seen, pending = set(), [node]
-        while pending:
-            item = pending.pop()
-            if item not in seen:
-                seen.add(item)
-                pending.extend(graph.get(item, set()) - seen)
-        if len(seen & public) != 1:
-            return False
-    return True
-
-
 def netlist_cells(netlist_text: str, known: Sequence[str]) -> List[str]:
     """The cells among `known` the structural netlist instantiates."""
     used = set(_INSTANCE_RE.findall(netlist_text))
@@ -544,10 +511,9 @@ def netlist_cells(netlist_text: str, known: Sequence[str]) -> List[str]:
 
 
 def extraction_tcl(gds: Sequence[str], cells: Sequence[str], out_dir: Path, *,
-                   extract_style: Optional[str] = None,
-                   extresist_mindelay_ps: Optional[float] = None) -> str:
+                   extract_style: Optional[str] = None) -> str:
     """One Magic session: the declared cell GDS read once, then each cell
-    extracted with the existing full parasitic-RC recipe. An absent style
+    extracted with minimum RC delay zero. An absent style
     leaves the PDK rcfile's selection intact; it does not assert a corner."""
     lines = ['gds readonly true', 'gds rescale false']
     lines += [f'gds read {g}' for g in gds]
@@ -559,7 +525,7 @@ def extraction_tcl(gds: Sequence[str], cells: Sequence[str], out_dir: Path, *,
         lines += [f'extract path {out_dir}', _mx.build_extraction_tcl(
             cell, str(out_dir / f'{cell}.spice'),
             _mx.MagicResimExtractOptions(extract_style=None,
-                extresist_mindelay_ps=extresist_mindelay_ps))]
+                extresist_mindelay_ps=0))]
     return '\n'.join(lines + ['quit -noprompt']) + '\n'
 
 
@@ -590,8 +556,7 @@ def extraction_corner(pdk: str, pdk_dir: Path, liberty: str) -> dict:
 def extract_cells(image: str, project: Path, mounts: List[Tuple[Path, str]], *,
                   gds: Sequence[str], magicrc: str, guest_root: str,
                   schematic: Dict[str, List[str]], cells: Sequence[str],
-                  out_dir: Path, extract_style: Optional[str] = None,
-                  extresist_mindelay_ps: Optional[float] = None) -> Dict[str, Any]:
+                  out_dir: Path, extract_style: Optional[str] = None) -> Dict[str, Any]:
     """The layout view of `cells`, one subckt per cell in the schematic's
     port order, written to `out_dir/cells_extracted.spice`. A cell whose
     extraction has no device, or whose ports are not the schematic's, is
@@ -605,8 +570,7 @@ def extract_cells(image: str, project: Path, mounts: List[Tuple[Path, str]], *,
             (work / (cell + suffix)).unlink(missing_ok=True)
     (out_dir / 'cells_extracted.spice').unlink(missing_ok=True)
     tcl = work / 'extract.tcl'
-    tcl.write_text(extraction_tcl(gds, cells, work, extract_style=extract_style,
-                                extresist_mindelay_ps=extresist_mindelay_ps))
+    tcl.write_text(extraction_tcl(gds, cells, work, extract_style=extract_style))
     run = _docker(image, project, mounts,
                   ['magic', '-dnull', '-noconsole', '-rcfile', magicrc, str(tcl)], work,
                   env={'PDK_ROOT': guest_root})
@@ -640,12 +604,9 @@ def extract_cells(image: str, project: Path, mounts: List[Tuple[Path, str]], *,
                                             original_text, re.M))
             split_nodes = set(re.findall(r'^rnode\s+"([^"]+)"', resistance_text, re.M))
             generated = original_ports == public and extra <= split_nodes - original_nodes
-        # Detailed extraction also splits private signal nets. The native
-        # rnode inventory above identifies these; they need not reach a
-        # public port through resistors. Preserve the legacy default path.
-        if (not public <= set(ports) or not generated
-                or (extresist_mindelay_ps is None
-                    and not _resistive_internal_ports(inner, extra, public))):
+        # Native resistance-split nodes may belong to private signal nets.
+        # The original-port and rnode inventories above preserve the interface.
+        if not public <= set(ports) or not generated:
             kept[cell] = f'layout ports {sorted(ports)} are not the schematic ports'
             continue
         body += [f'.subckt {cell} ' + ' '.join(schematic[cell]), inner, '.ends']
@@ -653,7 +614,7 @@ def extract_cells(image: str, project: Path, mounts: List[Tuple[Path, str]], *,
     out.write_text('* vibe-ic step 30: cells extracted from the declared layout\n'
                    + '\n'.join(body) + '\n')
     return {'path': str(out), 'magic_rc': run.returncode, 'magicrc': magicrc,
-            'extresist_mindelay_ps': extresist_mindelay_ps,
+            'extresist_mindelay_ps': 0,
             'magic_execution': {'tool': 'Magic', 'rc': run.returncode,
                 'argv': ['magic', '-dnull', '-noconsole', '-rcfile', magicrc, str(tcl)],
                 'script': str(tcl), 'log': str(work / 'magic.log')},
@@ -664,7 +625,7 @@ def extract_cells(image: str, project: Path, mounts: List[Tuple[Path, str]], *,
 def cell_view(image: str, project: Path, mounts: List[Tuple[Path, str]], *, config: dict,
               pdk_dir: Path, guest_root: str, pdk: str, netlist: Path,
               cell_sources: Sequence[Path], out_dir: Path,
-              liberty: str = '', extresist_mindelay_ps: Optional[float] = None) -> Dict[str, Any]:
+              liberty: str = '') -> Dict[str, Any]:
     """Which standard-cell netlists the deck simulates, and why (module
     docstring). `cell_sources` are the declared `CELL_SPICE_MODELS`; pads keep
     their declared netlists (the arm's subject is register to register)."""
@@ -689,8 +650,7 @@ def cell_view(image: str, project: Path, mounts: List[Tuple[Path, str]], *, conf
     corner = extraction_corner(pdk, pdk_dir, liberty)
     got = extract_cells(image, project, mounts, gds=gds, magicrc=rc[0], guest_root=guest_root,
                         schematic=schematic, cells=used, out_dir=out_dir,
-                        extract_style=corner['style'],
-                        extresist_mindelay_ps=extresist_mindelay_ps)
+                        extract_style=corner['style'])
     view = ('layout-extracted' if got['extracted'] and not got['kept_schematic'] else
             'mixed' if got['extracted'] else 'schematic')
     return {'view': view, 'sources': [Path(got['path'])] if got['extracted'] else [],
@@ -1089,8 +1049,7 @@ def run_arm(project: Path, image: str, state_path: Path, corner: str, *,
 def prepare_arm(project: Path, image: str, state_path: Path, corner: str, *,
                 pdk_root: Path, pdk: str, out_dir: Path, simulator: str = 'ngspice',
                 paths: int = 3, path_args: Optional[List[str]] = None,
-                spef: Optional[Path] = None,
-                extresist_mindelay_ps: Optional[float] = None) -> Dict[str, Any]:
+                spef: Optional[Path] = None) -> Dict[str, Any]:
     """The STA session: each path's report and the tool's deck for it."""
     inputs = post_pnr_timing_inputs(project, state_path, corner)
     config = _load(state_path.parent / 'config.json')
@@ -1147,8 +1106,7 @@ def prepare_arm(project: Path, image: str, state_path: Path, corner: str, *,
     view = cell_view(image, project, mounts, config=config, pdk_dir=pdk_root / pdk,
                      guest_root=execution_root, pdk=pdk,
                      netlist=project / inputs['sta_netlist'], cell_sources=cell_sources,
-                     out_dir=out_dir, liberty=inputs['liberties'][0],
-                     extresist_mindelay_ps=extresist_mindelay_ps)
+                     out_dir=out_dir, liberty=inputs['liberties'][0])
     if view.get('missing_exports'):
         raise Refusal('LL_SPICE_CURRENT_CELL_EXPORT_MISSING', str(view['missing_exports']))
     cells = fold_subckts(view['sources'] + spice_sources, supply_voltages(lib_texts), power,
@@ -1482,15 +1440,14 @@ def worst_setup_corner(folder: Path) -> str:
     return min(setup, key=lambda name: (setup[name], name))
 
 
-def run_case_correlation(project, image, pdk_root, pdk, *, sta_step_dir,
-                         extresist_mindelay_ps=None):
+def run_case_correlation(project, image, pdk_root, pdk, *, sta_step_dir):
     """Native path correlation. C9 does not requalify tools during a case."""
     started = time.monotonic()
     folder = native_sta_folder(project, sta_step_dir)
     corner = worst_setup_corner(folder)
     prepared = prepare_arm(project, image, folder / 'state_out.json', corner,
         pdk_root=pdk_root, pdk=pdk, out_dir=project / 'phase3/tool_arms/30/ngspice/current',
-        simulator='ngspice', paths=3, extresist_mindelay_ps=extresist_mindelay_ps)
+        simulator='ngspice', paths=3)
     native = simulate_arm(prepared, workers=3, characterize=False)
     rows = native['paths']
     verdict = ('PASS' if rows and all(row.get('status') == 'MEASURED'

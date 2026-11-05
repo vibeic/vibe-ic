@@ -90,11 +90,6 @@ class TestEmit:
             mod.build_extraction_tcl("blk", "/o.spice",
                 mod.MagicResimExtractOptions(extresist_mindelay_ps=value))
 
-    def test_minimum_rc_delay_cli_uses_native_picoseconds(self, capsys):
-        assert mod.main(["--block", "blk", "--out-spice", "/o.spice",
-                         "--extresist-mindelay-ps", "0.25"]) == 0
-        assert "extresist mindelay 0.25\n" in capsys.readouterr().out
-
     def test_empty_block_raises(self):
         with pytest.raises(ValueError):
             mod.build_extraction_tcl("", "/o.spice")
