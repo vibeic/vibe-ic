@@ -110,6 +110,27 @@ def test_owner_session_runs_one_window_for_all_result_readers(tmp_path, monkeypa
     assert json.loads((tmp_path / "steps/lint/phase2_one_shot.json").read_text()) == measured
 
 
+def test_owner_log_does_not_change_the_project_during_generation(tmp_path):
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    report.parent.mkdir(parents=True)
+    directory = tmp_path / "steps/author"
+    directory.mkdir(parents=True)
+    selected = {"delivery_target": "ip_hardmacro"}
+    run = frontend.subprocess.run
+
+    def publish(command, **kwargs):
+        run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'catalog diagnostic\\xff\\n')"],
+            stdout=kwargs["stdout"], check=True)
+        assert not (directory / "owner.log").exists()
+        report.write_text(json.dumps({"steps": [{"name": "rtl_gen", "status": "PASS"}]}))
+        return SimpleNamespace(returncode=0)
+
+    with patch.object(frontend.subprocess, "run", side_effect=publish):
+        result = frontend.OwnerSession(tmp_path, selected).result(directory, "rtl_gen")
+    assert (directory / "owner.log").read_bytes() == b"catalog diagnostic\xff\n"
+    assert str(directory / "owner.log") in result["reports"]
+
+
 def test_owner_lint_numbers_are_read_from_its_report(tmp_path):
     report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
     report.parent.mkdir(parents=True)
