@@ -477,6 +477,16 @@ class NativeChain:
                 missing.append(name)
                 continue
             shutil.copyfile(str(value), destination / (self.config["DESIGN_NAME"] + extension))
+            if name == "lib" and self.state.get("def"):
+                from digital_hardmacro_gen import liberty_with_pg_pins, read_interface
+                from hardmacro_supply_intent import liberty_pg_pins
+                library = destination / (self.config["DESIGN_NAME"] + extension)
+                text = library.read_text()
+                if not liberty_pg_pins(text):
+                    pins = read_interface(Path(str(self.state["def"])).read_text())
+                    exported_library = liberty_with_pg_pins(text, self.config["DESIGN_NAME"], pins)
+                    if exported_library is not None:
+                        library.write_text(exported_library)
             exported.append(name)
         text = [f"# {self.config['DESIGN_NAME']} integration views", "",
                 "Views and reports were exported by LibreLane from its final State.",
@@ -917,7 +927,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             retained = bool(saved.get("tool_ran") and (
                 kind in {"librelane", "command", "snapshot"}
                 or kind == "adapter" and (
-                    tool.get("adapter") and tool["adapter"] not in {"physical_declarations", "macro_views"}
+                    tool.get("adapter") and tool["adapter"] not in {"physical_declarations", "macro_views", "ip_release_docs"}
                     and any(isinstance(value, (int, float))
                                                  for value in saved.get("native_metrics", {}).values())
                     or tool.get("function") == "doc_extract"

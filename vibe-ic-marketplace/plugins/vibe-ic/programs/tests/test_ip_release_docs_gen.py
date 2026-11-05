@@ -92,7 +92,7 @@ def test_a_delivered_kit_gets_its_document_set(tmp_path):
                 assert (out / spec.filename).is_file(), (
                     f"{spec.filename} is required for the ip arm and was not "
                     f"written into {out}")
-        assert (out / MANIFEST_NAME).is_file()
+        assert not (out / MANIFEST_NAME).exists()
 
 
 def test_one_directory_per_package_including_the_single_package_case(tmp_path):
@@ -181,49 +181,17 @@ def test_checked_in_spm_input_carries_a_bus_and_hardened_parameter():
     assert str(size["default"]) == "32"
 
 
-def test_the_manifest_counts_agree_with_the_documents(tmp_path):
-    project = build_project(tmp_path / "p", packages=(SUBJECT,))
-    assert run(project).returncode == 0
-    out = docs_dir(project)
-    derived = holes = 0
-    for path in sorted(out.glob("*.md")):
-        for _label, value, _third in _derived_rows(path.read_text(encoding="utf-8")):
-            if value == NOT_MEASURED:
-                holes += 1
-            else:
-                derived += 1
-    manifest = (out / MANIFEST_NAME).read_text(encoding="utf-8")
-    assert f"derived_fields: {derived}" in manifest, manifest
-    assert f"not_measured_fields: {holes}" in manifest, manifest
 
 
-def test_a_tree_that_is_not_a_work_tree_says_so_rather_than_inventing_a_sha(tmp_path):
-    """A report that does not name the tree it measured describes the wrong one."""
-    project = build_project(tmp_path / "p", packages=(SUBJECT,))
-    assert run(project).returncode == 0
-    manifest = (docs_dir(project) / MANIFEST_NAME).read_text(encoding="utf-8")
-    assert f'tree_sha: "{NOT_MEASURED}"' in manifest
-    assert "tree_sha_reason: \"\"" not in manifest, (
-        f"tree_sha is {NOT_MEASURED} with no reason")
 
 
-def test_the_conditional_document_is_decided_by_an_artefact_not_by_eye(tmp_path):
-    """'Conditional' is where a set quietly loses a required document."""
-    rich = build_project(tmp_path / "rich", packages=(SUBJECT,),
-                         register_rich=True)
+def test_the_conditional_document_is_decided_by_the_register_map(tmp_path):
+    rich = build_project(tmp_path / "rich", packages=(SUBJECT,), register_rich=True)
     assert run(rich).returncode == 0
     assert (docs_dir(rich) / "IP_PROGRAMMING_REFERENCE.md").is_file()
-    manifest = (docs_dir(rich) / MANIFEST_NAME).read_text(encoding="utf-8")
-    assert "register_rich: true" in manifest
-    assert "register_rich_source: \"phase1/generated_docs/L4_REGMAP.json\"" \
-        in manifest, manifest
-
-    plain = build_project(tmp_path / "plain", packages=(SUBJECT,),
-                          register_rich=False)
+    plain = build_project(tmp_path / "plain", packages=(SUBJECT,), register_rich=False)
     assert run(plain).returncode == 0
     assert not (docs_dir(plain) / "IP_PROGRAMMING_REFERENCE.md").exists()
-    assert "register_rich: false" in (
-        docs_dir(plain) / MANIFEST_NAME).read_text(encoding="utf-8")
 
 
 def test_a_layer_the_run_does_not_carry_becomes_a_hole_not_a_default(tmp_path):
@@ -281,7 +249,6 @@ def test_issue_1990_test_access_comes_from_the_delivered_dft_interface(tmp_path)
     guide = (out / "IP_INTEGRATION_GUIDE.md").read_text(encoding="utf-8")
     note = (out / "AN001_REFERENCE_INTEGRATION.md").read_text(
         encoding="utf-8")
-    manifest = (out / MANIFEST_NAME).read_text(encoding="utf-8")
 
     for text in (guide, note):
         assert "6 test mode(s)" not in text
@@ -291,7 +258,6 @@ def test_issue_1990_test_access_comes_from_the_delivered_dft_interface(tmp_path)
         assert "`reports/phase2/dft/scan_chain.json`" in text
         assert f"`phase3/stage4/hardmacro/{SUBJECT}.lef`" in text
     assert "| Declared test modes | 0 | " in guide
-    assert "path: \"reports/phase2/dft/scan_chain.json\"" in manifest
 
 
 def test_l19_declarations_reach_the_integration_guide(tmp_path):
