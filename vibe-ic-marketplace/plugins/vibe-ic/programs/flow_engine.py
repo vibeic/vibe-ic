@@ -324,7 +324,7 @@ class NativeChain:
         self.config = self.owner.config.to_raw_dict()
         self.state = State()
 
-    def prepare(self, *, floorplan=False):
+    def prepare(self, *, floorplan=False, directory=None):
         try:
             self.initialize()
             if floorplan:
@@ -334,9 +334,13 @@ class NativeChain:
                 span = (max(float(extent[2]) - float(extent[0]), float(extent[3]) - float(extent[1]))
                         if extent else None)
                 settings = current_settings(self.project, self.config, parallel_length_um=span)
-                if self.route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"}:
-                    from flow_chip_inputs import sized_floorplan
-                    settings.update(sized_floorplan(self.project, self.config, settings))
+                if directory is not None and self.route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"}:
+                    from flow_chip_inputs import netlist_area, sized_floorplan
+                    area = netlist_area(self.owner.config, self.state, self.toolbox,
+                                        directory / "openroad_area", self.observe_preparation)
+                    if area is None:
+                        raise FileNotFoundError("OpenROAD left no current-netlist area")
+                    settings.update(sized_floorplan(self.project, self.config, settings, float(area)))
                 self.owner.config = self.owner.config.copy(**_native_pdn_numbers(settings))
                 self.config = self.owner.config.to_raw_dict()
         except Exception as exc:
@@ -365,9 +369,16 @@ class NativeChain:
         if path.is_file():
             restored = State.load(read_json(path))
             self.state = restored
+            geometry = {key: [float(value) for value in bounds.split()] if isinstance(bounds, str) else bounds
+                for metric, key in (("design__die__bbox", "DIE_AREA"), ("design__core__bbox", "CORE_AREA"))
+                if (bounds := restored.metrics.get(metric)) is not None}
+            if geometry and self.owner is not None:
+                self.owner.config = self.owner.config.copy(**geometry)
+                self.config = self.owner.config.to_raw_dict()
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
-        error = self.prepare(**({"floorplan": True} if "OpenROAD.Floorplan" in tool.get("steps", []) else {}))
+        error = self.prepare(**({"floorplan": True, "directory": directory}
+                               if "OpenROAD.Floorplan" in tool.get("steps", []) else {}))
         result = self.preparation_result()
         if error is not None:
             return result
@@ -866,9 +877,10 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         beginning = time.perf_counter()
         preparation = ToolResult()
         if restore_directory is not None:
-            if chain.prepare(**({"floorplan": True} if
-                    first > positions.get("die_floorplan_and_macros", first) else {})) is None:
+            if chain.prepare() is None:
                 chain.restore(restore_directory)
+                if first > positions.get("die_floorplan_and_macros", first):
+                    chain.prepare(floorplan=True)
             preparation = chain.preparation_result()
             restore_directory = None
         directory = step_root / row["name"]
