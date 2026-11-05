@@ -120,3 +120,28 @@ def test_unresolved_declared_scenario_does_not_use_sample_success(tmp_path):
     assert result["metrics"] == {}
     assert not result["ran"]
     assert "transaction_rearm" in result["detail"]
+
+
+def test_adding_an_idle_bench_does_not_reduce_design_coverage(tmp_path):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "verilator", "verilator_coverage")):
+        pytest.skip("Native Icarus and Verilator tools are required")
+    rtl = tmp_path / "unit.v"
+    rtl.write_text("module unit(input wire [1:0] a, output reg [1:0] z); "
+                   "always @* if (a[0]) z = ~a; else z = a; endmodule\n")
+    active = tmp_path / "tb_active.v"
+    active.write_text("module tb_active; reg [1:0] a; wire [1:0] z; unit dut(a,z); "
+                      "initial begin a=0; #1; a=1; #1; a=2; #1; a=3; #1; a=0; #1; "
+                      "$display(\"ORACLE_TB_DONE pass=1/1\"); $finish; end endmodule\n")
+    idle = tmp_path / "tb_idle.v"
+    idle.write_text("module tb_idle; reg [1:0] a=0; wire [1:0] z; unit dut(a,z); "
+                    "initial begin #5; $display(\"ORACLE_TB_DONE pass=1/1\"); "
+                    "$finish; end endmodule\n")
+    tool = {"adapter": "simulation", "rtl": [str(rtl)], "top": "unit"}
+    single = execute(tmp_path, tmp_path / "single", {**tool, "testbenches": [str(active)]}, {})
+    suite = execute(tmp_path, tmp_path / "suite", {
+        **tool, "testbenches": [str(active), str(idle)]}, {})
+    assert single["metrics"]["assertion_failures"] == suite["metrics"]["assertion_failures"] == 0
+    for category in ("line", "toggle", "branch"):
+        metric = f"coverage_{category}_pct"
+        assert single["metrics"][metric] > 0
+        assert suite["metrics"][metric] >= single["metrics"][metric]
