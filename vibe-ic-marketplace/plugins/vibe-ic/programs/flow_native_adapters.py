@@ -40,6 +40,8 @@ def inputs(project, tool):
     from flow_config import resolve_rtl_inputs
     files = [Path(p) if Path(p).is_absolute() else project / p for p in tool.get("rtl", [])]
     top = tool.get("top")
+    if files and top:
+        return files, top
     produced, declared = resolve_rtl_inputs(project)
     return files or produced, top or declared
 

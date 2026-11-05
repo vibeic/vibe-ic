@@ -151,6 +151,13 @@ def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, mon
     assert calls == ["rtl_validate", "rtl_validate"]
 
 
+def test_adapter_accepts_explicit_rtl_and_top_without_document_defaults(tmp_path):
+    from flow_native_adapters import inputs
+    rtl = tmp_path / "provided.v"
+    rtl.write_text("module provided; endmodule\n")
+    assert inputs(tmp_path, {"rtl": ["provided.v"], "top": "provided"}) == ([rtl], "provided")
+
+
 def test_document_owner_runs_before_feature_selection(tmp_path, monkeypatch):
     import flow_engine_frontend
     calls = []
