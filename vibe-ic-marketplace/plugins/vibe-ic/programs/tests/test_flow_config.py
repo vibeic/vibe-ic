@@ -87,7 +87,8 @@ def test_chip_pdn_uses_native_script_and_registry_connections(project, monkeypat
         }}]}))
     monkeypatch.setattr(flow_config, "PROGRAMS", registry)
     config = build_config(project, route="ic")
-    assert config["PDN_VOFFSET"] == config["PDN_HOFFSET"] == 7
+    assert config["PDN_VOFFSET"] == 6.5
+    assert config["PDN_HOFFSET"] == 7
     assert config["PDN_SKIPTRIM"] is True
     assert config["PDN_CORE_RING_HWIDTH"] == 2
     assert config["PDN_CORE_RING_VOFFSET"] == 6
@@ -100,6 +101,16 @@ def test_chip_pdn_uses_native_script_and_registry_connections(project, monkeypat
 def test_config_cli_output_is_the_config_the_caller_receives(project):
     output = write_config(project, route="HARDMACRO")
     assert json.loads(output.read_text()) == build_config(project, route="HARDMACRO")
+
+
+def test_declared_grid_offsets_override_derived_ring_offsets(project):
+    declarations(project, [
+        {"kind": "flow_setting", "token": "FP_PDN_VOFFSET", "value": "9"},
+        {"kind": "flow_setting", "token": "FP_PDN_HOFFSET", "value": "11"},
+    ])
+    config = build_config(project, route="ic")
+    assert config["PDN_VOFFSET"] == 9
+    assert config["PDN_HOFFSET"] == 11
 
 
 def test_original_prompt_recovers_lost_pdk_and_invalid_top(project):

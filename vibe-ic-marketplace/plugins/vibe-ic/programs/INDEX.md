@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1526
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1526)
+- **Total programs (excluding helpers / shims):** 1527
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1527)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1517 |
+| `any` | 1518 |
 
 ## Alphabetical listing
 
@@ -543,6 +543,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_system_security` | any | — | D16/D17/D73 readers for existing full-stack and formal producers. |
 | `flow109_technology_qualification` | any | — | D03 native technology selection. BLOCKING on native config/pin refusal. |
 | `flow_artifact_paths` | any | — | flow_artifact_paths |
+| `flow_chip_inputs` | any | — | Generate native Chip inputs from the elaborated core and active PDK. |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15). |
 | `flow_condition_reachability_check` | any | — | the self-disabling-condition guard. |
 | `flow_config` | any | — | Translate generated design documents into native LibreLane configuration. |
@@ -1598,7 +1599,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1517 programs)
+### `any` (1518 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2113,6 +2114,7 @@ _(no programs in this group)_
 - `flow109_system_security` — D16/D17/D73 readers for existing full-stack and formal producers.
 - `flow109_technology_qualification` — D03 native technology selection. BLOCKING on native config/pin refusal.
 - `flow_artifact_paths` — flow_artifact_paths
+- `flow_chip_inputs` — Generate native Chip inputs from the elaborated core and active PDK.
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15).  _[Wave 91]_
 - `flow_condition_reachability_check` — the self-disabling-condition guard.
 - `flow_config` — Translate generated design documents into native LibreLane configuration.
