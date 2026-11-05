@@ -50,8 +50,7 @@ def test_mixed_negated_constraint_and_composition_is_explicitly_unqualified():
 
 def test_same_statement_later_composition_denial_is_not_ignored():
     prompt, _, _ = request(style="using full adders but do not build it from full adders")
-    ordinary, _, _ = request(style="")
-    assert arithmetic.synth(prompt, "neutral_sum") == arithmetic.synth(ordinary, "neutral_sum")
+    assert arithmetic.synth(prompt, "neutral_sum") is None
 
 
 def test_same_statement_opposed_directions_are_unqualified():
@@ -78,3 +77,32 @@ def test_unqualified_body_cannot_misbind_composition_or_polarity(style):
 def test_nested_construction_denials_are_unqualified():
     prompt, _, _ = request(style="without full adders")
     assert arithmetic.synth(prompt.replace("Implement", "Do not implement", 1), "neutral_sum") is None
+
+
+@pytest.mark.parametrize("style", [
+    "with full adders and without full adders",
+    "without full adders and with full adders",
+])
+def test_opposite_construction_directions_refuse_in_either_order(style):
+    prompt, _, _ = request(style=style)
+    assert arithmetic.synth(prompt, "neutral_sum") is None
+
+
+@pytest.mark.parametrize("statements", [
+    "Use full adders. Do not use full adders.",
+    "Do not use full adders. Use full adders.",
+])
+def test_opposite_separate_construction_directions_refuse_in_either_order(statements):
+    prompt, _, _ = request(style="")
+    assert arithmetic.synth(prompt + "\n" + statements, "neutral_sum") is None
+
+
+@pytest.mark.parametrize("positive", [True, False])
+def test_repeated_separate_construction_directions_stay_qualified(positive):
+    prompt, _, spans = request(style="")
+    statement = "Use full adders." if positive else "Do not use full adders."
+    rtl = arithmetic.synth(prompt + "\n" + statement + "\n" + statement, "neutral_sum")
+    if positive:
+        assert_fulladder_composition(rtl, 5, ("operand_u", "operand_v", "total"), spans)
+    else:
+        assert rtl == arithmetic.synth(prompt, "neutral_sum")

@@ -16,10 +16,9 @@ def test_negated_actions_keep_exact_ordinary_output(style):
 
 @pytest.mark.parametrize("tail", ["Do not use full adders.",
     "Do not instantiate individual full adders.", "Never use a network of full adders."])
-def test_later_negative_instruction_defeats_positive_clause(tail):
+def test_later_negative_instruction_conflicts_with_positive_clause(tail):
     prompt, _, _ = request()
-    ordinary, _, _ = request(style="")
-    assert arithmetic.synth(prompt + "\n" + tail, "neutral_sum") == arithmetic.synth(ordinary, "neutral_sum")
+    assert arithmetic.synth(prompt + "\n" + tail, "neutral_sum") is None
 
 
 def test_unrelated_descriptive_mention_is_not_an_instruction():
