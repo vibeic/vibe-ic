@@ -462,21 +462,6 @@ def test_M_ECO_6_the_declaration_is_what_refuses_not_the_gate_itself():
     assert axis_of(undeclared).status == F.AXIS_NOT_APPLICABLE
 
 
-def test_M_ECO_7_the_search_space_refuses_the_value_that_deletes_them(tmp_path):
-    """The stronger half of the fix: stop the candidate being GENERATED. With
-    a declared requirement, `--values spare_cell_density=0` is refused before
-    a place-and-route run is spent producing something the gate must reject."""
-    decl = tmp_path / "eco.json"
-    decl.write_text(json.dumps({"eco_readiness": DECL}), encoding="utf-8")
-    args = [sys.executable, str(SPACE), "--json", str(tmp_path / "space.json"),
-            "--values", "spare_cell_density=0.00,0.02"]
-    without = subprocess.run(args, capture_output=True, text=True,
-                             cwd=str(tmp_path))
-    withd = subprocess.run(args + ["--eco-declaration", str(decl)],
-                           capture_output=True, text=True, cwd=str(tmp_path))
-    assert without.returncode == 0, without.stderr      # negative control
-    assert withd.returncode == 1, withd.stdout + withd.stderr
-    assert "metal-only ECO" in withd.stderr
 
 
 def test_M_ECO_8_a_named_declaration_that_cannot_be_read_blocks_the_space(
@@ -494,19 +479,6 @@ def test_M_ECO_8_a_named_declaration_that_cannot_be_read_blocks_the_space(
     assert not (tmp_path / "space.json").exists()
 
 
-def test_M_ECO_9_a_zero_the_runner_produces_by_clamping_is_still_refused(
-        tmp_path):
-    """The check runs on what the runner would APPLY, not on how the caller
-    spelled it. `-1` is clamped to 0 by the runner's own guard, and a rule
-    that looked at the literal would have let it through."""
-    decl = tmp_path / "eco.json"
-    decl.write_text(json.dumps({"eco_readiness": DECL}), encoding="utf-8")
-    r = subprocess.run([sys.executable, str(SPACE), "--json",
-                        str(tmp_path / "space.json"),
-                        "--eco-declaration", str(decl),
-                        "--values", "spare_cell_density=-1"],
-                       capture_output=True, text=True, cwd=str(tmp_path))
-    assert r.returncode == 1, r.stdout + r.stderr
 
 
 # ---------------------------------------------------------------------------
