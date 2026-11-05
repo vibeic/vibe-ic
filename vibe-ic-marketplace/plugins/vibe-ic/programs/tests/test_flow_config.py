@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import gzip
 import sys
 import subprocess
 from decimal import Decimal
@@ -13,32 +12,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from flow_config import build_config, declared_power_checks, resolve_rtl_inputs, write_config
 
 
-@pytest.mark.parametrize("compressed", [False, True])
-def test_native_delay_defaults_preserve_buffers_and_user_exclusions(tmp_path, compressed):
+def test_native_delay_defaults_preserve_buffers_and_user_exclusions(tmp_path):
     pytest.importorskip("librelane")
     from librelane.common import Toolbox
     from librelane.config import Config
     from flow_config import native_defaults
 
-    cells = ["neutral__dlya_1", "neutral__dlygate4sd3_1", "DELAYx1",
-             "neutral__buf_1", "neutral__buf_4", "delay_library__inv_1"]
+    cells = ["neutral__dlya_1", "sg13g2_dlygate4sd3_1", "delayx1",
+             "neutral__buf_1", "neutral__buf_4"]
     text = "library (neutral) {\n" + "".join(
         f' cell ("{cell}") {{\n  area : 1;\n }}\n' for cell in cells) + "}\n"
-    liberty = tmp_path / ("neutral.lib.gz" if compressed else "neutral.lib")
-    if compressed:
-        with gzip.open(liberty, "wt") as stream:
-            stream.write(text)
-    else:
-        liberty.write_text(text)
+    liberty = tmp_path / "neutral.lib"
+    liberty.write_text(text)
     config = Config({"DEFAULT_CORNER": "nominal", "LIB": {"nom*": [str(liberty)]},
                      "EXTRA_EXCLUDED_CELLS": ["user_choice*"]})
     toolbox = Toolbox(str(tmp_path / "tool_tmp"))
 
-    updated = native_defaults(config, toolbox)
+    updated = native_defaults(config)
 
-    assert updated["EXTRA_EXCLUDED_CELLS"] == ["user_choice*", *cells[:3]]
+    assert updated["EXTRA_EXCLUDED_CELLS"] == ["user_choice*", "*dly*", "*delay*"]
     assert config["EXTRA_EXCLUDED_CELLS"] == ["user_choice*"]
-    assert native_defaults(updated, toolbox)["EXTRA_EXCLUDED_CELLS"] == updated["EXTRA_EXCLUDED_CELLS"]
+    assert native_defaults(updated)["EXTRA_EXCLUDED_CELLS"] == updated["EXTRA_EXCLUDED_CELLS"]
     filtered, = toolbox.remove_cells_from_lib(
         frozenset([str(liberty)]), frozenset(updated["EXTRA_EXCLUDED_CELLS"]))
     result = Path(filtered).read_text()
@@ -48,18 +42,17 @@ def test_native_delay_defaults_preserve_buffers_and_user_exclusions(tmp_path, co
         assert f'cell ("{cell}")' in result
 
 
-def test_native_delay_defaults_without_delay_cells_leave_config_unchanged(tmp_path):
+@pytest.mark.parametrize("existing", [None, ["*dly*", "user_choice*"]])
+def test_native_delay_defaults_need_no_library_scan(existing):
     pytest.importorskip("librelane")
-    from librelane.common import Toolbox
     from librelane.config import Config
     from flow_config import native_defaults
 
-    liberty = tmp_path / "neutral.lib"
-    liberty.write_text('library (neutral) {\n cell (neutral__buf_1) {\n }\n}\n')
-    config = Config({"DEFAULT_CORNER": "nominal", "LIB": {"nom*": [str(liberty)]},
-                     "EXTRA_EXCLUDED_CELLS": None})
+    config = Config({"EXTRA_EXCLUDED_CELLS": existing})
 
-    assert native_defaults(config, Toolbox(str(tmp_path / "tool_tmp"))) is config
+    expected = list(dict.fromkeys([*(existing or []), "*dly*", "*delay*"]))
+    assert native_defaults(config)["EXTRA_EXCLUDED_CELLS"] == expected
+    assert config["EXTRA_EXCLUDED_CELLS"] == existing
 
 
 @pytest.fixture

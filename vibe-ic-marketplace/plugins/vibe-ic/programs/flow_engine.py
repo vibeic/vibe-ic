@@ -248,7 +248,7 @@ class NativeChain:
         self.owner = Flow.factory.get(kind)(config, design_dir=str(self.project),
                                             pdk_root=os.environ.get("PDK_ROOT"))
         self.toolbox = Toolbox(str(self.project / "work/flow/tool_tmp"))
-        self.owner.config = native_defaults(self.owner.config, self.toolbox)
+        self.owner.config = native_defaults(self.owner.config)
         self.config = self.owner.config.to_raw_dict()
         self.state = State()
 

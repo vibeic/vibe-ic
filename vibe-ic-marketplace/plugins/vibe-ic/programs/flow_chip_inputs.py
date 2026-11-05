@@ -59,7 +59,7 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
     owner = Flow.factory.get("Chip")(core_config, design_dir=str(project),
                                      pdk_root=os.environ.get("PDK_ROOT"))
     toolbox = Toolbox(str(destination / "tool_tmp"))
-    owner.config = native_defaults(owner.config, toolbox)
+    owner.config = native_defaults(owner.config)
     native = owner.config.to_raw_dict()
     state = State()
     runs = []
