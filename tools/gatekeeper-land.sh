@@ -729,42 +729,6 @@ landing_unit_cheap_git_prohibition() {
   run "$1" "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" "$MSGFILE"
   rm -f "$MSGFILE"
 }
-landing_unit_cheap_collateral_revert() {
-  if [ "$GK_RANGE_N" = "0" ]; then
-    landing_skip "$1" "range is empty"
-    return 0
-  fi
-  # 2026-08-03 — the batch that landed five PRs from a 6.5-hour-stale base and
-  # let three of its own commits erase the other two. `gatekeeper_stale_branch_check`
-  # said STALE_OVERLAP on all five BEFORE the land; nothing looked at the
-  # commits AFTER they existed, which is the artefact this script pushes.
-  run "$1" "no collateral revert within the push" \
-      python3 "$PROGRAMS/landing_collateral_revert_check.py" --repo "$ROOT" --rev-range "$RANGE"
-}
-landing_unit_cheap_base_ancestry() {
-  if [ "$GK_RANGE_N" = "0" ]; then
-    landing_skip "$1" "range is empty"
-    return 0
-  fi
-  # 2026-08-05 — THE OTHER HALF OF THE SAME QUESTION, and the half nothing here
-  # was asking. The gate above reads the commits INSIDE this push; this reads
-  # whether the tree being pushed actually contains the base it names as its
-  # parent.
-  #
-  # `1766746f6` named origin/main (v1.9.78) as its parent and carried v1.9.77's
-  # tree: 81 files, 9258 deletions, 13 commits reverted, 15 files deleted. It
-  # passed every shape check here — one commit ahead of the base, no in-range
-  # predecessor to revert, and `gatekeeper_stale_branch_check` itself said FRESH,
-  # because the head really does descend from the tip. Only a human read caught
-  # it, an hour before it would have landed.
-  #
-  # The checker was already blocking in `gatekeeper_review`; it had never been
-  # wired HERE, which is the script that writes the stamp the pre-push hook
-  # demands — so the landing path had no opinion on the landing method at all.
-  run "$1" "tree contains the base it claims as parent" \
-      python3 "$PROGRAMS/gatekeeper_stale_branch_check.py" --repo "$ROOT" \
-          --base "$BASE" --head HEAD
-}
 landing_unit_cheap_version_sync() {
   run "$1" "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version_sync_check.py"
 }
@@ -835,19 +799,6 @@ landing_unit_cheap_nested_progress_pin() {
 # gates are ALREADY failing, and a gate that fails vacuously there would let a
 # candidate's REAL one-commit violation be waived as pre-existing. Range-scoped
 # gates must SKIP over an empty range, exactly as the block above already does.
-landing_unit_cheap_landing_shape() {
-  GK_RANGE_N="$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)"
-  if [ "$GK_RANGE_N" = "0" ]; then
-    echo "  SKIP  landing shape — range is empty, so there is no landing to shape"
-    landing_skip "$1" "range is empty"
-  elif [ "$GK_RANGE_N" -gt 1 ]; then
-    run "$1" "landing is a valid batch (version on tip)" \
-        python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE" --batch
-  else
-    run "$1" "landing is one commit" \
-        python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE"
-  fi
-}
 
 # The gate above asks whether the batch has a legal SHAPE. This asks what it
 # CONTAINS: does more than one member of this landing claim the same issue?

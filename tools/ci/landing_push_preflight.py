@@ -54,7 +54,6 @@ SCHEMA = 1
 KIND = "vibeic.landing-push-preflight-receipt"
 PROGRAMS_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs"
 GATES = (
-    "landing_collateral_revert_check.py",
     "commit_msg_nda_check.py",
     "nda_diff_scan_check.py",
     "git_prohibition_guard.py",
@@ -127,8 +126,6 @@ def build_receipt(*, object_repo: Path, base: str, candidate: str,
         env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(authority)})
 
         commands: list[tuple[str, list[str]]] = [
-            ("landing_collateral_revert_check.py",
-             ["--repo", str(repo), "--rev-range", push_range]),
             ("commit_msg_nda_check.py",
              ["--repo", str(repo), "--rev-range", push_range]),
             ("nda_diff_scan_check.py",

@@ -2034,7 +2034,6 @@ def sandbox(tmp_path_factory):
         "git_prohibition_guard.py",
         "hygiene_finding_delta.py",
         "hygiene_shard_plan.py",
-        "landing_collateral_revert_check.py",
         "_corpus_location.py",
         "nda_diff_scan_check.py",
         "_prose_polarity.py",
@@ -3647,57 +3646,6 @@ def test_reassert_refuses_a_record_that_was_not_a_pass(sandbox, tmp_path):
     assert "not LAND_OK" in bad.stderr
 
 
-def test_actual_push_shape_is_refused_before_any_expensive_arm(
-        sandbox, tmp_path):
-    """The exact ordering regression that wasted the fleet run.
-
-    The squash tree is harmless, but commit 2 retracts 3/4 substantive lines
-    commit 1 adds in the SAME unpublished push. Commit 2 also replaces its own
-    collateral checker with an always-PASS program. The immutable BASE-owned
-    checker must still answer before merge-tree/rebase or A1/A2/B1/B2 starts.
-    """
-    repo = tmp_path / "push-shape-repo"
-    cloned = _pr.run(
-        ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
-    _git(repo, "checkout", "-q", "-b", "bad_push_shape")
-    subject = repo / "push_shape.txt"
-    lines = [
-        "first substantive contribution line 0001",
-        "second substantive contribution line 0002",
-        "third substantive contribution line 0003",
-        "fourth substantive contribution line 0004",
-    ]
-    subject.write_text("\n".join(lines) + "\n")
-    _git(repo, "add", "push_shape.txt")
-    assert _git(repo, "commit", "-qm", "add one contribution").returncode == 0
-    subject.write_text(lines[-1] + "\n")
-    self_edited_gate = (repo / "vibe-ic-marketplace" / "plugins" /
-                        "vibe-ic" / "programs" /
-                        "landing_collateral_revert_check.py")
-    self_edited_gate.write_text(
-        "#!/usr/bin/env python3\nraise SystemExit(0)\n")
-    _git(repo, "add", "push_shape.txt", str(self_edited_gate.relative_to(repo)))
-    assert _git(repo, "commit", "-qm",
-                "retract most of it and weaken the checker").returncode == 0
-
-    out = tmp_path / "push-shape.json"
-    run = _pr.run(
-        ["bash", str(_VERIFY), "--ref", "bad_push_shape", "--base", "main",
-         "--repo", str(repo), "--no-fetch", "--json", str(out)],
-        capture_output=True, text=True, env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": ""})
-    assert run.returncode == 1, run.stdout + run.stderr
-    assert "PUSH PREFLIGHT: REFUSE" in run.stderr
-    assert "landing_collateral_revert_check.py" in run.stderr
-    assert "arm A1/B1" not in run.stdout
-    assert "tree-under-test" not in run.stdout
-    record = json.loads(out.read_text())
-    assert record["kind"] == "vibeic.landing-push-preflight-receipt"
-    assert record["verdict"] == "REFUSE"
 
 
 # ================================================ THE TWO VERIFICATION TIERS

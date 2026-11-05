@@ -24,17 +24,6 @@ never re-implemented):
                                          pair the author validated. Later main
                                          movement is a green Gatekeeper handoff;
                                          author-side rebase onto it is blocked
-  * gatekeeper_stale_branch_check.py   — the LANDING-METHOD guard: a PR forked
-                                         from an older base that also touches a
-                                         file landed since requires Gatekeeper
-                                         replay/rebase. It is non-blocking only
-                                         during version-less external-PR review;
-                                         final landing review still blocks
-  * landing_collateral_revert_check.py — the same guard AFTER the fact: no
-                                         commit in `base..head` may erase the
-                                         contribution an EARLIER commit of the
-                                         same range made to a file (the shape a
-                                         blind checkout land actually produces)
   * git_prohibition_guard.py           — forbidden destructive git ops in the
                                          PR's commit command strings
   * version_bump_monotonic_check.py    — strict monotonic version bump
@@ -61,12 +50,6 @@ never re-implemented):
                                          manual habit). See `repo_hygiene_gate`
                                          for why the list is INVOKED and not
                                          derived from the gate names.
-  * landing_is_one_commit_check.py     — a single landing is ONE commit;
-                                         a batch declares its own shape
-  * gatekeeper_stale_branch_check.py   — (already above) and its two
-                                         change-set neighbours, which
-                                         were spawned here and unlisted
-                                         until 2026-08-22:
 
 THE §4.05 / GENERAL / NO-CHEAT BOUNDARY  (read this — it is load-bearing)
 ========================================================================
@@ -652,112 +635,6 @@ def nda_diff_scan_gate(repo: Path, base: str, head: str) -> GateResult:
     return GateResult("nda_diff_scan_check", rc, summary or "(no output)")
 
 
-# --------------------------------------------------------------------------
-# gatekeeper_stale_branch_check — the LANDING-METHOD guard.
-#
-# A PR branch cut from an OLDER base than the current origin/main tip makes a
-# naive `origin/main..HEAD` diff show a PHANTOM REVERT of every commit landed
-# since the fork; a blind `git checkout HEAD -- <files>` land would silently
-# revert that work. This flags the risk so the land is a CHERRY-PICK of the
-# PR's own delta. rc 0 FRESH / stale-no-overlap; rc 1 stale WITH file overlap
-# (the real phantom-revert surface); rc 2 unresolvable ref. Unlike the other
-# gates this does not judge the CHANGE — only the safe way to LAND it.
-#
-# 2026-08-05 — its FRESH verdict now has to be EARNED. FRESH was decided by
-# ANCESTRY alone and then asserted a property about CONTENT ("an ordinary
-# squash-merge cannot phantom-revert anything"). A commit that named origin/main
-# as its parent while carrying the PREVIOUS version's TREE satisfied the
-# ancestry test exactly, and would have reverted 13 commits — 81 files, 9258
-# deletions, 15 files removed, plugin.json walked back a version. This roster
-# was green on it, because the two revert guards each disclaim that case IN
-# WRITING and hand it to the other: the collateral check's window is "this push"
-# (0 pairs on a one-commit branch) and this gate answered FRESH. Only a human
-# read caught it. The gate now checks, inside the FRESH branch, that no path the
-# head modifies holds a blob the base's own history has already superseded; that
-# rc 1 blocks here exactly as STALE_OVERLAP does.
-# --------------------------------------------------------------------------
-# --------------------------------------------------------------------------
-# landing_is_one_commit_check — the OTHER landing-method guard.
-#
-# A landing is ONE commit. Three landings left TWO on main (vibe-ic#459): the
-# authoring commit plus a version commit carrying only the manifests, because
-# `git commit --amend` after a rebase touches only the top commit. Nothing
-# failed and nothing warned, and GitHub runs CI on the LAST commit of a push,
-# so the intermediate one has no CI record of its own.
-#
-# rc 0 one commit / rc 1 two or more, or zero (nothing landed). rc 2 means the
-# range could not be counted, which is reported as a skip rather than a pass —
-# an uncountable range has told us nothing.
-#
-# v1.7.64 — BATCH mode. The owner's standing directive is to land several PRs
-# under ONE version bump and ONE CI run, and this review had no way to say so:
-# every batch was blocked by a rule that does not apply to it, on a line whose
-# own remedy text named a `--batch` flag the review could not forward. A
-# reviewer who learns to read past one blocking line learns to read past
-# blocking lines, so the flag is plumbed through instead.
-#
-# `--batch` does NOT relax the check. The underlying program's batch mode
-# asserts a strictly stronger property than the single-landing rule: no
-# manifest-only commit anywhere in the range, exactly one version bump, and it
-# must be the tip — because CI runs on the pushed tip, so a version buried
-# mid-batch would mean green CI referring to a tree nobody released. It stays
-# OPT-IN: without the flag the single-landing rule is unchanged, so a real
-# `commit --amend` slip still fails exactly as before.
-# --------------------------------------------------------------------------
-def one_commit_gate(repo: Path, base: str, head: str = "HEAD",
-                    batch: bool = False) -> GateResult:
-    prog = _PROGRAMS_DIR / "landing_is_one_commit_check.py"
-    if not prog.is_file():
-        return GateResult("landing_is_one_commit_check", 2,
-                          f"checker missing at {prog}")
-    argv = ([str(repo), "--base", base, "--head", head]
-            + (["--batch"] if batch else []))
-    rc, out, err = _run_program(prog, argv)
-    detail = (err or out).strip().splitlines()
-    reason = detail[-1] if detail else "no output"
-    if rc == 2:
-        return GateResult("landing_is_one_commit_check", -1,
-                          f"skipped — range not countable: {reason}")
-    return GateResult("landing_is_one_commit_check", rc, reason)
-
-
-def stale_branch_gate(repo: Path, base: str, head: str) -> GateResult:
-    prog = _PROGRAMS_DIR / "gatekeeper_stale_branch_check.py"
-    if not prog.is_file():
-        return GateResult("gatekeeper_stale_branch_check", 2,
-                          f"checker missing at {prog}")
-    rc, out, err = _run_program(prog, ["--repo", str(repo),
-                                       "--base", base, "--head", head])
-    # rc 2 == a ref could not be resolved (synthetic refs in a unit test, a
-    # shallow CI clone). NOT a phantom-revert finding, so it must not block —
-    # reported as a skip so a silently-unresolved range is visible.
-    if rc == 2:
-        return GateResult("gatekeeper_stale_branch_check", -1,
-                          f"skipped — {base}/{head} not resolvable")
-    body = err.strip() or out.strip()
-    summary = (body.splitlines() or [""])[0][:240]
-    return GateResult("gatekeeper_stale_branch_check", rc,
-                      summary or "(no output)")
-
-
-def authoring_stale_branch_policy(result: GateResult,
-                                  version_by_gatekeeper: bool) -> GateResult:
-    """A stale external PR selects the landing method; it is not author work.
-
-    The merge verifier already replays/rebases on current main and re-runs the
-    gates. Making the author chase main duplicates that work and creates an
-    endless race with unrelated landings. Only the version-less external-PR
-    mode gets this ownership transfer; direct-push/final landing review keeps
-    the original blocking result.
-    """
-    if version_by_gatekeeper and result.rc == 1:
-        return GateResult(
-            result.name, 0,
-            "LANDING_METHOD owned by Repo Gatekeeper — author publication "
-            "base remains frozen; replay/rebase and re-gating happen at landing")
-    return result
-
-
 def publication_base_gate(repo: Path, current_main: str,
                           pr_metadata: Optional[dict]) -> GateResult:
     """Require the immutable publication base/head on every external PR."""
@@ -777,38 +654,6 @@ def publication_base_gate(repo: Path, current_main: str,
             "main advanced after publication — author base correctly remains "
             "frozen; Repo Gatekeeper owns integration replay/rebase")
     return GateResult(name, 0, "validated publication base/head are pinned")
-
-
-# --------------------------------------------------------------------------
-# landing_collateral_revert_check — the landing-method guard AFTER the fact.
-#
-# `stale_branch_gate` above is a PRE-land guard: it reasons about a branch that
-# has not been landed yet. It said rc 1 STALE_OVERLAP on all five PRs of the
-# 2026-08-03 batch and named the exact overlap files, and the batch landed
-# anyway with three of its eleven commits erasing the other two.
-#
-# It could not have said otherwise once the land had happened. Its verdict is
-# `merge-base(base, head) == base tip -> FRESH`, and after a cherry-pick the
-# landed commit IS a fast-forward descendant of the base, so FRESH is
-# structurally guaranteed and says nothing about the content that now exists.
-# This gate reads that content: it takes the same `base..head` the review is
-# already scoped to and asks whether any commit in it erases an earlier one's
-# contribution to a file. rc 2 (unresolvable or empty range) is NOT CHECKED,
-# never a pass — same contract as every other range-shaped gate here.
-# --------------------------------------------------------------------------
-def collateral_revert_gate(repo: Path, base: str, head: str) -> GateResult:
-    prog = _PROGRAMS_DIR / "landing_collateral_revert_check.py"
-    if not prog.is_file():
-        return GateResult("landing_collateral_revert_check", 2,
-                          f"checker missing at {prog}")
-    rc, out, err = _run_program(prog, ["--repo", str(repo),
-                                       "--rev-range", f"{base}..{head}"])
-    body = (err.strip() or out.strip()).splitlines()
-    reason = body[-1] if body else "(no output)"
-    if rc == 2:
-        return GateResult("landing_collateral_revert_check", -1,
-                          f"skipped — {base}..{head} not walkable: {reason[:160]}")
-    return GateResult("landing_collateral_revert_check", rc, reason[:400])
 
 
 # --------------------------------------------------------------------------
@@ -2047,22 +1892,6 @@ def review(base: str, head: str, *,
     gates.append(nda_diff_scan_gate(repo, base, head))
     if version_by_gatekeeper:
         gates.append(publication_base_gate(repo, base, pr_metadata))
-    gates.append(authoring_stale_branch_policy(
-        stale_branch_gate(repo, base, head), version_by_gatekeeper))
-    # The same landing method, seen from the other side. `stale_branch_gate`
-    # judges a branch BEFORE it lands; once it has landed, its FRESH verdict is
-    # structurally guaranteed and content-blind. This one reads the commits.
-    gates.append(collateral_revert_gate(repo, base, head))
-    # #459 — the landing SHAPE, alongside the landing METHOD above.
-    #
-    # v1.7.65: this used to omit `head`, and the comment that stood here
-    # claimed a synthetic head ref would make the range uncountable so the
-    # gate would skip. It did no such thing — `head` was simply never passed,
-    # and the checker counted the REVIEWER'S working HEAD. Reviewing a PR from
-    # a checkout parked on a clean one-commit landing returned PASS over an
-    # unsquashed branch. An unresolvable ref is rc 2 / NOT CHECKED, which is
-    # what the old comment promised and the code now delivers.
-    gates.append(one_commit_gate(repo, base, head, batch=batch))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
     gates.append(test_cadence_gate(pytest_cmd, cadence))

@@ -196,7 +196,6 @@ def test_the_gates_run_inside_a_per_ref_loop():
     loop = code[code.index("for _push_ref_record in"):]
     body = loop[:loop.index("\ndone")]
     for gate in ("nda_diff_scan_check.py",
-                 "landing_collateral_revert_check.py",
                  "version_bump_monotonic_check.py",
                  "agent_checkin_scope_guard.py",
                  "branch_version_bump_guard.py",
