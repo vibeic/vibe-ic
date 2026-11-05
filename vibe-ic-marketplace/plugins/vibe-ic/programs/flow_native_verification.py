@@ -181,7 +181,11 @@ def finishing_xor(project, directory, tool, commands, *, state, config):
     if not pre or core is None:
         return commands.result(detail="Finishing XOR needs the native pre-finishing stream and core rectangle.")
     if state.metrics.get("design__seal_ring__verified") == 1 and not sealed:
-        return commands.result(detail="Finishing XOR needs the native seal-ring output as well as the finished GDS.")
+        seal_state = Path(project) / "steps/seal_ring_and_die_identification/state_out.json"
+        if seal_state.is_file():
+            sealed = json.loads(seal_state.read_text()).get("gds")
+        if not sealed:
+            return commands.result(detail="Finishing XOR needs the native seal-ring output as well as the finished GDS.")
     from librelane_plugins.librelane_plugin_vibeic.signoff import FinishingXOR
     core = core.replace(",", " ").split() if isinstance(core, str) else list(core)
     if len(core) != 4:
