@@ -63,8 +63,8 @@ def run(project, rows):
     return engine.run(project, table={'steps': rows}, route=route)
 
 
-@pytest.mark.parametrize('name', ['netlist_equivalence', 'final_adopted_netlist_equivalence'])
-def test_actual_equivalence_tools_leave_physical_export_free(tmp_path, worker, name):
+@pytest.mark.parametrize('name', ['netlist_equivalence', 'final_adopted_netlist_equivalence', 'functional_activity_and_external_loads'])
+def test_actual_background_tools_leave_physical_export_free(tmp_path, worker, name):
     source = next(item for item in engine.read_json(engine.TABLE)['steps'] if item['name'] == name)
     tool = {**source['tool'], 'hold': True}
     report = run(tmp_path, [row(name, tool), command('physical', 'physical.done', wait=True),
