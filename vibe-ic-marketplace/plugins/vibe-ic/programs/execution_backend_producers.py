@@ -2369,6 +2369,9 @@ def produce_signoff(project, params):
         # DRV measurement under the current deck. Never resynthesize here.
         _retained_synth_census(project, params, R, ll, pdk)
         row = R.step_postroute_repair_librelane(project, top, pdk, container)
+        if row is None:
+            return {'verdict': 'NOT_MEASURED',
+                    'detail': 'post-route repair input_absent: no routed database is available'}
         if row.status in ('PASS', 'FAIL'):
             # The current receipt is checked before the legacy all-step
             # canonicalizer runs. Publish this row's existing canonical
