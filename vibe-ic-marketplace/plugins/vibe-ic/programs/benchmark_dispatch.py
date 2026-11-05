@@ -5722,6 +5722,10 @@ def _require_program_first_ai_acceptance(run_p: Path) -> None:
                          "COMPLETE report does "
                          "not account for every solve_report result")
     failures = []
+    for result in solve.get("results") or []:
+        ledger = _required_gate_ledger(result)
+        if ledger.get("eligibility") != "ELIGIBLE":
+            failures.append(f"{result.get('id')}: {_gate_status_note(ledger)}")
     for pid in expected:
         task = by_id[pid]
         verdict = _validate_ai_review(task)
@@ -5855,10 +5859,7 @@ def _shape_c_task_binding_reasons(task: dict, run_p: Path,
     if recorded_rtl_gen not in {_V.Verdict.PASS.value,
                                 _V.Verdict.NOT_APPLICABLE.value}:
         reasons.append("RTL-owning Program gate did not pass its allowed status")
-    # #2216 — the RTL-OWNING gate is one gate, not the ledger. Export is the
-    # second door onto the same claim as the resume accept path, so it asks the
-    # same question: did any REQUIRED IN-SCOPE gate report a failure on these
-    # bytes. Out-of-exit and unplaceable gates are recorded and never block.
+    # Export and acceptance require the same measured, in-scope ledger.
     ledger = _required_gate_ledger(solve_result)
     reasons.extend(_gate_evidence_freshness_reasons(
         expected_project, solve_result))
@@ -5866,6 +5867,8 @@ def _shape_c_task_binding_reasons(task: dict, run_p: Path,
         reasons.append(
             f"required in-scope PROGRAM gate {name} reported "
             f"{(ledger.get('in_scope') or {}).get(name)}")
+    if ledger.get("eligibility") != "ELIGIBLE":
+        reasons.append(_gate_status_note(ledger))
     return reasons
 
 
@@ -6186,6 +6189,11 @@ def _export_accepted_shape_b_samples(bench: str, dataset: Path,
                 or sorted(task_ids) != sorted(solve_ids)):
             raise SystemExit("accepted Shape-B sample export BLOCKED: review "
                              "worklist does not exactly match solve_report")
+        for row in solve_results:
+            ledger = _required_gate_ledger(row)
+            if ledger.get("eligibility") != "ELIGIBLE":
+                raise SystemExit("accepted Shape-B sample export BLOCKED: "
+                                 + _gate_status_note(ledger))
 
     failures = []
     guard_notes_by_id: dict[str, list[str]] = {}
@@ -10345,8 +10353,23 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 reasons.append("runner re-entry project is not coordinator-owned")
             if pid in phase1_blocked:
                 reasons.append(phase1_blocked[pid])
-            if result.get("accepted") or Path(str(task.get("response_path"))).is_file():
+            response = Path(str(task.get("response_path")))
+            recover_unmeasured = (
+                invocation_reason == "RUNNER_REQUIRED_GATES_REMEASURE: Program source changed"
+                and task.get("candidate_origin") == "PROGRAM"
+                and result.get("candidate_origin") == "PROGRAM"
+                and result.get("accepted") is True
+                and gate_ledger.get("eligibility") == _NOT_MEASURED
+                and not _gate_evidence_freshness_reasons(proj, result)
+                and not (run_p / "pass_at_1.json").exists()
+                and _validate_ai_review(task).get("status") == "ACCEPTED")
+            if (result.get("accepted") or response.is_file()) and not recover_unmeasured:
                 reasons.append("runner re-entry cannot replace an accepted/published candidate")
+            if recover_unmeasured and (
+                    response != run_p / "responses" / f"{_safe_problem_id(pid)}.json"
+                    or response.is_symlink() or response.exists() and response.read_bytes() != Path(
+                        task["candidate_snapshot"]["response_payload_path"]).read_bytes()):
+                reasons.append("published response differs from the frozen candidate")
             if task.get("candidate_origin") == "AI_REPAIR":
                 reasons += _validate_embedded_repair_provenance(task)
             if reasons:
@@ -10359,6 +10382,12 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             archive = run_p / "runner_regates" / _safe_problem_id(pid) / key
             _write_immutable_json(archive / "prior_task.json", task)
             _write_immutable_json(archive / "prior_result.json", result)
+            if recover_unmeasured:
+                for name, path in (("prior_review.json", task["review_path"]),
+                                   ("prior_invocation.json", old_invocation["record_path"])):
+                    _write_immutable_text(archive / name, Path(path).read_bytes().decode("utf-8"))
+                if response.exists():
+                    response.replace(archive / "prior_response.json")
             repair_plans.append({
                 "kind": "regate", "id": pid, "task": task, "result": result,
                 "project": proj, "challenge": None, "review_key": review_key,
@@ -10840,15 +10869,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                            "awaiting_ai_review": False,
                            "ai_repair_required": False})
             continue
-        # #2216 — REQUIRED IN-SCOPE PROGRAM GATE ELIGIBILITY, asked here and
-        # nowhere earlier. Every check above is about the ARTEFACT: is it
-        # runner-owned, does its hash still match, is its Phase-1 provenance
-        # intact, did its OWNING gate pass. None of them can see a second
-        # in-scope gate that FAILED on these same bytes, and the message below
-        # nevertheless claimed every Program gate had passed. Collection stays
-        # exactly as permissive as it was — a failed candidate must remain
-        # reviewable and repairable — but a required in-scope FAILURE now holds
-        # the DELIVERABLE instead of being overwritten by a semantic PASS.
+        # Collection remains reviewable; only an ELIGIBLE ledger can publish.
         freshness_reasons = _gate_evidence_freshness_reasons(
             Path(str(task.get("project") or "")), result)
         if freshness_reasons:
@@ -10910,6 +10931,17 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             print(f"  {pid:44s} NOT ACCEPTED -- "
                   f"{_gate_status_note(gate_ledger)}")
             continue
+        if gate_ledger.get("eligibility") != "ELIGIBLE":
+            repairs.append({
+                "id": pid, "project": task.get("project"),
+                "status": "PROGRAM_GATE_NOT_MEASURED",
+                "reasons": [_gate_status_note(gate_ledger)],
+                "required_gate_ledger": gate_ledger,
+                "required_next": "measure the required native gates, then obtain a fresh review"})
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": False, "ai_repair_required": False})
+            print(f"  {pid:44s} NOT ACCEPTED -- {_gate_status_note(gate_ledger)}")
+            continue
         if task.get("candidate_origin") == "AI_REPAIR":
             recovery = _verified_program_recovery(task, result, verdict)
             enhancement_by_key[(
@@ -10931,11 +10963,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         route_note = ("AI OVERRIDE_PROGRAM" if
                       verdict.get("routing_verdict") == "OVERRIDE_PROGRAM"
                       else "AI AGREE")
-        # The message states what was MEASURED. "ACCEPTED by PROGRAM gates"
-        # asserted that every required gate passed even when a required
-        # in-scope gate never reported at all -- MEASURED: `rtl_validate` is
-        # BLOCKED on 44 of 61 published accepted rows and absent on the other
-        # 17. That hole is now said out loud as NOT_MEASURED, never as a pass.
         print(f"  {pid:44s} ACCEPTED -- {_gate_status_note(gate_ledger)} "
               f"+ {route_note}")
 
