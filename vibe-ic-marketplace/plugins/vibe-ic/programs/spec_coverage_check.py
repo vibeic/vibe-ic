@@ -3176,7 +3176,8 @@ def _tb_has_other_clock_driver(rtl_text: str, tb_code: str,
 
 
 def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
-                            endpoint_checks: Optional[set] = None) -> tuple:
+                            endpoint_checks: Optional[set] = None,
+                            reset_checks: Optional[set] = None) -> tuple:
     """Bounded inline initial/clocked output witnesses, not general SV execution.
 
     Reuse DUT binding and the HDL block parser. Only a single finishing initial
@@ -3235,6 +3236,7 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
     time, edge_time, count = 0.0, 0.0, 0
     before, after = False, False
     checked = {}
+    driven, samples = {}, {}
     delay_pattern = re.compile(r"#\s*(\d+(?:\.\d+)?)\s*;?")
     assignment_pattern = re.compile(r"(\w+)\s*=(?!=)\s*([^;]+);")
     output_expression = r"(?:\w+|\{\s*\w+(?:\s*,\s*\w+)+\s*\})"
@@ -3253,6 +3255,17 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
             signal, expression = assignment.groups()
             if re.search(r"[()#@]", expression):
                 return False, False
+            literal = _parse_hdl_int(expression)
+            sized = _SIZED_LITERAL_RE.fullmatch(expression.strip())
+            bits = int(sized[1]) if sized else None
+            if literal is not None and bits:
+                literal %= 1 << bits
+                literal -= (1 << bits) if sized[2] and literal >> (bits - 1) else 0
+            width = min([_rtl_declared_widths(outside).get(signal.lower(), 0)] + [p.width for p in ports
+                        if p.direction == "output" or roles.get(p.name.lower()) == signal.lower()])
+            literal = literal % (1 << width) if literal is not None and width > 0 and bits != 0 else None
+            if driven.get(signal.lower(), (None, None))[1] != literal:
+                driven[signal.lower()] = (time, literal)
             if signal.lower() == clock:
                 value = _parse_hdl_int(expression)
                 if value not in (0, 1) or (level is None and value != 1 - active):
@@ -3273,8 +3286,44 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
                 value = _parse_hdl_int(check.group(2))
                 if count > 0 and time > edge_time and len(observed) == 1 and value is not None:
                     checked.setdefault(observed[0], {})[count] = value
+                    samples.setdefault(observed[0], []).append((count, time, edge_time, value, dict(driven)))
         elif system:
             if system.group(1).lower() == "finish":
+                if reset_checks is not None:
+                    module = re.search(rf"\bmodule\s+{re.escape(top)}\b(.*?)\bendmodule", _HDL.strip_hdl_comments_and_strings(rtl_text), re.S)
+                    inputs = {roles.get(p.name.lower()) for p in ports if p.direction == "input"} - {clock, None}
+                    safe = len(ports) == len({roles.get(p.name.lower()) for p in ports} - {None}) and not any(
+                        _tb_has_other_clock_driver(rtl_text, tb_code, scope, net, context=drivers) for net in inputs)
+                    safe = (safe and module and len(outputs) == len(re.findall(r"\balways(?:_ff)?\b", module[1])) == 1
+                            and not re.search(r"\b(?:generate|task|function)\b|\bif\b(?=[\s\S]*\balways)", module[1]))
+                    pattern = (rf"\balways(?:_ff)?\s*@\(\s*(?:posedge|negedge)\s+{re.escape(formal[0])}\s*\)"
+                               rf"\s*(?:begin\s*)?if\s*\(([^)]+)\)\s*(?:begin\s*)?(\w+)\s*<=\s*({_HDL_INT})\s*;"
+                               r"\s*(?:end\s*)?else\s*(?:begin\s*)?\2\s*<=\s*(\w+)\s*;")
+                    for match in re.finditer(pattern, module[1] if module and safe else "", re.I):
+                        control, polarity = _SRC._classify_polarity(match[1])
+                        local, output, data = (roles.get(name.lower())
+                                               for name in (control or "", match[2], match[4]))
+                        if (local not in inputs or output not in outputs or data not in inputs - {local}
+                                or not any(p.name == control and p.width == 1 for p in ports)
+                                or len(_assigned_expressions(module[1], match[2])) != 2
+                                or _parse_hdl_int(match[3]) != 0):
+                            continue
+                        reset_checks.add("supported")
+                        active_value = int(polarity == "active-high")
+                        a = b = c = None
+                        for d in samples.get(output, []):
+                            ctrl, datum = d[4].get(local, (None, None)), d[4].get(data, (None, None))
+                            if ctrl[1] == 1-active_value and d[3] != 0:
+                                if c and d[0] > c[0] and c[1] <= ctrl[0] < d[2]:
+                                    reset_checks.add(polarity)
+                                elif (datum[1] not in (None, 0)
+                                      and (a is None or (d[0], d[3], datum) != (a[0], a[3], a[4].get(data)))):
+                                    a, b, c = d, None, None
+                            if a and ctrl[1] == active_value and datum == a[4].get(data):
+                                if d[0] == a[0] and d[3] == a[3] and a[1] < ctrl[0] < d[1]:
+                                    b = d
+                                elif b and d[0] == b[0] + 1 and d[3] == 0 and ctrl == b[4].get(local):
+                                    c = c or d
                 if endpoint_checks is not None:
                     for port in ports:
                         signal = roles.get(port.name.lower())
@@ -3465,16 +3514,23 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
     register_loop_attempted, register_loop_offsets = \
         _tb_register_loop_coverage(
             _HDL.strip_hdl_comments_and_strings(tb_text), rtl_text)
-    endpoint_checks = set()
+    endpoint_checks, reset_checks = set(), set()
     initial_observed, clocked_observed = (
-        _tb_direct_state_checks(rtl_text, _HDL.strip_hdl_comments_and_strings(tb_text), endpoint_checks)
-        if any(it.kind in {"initial_state", "latency", "overflow", "saturation"} for it in items)
+        _tb_direct_state_checks(rtl_text, _HDL.strip_hdl_comments_and_strings(tb_text), endpoint_checks, reset_checks)
+        if any(it.kind in {"initial_state", "latency", "overflow", "saturation", "reset"} for it in items)
         else (False, False))
 
     members_norm = {_norm_value(m) for m in enum_members_all
                     if re.fullmatch(r"(0[xXbB][0-9A-Fa-f_]+|\d+|\d+'[bdh][0-9A-Fa-fxXzZ_]+)", m)}
 
     for it in items:
+        if (it.kind == "reset" and rtl_text
+                and _detect_reset_mode_polarity(it.evidence)[0] == "synchronous"
+                and not _rtl_reset_ports(rtl_text, tb_text) and "supported" in reset_checks):
+            _, polarity = _detect_reset_mode_polarity(it.evidence)
+            it.covered = polarity in reset_checks if polarity else bool(reset_checks - {"supported"})
+            it.coverage_note = f"{'' if it.covered else 'no '}bound synchronous clear/retention/recovery witness"
+            continue
         if it.kind == "initial_state":
             it.covered = initial_observed
             it.coverage_note = ("fatal-backed DUT output literal check before the first bound clock edge"
