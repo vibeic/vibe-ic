@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import gzip
 import json
 import re
 from decimal import Decimal
@@ -32,6 +33,23 @@ IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_R
 
 def implementation_setting(key: str) -> bool:
     return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
+
+
+def native_defaults(config, toolbox):
+    """Exclude delay-cell families after LibreLane resolves the PDK libraries."""
+    excluded = list(config.get("EXTRA_EXCLUDED_CELLS") or [])
+    for library in toolbox.filter_views(config, config["LIB"]):
+        path = Path(str(library))
+        with (gzip.open(path, "rt") if path.suffix == ".gz" else path.open()) as stream:
+            for line in stream:
+                for match in re.finditer(r'\bcell\s*\(\s*"?([^\s"()]+)"?\s*\)', line):
+                    cell = match[1]
+                    if (re.match(r"(?:dly|delay)", cell.rsplit("__", 1)[-1], re.I)
+                            and cell not in excluded):
+                        excluded.append(cell)
+    if excluded == (config.get("EXTRA_EXCLUDED_CELLS") or []):
+        return config
+    return config.copy(EXTRA_EXCLUDED_CELLS=excluded)
 
 
 def _load(path: Path) -> dict[str, Any]:
