@@ -206,16 +206,6 @@ def test_the_gates_run_inside_a_per_ref_loop():
             "on behalf of all of them")
 
 
-def test_the_ref_independent_gate_stays_outside_the_loop():
-    """The complement, and it is not decoration: `marketplace_version_sync_check`
-    takes no range, no base and no destination — it asks whether the working
-    tree's two manifests agree.  Running it per ref would repeat one answer N
-    times, and it must still run when the push publishes no new commit at all."""
-    code = _hook_code()
-    loop = code[code.index("for _push_ref_record in"):]
-    body = loop[:loop.index("\ndone")]
-    assert "marketplace_version_sync_check.py" not in body
-    assert "marketplace_version_sync_check.py" in loop[loop.index("\ndone"):]
 
 
 def test_the_gates_are_not_moved_into_a_function():

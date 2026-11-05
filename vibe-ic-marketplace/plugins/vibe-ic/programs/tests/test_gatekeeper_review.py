@@ -169,7 +169,6 @@ def test_clean_diff_merge_ok(tmp_path):
     # Every machine gate green => MERGE_OK.
     by_name = {g.name: g for g in v.gates}
     assert by_name["version_bump_monotonic_check"].rc == 0
-    assert by_name["marketplace_version_sync_check"].rc == 0
     assert by_name["source_chip_agnostic_check"].rc == 0
     assert by_name["plugin_full_audit"].rc == 0, by_name["plugin_full_audit"].summary
     assert by_name["git_prohibition_guard"].rc == 0
@@ -208,29 +207,6 @@ def test_chip_token_request_changes(tmp_path):
 # ---------------------------------------------------------------------------
 # 3. a version-equality break (plugin.json != marketplace.json) -> REQUEST_CHANGES
 # ---------------------------------------------------------------------------
-def test_version_equality_break_request_changes(tmp_path):
-    repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
-    # Break the marketplace<->plugin equality: marketplace stays stale at .95.
-    mkt = repo / "vibe-ic-marketplace" / ".claude-plugin" / "marketplace.json"
-    data = json.loads(mkt.read_text())
-    data["plugins"][0]["version"] = "1.0.95"
-    mkt.write_text(json.dumps(data) + "\n")
-    v = gk.review(
-        "BASE", "HEAD",
-        repo=repo, plugin_root=plugin,
-        role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
-        override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
-        # version_bump_monotonic equality re-assert: market passed in as the
-        # head marketplace version (.95) != plugin (.96).
-        override_cur="1.0.96", override_prev="1.0.95",
-    )
-    by_name = {g.name: g for g in v.gates}
-    # The marketplace_version_sync_check subprocess must catch the drift.
-    assert by_name["marketplace_version_sync_check"].rc == 1, \
-        by_name["marketplace_version_sync_check"].summary
-    assert v.verdict == "REQUEST_CHANGES"
-    assert any("marketplace_version_sync_check" in b for b in v.blocking)
 
 
 # ---------------------------------------------------------------------------

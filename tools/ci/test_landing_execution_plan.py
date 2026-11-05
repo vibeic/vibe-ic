@@ -34,7 +34,7 @@ C = load('_cx_completion', ROOT / 'tools/ci/landing_completion_record.py')
 REQUIRED = tuple(('cheap:' + x) for x in (
     'nda-messages', 'nda-content', 'version', 'agent-scope', 'benchmark-structure',
     'git-prohibition',
-    'version-sync', 'prose-polarity', 'nested-progress-pin',
+    'prose-polarity', 'nested-progress-pin',
     'competing-claims-report', 'worktree-clean', 'scratch-report', 'hygiene-ratchet')) + tuple(
     ('full:' + x) for x in ('write-guard-baseline', 'targeted-tests', 'repo-tools-tests',
     'unselectable-tests', 'unselectable-census', 'census-freshness', 'repo-hygiene',

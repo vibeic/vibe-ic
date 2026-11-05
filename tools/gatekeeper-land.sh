@@ -729,9 +729,6 @@ landing_unit_cheap_git_prohibition() {
   run "$1" "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" "$MSGFILE"
   rm -f "$MSGFILE"
 }
-landing_unit_cheap_version_sync() {
-  run "$1" "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version_sync_check.py"
-}
 # vibe-ic#712 — NO LANDING MAY ADD A POLARITY-BLIND PROSE EXTRACTOR.
 #
 # Whole-tree, so it sits OUTSIDE the range block above with `version-sync`: the

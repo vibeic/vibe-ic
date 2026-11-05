@@ -203,7 +203,7 @@ _HOOK_PROGRAMS = (
     "agent_checkin_scope_guard.py", "branch_version_bump_guard.py",
     "commit_msg_nda_check.py",
     "git_prohibition_guard.py",
-    "marketplace_version_sync_check.py", "nda_diff_scan_check.py",
+    "nda_diff_scan_check.py",
     "plugin_full_audit.py", "version_bump_monotonic_check.py",
 )
 

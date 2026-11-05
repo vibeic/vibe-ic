@@ -193,11 +193,6 @@ jobs:
           # of N commits — the guard flags vacuous=true but exits 0.
           python3 "$PROGRAMS/git_prohibition_guard.py" /tmp/pr_commit_text.txt
 
-      - name: marketplace ↔ plugin version sync
-        run: |
-          python3 "$PROGRAMS/marketplace_version_sync_check.py" \
-            --marketplace-dir "$MARKETPLACE_DIR"
-
       - name: version bump is monotonic (version-less PR allowed)
         run: |
           # --version-by-gatekeeper: an authoring PR is VERSION-LESS by

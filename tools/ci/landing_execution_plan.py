@@ -23,7 +23,6 @@ STEPS = (
     ("cheap:agent-scope", "cheap", ""),
     ("cheap:benchmark-structure", "cheap", ""),
     ("cheap:git-prohibition", "cheap", ""),
-    ("cheap:version-sync", "cheap", ""),
     ("cheap:prose-polarity", "cheap", ""),
     ("cheap:nested-progress-pin", "cheap", ""),
     ("cheap:competing-claims-report", "cheap", ""),

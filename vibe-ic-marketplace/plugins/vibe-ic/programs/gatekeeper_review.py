@@ -29,7 +29,6 @@ never re-implemented):
   * version_bump_monotonic_check.py    — strict monotonic version bump
                                          (current > previous) + the
                                          marketplace equality re-assert
-  * marketplace_version_sync_check.py  — plugin.json == marketplace.json
   * agent_checkin_scope_guard.py       — role-based check-in path scope
   * plugin_full_audit.py               — D1 (every program tested) + D2 (every
                                          step has a compliance checker)
@@ -544,12 +543,6 @@ def version_bump_gate(cur: Optional[str], prev: Optional[str],
 # --------------------------------------------------------------------------
 # marketplace_version_sync_check — run as subprocess (it walks the tree).
 # --------------------------------------------------------------------------
-def marketplace_sync_gate(plugin_or_repo: Path) -> GateResult:
-    prog = _PROGRAMS_DIR / "marketplace_version_sync_check.py"
-    # The program walks UP from --marketplace-dir to find marketplace.json.
-    rc, out, err = _run_program(prog, ["--marketplace-dir", str(plugin_or_repo)])
-    summary = (out.strip().splitlines() or [err.strip()] or [""])[-1][:240]
-    return GateResult("marketplace_version_sync_check", rc, summary or "(no output)")
 
 
 # --------------------------------------------------------------------------
@@ -1885,7 +1878,6 @@ def review(base: str, head: str, *,
     vb = version_bump_gate(cur, prev, market, version_by_gatekeeper, files)
     gates.append(vb)
 
-    gates.append(marketplace_sync_gate(plugin_root))
     gates.append(chip_agnostic_gate(plugin_root))
     gates.append(path_portability_gate(plugin_root))
     gates.append(commit_msg_nda_gate(repo, base, head))

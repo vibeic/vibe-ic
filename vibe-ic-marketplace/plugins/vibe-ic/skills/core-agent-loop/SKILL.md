@@ -726,7 +726,6 @@ programmable; only Step 2 fix-authoring is genuine LLM judgment):
   (`gh issue close` / `gh issue reopen` are NOT flagged)
 - Chip-AGNOSTIC source scan (prohibition 5): `programs/source_chip_agnostic_check.py`
 - Terminology guard (prohibition 6): `programs/field_agent_terminology_scan.py`
-- Version equality: `programs/marketplace_version_sync_check.py`
 - Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
 - Authoritative machine gate (run locally → MERGE_OK before the direct push;
   `--version-by-gatekeeper` is the legacy flag that DEFERS the version gate for

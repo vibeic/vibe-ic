@@ -545,7 +545,6 @@ done
 # base and no destination, so running it per ref would repeat one answer. It
 # also runs when the push publishes no new commit at all, which is where it sat
 # before and where it still sits.
-run_gate "marketplace <-> plugin version sync" marketplace_version_sync_check.py
 
 if [ "$FAILED" -ne 0 ]; then
   echo "pre-push: BLOCKED — see the gate(s) named above." >&2
