@@ -205,6 +205,8 @@ def simulation(project, directory, tool, commands):
 
 
 def formal(project, directory, tool, commands):
+    from formal_property_run import _ensure_expert_observers_bound, _model_texts
+
     configured = tool.get("properties", [])
     paths = [Path(p) if Path(p).is_absolute() else project / p for p in configured]
     if not paths:
@@ -228,6 +230,8 @@ def formal(project, directory, tool, commands):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
     statuses, covers, reports, required, observed, native_steps = [], [], [], [], [], []
     for index, source in enumerate(paths):
+        _ensure_expert_observers_bound(source, source.parent,
+                                      harness_text=_model_texts(source, source.parent, None))
         listing = commands.run(["sby", "--dumptasks", source], cwd=source.parent)
         if listing is None:
             return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
