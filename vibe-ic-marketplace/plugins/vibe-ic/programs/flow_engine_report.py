@@ -71,16 +71,12 @@ def render(project: Path, output: Path, stage: str, head: str,
              f"Project `{project}`. `{report['fail']}` failed rows and `{report['not_measured']}` unmeasured rows.", "",
              f"FIX-PUSHED head={head} branch=flow-engine NEW_FAILED={json.dumps(new_failed)}", "",
              f"Tool time {duration(report['tool_seconds'])}. Program time {duration(report['program_seconds'])}.",
-             f"Measured AI review time {duration(report['ai_measured_seconds'])}.",
-             f"Common native window including review {duration(report['common_wall_seconds'])}.", "",
-             "The timing reference is native synthesis configuration publication through the last native or concurrent review completion.",
-             "This span includes continuation after runner repairs. It is one run, not a speedup claim.", "",
+             f"Measured AI review time {duration(report['ai_seconds'])}.",
+             f"Total row wall time {duration(report['wall_seconds'])}.", "",
              "Slowest tool steps: " + ", ".join(report["slowest_steps"]) + ".", "",
-             "Non-LibreLane steps are timed separately in STEPS.tsv. Missing AI durations are NOT_MEASURED.", "",
+             "Each row is timed in STEPS.tsv. Missing AI durations are NOT_MEASURED.", "",
              "Unmeasured selected obligations are listed in SELECTED_GAPS.tsv. They are measurement gaps, not requests for new limits.", "",
              "The tool chain did not wait for AI review. Native failures and unmeasured obligations remain open.", ""]
-    if report["ai_unmeasured_steps"]:
-        lines += ["AI duration remains unmeasured for " + ", ".join(report["ai_unmeasured_steps"]) + ".", ""]
     (output / "RESULT.md").write_text("\n".join(lines))
     integration_guide(project, report)
     return report

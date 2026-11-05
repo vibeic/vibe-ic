@@ -525,7 +525,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_route_check` | any | — | D42 Default routed-candidate checks on the adopted D41 database. |
 | `flow109_scan_physical` | any | — | D36 BLOCKING native leaf for the existing Phase-3 physical owner. |
 | `flow109_system_security` | any | — | D16/D17/D73 readers for existing full-stack and formal producers. |
-| `flow109_technology_qualification` | any | — | D03 native technology selection. BLOCKING on native config/pin refusal. |
+| `flow109_technology_qualification` | any | — | Resolve the documented technology with LibreLane; revisions are observations. |
 | `flow_activity` | any | — | Run functional activity and native vector power on a captured State. |
 | `flow_adapter_jobs` | any | — | One FIFO subprocess lane for independent native adapters. |
 | `flow_artifact_paths` | any | — | flow_artifact_paths |
@@ -545,7 +545,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_engine` | any | — | Run the Router-selected window of the native step table. |
 | `flow_engine_frontend` | any | — | flow_engine_frontend |
 | `flow_engine_report` | any | — | Render measured engine results and an integration guide for exported views. |
-| `flow_engine_timing` | any | — | Reduce recorded native, independent-check and review times. |
+| `flow_engine_timing` | any | — | Plain totals of the recorded row durations. |
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
 | `flow_ic_checks` | any | — | flow_ic_checks |
@@ -2046,7 +2046,7 @@ _(no programs in this group)_
 - `flow109_route_check` — D42 Default routed-candidate checks on the adopted D41 database.
 - `flow109_scan_physical` — D36 BLOCKING native leaf for the existing Phase-3 physical owner.
 - `flow109_system_security` — D16/D17/D73 readers for existing full-stack and formal producers.
-- `flow109_technology_qualification` — D03 native technology selection. BLOCKING on native config/pin refusal.
+- `flow109_technology_qualification` — Resolve the documented technology with LibreLane; revisions are observations.
 - `flow_activity` — Run functional activity and native vector power on a captured State.
 - `flow_adapter_jobs` — One FIFO subprocess lane for independent native adapters.
 - `flow_artifact_paths` — flow_artifact_paths
@@ -2066,7 +2066,7 @@ _(no programs in this group)_
 - `flow_engine` — Run the Router-selected window of the native step table.
 - `flow_engine_frontend` — flow_engine_frontend
 - `flow_engine_report` — Render measured engine results and an integration guide for exported views.
-- `flow_engine_timing` — Reduce recorded native, independent-check and review times.
+- `flow_engine_timing` — Plain totals of the recorded row durations.
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
 - `flow_ic_checks` — flow_ic_checks

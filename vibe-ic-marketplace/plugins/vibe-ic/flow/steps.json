@@ -1526,7 +1526,6 @@
         "adapter": "eqy",
         "program": "flow_native_verification.py",
         "metric": "unproved_equivalence",
-        "timing_group": "other",
         "parallel": true
       },
       "checks": [
@@ -3089,7 +3088,6 @@
         "adapter": "eqy",
         "program": "flow_native_verification.py",
         "metric": "final_lec_unproved",
-        "timing_group": "other",
         "parallel": true
       },
       "checks": [
@@ -3618,8 +3616,7 @@
       "tool": {
         "kind": "adapter",
         "adapter": "functional_activity",
-        "parallel": true,
-        "timing_group": "other"
+        "parallel": true
       },
       "checks": [],
       "legacy_id": {
@@ -4248,8 +4245,7 @@
         "kind": "adapter",
         "adapter": "xor",
         "program": "flow_native_verification.py",
-        "metric": "unexplained_stream_xor",
-        "timing_group": "librelane"
+        "metric": "unexplained_stream_xor"
       },
       "checks": [
         {
@@ -5303,8 +5299,7 @@
           "gds": ".gds",
           "nl": ".v"
         },
-        "metric": "release_required_items",
-        "timing_group": "librelane"
+        "metric": "release_required_items"
       },
       "checks": [
         {

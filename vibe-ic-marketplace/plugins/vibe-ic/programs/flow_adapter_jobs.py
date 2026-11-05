@@ -24,7 +24,6 @@ class _Job:
     directory: Path
     payload: bytes
     config: object
-    queued_at: float
 
 
 class AdapterJobs:
@@ -47,7 +46,7 @@ class AdapterJobs:
                                 "tool": tool, "route": self.route, "state": raw_state,
                                 "config": config}, protocol=pickle.HIGHEST_PROTOCOL)
         captured = pickle.loads(payload)
-        job = _Job(name, captured["directory"], payload, captured["config"], time.perf_counter())
+        job = _Job(name, captured["directory"], payload, captured["config"])
         with self._lock:
             if self._closed:
                 raise RuntimeError("AdapterJobs is closed")
@@ -107,10 +106,8 @@ class AdapterJobs:
         log = job.directory / "adapter-worker.log"
         output = None
         process = None
-        started_at = started_clock = None
-        completed_at = wall_seconds = None
-        queue_seconds = time.perf_counter() - job.queued_at
-        timing_complete = False
+        started_clock = None
+        wall_seconds = 0.0
         try:
             job.directory.mkdir(parents=True, exist_ok=True)
             with log.open("wb") as stream:
@@ -119,8 +116,7 @@ class AdapterJobs:
                 with tempfile.NamedTemporaryFile(prefix=".adapter-result-", suffix=".pickle",
                                                  dir=job.directory, delete=False) as temporary:
                     output = Path(temporary.name)
-                started_at, started_clock = time.time(), time.perf_counter()
-                queue_seconds = started_clock - job.queued_at
+                started_clock = time.perf_counter()
                 process = subprocess.Popen(_worker_command(output), cwd=self.project,
                     stdin=subprocess.PIPE, stdout=stream, stderr=subprocess.STDOUT,
                     start_new_session=True)
@@ -135,7 +131,6 @@ class AdapterJobs:
                     process.wait()
                     with self._lock:
                         self._process = None
-                completed_at = time.time()
                 wall_seconds = time.perf_counter() - started_clock
             if process.returncode:
                 raise RuntimeError("Adapter worker exited before returning a raw result")
@@ -144,7 +139,6 @@ class AdapterJobs:
             if not isinstance(result, dict) or not isinstance(result.get("native"), dict):
                 raise ValueError("Adapter worker did not return a raw native result dictionary")
             native = result["native"]
-            timing_complete = True
         except Exception as exc:
             code = process.returncode if process is not None else None
             native = {"ran": False, "exit_code": code, "metrics": {}, "reports": [str(log)],
@@ -158,13 +152,10 @@ class AdapterJobs:
                     native["detail"] = (native.get("detail", "")
                         + f" Worker temporary output cleanup: {type(exc).__name__}: {exc}")
                     native.setdefault("reports", []).append(str(output))
-        if completed_at is None:
-            completed_at = time.time()
-            wall_seconds = time.perf_counter() - started_clock if started_clock is not None else 0.0
+        if started_clock is not None:
+            wall_seconds = time.perf_counter() - started_clock
         return {"name": job.name, "native": native, "config": job.config,
-                "started_at": started_at, "completed_at": completed_at,
-                "wall_seconds": wall_seconds, "queue_seconds": queue_seconds,
-                "timing_complete": timing_complete}
+                "wall_seconds": wall_seconds}
 
 
 def _worker(output: Path) -> None:

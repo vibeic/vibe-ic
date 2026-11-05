@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from flow_pdn_recovery import Wire, RecoveryPlan, finish_replay, measured_settings, plan_recovery, printed_bound, record_common_completion, _wires
+from flow_pdn_recovery import Wire, RecoveryPlan, finish_replay, measured_settings, plan_recovery, printed_bound, _wires
 
 
 class Tech:
@@ -35,30 +35,8 @@ def test_printed_current_and_area_bounds_follow_actual_decimal_precision():
     assert printed_bound("1.0000e+00", False) == Decimal("0.99995")
 
 
-def test_common_completion_excludes_later_report_and_independent_check():
-    tool = {"name": "floorplan", "timing_group": "librelane", "tool_kind": "librelane",
-            "tool_ran": True, "completed_at": 20}
-    report = {"native_common_started_at": 10, "native_common_completed_at": None,
-              "common_step_names": ["floorplan", "timing_report"], "steps": [tool,
-                  {**tool, "name": "timing_report", "tool_kind": "native_report", "completed_at": 30},
-                  {**tool, "name": "independent_check", "timing_group": "other", "completed_at": 40}]}
-    assert record_common_completion(report)
-    assert report["native_common_completed_at"] == 20
 
 
-@pytest.mark.parametrize("change", ["pending", "unfinished", "unmeasured", "not_run"])
-def test_unfinished_common_execution_has_no_completion_bound(change):
-    tool = {"name": "floorplan", "timing_group": "librelane", "tool_kind": "librelane",
-            "tool_ran": True, "completed_at": 20}
-    report = {"native_common_started_at": 10, "native_common_completed_at": None,
-              "common_step_names": ["floorplan"], "steps": [tool]}
-    if change == "pending":
-        report["common_step_names"].append("placement")
-    else:
-        tool.update({"unfinished": {"completed_at": None}, "unmeasured": {"timing_complete": False},
-                     "not_run": {"tool_ran": False}}[change])
-    assert not record_common_completion(report)
-    assert report["native_common_completed_at"] is None
 
 
 def test_measured_strap_width_and_ring_follow_exact_capacity_without_margin():
@@ -197,62 +175,8 @@ def test_public_entry_performs_one_replay_even_when_second_em_fails(tmp_path, mo
     assert calls[1]["from_name"] == "die_floorplan_and_macros"
 
 
-def test_public_prepass_preserves_historical_native_clock_on_retained_run(tmp_path, monkeypatch):
-    import sys
-    import flow_engine
-    import flow_engine_frontend as frontend
-    import flow_pdn_current
-    reports = []
-    def run(project, **kwargs):
-        if kwargs.get("to_name"):
-            return {"native_common_started_at": 100, "common_wall_seconds": 5}
-        return {"fail": 0}
-    monkeypatch.setattr(flow_pdn_current, "needs_estimate", lambda *args: True)
-    monkeypatch.setattr(frontend, "time", SimpleNamespace(time=lambda: 200, perf_counter=lambda: 2000))
-    monkeypatch.setitem(sys.modules, "flow_engine", SimpleNamespace(run=run, TABLE=flow_engine.TABLE,
-        write_json=lambda path, report: reports.append(dict(report))))
-    args = SimpleNamespace(project=tmp_path, entry_step="requirements_and_delivery_route",
-        exit_step="candidate_electromigration", rtl_input="structured", delivery_target="ip_hardmacro",
-        route="ip", pdk="auto", from_name=None)
-    assert frontend.run_public(args) == 0
-    assert reports[-1]["common_wall_seconds"] == 100
-    assert reports[-1]["native_common_started_at"] == 100
 
 
-@pytest.mark.parametrize("native_epoch", [False, True])
-def test_actual_retained_engine_cannot_erase_original_public_clock(tmp_path, monkeypatch, native_epoch):
-    import flow_engine
-    import flow_engine_frontend as frontend
-    from test_flow_engine import command_row
-    names = ["pre_layout_timing", "die_floorplan_and_macros", "candidate_electromigration"]
-    rows = [command_row(name) for name in names]
-    for row in rows:
-        row["tool"]["timing_group"] = "librelane"
-    table = tmp_path / "steps.json"
-    table.write_text(json.dumps({"steps": rows}))
-    monkeypatch.setattr(flow_engine, "TABLE", table)
-    route = {"entry_step": names[0], "verify_through": names[-1],
-             "delivery_target": "ip_hardmacro", "input_contract": "structured"}
-    flow_engine.run(tmp_path, route=route)
-    first = tmp_path / "steps" / names[0] / "result.json"
-    saved = json.loads(first.read_text())
-    saved.update(started_at=100, completed_at=101)
-    if native_epoch:
-        saved["native_common_started_at"] = 100
-    first.write_text(json.dumps(saved))
-    args = SimpleNamespace(project=tmp_path, entry_step=names[0], exit_step=names[-1],
-        rtl_input="structured", delivery_target="ip_hardmacro", route="ip", pdk="auto", from_name=None)
-    assert frontend.run_public(args) == 0
-    retained = json.loads(first.read_text())
-    assert retained["retained"]
-    assert "native_common_started_at" not in retained
-    report = json.loads((tmp_path / "reports/flow_engine.json").read_text())
-    assert report["native_common_started_at"] == 100
-    completed = max(row["completed_at"] for row in report["steps"])
-    for _ in range(2):
-        report = flow_engine.refresh_report(tmp_path)
-        assert report["common_native_wall_seconds"] == pytest.approx(completed - 100, rel=0, abs=1e-6)
-        assert report["common_wall_seconds"] == pytest.approx(completed - 100, rel=0, abs=1e-6)
 
 
 def test_actual_floorplan_resume_keeps_failed_attempt_execution_times(tmp_path, monkeypatch):
@@ -280,12 +204,6 @@ def test_actual_floorplan_resume_keeps_failed_attempt_execution_times(tmp_path, 
     assert report["selected_names"] == names
     assert report["pdn_recovery"]["physical_replays"] == 1
     assert next(row["tool_seconds"] for row in report["steps"] if row["name"] == names[1]) > old_floorplan
-    started = min(row["started_at"] for row in first["steps"])
-    completed = max(row["completed_at"] for row in report["steps"])
-    for _ in range(2):
-        report = flow_engine.refresh_report(tmp_path)
-        assert report["native_common_started_at"] == started
-        assert report["common_native_wall_seconds"] == pytest.approx(completed - started, rel=0, abs=1e-6)
 
 
 def test_replayed_metrics_replace_old_candidate_and_spent_times_remain(tmp_path):
@@ -304,8 +222,6 @@ def test_replayed_metrics_replace_old_candidate_and_spent_times_remain(tmp_path)
     assert result["steps"][0]["native_metrics"] == {"measured": 2}
     assert result["tool_seconds"] == 11
     assert result["program_seconds"] >= 5
-    assert result["common_wall_seconds"] == 15
-    assert result["started_at"] == 8
 
 
 def test_native_special_wire_roles_use_actual_shape_types(tmp_path):

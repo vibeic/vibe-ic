@@ -78,7 +78,6 @@ def test_actual_background_tools_leave_physical_export_free(tmp_path, worker, na
                             command('export', 'export.done')])
     assert report['pass'] == 3
     proof = report['steps'][0]
-    assert proof['timing_group'] == 'other'
     assert (tmp_path / 'export.done').exists()
 
 
@@ -97,7 +96,6 @@ def test_blocked_check_does_not_delay_physical_export_and_aggregate_waits(
     assert actual['check']['status'] == check_status
     assert actual['physical']['status'] == actual['export']['status'] == 'PASS'
     assert actual['summary']['status'] == aggregate_status
-    assert actual['export']['completed_at'] <= actual['check']['completed_at'] + 0.2
     assert report['pending_steps'] == []
     assert report['background_pending'] == []
 

@@ -116,18 +116,12 @@ while not (project / 'gls.done').exists():
         assert lane.collect() == []
         assert Path.cwd() == original_cwd
         for packet in packets:
-            assert set(packet) == {"name", "native", "config", "started_at", "completed_at",
-                                   "wall_seconds", "queue_seconds", "timing_complete"}
-            assert packet["timing_complete"] is True
-            assert packet["completed_at"] >= packet["started_at"]
             assert packet["wall_seconds"] > 0
-            assert packet["queue_seconds"] >= 0
             assert packet["native"]["reports"] == [str(project)]
             assert packet["native"]["cgroup"] == Path("/proc/self/cgroup").read_text()
             log = (project / packet["name"] / "adapter-worker.log").read_text()
             assert "worker stdout " + packet["name"] in log
             assert "worker stderr " + packet["name"] in log
-        assert packets[1]["started_at"] >= packets[0]["completed_at"]
     finally:
         lane.close(cancel=True)
 
@@ -177,7 +171,6 @@ def test_submit_captures_state_tool_route_and_precise_config_before_mutation(
         assert native["metrics"]["precise"] == Decimal("0.12345678901234567890123456789")
         assert native["metrics"]["infinite"] == Decimal("Infinity")
         assert native["metrics"]["floating"] == float("inf")
-        assert packet["timing_complete"] is True
     finally:
         lane.close(cancel=True)
 
@@ -199,7 +192,6 @@ def test_cleanup_error_preserves_native_failure_and_queue_progress(tmp_path, con
         packets = list(lane.drain())
         assert [packet["name"] for packet in packets] == ["first", "later"]
         assert packets[0]["native"]["exit_code"] == 1
-        assert packets[0]["timing_complete"] is True
         assert "controlled output cleanup failure" in packets[0]["native"]["detail"]
         assert packets[1]["native"]["exit_code"] == 0
         assert lane.pending == []
@@ -219,7 +211,6 @@ def test_transport_failure_is_explicit_and_next_job_still_runs(
         assert failure["native"]["ran"] is False
         assert failure["native"]["exit_code"] == exit_code
         assert str(exit_code) in failure["native"]["detail"]
-        assert failure["timing_complete"] is False
         assert failure["wall_seconds"] > 0
         assert "tool_seconds" not in failure["native"]
         assert failure["config"] == {"exact": Decimal("0.1000000000000000001")}
@@ -261,7 +252,6 @@ def test_spawn_failure_retains_exact_error_and_empty_log(tmp_path, monkeypatch):
     try:
         lane.submit("absent", tmp_path / "absent", {})
         packet, = list(lane.drain())
-        assert packet["timing_complete"] is False
         assert packet["native"]["ran"] is False
         assert packet["native"]["exit_code"] is None
         assert "FileNotFoundError" in packet["native"]["detail"]
@@ -285,7 +275,6 @@ def test_cancel_kills_only_own_process_group_and_cancels_queued_work(
         packets = lane.collect()
         assert [packet["name"] for packet in packets] == ["running", "queued"]
         assert all(packet["native"]["ran"] is False for packet in packets)
-        assert all(packet["timing_complete"] is False for packet in packets)
         assert packets[0]["native"]["exit_code"] == -9
         assert packets[1]["native"]["exit_code"] is None
         assert not (tmp_path / "queued.running").exists()
@@ -315,7 +304,6 @@ runpy.run_path(sys.argv[0], run_name='__main__')
     try:
         lane.submit("missing-input", tmp_path / "missing-input", {"adapter": "gls"})
         packet, = list(lane.drain())
-        assert packet["timing_complete"] is True, packet
         assert packet["native"]["ran"] is False
         assert packet["native"]["exit_code"] is None
         assert packet["native"]["detail"] == (
