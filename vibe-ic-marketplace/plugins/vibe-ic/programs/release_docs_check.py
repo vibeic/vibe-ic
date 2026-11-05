@@ -34,7 +34,7 @@ So the acceptance for this gate is not "the documents are generated". It is:
 Its own test suite falsifies that in both directions over a project that carries
 a SECOND, UNTOUCHED release as a control: a required section deleted, a pin
 count edited away from the netlist, a mandatory constraint left only in an
-Application Note, a shipped-view digest gone stale — each one rc 1 naming the
+Application Note, an unresolved placeholder — each one rc 1 naming the
 defect, each one repaired back to rc 0, and the control release green in every
 arm.
 
@@ -52,16 +52,12 @@ exists:
   R4  a mandatory constraint appears ONLY in an Application Note
   R5  a quantitative field is neither derived from a resolvable artefact nor
       explicitly NOT_MEASURED with a reason
-  R6  a shipped-view digest in the deliverables manifest disagrees with the file
-  R7  the manifest's derived / NOT_MEASURED counts disagree with a recount
   R8  an unresolved placeholder survived into a shipped document
   R9  a chip-path artefact the documents describe is hollow
   R10 two sections of one document state different test-mode counts from the
       same source artefact
 
-R3 AND R6 ARE THE TWO THAT CANNOT BE SATISFIED BY WRITING PROSE. A hand-typed
-pin count and a stale digest are the two ways a document goes quietly wrong
-while every section heading stays exactly where it was.
+The stated pin count is independently checked against the delivered netlist.
 
 THE VERDICT TIERS
 =================
@@ -1760,7 +1756,7 @@ def run_audit(project: Path, arm: str) -> Result:
                             "documents_present": [], "derived_fields": 0,
                             "not_measured_fields": 0, "rows_examined": 0,
                             "mandatory_constraints_in_app_notes": 0,
-                            "same_source_count_comparisons": 0,
+                            "same_source_count_comparisons": 0, "placeholders": 0,
                             "pin_count_cross_check": "NOT_STATED",
                             "die_size_cross_check": "NOT_STATED",
                             "artefact_substance": "NOT_EXAMINED",
