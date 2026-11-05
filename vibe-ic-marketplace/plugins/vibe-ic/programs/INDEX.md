@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1478
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1478)
+- **Total programs (excluding helpers / shims):** 1479
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1479)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1469 |
+| `any` | 1470 |
 
 ## Alphabetical listing
 
@@ -561,6 +561,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_pdn_current` | any | — | flow_pdn_current |
 | `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
 | `flow_power` | any | — | Call the existing power-intent tools without initializing the physical chain. |
+| `flow_security` | any | — | Run supplied security property decks through the existing native formal adapter. |
 | `flow_spare_cells` | any | — | flow_spare_cells |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
 | `flow_stage_membership_single_declaration_check` | any | — | stage membership is declared once. |
@@ -1550,7 +1551,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1469 programs)
+### `any` (1470 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2083,6 +2084,7 @@ _(no programs in this group)_
 - `flow_pdn_current` — flow_pdn_current
 - `flow_phase_attribution` — WHO did each of the four phases, and HOW.
 - `flow_power` — Call the existing power-intent tools without initializing the physical chain.
+- `flow_security` — Run supplied security property decks through the existing native formal adapter.
 - `flow_spare_cells` — flow_spare_cells
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
 - `flow_stage_membership_single_declaration_check` — stage membership is declared once.
