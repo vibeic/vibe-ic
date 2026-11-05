@@ -1181,8 +1181,8 @@ def _tool_in_container(container: str, tool: str) -> bool:
 def _local_cocotb_toolchain_present() -> bool:
     """True iff THIS process's PATH/python can run a cocotb+icarus Makefile."""
     import shutil as _shutil
-    if not (_shutil.which("iverilog") and _shutil.which("vvp")
-            and _shutil.which("make")):
+    tools = ("verilator", "make") if os.environ.get("SIM") == "verilator" else ("iverilog", "vvp", "make")
+    if not all(_shutil.which(tool) for tool in tools):
         return False
     try:
         cp = subprocess.run([sys.executable, "-c", "import cocotb"],
@@ -1226,7 +1226,7 @@ def _professional_tb_exec_site(container: str) -> Optional[str]:
     # container route at all"; consulting it here keeps the site honest
     # without changing what either branch does when there is one.
     if (container and not _local_exec_mode()
-            and _tool_in_container(container, "iverilog")):
+            and _tool_in_container(container, "verilator" if os.environ.get("SIM") == "verilator" else "iverilog")):
         return "container"
     if _local_cocotb_toolchain_present():
         return "host"
@@ -10805,8 +10805,9 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                             "program_first": "professional_tb_gen"},
                     reason_class=_V.ReasonClass.PARTIAL_POPULATION)
             consumer_out_dir = _to_container_path(str(out_dir), container)
+        simulator = os.environ.get("SIM", "icarus")
         cmd = (f"cd {_shlex.quote(consumer_out_dir)} && "
-               "make -B SIM=icarus")
+               f"make -B SIM={_shlex.quote(simulator)}")
         if _exec_site == "container":
             rc, so, se = _docker_exec(container, cmd, timeout=1200,
                                       marker=consumer_out_dir,
@@ -10835,7 +10836,7 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
         if gen.get('random_goal_plan') and xml_summary is not None:
             _ptb.finalize_random_pair_execution(
                 out_dir, gen['random_goal_plan'],
-                argv=['make', '-B', 'SIM=icarus'], returncode=rc,
+                argv=['make', '-B', f'SIM={simulator}'], returncode=rc,
                 image=_pin.configured_reference())
 
         if xml_summary is None:

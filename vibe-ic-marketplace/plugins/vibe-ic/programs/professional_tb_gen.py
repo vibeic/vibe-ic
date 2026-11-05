@@ -1148,10 +1148,12 @@ def reference_model_identity(out: Path) -> Optional[str]:
 def emit_makefile(shape: dict, rtl_files: List[str]) -> str:
     top = shape["top"]
     verilog = " \\\n\t".join(rtl_files) if rtl_files else f"$(PWD)/{top}.v"
+    includes = " ".join(sorted({str(Path(path).parent) for path in rtl_files}))
     return f'''# Auto-generated cocotb Makefile (professional_tb_gen)
 SIM ?= icarus
 TOPLEVEL_LANG ?= verilog
 VERILOG_SOURCES = {verilog}
+VERILOG_INCLUDE_DIRS = {includes}
 TOPLEVEL = {top}
 MODULE = tb_{top}
 export PYTHONPATH := $(PWD):$(PYTHONPATH)
