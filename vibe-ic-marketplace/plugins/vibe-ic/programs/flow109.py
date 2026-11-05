@@ -728,7 +728,9 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     native_proof = None
     named = ('input/flow109/D25.json', 'input/flow109/D25_source_authority.json',
              'reports/lec_eqy_execution.json')
-    generic = not intent['requires_scan'] and (project / 'reports/lec_eqy.json').is_file()
+    generic = (all(context['features'].get(key) is False
+                   for key in ('requires_dft', 'requires_scan'))
+               and (project / 'reports/lec_eqy.json').is_file())
     if generic or any((project / name).exists() or (project / name).is_symlink() for name in named):
         # The original native consumer binds its independent execution adoption,
         # full partition census, mode, models and launch. Do not manufacture a
