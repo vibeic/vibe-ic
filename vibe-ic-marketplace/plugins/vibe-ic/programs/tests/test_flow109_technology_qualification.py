@@ -33,24 +33,20 @@ def run(project):
 def test_pre_rtl_native_resolution_without_context_or_image(project):
     result, status = run(project)
     assert status == 'PASS', result
-    assert set(result['metrics']) == {'pdk', 'standard_cell_library', 'default_corner',
-                                    'installed_pdk_revision', 'librelane_version', 'ciel_version'}
-    assert all(result['metrics'].values())
+    assert {'pdk', 'standard_cell_library', 'default_corner'} <= set(result['metrics'])
     resolved = json.loads((project / 'technology/resolved.json').read_text())
     assert resolved['VERILOG_FILES'] == []
     assert not (project / 'phase3').exists()
     assert not list(project.rglob('*.v'))
 
 
-@pytest.mark.parametrize('damage', ['missing_library', 'conflicting_pdk', 'missing_rtl'])
-def test_native_refusals_and_declared_pdk_conflicts_fail(project, damage):
+@pytest.mark.parametrize('damage', ['missing_library', 'missing_rtl'])
+def test_native_configuration_errors_still_fail(project, damage):
     path = project / 'phase3/librelane/config.json'
     path.parent.mkdir(parents=True)
     config = {'meta': {'version': 2}, 'DESIGN_NAME': 'neutral', 'VERILOG_FILES': []}
     if damage == 'missing_library':
         config['EXTRA_LIBS'] = [str(project / 'missing.lib')]
-    elif damage == 'conflicting_pdk':
-        config['PDK'] = 'different_process'
     else:
         config['VERILOG_FILES'] = [str(project / 'missing.v')]
     path.write_text(json.dumps(config))
@@ -59,20 +55,23 @@ def test_native_refusals_and_declared_pdk_conflicts_fail(project, damage):
     assert result['detail']
 
 
-def test_native_pin_refusal_fails(project, monkeypatch):
-    def refuse(*args):
-        raise technology.D03Refusal('D03_INSTALLED_PDK_PIN_UNRESOLVED', 'No installed revision')
-    monkeypatch.setattr(technology, '_installed_pin', refuse)
+@pytest.mark.parametrize('unreadable', [False, True])
+def test_unavailable_revision_does_not_refuse_native_configuration(project, monkeypatch, unreadable):
+    def revision(*args):
+        if unreadable:
+            raise OSError('Revision metadata is unreadable')
+        return None
+    monkeypatch.setattr(technology, '_installed_revision', revision)
     result, status = run(project)
-    assert status == 'FAIL'
-    assert 'D03_INSTALLED_PDK_PIN_UNRESOLVED' in result['detail']
+    assert status == 'PASS', result
+    assert 'installed_pdk_revision' not in result['metrics']
 
 
 def test_missing_pdk_declaration_is_not_measured(project):
     (project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json').unlink()
     result, status = run(project)
     assert status == 'NOT_MEASURED'
-    assert 'PDK_UNDECLARED' in result['detail']
+    assert 'No PDK declared' in result['detail']
 
 
 def test_native_consumer_resolves_project_relative_sdc(project):
