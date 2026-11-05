@@ -4365,6 +4365,34 @@
     "clock_planning": {
       "kind": "native_report",
       "from": "clock_tree_synthesis"
+    },
+    "dft_architecture_and_insertion": {
+      "kind": "librelane",
+      "imports": [
+        "flow_dft_steps"
+      ],
+      "steps": [
+        "VibeIC.ScanInsertion"
+      ]
+    },
+    "post_dft_optimization": {
+      "kind": "librelane",
+      "imports": [
+        "flow_dft_steps"
+      ],
+      "steps": [
+        "Yosys.Resynthesis",
+        "VibeIC.ScanPreservation"
+      ]
+    },
+    "physical_scan_stitching": {
+      "kind": "librelane",
+      "imports": [
+        "flow_dft_steps"
+      ],
+      "steps": [
+        "VibeIC.PhysicalScan"
+      ]
     }
   },
   "report_check_readers": {
