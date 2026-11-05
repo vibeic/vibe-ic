@@ -2295,7 +2295,7 @@
       "when": "digital_physical",
       "tool": {
         "kind": "native_report",
-        "from": "pre_layout_timing"
+        "from": "clock_tree_synthesis"
       },
       "checks": [],
       "legacy_id": {
