@@ -3982,5 +3982,10 @@
       ],
       "corners": "all"
     }
+  },
+  "report_check_readers": {
+    "candidate_power_analysis": [
+      "flow_config.declared_power_checks"
+    ]
   }
 }
