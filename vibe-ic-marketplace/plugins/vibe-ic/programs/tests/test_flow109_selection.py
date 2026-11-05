@@ -1969,6 +1969,45 @@ def test_public_d26_owner_finalizes_selected_attempt(
                      else ["producer", "postcheck"])
 
 
+@pytest.mark.parametrize('producer,postcheck,expected,rc', [
+    ('PASS', 'PASS', 'PASS', 0), ('FAIL', 'PASS', 'FAIL', 1),
+    ('PASS', 'FAIL', 'FAIL', 1), ('NOT_MEASURED', 'PASS', 'NOT_MEASURED', 2)])
+def test_public_d26_functional_timing_preserves_native_outcome_without_scan_envelope(
+        tmp_path, monkeypatch, producer, postcheck, expected, rc):
+    import _delivery_route
+    import vibe_ic_one_shot_runner as runner
+    assert _delivery_route.admit(tmp_path, 'ic') is None
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps({'features': profile()}))
+    source = tmp_path / 'input/feature-decisions.json'
+    source.parent.mkdir(exist_ok=True)
+    source.write_text(json.dumps({'dft': {'requires_scan': False,
+        'reason': 'This functional-only design has no scan delivery requirement.'}}))
+    monkeypatch.setattr(runner, '_activate_runtime_program_tree', lambda *_: None)
+    monkeypatch.setattr(runner, '_capture_container_image', lambda *_a, **_k: {'verdict': 'PASS'})
+    timing = {'verdict': producer, 'detail': 'native timing result'}
+    if producer == 'FAIL':
+        envelope = tmp_path / 'legacy_scan_mode.json'
+        envelope.write_text(json.dumps({'aggregate_status': 'FAIL',
+            'functional_baseline': {'status': 'FAIL'}, 'post_scan_arms': {},
+            'scan': {'applicability': 'UNKNOWN'}}))
+        timing['timing_modes_receipt'] = {'path': envelope.name,
+            'sha256': hashlib.sha256(envelope.read_bytes()).hexdigest()}
+    monkeypatch.setattr(runner, '_complete_step10_prelayout', lambda *_a, **_k: {
+        **timing})
+    monkeypatch.setattr(runner, '_complete_step8_postcheck', lambda *_a, **_k: {
+        'verdict': postcheck, 'detail': 'native SDC semantic result'})
+    monkeypatch.setattr(sys, 'argv', [str(Path(runner.__file__)), str(tmp_path),
+        '--flow', '109', '--flow109-manifest', str(manifest), '--route', 'ic',
+        '--entry-step', 'D26', '--exit-step', 'D26', '--no-dashboard'])
+    assert runner._main() == rc
+    result = json.loads((tmp_path / 'reports/flow109/default_rows/D26.json').read_text())
+    assert result['default_row_status'] == expected
+    assert result['completed'] is (expected == 'PASS')
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+    assert not (tmp_path / 'reports/flow109/d26_scan_mode.json').exists()
+
+
 def test_public_d26_missing_d01_authority_stops_before_prelayout(
         tmp_path, monkeypatch, capsys):
     """The fixture repair must not bypass the real D01 authority reader."""
