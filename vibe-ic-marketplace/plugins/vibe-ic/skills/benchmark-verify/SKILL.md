@@ -150,7 +150,7 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
 
 ## Procedure (run for each benchmark IC)
 1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
-2. **Pillar 2:** dispatch comparisons only for the stable IDs selected by the
+2. **Pillar 2:** dispatch comparisons only for the step names selected by the
    exact flow plan/request, keeping tool runs bounded. Write
    `cross_check/steps/<step-name>.md` with the current registry position as
    display metadata. Run REAL tools in `vibeic-eda`; close gaps.
@@ -168,19 +168,19 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
    ```
    It emits `<project>/BENCHMARK_VERIFICATION_REPORT.md` with the 6-pillar gate summary +
    the complete selected-applicable flow row comparison table. The table must
-   identify every row by stable ID and current position and must not treat position
+   identify every row by step name and current position and must not treat position
    as execution authority. The gate remains non-PASS until every selected applicable
    row is represented and every pillar passes.
 8. **Close the loop** on any failing/pending gate, then re-aggregate. The benchmark IC is
    **DONE only when the report's OVERALL is PRODUCTION-READY** (functional 100% · every
-   selected applicable flow stable ID PASS · code line >= 90% · FPGA PASS · analog
+   selected applicable flow step name PASS · code line >= 90% · FPGA PASS · analog
    converged-or-N/A · Design-for-ECO ready-or-N/A) —
    with honest, evidence-backed results and source provenance tagged.
 
 ## Acceptance
 A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.md` shows:
 - Functional Coverage **100%**, and
-- Every selected applicable flow row = PASS, identified by its stable ID and
+- Every selected applicable flow row = PASS, identified by its step name and
   current position (no GAP/PENDING/FAIL/unexplained NO-TOOL); unselected or
   inapplicable rows are disclosed and never counted as PASS, and
 - Code line coverage **>= 90%**, and
@@ -206,27 +206,8 @@ limits above unchanged.
 ## Worked example
 `benchmark_clean/spm/` is a report-shape example only: retain its RTL provenance,
 functional equivalence evidence, and signed-off DRC/LVS/STA evidence where their
-hashes remain current. For Pillar 2, derive the exact selected stable IDs from
+hashes remain current. For Pillar 2, derive the exact selected step names from
 the current flow plan/request, record each current registry position for
 display, and write one comparison per selected applicable row under
-`benchmark_clean/spm/cross_check/flow109/`. Historical fixed-count tables are
+`benchmark_clean/spm/cross_check/steps/`. Historical fixed-count tables are
 not current acceptance authority.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/benchmark-verify/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

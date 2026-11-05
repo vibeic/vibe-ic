@@ -193,65 +193,24 @@ Save run documents, generated samples, tool reports, raw transcripts and
 separate from design-specific results. Follow the owner's branch and landing
 instructions for the current task.
 
-## Capture Enhancement → version-less PR (how you change the plugin)
+## Capture and verify a general improvement
 
-> **Contribution-layer note.** The version-less PR is your **Layer-1** path — the
-> *report-with-fix* half of Vibe-IC's public contribution model (a **backlog** is
-> the report-only half). You are NOT the maintainer, so you never direct-push to
-> `main`: the **repo-gatekeeper** (whose OWN in-house fixes do land by Layer-2
-> direct push) reviews and lands your PR into the next version. Keep results
-> (the `benchmark-data` repo) and the plugin/MCP fix in SEPARATE commits — and now
-> in separate REPOSITORIES, so NO-MIX is enforced by where you are standing rather
-> than by remembering.
+When a native tool or official scorer exposes a real plugin or MCP defect,
+reproduce it using the visible input and its original requirement. Follow
+`benchmark-enhancement-capture` to put a general correction in the responsible
+program, local tool fork, or IC Expert skill. Keep product fixes separate from
+benchmark results and run evidence outside the plugin repository.
 
-When a run surfaces a real, **VERIFIED** plugin / MCP gap (a runner waiver that
-should be a deterministic program, an ingester miss, a missing gate, an MCP tool
-bug):
+Run the actual affected behavior and relevant existing tests. Preserve Program
+First, independent blind AI review and backup, and official scoring. Authors
+and reviewers never inspect hidden oracle, harness, or golden contents.
 
-1. **VERIFY it is a real bug FIRST** (open-benchmark-methodology §4.1): run the
-   exact official scorer and, for a suspected floor, the golden-self-test. A
-   misdiagnosed non-bug must NEVER become a PR.
-2. **Triage** with **`vibe-ic:benchmark-enhancement-capture`** into Bucket A
-   (deterministic program rule) / B (ic-expert-agent skill section) / D (discard,
-   genuine over-fit only).
-3. **Author the chip-AGNOSTIC fix + a §4.05 no-leak regression** in the plugin/MCP,
-   run the cadence-correct tests, and open a **VERSION-LESS PR** (no version bump;
-   the repo-gatekeeper assigns it at merge). Keep the title + content chip-AGNOSTIC
-   (no vendor / SKU / IC names). This is a SEPARATE commit from any benchmark
-   result (NO-MIX).
-
-### PR publication base (HARD Plugin contract; not a Skill)
-
-Immediately before publishing the PR, freeze the exact pair you validated and
-render the required PR-body block with the Plugin program:
-
-```bash
-python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py \
-  --render-pr-contract --repo . --base origin/main --head HEAD
-```
-
-Put that block in the PR body. Its policy token is
-`gatekeeper-replay-no-author-rebase`. After `gh pr create`, the publication base
-is immutable. Main advancing is expected and is **not** a reason for the author
-to fetch/rebase/force-push. If Gatekeeper finds a genuine defect in the PR, fix
-the defect on the existing branch without merging/rebasing later main, rerun
-the author tests, update only the validated-head SHA, and retain the original
-validated-base SHA. Repo Gatekeeper alone owns integration replay/rebase,
-re-testing on current main, version assignment, and landing.
-
-The live contract check is:
-
-```bash
-gh pr view <PR> --json body,headRefOid,baseRefName,createdAt | \
-  python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gatekeeper_review.py \
-    --check-pr-contract --pr-json - --repo . --base origin/main --head HEAD
-```
-
-Missing/mutable base metadata, a head mismatch, or absorbing a later main commit
-is blocking. `main advanced after publication` is a PASS owned by Gatekeeper.
-4. The **repo-gatekeeper** reviews (machine gates + Step-2.7 §4.05) + lands it. The
-   improvement reaches you on the next plugin version — re-run clean-room to confirm
-   it moved the number against the LANDED version.
+The current task determines authority to create an issue, publish a PR, push,
+or land a change. Follow the owner's current branch and landing instructions;
+this role does not establish a publication hash contract, a new gate, or another
+approval layer. If publication is not authorized, leave the concrete fix and
+its verification results for the owner. After an authorized landing, use the
+owner-requested clean-room rerun to measure the result against that version.
 
 ## 5/5 STABILITY-CONVERGE CAMPAIGN — the per-suite measure→converge harness
 

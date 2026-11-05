@@ -1,20 +1,31 @@
 ---
 name: tapeout-checklist
-description: Run the final pre-tapeout gate — confirm DRC, LVS, STA, IR-drop, EM, antenna, ERC, LEC, DFT coverage, and documentation are all green or explicitly waived before GDS hand-off. Use when the user says "tapeout", "tape-out", "sign-off checklist", "GDS release", "ready for fab".
+description: Review native DRC, LVS, STA, IR-drop, EM, antenna, ERC, LEC, DFT coverage and release evidence against original requirements before an authorized GDS handoff.
 ---
 
 # Tapeout Checklist
 
-> **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt。
-> Mandatory program preflight first; AI is the backstop, not the lead.
+Review every applicable native tool result before a GDS handoff. Read
+`<project>/reports/flow_engine.json` produced by the normal public runner;
+`flow/steps.json` supplies the current row positions and names. The Router's
+selected window runs through the sole engine path. Do not introduce another
+execution or approval layer.
 
-Tape-out is a one-way door. This skill is the last-mile gate: every
-signoff item must be accounted for, with either a green status or a
-documented waiver approved by a named engineer.
+For each selected row, open the native files named in `reports` and inspect
+`tool_ran`, `native_steps`, `native_metrics`, and the value/operator/original
+limit in `metrics`. Confirm the intended design, corner and tool actually ran.
+AI review each native result for physical plausibility, missing coverage and
+engineering risk, retaining the existing per-row review and its measured
+duration. Missing native data or an absent original limit is `NOT_MEASURED`;
+it cannot be turned into PASS by an archive, report format or summary.
+
+Keep spec, PDK and owner limits unchanged. Failed, deferred or unmeasured work
+remains open. Record any owner-accepted engineering exception with its actual
+scope and risk; an exception does not make the unexecuted measurement pass.
 
 ## Portable design-release archive
 
-The existing Step38 producer writes `release_manifest.json`, `SHA256SUMS`
+The existing packaging producer writes `release_manifest.json`, `SHA256SUMS`
 and a relative `archive/` tree. The manifest separates final-GDS design
 material, retained internal STA/SDC/SPEF and logic/electrical closure, external
 PDK/tool dependencies, and the provider upload subset. A file's presence does
@@ -33,76 +44,30 @@ python3 programs/foundry_handoff_package_check.py <new-version-dir> \
 `--out-dir` must not already exist; old versions are retained. A provider die
 assembly is selected only through its producer-owned `--release-record` and
 `die_finishing_gen.read_admitted_release`, never an arbitrary GDS override.
-The normal Step38 YAML command uses `--design-release`; the compatibility
-checker without that flag reports `LEGACY_SKELETON`, not technical release
-completion. A relocated check validates the retained archive; it does not
+Use the packaging checker's existing `--design-release` mode when checking
+technical release completion; its compatibility mode reports `LEGACY_SKELETON`.
+A relocated check validates the retained archive; it does not
 rerun EDA or claim provider submission/order acceptance. Slot, CoB and IDs
 must come from the actual selected provider inputs and current precheck.
 
-## Mandatory Deterministic Preflight
+## Read the actual measurements
 
-Run all four programs and read their JSON outputs BEFORE narrating any
-tape-out readiness verdict:
-
-```bash
-# 1. The flow-compliance gate is the SOLE final criterion (see § next):
-python3 plugins/vibe-ic/programs/flow_compliance_check.py \
-    <project_dir> --strict
-
-# 2. Tapeout checklist generation:
-python3 plugins/vibe-ic/programs/tapeout_checklist_gen.py <project>
-
-# 3. Signoff audit aggregates DRC/LVS/STA verdicts:
-python3 plugins/vibe-ic/programs/signoff_audit.py <project>
-
-# 4. Foundry signoff plan + (if analog) mixed-signal signoff:
-python3 plugins/vibe-ic/programs/foundry_signoff_plan_check.py <project>
-python3 plugins/vibe-ic/programs/mixed_signal_signoff_check.py <project>
-```
-
-Plus, for chipignite-style submissions, the signoff-waiver pair from
-the v0.1.49 doctrine sweep:
+Use the selected native tool results for SPEF parasitic extraction, post-route
+MCMM STA, IR/EM/antenna/SI, post-layout gate simulation, SPICE correlation,
+ECO, metal fill, FPGA final recompile, and analog work when applicable. A
+smaller subset of successful reports cannot establish completion of those
+obligations. For static IR-drop, keep the actual declared budget; the existing
+budget reader can inspect the native report without moving that budget:
 
 ```bash
-# 5. Waiver schema + content gate (HONESTY: refuses 'ai'/'agent' approver):
-python3 plugins/vibe-ic/programs/signoff_waiver_emit.py \
-    --validate-only --strict < signoff/waivers/*.json
-
-# 6. Static IR-drop numeric BUDGET gate (max drop < pct*Vdd):
 python3 plugins/vibe-ic/programs/ir_drop_budget_check.py \
     <ir_report_or_dir> --vdd <V> --budget-pct 10
 ```
 
-**Refuse to claim tape-out-ready if any of these returns non-zero or
-FAIL.** Only after ALL pass can the narrative proceed.
-
-## ⛔ PHASE 2+3 SOLE ACCEPTANCE CRITERION (READ FIRST)
-
-This skill produces `tapeout_signoff_check.json`. **That gate alone is NOT sufficient to claim Phase 2+3 complete.**
-
-The **ONLY** valid completion signal for the full design flow is:
-
-```
-python3 vibe-ic/programs/flow_compliance_check.py <project_dir> --strict
-```
-
-returning ONE of three verdict states:
-
-- `Overall: PASS` — every canonical step actually executed. Tape-out ready.
-- `Overall: PASS_WITH_WAIVERS` — structurally complete BUT N step(s) DEFERRED. **NOT tape-out ready in the foundry sense.** Foundry-side sign-off must close every waiver on the commercial PDK + commercial sign-off deck before fab takes the GDS.
-- `Overall: FAIL` — incomplete.
-
-`flow_compliance_check` covers what `tapeout_signoff_check` does NOT: SPEF parasitic extraction, post-route MCMM STA, IR/EM/antenna/SI sign-off, post-layout gate-sim, SPICE correlation, ECO, metal fill, FPGA final recompile, and analog A1-A8. Skipping these and claiming "tapeout signoff PASS" because the 4-item gate is green is a process violation.
-
-**Waiver semantics**: a waiver is `DEFERRED open work` not `PASS`. When summarising a `PASS_WITH_WAIVERS` run to a user, never say "all N steps PASS". Always disambiguate `executed PASS` from `deferred via waiver`.
-
-Before declaring tape-out ready, **always** end with:
-
-```
-python3 vibe-ic/programs/flow_compliance_check.py <project_dir> --strict 2>&1 | tail -10
-```
-
-and paste the output into `FINAL_REPORT.md`. If `PASS_WITH_WAIVERS`, also enumerate every waiver (id, reason, ticket) inline in the report — do not bury them in the JSON file.
+The command's 10 percent budget applies only when it is the actual original
+requirement; it does not replace a stricter spec or PDK limit. Use each run's
+native report paths and disclose every selected `FAIL` or `NOT_MEASURED` item
+in the final report, along with any deferred obligation and its real risk.
 
 ## When to use
 
@@ -110,16 +75,17 @@ and paste the output into `FINAL_REPORT.md`. If `PASS_WITH_WAIVERS`, also enumer
 - After the final ECO
 - As a nightly regression item for any design in the "tapeout window"
 
-## Checklist categories (must all be green or waived)
+## Checklist categories
 
-Every mechanical row below is a **deterministic program** — the integer
-counts, numeric thresholds, corner-slack comparisons and file-presence
-assertions are NOT re-judged in prose. Run the program; read its JSON.
+The native tools and their existing readers supply the integer counts,
+coverage and corner-slack comparisons below. Read the actual report and its
+original requirement, then AI review the engineering meaning. File presence
+is not a substitute for a measurement.
 
 1. **Functional**
    - RTL regression 100% pass + coverage ≥ target (code/functional/assertion)
      — *enforced by* `programs/coverage_metric_check.py` (and the analog/
-     state variants) + `programs/signoff_audit.py`.
+     state variants).
    - Formal properties all proven or bounded — *enforced by* `programs/
      assertion_property_check.py`.
    - LEC RTL↔netlist clean — *enforced by* `programs/lec_equivalence_check.py`.
@@ -144,10 +110,10 @@ assertions are NOT re-judged in prose. Run the program; read its JSON.
    - Density rules clean (min/max metal density) — *enforced by* `programs/
      metal_fill_density_check.py`.
    - ERC clean — *enforced by* `programs/erc_density_check.py`.
-5. **Test** (DFT data missing = FAIL, not SKIP — v0.100 K3) — FOUNDRY / ATE bar
+5. **Test** (missing DFT data = `NOT_MEASURED`, not SKIP; the DFT signoff obligation remains failed) — FOUNDRY / ATE bar
    - Scan ATPG **stuck-at** coverage ≥ **foundry floor (95 %, up to 98 %)**;
      a lenient written target is clamped UP to the floor; **missing DFT
-     report = FAIL** — *enforced by* `programs/dft_atpg_coverage_check.py`
+     report = FAIL** (the measurement remains `NOT_MEASURED`) — *enforced by* `programs/dft_atpg_coverage_check.py`
      (no SKIP path; recomputed, never a trusted self-asserted boolean).
    - **Transition (at-speed / launch-off-capture)** coverage ≥ target, OR a
      DOCUMENTED OSS-engine limitation (Fault is stuck-at-only — never a
@@ -167,8 +133,8 @@ assertions are NOT re-judged in prose. Run the program; read its JSON.
      `programs/tapeout_checklist_gen.py`.
 8. **Release**
    - GDS stream-out (Calibre + KLayout), md5 checksum recorded, fab-specific
-     deliverables bundled — *enforced by* `programs/signoff_audit.py` +
-     `programs/foundry_handoff_package_check.py`.
+     deliverables bundled — inspect the native stream-out and existing
+     `programs/foundry_handoff_package_check.py` results.
    - The md5 above ATTESTS one artefact — what this file was — and that is the
      right instrument for it. It is the WRONG instrument for comparing two
      runs. A GDSII stream stamps its own write time into every BGNLIB and
@@ -182,21 +148,14 @@ assertions are NOT re-judged in prose. Run the program; read its JSON.
 
 ## Workflow
 
-The mechanical green/red verdict for every row above is produced by the
-programs (run them first). The AI's residual job — the part that stays
-**judgment**, not a program — is:
+Read every applicable native result against its unchanged original limit.
+The AI review then addresses the engineering facts those measurements leave
+unresolved:
 
-1. **Waiver risk assessment.** The waiver *schema/honesty* gate (id +
-   reason + ticket present, approver not `ai`/`agent`/`self`) is the
-   program `waiver_legitimacy_check.py` / `signoff_waiver_emit.py`. Whether
-   a waiver's *mitigation is technically credible* and the *residual risk
-   is acceptable for fab* is a substantive engineering judgment that no
-   regex can make — assess it here.
-2. **Route each red item** back to its owning sub-skill (`/sta-review`,
-   `/drc-fix`, `/ir-drop-triage`, `/lvs-triage`, …) and decide ordering.
-3. **Author the management-facing go/no-go narrative** that synthesizes
-   the heterogeneous program JSON into one sign-off recommendation.
-4. Block tape-out if any red without an accepted waiver.
+1. Assess whether any proposed mitigation is technically credible and its residual risk acceptable to the owner. A well-formed exception cannot establish that a failed measurement passed.
+2. Route each failed or unmeasured obligation to its owning skill (`/sta-review`, `/drc-fix`, `/ir-drop-triage`, `/lvs-triage`, …) and resolve the cause in the design, local tool fork or existing producer.
+3. Rerun the actual affected tool and review its new native result. Do not fabricate coverage or move an engineering limit.
+4. Write the engineering recommendation using per-row position/name, native evidence, original limit, AI finding and remaining work. Current owner instructions govern any physical release or external handoff.
 
 ## Output format
 
@@ -227,23 +186,4 @@ whoever points it at a shuttle that is still answering.
 ## Handoff
 
 - Any red item routes back to its owning skill (`/sta-review`, `/drc-fix`, etc.)
-- After full green → GDS release
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/tapeout-checklist/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
+- After applicable native measurements meet their original limits, follow the owner's authorized GDS release workflow.
