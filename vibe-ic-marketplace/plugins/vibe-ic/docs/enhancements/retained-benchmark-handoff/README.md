@@ -6,7 +6,7 @@
 
 The parallel coordinator drains successful in-flight results through the existing checkpoint callback after cancellation and shutdown. Each callback is attempted once; the original interruption remains the exception raised, with a secondary failure retained as its cause.
 
-Ordinary resume may recover a task only from the unique current Phase-2 report owner. It validates the original invocation, issuer and retained producer source, current material, issued route and original native admission interval. A later duplicate refusal stays a separate observation. Changed or missing inputs, reports, hashes, configuration, ambiguous owners and published responses remain blocked. Recovery never materializes a missing Flow109 manifest and never reruns a native producer.
+Ordinary resume may recover a task only from the unique current Phase-2 report owner. It validates the original invocation, issuer and retained producer source, current material, issued route and original native admission interval. A later duplicate refusal stays a separate observation. Changed or missing inputs, reports, hashes, configuration, ambiguous owners and published responses remain blocked. Recovery never materializes a missing flow manifest and never reruns a native producer.
 
 The normal collector and existing task builders determine the resulting handoff. An original authoring waiver remains AI_BACKUP_PENDING; a gated candidate still requires independent AI review and the ordinary acceptance checks. No recovered benchmark PASS is claimed.
 
