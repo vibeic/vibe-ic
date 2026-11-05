@@ -449,3 +449,151 @@ def test_gls_accepts_native_physical_cell_models(tmp_path, connected):
     netlist.write_text(netlist.read_text().replace("endmodule", f"physical_cell fill({connection});\nendmodule"))
     result = gls(project, directory, {}, Commands(directory), state=state, config=config)
     assert result["native_steps"][0]["status"] == "PASS", result
+
+
+def test_gls_uses_the_native_sdc_clock(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("input a", "input clk, input a"))
+    sdc = project / "timing.sdc"
+    sdc.write_text("create_clock -name clock -period 24 [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    bench = project / "phase2/stage1/sim/tb_unit.v"
+    bench.write_text('`timescale 1ns/1ps\nmodule tb_unit;\nreg clk=0,a=0; wire y;\n'
+        'unit dut(.clk(clk),.a(a),.y(y));\nalways #5 clk=~clk;\n'
+        'time first_edge; initial begin @(posedge clk); first_edge=$time; '
+        '@(posedge clk); $display("ORACLE_TB_DONE pass=%0d/1",($time-first_edge)==24); '
+        '$finish; end endmodule\n')
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["metrics"]["gls_failures"] == 0, result
+    assert result["native_steps"][0]["clock"]["clocks"][0]["bench_half_period"] == "12"
+
+
+def timed_arithmetic_fixture(project, *, physical=False, different=False, scenario=False, delay=17):
+    from test_serial_parallel_declared_function_oracle import _declared_scenario_project
+    import arith_oracle_tb_gen as arithmetic
+    import testbench_gen
+
+    cases = _declared_scenario_project(project, mode="wrong_product" if different else "good")
+    docs = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    interface = json.loads(docs.read_text())
+    interface["clocks"][0]["period_ns"] = 24
+    docs.write_text(json.dumps(interface))
+    if scenario:
+        case = cases[1]
+        assert testbench_gen.emit_unit_tbs(project, top="neutral_serial", scaffold=False,
+                                          case_stated=True, case_ids=[case["name"]]) == 1
+        bench = project / "phase2/stage1/sim/tb" / (case["name"] + ".v")
+    else:
+        report, code = arithmetic.generate(project, "digital_arithmetic_primitive")
+        assert code == 0, report
+        bench = project / report["tb"]
+    source = project / "phase2/stage1/rtl/neutral_serial.v"
+    core = source.read_text()
+    native = project / "native"
+    corner = native / "typical"
+    corner.mkdir(parents=True)
+    netlist, model, sdc, sdf = [native / name for name in ("netlist.v", "models.v", "timing.sdc", "typical/timing.sdf")]
+    model.write_text('`timescale 1ns/1ps\n'
+        'module timing_cell(input a,output y); assign y=a; specify (a=>y)=(1,1); endspecify endmodule\n'
+        'module input_cell(inout PAD,output Y); assign Y=PAD; specify (PAD=>Y)=(0,0); endspecify endmodule\n'
+        'module output_cell(input A,inout PAD); assign PAD=A; specify (A=>PAD)=(1,1); endspecify endmodule\n')
+    if physical:
+        top, cell, arc, instance = "neutral_chip", "output_cell", "A PAD", "output_pad"
+        netlist.write_text(core + 'module neutral_chip(inout clk,rst,inout [7:0] x,inout y,p);\n'
+            'wire inner_clk, result; input_cell input_pad(.PAD(clk),.Y(inner_clk));\n'
+            'neutral_serial logical(.clk(inner_clk),.rst(rst),.x(x),.y(y),.p(result));\n'
+            'output_cell output_pad(.A(result),.PAD(p)); endmodule\n')
+        interconnect = '(INTERCONNECT clk input_pad/PAD (0.1:0.1:0.1))\n(INTERCONNECT output_pad/PAD p (0.1:0.1:0.1))'
+    else:
+        top, cell, arc, instance = "neutral_serial", "timing_cell", "a y", "gate"
+        netlist.write_text(core.replace("output reg p", "output wire p")
+            .replace("integer idx=0;", "integer idx=0; reg core_p;\ntiming_cell gate(.a(core_p),.y(p));")
+            .replace("p<=", "core_p<="))
+        interconnect = '(INTERCONNECT gate/y p (0.1:0.1:0.1))'
+    sdc.write_text("create_clock -name clock -period 24 [get_ports clk]\n")
+    sdf.write_text(f'(DELAYFILE (SDFVERSION "3.0") (DESIGN "{top}") (DIVIDER /) (TIMESCALE 1ns)\n'
+        f'(CELL (CELLTYPE "{top}") (INSTANCE) (DELAY (ABSOLUTE\n{interconnect})))\n'
+        f'(CELL (CELLTYPE "{cell}") (INSTANCE {instance}) '
+        f'(DELAY (ABSOLUTE (IOPATH {arc} ({delay}:{delay}:{delay}) ({delay}:{delay}:{delay}))))))\n')
+    state = {"nl": str(netlist), "sdc": str(sdc), "sdf": {"typical": str(sdf)}}
+    (native / "state_out.json").write_text(json.dumps(state))
+    (corner / "max.rpt").write_text('Startpoint: state (rising edge-triggered flip-flop clocked by clock)\n'
+        'Endpoint: p (output port clocked by clock)\nPath Group: clock\nPath Type: max\n'
+        ' 19.000000 data required time\n 17.000000 data arrival time\n 2.000000 slack (MET)\n')
+    config = {"DESIGN_NAME": top, "CELL_VERILOG_MODELS": [str(model)], "VERILOG_FILES": [str(source)]}
+    return state, config, bench
+
+
+@pytest.mark.parametrize("physical", [False, True])
+@pytest.mark.parametrize("scenario", [False, True])
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_regenerates_arithmetic_at_native_output_deadline(tmp_path, physical, scenario, different):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config, bench = timed_arithmetic_fixture(project, physical=physical,
+                                                   scenario=scenario, different=different)
+    original = bench.read_bytes()
+    result = gls(project, directory, {"testbenches": [str(bench)]}, Commands(directory), state=state, config=config)
+    row = result["native_steps"][0]
+    assert row["status"] == ("FAIL" if different else "PASS"), result
+    assert row["observation"]["sample_offset_ns"] == 19
+    assert row["sdf_errors"] == 0, result
+    assert row["sdf_delays_applied"] > 0
+    assert (result["metrics"]["gls_failures"] > 0) == different
+    assert bench.read_bytes() == original
+    if scenario:
+        import arith_oracle_tb_gen as arithmetic
+        original_plan = arithmetic._scenario_header(bench)
+        replay = arithmetic._scenario_header(directory / "corner_1/annotated_tb.v")
+        assert replay["pairs"] == original_plan["pairs"]
+        assert replay["framing"] == original_plan["framing"]
+
+
+@pytest.mark.parametrize("failure", ["late_output", "sdf_error"])
+def test_gls_arithmetic_preserves_native_failures(tmp_path, failure):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config, bench = timed_arithmetic_fixture(project, scenario=True,
+                                                   delay=22 if failure == "late_output" else 17)
+    if failure == "sdf_error":
+        sdf = Path(state["sdf"]["typical"])
+        sdf.write_text(sdf.read_text().replace("IOPATH a y", "IOPATH missing y"))
+    result = gls(project, directory, {"testbenches": [str(bench)]}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == "FAIL", result
+    assert result["metrics"]["gls_failures"] > 0
+    assert (result["native_steps"][0]["sdf_errors"] > 0) == (failure == "sdf_error")
+
+
+def test_late_arithmetic_observers_preserve_every_drive_edge(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    from test_serial_parallel_declared_function_oracle import _declared_scenario_project
+    import arith_oracle_tb_gen as arithmetic
+
+    _declared_scenario_project(tmp_path)
+    spec, why = arithmetic.extract_serial_arith_spec(tmp_path, "digital_arithmetic_primitive")
+    assert spec, why
+    traces = []
+    for sample in (1, 19):
+        bench, executable = tmp_path / f"observe_{sample}.v", tmp_path / f"observe_{sample}.vvp"
+        bench.write_text(arithmetic.emit_serial_oracle_module("tb_stream", spec,
+            clock_period_ns=24, sample_offset_ns=sample)
+            + '\nmodule monitor; always @(negedge tb_stream.clk) #0 '
+            '$strobe("DRIVE %0t %b %b %b",$time,tb_stream.rst,tb_stream.x,tb_stream.y); endmodule\n')
+        built = subprocess.run(["iverilog", "-g2012", "-s", "tb_stream", "-s", "monitor",
+            "-o", str(executable), str(bench), str(tmp_path / "phase2/stage1/rtl/neutral_serial.v")],
+            capture_output=True, text=True)
+        assert built.returncode == 0, built.stderr
+        run = subprocess.run(["vvp", str(executable)], capture_output=True, text=True)
+        assert "ORACLE_TB_DONE pass=28/28" in run.stdout, run.stdout
+        traces.append([line for line in run.stdout.splitlines() if line.startswith("DRIVE ")])
+    assert traces[0] == traces[1]
