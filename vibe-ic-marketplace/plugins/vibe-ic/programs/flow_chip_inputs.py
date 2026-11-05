@@ -49,6 +49,39 @@ def _bits(port: dict) -> list[str]:
     return [f"{port['name']}[{i}]" for i in range(port["msb"], port["lsb"] + step, step)]
 
 
+def netlist_area(config, state, toolbox, directory, on_tool_run=None):
+    """Read OpenROAD's area with the floorplanner's native netlist/library inputs."""
+    from librelane.steps import Step, StepError, StepException
+
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "area.tcl"
+    script.write_text("source $::env(SCRIPTS_DIR)/openroad/common/io.tcl\n"
+        "read_pnr_libs\nread_lefs\nread_current_netlist\nreport_design_area_metrics\n")
+    step = Step.factory.get("OpenROAD.Floorplan")(config, state)
+    step.get_script_path = lambda: str(script)
+    started = time.monotonic()
+    code, ran, status, detail = None, False, "NOT_MEASURED", ""
+    try:
+        step.start(toolbox=toolbox, step_dir=str(directory))
+        area = json.loads((directory / "or_metrics_out.json").read_text()).get("design__instance__area")
+        code, ran, status = 0, True, "PASS" if area is not None else "NOT_MEASURED"
+        return area
+    except (StepException, FileNotFoundError) as exc:
+        code, ran, status, detail = None, False, "NOT_MEASURED", str(exc)
+        raise
+    except StepError as exc:
+        code, ran, status, detail = getattr(getattr(exc, "underlying_error", None), "returncode", 1) or 1, True, "FAIL", str(exc)
+        raise
+    except Exception as exc:
+        detail = str(exc)
+        raise
+    finally:
+        if on_tool_run is not None:
+            on_tool_run({"name": "OpenROAD.ReportDesignArea", "ran": ran, "exit_code": code,
+                "status": status, "tool_seconds": time.monotonic() - started,
+                "detail": detail, "reports": str(directory)})
+
+
 def _native_core(project: Path, core_config: dict, destination: Path, on_tool_run=None):
     from flow_config import native_defaults
     from librelane.common import Toolbox
@@ -65,6 +98,10 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
     toolbox = Toolbox(str(run_root / "tool_tmp"))
     state = State()
     runs = []
+    def observed(run):
+        runs.append({"name": run["name"], "tool_seconds": run["tool_seconds"]})
+        if on_tool_run is not None:
+            on_tool_run(run)
     try:
         for name in ("Yosys.JsonHeader", "Yosys.Synthesis"):
             step = Step.factory.get(name)(owner.config, state)
@@ -90,19 +127,17 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
             finally:
                 os.chdir(cwd)
                 elapsed = time.monotonic() - started
-                runs.append({"name": name, "tool_seconds": elapsed})
-                if on_tool_run is not None:
-                    on_tool_run({"name": name, "ran": ran, "exit_code": code,
-                                 "status": status, "tool_seconds": elapsed,
-                                 "detail": detail, "reports": str(directory)})
+                observed({"name": name, "ran": ran, "exit_code": code,
+                          "status": status, "tool_seconds": elapsed,
+                          "detail": detail, "reports": str(directory)})
+        area = netlist_area(owner.config, state, toolbox, run_root / "openroad_area", observed)
     finally:
         (destination / "sizing.json").write_text(json.dumps({"runs": runs,
             "top": core_config["DESIGN_NAME"], "state_out": str(run_root / "yosys_synthesis/state_out.json"),
             "tool_seconds": sum(run["tool_seconds"] for run in runs)}, indent=2) + "\n")
     header = json.loads(Path(str(state[DesignFormat.JSON_HEADER])).read_text())
-    area = state.metrics.get("design__instance__area")
     if area is None or float(area) <= 0:
-        raise FileNotFoundError("Missing native Yosys mapped design__instance__area")
+        raise FileNotFoundError("Missing native OpenROAD design__instance__area")
     return native, _ports(header, core_config["DESIGN_NAME"]), float(area), runs
 
 
@@ -451,7 +486,7 @@ def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: f
                        "pad_side_widths_um": spans, "manufacturing_grid_um": grid}
 
 
-def sized_floorplan(project: Path, native: dict, settings: dict) -> dict:
+def sized_floorplan(project: Path, native: dict, settings: dict, area: float) -> dict:
     from flow_config import _load
 
     path = project / "work/flow/chip/preparation.json"
@@ -464,7 +499,7 @@ def sized_floorplan(project: Path, native: dict, settings: dict) -> dict:
         native = _slot_geometry(native, slot)
     _, placement, _ = _side_ports(project, prepared["ports"])
     die, core, geometry = _floorplan(native, prepared["pads"], prepared["pad_sides"],
-        _library(native), prepared["geometry"]["mapped_cell_area_um2"], placement, settings)
+        _library(native), area, placement, settings)
     prepared.update(geometry=geometry, die_area_um=die, core_area_um=core)
     path.write_text(json.dumps(prepared, indent=2, default=str) + "\n")
     return {"DIE_AREA": die, "CORE_AREA": core}
