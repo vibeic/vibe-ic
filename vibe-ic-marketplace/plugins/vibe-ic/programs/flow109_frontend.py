@@ -269,6 +269,8 @@ def input_census(project):
 
 
 def _before(project, context, prepared):
+    if context['runtime_tool_uses'] is None:
+        return
     require_launch_admission(project, '9', {'flow109_context': context})
     import flow109
     try:
@@ -473,6 +475,12 @@ def d10_native_failure(result):
 
 
 def prepare(project, context):
+    if context.get('requested_step') == 'D22' and context['runtime_tool_uses'] is None:
+        import p0_tool_frontend_check as frontend
+        import librelane_contract as contract
+        pdk, _ = contract.phase2_pdk(project)
+        return {'manifest': {'top': frontend._top(project), 'pdk': pdk},
+                'sources': {}, 'inputs': {}, 'dft_intent': None}
     require_launch_admission(project, '9', {'flow109_context': context})
     if context.get('requested_step') != 'D22':
         raise AdmissionRefusal('D22_CONTEXT_MISMATCH', 'synthesis component only')
