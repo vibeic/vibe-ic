@@ -27,7 +27,7 @@ def driver(tmp_path):
     helpers.mkdir()
     (helpers / "generate_fill.py").write_text(
         "import gzip, pathlib, sys\n"
-        "assert len(sys.argv) == 2\n"
+        "assert len(sys.argv) == 3 and sys.argv[2] == '-dist'\n"
         "source = pathlib.Path(sys.argv[1])\n"
         "assert source.name == 'unit.gds' and not source.is_absolute()\n"
         "assert source.is_symlink() and source.read_bytes() == b'layout'\n"

@@ -225,7 +225,7 @@ def eqy(project, directory, tool, commands, *, state, config):
             if path.is_file():
                 classes.update(parse_lef_macro_classes(path.read_text()))
     physical = {name for name, kind in classes.items() if name in used
-                and (kind in {"PAD SPACER", "CORE SPACER"} or kind.startswith("ENDCAP "))}
+                and (kind in {"PAD SPACER", "CORE SPACER", "CORE WELLTAP"} or kind.startswith("ENDCAP "))}
     corner = config.get("DEFAULT_CORNER", "")
     liberty, external_liberty, pad_liberty = [], [], []
     for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):

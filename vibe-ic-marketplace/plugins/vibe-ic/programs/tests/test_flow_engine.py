@@ -74,14 +74,44 @@ def test_manufacturability_reads_final_native_result_before_aggregation(
     assert (tmp_path / "calls").read_text() == "1"
 
 
-def test_from_preserves_earlier_folder_and_clears_later_results(tmp_path):
+@pytest.mark.parametrize("bounded", [False, True])
+def test_from_preserves_results_outside_explicit_window(tmp_path, bounded):
     rows = [command_row(name) for name in ("first", "middle", "last")]
     execute(tmp_path, rows)
     prior = (tmp_path / "steps/first/result.json").read_bytes()
-    execute(tmp_path, rows, from_name="middle", to_name="middle")
+    later = tmp_path / "steps/last/result.json"
+    saved = later.read_bytes()
+    state = later.with_name("state_out.json")
+    state.write_text("original native state\n")
+    rows[-1] = command_row("last", value=1)
+    execute(tmp_path, rows, from_name="middle", to_name="middle" if bounded else None)
     assert (tmp_path / "steps/first/result.json").read_bytes() == prior
-    assert not (tmp_path / "steps/last/result.json").exists()
+    if bounded:
+        assert later.read_bytes() == saved
+        assert state.read_text() == "original native state\n"
+    else:
+        assert json.loads(later.read_text())["status"] == "FAIL"
+        assert not state.exists()
     assert json.loads((tmp_path / "steps/middle/result.json").read_text())["status"] == "PASS"
+
+
+def test_bounded_replay_recomputes_later_aggregates_without_rerunning_tools(tmp_path):
+    aggregate = {"name": "summary", "title": "summary", "when": "always", "legacy_id": {},
+                 "tool": {"kind": "aggregate"}, "checks": [
+                     {"metric": "non_passing_steps", "operator": "==", "limit": 0}]}
+    rows = [command_row("first"), command_row("middle", value=1), command_row("physical"),
+            aggregate, {**aggregate, "name": "final_summary", "title": "final_summary"}]
+    execute(tmp_path, rows)
+    physical = tmp_path / "steps/physical/result.json"
+    saved = physical.read_bytes()
+    rows[1] = command_row("middle")
+    report = execute(tmp_path, rows, from_name="middle", to_name="middle")
+    assert physical.read_bytes() == saved
+    assert report["selected"] == report["run"] == report["pass"] == 1
+    for name in ("summary", "final_summary"):
+        result = json.loads((tmp_path / "steps" / name / "result.json").read_text())
+        assert result["status"] == "PASS"
+        assert result["native_metrics"]["non_passing_steps"] == 0
 
 
 def test_added_table_entry_runs_without_runner_change(tmp_path):
@@ -208,6 +238,27 @@ def test_declared_observation_cannot_drop_a_missing_native_number(tmp_path):
     measured = engine.measure(checks, native.metrics, {}, {"always": True}, tmp_path)
     assert [item["status"] for item in measured] == ["PASS", "NOT_MEASURED"]
     assert engine.evaluate(native, measured) == "NOT_MEASURED"
+
+
+@pytest.mark.parametrize("category", ["line", "toggle", "branch"])
+def test_zero_native_coverage_points_have_no_percentage_floor(category):
+    metric = f"coverage_{category}_pct"
+    numbers = {f"coverage_{category}_points": 0}
+    native = engine.ToolResult(True, 0, numbers)
+    checks = [{"metric": metric, "operator": ">=", "limit": 70}]
+    measured = engine.measure(checks, numbers, {}, {"always": True})
+    assert measured[0]["status"] == "NOT_APPLICABLE"
+    assert measured[0]["points"] == 0 and measured[0]["value"] is None
+    assert measured[0]["limit"] == 70 and measured[0]["reason"]
+    assert engine.evaluate(native, measured) == "PASS"
+
+
+@pytest.mark.parametrize("points", [None, False, 1])
+def test_missing_or_nonempty_coverage_population_keeps_missing_percentage_unmeasured(points):
+    numbers = {"coverage_branch_points": points} if points is not None else {}
+    measured = engine.measure([{"metric": "coverage_branch_pct", "operator": ">=", "limit": 70}],
+                              numbers, {}, {"always": True})
+    assert measured[0]["status"] == "NOT_MEASURED"
 
 
 def test_native_decimal_and_infinite_path_group_values(tmp_path):
@@ -355,7 +406,8 @@ def test_from_does_not_restore_an_invalidated_later_state(tmp_path, monkeypatch)
         + rows[0]["tool"]["command"][2])
     execute(tmp_path, rows)
     (tmp_path / "steps/middle/state_out.json").write_text("{}")
-    execute(tmp_path, rows, from_name="first", to_name="first")
+    execute(tmp_path, rows, from_name="first")
+    assert not (tmp_path / "steps/middle/state_out.json").exists()
     execute(tmp_path, rows, from_name="last")
     assert restored == ["first"]
 
@@ -465,8 +517,8 @@ def test_native_seal_skip_is_missing_measurement_and_verifier_failure_still_fail
 
 @pytest.mark.parametrize("target,nature,entry,exit_step,count", [
     ("rtl", "debug", "4", "4", 4),
-    ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 41),
-    ("shippable_gds", "spec_generation", "D1", "37.5ic", 45),
+    ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 43),
+    ("shippable_gds", "spec_generation", "D1", "37.5ic", 47),
 ])
 def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         tmp_path, target, nature, entry, exit_step, count, physical_step_table):
@@ -516,12 +568,20 @@ def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
                                        engine.measure(row["checks"], bad, {}, features)) == "FAIL"
 
 
-@pytest.mark.parametrize("watts,status", [(0.004, "PASS"), (0.005, "FAIL"),
-                                          (0.0416, "FAIL"), (None, "NOT_MEASURED")])
-def test_power_report_compares_declared_tt_limit_instead_of_inheriting_pass(tmp_path, watts, status):
+@pytest.mark.parametrize("watts,status,statement", [
+    (0.004, "PASS", "< 5 mW"), (0.005, "FAIL", "< 5 mW"),
+    (0.0416, "FAIL", "< 5 mW"), (None, "NOT_MEASURED", "< 5 mW"),
+    (0.0416, "PASS", "5 mW"),
+    (0.0416, "PASS", "< 5 mW at gf180mcuD, 24 ns")])
+def test_power_report_compares_declared_tt_limit_instead_of_inheriting_pass(tmp_path, monkeypatch, watts, status, statement):
+    initialize = engine.NativeChain.__init__
+    def configured(chain, *args, **kwargs):
+        initialize(chain, *args, **kwargs)
+        chain.config = {"STA_CORNERS": ["nom_tt_025C_1v80"]}
+    monkeypatch.setattr(engine.NativeChain, "__init__", configured)
     docs = tmp_path / "input/docs"
     docs.mkdir(parents=True)
-    (docs / "quality.md").write_text("| total power(TT) | < 5 mW | sign-off |\n")
+    (docs / "quality.md").write_text(f"| total power(TT) | {statement} | sign-off |\n")
     table = engine.read_json(engine.TABLE)
     row = next(row for row in table["steps"] if row["name"] == "candidate_power_analysis")
     features = engine.design_features(tmp_path, {"delivery_target": "ip_hardmacro"}, table)
@@ -537,6 +597,12 @@ def test_power_report_compares_declared_tt_limit_instead_of_inheriting_pass(tmp_
         + repr(json.dumps(metrics)) + ")")
     result = execute(tmp_path, [producer, row])["steps"][-1]
     assert result["status"] == status
+    if statement != "< 5 mW":
+        assert result["metrics"] == []
+        observation = result["observations"][-1]
+        assert observation["status"] == "NOT_APPLICABLE"
+        assert observation["applicable"] is False
+        return
     assert len(result["metrics"]) == 1
     check = result["metrics"][0]
     assert check["operator"] == "within_declared_bounds"
@@ -554,8 +620,8 @@ def test_strict_power_ceiling_rejects_decimal_and_float_equality(tmp_path, milli
     docs.mkdir(parents=True)
     (docs / "quality.md").write_text(
         f"Total power (including core power and pads) < {milliwatts} mW at TT.\n")
-    checks = declared_power_checks(tmp_path)
-    assert len(checks) == 1
+    checks = declared_power_checks(tmp_path, metrics={"power__total__corner:nom_tt": watts})
+    assert len(checks) == 1 and checks[0].get("applicable") is not False
     measured = engine.measure(checks, {"power__total__corner:nom_tt": watts}, {}, {"always": True})
     assert measured[0]["status"] == "FAIL"
     assert engine.evaluate(engine.ToolResult(True, 0), measured) == "FAIL"

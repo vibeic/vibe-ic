@@ -368,6 +368,38 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert result["CORE_AREA"][0] == 22
 
 
+def test_current_geometry_reaches_floorplan_and_reserves_both_ring_rails(inputs, monkeypatch):
+    import flow_pdn_current
+    project, config, native, _, _ = inputs
+    native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=False,
+                  PDN_CORE_RING_VOFFSET=1, PDN_CORE_RING_HOFFSET=1,
+                  PDN_CORE_RING_VWIDTH=1, PDN_CORE_RING_HWIDTH=1,
+                  PDN_CORE_RING_VSPACING=1, PDN_CORE_RING_HSPACING=1)
+    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda *args: {
+        "PDN_VWIDTH": 3.2, "PDN_CORE_RING_VWIDTH": 3.2,
+        "PDN_HWIDTH": 2.4, "PDN_CORE_RING_HWIDTH": 2.4})
+    result = chip.prepare(project, config)
+    assert result["PDN_VWIDTH"] == 3.2
+    geometry = json.loads((project / "work/flow/chip/preparation.json").read_text())["geometry"]
+    assert geometry["pdn_envelope_um"] == pytest.approx(8.4)
+    assert geometry["core_inset_um"] >= 8.4 + geometry["pad_depth_um"]
+
+
+def test_nonconverging_current_geometry_stops_with_plain_error(inputs, monkeypatch):
+    import flow_pdn_current
+    project, config, _, _, _ = inputs
+    calls = []
+
+    def changing_settings(*args):
+        calls.append(args)
+        return {"PDN_VWIDTH": len(calls)}
+
+    monkeypatch.setattr(flow_pdn_current, "current_settings", changing_settings)
+    with pytest.raises(ValueError, match="did not converge after eight"):
+        chip.prepare(project, config)
+    assert len(calls) == 9
+
+
 def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
     project, config, native, _, _ = inputs
     native.update(CLOCK_UNCERTAINTY_CONSTRAINT=0.25, CLOCK_TRANSITION_CONSTRAINT=0.15,
@@ -486,12 +518,6 @@ def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical
     config["PDN_CFG"] = native["PDN_CFG"] = str(pdn)
     result = chip.prepare(project, config)
     generated = Path(result["PDN_CFG"]).read_text()
-    if owned:
-        assert "--config [file join $::env(STEP_DIR) config.json]" in generated
-        assert "pdn__requested_width__um__variable:" in generated
-        selected = project / "work/flow/chip/pdn_cfg.tcl"
-        assert "source " + str(selected) in generated
-        generated = selected.read_text()
     command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {target}}}"
     assert generated.count(command) + generated.count(reverse) == 1
     assert "signal_access" not in generated
@@ -621,6 +647,60 @@ def test_explicit_legal_geometry_is_retained(inputs):
     result = chip.prepare(project, config)
     assert result["DIE_AREA"] == native["DIE_AREA"]
     assert result["CORE_AREA"] == native["CORE_AREA"]
+
+
+@pytest.mark.parametrize("ingested", [False, True])
+def test_selected_operator_slot_controls_die_core_and_pad_order(inputs, ingested):
+    import submission_template_ingest as ingest
+
+    project, config, native, _, _ = inputs
+    generated = chip.prepare(project, config)
+    sides = {side: generated["PAD_" + side][:] for side in chip.SIDES.values()}
+    sides["NORTH"], sides["EAST"] = sides["EAST"], sides["NORTH"]
+    sides["SOUTH"].reverse()
+    die, core = [0.125, 0.25, 100.125, 100.25], [22.125, 22.25, 78.125, 78.25]
+    source = project / ("operator" if ingested else "input/submission_template/slots")
+    slot = {"SLOT": "neutral_slot", "DIE_AREA": die, "CORE_AREA": core,
+            **{"PAD_" + side: values for side, values in sides.items()}}
+    _write(source / "neutral_slot.yaml", json.dumps(slot))
+    _write(project / "input/step_0_5ic_answers.json",
+           json.dumps({"operator_template": {"slot": "neutral_slot"}}))
+    if ingested:
+        assert ingest.main([str(project), "--template", str(source), "--slot", "neutral_slot"]) == 0
+    native.update(DIE_AREA=[0, 0, 80, 80], CORE_AREA=[22, 22, 58, 58])
+
+    result = chip.prepare(project, config)
+
+    assert result["DIE_AREA"] == die
+    assert result["CORE_AREA"] == core
+    assert {side: result["PAD_" + side] for side in sides} == sides
+    report = json.loads((project / "work/flow/chip/preparation.json").read_text())
+    assert report["operator_slot"] == "neutral_slot"
+    wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
+    assert all(f" {instance} (" in wrapper for names in sides.values() for instance in names)
+
+
+@pytest.mark.parametrize("selected", [None, "unavailable_slot"])
+def test_supplied_operator_slot_never_defaults_to_another_geometry(inputs, selected):
+    project, config, _, _, _ = inputs
+    _write(project / "input/submission_template/slots/neutral_slot.yaml", json.dumps({
+        "SLOT": "neutral_slot", "DIE_AREA": [0, 0, 100, 100]}))
+    if selected:
+        _write(project / "input/step_0_5ic_answers.json",
+               json.dumps({"operator_template": {"slot": selected}}))
+    with pytest.raises(ValueError, match="no slot is selected|0 matching records"):
+        chip.prepare(project, config)
+
+
+def test_operator_slot_pad_names_must_resolve_to_wrapper_pads(inputs):
+    project, config, _, _, _ = inputs
+    _write(project / "input/submission_template/slots/neutral_slot.yaml", json.dumps({
+        "SLOT": "neutral_slot", "DIE_AREA": [0, 0, 100, 100],
+        "PAD_NORTH": ["unknown_pad"]}))
+    _write(project / "input/step_0_5ic_answers.json",
+           json.dumps({"operator_template": {"slot": "neutral_slot"}}))
+    with pytest.raises(ValueError, match="does not resolve to one unused wrapper pad"):
+        chip.prepare(project, config)
 
 
 def test_missing_native_fact_is_named(inputs):

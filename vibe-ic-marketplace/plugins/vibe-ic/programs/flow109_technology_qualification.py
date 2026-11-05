@@ -7,30 +7,19 @@ not execution/signoff of every downstream tool, corner or physical deck.
 """
 from __future__ import annotations
 
-import hashlib
 from importlib.metadata import version
 import json
 import os
 from pathlib import Path
-import re
-from typing import Mapping
 
 from declared_pdk_is_the_pdk_used_check import declared_distribution, PDKDeclarationError
 
-STEP = "D03"
-NATIVE_STEP = "flow109.D03"
-SCHEMA = "vibeic.flow109.technology-qualification.v1"
 
 
 class D03Refusal(ValueError):
     def __init__(self, code: str, detail: str):
         self.code, self.detail = code, detail
         super().__init__(f"{code}: {detail}")
-
-
-def _record(path: Path) -> dict:
-    return {"path": str(path.resolve(strict=True)),
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
 def _installed_pin(pdk_root: Path, pdk: str, family: str) -> dict:
@@ -65,12 +54,8 @@ def _installed_pin(pdk_root: Path, pdk: str, family: str) -> dict:
     if record.get("resolved") is not True:
         raise D03Refusal("D03_INSTALLED_PDK_PIN_UNRESOLVED",
                          str(record.get("reason") or tree))
-    sources = [_record(Path(row["read_from"])) for row in record["sources"]
-               if row.get("sha256") is not None]
     return {"family": family, "variant": pdk, "root": str(pdk_root),
-            "revision": record["revision"], "authority": "installed_pdk_revision",
-            "revision_record": record, "source_files": sources,
-            "reader_source": _record(Path(revision.__file__))}
+            "revision": record["revision"], "authority": "installed_pdk_revision"}
 
 
 def _resolve(config_path: Path, pdk_root: Path, *, pdk: str, project: Path):
@@ -99,97 +84,53 @@ def _resolve(config_path: Path, pdk_root: Path, *, pdk: str, project: Path):
     return selected, _installed_pin(pdk_root, pdk, family.name)
 
 
-def execute(project: Path, context: Mapping) -> dict:
-    project = Path(project).resolve(strict=True)
-    checks, inputs, metrics = [], [], {}
-    native_started = False
-    status, reason = "NOT_MEASURED", "D03_INPUT_UNRESOLVED"
+def execute(project: Path, directory: Path) -> dict:
+    """Resolve native technology before RTL; refusal is FAIL, missing input is NOT_MEASURED."""
+    project, directory = Path(project).resolve(), Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    started = False
+    reports, metrics = [], {}
+    import time
+    before = time.perf_counter()
     try:
-        row = context.get("resolved_row") or {}
-        if (context.get("requested_step") != STEP or row.get("id") != STEP
-                or not context.get("context_sha256")):
-            raise D03Refusal("D03_CONTEXT_INVALID", "current D03 context required")
-        image = os.environ.get("VIBEIC_EDA_IMAGE", "")
-        if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image):
-            raise D03Refusal("D03_RUNTIME_IMAGE_UNRESOLVED", "resolve image on launch host")
-        declared_pdk, declaration_sources = declared_distribution(project)
-        inputs.extend(_record(path) for path in sorted({path for path, _ in declaration_sources}))
+        declared_pdk, _ = declared_distribution(project)
         import librelane_contract as native
         config_path = project / "phase3/librelane/config.json"
-        if not config_path.exists() and not config_path.is_symlink():
-            # Technology selection precedes RTL authoring; keep its native
-            # input separate from the later implementation configuration.
-            docs = project / 'phase1/generated_docs'
-            design = (native._ldoc(docs, 'L9_INTEGRATION_SPEC.json').get('top_module')
-                      or native._ldoc(docs, 'L1_DATASHEET.json').get('ic_name'))
+        if not config_path.exists():
+            docs = project / "phase1/generated_docs"
+            design = (native._ldoc(docs, "L9_INTEGRATION_SPEC.json").get("top_module")
+                      or native._ldoc(docs, "L1_DATASHEET.json").get("ic_name"))
             settings, _ = native._declared_flow_settings(
-                native._ldoc(docs, 'L19_CONSTRAINTS_PDK.json'), declared_pdk)
-            config = {'meta': {'version': 2, 'flow': 'Classic'},
-                      'DESIGN_NAME': design, 'PDK': declared_pdk,
-                      'VERILOG_FILES': [], **settings}
-            config_path = project / 'reports/flow109/D03/technology.json'
-            from _atomic_artefact import write_json
-            write_json(config_path, config)
-        inputs.append(_record(config_path))
-        raw_root = os.environ.get("VIBEIC_LIBRELANE_PDK_ROOT", "")
-        if not raw_root:
-            raw_root = native.pdk_root_resolution(project, declared_pdk, image=image,
-                                                  native_handoff=True)['path']
-        root = Path(raw_root).resolve(strict=True)
-        native_started = True
-        selected, pin = _resolve(config_path, root, pdk=declared_pdk, project=project)
-        resolved_path = project / "reports/flow109/D03/resolved.json"
-        resolved_path.parent.mkdir(parents=True, exist_ok=True)
-        resolved_path.write_text(selected.dumps())
-        resolved_input = _record(resolved_path)
-        inputs.append(resolved_input)
-        inputs.extend(pin.get("source_files", []))
-        if pin.get("reader_source"):
-            inputs.append(pin["reader_source"])
-        # Native Path values, including input RTL/SDC, Liberty, LEF and decks,
-        # are validated by LibreLane, then hashed without a second file policy.
-        from librelane.common import Path as NativePath
-        def files(value):
-            if isinstance(value, NativePath):
-                p = Path(str(value))
-                if p.is_file():
-                    yield p
-            elif isinstance(value, Mapping):
-                for v in value.values():
-                    yield from files(v)
-            elif isinstance(value, (tuple, list)):
-                for v in value:
-                    yield from files(v)
-        inputs.extend(_record(p) for p in sorted(set(files(selected))))
-        tools = {name: version(name) for name in ("librelane", "ciel")}
-        inputs.append(_record(Path(__file__)))
-        metrics = {"required_capability_qualifications": {
-            "librelane_config_resolution": "PASS", pin["authority"]: "PASS"},
-            "tool_deck_corner_binding": {"image": image, "tools": tools,
-                "pdk": pin, "standard_cell_library": selected["STD_CELL_LIBRARY"],
-                "default_corner": selected["DEFAULT_CORNER"],
-                "resolved_config": resolved_input}}
-        checks = [{"check": key, "status": value} for key, value in
-                  metrics["required_capability_qualifications"].items()]
-        status = "PASS"
-        reason = ("D03_NATIVE_CONFIG_AND_CIEL_PIN_PASS" if pin["authority"] == "ciel_installed_pin"
-                  else "D03_NATIVE_CONFIG_AND_INSTALLED_PIN_PASS")
+                native._ldoc(docs, "L19_CONSTRAINTS_PDK.json"), declared_pdk)
+            config_path = directory / "technology.json"
+            config_path.write_text(json.dumps({"meta": {"version": 2, "flow": "Classic"},
+                "DESIGN_NAME": design, "PDK": declared_pdk,
+                "VERILOG_FILES": [], **settings}, default=str) + "\n")
+        root = os.environ.get("VIBEIC_LIBRELANE_PDK_ROOT") or os.environ.get("PDK_ROOT")
+        if not root:
+            return {"ran": False, "detail": "No installed PDK_ROOT for native technology resolution."}
+        started = True
+        selected, pin = _resolve(config_path, Path(root).resolve(strict=True),
+                                 pdk=declared_pdk, project=project)
+        if selected["PDK"] != declared_pdk:
+            raise D03Refusal("D03_PDK_DECLARATION_CONFLICT", "resolved PDK differs from design declaration")
+        resolved = directory / "resolved.json"
+        resolved.write_text(selected.dumps())
+        reports = [str(config_path), str(resolved)]
+        metrics = {"pdk": selected["PDK"], "standard_cell_library": selected["STD_CELL_LIBRARY"],
+                   "default_corner": selected["DEFAULT_CORNER"], "installed_pdk_revision": pin["revision"],
+                   "librelane_version": version("librelane"), "ciel_version": version("ciel")}
+        return {"ran": True, "exit_code": 0, "metrics": metrics, "reports": reports,
+                "tool_seconds": time.perf_counter() - before,
+                "detail": "Native LibreLane configuration and installed PDK revision resolved; downstream tools have not run."}
     except (D03Refusal, PDKDeclarationError) as exc:
-        reason = 'D03_' + exc.code if isinstance(exc, PDKDeclarationError) else exc.code
-        checks.append({"check": "native_qualification", "status": status, "detail": exc.detail})
+        failed = not isinstance(exc, PDKDeclarationError) or exc.code != "PDK_UNDECLARED"
+        return {"ran": failed or started, "exit_code": 1 if failed else None,
+                "metrics": metrics, "reports": reports, "tool_seconds": time.perf_counter() - before,
+                "detail": str(exc)}
+    except (ImportError, FileNotFoundError) as exc:
+        return {"ran": started, "exit_code": 1 if started else None, "detail": str(exc),
+                "tool_seconds": time.perf_counter() - before}
     except Exception as exc:
-        status = "FAIL" if native_started else "NOT_MEASURED"
-        reason = "D03_NATIVE_RESOLUTION_FAILED" if native_started else "D03_INPUT_UNRESOLVED"
-        checks.append({"check": "native_qualification", "status": status,
-                       "detail": str(exc)})
-    return {"schema": SCHEMA, "step_id": STEP,
-        "program": "flow109_technology_qualification",
-        "context_sha256": context.get("context_sha256"),
-        "component_status": status, "default_row_status": status,
-        "completed": status == "PASS", "reason": reason,
-        "checks": checks, "inputs": inputs, "metrics": metrics,
-        "native_started": native_started, "metric_acceptance_status": "IMPLEMENTED",
-        "flow109_acceptance": status, "whole_flow_acceptance": "NOT_MEASURED",
-        "delivery_accepted": False,
-        "scope": "native LibreLane configuration resolution and installed PDK revision",
-        "unsupported_scope": "downstream synthesis, simulation, timing and physical signoff"}
+        return {"ran": started, "exit_code": 1 if started else None, "detail": str(exc),
+                "tool_seconds": time.perf_counter() - before}

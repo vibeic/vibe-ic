@@ -110,6 +110,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass, asdict, field
@@ -143,8 +144,10 @@ class MagicResimExtractOptions:
         resistance` before the extract, `extresist extout on` +
         `extresist all` after it, and `ext2spice extresist on` before the
         write. `extresist all` alone extracts nothing.
-    `extresist_threshold_mohm`: `extresist threshold` (milliohms). 0 keeps
-        every net; magic's default drops all of them on a small block.
+    `extresist_threshold_mohm`: native resistance threshold in milliohms,
+        independent of Magic's minimum-delay cutoff.
+    `extresist_mindelay_ps`: optional native `extresist mindelay` cutoff in ps.
+        None preserves Magic's default; 0 retains sub-picosecond RC networks.
     """
     cthresh: float = 0.0
     rthresh: object = 0
@@ -152,6 +155,7 @@ class MagicResimExtractOptions:
     extract_style: Optional[str] = "ngspice()"
     extresist: bool = True
     extresist_threshold_mohm: int = 0
+    extresist_mindelay_ps: Optional[float] = None
 
 
 def _rthresh_token(value: object) -> str:
@@ -212,6 +216,9 @@ def build_extraction_tcl(
         raise ValueError("out_spice must be a non-empty output path")
     opts = options or MagicResimExtractOptions()
     rthresh_tok = _rthresh_token(opts.rthresh)
+    if opts.extresist_mindelay_ps is not None and (
+            not math.isfinite(opts.extresist_mindelay_ps) or opts.extresist_mindelay_ps < 0):
+        raise ValueError("extresist_mindelay_ps must be finite and nonnegative")
 
     out: List[str] = []
     out.append(
@@ -244,6 +251,8 @@ def build_extraction_tcl(
         # ...only now does extresist have something to work on.
         out.append("extresist extout on")
         out.append(f"extresist threshold {int(opts.extresist_threshold_mohm)}")
+        if opts.extresist_mindelay_ps is not None:
+            out.append(f"extresist mindelay {opts.extresist_mindelay_ps:g}")
         out.append("extresist all")
     if opts.ext2spice_scale_off:
         out.append("ext2spice scale off")
@@ -923,6 +932,7 @@ def main(argv: list = None) -> int:
     else:
         print(tcl, end="")
     return 0
+
 
 
 

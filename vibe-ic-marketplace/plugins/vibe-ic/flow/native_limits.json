@@ -1216,7 +1216,8 @@
         "_cdc_netlist.normalization_script",
         "_cdc_netlist.load",
         "_cdc_netlist.judge"
-      ]
+      ],
+      "parallel": true
     },
     "functional_simulation_and_coverage": {
       "adapter": "simulation",
@@ -1227,7 +1228,8 @@
         "verilator_coverage_measure.parse_coverage_dat",
         "verilator_coverage_measure.scope_totals",
         "_sim_results_bridge.parse_junit"
-      ]
+      ],
+      "parallel": true
     },
     "formal_verification": {
       "adapter": "formal",
@@ -1236,7 +1238,8 @@
       "native_commands": [
         "sby --dumptasks INPUT",
         "sby -f -d OUTPUT INPUT TASK"
-      ]
+      ],
+      "parallel": true
     },
     "ip_release_views_and_documentation": {
       "kind": "snapshot",
@@ -1246,7 +1249,8 @@
         "lib": ".lib",
         "gds": ".gds",
         "nl": ".v"
-      }
+      },
+      "timing_group": "librelane"
     },
     "design_release": {
       "kind": "snapshot",
@@ -1257,7 +1261,8 @@
         "gds": ".gds",
         "nl": ".v"
       },
-      "metric": "release_required_items"
+      "metric": "release_required_items",
+      "timing_group": "librelane"
     },
     "signoff_aggregation": {
       "kind": "aggregate"
@@ -1270,6 +1275,17 @@
       "function": "run_block",
       "native_report": "phase3/analog/*/corner_results.json#/spec_results",
       "gap": "Direct L-document spec to SPICE-number comparator is not wired. Missing declared numbers must be NOT_MEASURED."
+    },
+    "submission_and_implementation_interface": {
+      "adapter": "physical_declarations"
+    },
+    "pdk_library_deck_and_tool_use_qualification": {
+      "adapter": "technology"
+    },
+    "functional_safety_plan_and_tool_confidence": {
+      "program": null,
+      "function": null,
+      "gap": "Functional safety plan and tool-confidence program is not available; selected row is NOT_MEASURED."
     }
   },
   "deleted_metrics": {
@@ -1279,7 +1295,8 @@
     "unresolved_revalidation": "Plugin changes do not invalidate results.",
     "required_tool_confidence_evidence": "Tool confidence paperwork removed; native tools decide.",
     "required_dfm_capabilities": "Tool-capability qualification removed; native DFM results decide.",
-    "advanced_dfm_required_capabilities": "Tool-capability qualification removed; native DFM results decide."
+    "advanced_dfm_required_capabilities": "Tool-capability qualification removed; native DFM results decide.",
+    "stale_adopted_evidence": "Adopted-evidence staleness removed by the owner; native tools consume current design inputs."
   },
   "report_rows": {
     "clock_planning": "pre_layout_timing",
@@ -2007,7 +2024,18 @@
         "reason": "Delivery checklist is paper. Native output files and release snapshot remain."
       }
     ],
-    "pdk_library_deck_and_tool_use_qualification": [],
+    "pdk_library_deck_and_tool_use_qualification": [
+      {
+        "old_name": "required_capability_qualifications",
+        "class": "X",
+        "reason": "Native LibreLane configuration resolution and installed PDK revision refusal stop the adapter."
+      },
+      {
+        "old_name": "tool_deck_corner_binding",
+        "class": "X",
+        "reason": "Native LibreLane configuration resolution and installed PDK revision refusal stop the adapter."
+      }
+    ],
     "functional_safety_plan_and_tool_confidence": [
       {
         "old_name": "safety_goals_allocation",
@@ -3849,12 +3877,12 @@
       "reason": "Owner ruling 207 provider checks duplicate native DRC unless a provider deck is declared."
     },
     "pdk_library_deck_and_tool_use_qualification": {
-      "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "when": "technology_specific",
+      "reason": "Resolve the declared technology with LibreLane and report its installed PDK revision before RTL."
     },
     "functional_safety_plan_and_tool_confidence": {
-      "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "when": "requires_functional_safety",
+      "reason": "Functional safety is declared by the design; no safety-plan tool is implemented, so the selected row is NOT_MEASURED."
     },
     "macro_logical_and_timing_views": {
       "when": "False",
@@ -3873,8 +3901,8 @@
       "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     "submission_and_implementation_interface": {
-      "when": "False",
-      "reason": "No native engineering tool or checks remain. _run_step_0_5ic performs old submission/template admission and is not an available native OwnerSession tool. Documents and unchanged Router own the implementation interface."
+      "when": "physical",
+      "reason": "Physical delivery evaluates supplied operator templates and declarations; document-only input needs no operator-absence answer."
     },
     "constraint_validation": {
       "when": "False",
@@ -3896,19 +3924,24 @@
       "kind": "adapter",
       "adapter": "eqy",
       "program": "flow_native_verification.py",
-      "metric": "unproved_equivalence"
+      "metric": "unproved_equivalence",
+      "timing_group": "other",
+      "parallel": true
     },
     "final_adopted_netlist_equivalence": {
       "kind": "adapter",
       "adapter": "eqy",
       "program": "flow_native_verification.py",
-      "metric": "final_lec_unproved"
+      "metric": "final_lec_unproved",
+      "timing_group": "other",
+      "parallel": true
     },
     "finishing_geometry_fidelity": {
       "kind": "adapter",
       "adapter": "xor",
       "program": "flow_native_verification.py",
-      "metric": "unexplained_stream_xor"
+      "metric": "unexplained_stream_xor",
+      "timing_group": "librelane"
     },
     "pre_layout_timing": {
       "kind": "librelane",
@@ -3927,7 +3960,8 @@
     "implemented_netlist_cdc_and_rdc": {
       "kind": "adapter",
       "adapter": "implemented_cdc",
-      "program": "flow_native_adapters.py"
+      "program": "flow_native_adapters.py",
+      "parallel": true
     },
     "candidate_gate_level_simulation": {
       "kind": "adapter",
@@ -3953,7 +3987,8 @@
             "line": 2751
           }
         }
-      ]
+      ],
+      "parallel": true
     },
     "final_sdf_gate_level_replay": {
       "kind": "adapter",
@@ -3980,7 +4015,8 @@
           }
         }
       ],
-      "corners": "all"
+      "corners": "all",
+      "parallel": true
     }
   },
   "report_check_readers": {

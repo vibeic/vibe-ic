@@ -154,11 +154,13 @@ def test_public_entry_preserves_router_closure_without_a_stored_receipt(tmp_path
 
 @pytest.mark.parametrize("selected,target", [("ic", "shippable_gds"), ("ip", "ip_hardmacro")])
 def test_public_native_delivery_flag_overrides_document_wording(tmp_path, monkeypatch, selected, target):
+    import flow_engine
     docs = tmp_path / "input/docs"
     docs.mkdir(parents=True)
     (docs / "requirements.md").write_text("Generate a digital IP block with a clock and data ports.")
     observed = []
     engine = SimpleNamespace(
+        TABLE=flow_engine.TABLE, aliases=flow_engine.aliases,
         design_text=lambda project: (docs / "requirements.md").read_text(),
         run=lambda project, **kwargs: observed.append(kwargs["route"]) or {})
     monkeypatch.setitem(sys.modules, "flow_engine", engine)
@@ -414,3 +416,21 @@ def test_public_native_resume_forwards_pdk_and_from_without_rerouting(tmp_path, 
     assert observed[0]["from_name"] == "rtl_validation_and_lint"
     assert observed[0]["pdk"] == "sky130A"
     assert observed[0]["route"]["verify_closed_steps"] == ["1", "2"]
+
+
+def test_sizing_prepass_forced_synthesis_resume_replays_physical_geometry(tmp_path, monkeypatch):
+    import flow_pdn_current
+    observed = []
+    table = tmp_path / "table.json"
+    table.write_text("{}")
+    engine = SimpleNamespace(TABLE=table, run=lambda project, **kwargs: observed.append(kwargs) or {})
+    monkeypatch.setitem(sys.modules, "flow_engine", engine)
+    monkeypatch.setattr(flow_pdn_current, "needs_estimate", lambda *args: True)
+    args = SimpleNamespace(project=tmp_path, entry_step="requirements_and_delivery_route",
+                           exit_step="candidate_electromigration", rtl_input="structured",
+                           delivery_target="shippable_gds", route="ic", from_name="synthesis", pdk="gf180mcuD")
+    assert frontend.run_public(args) == 0
+    assert observed[0]["from_name"] == "synthesis"
+    assert observed[0]["to_name"] == "pre_layout_timing"
+    assert observed[1]["from_name"] == "die_floorplan_and_macros"
+    assert "to_name" not in observed[1]

@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
+import tempfile
 import time
 from typing import Any
 
@@ -49,6 +50,7 @@ def _bits(port: dict) -> list[str]:
 
 
 def _native_core(project: Path, core_config: dict, destination: Path, on_tool_run=None):
+    from flow_config import native_defaults
     from librelane.common import Toolbox
     from librelane.flows import Flow
     from librelane.state import DesignFormat, State
@@ -57,14 +59,16 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
     os.environ["_OPENLANE_MAX_CORES"] = "8"
     owner = Flow.factory.get("Chip")(core_config, design_dir=str(project),
                                      pdk_root=os.environ.get("PDK_ROOT"))
+    owner.config = native_defaults(owner.config)
     native = owner.config.to_raw_dict()
-    toolbox = Toolbox(str(destination / "tool_tmp"))
+    run_root = Path(tempfile.mkdtemp(prefix="core_", dir=destination))
+    toolbox = Toolbox(str(run_root / "tool_tmp"))
     state = State()
     runs = []
     try:
         for name in ("Yosys.JsonHeader", "Yosys.Synthesis"):
             step = Step.factory.get(name)(owner.config, state)
-            directory = destination / name.lower().replace(".", "_")
+            directory = run_root / name.lower().replace(".", "_")
             directory.mkdir(parents=True, exist_ok=True)
             started = time.monotonic()
             cwd = Path.cwd()
@@ -142,6 +146,95 @@ def _paths(value) -> list[Path]:
     if isinstance(value, (str, os.PathLike)):
         return [Path(str(value))]
     return [Path(str(path)) for path in value or []]
+
+
+def _selected_slot(project: Path):
+    """Read the selected operator slot; its published rectangles are inputs."""
+    import _submission_template as submission
+    import yaml
+
+    root = project / submission.SLOTS_DIR_REL
+    files = sorted([*root.glob("*.yaml"), *root.glob("*.yml"), *root.glob("*.json")])
+    if not files:
+        return None
+    report = project / submission.REPORT_REL
+    declared = (json.loads(report.read_text()).get("ingest", {}).get("declared_slot")
+                if report.is_file() else None)
+    answers = project / submission.DESIGN_ANSWERS_REL
+    if answers.is_file():
+        operator = json.loads(answers.read_text()).get("operator_template") or {}
+        selected = operator.get("slot")
+        if declared and selected and declared != selected:
+            raise ValueError(f"Conflicting selected operator slots: {declared!r}, {selected!r}")
+        declared = selected or declared
+    if not declared:
+        raise ValueError("Operator slots are supplied but no slot is selected in the design inputs")
+    records = []
+    for path in files:
+        try:
+            value = yaml.safe_load(path.read_text())
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Unreadable operator slot: {path}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"Unreadable operator slot: {path}")
+        record = value
+        if "die_area" not in value:
+            _, name = submission._first_key(value, submission.SLOT_NAME_KEYS)
+            record = {"slot": name or path.stem,
+                      "die_area": submission._rect_field(value, submission.DIE_AREA_KEY),
+                      "core_area": submission._rect_field(value, submission.CORE_AREA_KEY),
+                      "pads": submission._pad_lists(value, set())}
+        if record.get("slot") == declared:
+            records.append(record)
+    if len(records) != 1:
+        raise ValueError(f"Selected operator slot {declared!r} has {len(records)} matching records")
+    return records[0]
+
+
+def _slot_geometry(native: dict, slot: dict) -> dict:
+    import _submission_template as submission
+
+    native = dict(native)
+    for field, key in (("die_area", "DIE_AREA"), ("core_area", "CORE_AREA")):
+        value = slot.get(field)
+        if value is None and field == "core_area":
+            continue
+        rect = submission.parse_rect((value or {}).get("rect") or (value or {}).get("raw"))
+        if rect is None or min(submission.rect_wh(rect)) <= 0:
+            raise ValueError(f"Selected operator slot {slot['slot']!r} has no usable {key}")
+        native[key] = [float(number) for number in rect]
+    return native
+
+
+def _slot_pads(project: Path, chosen: dict, ordered: dict, slot: dict):
+    """Resolve the slot's pad instances against this generated wrapper."""
+    lists = (slot.get("pads") or {}).get("lists") or []
+    if not lists:
+        return chosen, ordered
+    sides = {side: [] for side in SIDES}
+    reverse_sides = {"PAD_" + name: side for side, name in SIDES.items()}
+    for entry in lists:
+        key = str(entry["key"]).upper()
+        if key not in reverse_sides:
+            raise ValueError(f"Operator slot pad list {key!r} names no die side")
+        sides[reverse_sides[key]] = entry["raw"]
+    by_port = {}
+    for instance, entry in chosen.items():
+        if entry.get("port"):
+            by_port.setdefault(entry["port"], []).append(instance)
+    bound = electrical._bind_side_names(project, sides, list(by_port))
+    result, used = {}, set()
+    for side, names in sides.items():
+        for name, port in zip(names, bound[side]):
+            candidates = [name] if name in chosen else by_port.get(port, [])
+            if len(candidates) != 1 or candidates[0] in used or name in result:
+                raise ValueError(f"Operator slot pad {name!r} does not resolve to one unused wrapper pad")
+            original = candidates[0]
+            result[name] = chosen[original]
+            used.add(original)
+    if used != set(chosen):
+        raise ValueError(f"Operator slot omits wrapper pads: {sorted(set(chosen) - used)}")
+    return result, sides
 
 
 def _library(native: dict):
@@ -242,7 +335,7 @@ def _ring(project: Path, native: dict, ports: list[dict], library: dict):
     return chosen, ordered, supplies, power, ground, placement
 
 
-def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: float, placement):
+def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: float, placement, pdn_geometry=None):
     sizes = library["sizes"]
     corners = _required(native, "PAD_CORNER")
     if isinstance(corners, str):
@@ -271,10 +364,11 @@ def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: f
         raise ValueError("FP_ASPECT_RATIO must be positive")
     depth = max(sizes[entry["master"]][1] for entry in chosen.values())
     envelope = 0.0
+    supply_count = len(native["VDD_NETS"]) + len(native["GND_NETS"])
     if native.get("PDN_CORE_RING"):
         envelope = max(float(_required(native, f"PDN_CORE_RING_{axis}OFFSET"))
-            + float(_required(native, f"PDN_CORE_RING_{axis}WIDTH"))
-            + float(_required(native, f"PDN_CORE_RING_{axis}SPACING")) for axis in ("V", "H"))
+            + supply_count * float(_required(native, f"PDN_CORE_RING_{axis}WIDTH"))
+            + (supply_count - 1) * float(_required(native, f"PDN_CORE_RING_{axis}SPACING")) for axis in ("V", "H"))
     inset = snap(edge + max(depth, corner) + envelope)
     spans = {side: sum(sizes[chosen[inst]["master"]][0] for inst in instances)
              for side, instances in ordered.items()}
@@ -283,6 +377,14 @@ def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: f
     minimum = max(spans[side] + max(len(ordered[side]) - 1, 0) * minimum_gap
                   + 2 * (corner + edge) for side in SIDES)
     required_width, required_height = math.sqrt(area / util / aspect), math.sqrt(area / util * aspect)
+    minimum_core = {}
+    for axis in ("V", "H"):
+        keys = [f"PDN_{axis}{suffix}" for suffix in ("OFFSET", "WIDTH", "SPACING")]
+        if pdn_geometry and all(native.get(key) is not None for key in keys):
+            offset, width, spacing = (float(native[key]) for key in keys)
+            minimum_core[axis] = offset + supply_count * width + (supply_count - 1) * spacing
+    required_width = max(required_width, minimum_core.get("V", 0), minimum_core.get("H", 0) / aspect)
+    required_height = required_width * aspect
     explicit_die, explicit_core = native.get("DIE_AREA"), native.get("CORE_AREA")
     width = max(minimum, required_width + 2 * inset)
     height = max(minimum, required_height + 2 * inset)
@@ -338,7 +440,9 @@ def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: f
             [die[0] + inset, die[1] + inset, die[2] - inset, die[3] - inset])
     if (core[0] < die[0] + inset or core[1] < die[1] + inset
             or core[2] > die[2] - inset or core[3] > die[3] - inset
-            or (core[2] - core[0]) * (core[3] - core[1]) < area / util):
+            or (core[2] - core[0]) * (core[3] - core[1]) < area / util
+            or core[2] - core[0] < minimum_core.get("V", 0)
+            or core[3] - core[1] < minimum_core.get("H", 0)):
         raise ValueError("Declared geometry cannot fit mapped core area/utilization and native pad/PDN inset")
     return die, core, {"mapped_cell_area_um2": area, "core_utilization_percent": util * 100,
                        "pad_depth_um": depth, "corner_um": corner, "edge_spacing_um": edge,
@@ -376,7 +480,7 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
     lines.extend(f"    wire {_identifier(net)};" for net in sorted(internal))
     for tie in used.values():
         if tie.get("source") != "pad":
-            lines.append(f"    {tie['master']} {tie['instance']} (.{tie['pin']}({tie['net']}));")
+            lines.append(f"    {tie['master']} {_identifier(tie['instance'])} (.{tie['pin']}({tie['net']}));")
     buses = electrical.io_bus_ports(library["verilog"])
     for instances in ordered.values():
         for instance in instances:
@@ -397,7 +501,7 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
             power = [f".{pin}({_identifier(net)})" for pin, net in pairs.items() if pin in pg]
             if entry.get("is_ring_connector"):
                 lines.append("    (* keep = 1 *)")
-            lines.extend([f"    {entry['master']} {instance} (", "        " + ", ".join(regular)])
+            lines.extend([f"    {entry['master']} {_identifier(instance)} (", "        " + ", ".join(regular)])
             if power:
                 lines.extend(["`ifdef USE_POWER_PINS", ("        , " if regular else "        ") + ", ".join(power), "`endif"])
             lines.append("    );")
@@ -497,9 +601,25 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     destination.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     native, ports, area, runs = _native_core(project, core_config, destination, on_tool_run)
+    slot = _selected_slot(project)
+    if slot is not None:
+        native = _slot_geometry(native, slot)
     library = _library(native)
     chosen, ordered, supplies, power, ground, placement = _ring(project, native, ports, library)
-    die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement)
+    if slot is not None:
+        chosen, ordered = _slot_pads(project, chosen, ordered, slot)
+    from flow_pdn_current import current_settings
+    native.update(VDD_NETS=[power], GND_NETS=[ground])
+    pdn_settings = current_settings(project, native)
+    for _ in range(8):
+        native.update(pdn_settings)
+        die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement, pdn_settings)
+        updated = current_settings(project, native, max(die[2] - die[0], die[3] - die[1]))
+        if updated == pdn_settings:
+            break
+        pdn_settings = updated
+    else:
+        raise ValueError("PDN geometry did not converge after eight floorplan updates.")
     top = core_config["DESIGN_NAME"] + "_chip"
     wrapper = destination / "wrapper.v"
     wrapper.write_text(_wrapper(core_config["DESIGN_NAME"], top, ports, chosen, ordered,
@@ -508,6 +628,7 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     input_masters = {entry["master"] for entry in chosen.values() if entry.get("direction") == "input"}
     sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters))
     result = dict(core_config)
+    result.update(pdn_settings)
     for axis in ("VERTICAL", "HORIZONTAL"):
         key = f"PDN_CORE_{axis}_LAYER"
         if result.get(key) == native.get(f"PDN_{axis}_LAYER"):
@@ -543,10 +664,9 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
             pdn.write_text(text)
             result["PDN_CFG"] = str(pdn)
     result.update({"PAD_" + full: ordered[side] for side, full in SIDES.items()})
-    from flow_pdn_current import attach
-    attach(project, result, destination, core_config.get("PDN_CFG"))
     tool_seconds = sum(run["tool_seconds"] for run in runs)
     report = {"ports": ports, "pads": chosen, "pad_sides": ordered,
+              "operator_slot": slot.get("slot") if slot else None,
               "geometry": geometry, "die_area_um": die, "core_area_um": core,
               "sizing_runs": runs, "tool_seconds": tool_seconds,
               "program_seconds": time.monotonic() - started - tool_seconds,

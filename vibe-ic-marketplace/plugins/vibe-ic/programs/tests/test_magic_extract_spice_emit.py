@@ -13,6 +13,32 @@ import pytest
 mod = importlib.import_module("magic_extract_spice_emit")
 
 
+@pytest.mark.parametrize("extra", [{}, {"extresist_mindelay_ps": None},
+                                 {"extresist_mindelay_ps": 0}])
+def test_d47_legacy_options_and_optional_mindelay_reach_technology_resolution(tmp_path, monkeypatch, extra):
+    import hashlib
+    import json
+    import analog_hardmacro_gds_emit as layout_owner
+
+    layout = tmp_path / "neutral_cell.mag"
+    layout.write_text("magic\ntech neutral\n")
+    logical = tmp_path / "logical.spice"
+    logical.write_text(".subckt neutral_cell A B\n.ends neutral_cell\n")
+    ref = lambda path: {"path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    options = {"cthresh": 0, "rthresh": 0, "ext2spice_scale_off": True,
+               "extract_style": None, "extresist": True, "extresist_threshold_mohm": 0, **extra}
+    config = tmp_path / "input/flow109/D47.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"top": "neutral_cell", "layout": ref(layout),
+        "logical_netlist": ref(logical), "options": options, "require_resistance": False}))
+    def native_technology_boundary(path):
+        assert path == layout
+        raise RuntimeError("native-tech-boundary")
+    monkeypatch.setattr(layout_owner, "tech_of", native_technology_boundary)
+    with pytest.raises(RuntimeError, match="native-tech-boundary"):
+        mod._d47_inputs(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # EMIT
 # ---------------------------------------------------------------------------
@@ -52,6 +78,18 @@ class TestEmit:
         assert "ext2spice rthresh 10.0" not in tcl
 
     # ----- honest failure on garbage emit input -----
+    def test_minimum_rc_delay_override_is_opt_in(self):
+        assert "extresist mindelay" not in mod.build_extraction_tcl("blk", "/o.spice")
+        opts = mod.MagicResimExtractOptions(extresist_mindelay_ps=0)
+        tcl = mod.build_extraction_tcl("blk", "/o.spice", opts)
+        assert tcl.index("extresist mindelay 0\n") < tcl.index("extresist all\n")
+
+    @pytest.mark.parametrize("value", [-1, float("nan"), float("inf")])
+    def test_invalid_minimum_rc_delay_is_refused_before_magic(self, value):
+        with pytest.raises(ValueError, match="finite and nonnegative"):
+            mod.build_extraction_tcl("blk", "/o.spice",
+                mod.MagicResimExtractOptions(extresist_mindelay_ps=value))
+
     def test_empty_block_raises(self):
         with pytest.raises(ValueError):
             mod.build_extraction_tcl("", "/o.spice")
