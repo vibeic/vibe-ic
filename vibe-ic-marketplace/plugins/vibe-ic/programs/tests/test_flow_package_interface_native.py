@@ -1,61 +1,66 @@
+"""The early package row reports native pad placement after RTL authoring."""
 import json
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip('librelane')
-from librelane.common import Toolbox
-from librelane.flows import Flow
-from librelane.state import State
-
 import flow_engine as engine
-import io_pad_chip_top_gen as io
-import pad_assignment_gen as assignment
+import flow_engine_frontend as frontend
+import pad_assignment_gen
+import io_pad_chip_top_gen
 
 
-@pytest.mark.parametrize('io_code,assignment_code,expected', [
-    (0, 0, 'PASS'), (1, 0, 'FAIL'), (2, 0, 'NOT_MEASURED'), (0, 1, 'FAIL')])
-def test_selected_interface_step_runs_native_producers_and_keeps_their_verdicts(
-        tmp_path, monkeypatch, io_code, assignment_code, expected):
+@pytest.mark.parametrize('status,code,ran', [('PASS', 0, True), ('FAIL', 1, True),
+                                           ('NOT_MEASURED', None, False)])
+def test_early_package_row_defers_to_native_pad_placement(tmp_path, monkeypatch, status, code, ran):
+    docs = tmp_path / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L1_DATASHEET.json').write_text(json.dumps({'no_package_in_input': True}))
+    (docs / 'L19_CONSTRAINTS_PDK.json').write_text(json.dumps({'fields': {'pdk_target': 'gf180mcuD'}}))
     calls = []
-    rtl = tmp_path / 'unit.v'
-    rtl.write_text('module unit(input clk, input d, output q); assign q=d; endmodule\n')
-    owner = Flow.factory.get('Classic')({'DESIGN_NAME': 'unit', 'PDK': 'sky130A',
-        'VERILOG_FILES': [str(rtl)], 'CLOCK_PORT': 'clk'}, design_dir=str(tmp_path))
+    names = {'package_load_and_test_interface_feasibility', 'rtl_authoring',
+             'structural_rtl_preflight', 'die_floorplan_and_macros'}
+    select = engine.select_steps
+    monkeypatch.setattr(engine, 'select_steps', lambda *args: [row for row in select(*args) if row['name'] in names])
 
-    def io_run(argv):
-        calls.append('io')
-        output = tmp_path / 'reports/phase3/io_pad_chip_top.json'
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps({'program': 'io_pad_chip_top_gen',
-            'verdict': 'WROTE' if io_code == 0 else 'REFUSE' if io_code == 1 else 'NOT_AVAILABLE',
-            'pad_instances': {'u_clock': {}, 'u_data': {}, 'u_output': {}},
-            'rule': 'native producer result'}))
-        return io_code
+    def author(self, directory, action):
+        assert action == 'rtl_gen'
+        assert not (tmp_path / 'phase2/stage1/rtl').exists()
+        calls.append('author')
+        rtl = tmp_path / 'phase2/stage1/rtl/core.v'
+        rtl.parent.mkdir(parents=True)
+        rtl.write_text('module core(input clk, output q); assign q=clk; endmodule\n')
+        return {'ran': True, 'exit_code': 0}
 
-    def assign(argv):
-        calls.append('assignment')
-        output = Path(argv[argv.index('--json') + 1])
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps({'program': 'pad_assignment_gen',
-            'verdict': 'WROTE' if assignment_code == 0 else 'REFUSE',
-            'questions_answered': 8, 'questions_unanswered': [], 'reason': 'native producer result'}))
-        return assignment_code
+    def native(self, directory, tool):
+        assert (tmp_path / 'phase2/stage1/rtl/core.v').is_file()
+        calls.append(tool['steps'][0])
+        if 'OpenROAD.PadRing' in tool['steps']:
+            return engine.ToolResult(ran, code, {'native_pad_count': 7}, ['native-pad-ring.log'])
+        assert tool['steps'] == ['Yosys.JsonHeader']
+        return engine.ToolResult(True, 0)
 
-    monkeypatch.setattr(io, 'main', io_run)
-    monkeypatch.setattr(assignment, 'main', assign)
-    chain = engine.NativeChain(tmp_path, {'delivery_target': 'gds'})
-    chain.owner = SimpleNamespace(config=owner.config, gating_config_vars={})
-    chain.config = owner.config.to_raw_dict()
-    chain.state = State()
-    chain.toolbox = Toolbox(str(tmp_path / 'tool_tmp'))
-    row = next(row for row in engine.read_json(engine.TABLE)['steps']
-               if row['name'] == 'package_load_and_test_interface_feasibility')
-    (tmp_path / 'step').mkdir()
-    result = chain.execute(tmp_path / 'step', row['tool'])
-    assert calls == (['io', 'assignment'] if io_code == 0 else ['io'])
-    assert engine.evaluate(result, []) == expected
-    if expected == 'PASS':
-        assert result.metrics['package_interface__pad__count'] == 3
-        assert result.metrics['package_interface__unanswered__count'] == 0
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Step 6 must report native placement, not run document or IO producers')
+
+    monkeypatch.setattr(frontend.OwnerSession, 'result', author)
+    monkeypatch.setattr(engine.NativeChain, 'execute', native)
+    monkeypatch.setattr(pad_assignment_gen, 'main', forbidden)
+    monkeypatch.setattr(io_pad_chip_top_gen, 'main', forbidden)
+    table = engine.read_json(engine.TABLE)
+    row = table['steps'][5]
+    assert row['tool'] == {'kind': 'native_report', 'from': 'die_floorplan_and_macros'}
+    route = {'entry_step': row['name'], 'verify_through': 'die_floorplan_and_macros',
+             'delivery_target': 'gds', 'input_contract': 'structured'}
+    result = engine.run(tmp_path, table=table, route=route,
+                        from_name=row['name'], to_name='die_floorplan_and_macros')
+    rows = {row['name']: row for row in result['steps']}
+    package = rows['package_load_and_test_interface_feasibility']
+    assert calls == ['author', 'Yosys.JsonHeader', 'OpenROAD.Floorplan']
+    assert rows['structural_rtl_preflight']['status'] == 'PASS'
+    assert package['status'] == status
+    assert package['native_metrics'] == {'native_pad_count': 7}
+    assert package['reports'] == ['native-pad-ring.log']
+    if ran:
+        assert package['review_from'] == 'die_floorplan_and_macros'
+    else:
+        assert package['ai_review'] == 'NO_NATIVE_RESULT'
