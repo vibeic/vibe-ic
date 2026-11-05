@@ -62,6 +62,22 @@ def test_clock_wire_budget_accepts_supplemental_liberty_without_buffers(native, 
     assert clock_settings(native) == {"CTS_CLK_MAX_WIRE_LENGTH": 80}
 
 
+@pytest.mark.parametrize("attribute", ["is_level_shifter", "is_pad"])
+def test_clock_wire_budget_excludes_native_nonbuffer_identity_cells(native, attribute):
+    path = Path(native["LIB"]["*slow"][0])
+    text = buffer("identity_interface", .21, extra=f"{attribute} : true;")
+    path.write_text(path.read_text().rsplit("}", 1)[0] + text + "}")
+    assert clock_settings(native) == {"CTS_CLK_MAX_WIRE_LENGTH": 80}
+
+
+def test_clock_wire_budget_excludes_identity_cells_with_extra_inout(native):
+    path = Path(native["LIB"]["*slow"][0])
+    text = buffer("identity_interface", .21,
+                  extra="pin (external) { direction : inout; }")
+    path.write_text(path.read_text().rsplit("}", 1)[0] + text + "}")
+    assert clock_settings(native) == {"CTS_CLK_MAX_WIRE_LENGTH": 80}
+
+
 @pytest.mark.parametrize("override", [{"CTS_CLK_MAX_WIRE_LENGTH": 12},
                                       {"CTS_CLK_MAX_WIRE_LENGTH": -1},
                                       {"PNR_SDC_FILE": "operator.sdc"},

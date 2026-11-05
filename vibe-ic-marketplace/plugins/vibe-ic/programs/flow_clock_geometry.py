@@ -23,10 +23,15 @@ def _buffer_input_caps(text, excluded):
     scale = parse_liberty_header(text)["cap_unit_pf"]
     values = []
     for cell, body in _liberty_blocks(text, "cell"):
+        attributes = _own_attrs(body)
         if (any(fnmatch.fnmatchcase(cell, pattern) for pattern in excluded)
-                or _attribute(_own_attrs(body), "dont_use") == "true"):
+                or any(_attribute(attributes, name) == "true"
+                       for name in ("dont_use", "is_level_shifter", "is_pad"))):
             continue
         pins = {name: _own_attrs(pin) for name, pin in _liberty_blocks(body, "pin")}
+        if any(_attribute(attrs, "direction") not in {"input", "output"}
+               for attrs in pins.values()):
+            continue
         inputs = [name for name, attrs in pins.items() if _attribute(attrs, "direction") == "input"]
         outputs = [attrs for attrs in pins.values() if _attribute(attrs, "direction") == "output"]
         if len(inputs) != 1 or len(outputs) != 1:
