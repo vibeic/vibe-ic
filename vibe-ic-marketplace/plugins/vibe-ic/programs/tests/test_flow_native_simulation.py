@@ -63,10 +63,11 @@ def test_functional_simulation_uses_a_frontend_that_elaborates_the_source(
     if not all(shutil.which(name) for name in ("iverilog", "verilator", "verilator_coverage", "cocotb-config")):
         pytest.skip("Native functional and coverage simulators are required")
     package = tmp_path / "unit_pkg.sv"
-    package.write_text("package unit_pkg; localparam MASK = 1'b1; endpackage\n")
+    package.write_text("package unit_pkg; typedef struct packed {logic bit_value;} value_t; "
+        "parameter value_t MASK = '{bit_value:1'b1}; endpackage\n")
     rtl = tmp_path / "unit.sv"
     rtl.write_text("`timescale 1ns/1ps\nmodule unit import unit_pkg::*; "
-                   "(input wire a, output wire z); assign z=a^MASK; endmodule\n")
+                   "(input wire a, output wire z); assign z=a^MASK.bit_value; endmodule\n")
     expected = 0 if outcome == "fail" else 1
     tb = tmp_path / ("tb_unit.py" if language == "python" else "tb_unit.v")
     if language == "python":
