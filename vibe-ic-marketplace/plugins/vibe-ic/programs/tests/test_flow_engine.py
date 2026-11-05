@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 import sys
 from decimal import Decimal
@@ -41,6 +42,29 @@ def test_tool_result_against_original_limit(tmp_path, code, value, inputs, statu
 def test_failed_step_does_not_block_independent_tool(tmp_path):
     report = execute(tmp_path, [command_row("bad", 2), command_row("good")])
     assert [row["status"] for row in report["steps"]] == ["FAIL", "PASS"]
+
+
+@pytest.mark.parametrize("errors,status", [(0, "PASS"), (1, "FAIL")])
+def test_manufacturability_reads_final_native_result_before_aggregation(tmp_path, errors, status):
+    names = {"design_for_manufacturability", "final_electrical_analysis", "signoff_aggregation"}
+    rows = [deepcopy(row) for row in engine.read_json(engine.TABLE)["steps"] if row["name"] in names]
+    measurement = command_row("final_electrical_analysis", errors)
+    measurement["tool"]["command"][2] = (
+        "import pathlib; p=pathlib.Path('calls'); "
+        "p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); "
+        + measurement["tool"]["command"][2])
+    for row in rows:
+        row["when"] = "always"
+        if row["name"] == measurement["name"]:
+            row["tool"], row["checks"] = measurement["tool"], measurement["checks"]
+    report = execute(tmp_path, rows)
+    actual = {row["name"]: row for row in report["steps"]}
+    summary = actual["design_for_manufacturability"]
+    assert summary["status"] == status
+    assert summary["native_metrics"]["errors"] == errors
+    assert actual["signoff_aggregation"]["status"] == status
+    assert actual["signoff_aggregation"]["native_metrics"]["non_passing_steps"] == (0 if errors == 0 else 2)
+    assert (tmp_path / "calls").read_text() == "1"
 
 
 def test_from_preserves_earlier_folder_and_clears_later_results(tmp_path):
@@ -243,6 +267,38 @@ def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, mon
     assert calls == ["rtl_validate", "rtl_validate"]
 
 
+@pytest.mark.parametrize("explicit_from", [False, True])
+def test_author_refresh_preserves_failure_and_uses_current_ai_output(tmp_path, monkeypatch, explicit_from):
+    import flow_engine_frontend
+    calls = []
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+
+    def author(self, directory, kind):
+        calls.append(kind)
+        produced = rtl.is_file()
+        return {"ran": True, "exit_code": 0 if produced else 1,
+                "native_steps": [{"name": "rtl_output", "ran": True,
+                    "status": "PASS" if produced else "FAIL", "exit_code": 0 if produced else 1,
+                    "source": {"author": {"kind": "AI", "model": "recorded-model"}}}]}
+
+    monkeypatch.setattr(flow_engine_frontend.OwnerSession, "result", author)
+    row = command_row("author")
+    row.update(tool={"kind": "adapter", "function": "step_rtl_gen"}, checks=[])
+    assert execute(tmp_path, [row])["fail"] == 1
+    old = (tmp_path / "steps/author/result.json").read_bytes()
+    (tmp_path / "steps/author/native-author.log").write_text("original author failure\n")
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit(input a,output y); assign y=a; endmodule\n")
+    report = execute(tmp_path, [row], **({"from_name": "author"} if explicit_from else {}))
+    assert report["pass"] == 1
+    assert calls == ["rtl_gen", "rtl_gen"]
+    current = report["steps"][0]["native_steps"][0]
+    assert current["source"]["author"]["kind"] == "AI"
+    history = list((tmp_path / "steps/author/author_history").glob("*/result.json"))
+    assert len(history) == 1 and history[0].read_bytes() == old
+    assert (history[0].parent / "native-author.log").read_text() == "original author failure\n"
+
+
 def test_adapter_accepts_explicit_rtl_and_top_without_document_defaults(tmp_path):
     from flow_native_adapters import inputs
     rtl = tmp_path / "provided.v"
@@ -408,7 +464,7 @@ def test_native_seal_skip_is_missing_measurement_and_verifier_failure_still_fail
 @pytest.mark.parametrize("target,nature,entry,exit_step,count", [
     ("rtl", "debug", "4", "4", 4),
     ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 39),
-    ("shippable_gds", "spec_generation", "D1", "37.5ic", 41),
+    ("shippable_gds", "spec_generation", "D1", "37.5ic", 45),
 ])
 def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         tmp_path, target, nature, entry, exit_step, count):
@@ -435,6 +491,54 @@ def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         assert {"formal_verification", "functional_simulation_and_coverage",
                 "implemented_netlist_cdc_and_rdc", "final_geometry_rc_and_pex",
                 "final_electrical_analysis", "final_sdf_gate_level_replay"} <= names
+        if target == "shippable_gds":
+            assert {"candidate_signal_integrity", "post_layout_spice_correlation",
+                    "candidate_reliability_and_esd", "final_perc_esd_and_latch_up"} <= names
         assert selected[0]["name"] == "requirements_and_delivery_route"
         assert selected[-1]["name"] == ("ip_release_views_and_documentation"
                                           if target == "ip_hardmacro" else "compliance_and_final_adoption")
+
+
+@pytest.mark.parametrize("watts,status", [(0.004, "PASS"), (0.005, "FAIL"),
+                                          (0.0416, "FAIL"), (None, "NOT_MEASURED")])
+def test_power_report_compares_declared_tt_limit_instead_of_inheriting_pass(tmp_path, watts, status):
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    (docs / "quality.md").write_text("| total power(TT) | < 5 mW | sign-off |\n")
+    table = engine.read_json(engine.TABLE)
+    row = next(row for row in table["steps"] if row["name"] == "candidate_power_analysis")
+    features = engine.design_features(tmp_path, {"delivery_target": "ip_hardmacro"}, table)
+    row = {**row, "when": "always", "tool": {
+        **engine.choose_tool(row["tool"], features), "from": "producer"}}
+    producer = command_row("producer")
+    metrics = {"power__total__corner:nom_ff": 0.999}
+    if watts is not None:
+        metrics["power__total__corner:nom_tt"] = watts
+    producer["checks"] = []
+    producer["tool"]["command"][2] = (
+        "import json,pathlib,sys; pathlib.Path(sys.argv[1]).write_text("
+        + repr(json.dumps(metrics)) + ")")
+    result = execute(tmp_path, [producer, row])["steps"][-1]
+    assert result["status"] == status
+    assert len(result["metrics"]) == 1
+    check = result["metrics"][0]
+    assert check["operator"] == "within_declared_bounds"
+    assert check["limit"] == {"max": 0.005, "max_exclusive": True}
+    assert check["unit"] == "W"
+    assert check["source"]["line"] == 1
+    assert "pad" in check["scope"].lower()
+
+
+@pytest.mark.parametrize("milliwatts,watts", [("5", Decimal("0.005")),
+                                           ("41.6", 0.0416), ("41.6", Decimal("0.0416"))])
+def test_strict_power_ceiling_rejects_decimal_and_float_equality(tmp_path, milliwatts, watts):
+    from flow_config import declared_power_checks
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    (docs / "quality.md").write_text(
+        f"Total power (including core power and pads) < {milliwatts} mW at TT.\n")
+    checks = declared_power_checks(tmp_path)
+    assert len(checks) == 1
+    measured = engine.measure(checks, {"power__total__corner:nom_tt": watts}, {}, {"always": True})
+    assert measured[0]["status"] == "FAIL"
+    assert engine.evaluate(engine.ToolResult(True, 0), measured) == "FAIL"
