@@ -144,6 +144,9 @@ END {layer}
         values = coherent_geometry(native, widths, database.getTech(), 200)
         assert values["PDN_VSPACING"] == 3
         assert values["PDN_CORE_RING_VSPACING"] == 3
+        bound = coherent_geometry(native, widths, database.getTech(), None)
+        assert bound["PDN_VSPACING"] == 3
+        assert bound["PDN_CORE_RING_VSPACING"] == 3
         with pytest.raises(ValueError, match="Declared PDN_VSPACING"):
             coherent_geometry(native, widths, database.getTech(), 200, {"PDN_VSPACING"})
         native["PDN_VSPACING"] = 3.0015
