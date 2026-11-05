@@ -241,6 +241,66 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
     in_decls = [_decl(n, w, "input") for n, w in ins]
     out_decls = [_decl(out_name, out_w, "output")]
     body = [f"    assign {out_name} = {a} + {b};"]
+    requests = []
+    target = r"(?:(?:(?:an?|the|this)\s+)?(?:(?:unsigned|(?:\d+|[a-z]+)[-\s]+bit)\s+)*(?:adder|implementation)|it)\b"
+    construction = re.compile(r"(?:(?:and|but)\s+)?(?:do\s+)?(?:(?P<deny>not|never|without|avoid)\s+)?"
+                              r"(?:(?:use|using|with|from|instantiate)\s+|(?:built|build|construct)\s+"
+                              r"(?:(?:it|the\s+(?:adder|implementation))\s+)?(?:from|using)\s+)?"
+                              r"(?:(?:only|multiple|individual|one[-\s]bit|1[-\s]bit|a|network|of)\s+)*"
+                              r"full[-\s]+adders?(?:\s+cells)?(?:\s+without\s+registers)?", re.I)
+    for clause in re.findall(r"[^.;]*\bfull[-\s]+adders?\b[^.;]*", text, re.I):
+        if re.fullmatch(r"\s*(?:a\s+different|another|the\s+previous)\s+(?:design|implementation)\s+"
+                        r"(?:uses?|was\s+(?:built|constructed))\s+(?:(?:from|using)\s+)?(?:a\s+network\s+of\s+)?full[-\s]+adders?(?:\s+cells)?\s*", clause, re.I):
+            continue
+        request = re.match(r"\s*(?:please\s+)?(?:do\s+)?(?:(?P<deny>not|never|avoid)\s+)?"
+                           r"(?:implement|construct|build|use|instantiate)\b\s*(?:" + target + r"\s*)?(?P<body>[\s\S]*)", clause, re.I)
+        if request is None:
+            return None
+        for piece in re.split(r"\s+(?:and|but)\s+", request["body"].strip(), flags=re.I):
+            parsed = construction.fullmatch(piece.strip())
+            if parsed is None or request["deny"] and parsed["deny"]:
+                return None
+            positive = not (request["deny"] or parsed["deny"])
+            if requests and positive != requests[-1]:
+                return None
+            requests.append(positive)
+    if requests and requests[0]:
+        packed = []
+        _pp._bullet_ports(text, packed)
+        header_ins, header_outs = _pp._header_ports(text, packed)
+        if (header_ins or header_outs) and _pp.enforce_unique_port_names(header_ins, header_outs) != (ins, outs):
+            return None
+        widths = dict(ins + outs)
+        spans = {}
+        for name, hi, lo in packed:
+            if (name not in widths or abs(hi - lo) + 1 != widths[name]
+                    or name in spans and spans[name] != (hi, lo)):
+                return None
+            spans[name] = (hi, lo)
+
+        def declaration(name, width, direction):
+            if name in spans:
+                hi, lo = spans[name]
+                return f"    {direction} [{hi}:{lo}] {name}"
+            return _decl(name, width, direction)
+
+        def bit(name, offset):
+            if name not in spans and widths[name] == 1:
+                return name
+            hi, lo = spans.get(name, (widths[name] - 1, 0))
+            return f"{name}[{lo + offset * (1 if hi >= lo else -1)}]"
+
+        in_decls = [declaration(n, w, "input") for n, w in ins]
+        out_decls = [declaration(out_name, out_w, "output")]
+        carry = "_vibeic_carry"
+        while carry in widths:
+            carry += "_"
+        body = [f"    wire [{aw}:0] {carry};", f"    assign {carry}[0] = 1'b0;"]
+        for index in range(aw):
+            left, right, incoming = bit(a, index), bit(b, index), f"{carry}[{index}]"
+            body += [f"    assign {bit(out_name, index)} = {left} ^ {right} ^ {incoming};",
+                     f"    assign {carry}[{index+1}] = ({left} & {right}) | (({left} ^ {right}) & {incoming});"]
+        body.append(f"    assign {bit(out_name, aw)} = {carry}[{aw}];")
     return _emit("// program-SOLVED N-bit unsigned adder (carry in MSB); "
                  "deterministic.", top, in_decls, out_decls, body)
 
