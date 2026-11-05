@@ -25,11 +25,12 @@ SETTINGS = {
     "PDN_CORE_RING_CONNECT_TO_PADS", "PDN_VWIDTH", "PDN_HWIDTH",
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
 }
-IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
+IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_REPAIR",
+                           "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
 
 
 def implementation_setting(key: str) -> bool:
-    return key in IMPLEMENTATION_SETTINGS or key.startswith("CTS_")
+    return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -223,7 +224,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
         config.update(_chip_pdn(project, pdk))
     implementation = _load(project / "plugin_output/declaration.json")
     config.update({key: value for key, value in implementation.items()
-                   if implementation_setting(key) or key.startswith("PDN_")})
+                   if implementation_setting(key)})
     config.update(_settings(fields, pdk))
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
@@ -234,11 +235,13 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     return config
 
 
-def build_native_config(project: Path | str, *, route: str | None = None, pdk: str | None = None) -> dict[str, Any]:
+def build_native_config(project: Path | str, *, route: str | None = None, pdk: str | None = None,
+                        on_tool_run=None) -> dict[str, Any]:
     config = build_config(project, route=route, **({"pdk": pdk} if pdk else {}))
     if route in {"ic", "DIE"}:
         from flow_chip_inputs import prepare
-        config = prepare(Path(project).resolve(), config)
+        config = prepare(Path(project).resolve(), config,
+                         **({"on_tool_run": on_tool_run} if on_tool_run is not None else {}))
     return config
 
 
