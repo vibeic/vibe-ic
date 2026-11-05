@@ -97,3 +97,39 @@ def test_power_simulation_reads_native_assertions(tmp_path, monkeypatch, code, o
         assert native.metrics["isolation_retention_behavior_errors"] == (0 if "4/4" in output else 1)
     else:
         assert "isolation_retention_behavior_errors" not in native.metrics
+
+
+@pytest.mark.parametrize("code,output,expected", [
+    (0, "UPF read", "NOT_MEASURED"),
+    (1, 'invalid command name "set_design_top"', "NOT_MEASURED"),
+    (1, "UPF-0014 isolation control is invalid", "FAIL"),
+    (None, "", "NOT_MEASURED"),
+])
+def test_implemented_upf_read_preserves_measurement_gaps(tmp_path, monkeypatch, code, output, expected):
+    database, upf = tmp_path / "core.odb", tmp_path / "core.upf"
+    database.write_text("")
+    upf.write_text("set_design_top core\n")
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L21_POWER_INTENT.json").write_text(json.dumps({"upf_path": "core.upf"}))
+    calls = []
+
+    def run(self, argv, **kwargs):
+        calls.append(list(map(str, argv)))
+        script = Path(calls[-1][-1]).read_text()
+        assert "read_db " in script and "read_upf -file " in script
+        assert "initialize_floorplan" not in script
+        if code is None:
+            return None
+        self.records.append({"exit_code": code, "log": str(self.directory / "openroad.log")})
+        return subprocess.CompletedProcess(argv, code, output, "")
+
+    monkeypatch.setattr(adapters.Commands, "run", run)
+    row = next(row for row in engine.read_json(engine.TABLE)["steps"]
+               if row["name"] == "implemented_power_intent_consistency")
+    native = engine.ToolResult(**adapters.execute(tmp_path, tmp_path / "step", row["tool"], {},
+        state={"odb": str(database)}, config={"DESIGN_NAME": "core"}))
+    assert len(calls) == 1
+    assert native.metrics == {}
+    measured = engine.measure(row["checks"], native.metrics, {}, {"has_power_intent": True, "physical": True})
+    assert engine.evaluate(native, measured) == expected

@@ -750,6 +750,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if tool.get("adapter") == "power_simulation":
         from flow_power import simulation
         return simulation(project, work, tool)
+    if tool.get("adapter") == "implemented_power_intent":
+        from flow_power import implemented
+        return implemented(project, work, state=state, config=config)
     if tool.get("adapter") == "transition_atpg":
         from flow_atpg import transition
         return transition(project, work, state=state, config=config)
