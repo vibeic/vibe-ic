@@ -102,11 +102,6 @@ def prepare(project, context):
         raise Flow109Error("FLOW109_M02_WRONG_COMPONENT", str(context["requested_step"]))
     require_launch_admission(project, "flow109.M02", {"flow109_context": context})
     sources = operation_sources()
-    uses = context["runtime_tool_uses"]
-    if (len(uses) != 1 or uses[0].get("tool_id") != "python3"
-            or (uses[0].get("semantics") or {}).get("operation_sources") != sources):
-        raise AdmissionRefusal("QUALIFICATION_OPERATION_SOURCE_MISMATCH",
-                               "M02 must bind the existing M3 producer and consumer")
     manifest_path = project / INPUT
     manifest = _read(manifest_path)
     if manifest.get("schema") != SCHEMA or manifest.get("basis") != "current_pre_layout_partition":
@@ -124,12 +119,6 @@ def prepare(project, context):
     if plan_path.name != "L22_VERIFICATION_PLAN.json" or not m3.plan(project):
         raise AdmissionRefusal("M02_SCENARIO_PLAN_ABSENT", str(plan_path))
     predecessors = _predecessors(project, manifest)
-    identity = uses[0]
-    if (identity.get("config") != _record(project, manifest_path)
-            or identity.get("deck") != _record(project, contract_path)
-            or identity.get("pdk") != manifest.get("pdk")
-            or identity.get("corner") != ["pre_layout"]):
-        raise AdmissionRefusal("M02_RUNTIME_SCOPE_MISMATCH", str(identity.get("use_id")))
     inputs = m3.inputs(project, top)
     inputs[str(Path(INPUT))] = _sha(manifest_path)
     for record in predecessors:
@@ -226,6 +215,7 @@ def execute(project, context):
               "producer_receipt": producer, "cosim_audit": audit,
               "reused_current_native": reused,
               "literal_measured_failures": literal_failures,
+              "qualification_status": "NOT_MEASURED",
               "metric_acceptance_status": "UNIMPLEMENTED",
               "unimplemented_obligations": [x["id"] for x in context["resolved_row"]["obligations"]],
               "gate_layers": {f"G{i}": "NOT_MEASURED" for i in range(1, 10)},

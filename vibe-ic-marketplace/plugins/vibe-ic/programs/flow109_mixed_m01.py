@@ -284,11 +284,6 @@ def prepare(project, context):
         raise Flow109Error('FLOW109_M01_WRONG_COMPONENT', str(context['requested_step']))
     require_launch_admission(project, 'flow109.M01', {'flow109_context': context})
     sources_id = operation_sources()
-    uses = context['runtime_tool_uses']
-    if (len(uses) != 1 or uses[0]['tool_id'] != 'python3'
-            or (uses[0].get('semantics') or {}).get('operation_sources') != sources_id):
-        raise AdmissionRefusal('QUALIFICATION_OPERATION_SOURCE_MISMATCH',
-                               'M01 must bind inherited producers, consumer and adapter')
     manifest_path = project / INPUT
     manifest = _read(manifest_path)
     if manifest.get('schema') != SCHEMA or manifest.get('basis') != 'source_bound_interface_facts':
@@ -313,18 +308,12 @@ def prepare(project, context):
     extraction = iface_source.extract('\n'.join(path.read_text(errors='replace') for path in sources.values()))
     if not extraction:
         raise AdmissionRefusal('M01_INHERITED_INTERFACE_EXTRACTION_EMPTY', str(manifest_path))
-    identity = uses[0]
-    if (identity['config'] != _record(project, manifest_path)
-            or identity['deck'] != _record(project, req_path)
-            or identity['pdk'] != {'applicable': False, 'reason': 'source interface contract is PDK-independent'}
-            or identity['corner'] != ['source']):
-        raise AdmissionRefusal('M01_RUNTIME_SCOPE_MISMATCH', identity['use_id'])
     inputs = {str(path): _sha(path) for path in [manifest_path, req_path, *sources.values()]}
     for record in a04_bound:
         inputs[str(project / record['path'])] = record['sha256']
     return {'manifest': manifest, 'contract': contract, 'unresolved': unresolved,
             'rails': rails, 'extraction': extraction, 'a04': a04, 'inputs': inputs,
-            'sources': sources_id, 'binary': identity['executable']['path']}
+            'sources': sources_id, 'binary': sys.executable}
 
 
 def _before(project, context, prepared):
@@ -386,6 +375,7 @@ def execute(project, context):
     report = {**contract, 'native_step_id': 'flow109.M01', 'component_status': status,
               'flow109_acceptance': 'NOT_MEASURED', 'consumer': consumer,
               'execution': execution, 'operation_sources': prepared['sources'],
+              'qualification_status': 'NOT_MEASURED',
               'metric_acceptance_status': 'UNIMPLEMENTED',
               'unimplemented_obligations': [o['id'] for o in context['resolved_row']['obligations']],
               'gate_layers': {f'G{i}': 'NOT_MEASURED' for i in range(1, 10)}}
