@@ -488,6 +488,10 @@ def _reset_map(mod: dict, port_bit: int) -> Dict[str, list]:
             out["opaque"].append({"cell": n, "type": c.get("type")})
         elif "SRST" in hit or "ARST" in hit:
             pin = "SRST" if "SRST" in hit else "ARST"
+            family = _SYNC_RESET_FFS if pin == "SRST" else {"$adff", "$adffe"}
+            if c.get("type") not in family or len(_bits(c, pin)) != 1:
+                out["opaque"].append({"cell": n, "type": c.get("type")})
+                continue
             par = _parity(drivers, _bits(c, pin)[0], port_bit) if _bits(c, pin) else None
             pol = _param_bit(params.get(f"{pin}_POLARITY"))
             eff = None if (par is None or pol is None) else (pol ^ par)
@@ -2488,10 +2492,10 @@ def check_claim(netlist: dict, top: str, claim: dict,
             r.get("proof_basis") == "complete_raw_transition_fanin" for r in rows) else "native paired queries")
         return dict(out, verdict=PASS,
                     finding=f"complete current-Q reset mapping ({basis}) closes {rule}={value} for every reset-force group")
-    forced = rm["sync"] + rm["async"] + rm["async_x"]
+    forced = rm["sync"] + rm["async"]
     out["sync_reset_flops"] = len(rm["sync"])
-    out["async_reset_flops"] = len(rm["async"]) + len(rm["async_x"])
-    unclass = rm["clk"] + rm["opaque"]
+    out["async_reset_flops"] = len(rm["async"])
+    unclass = rm["clk"] + rm["opaque"] + rm["async_x"] + rm["data"]
     if rule == "reset_port":
         if forced:
             return dict(out, verdict=PASS,
@@ -2527,8 +2531,8 @@ def check_claim(netlist: dict, top: str, claim: dict,
                              f"resets is reset {value} (SRST/ARST polarity)"))
     if rule == "reset_sync":
         if value == "synchronous":
-            if rm["async"] or rm["async_x"]:
-                cells_ = sorted(f["cell"] for f in rm["async"] + rm["async_x"])
+            if rm["async"]:
+                cells_ = sorted(f["cell"] for f in rm["async"])
                 return dict(out, verdict=REFUTED, cells=cells_,
                             finding=(f"{len(cells_)} flop(s) are reset "
                                      f"ASYNCHRONOUSLY by {signal!r} (directly "
@@ -3070,19 +3074,6 @@ def check(rtl_files: List[Path], top: str, claims: List[dict],
         record["reset_memory_construction"] = proofs
         if not reset_fails:
             reset_elabs = candidate_elabs
-    mappings = {}
-    for i, e in enumerate(reset_elabs):
-        if e["netlist"] is not None:
-            for signal in sorted({c.get("signal", "") for c in claims if c.get("rule") in
-                                  {"reset_port", "reset_sync", "reset_polarity"}}):
-                mappings[i, signal] = reset_control_mapping(
-                    e["netlist"], e["raw"], top, signal,
-                    work_dir / f"reset_transition_{i}_{signal.encode().hex()}", container)
-                mappings[i, signal]["source_binding"] = {
-                    "rtl_sha256": record["rtl_sha256"], "defines": e["defines"],
-                    "optimized_netlist_sha256": file_sha256(e["path"]),
-                    "raw_netlist_sha256": file_sha256(e["raw_path"]),
-                    "scope": "same-invocation source next-state roles; not optimized-state coverage"}
     results = []
     for claim in claims:
         answers = []
@@ -3109,8 +3100,7 @@ def check(rtl_files: List[Path], top: str, claims: List[dict],
             else:
                 observed = (clock_elabs[i]["netlist"] if clock_claim else
                             reset_elabs[i]["netlist"] if reset_claim else e["netlist"])
-                answers.append(check_claim(observed, top, claim,
-                    mappings.get((i, claim.get("signal", ""))) if reset_claim else None))
+                answers.append(check_claim(observed, top, claim))
         verdicts = {a["verdict"] for a in answers}
         if len(verdicts) == 1:
             results.append(answers[0])
