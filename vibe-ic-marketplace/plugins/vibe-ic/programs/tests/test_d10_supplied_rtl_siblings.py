@@ -340,7 +340,7 @@ def test_b_a_deferral_is_recorded_and_hands_off_as_reused_ip(
         "catalog-glue-author" if route == "input/vendor_rtl"
         else "spec-to-rtl"), res.extras
     assert res.extras["supplied_build_rtl"] == [f"{route}/spm.v"]
-    assert "serial_parallel_mul_synth" in [
+    assert "rtl_gen" in [
         d["generator"] for d in res.extras["deferred_generators"]]
     assert ("Do NOT author the design itself" in res.detail) is (
         route == "input/vendor_rtl")
