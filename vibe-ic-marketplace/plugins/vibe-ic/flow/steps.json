@@ -4057,8 +4057,7 @@
               "steps": [
                 "KLayout.Filler",
                 "KLayout.Density",
-                "VibeIC.DensityTopUp",
-                "Checker.KLayoutDensity"
+                "VibeIC.DensityTopUp"
               ],
               "imports": [
                 "flow_density_topup"
@@ -4076,7 +4075,7 @@
       },
       "checks": [
         {
-          "metric": "klayout__density_error__count",
+          "metric": "*__density_error__count",
           "operator": "<=",
           "limit": 0,
           "source": {
@@ -4088,8 +4087,6 @@
             "line": 471
           },
           "unit": "count",
-          "enabled_by": "ERROR_ON_KLAYOUT_DENSITY",
-          "enabled_default": true,
           "when": "ic"
         }
       ],
@@ -4120,7 +4117,7 @@
         {
           "metric": "dfm_density_lithography_cmp_targets",
           "native_metrics": [
-            "klayout__density_error__count"
+            "*__density_error__count"
           ],
           "source": {
             "file": "flow/flow109.json",
