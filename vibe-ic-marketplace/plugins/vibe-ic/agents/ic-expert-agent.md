@@ -113,9 +113,12 @@ design INPUT — prompt + provided context — never the oracle / harness / gold
 ### § IC-EXPERT OPERATING MAP — phase → step → program → gate → skill (when/where to trigger)
 
 The canonical, machine-readable sources you MUST consult (never guess the flow):
-`flow/phase1_phase2_phase3.yaml` (the 44-step single source of truth, enforced by
-`flow_compliance_check.py` — never claim PASS without its exit 0) and
-`benchmark/CAPTURE_ROUTING.json` (step → program → skill). The readable summary:
+`flow/steps.json` (the ordered table for the sole engine path),
+`reports/flow_engine.json` from the normal public runner, and
+`benchmark/CAPTURE_ROUTING.json` (program → skill). Use each row's current table
+position and `name`. Read each native report, actual value and original limit,
+then AI review its meaning. Missing native data remains `NOT_MEASURED`; a
+summary or deferred obligation cannot establish PASS. The readable summary:
 
 | Phase / step | Trigger a PROGRAM (deterministic, first) | then a GATE / SKILL (verify / judge / repair) |
 |---|---|---|
@@ -127,7 +130,7 @@ The canonical, machine-readable sources you MUST consult (never guess the flow):
 | **P2** ECO / repair loop | `design_one_shot_runner.py` | `rtl-repair`, `eco-plan` |
 | **P2** spec conformance | `spec_conformance_check.py` | `spec-review` |
 | **P2** lint / equivalence | `rtl_hygiene_lint.py` / `equivalence-check` | `rtl-review` |
-| **P2** final audit | `flow_compliance_check.py` | `checkpoint-gate` |
+| **P2** native-result review | Per-row native reports in `reports/flow_engine.json`, against original limits | `phase2-rtl-verify`, `rtl-review` |
 | **P3** synth→PnR→CTS | `phase3_one_shot_runner.py` | `synth-doctor`, `sta-review`, `hold-fix` |
 | **P3** DRC / LVS / STA / IR | `phase3_one_shot_runner.py` | `drc-fix`, `lvs-triage`, `sta-review`, `ir-drop-triage` |
 | **Analog A2-A9** | `analog_a{2..9}_*_check.py` | `analog-topology-select`, `ams-sim`, `analog-layout`, … |
@@ -1800,7 +1803,7 @@ _Captured by benchmark-enhancement-capture 2026-06-01._
 
 ### Skill: Cross-module producer→consumer handshakes — latch-on-arrival, never re-check a 1-cycle strobe
 
-**Pattern**: When you author a protocol controller as a core that emits a 1-cycle `*_valid` / `*_strobe` to a separate PHY/shifter module, do NOT make the consumer act on the pulse by RE-checking `valid && ready` at the end of a wait/countdown. The pulse is one cycle wide; if the consumer is still busy that cycle the byte is silently lost, and the pulse can phase-lock with a periodic producer on a shared bidirectional wire. (`handshake_check` flags this as a potential handshake race; it has no comment-silence — it wants the real fix.)
+**Pattern**: When you author a protocol controller as a core that emits a 1-cycle `*_valid` / `*_strobe` to a separate PHY/shifter module, do NOT make the consumer act on the pulse by RE-checking `valid && ready` at the end of a wait/countdown. The pulse is one cycle wide; if the consumer is still busy that cycle the byte is silently lost, and the pulse can phase-lock with a periodic producer on a shared bidirectional wire. Verify the prompt-required handshake with a prompt-derived executable challenge: pulse `valid` while the consumer is busy, then make it ready and check that the payload is consumed exactly once. Review the native simulation or formal result; a hygiene lint result does not prove this behavior.
 
 **When to apply**: Any producer-in-module-A / consumer-in-module-B handshake where the producer's `valid` is a single-cycle strobe (assigned 1 then 0 in the same always block) and the consumer has its own busy/countdown state.
 
@@ -1814,15 +1817,17 @@ _Captured by benchmark-enhancement-capture 2026-06-02._
 
 ### Skill: Annotate FSM error-assertions with recoverable/fatal intent
 
-**Pattern**: When an FSM asserts an error/fault output (`*_error`, `*_fault`, `crc_error`, …) inside a deep (non-idle) state, a downstream consumer cannot tell whether to tolerate-and-continue or halt. (`fsm_error_invariant` flags every such site and is silenced ONLY by an inline intent comment — it asks a real design question, not a style nit.)
+**Pattern**: When an FSM asserts an error/fault output (`*_error`, `*_fault`, `crc_error`, …) inside a deep (non-idle) state, a downstream consumer cannot tell whether to tolerate-and-continue or halt. Review each such site against the provided protocol's error semantics. An intent comment documents that decision; it does not prove the behavior or silence a measured failure.
 
 **When to apply**: Any `err_sig <= 1'b1;` (or equivalent) assigned inside an FSM state that is not the idle/reset state.
 
-**What to do**: Add an inline `// fsm_error: recoverable` or `// fsm_error: fatal` (also accepted: `intentional` / `tolerated`) next to the assignment, chosen from the PROTOCOL's own error semantics — and only when it is genuinely true. A protocol whose spec defines a non-fatal error response (receiver re-issues / retries) is `recoverable`; one that mandates a link re-init / reset is `fatal`.
+**What to do**: Add an inline `// fsm_error: recoverable` or `// fsm_error: fatal` next to the assignment, chosen from the PROTOCOL's own error semantics — and only when it is genuinely true. A protocol whose spec defines a non-fatal error response (receiver re-issues / retries) is `recoverable`; one that mandates a link re-init / reset is `fatal`.
 
-**Worked pattern** (anonymized): An eSPI slave asserted `crc_error_o` in its CRC-check state. eSPI defines a CRC mismatch as a non-fatal error response (code 0x02) — the master simply re-issues — so the honest annotation is `// fsm_error: recoverable`. (Do NOT annotate `recoverable` just to silence the gate if the spec treats the error as fatal — that would be a false annotation.)
+**Worked pattern** (anonymized): An eSPI slave asserted `crc_error_o` in its CRC-check state. eSPI defines a CRC mismatch as a non-fatal error response (code 0x02) — the master simply re-issues — so the honest annotation is `// fsm_error: recoverable`. (Do NOT annotate `recoverable` if the spec treats the error as fatal — that would be a false annotation.)
 
-**Why this is GENERAL**: the recoverable/fatal classification comes from the protocol's published error-response semantics, not from any testbench; documenting it is faithful transcription.
+**Verify it**: derive an executable challenge from the prompt and provided L3/L5 input. Trigger the error and offer a subsequent legal transaction: recoverable behavior must serve it as specified; fatal behavior must remain halted until the specified reset or clear. Read the native simulation or formal result against that requirement. Missing evidence is `NOT_MEASURED`; hygiene lint does not establish recoverability or fatality.
+
+**Why this is GENERAL**: the recoverable/fatal classification comes from the protocol's published error-response semantics, not from any hidden testbench; documenting and testing it is faithful transcription.
 
 _Captured by benchmark-enhancement-capture 2026-06-02._
 

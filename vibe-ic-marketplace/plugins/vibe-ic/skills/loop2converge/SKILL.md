@@ -288,8 +288,11 @@ retains valid checkpoints and all historical outputs.
 
 **Terminate on the subject's target, not on effort:**
 
-* benchmark IC — `flow_compliance_check` exit 0, or `PASS_WITH_WAIVERS` where every
-  waiver carries evidence + ticket + `review_required: true`
+* benchmark IC — every selected applicable native tool result in
+  `reports/flow_engine.json` meets its original spec, PDK or owner limit and has
+  been AI reviewed. Use current `flow/steps.json` row position/name. Deferred
+  work stays open; missing native values or original limits are `NOT_MEASURED`,
+  never summary PASS.
 * IP-cell — the LEF/GDS deliverables exist and the 37.5 gate is reached
 * open benchmark — the highest pass@1 that survives §4.05 and the tool-substitution
   disclosure

@@ -116,7 +116,10 @@ python3 plugins/vibe-ic/programs/fpga_led_probe_lint.py \
 Exit codes: `0` = PASS (ERROR-free; WARNINGs may still be reported);
 `1` = ERROR anti-pattern found; `2` = **NOTHING EXAMINED** — no input file, or
 no LED drive in any file that was read. `2` is the *disclosed-skip* tier, never
-a pass: `flow_compliance_check` files it as VACUOUS_PASS. The JSON `findings[]`
+a pass: record the unexamined behavior as `NOT_MEASURED` in the native-result
+review. Read the actual FPGA/native tool evidence in `reports/flow_engine.json`
+against its original requirement and AI review it; the lint only establishes
+what its examined LED drives cover. The JSON `findings[]`
 carries `rule` / `file` / `line` / `detail` / `fix_hint` for each ERROR;
 `warnings[]` carries the same shape for advisory hits; `unreadable[]` and
 `led_drives_examined` disclose the lint's actual coverage.

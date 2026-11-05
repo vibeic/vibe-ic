@@ -67,8 +67,11 @@ knowing because they tell you what a layered IR is *for*:
 
 Assertion-based design is the third: SVA/PSL as the machine-executable form of
 design intent, reusable in both simulation and formal. We already emit some of
-this (`assertion_covers_l3_constraints_check`, `assertion_property_check`,
-`formal_property_run`); we do not emit a
+this (`assertion_property_check`, `formal_property_run`). Read the actual
+simulation or formal report for each prompt-derived assertion against its
+original requirement and AI review its coverage; absent native proof is
+`NOT_MEASURED`. A syntactically valid property does not establish that it
+covers an L3 constraint; we do not emit a
 C/SystemC golden model, so sequential and transaction equivalence are not
 available to us. Say so when someone claims the flow is "formally verified".
 

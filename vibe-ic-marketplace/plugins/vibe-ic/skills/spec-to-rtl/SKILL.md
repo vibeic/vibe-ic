@@ -295,8 +295,7 @@ ships this skill so the WAIVE → handoff is unambiguous + reproducible.
 When you author RTL that raises an error flag on an undefined-access /
 illegal-command / out-of-range path, decide from the **L3/L5 protocol prose**
 (not from convenience) whether the FSM should **recover** or **halt**, and encode
-that decision so the downstream `fsm_error_invariant` gate and `/rtl-review` can
-audit it:
+that decision in RTL behavior and document it for `/rtl-review`:
 
 - **recoverable** — if L3 (transaction protocol) / L5 (error-handling spec) says the
   block sets the error flag and **continues serving the next transaction** (returns to
@@ -307,12 +306,17 @@ audit it:
   **requires a reset (or explicit clear) to clear**, implement the halt and do NOT add
   the recoverable annotation; the FSM stays in the error state until reset.
 
-**FORBIDDEN:** annotating a site `// fsm_error: recoverable` (or, in review, silencing
-the gate) **without** the L3/L5 sentence(s) that establish the halt-vs-continue
+**FORBIDDEN:** annotating a site `// fsm_error: recoverable` (or, in review, dismissing
+a behavioral failure) **without** the L3/L5 sentence(s) that establish the halt-vs-continue
 behavior. The annotation is a claim about the spec and must be backed by spec text.
 
-**why_not_bucket_a:** the gate program already does its half — it flags the
-error-flag sites structurally. The recoverable-vs-fatal call is a semantic judgment
+Verify the decision with a prompt-derived executable challenge: trigger the
+error, offer the next legal transaction and check either the specified recovery
+or the required halt until reset/clear. Read the native simulation or formal
+result against the unchanged requirement and AI review it. Missing evidence is
+`NOT_MEASURED`. A hygiene lint result does not prove error recovery or fatality.
+
+**why_not_bucket_a:** the recoverable-vs-fatal call is a semantic judgment
 that lives in protocol prose (L3/L5), not in RTL structure; the identical
 `error <= 1'b1` line means "keep going" in one protocol and "lock until reset" in
 another, so no deterministic rule over the RTL can decide it. This is the residual LLM

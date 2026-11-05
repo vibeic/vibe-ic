@@ -131,17 +131,15 @@ rules moved from prompt-space to tool-space.
 
 ## Error-flag site classification — recoverable vs fatal (#468)
 
-When the `fsm_error_invariant` gate flags an error-flag assignment site (an
-`error <= 1`, `err_o = 1'b1`, `status[ERR] <= 1`, etc. raised on an
-undefined-access / illegal-command / out-of-range path), the **program has done
-its half**: it located the site and proved an error flag is raised there. What it
-**cannot** decide from RTL structure is whether that error is *recoverable* (the
-FSM keeps serving subsequent transactions) or *fatal* (the FSM halts / needs reset
+Review every error-flag assignment site (an `error <= 1`, `err_o = 1'b1`,
+`status[ERR] <= 1`, etc. raised on an undefined-access / illegal-command /
+out-of-range path). RTL structure alone does not establish whether that error
+is *recoverable* (the FSM keeps serving subsequent transactions) or *fatal* (the FSM halts / needs reset
 to clear). That halt-vs-continue semantic lives in the **protocol prose** of L3
 (external interface / transaction protocol) and L5 (ADI / error-handling spec), not
 in the netlist topology — so it is the residual LLM judgment for this skill.
 
-**Procedure** (per flagged site):
+**Procedure** (per error-flag assignment site):
 
 1. Read the L3/L5 sentences that describe what the protocol does *after* this error
    condition is signalled.
@@ -150,22 +148,27 @@ in the netlist topology — so it is the residual LLM judgment for this skill.
      illegal-command / out-of-range) path AND the FSM **continues serving the next
      transaction** per L3/L5 (e.g. "an unsupported command sets the error bit and
      the slave returns to IDLE ready for the next frame"). Add the annotation
-     `// fsm_error: recoverable` at the flagged site.
+     `// fsm_error: recoverable` at the assignment site.
    - **fatal** — the error flag binds to a **halt / lockup state**, or L3/L5 says it
      **requires a reset (or explicit clear sequence) to clear** before any further
-     transaction is served. Leave the gate finding as a real concern and document the
-     halt/reset requirement.
+     transaction is served. Verify the halt/reset behavior and document the
+     requirement.
 3. In the review prose, **quote the exact L3/L5 sentence(s)** that justify the
    classification.
 
-**FORBIDDEN:** silencing / waiving the `fsm_error_invariant` gate finding *without*
+4. Derive an executable challenge from the provided prompt and L3/L5: trigger
+   the error, then offer the next legal transaction. Check specified recovery
+   or persistent halt until the required reset/clear. Review the actual native
+   simulation or formal result against that requirement. Missing native
+   evidence is `NOT_MEASURED`; hygiene lint does not prove this semantic behavior.
+
+**FORBIDDEN:** dismissing an error-recovery or fatal-state concern *without*
 quoting the L3/L5 sentence(s) that establish recoverable-vs-fatal. An unquoted
 "this is fine, it's recoverable" is an honesty-rule violation — the annotation must
 be backed by protocol text, not by an unsupported assertion.
 
-**why_not_bucket_a (cannot be a deterministic rule):** the program already flags the
-sites — that half *is* deterministic. The halt-vs-continue judgment requires reading
-the protocol's error-handling semantics in L3/L5 prose; whether the FSM resumes or
+**why_not_bucket_a (cannot be a deterministic rule):** the halt-vs-continue
+judgment requires reading the protocol's error-handling semantics in L3/L5 prose; whether the FSM resumes or
 locks up is a property of the *spec's intent*, not of the RTL's `case`/state
 structure (the same `error <= 1` line is recoverable in one protocol and fatal in
 another). No regex over the RTL can decide it; it needs the L3/L5 sentence.

@@ -204,7 +204,7 @@ re-rendering is a re-run of that track, not a separate skill invocation.
 | L11 | `L11_CALIBRATION.json` |
 | L12 | `L12_BEHAVIORAL_SEQUENCES.json` |
 | L13 | `L13_LAB_CALIBRATION.json` |
-| cross-layer | consistency is checked by `doc_consistency_no_unresolved_conflicts_check` |
+| cross-layer | AI review each admitted fact at its real consumer field against the provided source; read native results in `reports/flow_engine.json` against original requirements and disclose `NOT_MEASURED` where evidence is absent |
 
 The skills that DO ship for this stage are this `phase1` skill and the two
 verification-tier reviewers `phase1-output-verify` and

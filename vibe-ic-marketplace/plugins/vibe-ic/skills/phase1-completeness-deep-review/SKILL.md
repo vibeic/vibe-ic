@@ -273,7 +273,9 @@ Write `<project>/reports/phase1_completeness_deep_review.md` with:
 ## Reference
 
 - Tier-1 program: `programs/phase1_doc_input_completeness_check.py`
-- Forbidden waiver prefix: `phase1_input_vs_generated_*`
-  (enforced by `phase1_no_waivers_used_check`)
+- Missing admitted source facts remain open deficiencies. Read the existing
+  native extraction results in `reports/flow_engine.json`, compare against the
+  original provided input, and AI review the actual consumer fields. Missing
+  native evidence is `NOT_MEASURED`; metadata or a waiver cannot establish PASS.
 - Sibling skill (lighter spot-check): `phase1-output-verify`
 - Backlog skill: `community-backlog-submit`
