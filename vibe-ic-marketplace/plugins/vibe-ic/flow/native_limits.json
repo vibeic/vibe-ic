@@ -960,6 +960,18 @@
           "file": "programs/flow109_final_electrical.py",
           "line": 123
         }
+      },
+      {
+        "metric": "em_worst_utilization_pct",
+        "operator": "<=",
+        "limit": 100,
+        "unit": "%",
+        "when": "ic",
+        "source": {
+          "file": "programs/flow109_final_electrical.py",
+          "line": 166
+        },
+        "limit_note": "Native current-density utilization of the PDK Jmax, without an added margin."
       }
     ],
     "final_perc_esd_and_latch_up": [
@@ -1185,6 +1197,17 @@
         ],
         "imports": [
           "flow_density_topup"
+        ]
+      }
+    },
+    "candidate_electromigration": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "VibeIC.EMCorners"
+        ],
+        "imports": [
+          "flow_em_corners"
         ]
       }
     }
@@ -1660,6 +1683,14 @@
       "source": {
         "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/flows/classic.py",
         "line": 148
+      }
+    },
+    "requires_em": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "/mnt/ssd2/codex_tasks/in/flow-ic/leader.txt",
+        "note": "Ruling211: retain published IC power-grid EM against PDK Jmax."
       }
     }
   },
@@ -2907,13 +2938,24 @@
     "candidate_electromigration": [
       {
         "old_name": "em_violations",
-        "class": "T",
-        "reason": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
+        "class": "N",
+        "native_metrics": [
+          "em_violations"
+        ],
+        "reason": "OpenROAD check_current_density violations against PDK Jmax."
+      },
+      {
+        "old_name": "em_worst_utilization_pct",
+        "class": "N",
+        "native_metrics": [
+          "em_worst_utilization_pct"
+        ],
+        "reason": "OpenROAD native Worst utilization percentage against PDK Jmax."
       },
       {
         "old_name": "em_current_lifetime_limits",
-        "class": "T",
-        "reason": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
+        "class": "D",
+        "reason": "Native current-density violations and utilization enforce the PDK Jmax calibrated for conductor lifetime; ruling211 retains this limit without a new lifetime target."
       },
       {
         "old_name": "current_temperature_model_coverage",

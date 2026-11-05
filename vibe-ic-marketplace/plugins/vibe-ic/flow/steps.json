@@ -171,6 +171,14 @@
         "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/flows/classic.py",
         "line": 148
       }
+    },
+    "requires_em": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "/mnt/ssd2/codex_tasks/in/flow-ic/leader.txt",
+        "note": "Ruling211: retain published IC power-grid EM against PDK Jmax."
+      }
     }
   },
   "steps": [
@@ -3618,6 +3626,18 @@
             }
           },
           {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "VibeIC.EMCorners"
+              ],
+              "imports": [
+                "flow_em_corners"
+              ]
+            }
+          },
+          {
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
@@ -3637,23 +3657,19 @@
           "source": {
             "file": "programs/flow109_final_electrical.py",
             "line": 123
-          },
-          "tool_gap": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
+          }
         },
         {
-          "metric": "em_current_lifetime_limits",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical and requires_em",
+          "metric": "em_worst_utilization_pct",
+          "operator": "<=",
+          "limit": 100,
+          "unit": "%",
+          "when": "ic",
           "source": {
-            "file": "flow/flow109.json",
-            "line": 13638
+            "file": "programs/flow109_final_electrical.py",
+            "line": 166
           },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "em_current_lifetime_limits"
-          },
-          "tool_gap": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
+          "limit_note": "Native current-density utilization of the PDK Jmax, without an added margin."
         }
       ],
       "legacy_id": {
