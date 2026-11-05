@@ -335,3 +335,38 @@ def test_empty_corner_filter_keeps_native_numbers_and_original_limit(filters):
     assert engine.evaluate(engine.ToolResult(True, 0), observed) == "FAIL"
     selected = engine.measure([check], metrics, {"CORNERS": ["nom_*"]}, {"always": True})
     assert [item["metric"] for item in selected] == ["slew__corner:nom_ss"]
+
+
+@pytest.mark.parametrize("target,nature,entry,exit_step,count", [
+    ("rtl", "debug", "4", "4", 4),
+    ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 39),
+    ("shippable_gds", "spec_generation", "D1", "37.5ic", 41),
+])
+def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
+        tmp_path, target, nature, entry, exit_step, count):
+    import task_nature_route as router
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        {"domain_kind": "primary", "source_pin": "clk", "period_ns": 20}]}))
+    route = router.route_decision_receipt(
+        "Debug a synchronous counter." if nature == "debug" else
+        "Build a synchronous counter from the design documents.",
+        nature=nature, delivery_target=target)
+    route = {**route, "input_contract": "structured"}
+    assert (route["entry_step"], route["verify_through"]) == (entry, exit_step)
+    table = engine.read_json(engine.TABLE)
+    features = engine.design_features(tmp_path, route, table)
+    selected = engine.select_steps(table, route, features, None, None)
+    assert len(selected) == count
+    names = {row["name"] for row in selected}
+    if target == "rtl":
+        assert names == {"requirements_and_delivery_route", "rtl_authoring",
+                         "rtl_validation_and_lint", "functional_simulation_and_coverage"}
+    else:
+        assert {"formal_verification", "functional_simulation_and_coverage",
+                "implemented_netlist_cdc_and_rdc", "final_geometry_rc_and_pex",
+                "final_electrical_analysis", "final_sdf_gate_level_replay"} <= names
+        assert selected[0]["name"] == "requirements_and_delivery_route"
+        assert selected[-1]["name"] == ("ip_release_views_and_documentation"
+                                          if target == "ip_hardmacro" else "compliance_and_final_adoption")
