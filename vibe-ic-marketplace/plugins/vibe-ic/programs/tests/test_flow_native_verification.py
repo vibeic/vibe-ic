@@ -12,6 +12,50 @@ from flow_native_adapters import Commands, formal
 from flow_native_verification import eqy, eqy_partitions, gls, reset_boundary, xor
 
 
+@pytest.mark.parametrize("bad", [False, True])
+@pytest.mark.parametrize("relative", [False, True])
+def test_native_formal_retries_an_unsupported_sv_read_without_changing_properties(
+        tmp_path, bad, relative):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    source = tmp_path / "phase2/stage1/formal"
+    source.mkdir(parents=True)
+    package = source / "unit_pkg.sv"
+    package.write_text("package unit_pkg; parameter SET=1'b1; endpackage\n")
+    rtl = source / "unit.sv"
+    rtl.write_text("module unit import unit_pkg::*; (input clk, output q);\n"
+        "`ifdef FORMAL\n`ifdef YOSYS\n`ifndef SYNTHESIS\n"
+        f"assign q=1'b{0 if bad else 1};\n"
+        "`else\nassign q=0;\n`endif\n`else\nassign q=0;\n`endif\n"
+        "`else\nassign q=0;\n`endif\nendmodule\n")
+    harness = source / "proof.sv"
+    harness.write_text("module proof import unit_pkg::*; (input clk);\n"
+        "wire q; unit dut(clk,q); always @(posedge clk) assert(q==SET); endmodule\n")
+    path = (lambda p: p.name) if relative else str
+    deck = source / "proof.sby"
+    deck.write_text(emit_invariant_sby([path(package), path(rtl)], path(harness),
+        "proof", [], [], prove_depth=8, bmc_depth=8))
+    original = deck.read_bytes(), harness.read_bytes(), rtl.read_bytes()
+    output = tmp_path / "output"
+    output.mkdir()
+    result = formal(tmp_path, output, {"top": "system"}, Commands(output))
+    assert result["metrics"]["unproved_required_properties"] == int(bad), result
+    assert {row["status"] for row in result["native_steps"]
+            if row["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}} == {"FAIL" if bad else "PASS"}
+    assert result["exit_code"] == (2 if bad else 0), result
+    scope = json.loads((output / "formal_scope.json").read_text())
+    assert scope["proves_declared_top"] is False
+    assert (deck.read_bytes(), harness.read_bytes(), rtl.read_bytes()) == original
+    retry = list(output.rglob("sv_frontend.sby"))
+    assert len(retry) == 2
+    for entry in retry:
+        text = entry.read_text()
+        assert "read_slang --single-unit" in text
+        assert "depth 8" in text and "abc " in text
+
+
 @pytest.mark.parametrize("reset_value", [0, 1])
 def test_native_formal_binds_retained_internal_state(tmp_path, reset_value):
     if not shutil.which("sby"):
