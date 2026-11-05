@@ -2210,6 +2210,7 @@ def run_rows(args, project: Path, run_row) -> int:
         # The bounded original contract owns authoring/lint, not adopted-IP inventory.
         rows = [row for row in rows if row['profile']['dispatch']['native_step_id'] != 'P0']
     code = 0
+    phase2_reports = []
     for row in rows:
         current = execution_context(plan, row['id'], row['id'],
             runtime_tool_uses=manifest.get('runtime_tool_uses', manifest.get('tool_uses')),
@@ -2239,6 +2240,29 @@ def run_rows(args, project: Path, run_row) -> int:
             raise
         finally:
             outputs.finish_flow109_row(project, row, current, result, attempt)
+            report = attempt['folder'] / 'outputs/reports/orchestrator/phase2_one_shot.json'
+            if report.is_file():
+                phase2_reports.append(json.loads(report.read_text()))
+    if len(phase2_reports) > 1:
+        # Later owners mark upstream sites N/A; retain what this window ran.
+        import verdict
+        from _atomic_artefact import write_json
+        summary = copy.deepcopy(phase2_reports[-1])
+        steps = {}
+        for report in phase2_reports:
+            for step in report.get('steps', []):
+                if step['name'] not in steps or step['status'] != 'NOT_APPLICABLE':
+                    steps[step['name']] = step
+        summary['steps'] = list(steps.values())
+        words = {report['verdict'] for report in phase2_reports}
+        summary['verdict'] = next((word.value for word in verdict.RUN_PRECEDENCE
+                                   if word.value in words), 'NOT_MEASURED')
+        summary['declared_window'] = {
+            'entry_step': phase2_reports[0].get('declared_window', {}).get('entry_step'),
+            'exit_step': summary.get('declared_window', {}).get('exit_step'),
+            'dispatched_step_ids': list(dict.fromkeys(step for report in phase2_reports
+                for step in report.get('declared_window', {}).get('dispatched_step_ids', [])))}
+        write_json(project / 'reports/orchestrator/phase2_one_shot.json', summary)
     return code
 
 

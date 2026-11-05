@@ -17,6 +17,11 @@
       "bucket_A_program": "programs/benchmark_dispatch.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
+    "flow.native_window_report": {
+      "description": "Retain measured native owner steps across one current Flow109 window without promoting later out-of-window sentinels.",
+      "bucket_A_program": "programs/flow109.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
     "flow.task_features": {
       "description": "General source/evidence-bound task profile selection before public admission; capture routing only, not a new flow step or acceptance gate.",
       "bucket_A_program": "programs/flow109.py",
