@@ -4,7 +4,7 @@ import io
 import re
 import tokenize
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Tuple
 def executable_text(path: Path, text: str) -> str:
     """`text` with everything that CANNOT invoke anything removed.
 

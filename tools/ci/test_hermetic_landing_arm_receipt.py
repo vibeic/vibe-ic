@@ -244,9 +244,9 @@ def _landing_case(tmp_path: Path, arm: str = "A2") -> dict[str, Path]:
                 "base": BASE, "head": HEAD, "tree": TREE,
                 "range": BASE + ".." + HEAD,
                 "source_sha256": {name: "1" * 64 for name in (
-                    "commit_msg_nda_check.py", "nda_diff_scan_check.py", "_commercial_pdk.py")},
+                    "nda_diff_scan_check.py", "_commercial_pdk.py")},
                 "guards": [{"guard": name, "rc": 0} for name in (
-                    "commit_msg_nda_check.py", "nda_diff_scan_check.py")],
+                    "nda_diff_scan_check.py",)],
             }}, sort_keys=True, separators=(",", ":"))
         receipt["container"]["process_environment"] = [
             name + "=" + value for name, value in sorted(env.items())]

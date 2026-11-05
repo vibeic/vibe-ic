@@ -19,6 +19,4 @@ requirements:
     pattern: '(PASS|FAIL|green|all four)'
     skill_section: 'Synthesis'
 
-# No postcheck_pass_only: full-test-audit is a DIAGNOSTIC — its report
-# legitimately states FAIL when a dimension has a gap, so the verdict must not
 cross_checks: []

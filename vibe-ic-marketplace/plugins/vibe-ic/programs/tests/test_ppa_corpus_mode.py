@@ -283,9 +283,6 @@ def test_measurement_exact_and_corpus_together_is_bad_invocation(tmp_path):
     assert "bad invocation" in r.stderr
 
 
-# ===========================================================================
-# 3. ppa_feasibility_check
-# ===========================================================================
 
 
 # ===========================================================================
@@ -344,9 +341,6 @@ def test_pareto_frontier_and_corpus_together_is_bad_invocation(tmp_path):
     assert "bad invocation" in r.stderr
 
 
-# ===========================================================================
-# 5. ppa_problem_integrity_check
-# ===========================================================================
 
 
 def _flags_named(stderr: str) -> list:

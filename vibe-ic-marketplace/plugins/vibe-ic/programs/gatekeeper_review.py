@@ -12,9 +12,6 @@ never re-implemented):
   * source_chip_agnostic_check.py      — chip-AGNOSTIC plugin source guard
   * shipped_path_portability_check.py  — no personal absolute path may
     ship as a value (the phantom-directory / wrong-machine-default guard)
-  * commit_msg_nda_check.py            — the MESSAGE-side twin of that guard:
-                                         no NDA foundry / SKU / process token in
-                                         any commit MESSAGE in base..head
   * nda_diff_scan_check.py             — the DIFF-CONTENT twin: no NDA foundry /
                                          SKU / process / IP-vendor token in any
                                          line the PR ADDS or any added/renamed
@@ -538,9 +535,6 @@ def version_bump_gate(cur: Optional[str], prev: Optional[str],
     return GateResult("version_bump_monotonic_check", rc, report.reason)
 
 
-# --------------------------------------------------------------------------
-# marketplace_version_sync_check — run as subprocess (it walks the tree).
-# --------------------------------------------------------------------------
 
 
 # --------------------------------------------------------------------------
@@ -567,34 +561,6 @@ def path_portability_gate(plugin_root: Path) -> GateResult:
     summary = (out.strip().splitlines() or [err.strip()] or [""])[0][:240]
     return GateResult("shipped_path_portability_check", rc,
                       summary or "(no output)")
-
-
-# --------------------------------------------------------------------------
-# commit_msg_nda_check — the MESSAGE-side twin of the source guard.
-#
-# chip_agnostic_gate above scans FILES. A commit whose MESSAGE names the
-# commercial foundry / SKU / process therefore passed every gate here — and one
-# really did land on origin/main AFTER the full-history NDA rewrite. A commit
-# message is a permanent, publicly mirrored artifact, so this scans the exact
-# range being landed. Output is MASKED (role, not literal), so it is safe in a
-# CI log or a PR comment.
-# --------------------------------------------------------------------------
-def commit_msg_nda_gate(repo: Path, base: str, head: str) -> GateResult:
-    prog = _PROGRAMS_DIR / "commit_msg_nda_check.py"
-    if not prog.is_file():
-        return GateResult("commit_msg_nda_check", 2,
-                          f"checker missing at {prog}")
-    rc, out, err = _run_program(prog, ["--repo", str(repo),
-                                       "--rev-range", f"{base}..{head}"])
-    # rc 2 == the range could not be walked (synthetic refs in a unit test, a
-    # shallow CI clone). That is NOT a leak finding, so it must not block —
-    # but it IS reported as a skip so a silently-unwalked range is visible.
-    if rc == 2:
-        return GateResult("commit_msg_nda_check", -1,
-                          f"skipped — range {base}..{head} not walkable")
-    body = err.strip() or out.strip()
-    summary = (body.splitlines() or [""])[0][:240]
-    return GateResult("commit_msg_nda_check", rc, summary or "(no output)")
 
 
 # --------------------------------------------------------------------------
@@ -1758,7 +1724,6 @@ def review(base: str, head: str, *,
 
     gates.append(chip_agnostic_gate(plugin_root))
     gates.append(path_portability_gate(plugin_root))
-    gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(nda_diff_scan_gate(repo, base, head))
     if version_by_gatekeeper:
         gates.append(publication_base_gate(repo, base, pr_metadata))

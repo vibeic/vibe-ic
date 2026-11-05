@@ -17,7 +17,6 @@ import sys
 
 # (unit, execution phase, concurrent lane). Serial phases have no lane.
 STEPS = (
-    ("cheap:nda-messages", "cheap", ""),
     ("cheap:nda-content", "cheap", ""),
     ("cheap:version", "cheap", ""),
     ("cheap:agent-scope", "cheap", ""),

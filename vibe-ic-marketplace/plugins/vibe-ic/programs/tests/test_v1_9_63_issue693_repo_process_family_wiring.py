@@ -133,7 +133,6 @@ def test_the_two_inventoried_gates_are_named_with_their_measured_reason():
     assert "156" in reasons["benchmark_triage_absorption_audit.py"]
 
 
-# ── 3. a written exclusion that excludes nothing ───────────────────────────
 
 
 

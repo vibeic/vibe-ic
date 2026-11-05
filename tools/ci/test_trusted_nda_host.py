@@ -58,7 +58,7 @@ def _completion(path: Path, arm: str, base: str, head: str, tree: str) -> None:
     gates = [{"index": i, "label": label,
               "output_sha256": "a" * 64, "returncode": 0,
               "state": "SKIP" if arm == "A2" and label in {
-                  "cheap:nda-messages", "cheap:nda-content"} else "PASS"}
+                  "cheap:nda-content"} else "PASS"}
              for i, label in enumerate(completion.LANDING_PROGRESS_UNITS)]
     digest = {"sha256": "b" * 64, "size": 1}
     payload = {"arm": arm, "base": base, "head": head, "tree": tree,

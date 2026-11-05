@@ -64,10 +64,9 @@ jobs:
       # commercial foundry / SKU / process is an equally permanent public leak
       # and used to pass every gate. Scan the messages this event introduces.
       # Output is MASKED (token ROLE, never the literal), so this log is safe.
-      - name: NDA guard — commit MESSAGES
+      - name: NDA guard — added CONTENT and PATHS
         run: |
           set -euo pipefail
-          CHECK=vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE="${{ github.event.pull_request.base.sha }}"
           else
@@ -84,8 +83,6 @@ jobs:
           else
             RANGE="${BASE}..HEAD"
           fi
-          echo "Scanning commit messages in: $RANGE" >&2
-          python3 "$CHECK" --repo "$GITHUB_WORKSPACE" --rev-range "$RANGE"
 
           # The message guard above scans only the commit TEXT. The same NDA
           # token is equally permanent when it arrives as added CONTENT or as

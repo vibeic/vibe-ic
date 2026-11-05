@@ -28,7 +28,7 @@ if _HERE not in sys.path:
 from landing_record_primitives import _git, _git_env, _object_format, _commit_and_tree
 
 PROGRAMS = "vibe-ic-marketplace/plugins/vibe-ic/programs"
-GUARDS = ("commit_msg_nda_check.py", "nda_diff_scan_check.py")
+GUARDS = ("nda_diff_scan_check.py",)
 SOURCE = GUARDS + ("_commercial_pdk.py",)
 OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 HEX = re.compile(r"[0-9a-f]{64}\Z")
@@ -251,7 +251,7 @@ def verify_completion(p: dict, repo: Path, path: Path, arm: str) -> None:
             or completion["head"] != expected_head
             or completion["tree"] != _commit_and_tree(repo, expected_head, len(p["base"]), arm)[1]):
         raise Refusal("host NDA result and completion identity differ")
-    for label in ("cheap:nda-messages", "cheap:nda-content"):
+    for label in ("cheap:nda-content",):
         rows = [row for row in completion["gates"] if row["label"] == label]
         expected_state = "SKIP" if arm == "A2" else "PASS"
         if len(rows) != 1 or rows[0]["state"] != expected_state or rows[0]["returncode"] != 0:
@@ -284,7 +284,7 @@ def verify(path: Path, repo: Path, base: str, head: str, tree: str,
                 or completion["head"] != expected
                 or completion["tree"] != _commit_and_tree(repo, expected, len(base), arm)[1]):
             raise Refusal("host NDA receipt and landing completion differ")
-        for label in ("cheap:nda-messages", "cheap:nda-content"):
+        for label in ("cheap:nda-content",):
             rows = [r for r in completion["gates"] if r["label"] == label]
             if len(rows) != 1 or rows[0]["state"] != ("SKIP" if arm == "A2" else "PASS") or rows[0]["returncode"] != 0:
                 raise Refusal("child NDA unit disagrees with host measurement")

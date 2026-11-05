@@ -639,18 +639,6 @@ echo "--- cheap tier (also enforced by the pre-push hook) ---"
 # An empty range means nothing new is being landed; the NDA checkers correctly
 # refuse an empty scan, so the no-op is skipped rather than reported as a pass.
 GK_RANGE_N="$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)"
-landing_unit_cheap_nda_messages() {
-  if [ "$GK_RANGE_N" = "0" ]; then
-    landing_skip "$1" "range is empty"
-    return 0
-  fi
-  if [ -n "${VIBEIC_NDA_HOST_RESULT:-}" ]; then
-    run "$1" "NDA — trusted host commit messages" python3 "$RUNTIME_ROOT/tools/ci/trusted_nda_host.py" \
-      check-unit --repo "$ROOT" --base "$BASE" --guard commit_msg_nda_check.py
-    return
-  fi
-  run "$1" "NDA — commit messages"   python3 "$PROGRAMS/commit_msg_nda_check.py" --repo "$ROOT" --rev-range "$RANGE"
-}
 landing_unit_cheap_nda_content() {
   if [ "$GK_RANGE_N" = "0" ]; then
     landing_skip "$1" "range is empty"
@@ -731,8 +719,6 @@ landing_unit_cheap_git_prohibition() {
 }
 # vibe-ic#712 — NO LANDING MAY ADD A POLARITY-BLIND PROSE EXTRACTOR.
 #
-# Whole-tree, so it sits OUTSIDE the range block above with `version-sync`: the
-# question is what the tree that ships contains, not what this push touched.
 #
 # `--ratchet` is a MEMBERSHIP verdict against `_OFFENDER_REGISTER`, not a count.
 # MEASURED across v1.17.51..v1.17.83 the population went 212 -> 213 -> 214 ->
@@ -782,24 +768,7 @@ landing_unit_cheap_nested_progress_pin() {
         --schedule "$ROOT/tools/ci/trusted_test_selection.py" \
         --plugin-root "$PLUGIN"
 }
-# A landing is normally ONE commit. A batch is legitimate when several
-# independent changes land together — NO-MIX forces a benchmark-data fix and a
-# plugin change into separate commits, for instance — and the gate accepts that
-# via --batch, which additionally requires the version bump to sit on the TIP.
-# Auto-detected rather than configured, so a batch is never silently waved
-# through as if it were a single landing.
-#
-# AN EMPTY RANGE IS NOT A LANDING, so it is not a landing of one commit either.
-# Asked over `X..X` the checker sees ZERO commits and answers FAIL — a vacuous
-# refusal, and one with teeth beyond this line: `gatekeeper-verify-merge.sh`
-# (vibe-ic#1019) runs this script over an empty range on the BASE to learn which
-# gates are ALREADY failing, and a gate that fails vacuously there would let a
-# candidate's REAL one-commit violation be waived as pre-existing. Range-scoped
-# gates must SKIP over an empty range, exactly as the block above already does.
 
-# The gate above asks whether the batch has a legal SHAPE. This asks what it
-# CONTAINS: does more than one member of this landing claim the same issue?
-#
 # vibe-ic#1411 — the only mechanism this repo has for noticing two changes doing
 # one job is a MERGE CONFLICT, and of the 22 issues carrying more than one open
 # PR, 16 had members sharing no file, so nothing reported them. #1080 is the

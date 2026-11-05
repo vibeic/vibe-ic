@@ -375,10 +375,6 @@ def test_bad_invocation_project_with_no_value_is_3_not_2(tmp_path):
 
 
 def test_bad_invocation_help_documents_project_on_both(tmp_path):
-    """A flag nobody can find is a flag nobody passes, and this one decides
-    what an ABSENT ECO declaration means. Asserted on the OUTPUT rather than
-    the exit code, because one of the two CLIs gets that code wrong -- see
-    below."""
     for prog in (SPACE,):
         r = subprocess.run([sys.executable, str(prog), "--help"],
                            capture_output=True, text=True, cwd=str(tmp_path))

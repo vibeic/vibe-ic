@@ -71,7 +71,7 @@ def _log(tools_line):
     body = [
         "=== gatekeeper landing gates — base=origin/main ===",
         "--- cheap tier (also enforced by the pre-push hook) ---",
-        "  PASS  NDA — commit messages",
+        "  PASS  NDA — added content/paths",
         "  PASS  version monotonic (assigned at merge — deferred)",
         "--- full tier (minutes; stamps the tree on success) ---",
         "  PASS  targeted tests (21 file(s))",

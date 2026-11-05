@@ -1,13 +1,3 @@
-"""v1.3.48 — the SECOND face of the watchdog primitive (`loop_guard`) + the
-
-Owner directive: "let watchdog be the common process for loop in the vibe-ic
-plugin; force AI to use such watchdog for any loop." Two halves:
-
-  * loop_guard — a bounded, no-progress-aware driver for an IN-PROCESS
-    convergence / poll / retry loop. Proven here: converges-early,
-    hits-max_iter, breaks-on-no-progress, single-shot, progress-keeps-alive,
-    deterministic (injected clock → ms).
-"""
 import sys
 from pathlib import Path
 

@@ -60,7 +60,7 @@ import _owned_process_supervisor as _owned
 import _semantic_child_progress as _semantic_progress
 
 
-from _atomic_artefact import write_json, write_text
+from _atomic_artefact import write_json
 
 
 DEFAULT_JOBS = 8

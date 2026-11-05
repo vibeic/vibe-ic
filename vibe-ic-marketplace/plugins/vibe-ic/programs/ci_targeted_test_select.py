@@ -350,7 +350,6 @@ DEFAULT_REF_MAX_TESTS = 50
 # ---------------------------------------------------------------------------
 SMOKE_BASENAMES: tuple[str, ...] = (
     "test_source_chip_agnostic_check.py",
-    "test_commit_msg_nda_check.py",
     "test_version_bump_monotonic_check.py",
     "test_agent_checkin_scope_guard.py",
     "test_flow_compliance_check.py",

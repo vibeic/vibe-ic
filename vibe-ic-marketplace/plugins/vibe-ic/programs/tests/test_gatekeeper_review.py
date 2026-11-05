@@ -3,14 +3,6 @@
 AGGREGATES the existing governance programs against a PR change-set and emits a
 verdict (chip-AGNOSTIC).
 
-Strategy
---------
-The file-walking gates (source_chip_agnostic_check / plugin_full_audit /
-marketplace_version_sync_check) are exercised against a SYNTHETIC, self-
-contained plugin root built per-test in a tmp dir, so the assertions do not
-couple to the live monorepo's audit state. The pure-logic gates (version bump,
-role scope, cadence, git prohibition, test cadence) are driven through the
-`review()` entry point with `override_*` injection.
 
 The §4.05/General/no-cheat AGENT-JUDGMENT gate is INTENTIONALLY NOT covered
 here — it is the loop's Step-2.7 (documented in the program docstring); a test
@@ -203,9 +195,6 @@ def test_chip_token_request_changes(tmp_path):
     assert any("source_chip_agnostic_check" in b for b in v.blocking)
 
 
-# ---------------------------------------------------------------------------
-# 3. a version-equality break (plugin.json != marketplace.json) -> REQUEST_CHANGES
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
