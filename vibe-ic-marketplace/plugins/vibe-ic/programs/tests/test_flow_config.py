@@ -45,6 +45,20 @@ def test_config_uses_documents_and_leaves_pdk_defaults(project):
     assert "FP_CORE_UTIL" not in config
 
 
+def test_generated_lowercase_pdk_keeps_installed_registry_spelling(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"fields": {"pdk_target": "sky130a"}}))
+    assert build_config(project)["PDK"] == "sky130A"
+
+
+def test_explicit_pdk_does_not_require_rewriting_generated_documents(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"fields": {}}))
+    before = path.read_bytes()
+    assert build_config(project, pdk="sky130A")["PDK"] == "sky130A"
+    assert path.read_bytes() == before
+
+
 def test_declaration_values_keep_native_units_and_pdk_scope(project):
     declarations(project, [
         {"kind": "flow_setting", "token": "FP_CORE_UTIL", "value": "20%"},

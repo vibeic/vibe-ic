@@ -150,14 +150,14 @@ def resolve_rtl_inputs(project: Path | str) -> tuple[list[Path], str]:
     return _resolve_rtl_inputs(Path(project).resolve(), {})
 
 
-def build_config(project: Path | str, *, route: str | None = None) -> dict[str, Any]:
+def build_config(project: Path | str, *, route: str | None = None, pdk: str | None = None) -> dict[str, Any]:
     """Read L documents and produced RTL; route is supplied by the Router caller."""
     project = Path(project).resolve()
     docs = project / "phase1/generated_docs"
     l8 = _load(docs / "L8_TIMING_WAVEFORM.json")
     l19 = _load(docs / "L19_CONSTRAINTS_PDK.json")
     fields = l19.get("fields", {})
-    pdk = fields.get("pdk_target") or l19.get("pdk_target")
+    pdk = pdk or fields.get("pdk_target") or l19.get("pdk_target")
     rtl_root = project / "phase2/stage1/rtl"
     inputs = _input_docs(project)
     sources: dict[str, Any] = {}
@@ -174,6 +174,8 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
                 break
     if not pdk:
         raise FileNotFoundError("Top module and PDK must be declared in design documents")
+    registered = [row["name"] for row in _load(PROGRAMS / "pdk_registry.json").get("pdks", [])]
+    pdk = next((name for name in registered if name.casefold() == str(pdk).strip().casefold()), str(pdk).strip())
     config: dict[str, Any] = {"DESIGN_NAME": top, "PDK": pdk,
                               "VERILOG_FILES": [str(path) for path in rtl]}
     config["VERILOG_INCLUDE_DIRS"] = sorted({str(path.parent) for path in
@@ -229,8 +231,8 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
     return config
 
 
-def build_native_config(project: Path | str, *, route: str | None = None) -> dict[str, Any]:
-    config = build_config(project, route=route)
+def build_native_config(project: Path | str, *, route: str | None = None, pdk: str | None = None) -> dict[str, Any]:
+    config = build_config(project, route=route, **({"pdk": pdk} if pdk else {}))
     if route in {"ic", "DIE"}:
         from flow_chip_inputs import prepare
         config = prepare(Path(project).resolve(), config)
