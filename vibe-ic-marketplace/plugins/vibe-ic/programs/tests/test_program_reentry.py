@@ -856,7 +856,8 @@ def test_a_concurrent_coordinator_refuses_the_regate(
 def test_a_non_repair_candidate_cannot_be_regated(
         tmp_path, monkeypatch, capsys):
     run, task, _ = fx._task(tmp_path)
-    fx._solve_report(run, task, active_route=True, exit_step="2")
+    task["candidate_origin"] = "AI_BACKUP"
+    fx._solve_report(run, task, exit_step="2")
     _declare_exit(run)
     fx._write_review(task, fx._valid_review(task))
     request = {
@@ -876,7 +877,7 @@ def test_a_non_repair_candidate_cannot_be_regated(
     request_path = Path(run) / "regate_request_nonrepair.json"
     request_path.write_text(json.dumps(request))
     assert _resume(run, request_path) == 2
-    assert "only an AI_REPAIR candidate can be re-gated" in _refusal(capsys)
+    assert "only an AI_REPAIR" in _refusal(capsys)
 
 
 def test_a_symlinked_request_is_refused_without_reading_its_target(

@@ -490,7 +490,7 @@
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "benchmark.program_regate": {
-      "description": "The ONE explicit Program re-entry: re-run the FIXED Program on one preserved, signed pre-gate input, in a staged project through the shared coordinator and the ordinary declared validation route. Bound by BOTH Program identities -- the declared version pair and the executable source tree. Preserve prior output and proof; require a fresh independent review. This is neither an AI repair nor an acceptance. Merged from benchmark.program_regate (v1.17.63) and benchmark.program_retry (v1.17.71) under #2047; --program-retry remains a deprecated alias of --program-regate.",
+      "description": "The ONE explicit Program re-entry: regenerate an unaccepted PROGRAM candidate from unchanged public input through ordinary worker retry, or re-run a preserved signed AI_REPAIR input through its existing staged validation path. Retain current identity/version rules, prior projects and active challenges; require a fresh independent review. Neither an AI repair nor acceptance. --program-retry remains the deprecated alias of --program-regate.",
       "bucket_A_program": "programs/benchmark_dispatch.py",
       "bucket_A_related": [
         "programs/vibe_ic_one_shot_runner.py"
