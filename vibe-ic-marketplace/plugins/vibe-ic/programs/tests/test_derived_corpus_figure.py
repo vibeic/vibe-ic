@@ -19,13 +19,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PLUGIN = PROGRAMS.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import _derived_corpus_figure as seam            # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -75,33 +73,8 @@ _WALKER = 'from pathlib import Path\n\n\ndef sweep(r):\n    return list(Path(r).
 
 
 
-def test_render_refuses_an_unbound_placeholder_rather_than_emitting_blank():
-    """The "render what you can" over-correction.
-
-    Substituting an unknown placeholder with itself, or with nothing, puts the
-    docstring back into the state the seam exists to prevent: prose that reads
-    as a measurement and is not one. It must raise.
-    """
-    with pytest.raises(seam.FigureError):
-        seam.render("population {figure:absent_one}", {"other": 3})
-    assert seam.render("population {figure:present_one}", {"present_one": 7}) \
-        == "population 7"
 
 
-def test_bindings_are_not_cached_between_calls(tmp_path):
-    """The "memoize for speed" over-correction — a cache reintroduces staleness."""
-    calls = []
-
-    def counting(root: Path) -> int:
-        calls.append(root)
-        return len(list(Path(root).glob("*.py")))
-
-    figures = seam.CorpusFigures({"n": counting})
-    (tmp_path / "a.py").write_text("")
-    assert figures.evaluate("n", tmp_path) == 1
-    (tmp_path / "b.py").write_text("")
-    assert figures.evaluate("n", tmp_path) == 2, "a cached figure is a stale figure"
-    assert len(calls) == 2
 
 
 

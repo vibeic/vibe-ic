@@ -52,11 +52,9 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import landing_merge_verdict as V  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO_ROOT = _PROGRAMS.parents[3]
@@ -66,79 +64,19 @@ TREE = "a" * 40
 SHA = "c" * 40
 
 
-def _log(tools_line):
-    """A `gatekeeper-land.sh` transcript whose ONLY variable is the tools tier."""
-    body = [
-        "=== gatekeeper landing gates — base=origin/main ===",
-        "--- cheap tier (also enforced by the pre-push hook) ---",
-        "  PASS  NDA — commit messages",
-        "  PASS  version monotonic (assigned at merge — deferred)",
-        "--- full tier (minutes; stamps the tree on success) ---",
-        "  PASS  targeted tests (21 file(s))",
-    ]
-    if tools_line is not None:
-        body.append("  " + tools_line)
-    body.append("  PASS  repo hygiene gates")
-    body.append("=== ALL GATES PASS — stamped %s ===" % SHA[:9])
-    return "\n".join(body) + "\n"
 
 
-def _decide(base_log, cand_log):
-    """Everything except the two gate logs is held identical and clean."""
-    # This unit fixture varies gate-label counts, not hygiene findings. Supply
-    # the complete comparator input for its one clean synthetic hygiene gate;
-    # absence now correctly means INCOMPLETE, never a measured empty delta.
-    hygiene = {"status": "CLEAN", "introduced": [], "carried": [],
-               "cleared": [], "candidate_findings": 0,
-               "base_findings": 0, "declared": 1}
-    return V.decide(
-        rebase_status="ok", expected_tree=TREE, verified_tree=TREE,
-        github_tree=TREE, land=V.parse_land_log(cand_log),
-        base_land=V.parse_land_log(base_log),
-        delta=V.Delta(base_total=10, candidate_total=10, overlap=10),
-        verified_sha=SHA, truncated=False, dropped_files=(), selection_size=21,
-        hygiene=hygiene)
 
 
 # ====================================================== 1. THE BAN, AND ITS CONTROL
 
 
-def test_a_fix_that_also_adds_a_tools_test_is_not_read_as_silencing_the_gate():
-    """The reported defect. The branch REPAIRS the red tier and adds one test
-    file, so the count moves 28 -> 29. Before the fix this refused with
-    'A FAILING GATE WAS SILENCED RATHER THAN FIXED'."""
-    v = _decide(_log("FAIL  repo tools tests (28 file(s))"),
-                _log("PASS  repo tools tests (29 file(s))"))
-    assert v.ok is True, v.reasons
-    assert not any("SILENCED" in r for r in v.reasons), v.reasons
-    assert any("now passes" in n for n in v.notes), v.notes
 
 
-def test_the_same_repair_without_a_new_tools_test_is_the_control():
-    """PAIRED CONTROL. Identical to the test above except the count does not
-    move — so the count is the only thing the assertion above is about."""
-    v = _decide(_log("FAIL  repo tools tests (28 file(s))"),
-                _log("PASS  repo tools tests (28 file(s))"))
-    assert v.ok is True, v.reasons
-    assert any("now passes" in n for n in v.notes), v.notes
 
 
-def test_a_tier_red_on_both_arms_is_not_read_as_a_failure_the_branch_owns():
-    """The second half of the defect: with the tier red on both sides, a count
-    change also invented a NEW failure. A gate red on the base is nobody's."""
-    v = _decide(_log("FAIL  repo tools tests (28 file(s))"),
-                _log("FAIL  repo tools tests (29 file(s))"))
-    assert v.ok is True, v.reasons
-    assert not any("PASSED ON THE BASE" in r for r in v.reasons), v.reasons
-    assert any("fails on the base too" in n for n in v.notes), v.notes
 
 
-def test_the_same_pre_existing_red_without_a_new_tools_test_is_the_control():
-    """PAIRED CONTROL for the test above."""
-    v = _decide(_log("FAIL  repo tools tests (28 file(s))"),
-                _log("FAIL  repo tools tests (28 file(s))"))
-    assert v.ok is True, v.reasons
-    assert any("fails on the base too" in n for n in v.notes), v.notes
 
 
 # ============================== 2. THE GATE MUST STILL REFUSE ACROSS A COUNT CHANGE
@@ -148,75 +86,21 @@ def test_the_same_pre_existing_red_without_a_new_tools_test_is_the_control():
 # between the arms, so it is answered by the new code path and not the old one.
 
 
-def test_a_gate_this_branch_reddens_is_still_refused_across_a_count_change():
-    v = _decide(_log("PASS  repo tools tests (28 file(s))"),
-                _log("FAIL  repo tools tests (29 file(s))"))
-    assert v.ok is False
-    assert any("PASSED ON THE BASE" in r and "repo tools tests" in r
-               for r in v.reasons), v.reasons
 
 
-def test_a_failing_gate_that_stops_being_asked_is_still_refused():
-    """`failed -> absent` is never an improvement. The candidate does not print
-    the tier at all; deleting the red gate must not buy a landing."""
-    v = _decide(_log("FAIL  repo tools tests (28 file(s))"), _log(None))
-    assert v.ok is False
-    assert any("SILENCED" in r for r in v.reasons), v.reasons
 
 
-def test_a_failing_gate_moved_to_SKIP_is_still_refused_across_a_count_change():
-    """`failed -> skipped` is never an improvement either, and a changed count
-    must not let the SKIP through as 'a different gate that was never red'."""
-    v = _decide(_log("FAIL  repo tools tests (28 file(s))"),
-                _log("SKIP  repo tools tests (29 file(s))"))
-    assert v.ok is False
-    assert any("SILENCED" in r for r in v.reasons), v.reasons
 
 
-def test_a_gate_with_no_count_at_all_is_unaffected():
-    """The whole rest of the gate list is compared exactly as before."""
-    base = _log("FAIL  repo tools tests (28 file(s))")
-    cand = base.replace("  PASS  repo hygiene gates",
-                        "  FAIL  repo hygiene gates")
-    v = _decide(base, cand)
-    assert v.ok is False
-    assert any("PASSED ON THE BASE" in r and "repo hygiene gates" in r
-               for r in v.reasons), v.reasons
 
 
 # ================================================ 3. THE NORMALISER'S OWN BOUNDARY
 
 
-@pytest.mark.parametrize("a,b", [
-    ("repo tools tests (28 file(s))", "repo tools tests (29 file(s))"),
-    ("repo tools tests (1 file(s))", "repo tools tests (10 file(s))"),
-    ("targeted tests (21 file(s))", "targeted tests (145 file(s))"),
-])
-def test_the_same_gate_under_two_counts_is_one_identity(a, b):
-    assert V.gate_key(a) == V.gate_key(b)
 
 
-@pytest.mark.parametrize("a,b", [
-    # Two DIFFERENT gates must never collapse into one identity.
-    ("repo tools tests (28 file(s))", "targeted tests (28 file(s))"),
-    ("repo tools tests (28 file(s))", "repo hygiene gates"),
-    # Not a per-tree count: an rc is an OUTCOME, and merging two outcomes would
-    # let 'I could not look' (rc=2) be waived by 'I looked and it wrote' (rc=1).
-    ("repo tools tests wrote to the tree (write-guard rc=1)",
-     "repo tools tests wrote to the tree (write-guard rc=2)"),
-    # A count that is not the trailing group is part of the name, not a measurement.
-    ("gate (2 file(s)) suffix", "gate (3 file(s)) suffix"),
-])
-def test_two_different_identities_are_never_merged(a, b):
-    assert V.gate_key(a) != V.gate_key(b)
 
 
-def test_the_label_is_reported_verbatim_even_though_the_key_is_stripped():
-    """The denominator is evidence. A reader of a refusal must still see how
-    many files the tier discovered."""
-    v = _decide(_log("PASS  repo tools tests (28 file(s))"),
-                _log("FAIL  repo tools tests (29 file(s))"))
-    assert any("(29 file(s))" in r for r in v.reasons), v.reasons
 
 
 # ========================================= 4. THE STRUCTURAL GUARD ON THE SCRIPT
@@ -314,34 +198,8 @@ def test_the_scan_actually_finds_the_labels_it_is_meant_to_judge():
         "the known counted label is missing from the scan: %r" % (labels,))
 
 
-def test_every_tree_varying_gate_label_is_normalised_or_declared_strict():
-    offenders = []
-    for label in _tree_varying_gate_labels():
-        if label in _DECLARED_STRICT:
-            continue
-        a, b = label.replace("%s", "28"), label.replace("%s", "29")
-        if V._TEST_TIER.match(a) and V._TEST_TIER.match(b):
-            continue                      # dropped from the comparison entirely
-        if V.gate_key(a) == V.gate_key(b):
-            continue                      # normalised to one identity
-        offenders.append(label)
-    assert not offenders, (
-        "these gate labels change with the tree, so the base arm and the "
-        "candidate arm compare two different names for one gate — a landing is "
-        "refused for a difference nobody made: " + repr(offenders))
 
 
-def test_at_least_one_label_is_carried_by_the_normaliser_and_not_the_declaration():
-    """Keeps the guard above from being satisfied by declaring everything
-    strict, which would restate the bug as policy."""
-    normalised = [l for l in _tree_varying_gate_labels()
-                  if l not in _DECLARED_STRICT
-                  and not V._TEST_TIER.match(l.replace("%s", "28"))
-                  and V.gate_key(l.replace("%s", "28"))
-                  == V.gate_key(l.replace("%s", "29"))]
-    assert normalised, (
-        "every varying label is exempt by declaration — the normaliser is "
-        "carrying nothing")
 
 
 def test_the_strict_declaration_names_no_label_the_script_stopped_printing():

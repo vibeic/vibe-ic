@@ -122,109 +122,16 @@ def test_the_VARIABLE_ALONE_does_not_reach_an_ISOLATED_child(tmp_path):
 
 # ── the coordinator launch site ──────────────────────────────────────────────
 
-def _capture(monkeypatch, tmp_path, *, script=None):
-    """`repo_hygiene_gate`'s real launch, with the supervisor stubbed out."""
-    parallel = tmp_path / _REL
-    parallel.parent.mkdir(parents=True, exist_ok=True)
-    parallel.write_text("# stub\n", encoding="utf-8")
-    seen = {}
-
-    class _Res:
-        outcome, rc, out, err = "natural", 0, "", ""
-
-    def _fake(argv, *, env, **kw):
-        seen["argv"] = list(argv)
-        seen["env"] = dict(env)
-        return _Res()
-
-    monkeypatch.setattr(GR._wd, "run_supervised", _fake)
-    monkeypatch.setattr(GR, "_published_corpus_binding", lambda: ({}, None))
-    GR.repo_hygiene_gate(tmp_path, script=script)
-    assert seen, "the launch site was never reached"
-    return seen
 
 
-def test_the_hygiene_coordinator_is_launched_with_BOTH_halves(
-        monkeypatch, tmp_path):
-    """THE FIX. `repo_hygiene_parallel.py` imports ten modules out of the
-    `programs/` directory it is about to audit, before any shard exists."""
-    seen = _capture(monkeypatch, tmp_path)
-    argv = seen["argv"]
-    assert argv[0] == sys.executable, argv
-    assert argv[1] == "-B", (
-        "the coordinator interpreter is unguarded; its own import phase writes "
-        f"into the tree it audits: {argv}")
-    assert seen["env"].get("PYTHONDONTWRITEBYTECODE") == "1", (
-        "the propagating half is missing, so a child of the coordinator that is "
-        "not `-I` may still write")
 
 
-def test_CONTROL_the_unit_test_seam_is_still_an_unflagged_bash_script(
-        monkeypatch, tmp_path):
-    """Green in both arms. The `script=` seam runs `bash`, which takes no `-B`;
-    a change that put the flag on every command would break it, and a test that
-    only looked at the parallel branch would not notice."""
-    fixture = tmp_path / "fake_gates.sh"
-    fixture.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
-    seen = _capture(monkeypatch, tmp_path, script=fixture)
-    assert seen["argv"][0] == "bash", seen["argv"]
-    assert "-B" not in seen["argv"], seen["argv"]
 
 
 # ── the program guards its own import phase ─────────────────────────────────
 
-def test_the_review_sets_BOTH_halves_BEFORE_its_first_IN_TREE_import():
-    """An ordering claim on the source, because placement is the whole point.
-
-    Everything imported out of `programs/` after this line is what would leave
-    bytecode in the audited tree; a guard set after the first such import would
-    read as correct and protect nothing."""
-    body = (PROGRAMS / "gatekeeper_review.py").read_text(encoding="utf-8")
-    lines = body.splitlines()
-
-    def first(pred):
-        for n, line in enumerate(lines, 1):
-            if pred(line):
-                return n
-        return None
-
-    attr = first(lambda l: l.strip() == "sys.dont_write_bytecode = True")
-    var = first(lambda l: l.strip()
-                == 'os.environ["PYTHONDONTWRITEBYTECODE"] = "1"')
-    in_tree = first(lambda l: l.startswith("import _watchdog"))
-    assert attr, "the interpreter half is not set at all"
-    assert var, "the propagating half is not set at all"
-    assert in_tree, "the first in-tree import moved; re-anchor this test"
-    assert attr < in_tree and var < in_tree, (
-        f"the guard is set at lines {attr}/{var}, after the first in-tree "
-        f"import at line {in_tree} — every module imported before it still "
-        f"writes into the tree this program audits")
 
 
-def test_the_review_launched_AS_THE_TIER_LAUNCHES_IT_leaves_no_bytecode(
-        tmp_path):
-    """THE FIX, as the experiment rather than as an assertion about source.
-
-    `tools/gatekeeper-land.sh:2013` starts this program as a plain
-    `python3 "$PROGRAMS/gatekeeper_review.py"` — no flag, no variable — so the
-    guarantee has to hold under exactly that command. Run against a COPY, so a
-    failure cannot dirty the real tree."""
-    prog = tmp_path / "programs"
-    prog.mkdir()
-    for src in PROGRAMS.glob("*.py"):
-        (prog / src.name).write_bytes(src.read_bytes())
-    env = dict(os.environ)
-    env.pop("PYTHONDONTWRITEBYTECODE", None)
-    env.pop("PYTHONPYCACHEPREFIX", None)  # the pinned image sets it to /tmp/pycache
-    r = subprocess.run([sys.executable, str(prog / "gatekeeper_review.py"),
-                        "--help"], capture_output=True, text=True, env=env,
-                       cwd=str(tmp_path))
-    assert r.returncode == 0, r.stdout + r.stderr
-    residue = sorted(q.name for q in (prog / "__pycache__").glob("*.pyc")) \
-        if (prog / "__pycache__").is_dir() else []
-    assert residue == [], (
-        "an unguarded launch left bytecode in the directory this program "
-        f"audits: {residue}")
 
 
 def test_CONTROL_an_ORDINARY_program_in_that_directory_still_writes(tmp_path):

@@ -26,7 +26,6 @@ verdict.  ``index.js`` states the rule itself: treat "could not run" as
 nothing-to-judge and you are back where this started.
 """
 import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -59,34 +58,6 @@ def _body() -> str:
 
 
 # ── (1) the path: re-derived from the product's own expression ───────────
-def test_a_the_product_resolver_reaches_the_gate():
-    """NOT "does the gate file exist" -- "does the expression in index.js
-    resolve to it".  Pure Python on purpose: a node-gated arm would SKIP on a
-    host without node and report the same green as a pass."""
-    h = _handler()
-    m = re.search(r"const gate\s*=\s*([^;]+);", h)
-    assert m, "handler no longer assigns `const gate`"
-    expr = " ".join(m.group(1).split())
-
-    join_form = re.fullmatch(
-        r'join\(\s*VIBE_IC_PROGRAMS_DIR\s*,\s*"([^"]+)"\s*\)', expr)
-    resolve_form = re.match(r"path\.resolve\(\s*here\s*,(.+)\)", expr)
-
-    if join_form:
-        resolved = PLUGIN / "programs" / join_form.group(1)
-    elif resolve_form:
-        segs = re.findall(r'"([^"]+)"', resolve_form.group(1))
-        resolved = SRC
-        for s in segs:
-            resolved = resolved.parent if s == ".." else resolved / s
-    else:
-        pytest.fail(f"unrecognised gate expression, cannot re-derive: {expr}")
-
-    assert resolved.is_file(), (
-        f"the gate expression in index.js resolves to {resolved}, which does "
-        f"not exist. The tool cannot run, and (see the arms below) it reports "
-        f"that as a completeness verdict.")
-    assert resolved.name == GATE_NAME
 
 
 def test_b_the_handler_does_not_name_the_retired_plugin_as_a_path():

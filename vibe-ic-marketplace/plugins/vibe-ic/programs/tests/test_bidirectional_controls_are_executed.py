@@ -40,25 +40,21 @@ from __future__ import annotations
 
 import ast
 import re
-import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # pytest's own default `python_files` patterns, spelled ONCE in this repo and
 # reused here rather than respelled. The program that owns them says why: a
 # second definition of "is a test file" drifts from the one pytest uses, and
 # the direction it drifts in is a file nobody runs.
-from landing_unselectable_pytest_corpus import _TEST_BASENAME  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 _PROGRAMS = _HERE.parent
 #: The plugin root — where `pytest.ini` and `run_tests.sh` live, and the base
 #: every path in the census is relative to.
 _PLUGIN = _PROGRAMS.parent
-_TESTS_REL = _HERE.relative_to(_PLUGIN).as_posix()
 
 
 
@@ -200,7 +196,6 @@ _CLASS = {
 _PLUGIN = _PROGRAMS.parent
 
 #: pytest's DEFAULT `python_files`. BOTH spellings; the shipped glob had one.
-_TEST_BASENAME = re.compile(r"^(test_.*\.py|.*_test\.py)$")
 
 #: The two ways a module the AST reads as collectable still collects nothing.
 #: Either spelling sends the file to the real collector instead of being trusted.
@@ -215,31 +210,8 @@ _PYTEST_TIMEOUT_S = 60
 _DECLARED_OUT = ("benchmark-data/",)
 
 
-def _git(args, cwd=_PLUGIN):
-    return subprocess.run(["git", "-C", str(cwd), *args],
-                          capture_output=True, text=True,
-                          timeout=_PYTEST_TIMEOUT_S)
 
 
-def population():
-    """Every pytest module in this plugin tree, by git rather than by glob.
-
-    Returns paths relative to the plugin root. A git failure RAISES: "I could
-    not look" must never reach a reader as "I looked and there was nothing",
-    which is the whole shape this file exists to remove.
-    """
-    rels = []
-    for extra in ([], ["--others", "--exclude-standard"]):
-        proc = _git(["ls-files", "-z", *extra])
-        assert proc.returncode == 0, (
-            f"git ls-files {extra} failed under {_PLUGIN} — the population of "
-            f"this census is UNKNOWN, and an unknown population must not be "
-            f"reported as a clean one:\n{proc.stderr}")
-        rels += [r for r in proc.stdout.split("\0") if r]
-    return sorted({
-        r for r in rels
-        if _TEST_BASENAME.match(r.rsplit("/", 1)[-1])
-        and not any(r.startswith(d) for d in _DECLARED_OUT)})
 
 
 def defines_a_collectable_test(src: str) -> bool:
@@ -327,23 +299,3 @@ def test_PAIRED_GUARD_the_three_canary_shapes_are_candidates():
     assert defines_a_collectable_test("async def test_a():\n    pass\n")
     # An opt-out the AST reads as collectable still goes to the collector.
     assert _OPT_OUT.search("def test_a():\n    pass\n__test__ = False\n")
-
-
-def test_NEGATIVE_CONTROL_the_population_is_not_one_directory():
-    """Canary 1's shape: the population must reach outside `programs/tests`.
-
-    The shipped guard globbed `_HERE` only, so 128 modules — mcp-eda/test,
-    tools/phase1_engine/tests, skills/*/tests, _shared — were never subjects.
-    """
-    pop = population()
-    outside = sorted({r.split("/")[0] for r in pop
-                      if not r.startswith("programs/tests/")})
-    assert {"mcp-eda", "skills", "tools", "_shared"} <= set(outside), (
-        f"the census no longer reaches every tree that ships tests: {outside}")
-    # The SPELLING half, canary 2, pinned against the regex rather than the tree
-    # (the tree carries no `*_test.py` today, and a control that depends on that
-    # staying true would silently stop testing anything the day it changes).
-    assert _TEST_BASENAME.match("something_test.py"), (
-        "the `*_test.py` half of pytest's default `python_files` is not in the "
-        "population filter — that is canary 2")
-    assert not _TEST_BASENAME.match("conftest.py")

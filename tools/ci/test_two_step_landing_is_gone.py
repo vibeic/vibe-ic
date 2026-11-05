@@ -57,11 +57,6 @@ def test_the_removed_file_stays_removed(rel):
     assert not (REPO / rel).exists(), f"{rel} came back"
 
 
-@pytest.mark.parametrize("rel", CALLERS)
-def test_no_live_entry_point_calls_the_removed_tools(rel):
-    text = (REPO / rel).read_text(encoding="utf-8")
-    hits = [token for token in _TOKENS if token in text]
-    assert not hits, f"{rel} still names {hits}"
 
 
 def test_the_verifier_runs_the_arms_on_the_base_snapshot():

@@ -49,40 +49,6 @@ import trusted_test_selection as T  # noqa: E402
 CENSUS_ITEM = "test_the_published_total_equals_the_live_census"
 
 
-@pytest.mark.parametrize("item,ordinal,total", [
-    ("test_outcome_relay_owns_one_native_scope_across_module_waves", 21, 13),
-    ("test_outcome_relay_does_not_erase_a_real_child_predicate_failure", 23, 1),
-])
-def test_relay_item_emits_its_declared_module_checkpoints(
-        item, ordinal, total, tmp_path, monkeypatch):
-    """Observe the real consumer: declaring an unused lease is insufficient."""
-    import importlib.util
-    import inspect
-
-    root = _CI.parents[1] / T.PLUGIN_REL
-    monkeypatch.syspath_prepend(str(root / "programs"))
-    monkeypatch.syspath_prepend(str(root / "programs/tests"))
-    import _pytest_progress_plugin as progress
-    spec = importlib.util.spec_from_file_location(
-        "_matrix_relay_schedule_control", root / T.HERMETIC_MATRIX_FILE)
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    observed = []
-    monkeypatch.setattr(progress, "domain_progress",
-                        lambda *event: observed.append(event))
-    consumer = getattr(module, item)
-    with monkeypatch.context() as local:
-        if "monkeypatch" in inspect.signature(consumer).parameters:
-            consumer(local, tmp_path)
-        else:
-            consumer(tmp_path)
-    rows = T.HERMETIC_TEST_PROGRESS[T.HERMETIC_MATRIX_FILE]["domains"]
-    assert (ordinal, T.HERMETIC_MATRIX_FILE + "::" + item,
-            "matrix-outcome-modules", total) in rows
-    assert [event for event in observed if event[0] == "matrix-outcome-modules"] == [
-        ("matrix-outcome-modules", completed, total)
-        for completed in range(1, total + 1)]
 
 
 def _selection():

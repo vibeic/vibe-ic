@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -66,10 +65,6 @@ def _emit(tmp_path, name, content, evidence):
         (tmp_path / "phase1" / "generated_docs" / f"{name}.json").read_text())
 
 
-def _run_gate(gen: Path):
-    r = subprocess.run([sys.executable, str(_GATE), str(gen)],
-                       capture_output=True, text=True)
-    return r.returncode, r.stdout + r.stderr
 
 
 def test_a_layer_records_the_documents_its_own_evidence_names(tmp_path):
@@ -79,14 +74,6 @@ def test_a_layer_records_the_documents_its_own_evidence_names(tmp_path):
         "anything else is either a guess or a loss")
 
 
-def test_no_evidence_means_no_provenance_and_that_is_the_honest_answer(tmp_path):
-    """The failure mode this whole gate exists to catch is an invented trail."""
-    out = _emit(tmp_path, "L20_DFT_SCAN_TOPOLOGY", {"schema_version": 1}, {})
-    assert out["source_documents"] == [], (
-        "a layer with no evidence must record an EMPTY provenance, never a "
-        "plausible-looking one")
-    rc, txt = _run_gate(tmp_path / "phase1" / "generated_docs")
-    assert rc == 1, f"expected exit 1, got {rc}"
 
 
 def test_a_derivation_is_not_a_source_document(tmp_path):

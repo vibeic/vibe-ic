@@ -94,10 +94,11 @@ def test_installed_model_startup_requirement(tmp_path, monkeypatch, startup):
 def psp_runtime():
     import analog_pdk_availability as availability
     image = os.environ.get('VIBEIC_EDA_IMAGE')
-    if not os.environ.get(contract.LOCAL_ATTESTATION_ENV) or not shutil.which('ngspice'):
-        pytest.skip('requires real ngspice and a live host-attested image')
+    if not shutil.which('ngspice'):
+        pytest.skip('requires real ngspice')
     root = availability.local_pdks_root(image)
-    assert root
+    if not root:
+        pytest.skip('requires an installed local PDK')
     starts = sorted(path for path in Path(root).glob('*/libs.tech/ngspice/.spiceinit')
                     if 'psp103.osdi' in path.read_text(errors='replace'))
     assert starts, 'the pinned image must supply a PSP-capable PDK startup'

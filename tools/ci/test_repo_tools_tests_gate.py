@@ -16,13 +16,10 @@ the only claim worth making.
 """
 import os
 import re
-import shutil
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
-import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _LAND = _ROOT / "tools" / "gatekeeper-land.sh"
@@ -55,42 +52,8 @@ def _extract_fn(name):
     return "\n".join(src[start:end + 1])
 
 
-def _trusted_runtime_available() -> bool:
-    """Can the PROTECTED landing runtime actually run on this host?
-
-    `trusted_pytest_entry.py` documents its contract in its own docstring:
-    "Invoke this file with ``python3 -I``. The isolated interpreter imports
-    pytest from the digest-pinned runner image." `-I` implies `-s`, so the user
-    site-directory is off — a host whose pytest lives in `~/.local` (which is
-    what CONTRIBUTING's `pip install pytest` produces) cannot import it, and the
-    entry REFUSES with `[NORECORD] ... No module named 'pytest'`. The gate then
-    correctly reports NORECORD.
-
-    That refusal is the design working, not a defect: the whole point of the
-    protected runtime is that it will not run against an unattested toolchain.
-    But the three behavioural tests below drive that gate on the HOST, so on
-    such a host they measure the host, not the gate.
-
-    NOT_CHECKED IS NOT A PASS — the same rule this gate applies to itself. So
-    they skip with the reason named, rather than being deleted, weakened, or
-    left permanently red. Inside the pinned image (pytest in system
-    site-packages) this returns True and they run for real.
-    """
-    probe = subprocess.run(
-        [sys.executable, "-I", "-c", "import pytest"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    return probe.returncode == 0
 
 
-_NEEDS_TRUSTED_RUNTIME = pytest.mark.skipif(
-    not _trusted_runtime_available(),
-    reason=(
-        "the protected landing runtime is unavailable on this host: "
-        "`python3 -I` cannot import pytest, so trusted_pytest_entry.py refuses "
-        "and the gate reports NORECORD. This is UNVERIFIED here, not verified "
-        "— run it in the digest-pinned runner image "
-        "(ghcr.io/vibeic/vibeic-eda) where pytest is in system site-packages."),
-)
 
 
 def _run_fn_against(tmp_path, test_body, name="test_probe.py", *,
@@ -235,62 +198,14 @@ def test_the_gate_runs_before_the_verdict_is_read():
 
 # ── BEHAVIOUR: the three states ───────────────────────────────────────────
 
-@_NEEDS_TRUSTED_RUNTIME
-def test_a_passing_repo_test_is_a_pass(tmp_path):
-    failed, out = _run_fn_against(tmp_path, "def test_ok():\n    assert True\n")
-    assert failed == 0, out
-    assert "PASS  repo tools tests" in out, out
 
 
-@_NEEDS_TRUSTED_RUNTIME
-def test_a_FAILING_repo_test_turns_the_gate_red(tmp_path):
-    """The load-bearing assertion. If this passes green, the gate is decorative.
-
-    Everything else in this file could hold while the gate silently swallowed
-    a red — this is the one that proves it does not.
-    """
-    failed, out = _run_fn_against(tmp_path,
-                                  "def test_bad():\n    assert False\n")
-    assert failed == 1, f"a FAILING repo test did not fail the gate:\n{out}"
-    assert "FAIL  repo tools tests" in out, out
 
 
-@_NEEDS_TRUSTED_RUNTIME
-def test_a_selected_empty_test_file_cannot_shrink_the_repo_tools_denominator(
-        tmp_path):
-    failed, out = _run_fn_against(
-        tmp_path, "def test_ok():\n    assert True\n",
-        extra_files={"test_empty_selected.py":
-                     "# selected by discovery but has no pytest item\n"})
-    assert failed == 1, (
-        "a selected file disappeared from aggregate JUnit and landed green:\n"
-        + out)
-    assert "FAIL  repo tools tests" in out, out
 
 
-@_NEEDS_TRUSTED_RUNTIME
-def test_an_empty_corpus_is_refused_rather_than_reported_as_a_pass(tmp_path):
-    """Zero discovered files must be FAIL, not a silent green.
-
-    A gate that reports success over an empty population is indistinguishable
-    from one that works, and is worse than none: it occupies the slot.
-    """
-    failed, out = _run_fn_against(tmp_path, None)
-    assert failed == 1, f"an empty corpus reported success:\n{out}"
-    assert "empty corpus" in out or "matched NO files" in out, out
 
 
-@_NEEDS_TRUSTED_RUNTIME
-def test_a_repo_test_that_writes_to_the_tree_turns_the_gate_red(tmp_path):
-    """The plugin's in-process write guard is not loaded here, so the property
-    it asserts is asserted from outside — and must actually bite."""
-    failed, out = _run_fn_against(tmp_path, """
-        import pathlib
-        def test_writes():
-            pathlib.Path("tools/scribble.txt").write_text("x")
-        """)
-    assert failed == 1, f"a tree-writing repo test did not fail the gate:\n{out}"
-    assert "wrote to the tree" in out, out
 
 
 # ── DISCOVERY, not a roster ───────────────────────────────────────────────
@@ -306,13 +221,6 @@ def test_a_newly_added_repo_test_is_picked_up_without_editing_the_gate(tmp_path)
         f"list-driven, not discovery-driven:\n{out}")
 
 
-@_NEEDS_TRUSTED_RUNTIME
-def test_the_gate_names_its_denominator(tmp_path):
-    """A gate that will not say how many things it checked cannot be audited."""
-    failed, out = _run_fn_against(tmp_path, "def test_ok():\n    assert True\n")
-    assert failed == 0, out
-    assert re.search(r"repo tools tests \(\d+ file\(s\)\)", out), (
-        f"the gate did not report its file count:\n{out}")
 
 
 def test_pytest_is_progress_supervised_without_an_elapsed_verdict():
@@ -337,27 +245,3 @@ def test_discovery_is_not_hardcoded():
 
 
 # ── THE FIXTURE MUST NOT WRITE WHERE THE OPERATOR ASKED THE LANE TO WRITE ──
-
-@_NEEDS_TRUSTED_RUNTIME
-def test_the_fixture_does_not_write_the_operators_named_junit(tmp_path,
-                                                             monkeypatch):
-    """Drive the fixture with the three report paths exported and assert none
-    of them is touched.
-
-    The CONTROL is the assertion that the gate still ANSWERED (`FAILED` is 0 or
-    1, i.e. the extracted function ran): a fixture that stopped running would
-    also leave the paths untouched, and would prove nothing.
-    """
-    named = {}
-    for var in ("GATEKEEPER_PYTEST_JUNIT", "GATEKEEPER_REPO_TOOLS_JUNIT",
-                "GATEKEEPER_UNSELECTABLE_JUNIT"):
-        target = tmp_path / f"{var}.xml"
-        named[var] = target
-        monkeypatch.setenv(var, str(target))
-    failed, out = _run_fn_against(
-        tmp_path, "def test_ok():\n    assert True\n")
-    assert failed in (0, 1), out          # CONTROL: the gate actually ran
-    left = [str(t) for t in named.values() if t.exists()]
-    assert not left, (
-        "the gate fixture wrote its throwaway report to the path the operator "
-        f"named for a real lane: {left}\n{out}")

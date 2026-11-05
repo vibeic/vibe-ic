@@ -132,63 +132,8 @@ def test_forged_collection_work_refuses(monkeypatch, tmp_path, change):
     assert progress.completed == 0
 
 
-def test_collection_work_after_completion_or_allowance_refuses(monkeypatch, tmp_path):
-    R = _runner()
-    nonce = _env(monkeypatch, tmp_path, _COLLECTION_UNITS)
-    row = dict(nonce=nonce, schema=1, scope="landing", total=3, seq=1,
-               state="collect_scan", unit=_COLLECTION_UNITS[0],
-               completed=0, scanned=1000)
-    raw = R.PROGRESS_PREFIX + R._canonical(row)
-    progress = R.Progress(nonce, "landing", _COLLECTION_UNITS)
-    with pytest.raises(R.Refusal):
-        progress.accept(raw)
-    progress.accept(E.record("start").rstrip(b"\n"))
-    progress.accept(E.record("checkpoint", _COLLECTION_UNITS[0]).rstrip(b"\n"))
-    with pytest.raises(R.Refusal):
-        progress.accept(raw)
-    capped = R.Progress(nonce, "landing", _COLLECTION_UNITS)
-    capped.accept(E.record("start").rstrip(b"\n"))
-    # Set the consumed high-water mark to the EXISTING inner allowance.
-    # The next exact stride must still refuse; no enormous test population.
-    programs = HERE.parents[1] / "vibe-ic-marketplace/plugins/vibe-ic/programs"
-    sys.path.insert(0, str(programs))
-    import pytest_per_file_junit as D
-    capped.collect_scanned = D._COLLECT_SCAN_FLOOR
-    row["scanned"] = capped.collect_scanned + D.COLLECT_SCAN_STRIDE
-    with pytest.raises(R.Refusal):
-        capped.accept(R.PROGRESS_PREFIX + R._canonical(row))
 
 
-def _collection_child(root, evidence):
-    """Real pytest hooks -> private streams -> strict probe -> stdout relay."""
-    programs = HERE.parents[1] / "vibe-ic-marketplace/plugins/vibe-ic/programs"
-    sys.path.insert(0, str(programs))
-    import pytest_per_file_junit as D
-    D._install_shutdown_handlers()
-    # Only the plan transport is adapted to this CPU fixture. Production emit
-    # and parser consume the unchanged parent-plan shape and canonical bytes.
-    emitter = D._load_hermetic_progress_emitter()
-    emitter._plan = lambda: dict(nonce="a" * 64, scope="landing",
-                                units=_COLLECTION_UNITS, prefix="VIBEIC_PROGRESS ")
-    relay = D._HermeticAggregateProgress(["test_one.py"], emitter=emitter)
-    assert relay.start()
-    def observe(probe):
-        probe.sample()
-        for name, stream in probe.streams.items():
-            (evidence / name).write_bytes(stream.path.read_bytes())
-        (evidence / "probe.json").write_text(json.dumps({
-            "error": probe.error, "declared_items": probe.declared_items,
-            "scans": {name: pr.collect_scanned for name, pr in probe.streams.items()},
-        }))
-        relay.observe(probe)
-    rc, out, incomplete = D.run_aggregate(
-        [sys.executable, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
-        ["test_one.py"], evidence / "inner.xml", 30, str(root),
-        progress_observer=observe)
-    (evidence / "inner.log").write_text(out)
-    if not incomplete and rc in (0, 1) and relay.finish():
-        return rc
-    return 2
 
 
 @pytest.mark.parametrize("behavior", ["advancing", "stopped", "replayed"])

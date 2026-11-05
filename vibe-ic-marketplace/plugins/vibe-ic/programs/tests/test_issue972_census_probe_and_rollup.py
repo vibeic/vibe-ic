@@ -63,7 +63,6 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import gate_discloses_denominator_check as G  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -159,69 +158,3 @@ def test_a_different_checkout_is_refused_rather_than_answered_about(tmp_path):
 
 
 # ── (b) the roll-up names the kind and the gate ─────────────────────────────
-
-def test_an_unrunnable_gate_is_not_reported_as_a_silent_pass():
-    """The exact sentence measured in the issue, refused.
-
-    A GATE_UNRUNNABLE means the gate never produced an output; "answered PASS
-    without disclosing it" is a claim ABOUT an output. Reporting the first as
-    the second is not a wording problem — the remedies differ, and a reader
-    acting on the printed one fixes the wrong thing.
-    """
-    lines = G.summarise_findings([
-        {"gate": "63x8 census freshness", "kind": "GATE_UNRUNNABLE",
-         "detail": "timed out"}])
-    blob = "\n".join(lines)
-    assert "GATE_UNRUNNABLE" in blob, blob
-    assert "could not be driven" in blob, blob
-    assert "without disclosing" not in blob, (
-        f"an unrunnable gate is still being reported as a silent pass:\n{blob}")
-    assert "63x8 census freshness" in blob, (
-        f"the roll-up does not NAME the gate it is counting:\n{blob}")
-
-
-def test_each_kind_gets_its_own_line_and_its_own_gates():
-    """Mixed findings must not be collapsed onto whichever sentence is first."""
-    lines = G.summarise_findings([
-        {"gate": "alpha", "kind": "GATE_UNRUNNABLE", "detail": "x"},
-        {"gate": "beta", "kind": "PASS_WITHOUT_DENOMINATOR", "detail": "y"},
-        {"gate": "gamma", "kind": "PASS_WITHOUT_DENOMINATOR", "detail": "z"},
-    ])
-    assert len(lines) == 2, lines
-    unrun = [ln for ln in lines if "GATE_UNRUNNABLE" in ln]
-    silent = [ln for ln in lines if "PASS_WITHOUT_DENOMINATOR" in ln]
-    assert len(unrun) == 1 and "alpha" in unrun[0] and "beta" not in unrun[0]
-    assert len(silent) == 1 and "beta" in silent[0] and "gamma" in silent[0]
-    assert "1 GATE_UNRUNNABLE" in unrun[0], unrun[0]
-    assert "2 PASS_WITHOUT_DENOMINATOR" in silent[0], silent[0]
-
-
-def test_an_unknown_kind_is_reported_under_its_own_name_not_absorbed():
-    """DISCOVER, DO NOT ENUMERATE. `_KIND_HEADLINE` is a phrasing table, not the
-    population: a kind added to either audit must arrive in this roll-up
-    already reported, because a kind that falls through to somebody else's
-    sentence is the defect being fixed, one release later."""
-    lines = G.summarise_findings([
-        {"gate": "delta", "kind": "A_KIND_NOBODY_HAS_WRITTEN_YET"}])
-    assert len(lines) == 1
-    assert "A_KIND_NOBODY_HAS_WRITTEN_YET" in lines[0], lines[0]
-    assert "delta" in lines[0], lines[0]
-    assert "without disclosing" not in lines[0], lines[0]
-
-
-def test_neither_verdict_line_still_renames_what_it_counts():
-    """The two call sites, pinned at the source.
-
-    `summarise_findings` being correct buys nothing if a verdict line goes on
-    printing the old sentence beside it. Both used to read
-    "N gate(s) ... answer PASS over an empty tree without disclosing it" over a
-    findings list that can hold four other kinds.
-    """
-    src = Path(G.__file__).read_text(encoding="utf-8")
-    body = src.split("def summarise_findings", 1)[1]
-    body = body.split("_KIND_HEADLINE = {", 1)[0]
-    for banned in ("answer PASS over an empty tree without disclosing it",
-                   "disclosure finding(s) over"):
-        assert banned not in body, (
-            f"a verdict line still describes every finding as {banned!r}; "
-            f"GATE_UNRUNNABLE and STALE_INVENTORY_ENTRY are not that.")

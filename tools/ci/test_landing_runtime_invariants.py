@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import importlib.util
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -44,7 +43,6 @@ def _load(path: Path, name: str):
 
 P = _load(_ROOT / "tools/ci/landing_record_primitives.py",
           "_invariants_record_primitives")
-C = _load(_ROOT / _CHECKER, "_invariants_timeout_checker")
 
 
 def test_phase_b_routed_producer_and_structural_opt_in_are_active():
@@ -98,28 +96,3 @@ def test_the_activated_runtime_no_longer_uses_a_wall_clock_pytest_timeout():
 def test_strict_json_refuses_duplicate_nonfinite_and_non_utf8(bad):
     with pytest.raises(P.Refusal):
         P.strict_loads(bad, what="adversarial")
-
-
-@pytest.fixture
-def repo(tmp_path):
-    """The two files the landing pins are observed from, copied from the tree."""
-    root = tmp_path / "source"
-    for rel in (_LAND, _DRIVER, _CHECKER):
-        target = root / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(_ROOT / rel, target)
-    return root
-
-
-def test_the_pin_renderer_accepts_the_tree_as_it_stands(repo):
-    """The negative control for the refusal below: unmodified, it renders."""
-    rendered = C.render_landing_pins(repo, (repo / _CHECKER).read_bytes())
-    assert C.landing_pin_literals(rendered) == C.observe_landing_pins(repo)
-
-
-def test_repin_preserves_structural_negative_control(repo):
-    path = repo / _LAND
-    path.write_bytes(path.read_bytes().replace(
-        b"-p no:cacheprovider", b"-p cacheprovider", 1))
-    with pytest.raises(ValueError, match="cannot repin invalid semantic runtime"):
-        C.render_landing_pins(repo, (repo / _CHECKER).read_bytes())

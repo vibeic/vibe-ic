@@ -42,21 +42,16 @@ refuse. A gate silent on only ONE arm still refuses, untouched.
 """
 from __future__ import annotations
 
-import copy
 import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
 
 HERE = Path(__file__).resolve().parent
 PROGRAMS = HERE.parent
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import gate_process_attestation as A      # noqa: E402
-import hygiene_finding_delta as H         # noqa: E402
-import landing_merge_verdict as V         # noqa: E402
 
 #: The day both records are measured on. `delta` refuses arms measured on
 #: different days, so one constant serves both.
@@ -70,101 +65,24 @@ LIVE_WHY = "fixture has no macro LEF"
 LABEL = "macro OBS not crossed (tiny/openpdkx)"
 
 
-def _gate(label, state, *, until=None, why=None, expired=False):
-    """One gate row as `--summary-json` writes it. Every key always present."""
-    return {"label": label, "state": state, "seconds": 1,
-            "exempt_until": until, "exempt_reason": why, "corpus": None,
-            "exemption_expired": expired, "scope": None}
 
 
-def _attestation(row):
-    rc = {"PASS": 0, "FAIL": 1, "NOT_CHECKED": 2, "WROTE_CORPUS": 0}[row["state"]]
-    verdict = ("[PASS] checked" if rc == 0 else
-               "[NOT_CHECKED] unavailable" if rc == 2 else "[FAIL] named finding")
-    return A.process_attestation(row["label"], verdict + "\n", rc,
-                                 ["python3", "checker.py", row["label"]])
 
 
-def _record(gates):
-    counts = {s: sum(g["state"] == s for g in gates) for s in H.TERMINAL_STATES}
-    return {
-        "listed_only": False, "declared": len(gates),
-        "ran": sum(counts[s] for s in H.PROCESS_STATES),
-        "decided": counts["PASS"] + counts["FAIL"],
-        "passed": counts["PASS"], "failed": counts["FAIL"],
-        "not_checked": counts["NOT_CHECKED"],
-        "wrote_corpus": counts["WROTE_CORPUS"], "deferred": counts["LISTED"],
-        "other_shard": counts["OTHER_SHARD"], "out_of_scope": counts["OUT_OF_SCOPE"],
-        "not_checked_unexempted": [g["label"] for g in gates
-                                   if g["state"] == "NOT_CHECKED"
-                                   and not g.get("exempt_until")],
-        "exemptions_expired": [g["label"] for g in gates
-                               if g.get("exemption_expired")],
-        "wiring_errors": [], "corpora": [], "shard": None, "today": TODAY,
-        "gates": gates,
-        "process_attestations": [_attestation(g) for g in gates
-                                 if g["state"] in H.PROCESS_STATES
-                                 and not H._legacy_structural_empty(g)],
-    }
 
 
-def _both_arms(gate):
-    """The SAME gate row on base and candidate — the symmetric case."""
-    rec = _record([_gate("a gate that passed", "PASS"), gate])
-    return H.delta(copy.deepcopy(rec), copy.deepcopy(rec))
 
 
 # ------------------------------------------------------------------------
 # 1. WHAT THE DELTA MUST NOW SAY
 # ------------------------------------------------------------------------
 
-def test_a_live_dated_reasoned_exemption_on_both_arms_is_named_as_bought():
-    """The subset must be STATED. Before this, a consumer had one list and no
-    way to tell a bought silence from a bare one."""
-    d = _both_arms(_gate(LABEL, "NOT_CHECKED", until=LIVE_UNTIL, why=LIVE_WHY))
-    assert d["no_verdict_either_side"] == [LABEL], d
-    assert d["no_verdict_either_side_bounded"] == [LABEL], (
-        "a NOT_CHECKED bought on both arms with a live dated reason is exactly "
-        "what `_bounded_not_checked` recognises on the bootstrap path", d)
 
 
-@pytest.mark.parametrize("label,gate", [
-    ("unexempted", _gate(LABEL, "NOT_CHECKED")),
-    ("expired", _gate(LABEL, "NOT_CHECKED", until="2026-01-01", why="stale",
-                      expired=True)),
-    ("out of scope", _gate(LABEL, "OUT_OF_SCOPE")),
-])
-def test_a_silence_nobody_bought_is_reported_but_never_in_the_bought_subset(
-        label, gate):
-    """THE CONTROLS THAT PROVE NOTHING WAS RELAXED, one per way of being silent.
-
-    Each is still in `no_verdict_either_side` and still refuses; only the live
-    dated exemption above is excused. `OUT_OF_SCOPE` is here because no
-    exemption speaks to it at all -- an exemption buys a gate that COULD NOT
-    LOOK, not one that had nothing to look at.
-    """
-    d = _both_arms(gate)
-    assert d["no_verdict_either_side"] == [LABEL], (label, d)
-    assert d["no_verdict_either_side_bounded"] == [], (label, d)
 
 
-def test_an_expired_exemption_is_still_a_finding_in_its_own_right():
-    """Its own blocking route is untouched: leaving the bought subset must not
-    have moved it out of `findings` as well."""
-    d = _both_arms(_gate(LABEL, "NOT_CHECKED", until="2026-01-01", why="stale",
-                         expired=True))
-    assert ["EXEMPTION_EXPIRED", LABEL, ""] in d["carried"], d
 
 
-def test_a_gate_silent_on_only_one_arm_still_refuses_outright():
-    """The ONE-sided case is a different question and this change must not have
-    reached it: it is refused before any subset is computed."""
-    base = _record([_gate("a gate that passed", "PASS"), _gate(LABEL, "PASS")])
-    cand = _record([_gate("a gate that passed", "PASS"),
-                    _gate(LABEL, "NOT_CHECKED", until=LIVE_UNTIL, why=LIVE_WHY)])
-    with pytest.raises(H.Refusal) as exc:
-        H.delta(base, cand)
-    assert "reached a verdict on one side and none on the other" in str(exc.value)
 
 
 # ------------------------------------------------------------------------

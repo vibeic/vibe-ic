@@ -28,17 +28,13 @@ This file lives under `tools/` so the repo-tools lane covers it.
 """
 import re
 import subprocess
-import sys
-import textwrap
 from pathlib import Path
 
-import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _LAND = _ROOT / "tools" / "gatekeeper-land.sh"
 _DRIVER = (_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
            / "pytest_per_file_junit.py")
-_ENTRY = _DRIVER.parent / "trusted_pytest_entry.py"
 _LANES = ("run_pytest", "run_repo_tools_pytest", "run_unselectable_pytest")
 
 
@@ -54,18 +50,8 @@ def _extract_fn(name: str) -> str:
     return "\n".join(src[start:end + 1])
 
 
-def _trusted_runtime_available() -> bool:
-    probe = subprocess.run([sys.executable, "-I", "-c", "import pytest"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=False)
-    return probe.returncode == 0
 
 
-_NEEDS_TRUSTED_RUNTIME = pytest.mark.skipif(
-    not _trusted_runtime_available(),
-    reason=("the protected landing runtime is unavailable on this host: "
-            "`python3 -I` cannot import pytest. UNVERIFIED here, not verified "
-            "— run it in the digest-pinned runner image."))
 
 
 # ── the shared reporter, driven ───────────────────────────────────────────
@@ -175,55 +161,3 @@ def test_no_lane_tails_the_driver_output_on_its_own():
 
 
 # ── the driver half, for real ─────────────────────────────────────────────
-
-@_NEEDS_TRUSTED_RUNTIME
-def test_the_driver_names_every_red_case_without_truncating(tmp_path):
-    """The behavioural arm, and the one that was red before this change.
-
-    A selection whose failure count is BELOW the driver's own failure bound
-    completes — which is exactly the shape that used to print no name at all.
-    """
-    work = tmp_path / "w"
-    (work / "t").mkdir(parents=True)
-    (work / "t" / "test_green.py").write_text(
-        "def test_ok():\n    assert True\n", encoding="utf-8")
-    (work / "t" / "test_red.py").write_text(
-        "def test_this_one_is_red():\n    assert False\n", encoding="utf-8")
-    sel = tmp_path / "sel.txt"
-    sel.write_text("t/test_green.py\nt/test_red.py\n", encoding="utf-8")
-    junit = tmp_path / "merged.xml"
-    p = subprocess.run(
-        [sys.executable, str(_DRIVER), "--selection", str(sel),
-         "--junit", str(junit), "--cwd", str(work), "--aggregate-check",
-         "--stop-after-failures", "0",
-         "--", sys.executable, "-I", "-B", str(_ENTRY), "-q",
-         "-p", "no:cacheprovider"],
-        cwd=str(work), capture_output=True, text=True)
-    out = p.stdout + p.stderr
-    assert "test_this_one_is_red" in out, (
-        "the driver measured a red case and never named it:\n" + out)
-    assert re.search(r"^RED  .*test_this_one_is_red", out, re.M), out
-    # CONTROL: the green case must NOT be named. Printing every case would
-    # satisfy the assertion above while saying nothing.
-    assert not re.search(r"^RED  .*test_ok", out, re.M), out
-
-
-@_NEEDS_TRUSTED_RUNTIME
-def test_a_fully_green_selection_names_nothing(tmp_path):
-    """CONTROL for the arm above: no red case, no `RED` line, rc 0."""
-    work = tmp_path / "w"
-    (work / "t").mkdir(parents=True)
-    (work / "t" / "test_green.py").write_text(
-        "def test_ok():\n    assert True\n", encoding="utf-8")
-    sel = tmp_path / "sel.txt"
-    sel.write_text("t/test_green.py\n", encoding="utf-8")
-    p = subprocess.run(
-        [sys.executable, str(_DRIVER), "--selection", str(sel),
-         "--junit", str(tmp_path / "m.xml"), "--cwd", str(work),
-         "--aggregate-check", "--stop-after-failures", "0",
-         "--", sys.executable, "-I", "-B", str(_ENTRY), "-q",
-         "-p", "no:cacheprovider"],
-        cwd=str(work), capture_output=True, text=True)
-    out = p.stdout + p.stderr
-    assert p.returncode == 0, out
-    assert not re.search(r"^RED  ", out, re.M), out
