@@ -40,3 +40,18 @@ def test_unfinished_native_window_is_not_measured(tmp_path):
     ledger = dispatch._required_gate_ledger(native_result(tmp_path, 'PASS', selected=2))
     assert ledger['eligibility'] == 'NOT_MEASURED'
     assert ledger['unmeasured_required'] == ['remaining selected steps']
+
+
+def test_host_tools_need_no_runtime_supply_record(tmp_path, monkeypatch):
+    monkeypatch.delenv('VIBEIC_EDA_CONTAINER', raising=False)
+    monkeypatch.delenv('VIBEIC_CHALLENGE_BACKEND', raising=False)
+    assert dispatch._challenge_execution_declaration(tmp_path) == {
+        'backend': 'host', 'selection': 'installed host tools',
+    }
+    assert not list(tmp_path.iterdir())
+
+
+def test_explicit_existing_container_is_forwarded_to_public_runner(tmp_path, monkeypatch):
+    monkeypatch.setenv('VIBEIC_EDA_CONTAINER', 'selected-existing-container')
+    argv = dispatch._solver_argv(tmp_path / 'runner.py', tmp_path, '2', '2')
+    assert argv[argv.index('--container') + 1] == 'selected-existing-container'

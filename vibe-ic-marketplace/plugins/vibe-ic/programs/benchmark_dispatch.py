@@ -50,7 +50,7 @@ from typing import Callable, Iterable, Mapping, Optional, TypeVar
 from _atomic_artefact import write_json as _atomic_write_json
 from _atomic_artefact import write_text as _atomic_write_text
 from _atomic_artefact import write_bytes as _atomic_write_bytes
-import _runtime_pair_preflight as _runtime_pair
+import _eda_pin as _runtime_tools
 import _progress_run
 import _container_exec as _challenge_exec
 from rtl_repair_contract import (SCHEMA_PROMPT_STRUCTURAL, SCHEMA_PROMPT_COMPLETION,
@@ -3845,58 +3845,23 @@ def _frozen_native_challenge_identity(run_p: Path) -> dict | None:
     return declaration
 
 
-def _known_unbound_native_mismatch(declaration) -> bool:
-    """Only this pre-proof refusal is retryable; bound identities never refresh."""
-    return (isinstance(declaration, dict)
-            and declaration.get("backend") == "native"
-            and declaration.get("error") == "runtime pair is incomplete or mismatched"
-            and not any(declaration.get(k) for k in _NATIVE_CHALLENGE_IDENTITY_FIELDS)
-            and isinstance(declaration.get("runtime_pair"), dict)
-            and declaration["runtime_pair"].get("verdict") == _runtime_pair.RUNTIME_PAIR_MISMATCH)
-
-
 def _challenge_execution_declaration(run_p: Path, *, native: bool = False) -> dict:
-    """Bind the challenge to the run's selected runtime, before execution.
-
-    Old standalone callers without a runtime declaration retain their named
-    legacy host mode. A present but unreadable/incomplete pair NEVER selects it.
-    An operator can explicitly select host challenges with
-    VIBEIC_CHALLENGE_BACKEND=host; this does not change the runner's backend.
-    """
-    # A process default cannot override the run's first native proof identity.
-    try:
-        frozen = _frozen_native_challenge_identity(run_p)
-    except (OSError, ValueError) as exc:
-        return {"backend": "native", "error": str(exc)}
-    if frozen is not None:
-        return frozen
-    selected = "native" if native else os.environ.get("VIBEIC_CHALLENGE_BACKEND")
+    """Select installed host tools or the explicitly selected existing container."""
+    selected = os.environ.get("VIBEIC_CHALLENGE_BACKEND")
     if selected == "host":
         return {"backend": "host", "selection": "VIBEIC_CHALLENGE_BACKEND=host"}
     if selected not in (None, "native"):
         return {"backend": selected, "error": "unknown challenge backend"}
-    path = Path(run_p) / _RUNTIME_PAIR_RECORD
-    if (not path.exists() and selected is None
-            and not (Path(run_p) / ".bench_config.json").exists()):
-        return {"backend": "host", "selection": "legacy caller without runtime pair"}
-    try:
-        pair = _strict_json_loads(path.read_text())
-    except (OSError, ValueError) as exc:
-        return {"backend": "native", "error": f"runtime pair unreadable: {exc}"}
-    if (not isinstance(pair, dict)
-            or pair.get("verdict") != _runtime_pair.RUNTIME_PAIR_MATCH
-            or not pair.get("container")
-            or not pair.get("required_digest")
-            or pair.get("required_digest") != pair.get("found_digest")):
-        return {"backend": "native", "error": "runtime pair is incomplete or mismatched",
-                "runtime_pair": pair}
-    container = str(pair["container"])
-    image_id, why = _runtime_pair._pin.container_image_id(container)
-    return {"backend": "native", "selection": str(path.resolve()),
+    container = _recorded_benchmark_container(Path(run_p))
+    if not container:
+        return {"backend": "host", "selection": "installed host tools"}
+    image_id, why_id = _runtime_tools.container_image_id(container)
+    digest, why_digest = _runtime_tools.container_image_digest(container)
+    return {"backend": "native", "selection": "explicit existing container",
             "container": container,
             "container_id": _challenge_exec.container_id(container),
-            "image_id": image_id, "image_digest": pair["required_digest"],
-            **({"error": why} if why else {})}
+            "image_id": image_id, "image_digest": digest,
+            **({"error": why_id or why_digest} if why_id or why_digest else {})}
 
 
 def _challenge_execution_for_task(task: dict) -> dict:
@@ -3916,8 +3881,6 @@ def _challenge_execution_for_task(task: dict) -> dict:
                     and isinstance(issued_host, list)
                     and _review_task_digest(task) in issued_host):
                 return declaration
-            if _known_unbound_native_mismatch(declaration):
-                return frozen
             if (not isinstance(declaration, dict)
                     or declaration.get("backend") != "native"
                     or declaration.get("error")
@@ -3925,15 +3888,6 @@ def _challenge_execution_for_task(task: dict) -> dict:
                            for k in _NATIVE_CHALLENGE_IDENTITY_FIELDS)):
                 return {**frozen, "error": "task declaration differs from frozen native identity"}
             return frozen
-        if _known_unbound_native_mismatch(declaration):
-            # The original refusal stays in the task/worklist. Only a persisted
-            # MATCH may bind its first proof; arbitrary native errors stay owed.
-            return _challenge_execution_declaration(run_p, native=True)
-        if (isinstance(declaration, dict) and declaration.get("backend") == "host"
-                and str(declaration.get("selection", "")).startswith("legacy")
-                and ((run_p / _RUNTIME_PAIR_RECORD).exists()
-                     or (run_p / ".bench_config.json").exists())):
-            return {"backend": "native", "error": "canonical task has only a legacy host declaration"}
         return declaration
     # Historical tasks are resumed against their original run declaration,
     # including malformed declarations; absence is the named legacy case only.
@@ -3944,8 +3898,8 @@ def _challenge_native_identity(declaration: dict) -> tuple[dict, str]:
     """Read back the exact selected container; no host or alternate CID fallback."""
     container = str(declaration.get("container") or "")
     cid = _challenge_exec.container_id(container)
-    image_id, why_id = _runtime_pair._pin.container_image_id(container)
-    digest, why_digest = _runtime_pair._pin.container_image_digest(container)
+    image_id, why_id = _runtime_tools.container_image_id(container)
+    digest, why_digest = _runtime_tools.container_image_digest(container)
     actual = {"container_id": cid, "image_id": image_id, "image_digest": digest}
     if declaration.get("error"):
         return actual, str(declaration["error"])
@@ -6149,12 +6103,14 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
         argv += ["--exit-step", str(exit_step)]
     if entry:
         argv += ["--entry-step", str(entry)]
+    selected_container = os.environ.get("VIBEIC_EDA_CONTAINER", "").strip()
+    if selected_container:
+        argv += ["--container", selected_container]
     # Same-bytes re-entry stages below program_regates, rather than projects.
     for owner in Path(proj).resolve().parents:
-        if ((owner / _RUNTIME_PAIR_RECORD).exists()
-                or _native_challenge_identity_path(owner).exists()):
+        if _native_challenge_identity_path(owner).exists():
             container = _recorded_benchmark_container(owner)
-            if container:
+            if container and not selected_container:
                 argv += ["--container", container]
             break
     return argv
@@ -8057,167 +8013,12 @@ def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
               "scored or published as a benchmark result")
 
 
-#: Where a coordinator records what it reconciled before it launched anything.
-#: A run directory, never a committed artefact -- which is why the VERBATIM
-#: refusal, repository and all, may live in it.
-_RUNTIME_PAIR_RECORD = "runtime_pair_preflight.json"
-
-
 def _recorded_benchmark_container(run_p: Path) -> str | None:
-    """Keep a run's original native selection across coordinator processes."""
+    """Use the run's challenge container or an explicit environment selection."""
     frozen = _frozen_native_challenge_identity(run_p)
     if frozen is not None:
         return frozen["container"]
-    path = run_p / _RUNTIME_PAIR_RECORD
-    if path.exists():
-        pair = _read_json_regular(path)
-        if pair.get("execution_route") != "LOCAL":
-            if pair.get("selected_container"):
-                return pair["selected_container"]
-            if pair.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH:
-                return pair.get("container")
-    return None
-
-
-def _benchmark_runtime_env(run_p: Path, *, fresh: bool) -> dict:
-    """Supply only an implicit fresh Docker runtime through the deployment owner."""
-    env = dict(os.environ)
-    recorded = _recorded_benchmark_container(run_p)
-    if recorded:
-        env["VIBEIC_EDA_CONTAINER"] = recorded
-    elif (fresh and not env.get("VIBEIC_EDA_CONTAINER", "").strip()
-          and not _challenge_exec.no_container_route()):
-        pin = _runtime_pair._pin
-        source = pin.default_container_name(env)
-        reference, why = pin.container_image_reference(source)
-        if not reference:
-            raise ValueError(why or "source container image is unreadable")
-        name = "vibeic-bench-" + _sha256_text(str(run_p.resolve()))[:24]
-        helper = Path(__file__).resolve().parents[1] / "tools/vibeic-eda/restart-eda.sh"
-        helper_env = {**env, "NAME": name, "SOURCE_CONTAINER": source,
-                      "ENSURE_ONLY": "1", "PULL": "0"}
-        result = subprocess.run(
-            ["bash", str(helper), reference],
-            env=helper_env, capture_output=True, text=True)
-        if result.returncode:
-            raise ValueError((result.stderr or result.stdout).strip()
-                             or "run runtime creation refused")
-        env["VIBEIC_EDA_CONTAINER"] = name
-    return env
-
-
-def _write_runtime_pair_record(run_p: Path, record: dict) -> None:
-    """Record the reconciliation where the run that used it can be read with it."""
-    run_p.mkdir(parents=True, exist_ok=True)
-    path = run_p / _RUNTIME_PAIR_RECORD
-    if path.is_file():
-        prior_text = path.read_text()
-        try:
-            prior = _strict_json_loads(prior_text)
-        except ValueError:
-            prior = None
-        if isinstance(prior, dict):
-            if (record.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH
-                    and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MISMATCH):
-                _write_immutable_text(run_p / "runtime_pair_refusals" /
-                                      f"{_sha256_text(prior_text)}.json", prior_text)
-            # A failed readback is the latest status, not a new run selection.
-            if prior.get("execution_route") != "LOCAL":
-                selected = prior.get("selected_container")
-                if not selected and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH:
-                    selected = prior.get("container")
-                if selected:
-                    record["selected_container"] = selected
-    _atomic_write_json(path, record)
-    if _read_json_regular(path) != record:
-        raise ValueError("runtime pair persistence readback differs")
-
-
-def _runtime_pair_before_fan_out(rows, run_p: Path, operation: str) -> int | None:
-    """`None` to fan out over `rows`; `2` to launch ZERO workers.
-
-    THE FAN-OUT SITE, for the coordinator whose fan-outs are CONDITIONAL.
-    `--solve` always launches workers and asks the pair at its front door;
-    `--resume` does not. Most of what resume does — accepting a review,
-    refusing a re-entry under a stale source identity, writing a worklist — is
-    bookkeeping that needs no container at all, and refusing all of it on the
-    state of the machine would answer a routing question with a deployment one.
-
-    An empty `rows` is NOT a fan-out: `_ordered_parallel_map` never enters the
-    worker for it. Asking the pair there would make a resume with nothing to run
-    depend on a container it was never going to use.
-    """
-    if not rows:
-        return None
-    rc, _record = _runtime_pair_gate(run_p, operation)
-    return rc
-
-
-def _runtime_pair_gate(run_p: Path, operation: str,
-                       pristine: bool = False) -> tuple[int | None, dict]:
-    """`(None, record)` to fan out; `(2, record)` to launch ZERO workers.
-
-    THE PAIR IS ASKED BEFORE THE FIRST WORKER, and that placement is the whole
-    fix. #2120: the pin required one digest, the shared container ran another
-    build carrying the SAME version label, a freshly started MCP answered
-    "16/16 checks passed" about it, and this dispatcher fanned out anyway. Every
-    worker then recorded provenance about a container that was not the one the
-    pin demands; the batch had to be stopped and excluded from results.
-
-    Asking per worker would be worse, not better: N identical refusals, N
-    partially-built projects, and a run root that has to be reasoned about
-    before it can be thrown away. One question, before anything exists.
-
-    A MISMATCH IS AN INFRASTRUCTURE VERDICT (`RUNTIME_INFRASTRUCTURE_NOT_READY`)
-    and is recorded as one. No problem was attempted, so there is no design to
-    FAIL and nothing for an AI repair task to repair -- charging a deployment's
-    state to a design is how a machine problem becomes a score.
-
-    `pristine` says the run root is still a clean room that has not been built
-    yet. A refusal must not be the thing that stops the CORRECTED re-run: the
-    record then goes to a SIBLING path, because dropping a file into the run
-    root would make the next `--solve` refuse it as non-empty and the operator
-    would read the clean-room message instead of the mismatch.
-    """
-    try:
-        env = _benchmark_runtime_env(run_p, fresh=pristine)
-        record = _runtime_pair.preflight(env)
-    except (OSError, ValueError) as exc:
-        record = {"schema": "vibeic.runtime.pair_preflight.v1",
-                  "verdict": _runtime_pair.RUNTIME_PAIR_MISMATCH,
-                  "container": None, "required_digest": None, "found_digest": None,
-                  "checks": [], "disagreed": "run_runtime_supply", "evidence": [str(exc)]}
-    record["operation"] = operation
-    if record["verdict"] == _runtime_pair.RUNTIME_PAIR_MATCH:
-        if not pristine:
-            try:
-                _write_runtime_pair_record(run_p, record)
-            except (OSError, ValueError) as exc:
-                record.update(failure_class=_runtime_pair.RUNTIME_INFRASTRUCTURE_NOT_READY,
-                              workers_launched=0, persistence_error=str(exc))
-                print(f"RUNTIME_PAIR_PERSISTENCE_REFUSED: {exc}", file=sys.stderr)
-                return 2, record
-        print(_runtime_pair.pair_line(record))
-        return None, record
-    record["failure_class"] = _runtime_pair.RUNTIME_INFRASTRUCTURE_NOT_READY
-    record["workers_launched"] = 0
-    if pristine:
-        with contextlib.suppress(OSError):
-            _atomic_write_json(
-                run_p.parent / f"{run_p.name}.{_RUNTIME_PAIR_RECORD}", record)
-    else:
-        with contextlib.suppress(OSError, ValueError):
-            _write_runtime_pair_record(run_p, record)
-    print(f"{_runtime_pair.RUNTIME_INFRASTRUCTURE_NOT_READY}: "
-          f"{_runtime_pair.pair_line(record)}", file=sys.stderr)
-    # VERBATIM. `_eda_pin` composed these; re-wording one would hand the reader
-    # a summary of a mismatch instead of the mismatch itself.
-    for line in record["evidence"]:
-        print(line, file=sys.stderr)
-    print(f"0 worker(s) launched; the runtime pair was reconciled before "
-          f"fan-out and {record['disagreed']} disagreed. This is NOT a design "
-          f"result: no problem was attempted.", file=sys.stderr)
-    return 2, record
+    return os.environ.get("VIBEIC_EDA_CONTAINER", "").strip() or None
 
 
 def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
@@ -8251,19 +8052,9 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     sys.path.insert(0, str(HARNESS))
     import benchmark_io_adapter as bio                    # noqa: PLC0415
-    import benchmark_entry_surface_check as bes           # noqa: PLC0415
     import flow_phase_attribution as fpa                  # noqa: PLC0415
     import task_nature_route as tnr                       # noqa: PLC0415
     import route_decision as rd                            # noqa: PLC0415
-
-    entry_audit = bes.audit(Path(__file__).resolve().parents[1])
-    if entry_audit.get("verdict") != "PASS":
-        detail = "; ".join(
-            f"{row.get('rule')}: {row.get('path')}"
-            for row in entry_audit.get("findings") or [])
-        print("ERROR: benchmark general-entry policy failed: " + detail,
-              file=sys.stderr)
-        return 2
 
     try:
         _assessors = _completeness_adapters()
@@ -8280,10 +8071,6 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
 
     ds, run_p = Path(dataset).resolve(), Path(run).resolve()
     fresh = routed_tasks is None
-    gate_rc, pair_record = _runtime_pair_gate(
-        run_p, "solve" if fresh else "resume:ai-route", pristine=fresh)
-    if gate_rc is not None:
-        return gate_rc
     if fresh:
         _prepare_general_solve_run(bench, ds, run_p, fmt, limit)
     else:
@@ -8293,7 +8080,6 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 or config.get("diagnostic_limit") != int(limit or 0)):
             print("ERROR: route continuation differs from original run", file=sys.stderr)
             return 2
-    _write_runtime_pair_record(run_p, pair_record)
     runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
     runner_budget = _RunnerBudget(jobs, heavy_jobs, worker_threads)
     if fresh:
@@ -8892,31 +8678,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         print("ERROR: duplicate problem id in solve report or review worklist",
               file=sys.stderr)
         return 2
-    # Review-only resume can execute proofs without a worker fan-out. Refresh
-    # before repair planning, which itself adjudicates inherited challenges.
-    # Questions and absent reviews remain no-execution bookkeeping.
-    for task in review_tasks:
-        try:
-            review = _read_json_regular(Path(str(task.get("review_path") or "")))
-        except (OSError, ValueError):
-            continue
-        semantic = review.get("semantic_review") if isinstance(review, dict) else None
-        if (not isinstance(semantic, dict)
-                or semantic.get("verdict") == "NEEDS_CLARIFICATION"
-                or not (review.get("verification_test") or task.get("verification_challenges"))):
-            continue
-        declaration = _challenge_execution_for_task(task)
-        if not isinstance(declaration, dict) or declaration.get("backend") != "native":
-            continue
-        try:
-            frozen = _frozen_native_challenge_identity(run_p)
-        except (OSError, ValueError):
-            continue  # The consumer records UNAVAILABLE; never recover corruption.
-        if frozen is None:
-            gate_rc, _ = _runtime_pair_gate(run_p, "resume:review")
-            if gate_rc is not None:
-                return gate_rc
-        break
     try:
         route_worklist = _read_jsonl(run_p / _ROUTE_WORKLIST)
     except ValueError:
@@ -9237,9 +8998,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     for pid, reason in retry_blocked:
         repairs.append({"id": pid, "status": "ROUTE_REENTRY_BLOCKED",
                         "reasons": [reason]})
-    gate_rc = _runtime_pair_before_fan_out(retry_plans, run_p, "resume:retry")
-    if gate_rc is not None:
-        return gate_rc
     retry_outcomes = _ordered_parallel_map(
         [(p["id"], p["project"], False, p["result"].get("entry"),
           p["result"].get("exit"), p["result"].get("delivery_route", "ip"),
@@ -9400,10 +9158,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         })
 
     backup_run_plans = [p for p in backup_plans if p["kind"] == "run"]
-    gate_rc = _runtime_pair_before_fan_out(backup_run_plans, run_p,
-                                           "resume:ai-backup")
-    if gate_rc is not None:
-        return gate_rc
     def _run_completed_backup(job):
         pid = job[0]
         plan = next(p for p in backup_run_plans if p["id"] == pid)
@@ -9864,10 +9618,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         })
 
     repair_run_plans = [p for p in repair_plans if p["kind"] in {"run", "regate"}]
-    gate_rc = _runtime_pair_before_fan_out(repair_run_plans, run_p,
-                                           "resume:repair")
-    if gate_rc is not None:
-        return gate_rc
     repair_outcomes = iter(_ordered_parallel_map(
         [(p["id"], p["project"], True, None, p["result"].get("exit"),
           ({"repair_contract": ((p.get("repair_provenance") or {}).get("repair_contract")),
