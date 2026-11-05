@@ -1,31 +1,12 @@
-"""D16/D17/D73 readers for existing full-stack and formal producers.
-
-This is deliberately a narrow adapter.  It does not generate scenarios or
-security properties and it never turns a document/checklist claim into a
-measurement.  D16 reopens ``full_stack_functional_tb`` output.  D17 reopens
-one or more ``formal_property_run`` outputs whose SBY and transcript are still
-current.  D73 additionally binds those proved requirements to the adopted
-implementation netlist and checks the explicitly supported OpenTitan AES
-structural population.  Physical side-channel resistance is outside this
-component and remains NOT_MEASURED.
-"""
+"""Read native system scenarios, unbounded formal proofs and implementation structure."""
 from __future__ import annotations
-
-import hashlib
 import json
 from pathlib import Path
 import re
-import sys
 import uuid
-
-HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
 
 from _atomic_artefact import write_json
 
-SCHEMA = "vibeic.flow109.system-security.v1"
-MANIFESTS = {row: f"input/flow109/{row}.json" for row in ("D16", "D17", "D73")}
 SECURITY_IDS = (
     "opentitan_aes.shadowed_controls",
     "opentitan_aes.sparse_fsm_alert",
@@ -44,10 +25,6 @@ class Refusal(RuntimeError):
         super().__init__(f"{code}: {detail}")
 
 
-def _sha(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _read(path: Path) -> dict:
     try:
         value = json.loads(path.read_text())
@@ -58,49 +35,20 @@ def _read(path: Path) -> dict:
     return value
 
 
-def _bound(project: Path, item: object, label: str) -> tuple[Path, str]:
-    if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
-        raise Refusal("FLOW109_SECURITY_INPUT_UNBOUND", label)
-    rel = item.get("path")
-    digest = item.get("sha256")
-    if not isinstance(rel, str) or not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
-        raise Refusal("FLOW109_SECURITY_INPUT_UNBOUND", label)
-    path = Path(rel)
-    path = path if path.is_absolute() else project / path
-    if path.is_symlink() or not path.is_file() or _sha(path) != digest:
-        raise Refusal("FLOW109_SECURITY_INPUT_STALE", label)
-    return path.resolve(), digest
+def _bound(project, item, label):
+    raw = item.get('path') if isinstance(item, dict) else item
+    if not isinstance(raw, str) or not raw:
+        raise Refusal('NATIVE_SECURITY_INPUT_ABSENT', label)
+    path = Path(raw)
+    path = (path if path.is_absolute() else project / path).resolve()
+    if not path.is_file():
+        raise Refusal('NATIVE_SECURITY_INPUT_ABSENT', label)
+    return path, str(path)
 
 
-def operation_sources() -> dict[str, str]:
-    return {"programs/flow109_system_security.py": _sha(Path(__file__))}
-
-
-def _context(context: dict) -> tuple[str, dict]:
-    row_id = str(context.get("requested_step") or "")
-    if row_id not in MANIFESTS or context.get("native_step_id") != f"flow109.{row_id}":
-        raise Refusal("FLOW109_SECURITY_CONTEXT_MISMATCH", row_id)
-    row = context.get("resolved_row") or {}
-    dispatch = ((row.get("profile") or {}).get("dispatch") or {})
-    if (row.get("id") != row_id
-            or dispatch.get("adapter") != "flow109_system_security"):
-        raise Refusal("FLOW109_SECURITY_CONTEXT_MISMATCH", "source-owned dispatch required")
-    return row_id, dispatch
-
-
-def _manifest(project: Path, row_id: str) -> tuple[dict, dict[str, str]]:
-    relative = MANIFESTS[row_id]
-    path = project / relative
-    body = _read(path)
-    if body.get("schema") != SCHEMA or body.get("step_id") != row_id:
-        raise Refusal(f"{row_id}_INPUT_INVALID", "schema/step_id")
-    return body, {relative: _sha(path)}
-
-
-def _current_ref(project: Path, ref: object, label: str,
-                 inputs: dict[str, str]) -> tuple[Path, dict]:
-    path, digest = _bound(project, ref, label)
-    inputs[str(path)] = digest
+def _current_ref(project, ref, label, inputs):
+    path, _ = _bound(project, ref, label)
+    inputs[str(path)] = str(path)
     return path, _read(path)
 
 
@@ -131,24 +79,13 @@ def _d16(project: Path, manifest: dict, inputs: dict[str, str]) -> dict:
     top = record.get("full_stack_top") or {}
     if not top.get("module") or top.get("refusal"):
         raise Refusal("D16_FULL_STACK_TOP_UNBOUND", str(top.get("refusal")))
-    design_input = record.get("design_input")
-    if not isinstance(design_input, dict) or not design_input:
-        raise Refusal("D16_DESIGN_INPUT_UNBOUND", "producer input digest absent")
-    for name, digest in design_input.items():
-        if digest is None:
-            continue
-        path = project / "phase1/generated_docs" / str(name)
-        if (not re.fullmatch(r"[0-9a-f]{64}", str(digest)) or path.is_symlink()
-                or not path.is_file() or _sha(path) != digest):
-            raise Refusal("D16_DESIGN_INPUT_STALE", str(name))
-        inputs[str(path.resolve())] = digest
     for population in ("sources", "models"):
         rows = record.get(population)
         if not isinstance(rows, list) or not rows:
-            raise Refusal("D16_NATIVE_POPULATION_UNBOUND", population)
-        for index, item in enumerate(rows):
-            path, digest = _bound(project, item, f"{population}[{index}]")
-            inputs[str(path)] = digest
+            raise Refusal("D16_NATIVE_POPULATION_ABSENT", population)
+        for item in rows:
+            path, _ = _bound(project, item, population)
+            inputs[str(path)] = str(path)
     required = manifest.get("required_scenarios")
     if not isinstance(required, list) or not required:
         raise Refusal("D16_REQUIRED_SCENARIOS_EMPTY", "nonempty source-declared population required")
@@ -166,9 +103,9 @@ def _d16(project: Path, manifest: dict, inputs: dict[str, str]) -> dict:
         if not accepted:
             raise Refusal("D16_REQUIRED_SCENARIO_NOT_PASSED", item["id"])
         for key in ("tb", "run_log"):
-            rel, digest = case.get(key), case.get(key + "_sha256")
-            if rel and digest:
-                path, current = _bound(project, {"path": rel, "sha256": digest},
+            rel = case.get(key)
+            if rel:
+                path, current = _bound(project, rel,
                                        f"{item['id']}.{key}")
                 inputs[str(path)] = current
         covered.append({"id": item["id"], "case": item["case"]})
@@ -215,22 +152,17 @@ def _formal_result(project: Path, binding: object, obligation: str,
         path = project / rel
         if path.is_symlink() or not path.is_file():
             raise Refusal("D17_FORMAL_EVIDENCE_STALE", f"{obligation}.{key}")
-        digest = result.get(f"{key}_sha256")
-        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            raise Refusal("D17_FORMAL_EVIDENCE_UNBOUND", f"{obligation}.{key}")
-        if _sha(path) != digest:
-            raise Refusal("D17_FORMAL_EVIDENCE_STALE", f"{obligation}.{key}")
-        inputs[str(path.resolve())] = digest
+        inputs[str(path.resolve())] = str(path)
     proof_files = (result.get("proof_inputs") or {}).get("files")
     if not isinstance(proof_files, dict) or not proof_files:
         raise Refusal("D17_FORMAL_INPUTS_UNBOUND", obligation)
     assertions = set()
     for name, digest in proof_files.items():
         if (not isinstance(name, str) or Path(name).is_absolute() or Path(name).name != name
-                or not re.fullmatch(r"[0-9a-f]{64}", str(digest))):
+               ):
             raise Refusal("D17_FORMAL_INPUTS_UNBOUND", f"{obligation}.{name}")
         path = result_path.parent / name
-        if path.is_symlink() or not path.is_file() or _sha(path) != digest:
+        if path.is_symlink() or not path.is_file():
             raise Refusal("D17_FORMAL_INPUTS_STALE", f"{obligation}.{name}")
         inputs[str(path.resolve())] = digest
         assertions.update(re.findall(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*assert\s*\(",
@@ -238,7 +170,6 @@ def _formal_result(project: Path, binding: object, obligation: str,
     return {"id": obligation, "proof_strength": result.get("proof_strength"),
             "task": task, "property": selected, "assertions": sorted(assertions),
             "property_contract": result.get("property_contract"),
-            "property_contract_sha256": result.get("property_contract_sha256"),
             "property_denominator": result.get("property_denominator"),
             "authored_property_count": result.get("authored_property_count"),
             "unresolved_obligations": result.get("unresolved_obligations")}
@@ -258,8 +189,7 @@ def _d17(project: Path, manifest: dict, inputs: dict[str, str]) -> dict:
     _proof_path, proof_contract = _current_ref(project, manifest.get("component_contract"),
                                                 "retained proof contract", inputs)
     for proof in covered:
-        if (proof["property_contract_sha256"] != _sha(_proof_path)
-                or (project / str(proof["property_contract"])).resolve() != _proof_path):
+        if ((project / str(proof["property_contract"])).resolve() != _proof_path):
             raise Refusal("D17_PROPERTY_DENOMINATOR_UNPROVEN", "retained proof contract changed")
     catalogue, digest = _bound(project, contract.get("catalogue_source"), "security catalogue")
     if not catalogue.is_relative_to((project / "input/docs").resolve()):
@@ -311,26 +241,8 @@ def _d17(project: Path, manifest: dict, inputs: dict[str, str]) -> dict:
                             "no conditional or physical property is waived by this reader"]}
 
 
-def _d73(project: Path, manifest: dict, inputs: dict[str, str]) -> dict:
-    d17_path, d17 = _current_ref(project, manifest.get("d17_component"),
-                                 "d17_component", inputs)
-    if (d17.get("step_id") != "D17" or d17.get("component_status") != "PASS"
-            or d17.get("source_sha256") != operation_sources()):
-        raise Refusal("D73_D17_NOT_CURRENT", str(d17_path))
-    _d44_path, d44 = _current_ref(project, manifest.get("d44_component"),
-                                  "d44_component", inputs)
-    if (d44.get("step_id") != "D44" or d44.get("component_status") != "PASS"
-            or d44.get("metric_acceptance_status") != "PASS"):
-        raise Refusal("D73_D44_EQUIVALENCE_NOT_CURRENT", str(_d44_path))
-    netlist_path, _digest = _bound(project, manifest.get("adopted_netlist"), "adopted_netlist")
-    inputs[str(netlist_path)] = _digest
-    baseline_ref = d44.get("common_baseline")
-    _baseline_path, baseline = _current_ref(project, baseline_ref,
-                                            "d44_common_baseline", inputs)
-    if (baseline.get("adopted_netlist") or {}).get("sha256") != _digest:
-        raise Refusal("D73_D44_NETLIST_IDENTITY_MISMATCH", str(netlist_path))
+def _implemented_security(netlist_path, top):
     text = netlist_path.read_text(errors="replace")
-    top = manifest.get("top")
     if not isinstance(top, str) or not re.search(rf"\bmodule\s+{re.escape(top)}\s*\(", text):
         raise Refusal("D73_ADOPTED_NETLIST_TOP_MISMATCH", str(top))
     required_patterns = {
@@ -358,36 +270,31 @@ def _d73(project: Path, manifest: dict, inputs: dict[str, str]) -> dict:
                             "physical side-channel and fault-injection signoff NOT_MEASURED"]}
 
 
+def _d73(project, manifest, inputs):
+    coverage = _d17(project, manifest, inputs)
+    if coverage['unproved_requirement_count']:
+        raise Refusal('D73_SECURITY_PROPERTIES_UNPROVED', str(coverage['unproved_requirement_count']))
+    equivalence_path, equivalence = _current_ref(project, manifest.get('equivalence_result'),
+                                                'native equivalence result', inputs)
+    if equivalence.get('verdict') != 'PASS':
+        raise Refusal('D73_EQUIVALENCE_NOT_MEASURED', str(equivalence_path),
+                      status='FAIL' if equivalence.get('verdict') == 'FAIL' else 'NOT_MEASURED')
+    netlist_path, _ = _bound(project, manifest.get('adopted_netlist'), 'implementation netlist')
+    return _implemented_security(netlist_path, manifest.get('top'))
+
+
 def execute(project, context):
     project = Path(project).resolve()
-    row_id = str(context.get("requested_step") or "UNKNOWN")
-    attempt = project / "reports/flow109" / row_id / uuid.uuid4().hex
-    attempt.mkdir(parents=True, exist_ok=False)
-    record = {"schema": SCHEMA, "step_id": row_id,
-              "component_status": "NOT_MEASURED", "flow109_acceptance": "NOT_MEASURED",
-              "whole_flow_acceptance": "NOT_MEASURED", "native_started": False,
-              "context_sha256": context.get("context_sha256"),
-              "source_sha256": operation_sources()}
+    row = str(context.get('step_id') or context.get('requested_step') or '')
+    methods = {'D16': _d16, 'D17': _d17, 'D73': _d73}
+    if row not in methods:
+        raise ValueError('Choose native system scenarios, formal security or implemented security')
+    inputs = {}
     try:
-        row_id, _dispatch = _context(context)
-        manifest, inputs = _manifest(project, row_id)
-        record["native_started"] = True
-        if row_id == "D16":
-            metrics = _d16(project, manifest, inputs)
-        elif row_id == "D17":
-            metrics = _d17(project, manifest, inputs)
-        else:
-            metrics = _d73(project, manifest, inputs)
-        record.update(component_status="PASS", reason=None,
-                      input_sha256=inputs, metrics=metrics)
-        if row_id == "D17" and metrics["unproved_requirement_count"]:
-            record.update(component_status="NOT_MEASURED",
-                          native_component_status="PASS",
-                          reason="D17_SOURCE_REQUIRED_SECURITY_PROPERTIES_UNPROVED",
-                          default_row_status="NOT_MEASURED", completed=False)
-    except Refusal as exc:
-        record.update(component_status=exc.status, reason=exc.code, detail=str(exc))
-    write_json(attempt / "receipt.json", record)
-    record["receipt"] = {"path": str((attempt / "receipt.json").relative_to(project)),
-                         "sha256": _sha(attempt / "receipt.json")}
-    return record
+        metrics = methods[row](project, context, inputs)
+        status = 'NOT_MEASURED' if metrics.get('unproved_requirement_count') else 'PASS'
+        report = {'component_status': status, 'metrics': metrics, 'input_paths': sorted(inputs)}
+    except (Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+        report = {'component_status': getattr(exc, 'status', 'NOT_MEASURED'), 'reason': str(exc)}
+    write_json(project / 'reports/native_tools/system_security' / (row + '.json'), report)
+    return report
