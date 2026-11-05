@@ -610,16 +610,10 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
         chosen, ordered = _slot_pads(project, chosen, ordered, slot)
     from flow_pdn_current import current_settings
     native.update(VDD_NETS=[power], GND_NETS=[ground])
-    pdn_settings = current_settings(project, native)
-    for _ in range(8):
-        native.update(pdn_settings)
-        die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement, pdn_settings)
-        updated = current_settings(project, native, max(die[2] - die[0], die[3] - die[1]))
-        if updated == pdn_settings:
-            break
-        pdn_settings = updated
-    else:
-        raise ValueError("PDN geometry did not converge after eight floorplan updates.")
+    die, _, _ = _floorplan(native, chosen, ordered, library, area, placement)
+    pdn_settings = current_settings(project, native, max(die[2] - die[0], die[3] - die[1]))
+    native.update(pdn_settings)
+    die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement, pdn_settings)
     top = core_config["DESIGN_NAME"] + "_chip"
     wrapper = destination / "wrapper.v"
     wrapper.write_text(_wrapper(core_config["DESIGN_NAME"], top, ports, chosen, ordered,
