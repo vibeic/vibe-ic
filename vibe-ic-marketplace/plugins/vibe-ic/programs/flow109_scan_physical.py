@@ -1,226 +1,57 @@
-"""D36 BLOCKING native leaf for the existing Phase-3 physical owner.
-
-No placement, scan replacement, authority issuance or orchestration lives here.
-The owner consumes current placed state, stitches once, then reopens independently
-adopted original execution. Component success alone never establishes row PASS.
-"""
+"""Native OpenROAD scan stitching, connectivity readback and GLS flush."""
 from __future__ import annotations
-
-import hashlib
-import inspect
 import itertools
 import json
-import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import uuid
 
-HERE = Path(__file__).resolve().parent
-INPUT = 'input/flow109/D36.json'
-EXECUTION = 'reports/phase3/scan_physical/execution.json'
-ADOPTED_EXECUTION = 'adopted/scan_physical/native_execution.json'
-PURPOSE = 'functional_preserving_physical_scan_stitch'
+
+class NativeError(ValueError):
+    def __init__(self, code, detail):
+        self.code = code
+        super().__init__(f'{code}: {detail}')
 
 
 def fail(code, detail):
-    from flow109_metric_acceptance import MetricRefusal
-    raise MetricRefusal('D36_' + code, str(detail))
-
-
-def sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-def reference(project, path):
-    return {'path': str(Path(path).resolve().relative_to(project)), 'sha256': sha(path)}
+    raise NativeError('D36_' + code, str(detail))
 
 
 def bound(project, value):
-    from flow109_metric_acceptance import _safe_project_file
-    if (not isinstance(value, dict) or set(value) != {'path', 'sha256'}
-            or not isinstance(value['path'], str) or Path(value['path']).is_absolute()
-            or '..' in Path(value['path']).parts
-            or not re.fullmatch('[0-9a-f]{64}', str(value['sha256']))):
-        fail('INPUT_UNBOUND', value)
-    path = _safe_project_file(project, value['path'])
-    if not path.is_file() or not path.stat().st_size or sha(path) != value['sha256']:
-        fail('INPUT_STALE', value['path'])
+    raw = value.get('path') if isinstance(value, dict) else value
+    if not isinstance(raw, str) or not raw:
+        fail('INPUT_ABSENT', value)
+    path = Path(raw)
+    path = (path if path.is_absolute() else project / path).resolve()
+    if not path.is_file() or not path.stat().st_size:
+        fail('INPUT_ABSENT', path)
     return path
 
 
-def operation_sources():
-    """Original native producer identity; reader-only repairs do not replay native work."""
-    import phase3_one_shot_runner as owner
-    functions = (owner.step_scan_physical, run_native, flush_tb, tcl, ident)
-    return {fn.__name__: hashlib.sha256(inspect.getsource(fn).encode()).hexdigest()
-            for fn in functions} | {'snapshot_script': hashlib.sha256(SNAPSHOT_TCL.encode()).hexdigest()}
+def reference(project, path):
+    return str(Path(path).resolve())
 
 
-def consumer_sources():
-    import flow109_metric_acceptance as metrics
-    import lec_post_layout_check as parser
-    functions = (prepare, upstream, derive_map, check_clock, native_subject, reopen, owner,
-                 consume_default_row_completion, metrics.accept_d36)
-    return {fn.__name__: hashlib.sha256(inspect.getsource(fn).encode()).hexdigest()
-            for fn in functions} | {'model_parser': sha(parser.__file__)}
-
-
-def tool_readset():
-    result = {}
-    for name in ('openroad', 'iverilog', 'vvp'):
-        binary = shutil.which(name)
-        if not binary:
-            fail('TOOL_ABSENT', name)
-        path = Path(binary).resolve()
-        result[name] = {'path': str(path), 'sha256': sha(path)}
-    support = Path(result['iverilog']['path']).parent.parent / 'lib/ivl'
-    if not support.is_dir() or not (support / 'ivl').is_file() or not (support / 'vvp.tgt').is_file():
-        fail('SIMULATOR_SUPPORT_UNBOUND', support)
-    result['iverilog_support'] = {str(p.resolve()): sha(p) for p in sorted(support.rglob('*')) if p.is_file()}
-    return result
-
-
-def approved(project, relative, schema):
-    import flow109_metric_acceptance as metrics
-    authority, doc = metrics._approved_document(project, relative,
-        authority='requirements_owner', schema=schema)
-    source = json.loads(bound(project, authority['source']).read_text())
-    payload = {k: v for k, v in doc.items() if k not in ('schema', 'approval')}
-    if source.get('D36', {}).get(relative) != payload:
-        fail('AUTHORITY_PAYLOAD_MISMATCH', relative)
-    return authority, doc, source
-
-
-def upstream(project, context):
-    """Reopen normal D01/D23/D24/D25/D35 consumers; fixtures must isolate here."""
-    import flow109
-    import librelane_contract as contract
-    import step_output_collector as versions
-    source_intent = flow109.dft_source_intent(project, context)
-    intent = source_intent['source_binding']['intent']
-    if intent.get('requires_scan') is not True:
-        fail('SCAN_INTENT_ABSENT', 'D01 requires_scan')
-    scan = flow109.physical_d24_binding(project, context, source_intent)
-    records = {}
-    for step in ('D19', 'D25', 'D35'):
-        body, record = flow109._accepted_row(project,
-            Path('reports/flow109/default_rows') / (step + '.json'), step)
-        records[step] = record
-        if step == 'D25' and body.get('metric_acceptance_status', body.get('flow109_acceptance')) != 'PASS':
-            fail('D25_PURPOSE_UNMEASURED', 'current functional equivalence required')
-    retained = versions.latest_pass(project, '17')
-    if not retained or not all(retained.get(k) is True for k in ('current_inputs', 'canonical_pass')):
-        fail('PLACED_CURRENT_PASS_ABSENT', 'D35 current native placement')
-    handoff_path = project / 'reports/phase3/librelane_placement_handoff.json'
-    handoff = json.loads(handoff_path.read_text())
-    state = Path(handoff['state'])
-    if not state.is_absolute():
-        state = project / state
-    state = bound(project, reference(project, state))
-    if sha(state) != handoff['state_sha256']:
-        fail('PLACED_STATE_STALE', 'original state_out')
-    native = contract.validate_step_receipt(state.parent, 'OpenROAD.DetailedPlacement')
-    views = {}
-    for view in ('odb', 'def'):
-        row = handoff['views'][view]
-        paths = [Path(row[k]) for k in ('source', 'dest')]
-        paths = [p if p.is_absolute() else project / p for p in paths]
-        for p in paths:
-            bound(project, reference(project, p))
-        if any(sha(p) != row['source_sha256'] for p in paths) or row['dest_sha256'] != row['source_sha256']:
-            fail('PLACED_HANDOFF_STALE', view)
-        value = json.loads(state.read_text()).get(view)
-        if Path(str(value)).resolve() != paths[0].resolve():
-            fail('PLACED_VIEW_FOREIGN', view)
-        views[view] = reference(project, paths[1])
-    # Bind every original native receipt artifact, not just the copied ODB.
-    native_readset = [reference(project, state.parent / name) for name in native['sha256']]
-    return {'intent': intent, 'D01': source_intent, 'plan': flow109.dft_plan_reference(source_intent),
-            'scan': scan, 'accepted': records, 'placed': views,
-            'handoff': reference(project, handoff_path), 'native_readset': native_readset}
-
-
-def prepare(project, context):
-    import flow109
-    import librelane_contract as contract
-    project = Path(project).resolve()
-    current = flow109.validate_execution_context(context)
-    if current['resolved_row']['id'] != 'D36' or current['features'].get('physical') is not True:
-        fail('CONTEXT_INVALID', 'physical D36 only')
-    from flow109_admission import require_launch_admission
-    require_launch_admission(project, 'flow109.D36', {'flow109_context': current})
-    prior = upstream(project, current)
-    if set(prior['placed']) != {'odb', 'def'}:
-        fail('PLACED_VIEWS_MISSING', 'current D35 ODB and DEF required')
-    for record in prior['placed'].values():
-        bound(project, record)
-    manifest_path = project / INPUT
-    manifest = json.loads(manifest_path.read_text())
-    authority, adopted, source = approved(project,
-        'requirements/scan_physical/scan_flush_errors.json', 'vibeic.flow109.requirement-authority.v1')
-    if (source.get('project') != str(project) or source.get('purpose') != PURPOSE
-            or source.get('manifest') != reference(project, manifest_path)
-            or manifest.get('schema') != 'vibeic.flow109.d36-input.v1'
-            or manifest.get('upstream') != prior or source.get('operation_sources') != operation_sources()):
-        fail('SOURCE_AUTHORITY_MISMATCH', 'project/manifest/upstream/current source')
-    plan = prior['plan']
-    if plan.get('planned_chain_count') != 1:
-        fail('CHAIN_COUNT_UNQUALIFIED', 'only the reviewed single-chain endpoint scope is supported')
-    limit = plan.get('max_chain_length')
-    if type(limit) is not int or limit < 1 or len(prior['scan']['scan_cell_reconciliation']['cells']) > limit:
-        fail('PLAN_LIMIT_EXCEEDED', 'complete current population must fit the D01 limit')
-    mode = prior['intent']['test_mode']
-    ports = prior['intent']['test_port_def']
-    if (mode.get('clock_select', {}).get('functional_value') != 0
-            or mode.get('clock_select', {}).get('scan_value') != 1
-            or mode.get('scan_edge') != 'rising' or mode.get('edge') != 'rising'
-            or mode.get('scan_clock') != ports['tck']['native']
-            or mode.get('clock_select', {}).get('native') != ports['test']['native']):
-        fail('CLOCK_STRATEGY_UNRESOLVED', 'D01 explicit functional/test/tck selection required')
-    period = manifest.get('scan_period_ns')
-    if type(period) not in (int, float) or not 0 < period < float('inf'):
-        fail('SCAN_PROTOCOL_ABSENT', 'approved scan_period_ns; no functional-clock substitution')
-    if (manifest.get('scan_protocol') != 'positive_edge_zero_one_alternating_full_chain'
-            or source.get('qualification_scope') != {'purpose': PURPOSE, 'clock_mixing': 'no_mix',
-                'edge': 'rising', 'planned_chain_count': plan['planned_chain_count'],
-                'scan_protocol': manifest['scan_protocol']}
-            or source.get('test_output_change') != manifest.get('test_output_change')
-            or not isinstance(manifest.get('test_output_change'), dict)
-            or manifest['test_output_change'].get('port') != ports['scan_out']['public']):
-        fail('PURPOSE_UNQUALIFIED', 'explicit test-output semantics and qualified protocol required')
-    launch = contract.local_image_attestation()
-    if any(launch.get(k) != source.get('qualified_' + k) for k in ('image_id', 'image')):
-        fail('IMAGE_UNQUALIFIED', 'actual image differs')
-    tools = tool_readset()
-    if tools != source.get('actual_tool_readset'):
-        fail('TOOLS_UNQUALIFIED', 'current executable readset')
-    inputs = [manifest['liberty'], *manifest['models'], *manifest['D19_mode_authorities'], *manifest['clock_constraints']]
-    if not manifest['clock_constraints']:
-        fail('CLOCK_CONSTRAINTS_ABSENT', 'actual D19-approved scan-mode SDC required')
-    if not manifest['models'] or len(manifest['D19_mode_authorities']) != 2:
-        fail('MODEL_OR_MODE_AUTHORITY_ABSENT', 'models and D19 scenario/mode bindings required')
-    for record in inputs:
-        bound(project, record)
-    if (manifest.get('defines') != source.get('qualified_defines')
-            or manifest.get('models') != source.get('qualified_models')
-            or manifest.get('scan_cells') != source.get('qualified_scan_cells')
-            or not manifest.get('scan_cells') or not source.get('qualified_cell_types')):
-        fail('MODELS_UNQUALIFIED', 'exact official models/defines/cell semantics required')
-    for name, relative, schema in (
-            ('scenario_constraints', 'requirements/base_10/scenario_constraints.json', 'vibeic.flow109.requirement-authority.v1'),
-            ('mode_library_rc_mapping', 'adopted/base_10/mode_library_rc_mapping.json', 'vibeic.flow109.adopted-reference.v1')):
-        if not any(x['path'] == relative for x in manifest['D19_mode_authorities']):
-            fail('D19_MODE_AUTHORITY_ABSENT', relative)
-        import flow109_metric_acceptance as metrics
-        d19_authority, d19_doc = metrics._approved_document(project, relative, authority='requirements_owner', schema=schema)
-        expected = json.loads(bound(project, d19_authority['source']).read_text()).get(name)
-        if {k: v for k, v in d19_doc.items() if k not in ('schema', 'approval', 'producer_binding')} != expected:
-            fail('D19_AUTHORITY_UNBOUND', relative)
-    return {'project': project, 'context': current, 'upstream': prior, 'manifest': manifest,
-            'manifest_ref': reference(project, manifest_path), 'authority': authority,
-            'source': source, 'launch': launch, 'tools': tools}
+SNAPSHOT_TCL = r'''
+proc d36_snapshot {path} {
+ set f [open $path w]
+ set b [ord::get_db_block]
+ foreach i [$b getInsts] {
+  puts $f [join [list CELL [$i getName] [[$i getMaster] getName] [$i getPlacementStatus] [$i getLocation]] "\t"]
+  foreach p [$i getITerms] {
+   set n [$p getNet]; set nn ""; if {$n != "NULL"} {set nn [$n getName]}
+   puts $f [join [list PIN [$i getName] [[$p getMTerm] getName] $nn [$p getIoType]] "\t"]
+  }
+ }
+ foreach p [$b getBTerms] {
+  set n [$p getNet];set nn "";if {$n != "NULL"} {set nn [$n getName]}
+  puts $f [join [list BTERM [$p getName] [$p getId] [$p getIoType] $nn] "\t"]
+ }
+ close $f
+}
+'''
 
 
 def snapshot(path):
@@ -345,147 +176,6 @@ def check_clock(netlist, liberty, intent, chain):
     return {'functional': functional, 'scan': scan, 'select': test, 'truth_rows_per_cell': 8}
 
 
-def native_subject(prepared):
-    """Actual native inputs, separated from mutable admission/report audit bytes."""
-    m, prior = prepared['manifest'], prepared['upstream']
-    keys = ('top', 'liberty', 'models', 'defines', 'scan_cells', 'scan_period_ns',
-            'scan_protocol', 'clock_constraints', 'test_output_change')
-    return {**{key: m[key] for key in keys}, 'placed_odb': prior['placed']['odb'],
-            'population': sorted(prior['scan']['scan_cell_reconciliation']['cells'], key=lambda item: item['instance']),
-            'ports': prior['intent']['test_port_def'], 'mode': prior['intent']['test_mode'],
-            'plan': {k: prior['plan'][k] for k in ('planned_chain_count', 'max_chain_length')},
-            'tools': prepared['tools'],
-            'image': prepared['source']['qualified_image'],
-            'image_id': prepared['source']['qualified_image_id']}
-
-
-def reopen(prepared):
-    """Independent original-execution adoption prevents caller resealing."""
-    project = prepared['project']
-    pointer = json.loads((project / EXECUTION).read_text())
-    path = bound(project, pointer)
-    authority, adopted, source = approved(project, ADOPTED_EXECUTION,
-        'vibeic.flow109.adopted-reference.v1')
-    if (adopted.get('execution') != pointer or source.get('manifest') != prepared['manifest_ref']
-            or source.get('project') != str(project) or source.get('purpose') != PURPOSE):
-        fail('ORIGINAL_EXECUTION_UNADOPTED', 'exact execution/project/manifest required')
-    doc = json.loads(path.read_text())
-    if (doc.get('schema') != 'vibeic.flow109.d36-execution.v1'
-            or doc.get('project') != str(project) or doc.get('native_subject') != native_subject(prepared)
-            or doc.get('sources') != adopted.get('producer_sources')
-            or doc.get('tools') != prepared['tools']
-            or doc.get('producer') != 'phase3_one_shot_runner.step_scan_physical'
-            or doc.get('qualification_source') != adopted.get('qualification_source')):
-        fail('EXECUTION_STALE', 'subject/producer/tool readset differs')
-    for record in doc['readset']:
-        bound(project, record)
-    launch = json.loads(bound(project, doc['launch']).read_text())
-    ins = launch['container_inspect']
-    images = launch['image_inspect']
-    if (ins['Id'] != doc['cid'] or ins['Image'] != prepared['source']['qualified_image_id']
-            or not any(i['Id'] == ins['Image'] for i in images)
-            or launch['image'] != prepared['source']['qualified_image']):
-        fail('ORIGINAL_LAUNCH_UNBOUND', 'actual original CID/image')
-    outputs = doc['outputs']
-    for key in ('before', 'after', 'netlist', 'odb', 'map', 'flush', 'native_log', 'script', 'manifest_snapshot',
-                'simulation_log', 'simulation_result', 'testbench', 'compile_log'):
-        bound(project, outputs[key])
-    manifest = {**prepared['manifest'], 'qualified_cell_types': prepared['source']['qualified_cell_types']}
-    chain = derive_map(bound(project, outputs['before']), bound(project, outputs['after']), manifest,
-                       prepared['upstream']['intent'], prepared['upstream']['scan']['scan_cell_reconciliation']['cells'])
-    if json.loads(bound(project, outputs['map']).read_text()) != chain:
-        fail('MAP_CHANGED', 'map differs from original native connectivity')
-    original_manifest = bound(project, outputs['manifest_snapshot'])
-    original_qualification = json.loads(bound(project, doc['qualification_source']).read_text())
-    if (sha(original_manifest) != doc['manifest']['sha256']
-            or json.loads(original_manifest.read_text()) != doc['subject_manifest']
-            or original_qualification.get('manifest') != doc['manifest']
-            or original_qualification.get('operation_sources') != doc['sources']
-            or original_qualification.get('actual_tool_readset') != doc['tools']
-            or original_qualification.get('project') != str(project)
-            or original_qualification.get('purpose') != PURPOSE
-            or native_subject({'manifest': doc['subject_manifest'], 'upstream': doc['upstream'],
-                               'tools': doc['tools'], 'source': original_qualification}) != doc['native_subject']):
-        fail('ORIGINAL_INPUT_PROVENANCE_UNBOUND', 'retain original manifest and reviewed producer qualification')
-    raw_log = bound(project, outputs['native_log']).read_text()
-    if raw_log.count('D36_EXECUTE_START') != 1 or raw_log.count('D36_EXECUTE_DONE') != 1:
-        fail('SKIPPED_NATIVE_EXECUTION', 'actual native entry/exit markers absent')
-    required_readset = [*outputs.values(), doc['launch']]
-    if any(r not in doc['readset'] for r in required_readset):
-        fail('INCOMPLETE_NATIVE_READSET', 'all actual output/launch artifacts required')
-    clock = check_clock(bound(project, outputs['netlist']).read_text(),
-        bound(project, manifest['liberty']).read_text(), prepared['upstream']['intent'], chain)
-    flush = json.loads(bound(project, outputs['flush']).read_text())
-    if (flush.get('map') != outputs['map'] or flush.get('models') != manifest['models']
-            or flush.get('defines') != manifest['defines'] or flush.get('clock') != clock
-            or flush.get('protocol') != manifest['scan_protocol']
-            or type(flush.get('errors')) is not int or flush['errors'] < 0
-            or type(flush.get('checked_edges')) is not int or flush['checked_edges'] != 8 * chain['population']):
-        fail('FLUSH_UNBOUND', 'non-vacuous actual population, clock, models, protocol')
-    terminal = re.findall(r'^D36_FLUSH_DONE checked=(\d+) errors=(\d+)$',
-        bound(project, outputs['simulation_log']).read_text(), re.M)
-    sim_rc = json.loads(bound(project, outputs['simulation_result']).read_text()).get('returncode')
-    if (len(terminal) != 1 or list(map(int, terminal[0])) != [flush['checked_edges'], flush['errors']]
-            or type(sim_rc) is not int or (sim_rc != 0) != bool(flush['errors'])):
-        fail('FLUSH_INCOMPLETE', 'raw actual simulation completion differs')
-    if doc.get('native_rc') != 0:
-        fail('NATIVE_EXECUTION_INCOMPLETE', 'native rc alone is not a proof')
-    return {'execution': pointer, 'chain_map': chain, 'map_reference': outputs['map'],
-            'scan_flush_errors': flush['errors'], 'adoption': authority,
-            'native_status': 'FAIL' if flush['errors'] else 'PASS'}
-
-
-def pattern_map_binding(project, expected, context):
-    """BLOCKING read-only dependency for existing downstream pattern consumers.
-
-    Reopen current D36 through its normal consumer; an API-only measurement or
-    a stale canonical row is insufficient. This does not execute D36 or D52.
-    """
-    import flow109
-    import flow109_metric_acceptance as metrics
-    project = Path(project).resolve()
-    caller = flow109.validate_execution_context(context)
-    plan = flow109.resolve_plan(caller['features'])
-    current = flow109.execution_context(plan, 'D36', 'D36')
-    measured = metrics.accept_d36(project, current)
-    if measured['status'] != 'PASS':
-        fail('PATTERN_MAP_UNMEASURED', measured.get('reason'))
-    canonical, _ = flow109._accepted_row(project,
-        Path('reports/flow109/default_rows/D36.json'), 'D36')
-    observed = measured['map_reference']
-    if canonical.get('metric_acceptance', {}).get('map_reference') != observed:
-        fail('PATTERN_MAP_UNPUBLISHED', 'normal canonical D36 map required')
-    if observed != expected:
-        fail('PATTERN_MAP_STALE', 'patterns belong to another current D36 map')
-    return observed
-
-
-def execute(project, context):
-    """Existing adapter ABI, delegating the native action to its physical owner."""
-    import phase3_one_shot_runner as owner
-    return owner.step_scan_physical(Path(project).resolve(), context)
-
-
-SNAPSHOT_TCL = r'''
-proc d36_snapshot {path} {
- set f [open $path w]
- set b [ord::get_db_block]
- foreach i [$b getInsts] {
-  puts $f [join [list CELL [$i getName] [[$i getMaster] getName] [$i getPlacementStatus] [$i getLocation]] "\t"]
-  foreach p [$i getITerms] {
-   set n [$p getNet]; set nn ""; if {$n != "NULL"} {set nn [$n getName]}
-   puts $f [join [list PIN [$i getName] [[$p getMTerm] getName] $nn [$p getIoType]] "\t"]
-  }
- }
- foreach p [$b getBTerms] {
-  set n [$p getNet];set nn "";if {$n != "NULL"} {set nn [$n getName]}
-  puts $f [join [list BTERM [$p getName] [$p getId] [$p getIoType] $nn] "\t"]
- }
- close $f
-}
-'''
-
-
 def tcl(value):
     value = str(value)
     if any(c in value for c in '{}\n\r'):
@@ -559,7 +249,7 @@ def flush_tb(top, ports, intent, chain, period):
 def run_native(prepared, directory):
     """Only the physical owner calls this once for a new approved subject."""
     from _atomic_artefact import write_json
-    project, m, intent = prepared['project'], prepared['manifest'], prepared['upstream']['intent']
+    project, m, intent = prepared['project'], prepared['plan'], prepared['upstream']['intent']
     directory.mkdir(exist_ok=False)
     def path(name):
         return directory / name
@@ -635,87 +325,44 @@ def run_native(prepared, directory):
     write_json(path('flush.json'), {'map': reference(project, path('map.json')), 'models': m['models'],
         'defines': m['defines'], 'clock': clock, 'protocol': m['scan_protocol'],
         'checked_edges': edges, 'errors': errors})
-    path('manifest.json').write_bytes((project / INPUT).read_bytes())
-    original_launch = Path(os.environ['VIBEIC_LIBRELANE_LOCAL_ATTESTATION'])
-    path('launch.json').write_bytes(original_launch.read_bytes())
-    if prepare(project, prepared['context']) != prepared:
-        fail('INPUT_CHANGED_DURING_EXECUTION', 'current inputs/source/tools/launch')
-    outputs = {k: reference(project, path(v)) for k, v in {
-        'manifest_snapshot': 'manifest.json', 'before': 'before.tsv', 'after': 'after.tsv', 'netlist': 'stitched.v', 'odb': 'stitched.odb',
-        'map': 'map.json', 'flush': 'flush.json', 'native_log': 'native.log', 'script': 'stitch.tcl',
-        'simulation_log': 'simulation.log', 'simulation_result': 'simulation.result.json',
-        'testbench': 'tb.v', 'compile_log': 'compile.log'}.items()}
-    doc = {'schema': 'vibeic.flow109.d36-execution.v1', 'project': str(project),
-        'producer': 'phase3_one_shot_runner.step_scan_physical',
-        'qualification_source': prepared['authority']['source'],
-        'manifest': prepared['manifest_ref'], 'subject_manifest': m, 'native_subject': native_subject(prepared),
-        'upstream': prepared['upstream'], 'sources': operation_sources(), 'tools': prepared['tools'],
-        'cid': prepared['launch']['cid'], 'launch': reference(project, path('launch.json')),
-        'native_rc': result.returncode, 'outputs': outputs,
-        'readset': [reference(project, p) for p in sorted(directory.iterdir()) if p.is_file()]}
-    write_json(path('execution.json'), doc)
-    write_json(project / EXECUTION, reference(project, path('execution.json')))
-    return {'native_status': 'FAIL' if errors else 'PASS', 'execution': reference(project, path('execution.json'))}
+    outputs = {name: str(path(name)) for name in
+               ('before.tsv', 'after.tsv', 'stitched.v', 'stitched.odb', 'map.json', 'flush.json',
+                'native.log', 'stitch.tcl', 'simulation.log', 'simulation.result.json', 'tb.v', 'compile.log')}
+    report = {'native_status': 'FAIL' if errors else 'PASS',
+              'native_rc': result.returncode, 'checked_edges': edges, 'errors': errors,
+              'population': chain['population'], 'outputs': outputs}
+    write_json(path('execution.json'), report)
+    return report
 
 
-def owner(project, context):
-    """BLOCKING; unchanged or stale retained execution never silently re-stitches."""
-    from _atomic_artefact import write_json
-    import flow109
-    import flow109_metric_acceptance as metrics
-    result = {'step_id': 'D36', 'context_sha256': context['context_sha256'],
-              'component_status': 'NOT_MEASURED', 'default_row_status': 'NOT_MEASURED',
-              'flow109_acceptance': 'NOT_MEASURED', 'whole_flow_acceptance': 'NOT_MEASURED',
-              'delivery_accepted': False, 'completed': False, 'native_started': False}
-    try:
-        prepared = prepare(project, context)
-        if (project / EXECUTION).exists():
-            current = reopen(prepared)
-            result.update(component_status=current['native_status'], producer_reused=True)
-        else:
-            parent = flow109.validate_execution_context(json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
-            attempt = flow109._bound_attempt(project, parent, os.environ.get(flow109.ATTEMPT_ENV))
-            if (attempt / 'result.json').exists():
-                fail('ATTEMPT_IMMUTABLE', str(attempt))
-            result['native_started'] = True
-            current = run_native(prepared, attempt / 'D36-native')
-            result.update(component_status=current['native_status'], producer_reused=False)
-        accepted = metrics.accept_d36(project, context)
-        status = 'FAIL' if result['component_status'] == 'FAIL' else accepted['status']
-        result.update(default_row_status=status, flow109_acceptance='FAIL' if status == 'FAIL' else 'NOT_MEASURED',
-                      completed=False,
-                      metric_acceptance=accepted, reason=accepted.get('reason'))
-    except (ValueError, OSError, KeyError, TypeError, AttributeError, subprocess.TimeoutExpired) as exc:
-        result.update(reason=getattr(exc, 'code', 'D36_NATIVE_UNAVAILABLE'), detail=str(exc))
-        if (result['native_started'] and getattr(exc, 'code', '') in (
-                'D36_FUNCTIONAL_LOAD_CHANGED', 'D36_NATIVE_POPULATION_MISMATCH', 'D36_SCAN_ENABLE_MISMATCH')):
-            result.update(component_status='FAIL', default_row_status='FAIL', flow109_acceptance='FAIL')
-    immutable = project / 'reports/phase3/scan_physical/owners' / (uuid.uuid4().hex + '.json')
-    write_json(immutable, result)
-    write_json(project / 'reports/phase3/scan_physical/owner.json', result)
-    return {**result, 'owner_report': reference(project, immutable)}
-
-
-
-def consume_default_row_completion(project, context, result):
-    """Existing canonical completion ABI: fresh owner and current metrics required."""
-    import flow109_metric_acceptance as metrics
+def prepare(project, context):
     project = Path(project).resolve()
-    current = metrics.accept_d36(project, context)
-    status, reason = 'NOT_MEASURED', 'D36_OWNER_COMPLETION_UNPROVEN'
+    plan = context['plan']
+    upstream = context['upstream']
+    if not isinstance(plan, dict) or not isinstance(upstream, dict):
+        raise ValueError('native scan plan and prior native design views are required')
+    for field in ('liberty', 'clock_constraints', 'top', 'scan_cells', 'defines',
+                  'models', 'scan_period_ns', 'scan_protocol'):
+        if field not in plan:
+            raise ValueError('native scan plan is missing ' + field)
+    from lec_post_layout_check import _parse_liberty_pins
+    library = _parse_liberty_pins(bound(project, plan['liberty']).read_text())
+    tools = {}
+    for name in ('openroad', 'iverilog', 'vvp'):
+        path = shutil.which(name)
+        if path is None:
+            raise ValueError('native tool is unavailable: ' + name)
+        tools[name] = {'path': path}
+    return {'project': project, 'plan': plan, 'upstream': upstream, 'tools': tools,
+            'source': {'qualified_cell_types': sorted(library)}}
+
+
+def execute(project, context):
+    project = Path(project).resolve()
+    directory = project / 'reports/native_tools/scan_physical' / uuid.uuid4().hex
+    directory.parent.mkdir(parents=True, exist_ok=True)
     try:
-        raw = json.loads(bound(project, result['owner_report']).read_text())
-        expected = {key: value for key, value in result.items() if key != 'owner_report'}
-        if raw != expected or raw.get('context_sha256') != context['context_sha256']:
-            fail('OWNER_REPORT_STALE', 'actual owner report and context differ')
-        if raw.get('component_status') == 'FAIL':
-            status, reason = 'FAIL', raw.get('reason')
-        elif raw.get('default_row_status') == 'PASS' and raw.get('component_status') == 'PASS':
-            status, reason = current['status'], current.get('reason')
-    except (ValueError, OSError, KeyError, TypeError) as exc:
-        reason = getattr(exc, 'code', 'D36_OWNER_REPORT_UNPROVEN')
-    return {'step_id': 'D36', 'context_sha256': context['context_sha256'],
-            'default_row_status': status, 'completed': status == 'PASS',
-            'flow109_acceptance': status, 'whole_flow_acceptance': 'NOT_MEASURED',
-            'delivery_accepted': False, 'metric_acceptance': current,
-            'owner_report': result.get('owner_report'), 'reason': reason}
+        report = run_native(prepare(project, context), directory)
+        return {**report, 'component_status': report['native_status']}
+    except (NativeError, OSError, ValueError, KeyError, TypeError) as exc:
+        return {'component_status': 'NOT_MEASURED', 'reason': str(exc)}
