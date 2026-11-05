@@ -445,11 +445,6 @@ EMIT_OUT=""
 lane_resolve() {                     # lane_resolve <unit> [--last]
   # A KILLED LANE REACHES THE VERDICT AS FAILED, NEVER ABSENT AND NEVER A PASS.
   #
-  # Absence is NOT the signal, and assuming it was is the defect this replaces:
-  # a redirect creates the output file at fork time, so a killed lane leaves a
-  # PARTIAL file, not no file. Worse, `landing_merge_verdict.py:958` accepts
-  # rc=1 as an ordinary red and then subtracts BY PRINTED LABEL, so a lane that
-  # died contributing no label at all is absorbed as "no new failure".
   #
   # So a record is MANDATORY for every unit: the main shell pre-creates `.rc`
   # holding the literal NORECORD, the lane overwrites it atomically with an
@@ -594,19 +589,6 @@ census_freshness_emit() {            # census_freshness_emit [--last]
 fn_emit() {                          # fn_emit <unit> <label> [--last]
   # THE EMIT FOR A STAGE THAT PRINTS ITS OWN LABEL.
   #
-  # `run_emit` prints `PASS`/`FAIL <label>` from the return code. The three
-  # `fn_capture` stages print it themselves, so this one normally only replays
-  # what they wrote — EXCEPT when they never got there. A stage killed inside a
-  # live lane leaves a parsable `.rc` and no report marker, and
-  # `landing_merge_verdict.py` subtracts the two arms' gate logs BY PRINTED
-  # LABEL: a stage that contributed no label at all is absorbed as "no new
-  # failure", which is the permissive direction and the one that lands.
-  #
-  # So the label is printed HERE when the stage could not print it. WITHOUT ITS
-  # DISCOVERY COUNT, because the count was never measured: the base arm's line
-  # carries one and this one does not, the two labels therefore do not match,
-  # and the differential reads the gate as failing on the candidate alone —
-  # which is exactly what an unmeasured stage is.
   local unit="$1" label="$2" resolved=0
   lane_resolve "$unit" "${3:-}" || resolved=1
   printf '%s\n' "$EMIT_OUT"
@@ -873,12 +855,6 @@ landing_unit_cheap_scratch_report() {
 # landings, and `shipped-path portability` — BLOCKING since 2026-07-20 — went
 # 0 -> 4 (#2158) -> 9 (#2165) without being refused once.
 #
-# A DELTA, NOT THE GATE. Running the gates themselves here refuses every
-# landing: main already carries 9 portability findings and 1 watchdog offender.
-# What must be empty is the DIFFERENCE, which is the rule the test tier has had
-# since #1019 and which `hygiene_finding_delta.py` was written to give the
-# hygiene tier — supplied until now only by `tools/gatekeeper-verify-merge.sh`,
-# the PR path, which the direct-push directive never traverses.
 #
 # RANGE-SCOPED, so it SKIPs over an empty range exactly as the block above
 # does: `gatekeeper-verify-merge.sh` runs this script over `X..X` on the BASE
@@ -1584,19 +1560,10 @@ run_pytest() {
   # cases) printed DIFFERENT labels, `targeted aggregate session produced no
   # status` and `… produced no complete record`.
   #
-  # THE DIRECTION IS WHAT MAKES IT A DEFECT AND NOT A WART. For the NORECORD /
-  # NOTRUN / AGGREGATE_NORECORD probes a 141 MISSES A REAL REFUSAL — "I could
-  # not look" reaching the reader as "I looked and it was fine", which is the
-  # one direction this battery exists to make impossible. It also renames a
-  # gate between two arms that `landing_merge_verdict` subtracts BY PRINTED
-  # LABEL, so the differential reads one gate as two.
   #
   # A herestring has no pipe, no second process and no SIGPIPE, and asks the
   # identical question of the identical bytes.
   #
-  # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
-  # driver/subject stdout channel: pytest can print marker-looking text. It
-  # derives completeness from exact process suites in the merged JUnit.
   if grep -qa '^=== pytest junit summary' <<<"$out"; then
     printf '  REPORT  targeted test process verdicts embedded in junit\n'
   else
@@ -1968,56 +1935,18 @@ lane_corpus() {
   landing_plan_dispatch window corpus
 }
 
-# THE HYGIENE TIER, AND THE RECORD THAT LETS IT BE DIFFERENCED (vibe-ic#1498).
-#
-# The label below is ONE line for a suite of ~70 gates, and
-# `landing_merge_verdict` subtracts the two arms' gate logs BY LABEL. So the
-# hygiene tier is judged at a granularity of one: while the base's suite is red
-# — it has been, repeatedly, and `gate_red_since.json` exists because of it —
-# the whole label is excused on the candidate too, and a finding this branch
-# INTRODUCED under it is invisible. That is the permissive direction, and it is
-# the direction nothing catches.
-#
-# `GATEKEEPER_HYGIENE_REPORT=<path>` makes this run write the suite's own
-# `--summary-json` record there, which is what `hygiene_finding_delta.py` needs
-# to answer the finer question — "which findings does the candidate have that
-# the base does not" — instead of "is the count zero".
-#
-# IT CHANGES NO VERDICT HERE, exactly like `GATEKEEPER_PYTEST_JUNIT` above: the
-# `run` below still decides this line, and with the variable unset the command
-# is byte-for-byte the one this file has always issued. The differencing is
-# done by `landing_merge_verdict`, which is the program that already owns the
-# test tier's differential and is supplied by the VERIFIER rather than by the
-# tree under test — a branch must not be able to change what counts as a
-# refusal (see `gatekeeper-verify-merge.sh`, "WHERE EACH HALF COMES FROM").
 #
 # The record is written by `gate_dispatch_finish` BEFORE every one of its exit
 # paths, so a FAILING run still yields one. A baseline that only existed when
 # the base was green would be useless precisely when it is needed.
 # THE RECORD IS NO LONGER OPTIONAL (owner ruling, 2026-08-21).
 #
-# It used to be written only when `GATEKEEPER_HYGIENE_REPORT` named a path, and
-# the paragraph above says that with the variable unset the command was
-# byte-for-byte the one this file had always issued. That is no longer true and
-# this is why: `full:gatekeeper-review` below adjudicates THIS run's record
-# against `tools/ci/gate_red_since.json`, and with no record it can only report
-# `skipped — 0 gate state(s) examined`, which is a deadline that never comes
-# due. Measured on an unbound corpus: the whole review returns in 45 s having
-# adjudicated nothing at all.
 #
 # It still changes no verdict here. `run_capture` below decides this line from
 # the script's exit status exactly as before; the extra flag only makes the
 # record land somewhere the next stage can read it, and when the caller named a
 # path that path is still the one used.
 GK_HYG_RECORD="${GATEKEEPER_HYGIENE_REPORT:-$LANE_DIR/repo-hygiene-summary.json}"
-# THE CALLER'S PATH IS PASSED VERBATIM, and that branch is not collapsible into
-# the expansion above. The two are different contracts: a path the VERIFIER
-# named is read outside this process — `hygiene_finding_delta` differences it
-# against the base's record — while the lane-local default is scratch nobody
-# else has been told about. v1.11.67 collapsed them and the record went on
-# landing in the right place, so nothing observable broke; what broke is that
-# the one line saying "the variable the verifier sets is the path used" stopped
-# existing, and that line is the whole of the guarantee.
 if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ]; then
   GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
 else
@@ -2224,12 +2153,7 @@ landing_emit_full_repo_hygiene() {
   run_emit "$1" "repo hygiene gates" --last
 
 
-  if [ -n "${GK_HYG_RECORD:-}" ]; then
-    printf '  REPORT  hygiene debt (advisory display; parent comparator owns admission)\n'
-    python3 "$PROGRAMS/gate_red_since_check.py" --repo "$ROOT" \
-      --record "$GK_HYG_RECORD" --head-ref "$BASE" --ledger-ref "$BASE" \
-      || printf '  REPORT  debt checker reported findings or incomplete evidence\n'
-  fi
+
 }
 lane_emit_window() {
   landing_plan_dispatch window "" emit

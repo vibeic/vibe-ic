@@ -110,6 +110,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass, asdict, field
@@ -143,8 +144,10 @@ class MagicResimExtractOptions:
         resistance` before the extract, `extresist extout on` +
         `extresist all` after it, and `ext2spice extresist on` before the
         write. `extresist all` alone extracts nothing.
-    `extresist_threshold_mohm`: `extresist threshold` (milliohms). 0 keeps
-        every net; magic's default drops all of them on a small block.
+    `extresist_threshold_mohm`: native resistance threshold in milliohms,
+        independent of Magic's minimum-delay cutoff.
+    `extresist_mindelay_ps`: optional native `extresist mindelay` cutoff in ps.
+        None preserves Magic's default; 0 retains sub-picosecond RC networks.
     """
     cthresh: float = 0.0
     rthresh: object = 0
@@ -152,6 +155,7 @@ class MagicResimExtractOptions:
     extract_style: Optional[str] = "ngspice()"
     extresist: bool = True
     extresist_threshold_mohm: int = 0
+    extresist_mindelay_ps: Optional[float] = None
 
 
 def _rthresh_token(value: object) -> str:
@@ -212,6 +216,9 @@ def build_extraction_tcl(
         raise ValueError("out_spice must be a non-empty output path")
     opts = options or MagicResimExtractOptions()
     rthresh_tok = _rthresh_token(opts.rthresh)
+    if opts.extresist_mindelay_ps is not None and (
+            not math.isfinite(opts.extresist_mindelay_ps) or opts.extresist_mindelay_ps < 0):
+        raise ValueError("extresist_mindelay_ps must be finite and nonnegative")
 
     out: List[str] = []
     out.append(
@@ -244,6 +251,8 @@ def build_extraction_tcl(
         # ...only now does extresist have something to work on.
         out.append("extresist extout on")
         out.append(f"extresist threshold {int(opts.extresist_threshold_mohm)}")
+        if opts.extresist_mindelay_ps is not None:
+            out.append(f"extresist mindelay {opts.extresist_mindelay_ps:g}")
         out.append("extresist all")
     if opts.ext2spice_scale_off:
         out.append("ext2spice scale off")
@@ -958,12 +967,18 @@ def _d47_inputs(project):
     if ports is None:
         raise ValueError('D47_LOGICAL_INTERFACE_ABSENT')
     options = config.get('options')
-    if not isinstance(options, dict) or set(options) != set(MagicResimExtractOptions.__dataclass_fields__):
+    option_names = set(MagicResimExtractOptions.__dataclass_fields__)
+    required_options = option_names - {'extresist_mindelay_ps'}
+    if (not isinstance(options, dict) or not required_options <= set(options)
+            or not set(options) <= option_names):
         raise ValueError('D47_EXTRACTION_SETTINGS_ABSENT')
+    mindelay = options.get('extresist_mindelay_ps')
     if (type(options['cthresh']) not in (int, float) or not math.isfinite(options['cthresh'])
             or options['cthresh'] < 0 or type(options['extresist_threshold_mohm']) is not int
             or options['extresist_threshold_mohm'] < 0
             or any(type(options[k]) is not bool for k in ('extresist', 'ext2spice_scale_off'))
+            or (mindelay is not None and (type(mindelay) not in (int, float)
+                or not math.isfinite(mindelay) or mindelay < 0))
             or type(config.get('require_resistance')) is not bool):
         raise ValueError('D47_EXTRACTION_SETTINGS_INVALID')
     _rthresh_token(options['rthresh'])

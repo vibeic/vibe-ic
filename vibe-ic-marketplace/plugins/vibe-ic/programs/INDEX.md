@@ -543,6 +543,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_engine` | any | — | Run the Router-selected window of the native step table. |
 | `flow_engine_frontend` | any | — | flow_engine_frontend |
 | `flow_engine_report` | any | — | Render measured engine results and an integration guide for exported views. |
+| `flow_engine_timing` | any | — | Reduce recorded native, independent-check and review times. |
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
 | `flow_ic_checks` | any | — | flow_ic_checks |
@@ -620,7 +621,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_process_attestation` | any | — | Structured process evidence for repo hygiene gates. |
 | `gate_proof_vocabulary_has_a_producer` | any | — | An axis whose whole proof vocabulary is produced by nobody. |
-| `gate_red_since_check` | any | — | an acknowledged red must EXPIRE. vibe-ic#1025. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_skip_routing_check` | any | — | every gate, and whether its skip REACHES the machine that reads the verdict (#528). |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
@@ -677,7 +677,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `htol_attestation_check` | any | — | Step 43 reliability qualification (HTOL) attestation gate (v2.3). |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed hardware debug loop (hw-debug-loop skill). |
 | `hw_vs_rtl_verdict_check` | any | v0.45 | Require N byte-identical FAILs before blaming hardware. |
-| `hygiene_finding_delta` | any | — | which hygiene findings did this tree INTRODUCE? |
+| `hygiene_finding_delta` | any | — | hygiene_finding_delta |
 | `hyperbus_protocol_synth` | any | — | HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55). |
 | `i2c_protocol_synth` | any | v0.1.79 | I2C-class protocol synth helper. |
 | `i2s_protocol_synth` | any | v0.1.83 | I2S-class protocol synth helper. |
@@ -816,7 +816,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `landing_cadence` | any | — | wire the 2026-06-17 test-cadence policy into the LANDING. |
 | `landing_hygiene_ratchet_check` | any | — | the LANDING refuses a hygiene finding that this landing INTRODUCES, even under a label that is already red. |
-| `landing_merge_verdict` | any | — | the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all. |
+| `landing_merge_verdict` | any | — | landing_merge_verdict |
 | `landing_noop_verdict_check` | any | — | "nothing to land" is a claim about the TWO TREES, and a merge tool can only answer for its own staging area. |
 | `landing_pytest_runtime_preflight` | any | — | can this host RUN the protected landing test runtime at all?  Asked ONCE, before the arms, attributably. |
 | `landing_tier_checkout_preflight` | any | — | the full tier runs in a SELF-CONTAINED checkout, or it does not start. |
@@ -2057,6 +2057,7 @@ _(no programs in this group)_
 - `flow_engine` — Run the Router-selected window of the native step table.
 - `flow_engine_frontend` — flow_engine_frontend
 - `flow_engine_report` — Render measured engine results and an integration guide for exported views.
+- `flow_engine_timing` — Reduce recorded native, independent-check and review times.
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
 - `flow_ic_checks` — flow_ic_checks
@@ -2134,7 +2135,6 @@ _(no programs in this group)_
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_process_attestation` — Structured process evidence for repo hygiene gates.
 - `gate_proof_vocabulary_has_a_producer` — An axis whose whole proof vocabulary is produced by nobody.
-- `gate_red_since_check` — an acknowledged red must EXPIRE. vibe-ic#1025.
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_skip_routing_check` — every gate, and whether its skip REACHES the machine that reads the verdict (#528).
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
@@ -2191,7 +2191,7 @@ _(no programs in this group)_
 - `htol_attestation_check` — Step 43 reliability qualification (HTOL) attestation gate (v2.3).
 - `hw_acceptance_test_passed_check` — final-step gate for the closed hardware debug loop (hw-debug-loop skill).  _[v0.119.15]_
 - `hw_vs_rtl_verdict_check` — Require N byte-identical FAILs before blaming hardware.  _[v0.45]_
-- `hygiene_finding_delta` — which hygiene findings did this tree INTRODUCE?
+- `hygiene_finding_delta` — hygiene_finding_delta
 - `hyperbus_protocol_synth` — HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55).
 - `i2c_protocol_synth` — I2C-class protocol synth helper.  _[v0.1.79]_
 - `i2s_protocol_synth` — I2S-class protocol synth helper.  _[v0.1.83]_
@@ -2329,7 +2329,7 @@ _(no programs in this group)_
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `landing_cadence` — wire the 2026-06-17 test-cadence policy into the LANDING.
 - `landing_hygiene_ratchet_check` — the LANDING refuses a hygiene finding that this landing INTRODUCES, even under a label that is already red.
-- `landing_merge_verdict` — the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all.
+- `landing_merge_verdict` — landing_merge_verdict
 - `landing_noop_verdict_check` — "nothing to land" is a claim about the TWO TREES, and a merge tool can only answer for its own staging area.
 - `landing_pytest_runtime_preflight` — can this host RUN the protected landing test runtime at all?  Asked ONCE, before the arms, attributably.
 - `landing_tier_checkout_preflight` — the full tier runs in a SELF-CONTAINED checkout, or it does not start.

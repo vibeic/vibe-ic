@@ -125,6 +125,7 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     if normalized is None or normalized.returncode or not graph.is_file():
         return commands.result(reports=[raw, script], detail="Native CDC graph normalization did not complete.")
     netlist = native.load(graph, top)
+    native._load_latched_clock_gates(netlist)
     crossing, reset = {}, {}
     findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
     findings += native.judge(netlist, "async_input", is_probable_async_port, calibrate=False)
@@ -371,8 +372,11 @@ def simulation(project, directory, tool, commands):
             scoped = coverage.scope_totals(parsed, list(map(str, silicon_files)))
             if scoped:
                 for category, counts in scoped["totals"].items():
-                    if counts["total"] > 0 and (category != "line" or scoped["line_metric"] == "executable_line_union"):
-                        metrics[f"coverage_{category}_pct"] = 100.0 * counts["covered"] / counts["total"]
+                    if (category != "line" or scoped["line_metric"] == "executable_line_union"
+                            or (line_map is not None and counts["total"] == 0)):
+                        metrics[f"coverage_{category}_points"] = counts["total"]
+                        if counts["total"] > 0:
+                            metrics[f"coverage_{category}_pct"] = 100.0 * counts["covered"] / counts["total"]
             reports.append(merged)
     result = commands.result(metrics, reports)
     result["exit_code"] = next((r["exit_code"] for i, r in enumerate(commands.records)

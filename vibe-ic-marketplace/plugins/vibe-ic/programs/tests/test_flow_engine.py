@@ -220,6 +220,27 @@ def test_declared_observation_cannot_drop_a_missing_native_number(tmp_path):
     assert engine.evaluate(native, measured) == "NOT_MEASURED"
 
 
+@pytest.mark.parametrize("category", ["line", "toggle", "branch"])
+def test_zero_native_coverage_points_have_no_percentage_floor(category):
+    metric = f"coverage_{category}_pct"
+    numbers = {f"coverage_{category}_points": 0}
+    native = engine.ToolResult(True, 0, numbers)
+    checks = [{"metric": metric, "operator": ">=", "limit": 70}]
+    measured = engine.measure(checks, numbers, {}, {"always": True})
+    assert measured[0]["status"] == "NOT_APPLICABLE"
+    assert measured[0]["points"] == 0 and measured[0]["value"] is None
+    assert measured[0]["limit"] == 70 and measured[0]["reason"]
+    assert engine.evaluate(native, measured) == "PASS"
+
+
+@pytest.mark.parametrize("points", [None, False, 1])
+def test_missing_or_nonempty_coverage_population_keeps_missing_percentage_unmeasured(points):
+    numbers = {"coverage_branch_points": points} if points is not None else {}
+    measured = engine.measure([{"metric": "coverage_branch_pct", "operator": ">=", "limit": 70}],
+                              numbers, {}, {"always": True})
+    assert measured[0]["status"] == "NOT_MEASURED"
+
+
 def test_native_decimal_and_infinite_path_group_values(tmp_path):
     checks = [{"metric": "slack", "operator": ">=", "limit": Decimal("0")}]
     measured = engine.measure(checks, {"slack": Decimal("1.2")}, {}, {"always": True})
@@ -526,12 +547,20 @@ def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
                                        engine.measure(row["checks"], bad, {}, features)) == "FAIL"
 
 
-@pytest.mark.parametrize("watts,status", [(0.004, "PASS"), (0.005, "FAIL"),
-                                          (0.0416, "FAIL"), (None, "NOT_MEASURED")])
-def test_power_report_compares_declared_tt_limit_instead_of_inheriting_pass(tmp_path, watts, status):
+@pytest.mark.parametrize("watts,status,statement", [
+    (0.004, "PASS", "< 5 mW"), (0.005, "FAIL", "< 5 mW"),
+    (0.0416, "FAIL", "< 5 mW"), (None, "NOT_MEASURED", "< 5 mW"),
+    (0.0416, "PASS", "5 mW"),
+    (0.0416, "PASS", "< 5 mW at gf180mcuD, 24 ns")])
+def test_power_report_compares_declared_tt_limit_instead_of_inheriting_pass(tmp_path, monkeypatch, watts, status, statement):
+    initialize = engine.NativeChain.__init__
+    def configured(chain, *args, **kwargs):
+        initialize(chain, *args, **kwargs)
+        chain.config = {"STA_CORNERS": ["nom_tt_025C_1v80"]}
+    monkeypatch.setattr(engine.NativeChain, "__init__", configured)
     docs = tmp_path / "input/docs"
     docs.mkdir(parents=True)
-    (docs / "quality.md").write_text("| total power(TT) | < 5 mW | sign-off |\n")
+    (docs / "quality.md").write_text(f"| total power(TT) | {statement} | sign-off |\n")
     table = engine.read_json(engine.TABLE)
     row = next(row for row in table["steps"] if row["name"] == "candidate_power_analysis")
     features = engine.design_features(tmp_path, {"delivery_target": "ip_hardmacro"}, table)
@@ -547,6 +576,12 @@ def test_power_report_compares_declared_tt_limit_instead_of_inheriting_pass(tmp_
         + repr(json.dumps(metrics)) + ")")
     result = execute(tmp_path, [producer, row])["steps"][-1]
     assert result["status"] == status
+    if statement != "< 5 mW":
+        assert result["metrics"] == []
+        observation = result["observations"][-1]
+        assert observation["status"] == "NOT_APPLICABLE"
+        assert observation["applicable"] is False
+        return
     assert len(result["metrics"]) == 1
     check = result["metrics"][0]
     assert check["operator"] == "within_declared_bounds"
@@ -564,8 +599,8 @@ def test_strict_power_ceiling_rejects_decimal_and_float_equality(tmp_path, milli
     docs.mkdir(parents=True)
     (docs / "quality.md").write_text(
         f"Total power (including core power and pads) < {milliwatts} mW at TT.\n")
-    checks = declared_power_checks(tmp_path)
-    assert len(checks) == 1
+    checks = declared_power_checks(tmp_path, metrics={"power__total__corner:nom_tt": watts})
+    assert len(checks) == 1 and checks[0].get("applicable") is not False
     measured = engine.measure(checks, {"power__total__corner:nom_tt": watts}, {}, {"always": True})
     assert measured[0]["status"] == "FAIL"
     assert engine.evaluate(engine.ToolResult(True, 0), measured) == "FAIL"

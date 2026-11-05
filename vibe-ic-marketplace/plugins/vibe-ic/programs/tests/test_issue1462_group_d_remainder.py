@@ -16,12 +16,6 @@ arrived and two had not:
        generated_artifact_conflict_resolve.py:391  .write_text(...)
        hygiene_finding_delta.py:420  .write_text(...)
 
-Both are landing-evidence writers: one records whether a merge was resolved or
-REFUSED, the other records which hygiene findings a tree INTRODUCED. Those are
-exactly the artefacts #1082 is about — a reader opens them to learn a verdict,
-and under `.write_text` the final name is created before it is filled, so a
-process that dies mid-write leaves a truncated record that no consumer can tell
-from a complete one.
 
 WHY THIS FILE IS NOT JUST `assert scan_program(...) == []`
 ==========================================================
@@ -75,10 +69,6 @@ CONVERSIONS = {
         "write_json(a.json_out, v.to_dict(), ensure_ascii=True)",
         'Path(a.json_out).write_text(json.dumps(v.to_dict(), indent=2) + "\\n",'
         ' encoding="utf-8")',
-    ),
-    "hygiene_finding_delta.py": (
-        "write_json(a.json, d, ensure_ascii=True)",
-        'a.json.write_text(json.dumps(d, indent=2) + "\\n", encoding="utf-8")',
     ),
 }
 
@@ -215,19 +205,12 @@ _PATCH = {
         "    args=a, returncode=0, stdout=str(root) + '\\n', stderr='')\n"
         "M.resolve = lambda top, reg, dry_run=False: M.Verdict(0, PAYLOAD)\n"
     ),
-    "hygiene_finding_delta.py": (
-        "M.compare = lambda *a, **k: {'status': 'OK', 'pad': PAYLOAD}\n"
-    ),
 }
 
 
 def _argv(name: str, tmp_path: Path, dest: Path) -> list[str]:
     if name == "generated_artifact_conflict_resolve.py":
         return ["--repo", str(tmp_path), "--json", str(dest)]
-    return ["--base", str(tmp_path / "b.json"),
-            "--candidate", str(tmp_path / "c.json"),
-            "--base-host", "host-a", "--candidate-host", "host-a",
-            "--json", str(dest)]
 
 
 def _kill_mid_write(tmp_path: Path, name: str, arm: str):

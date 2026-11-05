@@ -107,9 +107,6 @@ def _build_clean_plugin(tmp_path: Path, version: str = "1.0.96") -> Path:
         "assert runpy.run_path(str(widget))['go']() == 1\n"
         f"pathlib.Path(a.summary_json).write_text({json.dumps(record)!r})\n"
         "PY\n")
-    ledger = repo / "tools/ci/gate_red_since.json"
-    ledger.parent.mkdir(parents=True, exist_ok=True)
-    ledger.write_text(json.dumps({"acknowledged": []}) + "\n")
     import subprocess
     # Keep the audit scaffolding in BASE: the subject is a widget repair,
     # not an addition of the fixture's synthetic gates or flow declaration.

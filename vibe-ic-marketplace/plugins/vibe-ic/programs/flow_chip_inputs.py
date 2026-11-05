@@ -50,6 +50,7 @@ def _bits(port: dict) -> list[str]:
 
 
 def _native_core(project: Path, core_config: dict, destination: Path, on_tool_run=None):
+    from flow_config import native_defaults
     from librelane.common import Toolbox
     from librelane.flows import Flow
     from librelane.state import DesignFormat, State
@@ -58,6 +59,7 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
     os.environ["_OPENLANE_MAX_CORES"] = "8"
     owner = Flow.factory.get("Chip")(core_config, design_dir=str(project),
                                      pdk_root=os.environ.get("PDK_ROOT"))
+    owner.config = native_defaults(owner.config)
     native = owner.config.to_raw_dict()
     run_root = Path(tempfile.mkdtemp(prefix="core_", dir=destination))
     toolbox = Toolbox(str(run_root / "tool_tmp"))

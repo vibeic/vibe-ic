@@ -64,7 +64,6 @@ FLOOR = (
     # own case in G1b). It was listed under PYTHON IMPORT, but nothing imports
     # it: until 2026-09-27 the walk reached it only by tokenizing the
     # protected-path byte register, which listed its path.
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py",
 )
 #: A SHRINK DETECTOR, not a bound: it sits far below the 267 measured on
 #: 2026-08-28 so that ordinary movement never touches it, and it exists because
