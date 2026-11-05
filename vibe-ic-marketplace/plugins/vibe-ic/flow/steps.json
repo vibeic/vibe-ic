@@ -654,19 +654,17 @@
     {
       "name": "macro_logical_and_timing_views",
       "title": "Macro logical and timing views",
-      "when": "False",
+      "when": "uses_macros",
       "tool": {
         "kind": "adapter",
-        "program": "ip_integration_check.py",
-        "function": "audit",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "macro_views"
       },
       "checks": [],
       "legacy_id": {
         "registry": "D08",
         "native": []
       },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "applicability_reason": "Macro designs require logical, physical and timing views. Before a netlist exists, the existing ip_integration_check evaluates supplied macro views; OpenROAD.CheckMacroInstances also checks instances during Pre-layout timing."
     },
     {
       "name": "rtl_authoring",
@@ -1736,7 +1734,7 @@
           "14"
         ]
       },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "applicability_reason": "Merged into Synthesis (native netlist diagnostics), Netlist equivalence (proof), and Pre-layout timing (SDC and timing checks). LibreLane State carries their netlist directly to Die floorplan and macros; the old change ledger is removed."
     },
     {
       "name": "analog_layout",
@@ -3602,19 +3600,19 @@
     {
       "name": "functional_activity_and_external_loads",
       "title": "Functional activity and external loads",
-      "when": "False",
+      "when": "physical",
       "tool": {
         "kind": "adapter",
-        "program": null,
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "functional_activity",
+        "parallel": true,
+        "timing_group": "other"
       },
       "checks": [],
       "legacy_id": {
         "registry": "D55",
         "native": []
       },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "applicability_reason": "Physical delivery requires functional activity and external-load analysis. Run scoped simulation and native OpenSTA vector power beside the physical chain; absent scenarios or views remain NOT_MEASURED."
     },
     {
       "name": "candidate_power_analysis",
@@ -4992,12 +4990,12 @@
     {
       "name": "mixed_signal_signoff",
       "title": "Mixed-signal signoff",
-      "when": "False",
+      "when": "mixed",
       "tool": {
         "kind": "adapter",
-        "program": "mixed_signal_signoff_run.py",
+        "program": null,
         "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "gap": "Native invocation of mixed_signal_signoff_run and mixed_signal_signoff_check against current LibreLane State is missing. Existing programs still require the retired M1-M3 bound records; selected mixed-signal signoff is NOT_MEASURED."
       },
       "checks": [],
       "legacy_id": {
@@ -5006,7 +5004,7 @@
           "M4"
         ]
       },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "applicability_reason": "Mixed analog/digital designs require mixed-signal signoff. Its native State integration is not implemented, so the selected row is NOT_MEASURED."
     },
     {
       "name": "assembly_physical_and_cross_die_signoff",

@@ -1286,6 +1286,19 @@
       "program": null,
       "function": null,
       "gap": "Functional safety plan and tool-confidence program is not available; selected row is NOT_MEASURED."
+    },
+    "macro_logical_and_timing_views": {
+      "adapter": "macro_views"
+    },
+    "functional_activity_and_external_loads": {
+      "adapter": "functional_activity",
+      "parallel": true,
+      "timing_group": "other"
+    },
+    "mixed_signal_signoff": {
+      "program": null,
+      "function": null,
+      "gap": "Native invocation of mixed_signal_signoff_run and mixed_signal_signoff_check against current LibreLane State is missing. Existing programs still require the retired M1-M3 bound records; selected mixed-signal signoff is NOT_MEASURED."
     }
   },
   "deleted_metrics": {
@@ -2204,8 +2217,8 @@
     "macro_logical_and_timing_views": [
       {
         "old_name": "required_macro_views",
-        "class": "P",
-        "reason": "Macro view inventory is paper. Native elaboration, STA and physical-tool input requirements remain."
+        "class": "X",
+        "reason": "Existing ip_integration_check fails on an incomplete logical/physical/timing macro view set; native hierarchy and STA also enforce their required inputs."
       },
       {
         "old_name": "unresolved_macro_instances",
@@ -3885,20 +3898,20 @@
       "reason": "Functional safety is declared by the design; no safety-plan tool is implemented, so the selected row is NOT_MEASURED."
     },
     "macro_logical_and_timing_views": {
-      "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "when": "uses_macros",
+      "reason": "Macro designs require logical, physical and timing views. Before a netlist exists, the existing ip_integration_check evaluates supplied macro views; OpenROAD.CheckMacroInstances also checks instances during Pre-layout timing."
     },
     "netlist_handoff": {
       "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "reason": "Merged into Synthesis (native netlist diagnostics), Netlist equivalence (proof), and Pre-layout timing (SDC and timing checks). LibreLane State carries their netlist directly to Die floorplan and macros; the old change ledger is removed."
     },
     "functional_activity_and_external_loads": {
-      "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "when": "physical",
+      "reason": "Physical delivery requires functional activity and external-load analysis. Run scoped simulation and native OpenSTA vector power beside the physical chain; absent scenarios or views remain NOT_MEASURED."
     },
     "mixed_signal_signoff": {
-      "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "when": "mixed",
+      "reason": "Mixed analog/digital designs require mixed-signal signoff. Its native State integration is not implemented, so the selected row is NOT_MEASURED."
     },
     "submission_and_implementation_interface": {
       "when": "physical",

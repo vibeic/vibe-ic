@@ -42,7 +42,8 @@ def test_selected_safety_without_tool_is_visible(tmp_path):
     assert result['steps'][0]['status'] == 'NOT_MEASURED'
     assert 'not available' in result['steps'][0]['detail'] or 'adapted' in result['steps'][0]['detail']
     omitted = next(item for item in result['not_selected'] if item['name'] == 'mixed_signal_signoff')
-    assert omitted['condition'] == 'False'
+    assert omitted['condition'] == 'mixed'
+    assert omitted['features'] == {'mixed': False}
 
 
 @pytest.mark.parametrize('target', ['ip_hardmacro', 'shippable_gds'])
@@ -118,3 +119,60 @@ def test_document_bought_slot_conflicts_with_hard_ip(tmp_path):
     result = adapters.execute(tmp_path, tmp_path / 'step', {'adapter': 'physical_declarations'}, {'delivery_target': 'ip_hardmacro'})
     assert engine.evaluate(engine.ToolResult(**result), []) == 'FAIL'
     assert 'bought shuttle slot' in result['detail']
+
+
+@pytest.mark.parametrize('name,feature', [
+    ('macro_logical_and_timing_views', 'uses_macros'),
+    ('mixed_signal_signoff', 'has_analog'),
+])
+@pytest.mark.parametrize('declared', [False, True])
+def test_restored_conditional_rows_remain_visible_without_inputs(tmp_path, name, feature, declared):
+    docs = tmp_path / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L1_DATASHEET.json').write_text(json.dumps({feature: declared}))
+    table = engine.read_json(engine.TABLE)
+    route = {'entry_step': name, 'verify_through': name, 'delivery_target': 'ip_hardmacro'}
+    report = engine.run(tmp_path, table=table, route=route)
+    assert report['selected'] == int(declared)
+    if declared:
+        assert report['steps'][0]['status'] == 'NOT_MEASURED'
+        assert report['steps'][0]['detail']
+    else:
+        omitted = next(item for item in report['not_selected'] if item['name'] == name)
+        assert list(omitted['features'].values()) == [False]
+
+
+@pytest.mark.parametrize('complete,status', [(True, 'PASS'), (False, 'FAIL')])
+def test_existing_macro_producer_retains_its_own_view_set_verdict(tmp_path, complete, status):
+    macro = tmp_path / 'input/pdk_local/neutral/block'
+    macro.mkdir(parents=True)
+    (macro / 'block.lef').write_text('MACRO block\n CLASS BLOCK ;\n SIZE 10 BY 10 ;\nEND block\n')
+    (macro / 'block.gds').write_bytes(b'neutral view-set fixture')
+    if complete:
+        (macro / 'block.lib').write_text('library(neutral) { cell(block) { area: 100; } }\n')
+    result = adapters.execute(tmp_path, tmp_path / 'step', {'adapter': 'macro_views'}, {'delivery_target': 'ip_hardmacro'})
+    assert engine.evaluate(engine.ToolResult(**result), []) == status
+    assert result['metrics']['macro_count'] == 1
+
+
+def test_physical_declaration_refusal_cannot_reuse_an_earlier_pass(tmp_path):
+    physical = row('submission_and_implementation_interface')
+    table = {'steps': [physical], 'predicates': {'physical': 'hard_ip'}}
+    route = {'entry_step': physical['name'], 'verify_through': physical['name'], 'delivery_target': 'ip_hardmacro'}
+    assert engine.run(tmp_path, table=table, route=route)['steps'][0]['status'] == 'PASS'
+    path = tmp_path / 'input/step_0_5ic_answers.json'
+    path.parent.mkdir()
+    path.write_text(json.dumps({'answers': {'deliverable': 'HARDMACRO'},
+        'answer_provenance': {'deliverable': {'answered_by': 'owner', 'citation': 'Deliver a hard macro IP.'}},
+        'operator_template': {'slot': 'neutral_slot'}}))
+    report = engine.run(tmp_path, table=table, route=route)
+    assert report['steps'][0]['status'] == 'FAIL'
+    assert report['steps'][0]['retained'] is False
+
+
+def test_only_actual_merged_rows_are_unconditionally_unselected():
+    table = engine.read_json(engine.TABLE)
+    assert {item['name'] for item in table['steps'] if item['when'] == 'False'} == {
+        'constraint_validation', 'netlist_handoff'}
+    reason = row('netlist_handoff')['applicability_reason']
+    assert all(name in reason for name in ('LibreLane State', 'Synthesis', 'Netlist equivalence', 'Pre-layout timing'))

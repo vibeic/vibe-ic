@@ -110,7 +110,7 @@ def execute(project: Path, directory: Path) -> dict:
         if not root:
             return {"ran": False, "detail": "No installed PDK_ROOT for native technology resolution."}
         started = True
-        selected, pin = _resolve(config_path, Path(root).resolve(strict=True),
+        selected, pin = _resolve(config_path, Path(root).resolve(),
                                  pdk=declared_pdk, project=project)
         if selected["PDK"] != declared_pdk:
             raise D03Refusal("D03_PDK_DECLARATION_CONFLICT", "resolved PDK differs from design declaration")
