@@ -98,6 +98,42 @@ def test_chip_pdn_uses_native_script_and_registry_connections(project, monkeypat
         "add_pdn_connect -grid stdcell_grid -layers {pad horizontal}\n")
 
 
+@pytest.mark.parametrize("route", ["ic", "DIE"])
+@pytest.mark.parametrize("ring", [{}, {"widths": [1, 2]}])
+def test_ic_pdn_connects_pads_without_optional_registry_layers(project, monkeypatch, route, ring):
+    import flow_config
+
+    registry = project / "registry"
+    registry.mkdir()
+    target = json.loads((project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json")
+                        .read_text())["fields"]["pdk_target"]
+    (registry / "pdk_registry.json").write_text(json.dumps({"pdks": [{
+        "name": target, "pdn_ring": ring}]}))
+    monkeypatch.setattr(flow_config, "PROGRAMS", registry)
+    config = build_config(project, route=route)
+    assert {key: config.get(key) for key in ("PDN_CORE_RING", "PDN_CORE_RING_CONNECT_TO_PADS")} == {
+        "PDN_CORE_RING": True, "PDN_CORE_RING_CONNECT_TO_PADS": True}
+    assert Path(config["PDN_CFG"]).read_text() == (
+        "source $::env(SCRIPTS_DIR)/openroad/common/pdn_cfg.tcl\n")
+
+
+def test_declared_pdn_construction_overrides_ic_defaults(project):
+    declarations(project, [
+        {"kind": "flow_setting", "token": "PDN_CORE_RING", "value": "false"},
+        {"kind": "flow_setting", "token": "PDN_CORE_RING_CONNECT_TO_PADS", "value": "false"},
+    ])
+    config = build_config(project, route="ic")
+    assert config["PDN_CORE_RING"] is False
+    assert config["PDN_CORE_RING_CONNECT_TO_PADS"] is False
+
+
+@pytest.mark.parametrize("route", [None, "ip", "HARDMACRO"])
+def test_non_ic_routes_leave_native_pdn_construction_defaults(project, route):
+    config = build_config(project, route=route)
+    assert {key for key in ("PDN_CORE_RING", "PDN_CORE_RING_CONNECT_TO_PADS", "PDN_CFG")
+            if key in config} == set()
+
+
 def test_config_cli_output_is_the_config_the_caller_receives(project):
     output = write_config(project, route="HARDMACRO")
     assert json.loads(output.read_text()) == build_config(project, route="HARDMACRO")
