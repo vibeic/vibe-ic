@@ -6,6 +6,7 @@ import argparse
 import fnmatch
 import json
 import re
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,208 @@ def _input_docs(project: Path) -> dict[str, str]:
     return {str(path.relative_to(project)): path.read_text(errors="replace")
             for path in paths if path.is_file()
             and path.suffix.lower() in {".md", ".rst", ".txt", ".markdown"}}
+
+
+_POWER_UNIT_EXPONENTS = {"W": 0, "mW": -3, "uW": -6, "µW": -6, "μW": -6}
+_POWER_NUMBER = r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+_POWER_BOUND = re.compile(
+    rf"(?P<operator><=|>=|<|>|≤|≥|under\b|below\b|at\s+most\b|at\s+least\b|"
+    rf"no\s+more\s+than\b|no\s+less\s+than\b)\s*"
+    rf"(?P<value>{_POWER_NUMBER})\s*(?P<unit>[mµμu]?W)\b", re.I)
+_POWER_INFORMATIONAL = re.compile(
+    r"informational|information[- ]only|non[- ]sign[- ]?off|non[- ]gating|"
+    r"not\s+(?:a\s+)?(?:sign[- ]?off\s+)?gate|資訊性|信息性|❌", re.I)
+_POWER_PARTIAL_SCOPE = re.compile(
+    r"\b(?:per[- ]rail|(?:core|rail)[- ]only|(?:core|rail|domain|block)\s+(?:total\s+)?power|"
+    r"(?:core|rail|domain|block)\s+budget|power\s*\(\s*(?:core|rail)\b|"
+    r"(?:VDD\w*|VCC\w*)\s+power\s+budget|power\s+budget\s+(?:for|of)\s+"
+    r"(?:core|rail|domain|block|VDD\w*|VCC\w*))",
+    re.I)
+
+
+def _power_watts(raw: str | int | float | Decimal, unit: str) -> Decimal | None:
+    """Shift the decimal exponent without rounding the declared coefficient."""
+    value = Decimal(str(raw))
+    if not value.is_finite() or value < 0:
+        return None
+    sign, digits, exponent = value.as_tuple()
+    return Decimal((sign, digits, exponent + _POWER_UNIT_EXPONENTS[unit]))
+
+
+def _power_limits(text: str, unit: str | None = None) -> dict | None:
+    limits = {}
+    if unit and not re.search(r"[mµμu]?W\b", text):
+        text += " " + unit
+    for match in _POWER_BOUND.finditer(text.replace("*", "")):
+        original_unit = match["unit"]
+        if original_unit not in _POWER_UNIT_EXPONENTS:
+            continue
+        value = _power_watts(match["value"], original_unit)
+        if value is None:
+            return None
+        operator = " ".join(match["operator"].lower().split())
+        side = "min" if operator in {">", ">=", "≥", "at least", "no less than"} else "max"
+        exclusive = operator in {"<", ">", "under", "below"}
+        if side in limits and limits[side] != value:
+            return None
+        limits[side] = value
+        if exclusive:
+            limits[side + "_exclusive"] = True
+    if not limits and unit:
+        scalar = re.fullmatch(rf"({_POWER_NUMBER})\s*([mµμu]?W)", text.strip())
+        if scalar:
+            value = _power_watts(scalar[1], scalar[2])
+            if value is not None:
+                limits["max"] = value
+    return limits or None
+
+
+def _power_check(source: dict, limits: dict | None, tt: bool = False) -> dict:
+    check = {
+        "metric": "power__total__corner:" + ("*tt*" if tt else "*"),
+        "operator": "within_declared_bounds", "limit": limits, "unit": "W",
+        "source": source,
+        "scope": "Native estimated total power of the current netlist, including die pads. "
+                 "The estimate uses the native activity assumptions.",
+    }
+    if limits is None:
+        check["missing"] = ("Declared total-power bound could not be parsed or its scope is ambiguous "
+                            "in the cited source.")
+    return check
+
+
+def _structured_power_limits(raw: Any, unit: str) -> dict | None:
+    if isinstance(raw, dict):
+        unit = raw.get("unit", unit)
+        if not isinstance(unit, str) or unit not in _POWER_UNIT_EXPONENTS:
+            return None
+        limits = {}
+        for side in ("min", "max"):
+            if side not in raw:
+                continue
+            value = raw[side]
+            if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+                return None
+            value = _power_watts(value, unit)
+            if value is None:
+                return None
+            limits[side] = value
+            if raw.get(side + "_exclusive") is True:
+                limits[side + "_exclusive"] = True
+        return limits or None
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float, Decimal)):
+        return None
+    return _power_limits(str(raw), unit)
+
+
+def _power_scope(text: str) -> str:
+    subject = re.split(r"\b(?:including|includes)\b", text.replace("_", " "), maxsplit=1, flags=re.I)[0]
+    total = re.search(r"\b(?:total[ -]+(?:power|netlist)|(?:whole|entire|full)[ -]+"
+                      r"(?:netlist|design|chip|die))\b", subject, re.I)
+    partial = _POWER_PARTIAL_SCOPE.search(subject)
+    if partial:
+        return "ambiguous" if total and partial.start() >= total.end() else "partial"
+    if re.search(r"\b(?:core|rail|domain|block)\b", subject, re.I):
+        return "ambiguous" if total else "partial"
+    return "total"
+
+
+def _power_metadata_excluded(holder: dict) -> bool:
+    return (holder.get("informational") is True
+            or any(holder.get(key) is False for key in ("signoff_gate", "signoff", "gating"))
+            or bool(holder.get("rail"))
+            or _power_scope(str(holder.get("scope", ""))) == "partial")
+
+
+def _json_field_offsets(text: str, start: int = 0) -> dict[str, tuple[int, int]]:
+    """Locate immediate JSON keys and values without confusing nested names."""
+    decoder = json.JSONDecoder()
+    position = text.index("{", start) + 1
+    offsets = {}
+    while True:
+        position += len(text[position:]) - len(text[position:].lstrip())
+        if text[position] == "}":
+            return offsets
+        key, end = decoder.raw_decode(text, position)
+        value_start = text.index(":", end) + 1
+        value_start += len(text[value_start:]) - len(text[value_start:].lstrip())
+        offsets[key] = position, value_start
+        _, position = decoder.raw_decode(text, value_start)
+        position += len(text[position:]) - len(text[position:].lstrip())
+        if text[position] == ",":
+            position += 1
+
+
+def declared_power_checks(project: Path) -> list[dict]:
+    """Read explicit total-power bounds without running tools or writing artifacts.
+
+    Supports direct comparisons in source text and total-budget fields at the
+    root or fields object of generated L documents. Relative baseline formulas
+    are retained as unparsed declarations unless a direct ceiling is present.
+    """
+    checks = []
+    for file, text in _input_docs(project).items():
+        gate_column = None
+        for line_number, line in enumerate(text.splitlines(), 1):
+            columns = [column.strip() for column in line.strip().strip("|").split("|")]
+            if "|" in line and any(re.search(r"sign[- ]?off\s+gate|是否.*gate", column, re.I)
+                                   for column in columns):
+                gate_column = next(index for index, column in enumerate(columns)
+                                   if re.search(r"sign[- ]?off\s+gate|是否.*gate", column, re.I))
+            if "|" not in line:
+                gate_column = None
+            if (gate_column is not None and len(columns) > gate_column
+                    and re.fullmatch(r"(?:no|false|否|❌(?:\s*否)?)", columns[gate_column], re.I)):
+                continue
+            scope = _power_scope(line)
+            if (_POWER_INFORMATIONAL.search(line) or scope == "partial"
+                    or not re.search(r"\b(?:total[ _-]+power|power[ _-]+budget)\b", line, re.I)):
+                continue
+            limits = _power_limits(line) if scope == "total" else None
+            if limits is None and not re.search(
+                    r"[|<>≤≥]|\b(?:budget|target|limit|under|below|baseline|shall|must)\b", line, re.I):
+                continue
+            matches = list(_POWER_BOUND.finditer(line.replace("*", "")))
+            checks.append(_power_check({
+                "file": file, "line": line_number, "text": line,
+                "bound": [match[0] for match in matches] or line,
+                "unit": [match["unit"] for match in matches],
+            }, limits, bool(re.search(r"\bTT\b", line, re.I))))
+    for path in sorted((project / "phase1/generated_docs").glob("L*.json")):
+        text = path.read_text()
+        document = json.loads(text, parse_float=Decimal)
+        if not isinstance(document, dict) or _power_metadata_excluded(document):
+            continue
+        root_offsets = _json_field_offsets(text)
+        for prefix, holder in (("", document), ("fields.", document.get("fields", {}))):
+            if not isinstance(holder, dict) or not holder:
+                continue
+            if _power_metadata_excluded(holder):
+                continue
+            offsets = (_json_field_offsets(text, root_offsets["fields"][1])
+                       if prefix else root_offsets)
+            for field, unit in (("power_budget_uw", "uW"), ("power_budget_mw", "mW"),
+                                ("total_power_mw", "mW")):
+                raw = holder.get(field)
+                if raw is None or raw == "":
+                    continue
+                if field == "total_power_mw" and not isinstance(raw, dict):
+                    continue
+                if isinstance(raw, dict) and _power_metadata_excluded(raw):
+                    continue
+                line_number = text.count("\n", 0, offsets[field][0]) + 1
+                scopes = [document.get("scope", ""), holder.get("scope", "")]
+                if isinstance(raw, dict):
+                    scopes.append(raw.get("scope", ""))
+                ambiguous = any(_power_scope(str(scope)) == "ambiguous" for scope in scopes)
+                checks.append(_power_check({
+                    "file": str(path.relative_to(project)), "line": line_number,
+                    "text": text.splitlines()[line_number - 1], "field": prefix + field,
+                    "bound": raw, "unit": raw.get("unit", unit) if isinstance(raw, dict) else unit,
+                }, None if ambiguous else _structured_power_limits(raw, unit),
+                    str(raw.get("corner", holder.get("corner", "")) if isinstance(raw, dict)
+                        else holder.get("corner", "")).casefold() == "tt"))
+    return checks
 
 
 def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:

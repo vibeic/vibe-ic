@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -68,23 +69,49 @@ def inputs(project, tool):
 def cdc(project, directory, tool, commands, *, state=None, config=None):
     import _cdc_netlist as native
     from cdc_async_input_check import is_probable_async_port
-    files, top = inputs(project, tool)
-    if not files or not top:
+    implemented = tool.get("adapter") == "implemented_cdc"
+    native_top = (config or {}).get("DESIGN_NAME") if implemented else None
+    files, top = ([], native_top) if native_top else inputs(project, tool)
+    if not top or (not implemented and not files):
         return commands.result(detail="Produced RTL and the declared top module are required.")
     raw, graph = directory / "graph_raw.json", directory / "graph.json"
     script = directory / "elaborate.ys"
-    if tool.get("adapter") == "implemented_cdc":
+    if implemented:
         import fnmatch
         from flow109_netlist_cdc import _word
+        from lec_post_layout_check import _LIB_CELL_RE
+        from sdf_gate_sim import missing_empty_cell_stubs, netlist_used_cells
         netlist = state.get("nl") if state is not None else None
-        libraries = config.get("CELL_LIBS") or config.get("LIB") or {}
-        liberty = [Path(p) for pattern, paths in libraries.items()
-                   if fnmatch.fnmatchcase(config.get("DEFAULT_CORNER", ""), pattern)
-                   for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
-        if not netlist or not Path(netlist).is_file() or not liberty:
+        if not netlist or not Path(netlist).is_file():
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
+        text = Path(netlist).read_text()
+        used = netlist_used_cells(text)
+        liberty = []
+        for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
+            libraries = config.get(key) or []
+            groups = ([paths for pattern, paths in libraries.items()
+                       if fnmatch.fnmatchcase(config.get("DEFAULT_CORNER", ""), pattern)]
+                      if isinstance(libraries, dict) else [libraries])
+            for paths in groups:
+                values = [Path(p) for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
+                if key in {"PAD_LIBS", "EXTRA_LIBS"}:
+                    values = [path for path in values if not path.is_file()
+                              or used.intersection(_LIB_CELL_RE.findall(path.read_text()))]
+                liberty.extend(values)
+        liberty = list(dict.fromkeys(liberty))
+        if not liberty:
+            return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
+        defined = {name for path in liberty if path.is_file()
+                   for name in _LIB_CELL_RE.findall(path.read_text())}
+        stubs = missing_empty_cell_stubs(text, used - defined, "")
+        models = []
+        if stubs:
+            physical = directory / "physical_cells.v"
+            physical.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
+            models.append("read_verilog -lib " + _word(physical))
         script.write_text("\n".join([
             *["read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
+            *models,
             "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
             "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
     else:
@@ -167,14 +194,29 @@ def simulation(project, directory, tool, commands):
             for path in sorted(unit_dir.glob(pattern)) if is_unit_tb(path))]))
     if files and not benches:
         from arith_oracle_tb_gen import generate as arithmetic
-        from professional_tb_gen import generate, _detect_ic_class
+        from professional_tb_gen import _detect_ic_class
         arithmetic(project, _detect_ic_class(project))
         benches = testbenches(project, tool)
-        if not benches:
-            generate(project)
-            benches = testbenches(project, tool)
+    producer_report = project / "reports/phase2/gates/professional_tb.json"
+    professional = project / "phase2/stage1/sim_professional" / str(top)
+    managed = (professional / "verification_plan.json").is_file() and any(
+        bench.parent == professional for bench in benches)
+    if files and (not benches or managed):
+        from professional_tb_gen import generate
+        generated = generate(project, rtl=files, top=top)
+        producer_report.parent.mkdir(parents=True, exist_ok=True)
+        producer_report.write_text(json.dumps({**generated, "status": "INCOMPLETE",
+            "reason": generated.get("reason") or "Native functional verification has not completed."}, indent=2) + "\n")
+        handoff = generated.get("reference_model_handoff")
+        if handoff:
+            Path(handoff["artifact_path"]).parent.mkdir(parents=True, exist_ok=True)
+            return commands.result(reports=[producer_report], detail=
+                "The existing professional testbench producer requires its reference model: "
+                + json.dumps(handoff))
+        benches = testbenches(project, tool)
     if not files or not benches:
-        return commands.result(detail="Produced RTL and a program-generated testbench are required.")
+        return commands.result(reports=[producer_report] if producer_report.is_file() else [],
+            detail="Produced RTL and a program-generated testbench are required.")
     reports, dats, assertions, native_steps = [], [], [], []
 
     def invoke(argv, cwd):
@@ -242,7 +284,8 @@ def simulation(project, directory, tool, commands):
         merged = directory / "coverage.dat"
         completed = commands.run(["verilator_coverage", "--write", merged, *dats])
         if completed is not None and not completed.returncode and merged.is_file():
-            parsed = coverage.parse_coverage_dat(str(merged))
+            parsed = (coverage.parse_coverage_dat(str(merged)) if len(dats) == 1
+                      else coverage.union_coverage_dats(list(map(str, dats))))
             line_map, info = coverage.lcov_line_union([str(merged)], str(directory), exec_fn=invoke)
             if line_map is not None:
                 parsed["line_union"] = line_map
@@ -448,6 +491,59 @@ def declared_electrical_checks(project):
     return list(checks.values())
 
 
+def _simulation_in_runtime(project, work, tool):
+    import _eda_pin
+
+    container = os.environ.get("EDA_CONTAINER") or _eda_pin.default_container_name()
+    transport = work / "runtime"
+    transport.mkdir()
+    commands = Commands(transport)
+    inspected = commands.run(["docker", "inspect", "--format", "{{json .Mounts}}", container])
+    if inspected is None or inspected.returncode:
+        return {**commands.result(detail="The declared simulation runtime could not be opened."),
+                "ran": False, "exit_code": None}
+    mounts = [(str(Path(mount["Source"]).resolve()), mount["Destination"])
+              for mount in json.loads(inspected.stdout) if mount["Type"] == "bind"]
+
+    def mapped(value, pairs):
+        if isinstance(value, str):
+            for source, destination in sorted(pairs, key=lambda pair: len(pair[0]), reverse=True):
+                if value == source or value.startswith(source.rstrip("/") + "/"):
+                    return destination.rstrip("/") + value[len(source):]
+        elif isinstance(value, list):
+            return [mapped(item, pairs) for item in value]
+        elif isinstance(value, dict):
+            return {key: mapped(item, pairs) for key, item in value.items()}
+        return value
+
+    result_path = work / "simulation_result.json"
+    code = """import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from flow_native_adapters import Commands, simulation
+project, work = map(Path, sys.argv[2:4])
+commands = Commands(work)
+try:
+    result = simulation(project, work, json.loads(sys.argv[4]), commands)
+except (OSError, ValueError, KeyError) as exc:
+    result = commands.result(detail=str(exc))
+Path(sys.argv[5]).write_text(json.dumps(result))
+"""
+    argv = ["python3", "-c", code, str(Path(__file__).resolve().parent),
+            str(project), str(work), json.dumps(mapped(tool, mounts)), str(result_path)]
+    options = ["-w", mapped(str(work), mounts)]
+    if os.environ.get("TMPDIR"):
+        options.extend(["-e", "TMPDIR=" + mapped(os.environ["TMPDIR"], mounts)])
+    completed = commands.run(["docker", "exec", *options, container, "bash", "-lc",
+                              "exec " + shlex.join(mapped(argv, mounts))])
+    if completed is None or completed.returncode or not result_path.is_file():
+        return {**commands.result(detail="The declared simulation runtime did not return a result."),
+                "ran": False, "exit_code": None}
+    result = mapped(json.loads(result_path.read_text()), [(target, source) for source, target in mounts])
+    result["reports"] = commands.result()["reports"] + result.get("reports", [])
+    return result
+
+
 def execute(project, directory, tool, route, *, state=None, config=None):
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
@@ -463,6 +559,10 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if adapter is None:
         return commands.result(detail=f"No native adapter for {tool.get('adapter')!r}.")
     try:
+        if tool.get("adapter") == "simulation":
+            from _container_exec import no_container_route
+            if not no_container_route():
+                return _simulation_in_runtime(project, work, tool)
         return adapter(project, work, tool, commands)
     except (OSError, ValueError, KeyError) as exc:
         return commands.result(detail=str(exc))
