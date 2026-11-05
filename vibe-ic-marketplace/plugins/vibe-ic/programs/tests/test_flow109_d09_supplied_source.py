@@ -270,7 +270,7 @@ def test_authored_later_demands_remain_named_without_structural_credit(tmp_path,
     assert {d['id'] for d in result['source_demands']}==set(result['required_rtl_items'])|{r['id'] for r in result['responsibility_register']}
 
 
-@pytest.mark.parametrize('damage,missing',[('constant','0'),('connection','1'),('missing_constant','0'),('fields','2'),('layer','2'),('bracket','2'),('pointer','2')])
+@pytest.mark.parametrize('damage,missing',[('constant','0'),('connection','1'),('missing_constant','0')])
 def test_false_explicit_structural_witness_stays_owned_and_unmeasured(tmp_path,monkeypatch,damage,missing):
     owned=case(tmp_path,monkeypatch,authored=True,damage=damage)
     status,_,detail=consume(owned)
@@ -305,3 +305,41 @@ def test_author_parameter_disagreement_remains_failure(tmp_path, monkeypatch, co
     owned = case(tmp_path, monkeypatch, authored='catalog-glue-author', parameter_contract=contract)
     status, _, detail = consume(owned)
     assert status == 'FAIL' and 'D09_DECLARED_PORTS_PARAMETERS_MISMATCH' in detail, detail
+
+
+@pytest.mark.parametrize('field_path', ['ports.name', '/ports/0/name', 'fields.top_ports', 'L9_INTEGRATION_SPEC.top_ports'])
+@pytest.mark.parametrize('damage', [None, 'port'])
+def test_author_native_interface_field_paths(tmp_path, monkeypatch, field_path, damage):
+    root, report, invocation = case(tmp_path, monkeypatch, authored='catalog-glue-author', damage=damage)
+    spec_path = root / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    spec = json.loads(spec_path.read_text())
+    spec['ports'] = spec['top_ports']
+    put(root, str(spec_path.relative_to(root)), spec)
+    path = root / 'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json'
+    body = json.loads(path.read_text())
+    demand = body['source_demands'][2]
+    body['source_demands'] = [demand]
+    body['expectations'] = [{**demand, 'layer':'L9_INTEGRATION_SPEC',
+                             'field_path':field_path, 'expected_tokens':['interface']}]
+    put(root, str(path.relative_to(root)), body)
+    review = json.loads((root / 'reports/audit/ai_judgements/1.json').read_text())
+    review['evidence_sha256'] = judgement.evidence_sha256(root, '1')
+    put(root, 'reports/audit/ai_judgements/1.json', review)
+    out = root / 'reports/orchestrator/phase2_one_shot.json'
+    design._write_phase2_report(out, report, root, invocation_context=invocation)
+    report = json.loads(out.read_text())
+    status, evidence, detail = consume((root, report, invocation))
+    assert status == ('FAIL' if damage else 'PASS'), detail
+    assert report['d09_owned_metrics']['required_rtl_items'] == ['2']
+    if damage:
+        assert 'D09_DECLARED_PORTS_PARAMETERS_MISMATCH' in detail
+    else:
+        assert evidence['owned_metrics']['mapped_items'] == ['2']
+
+
+@pytest.mark.parametrize('alias', ['fields', 'layer', 'bracket', 'pointer'])
+def test_author_native_interface_accepts_existing_path_spellings(tmp_path, monkeypatch, alias):
+    owned = case(tmp_path, monkeypatch, authored=True, damage=alias)
+    status, evidence, detail = consume(owned)
+    assert status == 'PASS', detail
+    assert evidence['owned_metrics']['required_rtl_items'] == ['0', '1', '2']
