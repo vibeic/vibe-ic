@@ -753,12 +753,15 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if tool.get("adapter") == "final_patterns":
         from flow_atpg import final_patterns
         return final_patterns(project, work, state=state, config=config)
-    if tool.get("adapter") == "security_requirements":
+    if tool.get("adapter") in {"security_requirements", "implemented_security"}:
         from flow_security import requirements
         return requirements(project, work, tool)
     if tool.get("adapter") == "safety_injection":
         from flow_safety import injection
         return injection(project, work, tool)
+    if tool.get("adapter") == "safety_case":
+        from flow_safety import safety_case
+        return safety_case(project, work, tool)
     if tool.get("adapter") == "system_scenarios":
         from flow_system_scenarios import execute as system_scenarios
         return system_scenarios(project, work, tool)

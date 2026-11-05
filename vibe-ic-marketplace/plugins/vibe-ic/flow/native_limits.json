@@ -4452,6 +4452,29 @@
     "safety_fault_injection_and_diagnostic_coverage": {
       "kind": "adapter",
       "adapter": "safety_injection"
+    },
+    "implemented_security_and_debug_access": {
+      "kind": "profiles",
+      "profiles": [
+        {
+          "when": "has_analog and not has_digital",
+          "tool": {
+            "kind": "adapter",
+            "adapter": "implemented_security"
+          }
+        },
+        {
+          "when": "otherwise",
+          "tool": {
+            "kind": "adapter",
+            "adapter": "implemented_security"
+          }
+        }
+      ]
+    },
+    "design_safety_case": {
+      "kind": "adapter",
+      "adapter": "safety_case"
     }
   },
   "report_check_readers": {

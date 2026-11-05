@@ -38,3 +38,27 @@ def injection(project, directory, tool):
             "native_steps": [{"name": "fmeda_fault_injection_coverage", "ran": True,
                               "exit_code": code, "status": status}],
             "detail": report.get("reason", "") + " Whole required-fault population and diagnostic latency have no native measurement."}
+
+
+def safety_case(project, directory, tool):
+    from flow_native_adapters import Commands
+    import fmeda_coverage_check as reader
+    import fmeda_fault_injection_coverage as producer
+
+    source = producer._report_path(project, None)
+    if not source.is_file():
+        return Commands(directory).result(detail="No native FMEDA injection report; diagnostic coverage and DFA are unmeasured.")
+    report = reader.check(json.loads(source.read_text()), tool.get("asil"), tool.get("min_dc"), project)
+    output = directory / "fmeda_coverage_check.json"
+    output.write_text(json.dumps(report, indent=2) + "\n")
+    metrics = {key: report[key] for key in ("injected_faults", "detected_faults", "dc_floor_pct",
+               "baseline_valid", "mechanisms") if key in report}
+    if "recomputed_dc_pct" in report:
+        metrics["diagnostic_coverage_pct"] = report["recomputed_dc_pct"]
+    status = report["verdict"]
+    code = 0 if report["passed"] else 2 if status == "NOT_MEASURED" else 1
+    return {"ran": True, "exit_code": code, "metrics": metrics,
+            "reports": [str(source), str(output)], "tool_seconds": 0.0,
+            "native_steps": [{"name": "fmeda_coverage_check", "ran": True,
+                              "exit_code": code, "status": status}],
+            "detail": report["reason"] + ". Reads retained native counts without rerunning injection. Diagnostic coverage does not measure redundancy separation or DFA."}
