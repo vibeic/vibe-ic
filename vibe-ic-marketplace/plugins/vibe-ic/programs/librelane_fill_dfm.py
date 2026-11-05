@@ -1063,12 +1063,8 @@ def tool_density(project: Path) -> Optional[Dict[str, Any]]:
     path = project / RECORD_REL
     if not path.is_file():
         return None
-    promotion = None
     try:
         doc = _load(path)
-        if doc.get('default_stream') or (project / DEFAULT_STREAM_REL).is_file() \
-                or (project / 'phase3/librelane' / CONFIG_FOLDER / 'KLayout.StreamOut.json').is_file():
-            promotion = validate_default_stream(project)
     except (OSError, ValueError, Refusal, KeyError, TypeError):
         return {'status': 'UNREADABLE', 'source': RECORD_REL}
     arms = doc.get('gds') or {}
@@ -1079,8 +1075,7 @@ def tool_density(project: Path) -> Optional[Dict[str, Any]]:
     state = _lc.project_path(project, arm.get('state') or '')
     if not state.is_file():
         return {'status': 'STALE', 'source': RECORD_REL, 'state': str(state)}
-    row = validate_density_result(project, arm,
-        layout=_lc.project_path(project, promotion['canonical']) if promotion else None)
+    row = validate_density_result(project, arm)
     count = _count(row.get('value'))
     if count is None:
         return {'status': 'NOT_MEASURED', 'source': RECORD_REL,
@@ -1088,22 +1083,13 @@ def tool_density(project: Path) -> Optional[Dict[str, Any]]:
     result = {'status': 'MEASURED', 'errors': count, 'arm': shipped,
             'rules': arm.get('rules'), 'runset': arm.get('runset'),
             'source': RECORD_REL, 'state': str(state)}
-    if promotion is not None:
-        try:
-            result['per_layer'] = current_metal_density(project, arm, promotion)
-        except (OSError, ValueError, Refusal, KeyError, TypeError) as exc:
-            result['per_layer'] = {'verdict': 'NOT_MEASURED', 'reason': str(exc),
-                                   'consumer': 'metal_layer_density_check.check'}
+    result['per_layer'] = current_metal_density(project, arm)
     return result
 
 
-DEFAULT_STREAM_REL = 'phase3/librelane/37-default-promotion.json'
-
-
-def current_metal_density(project: Path, arm: dict, promotion: dict) -> dict:
+def current_metal_density(project: Path, arm: dict) -> dict:
     """The PDK deck checks each density rule against its own original limit."""
-    row = validate_density_result(project, arm,
-        layout=_lc.project_path(project, promotion['canonical']))
+    row = validate_density_result(project, arm)
     count = _count(row.get('value'))
     return {'verdict': 'NOT_MEASURED' if count is None else 'PASS' if count == 0 else 'FAIL',
             'errors': count, 'source': row.get('source'), 'reason': row.get('reason'),
@@ -1120,38 +1106,6 @@ def _current_stage(project: Path, state: Path, step: str) -> tuple[dict, dict]:
     if after.get('metrics', {}).get('flow__errors__count', 0):
         raise Refusal('LL_STEP_FAILED', step)
     return before, after
-
-
-def validate_default_stream(project: Path) -> dict:
-    """Reuse the native stream when its filled DEF and publications are current."""
-    doc = _load(project / RECORD_REL)
-    record = dict(doc['default_stream'])
-    for key in ('stream_state', 'filled_def', 'stream', 'sealed', 'prefill',
-                'source', 'pnr_gds', 'canonical', 'finishing_report'):
-        if record.get(key):
-            record[key] = str(_lc.project_path(project, record[key]))
-    filled = project / 'phase3/stage3/pnr/filled.def'
-    before, after = _current_stage(project, Path(record['stream_state']),
-                                   record.get('stream_step', 'KLayout.StreamOut'))
-    if (_lc.project_path(project, before['def']) != filled
-            or _lc.project_path(project, after['klayout_gds']) != Path(record['stream'])
-            or not Path(record['stream']).is_file()):
-        raise Refusal('LL_FILLED_DEF_GDS_MISMATCH', record['stream_state'])
-    source = Path(record['source'])
-    if any(Path(record[key]).read_bytes() != source.read_bytes() for key in ('pnr_gds', 'canonical')):
-        raise Refusal('LL_FINISHING_WRONG_PUBLICATION', record['canonical'])
-    return record
-
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -241,7 +241,6 @@ def same_def(a: Path, b: Path) -> bool:
 
 
 FLOW_ORDINAL = re.compile(r'^(\d+(?:\.\d+)?)(?:ic)?(?:-|$)')
-FINISHING_RECORD_REL = 'phase3/librelane/37-default-promotion.json'
 
 
 def final_state(project: Path, *, streamed: bool = False) -> Path | None:
@@ -294,15 +293,11 @@ def final_state(project: Path, *, streamed: bool = False) -> Path | None:
 
 
 def finished_gds(project: Path, selected: Path) -> Path:
-    """Seal and fill run after the final State, so their publisher names the GDS."""
-    record = load(project / FINISHING_RECORD_REL)
-    if not record.get('canonical'):
-        raise ValueError(f'CURRENT_FINISHED_GDS_RECORD_MISSING: {FINISHING_RECORD_REL}')
-    if not isinstance(record['canonical'], str):
-        raise ValueError('CURRENT_FINISHED_GDS_RECORD_INVALID: canonical must be a path string')
-    if path(project, str(record.get('stream_state'))).resolve() != selected.resolve():
-        raise ValueError(f"CURRENT_FINISHED_GDS_OTHER_STATE: {record.get('stream_state')} != {selected}")
-    gds = path(project, record['canonical'])
+    """Read the GDS view from the caller's selected native State."""
+    value = load(selected).get('gds')
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f'CURRENT_FINAL_STATE_VIEW_INVALID: gds must be a path string in {selected}')
+    gds = path(project, value)
     if not gds.is_file() or gds.stat().st_size == 0:
         raise ValueError(f'CURRENT_FINISHED_GDS_MISSING: {gds}')
     return gds

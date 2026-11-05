@@ -1005,7 +1005,6 @@ def selected_provider_precheck(assembly):
 def design_release_sources(project, layout, assembly=None):
     """Existing selected producers supply the archive readset and judgments."""
     import librelane_signoff_evidence as native
-    import librelane_fill_dfm as finishing
     import librelane_signoff as timing
     import librelane_contract as lc
     project = Path(project).resolve()
@@ -1228,12 +1227,14 @@ def design_release_sources(project, layout, assembly=None):
     except (OSError, ValueError, lc.Refusal) as exc:
         validation['die_stack'] = {"verdict":"NOT_MEASURED","reason":str(exc)}
     try:
-        bound = finishing.validate_default_stream(project)
-        canonical = Path(bound['canonical'])
+        import _prestream_native as views
+        state = views.final_state(project, streamed=True)
+        if state is None:
+            raise ValueError('Native stream State missing')
+        canonical = views.finished_gds(project, state)
         if not assembly and canonical.read_bytes() != Path(layout).read_bytes():
             raise ValueError('stream subject differs from selected final GDS')
         validation['stream'] = {"verdict":"PASS", "canonical":str(canonical)}
-        state = lc.project_path(project, bound['stream_state'])
         retained(state.parent, 'stream_log')
         config = json.loads((state.parent / 'config.json').read_text())
         for key in ('KLAYOUT_DEF_LAYER_MAP', 'KLAYOUT_TECH', 'KLAYOUT_PROPERTIES'):

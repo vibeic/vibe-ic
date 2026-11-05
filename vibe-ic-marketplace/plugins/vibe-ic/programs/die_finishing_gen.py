@@ -2025,10 +2025,12 @@ def publish_provider_release(project: Path, record_path: Path, *,
     if official["input"] != precheck_input:
         # A normal complete Default stream can include its PDK filler before
         # density top-up. Reuse that existing exact chain, never invent one.
-        from librelane_fill_dfm import validate_default_stream
-        normal = validate_default_stream(source_project)
+        from _prestream_native import final_state, finished_gds
+        selected = final_state(source_project, streamed=True)
+        if selected is None or finished_gds(source_project, selected).read_bytes() != old_gds.read_bytes():
+            raise ValueError("the selected native State describes another GDS")
         current = _release_file(old_gds)
-        if official["input"] != current or normal.get("canonical_sha256") != current["sha256"]:
+        if official["input"] != current:
             raise ValueError("the operator did not check this assembly revision")
         files["filled_gds"] = current
     for index, step in enumerate(official["steps"]):
