@@ -75,7 +75,7 @@ RULE 0).
 
 | subject | entry | target |
 |---|---|---|
-| benchmark IC (doc→GDS) | `/vibe-ic-all <project> --route ic --flow109-manifest <manifest> --entry-step <D-id> --exit-step <D-id> --pdk <pdk> --ic-name <ic>` | selected Flow109 row evidence; whole-flow acceptance remains separate |
+| benchmark IC (doc→GDS) | `/vibe-ic-all <project> --route ic --flow109-manifest <manifest> --entry-step <D-id> --exit-step <D-id> --pdk <pdk> --ic-name <ic>` | selected flow row evidence; whole-flow acceptance remains separate |
 | IP-cell (doc→LEF) | same runner, IP route | LEF + GDS emitted, the 37.5 gate reached |
 | open benchmark | `/vibe-ic-benchmark <bench>` | the highest HONEST pass@1 |
 
@@ -305,7 +305,7 @@ Run through the one front door → classify each FAIL as flow / gate / tool → 
 fixing the layer that owns it → prove it in the cache against real artefacts with a
 falsification and a control → PR it to the owning repo → upgrade, restart, re-run.
 
-Next: run `/vibe-ic-all` through the explicit Flow109 public entry (or use a
+Next: run `/vibe-ic-all` through the explicit flow public entry (or use a
 benchmark dispatcher whose saved argv proves that same entry), then classify
 every FAIL per §2 before changing anything.
 
