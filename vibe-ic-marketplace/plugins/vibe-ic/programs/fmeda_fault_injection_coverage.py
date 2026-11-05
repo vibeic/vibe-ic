@@ -104,11 +104,8 @@ import json
 import os
 import re
 import shutil
-# Retained after the launchers moved to `_watchdog`: this module no longer
-# calls it, but `fi.subprocess` is the patch surface two tests use to assert
-# that the no-backend path launches NOTHING. Removing it turns those into an
-# AttributeError, not a pass.
-import subprocess  # noqa: F401
+import subprocess
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -119,7 +116,6 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 import _path_layout as _pl  # noqa: E402
 import _structural_absence as _sa  # noqa: E402  R-0915-119
-import _watchdog as _wd  # noqa: E402  progress-stall process supervision
 try:  # sibling module; programs/ is on sys.path when run as a script
     import _docker_memory as _dmem
 except ImportError:  # pragma: no cover - packaged/flattened layouts
@@ -898,162 +894,46 @@ def resolve_injection_backend(image: Optional[str] = None
             "the host has no iverilog/vvp on PATH" + unresolved)
 
 
-def _run_injection_host(project: Path,
-                        rtl_rel_files: List[str],
-                        tb_rel: str,
-                        tb_top: str,
-                        timeout: int) -> Tuple[int, str, str]:
-    """Compile + run the injection with the HOST iverilog/vvp.
-
-    Mirrors the container leg's `compile && run` semantics exactly: vvp runs
-    only when the compile succeeded, and the caller sees the CONCATENATED
-    stdout of both stages, because that is where the `GOLDEN`/`FAULT` transcript
-    the parser reads comes from.
-
-    `timeout` is the STALL GRACE for each stage, not a runtime budget. It used
-    to be a wall-clock budget shared across the pair, whose expiry returned rc
-    124 — and `main` books any non-zero rc as `verdict: FAIL` on the design's
-    diagnostic coverage. So the number of vectors a machine could simulate in
-    300 s decided whether a safety mechanism PASSED. That is a verdict about
-    the host. The two stages no longer share a budget either: the shared
-    deadline existed to keep this leg from outlasting the container leg's
-    wall, and neither leg has a wall any more — a stage that is progressing
-    runs to completion on both.
-    """
+def _run_injection_host(project: Path, rtl_rel_files: List[str],
+                        tb_rel: str, tb_top: str) -> Tuple[int, str, str]:
     vvp_out = project / f"{tb_rel}.vvp"
     vvp_out.parent.mkdir(parents=True, exist_ok=True)
-    srcs = [str(project / s) for s in rtl_rel_files + [tb_rel]]
-    grace = float(timeout)
-    c = _wd.run_host_supervised(
-        ["iverilog", "-g2012", "-o", str(vvp_out), "-s", tb_top] + srcs,
-        cwd=str(project), stall_grace_s=grace)
-    if c.outcome == "launch_error":
-        return 127, "", "iverilog/vvp not found on the host PATH"
-    if c.rc != 0:
-        return c.rc, c.out, c.err
-    r = _wd.run_host_supervised(["vvp", str(vvp_out)], cwd=str(project),
-                                stall_grace_s=grace)
-    if r.outcome == "launch_error":
-        return 127, "", "iverilog/vvp not found on the host PATH"
-    return r.rc, c.out + r.out, c.err + r.err
+    sources = [str(project / path) for path in [*rtl_rel_files, tb_rel]]
+    try:
+        compiled = subprocess.run(["iverilog", "-g2012", "-o", str(vvp_out), "-s", tb_top,
+                                   *sources], cwd=project, capture_output=True, text=True)
+        if compiled.returncode:
+            return compiled.returncode, compiled.stdout, compiled.stderr
+        simulated = subprocess.run(["vvp", str(vvp_out)], cwd=project,
+                                   capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        return 127, "", str(exc)
+    return simulated.returncode, compiled.stdout + simulated.stdout, compiled.stderr + simulated.stderr
 
 
-def run_injection_iverilog(project: Path,
-                           rtl_rel_files: List[str],
-                           tb_rel: str,
-                           tb_top: str = "fmeda_fi_tb",
-                           timeout: int = 300,
-                           image: Optional[str] = None
+def run_injection_iverilog(project: Path, rtl_rel_files: List[str], tb_rel: str,
+                           tb_top: str = "fmeda_fi_tb", image: Optional[str] = None
                            ) -> Tuple[int, str, str]:
-    """Compile the mechanism RTL + generated TB with iverilog and run vvp —
-    in the vibeic-eda container when one is usable WITHOUT a registry pull,
-    otherwise with the host iverilog/vvp. Returns (exit, stdout, stderr);
-    under the container leg the project is mounted at /work.
-
-    When NEITHER backend is available this returns 127 with the reason naming
-    both, rather than handing `docker run` an absent image and blocking on the
-    registry for a multi-GB fetch."""
-    backend, img, reason = resolve_injection_backend(image)
+    backend, image, reason = resolve_injection_backend(image)
     if backend == BACKEND_NONE:
         return 127, "", reason
     if backend == BACKEND_HOST:
-        return _run_injection_host(project, rtl_rel_files, tb_rel, tb_top,
-                                   timeout)
-    vvp_out = f"{tb_rel}.vvp"
-    srcs = " ".join(f"/work/{s}" for s in rtl_rel_files + [tb_rel])
-    compile_cmd = (f"iverilog -g2012 -o /work/{vvp_out} -s {tb_top} {srcs}")
-    run_cmd = f"vvp /work/{vvp_out}"
-    full = _ENV_PREAMBLE + compile_cmd + " && " + run_cmd
-    docker_cmd = [
-        "docker", "run", "--rm", *_dmem.docker_memory_flags(),
-        "--entrypoint", "bash",
-        "-v", f"{project}:/work", img, "-c", full,
-    ]
-    # `timeout` is the STALL GRACE, not a runtime bound — see
-    # `_run_injection_host`. A fault-injection campaign's runtime scales with
-    # the vector count and the mechanism's size; expiry used to return rc 124,
-    # which `main` books as `verdict: FAIL` for the design.
-    r = _wd.run_host_supervised(docker_cmd, stall_grace_s=float(timeout))
-    if r.outcome == "launch_error":
-        return 127, "", "docker binary not found"
-    return r.rc, r.out, r.err
+        return _run_injection_host(project, rtl_rel_files, tb_rel, tb_top)
+    executable = f"/work/{tb_rel}.vvp"
+    compile_command = shlex.join(["iverilog", "-g2012", "-o", executable, "-s", tb_top,
+        *[f"/work/{path}" for path in [*rtl_rel_files, tb_rel]]])
+    run_command = shlex.join(["vvp", executable])
+    command = ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+        "--entrypoint", "bash", "-v", f"{project}:/work", image, "-c",
+        _ENV_PREAMBLE + compile_command + " && " + run_command]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        return 127, "", str(exc)
+    return result.returncode, result.stdout, result.stderr
 
 
 # ─────────────────────────── report emit ────────────────────────────────
-# ---------------------------------------------------------------------------
-# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
-#
-# THE DRIFT. `dc_verdict(dc, floor)` returns True unconditionally when `floor is
-# None` — the ASIL-A / QM case, which states no quantitative DC floor. That is
-# right as a gating decision: inventing a floor the standard does not state would
-# be fabrication. But it means a run that injected NOTHING, or injected and
-# detected nothing, publishes `verdict: PASS` with `diagnostic_coverage_pct: 0`.
-#
-# `compute_dc` is explicit that "injected==0 -> 0.0 (no evidence is NOT full
-# coverage)", and the `reason` string does say "advisory". The VERDICT FIELD does
-# not, and that is the field a reader and every machine consumer take.
-import _record_adjudication as _ra  # noqa: E402
-
-
-def _advisory_zero_dc(record: dict):
-    """Would this gate still call this a PASS on the coverage it measured?"""
-    if record.get("verdict") != "PASS":
-        return None
-    try:
-        dc = float(record.get("diagnostic_coverage_pct") or 0.0)
-        injected = int(record.get("injected_faults") or 0)
-    except (TypeError, ValueError):
-        return None                      # unreadable -> UNDECIDABLE, not a guess
-    if injected > 0 and dc > 0.0:
-        return None                      # real coverage was measured
-    what = ("injected no fault at all" if injected <= 0
-            else "detected none of the faults it injected")
-    return _ra.Supersession(
-        would_issue="VACUOUS_PASS",
-        because=(f"the record carries PASS with diagnostic_coverage_pct {dc:g} "
-                 f"and injected_faults {injected} — the run {what}. The PASS "
-                 f"comes from the ASIL-A/QM branch, which states no quantitative "
-                 f"floor and therefore passes any number including zero; the "
-                 f"`reason` field says 'advisory' but the verdict does not, and "
-                 f"the verdict is what a consumer reads"),
-    )
-
-
-RECORD_ADJUDICATION = _ra.declare(
-    __file__,
-    gate="fmeda_fault_injection_coverage",
-    decision_roots=("build_report",),
-    # RE-REVIEWED at the safety-declaration split (this commit), not re-stamped.
-    # The digest moved because `build_report`'s reachable logic changed twice:
-    # the STRONG/WEAK declaration split, and `diagnostic_coverage_pct` becoming
-    # None when nothing was measured instead of a literal 0.0.
-    #
-    # The rule below reads verdict / diagnostic_coverage_pct / injected_faults,
-    # so the second change touches its inputs directly. Re-checked by RUNNING it
-    # against both record shapes rather than by reasoning about it:
-    #
-    #   PASS, dc 0.0,  injected 0     -> VACUOUS_PASS   (old shape)
-    #   PASS, dc None, injected 0     -> VACUOUS_PASS   (new shape, via `or 0.0`)
-    #   PASS, dc 99.2, injected 500   -> unchanged (no supersession)
-    #   FAIL, dc None, injected 0     -> unchanged (no supersession)
-    #
-    # Identical verdicts across the change, so no published record is
-    # re-adjudicated differently. Bumping this constant without running those
-    # four is exactly what `published_record_staleness_check` exists to stop.
-    decision_digest="ff18dc57a97f43103102d08829175402b0cd05378c130a3779438405a7bf7a27",
-    rules=(
-        _ra.Rule(
-            rule_id="fmeda_fault_injection_coverage.advisory-zero-dc",
-            landed_in="#562",
-            requires=("verdict", "diagnostic_coverage_pct", "injected_faults"),
-            decide=_advisory_zero_dc,
-            what=("a PASS at 0% diagnostic coverage measured no fault detection "
-                  "at all; the ASIL-A/QM branch passes any number"),
-        ),
-    ),
-)
-
-
 def build_report(spec: Optional[MechanismSpec],
                  results: Optional[InjectionResults],
                  asil: str,
@@ -1078,15 +958,11 @@ def build_report(spec: Optional[MechanismSpec],
     # "cannot measure DC". A run that measured nothing and a run that measured
     # zero detections are different claims; 0.00 % asserts the second.
     # `None` is the only honest value, and `measured` names which case it is.
-    measured = results is not None
-    dc = results.dc_pct if results else None
+    measured = bool(results and results.injected > 0 and results.golden_count > 0)
+    dc = results.dc_pct if measured else None
     baseline_ok = bool(results and results.golden_ok)
     if not measured:
-        passed, reason = False, ("injection produced NO result to read — "
-                                 "diagnostic coverage is UNMEASURED, not 0 %. "
-                                 "Reported as null; FAIL because an applicable "
-                                 "safety design must not sign off on an "
-                                 "unmeasured DC")
+        passed, reason = False, "No native baseline and fault counts; diagnostic coverage is unmeasured"
     elif not baseline_ok:
         passed, reason = False, ("harness baseline INVALID (false-alarm or "
                                  "non-inverse encode/decode) — DC not "
@@ -1126,7 +1002,7 @@ def build_report(spec: Optional[MechanismSpec],
         "baseline_golden_count": results.golden_count if results else 0,
         "baseline_notes": results.baseline_notes if results else [],
         "ge_floor": passed,
-        "verdict": "PASS" if passed else "FAIL",
+        "verdict": "PASS" if passed else "FAIL" if measured else "NOT_MEASURED",
         "reason": reason,
         "residual_note": (
             "MEASURED-DC half of FMEDA only. Full SPFM/LFM/PMHF roll-up needs "
@@ -1214,13 +1090,16 @@ def _vacuous_token_line(verdict: str) -> str:
 # ──────────────────────────────── main ──────────────────────────────────
 def run(project: Path, args) -> Tuple[int, dict]:
     import _fmeda_mechanisms as declared
-    if (project / declared.MANIFEST).exists() or (project / declared.MANIFEST).is_symlink():
+    if (not (getattr(args, "enc_module", None) or getattr(args, "dec_module", None))
+            and ((project / declared.MANIFEST).exists() or (project / declared.MANIFEST).is_symlink())):
         try:
             return declared.measure(project, args)
+        except (declared.NotMeasured, FileNotFoundError, KeyError, TypeError) as exc:
+            return 2, {"applicable": True, "measured": False, "verdict": "NOT_MEASURED",
+                       "ge_floor": False, "reason": str(exc)}
         except (declared.Refusal, OSError, ValueError) as exc:
-            return 1, {"schema": declared.REPORT_SCHEMA, "applicable": True,
-                       "measured": False, "verdict": "FAIL", "ge_floor": False,
-                       "reason": f"declared mechanism admission refused: {exc}"}
+            return 1, {"applicable": True, "measured": False, "verdict": "FAIL",
+                       "ge_floor": False, "reason": str(exc)}
     if bool(args.enc_module) != bool(args.dec_module):
         return 1, {"applicable": True, "measured": False, "verdict": "FAIL",
                    "reason": "incomplete explicit mechanism: both encoder and checker are required"}
@@ -1428,40 +1307,25 @@ def run(project: Path, args) -> Tuple[int, dict]:
     tb_path.write_text(tb)
 
     ec, out, err = run_injection_iverilog(
-        project, spec_rtl_rel, tb_rel, tb_top="fmeda_fi_tb",
-        timeout=args.timeout)
+        project, spec_rtl_rel, tb_rel, tb_top="fmeda_fi_tb")
     log = out + "\n" + err
-    if ec not in (0,) or not _GOLDEN_RE.search(out):
+    if ec != 0 or not _GOLDEN_RE.search(out):
         rep = build_report(spec, None, args.asil, floor, tool_log=log)
-        rep["verdict"] = "FAIL"
-        # SAY WHICH OF THE TWO HAPPENED. The old text — "injection run failed
-        # (exit={ec}) or produced no baseline" — was emitted verbatim with
-        # `exit=0` in it, i.e. it reported a FAILED run for a tool that had
-        # exited zero. They are different faults and they point at different
-        # code: a non-zero rc is the simulator; rc 0 with no GOLDEN line is the
-        # generated testbench.
-        if ec != 0:
-            rep["reason"] = (
-                f"iverilog/vvp injection run FAILED (exit={ec}) — no result "
-                f"was produced, so diagnostic coverage is UNMEASURED (null), "
-                f"not 0 %")
-        else:
-            rep["reason"] = (
-                "iverilog/vvp injection ran and exited 0 but emitted NO golden "
-                "baseline line, so no fault result could be read — the "
-                "generated testbench, not the simulator. Diagnostic coverage "
-                "is UNMEASURED (null), not 0 %")
-        rep["baseline_valid"] = False
-        rep["measured"] = False
-        rep["injection_exit_code"] = ec
-        return 1, rep
+        missing = ec in (0, 127)
+        rep.update(verdict="NOT_MEASURED" if missing else "FAIL", injection_exit_code=ec,
+                   reason=f"Native injection exit={ec}; no baseline/counts to read. {err}")
+        return (2 if missing else 1), rep
 
     if detection_only:
         try:
             results, baseline, faults = declared.census(out, spec, args.max_vectors)
-        except declared.Refusal as exc:
+        except declared.NotMeasured as exc:
             rep = build_report(spec, None, args.asil, floor, tool_log=log)
             rep["reason"] = str(exc)
+            return 2, rep
+        except declared.Refusal as exc:
+            rep = build_report(spec, None, args.asil, floor, tool_log=log)
+            rep.update(verdict="FAIL", reason=str(exc))
             return 1, rep
     else:
         results = parse_injection_results(out)
@@ -1470,7 +1334,7 @@ def run(project: Path, args) -> Tuple[int, dict]:
         rep.update(correction_applicable=False, baseline=baseline,
                    fault_list=faults, fault_list_truncated=False,
                    detection_criterion="detect_flag_asserted")
-    return (0 if rep["ge_floor"] else 1), rep
+    return (0 if rep["ge_floor"] else 2 if rep["verdict"] == "NOT_MEASURED" else 1), rep
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1498,7 +1362,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="explicit DC floor %% (overrides the ASIL default)")
     p.add_argument("--max-vectors", type=int, default=64,
                    help="max stimulus data values (all 2^K if small)")
-    p.add_argument("--timeout", type=int, default=300)
     p.add_argument("--json", default=None)
     args = p.parse_args(argv)
 
@@ -1512,9 +1375,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     out_path = _report_path(project, args.json)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    import _gate_authorship as _ga
     rep['program'] = 'fmeda_fault_injection_coverage'
-    _ga.stamp(rep)
     out_path.write_text(json.dumps(rep, indent=2) + "\n")
 
     _absence = _sa.evidence_of(rep)

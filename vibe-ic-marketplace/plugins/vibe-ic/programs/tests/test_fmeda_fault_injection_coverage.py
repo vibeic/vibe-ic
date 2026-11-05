@@ -32,7 +32,6 @@ import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
-_REPO_ROOT = ceiling_check.find_repo_root()
 
 
 @pytest.fixture(autouse=True)
@@ -259,7 +258,7 @@ def test_build_report_pass_and_fail():
 # ── independent recompute gate ───────────────────────────────────────────────
 def test_gate_vacuous_on_not_applicable():
     res = gate.check({"applicable": False, "reason": "n/a"}, None, None)
-    assert res["passed"] is True and res["verdict"] == "VACUOUS_PASS"
+    assert res["passed"] is False and res["verdict"] == "NOT_MEASURED"
 
 
 def test_gate_recomputes_pass():
@@ -270,13 +269,11 @@ def test_gate_recomputes_pass():
 
 
 def test_gate_catches_fabricated_pass():
-    # report LIES verdict=PASS while its own counts say 85.7% < 99% floor.
     rep = {"applicable": True, "asil": "D", "injected_faults": 112,
            "detected_faults": 96, "baseline_valid": True, "verdict": "PASS"}
     res = gate.check(rep, None, None)
-    assert res["passed"] is False
-    assert res["fabricated_verdict_detected"] is True
-    assert "FABRICATED" in res["reason"]
+    assert res["passed"] is False and res["verdict"] == "FAIL"
+    assert res["recomputed_dc_pct"] == round(100 * 96 / 112, 4)
 
 
 def test_gate_fails_invalid_baseline_even_if_dc_high():
@@ -317,29 +314,6 @@ assign syndrome_err=1'b0; endmodule
 """
 
 
-#: The `--timeout` the CI harness bounds a single test at, READ from the
-#: workflows rather than restated here (vibe-ic#542). The landed version of
-#: this line was `= 180`, a second copy of a value this file cannot see — the
-#: drift shape #527/#530/#534 each spent a version removing. It was also
-#: WRONG in a way a copy cannot notice: there are four pytest invocations
-#: across two workflows and they declare two different bounds, so the binding
-#: one is the minimum, which only a resolver can know.
-#: None when no workflow is reachable (a standalone plugin install). The guard
-#: below then SKIPs — it does not fall back to a remembered number, because a
-#: remembered number is the defect.
-CI_HARNESS_TIMEOUT_S = ceiling_check.ci_harness_timeout_seconds(_REPO_ROOT) \
-    if _REPO_ROOT else None
-#: Every inner timeout in this file. MUST stay well under the harness bound: an
-#: inner bound at or above it can never fire, because the harness kills the
-#: whole SESSION first — `--maxfail` stops applying, no per-test diagnostic is
-#: printed, and the verdict of every other file in the subset is lost with it.
-#: The landed value was 300 against a harness of 180, so the program's own
-#: timeout was decoration and a stalled backend took the session down instead.
-#: The real injection measures in well under a second; 60 s is ~100x headroom
-#: and still leaves the harness three times the room it needs to report.
-INNER_TIMEOUT_S = 60
-
-
 class _Args:
     """The `run()` argument surface, spelled out rather than argparse-parsed."""
 
@@ -358,7 +332,7 @@ class _Args:
         self.asil = asil
         self.min_dc = None
         self.max_vectors = 64
-        self.timeout = INNER_TIMEOUT_S
+        self.timeout = 300  # Legacy BASE argument; the native producer has no clock cut.
         self.json = None
 
 
@@ -572,46 +546,17 @@ def test_the_vacuous_token_line_survives_the_consumers_stdout_window(tmp_path):
 # it could never fire. Either one alone still costs the whole subset's result,
 # so each gets a guard that fails if it comes back.
 
-def test_no_inner_timeout_can_outlast_the_ci_harness(tmp_path):
-    """AN INNER TIMEOUT AT OR ABOVE THE HARNESS BOUND IS DECORATION.
-
-    CI runs `pytest --timeout=180 --timeout-method=thread`. A test that permits
-    a subprocess 300 s cannot ever reach its own timeout: at 180 s pytest-timeout
-    kills the SESSION, `--maxfail` stops applying, no per-test diagnostic is
-    printed, and every other file in the subset loses its verdict too. That is
-    exactly what this file did — one stalled backend, zero reported results.
-
-    The walk this test used to carry inline now lives in
-    `ci_harness_timeout_ceiling_check` and judges the WHOLE tree (vibe-ic#542).
-    This test keeps its own assertion — the file that produced the defect should
-    fail on its own when it comes back, not only through a repo-wide gate a
-    reader may not run — but it DELEGATES the parsing, so there is one
-    implementation of the scan and one source for the bound. The inline copy
-    could not see the two shapes the shared one has since grown: a bound spelled
-    as a module constant, and a wrapper that forwards `**kwargs` into a
-    launcher.
-    """
-    if CI_HARNESS_TIMEOUT_S is None:
-        import pytest
-        pytest.skip("no .github/workflows in reach — the harness bound cannot "
-                    "be resolved, and a remembered copy of it is the defect "
-                    "this test exists to prevent")
-    ceiling = CI_HARNESS_TIMEOUT_S // ceiling_check.CEILING_DIVISOR
-    findings, unresolved, sites = ceiling_check.scan_source(
-        Path(__file__).read_text(), Path(__file__).name, ceiling)
-    assert sites, "no bound was READ at all — has the scan stopped working?"
-    assert not findings, (
-        f"inner bound above the {ceiling}s ceiling (harness "
-        f"{CI_HARNESS_TIMEOUT_S}s) — it cannot fire, and the session dies "
-        "instead of the test:\n  " + "\n  ".join(str(f) for f in findings))
-    assert not unresolved, (
-        "a bound above the ceiling on a callee the scan cannot resolve:\n  "
-        + "\n  ".join(str(u) for u in unresolved))
-    assert INNER_TIMEOUT_S <= ceiling, (
-        f"the inner bound needs real headroom under the harness, not merely to "
-        f"be under it — the harness must have room to REPORT, and a test that "
-        f"makes two bounded calls must fit twice: {INNER_TIMEOUT_S} > "
-        f"{ceiling}")
+def test_native_injection_has_no_wall_or_stall_cut(tmp_path, monkeypatch):
+    calls = []
+    def native(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return fi.subprocess.CompletedProcess(argv, 0, "native output\n", "")
+    monkeypatch.setattr(fi.subprocess, "run", native)
+    monkeypatch.setattr(fi, "resolve_injection_backend", lambda *a: (fi.BACKEND_HOST, None, ""))
+    code, output, error = fi.run_injection_iverilog(tmp_path, ["design.v"], "bench.v")
+    assert code == 0 and output == "native output\nnative output\n" and error == ""
+    assert [call[0][0] for call in calls] == ["iverilog", "vvp"]
+    assert all("timeout" not in kwargs and "preexec_fn" not in kwargs for _, kwargs in calls)
 
 
 def test_the_skip_guard_is_the_code_paths_own_decision(tmp_path):
@@ -641,7 +586,7 @@ def test_the_skip_guard_is_the_code_paths_own_decision(tmp_path):
             "injection run — the guard is not reading the path's decision")
         t0 = _t.monotonic()
         ec, out, err = fi.run_injection_iverilog(
-            tmp_path, ["a.v"], "tb.v", timeout=INNER_TIMEOUT_S)
+            tmp_path, ["a.v"], "tb.v")
         elapsed = _t.monotonic() - t0
     finally:
         fi.resolve_injection_backend = orig

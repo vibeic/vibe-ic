@@ -1609,9 +1609,7 @@
       "when": "requires_functional_safety",
       "tool": {
         "kind": "adapter",
-        "program": "fmeda_fault_injection_coverage.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "safety_injection"
       },
       "checks": [
         {
