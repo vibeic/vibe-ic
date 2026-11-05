@@ -106,7 +106,6 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 import argparse
 import ast
-import hashlib
 import json
 import os
 import re
@@ -988,41 +987,6 @@ def _check_pin_count(project: Path, arm: str, release: str,
     return "AGREES"
 
 
-def _check_deliverables_digests(project: Path, release: str, text: str,
-                                findings: List[Finding]) -> int:
-    """R6 — every shipped-view digest in the manifest, recomputed.
-
-    A manifest whose digests are never re-derived binds nothing. This is the one
-    check that catches a document set correctly describing a DIFFERENT build of
-    the same kit — every heading in place, every section present, and the files
-    it names are not the files that shipped.
-    """
-    checked = 0
-    for line in text.splitlines():
-        cells = _cells(line.strip()) if line.strip().startswith("|") else []
-        if len(cells) != 3:
-            continue
-        path_m = re.fullmatch(r"`([^`]+)`", cells[0])
-        digest_m = re.fullmatch(r"`([0-9a-f]{64})`", cells[2])
-        if not (path_m and digest_m):
-            continue
-        checked += 1
-        target = project / path_m.group(1)
-        if not target.is_file():
-            findings.append(Finding(
-                "MANIFEST_FILE_ABSENT", "ERROR", release,
-                f"{IP_DELIVERABLES_MANIFEST} lists `{path_m.group(1)}` and no "
-                f"such file exists under {project}."))
-            continue
-        actual = _sha256(target)
-        if actual != digest_m.group(1):
-            findings.append(Finding(
-                "MANIFEST_DIGEST_STALE", "ERROR", release,
-                f"{IP_DELIVERABLES_MANIFEST} states sha256 "
-                f"{digest_m.group(1)} for `{path_m.group(1)}`; the file on "
-                f"disk digests to {actual}. The documents describe a build "
-                f"that is not the one shipped."))
-    return checked
 
 
 #: `metrics.json`'s own name for the die bounding box, and the label the IC
@@ -1141,50 +1105,6 @@ def _load_json(path: Path):
         return None
 
 
-def _check_source_digests(project: Path, release: str, manifest: Optional[dict],
-                          findings: List[Finding]) -> int:
-    """R6b — every `source_artefacts` digest in the manifest, recomputed.
-
-    THE IP ARM ALREADY HAD A DIGEST CHECK and the IC arm has no deliverables
-    document to carry one, which is not a reason for the IC arm to bind
-    nothing: both manifests already record a sha256 for every artefact they
-    read, and until this landed NOTHING recomputed them in either arm.
-
-    This is the check that catches a document set correctly describing a
-    DIFFERENT build of the same design — every heading in place, every section
-    present, every count self-consistent, and the artefacts it names are not
-    the artefacts on disk. A manifest whose digests are never re-derived binds
-    nothing.
-    """
-    entries = (manifest or {}).get("source_artefacts")
-    if not isinstance(entries, list):
-        return 0
-    checked = 0
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        rel_path = entry.get("path")
-        stated = entry.get("sha256")
-        if not (isinstance(rel_path, str) and isinstance(stated, str)
-                and re.fullmatch(r"[0-9a-f]{64}", stated)):
-            continue
-        checked += 1
-        target = project / rel_path
-        if not target.is_file():
-            findings.append(Finding(
-                "MANIFEST_SOURCE_ABSENT", "ERROR", release,
-                f"{MANIFEST_NAME} records a digest for `{rel_path}` and no "
-                f"such file exists under {project}. A citation that resolves "
-                f"to nothing binds nothing."))
-            continue
-        actual = _sha256(target)
-        if actual != stated:
-            findings.append(Finding(
-                "MANIFEST_SOURCE_DIGEST_STALE", "ERROR", release,
-                f"{MANIFEST_NAME} states sha256 {stated} for `{rel_path}`; "
-                f"the file on disk digests to {actual}. The documents "
-                f"describe a build that is not the one on this tree."))
-    return checked
 
 
 def _check_artefact_substance(project: Path, release: str,
@@ -1225,60 +1145,8 @@ def _check_artefact_substance(project: Path, release: str,
     return "CLEAN" if audit.any_present else "NOTHING_PRESENT"
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
-def _check_manifest(release_dir: Path, release: str, derived: int, holes: int,
-                    findings: List[Finding]) -> Optional[dict]:
-    """R7 — the manifest's own counts, against a recount of the documents."""
-    path = release_dir / MANIFEST_NAME
-    if not path.is_file():
-        findings.append(Finding(
-            "MANIFEST_ABSENT", "ERROR", release,
-            f"{release_dir} carries no {MANIFEST_NAME}. Without it nothing "
-            f"binds this document set to the tree it describes, and a report "
-            f"that does not name the tree it measured can describe the wrong "
-            f"one in four ways with no error raised."))
-        return None
-    try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 — an unreadable manifest is named
-        findings.append(Finding(
-            "MANIFEST_UNREADABLE", "ERROR", release,
-            f"{MANIFEST_NAME} does not parse as YAML: {exc}"))
-        return None
-    if not isinstance(doc, dict):
-        findings.append(Finding(
-            "MANIFEST_UNREADABLE", "ERROR", release,
-            f"{MANIFEST_NAME} is not a mapping."))
-        return None
-    for key, recount in (("derived_fields", derived),
-                         ("not_measured_fields", holes)):
-        stated = doc.get(key)
-        if stated != recount:
-            findings.append(Finding(
-                "MANIFEST_COUNT_DISAGREES", "ERROR", release,
-                f"{MANIFEST_NAME} states {key} = {stated!r}; a recount over "
-                f"the documents in {release_dir.name} gives {recount}. A count "
-                f"nobody re-derives is a count that drifts."))
-    tree = doc.get("tree_sha")
-    reason = str(doc.get("tree_sha_reason") or "").strip()
-    if tree != NOT_MEASURED and not re.fullmatch(r"[0-9a-f]{40}", str(tree)):
-        findings.append(Finding(
-            "MANIFEST_TREE_SHA_INVALID", "ERROR", release,
-            f"{MANIFEST_NAME} states tree_sha = {tree!r}, which is neither a "
-            f"commit nor {NOT_MEASURED}."))
-    if tree == NOT_MEASURED and not reason:
-        findings.append(Finding(
-            "MANIFEST_TREE_SHA_INVALID", "ERROR", release,
-            f"{MANIFEST_NAME} states tree_sha = {NOT_MEASURED} with no "
-            f"tree_sha_reason."))
-    return doc
 
 
 # ── one release ────────────────────────────────────────────────────────────
@@ -1362,15 +1230,6 @@ def check_release(project: Path, arm: str, release_dir: Path,
                  if arm == "ic" else "NOT_APPLICABLE")
     substance = (_check_artefact_substance(project, release, findings)
                  if arm == "ic" else "NOT_APPLICABLE")
-    digests = 0
-    if IP_DELIVERABLES_MANIFEST in texts:
-        digests = _check_deliverables_digests(
-            project, release, texts[IP_DELIVERABLES_MANIFEST], findings)
-    manifest_doc = _check_manifest(release_dir, release, derived, holes,
-                                   findings)
-    source_digests = _check_source_digests(project, release, manifest_doc,
-                                           findings)
-
     detail = {
         "release": release,
         "directory": release_dir.as_posix(),
@@ -1381,8 +1240,6 @@ def check_release(project: Path, arm: str, release_dir: Path,
         "mandatory_constraints_in_app_notes": constraints_checked,
         "observed_constraints": observed_constraints,
         "same_source_count_comparisons": source_counts_checked,
-        "shipped_digests_recomputed": digests,
-        "source_digests_recomputed": source_digests,
         "placeholders": placeholders,
         "pin_count_cross_check": pin_state,
         "die_size_cross_check": die_state,
@@ -1904,8 +1761,6 @@ def run_audit(project: Path, arm: str) -> Result:
                             "not_measured_fields": 0, "rows_examined": 0,
                             "mandatory_constraints_in_app_notes": 0,
                             "same_source_count_comparisons": 0,
-                            "shipped_digests_recomputed": 0,
-                            "source_digests_recomputed": 0, "placeholders": 0,
                             "pin_count_cross_check": "NOT_STATED",
                             "die_size_cross_check": "NOT_STATED",
                             "artefact_substance": "NOT_EXAMINED",

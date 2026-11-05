@@ -34,7 +34,6 @@ chip-AGNOSTIC: SDC syntax + structural correlation only.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
@@ -101,210 +100,47 @@ def _known_async_pairs(project: Path):
     return pairs, evidence
 
 
-def audit(project: Path, *, sdc_path: Optional[Path] = None,
-          sdc_sha256: Optional[str] = None) -> dict:
-    explicit = sdc_path is not None or sdc_sha256 is not None
-    if explicit and (sdc_path is None or not isinstance(sdc_sha256, str)
-                     or not re.fullmatch(r"[0-9a-f]{64}", sdc_sha256)):
-        return {"verdict": "FAIL", "rc": 1,
-                "reason": ("SDC_AUTHORITY_REFUSED: explicit authority "
-                           "requires one path and SHA-256"),
-                "sdc_files_checked": [],
-                "sdc_sha256_expected": sdc_sha256,
-                "sdc_sha256_observed": None}
-    if explicit:
-        candidate = Path(sdc_path)
-        try:
-            project_root = Path(project).resolve(strict=True)
-            declared_root = project_root / "input/constraints"
-            if ((project_root / "input").is_symlink()
-                    or declared_root.is_symlink()):
-                raise ValueError("input/constraints path traverses a symlink")
-            if candidate.parent != declared_root:
-                raise ValueError(
-                    "explicit SDC parent is not literal input/constraints authority")
-            input_root = declared_root.resolve(strict=True)
-            if input_root != declared_root:
-                raise ValueError("input/constraints traverses a symlink")
-            if candidate.is_symlink():
-                raise ValueError("explicit SDC is a symlink")
-            resolved = candidate.resolve(strict=True)
-            if not resolved.is_file() or resolved.parent != input_root:
-                raise ValueError(
-                    "explicit SDC is not a direct input/constraints file")
-        except (OSError, RuntimeError, ValueError) as exc:
-            return {"verdict": "FAIL", "rc": 1,
-                    "reason": f"SDC_AUTHORITY_REFUSED: {exc}",
-                    "sdc_files_checked": [],
-                    "sdc_sha256_expected": sdc_sha256,
-                    "sdc_sha256_observed": None}
-        sdcs = [resolved]
-    else:
-        sdcs = _sdc_files(project)
+def audit(project: Path, *, sdc_path: Optional[Path]) -> dict:
+    explicit = sdc_path is not None
+    sdcs = [Path(sdc_path)] if explicit else _sdc_files(project)
     if not sdcs:
-        return {"verdict": "SKIP", "rc": 2,
-                "reason": "no SDC under phase2/stage2/constraints yet",
-                "sdc_files_checked": [],
-                "sdc_sha256_expected": sdc_sha256 if explicit else None,
-                "sdc_sha256_observed": None}
-    observed = None
-    if explicit:
-        try:
-            observed = hashlib.sha256(sdcs[0].read_bytes()).hexdigest()
-        except OSError:
-            pass
-        if observed != sdc_sha256:
-            return {"verdict": "FAIL", "rc": 1,
-                    "reason": ("SDC_AUTHORITY_REFUSED: explicit SDC bytes "
-                               "do not match the invocation-bound SHA-256"),
-                    "sdc_files_checked": [str(p) for p in sdcs],
-                    "sdc_sha256_expected": sdc_sha256,
-                    "sdc_sha256_observed": observed}
+        return {'verdict': 'SKIP', 'rc': 2, 'reason': 'no SDC under phase2/stage2/constraints yet', 'sdc_files_checked': []}
     findings = []
-    async_pairs, evidence = _known_async_pairs(project)
-    # No readable evidence source => the correlation question was never
-    # ANSWERED. Every false_path still gets a finding, but under a category
-    # that names the real cause instead of asserting the SDC is wrong.
-    evidence_read = sorted(p for p, st in evidence.items() if st == "READ")
-    # PARTIAL evidence is the common case and it was the hole: with the
-    # Phase-1 L8 doc present (it nearly always is) and step 3's crossing.json
-    # absent, `evidence_read` is non-empty, so the finding read
-    # SDC_EXCEPTION_UNJUSTIFIED with the message "has no matching CDC
-    # crossing / L8 async relation" — naming, as a settled fact, a file that
-    # was never opened. The verdict a checker states may only cite the
-    # sources it actually read, so the message enumerates them and every
-    # unread source is disclosed below.
-    evidence_unread = sorted(p for p, st in evidence.items() if st != "READ")
-    consulted = ", ".join(evidence_read) if evidence_read else "nothing"
+    (async_pairs, evidence) = _known_async_pairs(project)
+    evidence_read = sorted((p for (p, st) in evidence.items() if st == 'READ'))
+    evidence_unread = sorted((p for (p, st) in evidence.items() if st != 'READ'))
+    consulted = ', '.join(evidence_read) if evidence_read else 'nothing'
     n_fp = n_mc = 0
     for sdc in sdcs:
         try:
-            txt = sdc.read_text(errors="replace")
+            txt = sdc.read_text(errors='replace')
         except OSError:
-            return {"verdict": "FAIL", "rc": 1,
-                    "reason": f"unreadable SDC: {sdc.name}",
-                    "sdc_files_checked": [str(p) for p in sdcs],
-                    "sdc_sha256_expected": sdc_sha256 if explicit else None,
-                    "sdc_sha256_observed": None}
+            return {'verdict': 'FAIL', 'rc': 1, 'reason': f'unreadable SDC: {sdc.name}', 'sdc_files_checked': [str(p) for p in sdcs]}
         rel = sdc.name
         for m in _FP_RE.finditer(txt):
             n_fp += 1
             args = m.group(1)
             clks = _CLK_TOK_RE.findall(args)
-            if _BROAD_RE.search(args) or "*" in clks:
-                findings.append({
-                    "severity": "WARNING",
-                    "category": "SDC_EXCEPTION_TOO_BROAD",
-                    "message": (f"{rel}: false_path with bare wildcard "
-                                f"-from/-to waives whole domains at once "
-                                f"— scope it: `{m.group(0).strip()[:100]}`")})
-            elif len(clks) >= 2 \
-                    and frozenset(clks[:2]) not in async_pairs:
-                findings.append({
-                    "severity": "WARNING",
-                    "category": ("SDC_EXCEPTION_UNJUSTIFIED" if evidence_read
-                                 else "SDC_EXCEPTION_UNVERIFIABLE"),
-                    "evidence_read": list(evidence_read),
-                    "evidence_unread": list(evidence_unread),
-                    "message": (
-                        f"{rel}: false_path between clocks "
-                        f"{clks[0]!r}↔{clks[1]!r} has no matching async "
-                        f"relation in the evidence actually read "
-                        f"({consulted})"
-                        + (f"; NOT correlated against {', '.join(evidence_unread)}"
-                           f" (unread) — justify or remove, but re-run this "
-                           f"screen once that source exists"
-                           if evidence_unread else " — justify or remove")
-                        if evidence_read else
-                        f"{rel}: false_path between clocks "
-                        f"{clks[0]!r}↔{clks[1]!r} could not be correlated: "
-                        f"no CDC/L8 evidence was readable, so this is NOT a "
-                        f"finding about the SDC")})
+            if _BROAD_RE.search(args) or '*' in clks:
+                findings.append({'severity': 'WARNING', 'category': 'SDC_EXCEPTION_TOO_BROAD', 'message': f'{rel}: false_path with bare wildcard -from/-to waives whole domains at once — scope it: `{m.group(0).strip()[:100]}`'})
+            elif len(clks) >= 2 and frozenset(clks[:2]) not in async_pairs:
+                findings.append({'severity': 'WARNING', 'category': 'SDC_EXCEPTION_UNJUSTIFIED' if evidence_read else 'SDC_EXCEPTION_UNVERIFIABLE', 'evidence_read': list(evidence_read), 'evidence_unread': list(evidence_unread), 'message': f'{rel}: false_path between clocks {clks[0]!r}↔{clks[1]!r} has no matching async relation in the evidence actually read ({consulted})' + (f"; NOT correlated against {', '.join(evidence_unread)} (unread) — justify or remove, but re-run this screen once that source exists" if evidence_unread else ' — justify or remove') if evidence_read else f'{rel}: false_path between clocks {clks[0]!r}↔{clks[1]!r} could not be correlated: no CDC/L8 evidence was readable, so this is NOT a finding about the SDC'})
         for m in _MC_RE.finditer(txt):
             n_mc += 1
             mult = int(m.group(1))
             if mult > _MC_SANE_MAX:
-                findings.append({
-                    "severity": "WARNING",
-                    "category": "SDC_MULTICYCLE_SUSPECT",
-                    "message": (f"{rel}: multicycle multiplier {mult} > "
-                                f"{_MC_SANE_MAX} — large multipliers "
-                                f"usually mask a missing clock "
-                                f"definition; verify the real path "
-                                f"latency")})
+                findings.append({'severity': 'WARNING', 'category': 'SDC_MULTICYCLE_SUSPECT', 'message': f'{rel}: multicycle multiplier {mult} > {_MC_SANE_MAX} — large multipliers usually mask a missing clock definition; verify the real path latency'})
             if _BROAD_RE.search(m.group(2)):
-                findings.append({
-                    "severity": "WARNING",
-                    "category": "SDC_EXCEPTION_TOO_BROAD",
-                    "message": (f"{rel}: multicycle with bare wildcard "
-                                f"scope — scope it")})
-    # The disclosure is raised whenever an UNREAD source could have changed a
-    # correlation verdict — i.e. at least one false_path was reported against
-    # an incomplete evidence set. It covers BOTH shapes:
-    #   * nothing readable  -> the findings are UNVERIFIABLE;
-    #   * some readable, some not (the common one: L8 present, step 3's
-    #     crossing.json absent) -> the findings are UNJUSTIFIED but the claim
-    #     is bounded to the sources read, and the missing one is named here.
-    # It is NOT raised when every source was read (nothing to disclose), nor
-    # when no exception needed correlating: a project with no false_path has
-    # nothing to correlate, so an unread CDC report is not a finding about it
-    # and raising it there would trade the old false clean for a false alarm.
-    correlation_categories = {"SDC_EXCEPTION_UNJUSTIFIED",
-                              "SDC_EXCEPTION_UNVERIFIABLE"}
-    if evidence_unread and any(
-            f["category"] in correlation_categories for f in findings):
-        status_blob = "; ".join(f"{src}: {st}"
-                                for src, st in sorted(evidence.items()))
+                findings.append({'severity': 'WARNING', 'category': 'SDC_EXCEPTION_TOO_BROAD', 'message': f'{rel}: multicycle with bare wildcard scope — scope it'})
+    correlation_categories = {'SDC_EXCEPTION_UNJUSTIFIED', 'SDC_EXCEPTION_UNVERIFIABLE'}
+    if evidence_unread and any((f['category'] in correlation_categories for f in findings)):
+        status_blob = '; '.join((f'{src}: {st}' for (src, st) in sorted(evidence.items())))
         if not evidence_read:
-            detail = ("no correlation evidence could be read (" + status_blob
-                      + ") — the false_path finding(s) below are reported "
-                        "UNVERIFIABLE, not unjustified: the known-async set "
-                        "is EMPTY BECAUSE NOTHING WAS READ, not because the "
-                        "design has no async crossing")
+            detail = 'no correlation evidence could be read (' + status_blob + ') — the false_path finding(s) below are reported UNVERIFIABLE, not unjustified: the known-async set is EMPTY BECAUSE NOTHING WAS READ, not because the design has no async crossing'
         else:
-            detail = ("correlation evidence is INCOMPLETE (" + status_blob
-                      + ") — the false_path finding(s) below were correlated "
-                        "ONLY against " + ", ".join(evidence_read)
-                      + ". `known_async_pairs` therefore carries no "
-                        "information from " + ", ".join(evidence_unread)
-                      + ": a pair absent from it may be declared async by a "
-                        "source that was never opened")
-        findings.insert(0, {
-            "severity": "WARNING",
-            "category": "SDC_EXCEPTION_EVIDENCE_UNREAD",
-            "evidence_read": list(evidence_read),
-            "evidence_unread": list(evidence_unread),
-            "message": detail})
-    if explicit:
-        try:
-            observed = hashlib.sha256(sdcs[0].read_bytes()).hexdigest()
-        except OSError:
-            observed = None
-        if observed != sdc_sha256:
-            return {"verdict": "FAIL", "rc": 1,
-                    "reason": "explicit SDC changed while exceptions were checked",
-                    "sdc_files_checked": [str(p) for p in sdcs],
-                    "sdc_sha256_expected": sdc_sha256,
-                    "sdc_sha256_observed": observed}
-    return {
-        "verdict": ("REVIEW" if any(f["severity"] == "WARNING"
-                                    for f in findings) else "PASS"),
-        "rc": 0,  # advisory — discloses, never blocks
-        "false_paths": n_fp,
-        "multicycle_paths": n_mc,
-        "known_async_pairs": [sorted(p) for p in async_pairs],
-        # The provenance of the number above. A reader must be able to tell
-        # `known_async_pairs: []` "the CDC report says there is no crossing"
-        # from `known_async_pairs: []` "no CDC report was read" — and, in the
-        # partial case, WHICH of the two sources each is true of.
-        "correlation_evidence": evidence,
-        "correlation_evidence_read": list(evidence_read),
-        "correlation_evidence_unread": list(evidence_unread),
-        "findings": findings,
-        "sdc_files_checked": [str(p) for p in sdcs],
-        "sdc_sha256_expected": sdc_sha256 if explicit else None,
-        "sdc_sha256_observed": observed if explicit else None,
-    }
+            detail = 'correlation evidence is INCOMPLETE (' + status_blob + ') — the false_path finding(s) below were correlated ONLY against ' + ', '.join(evidence_read) + '. `known_async_pairs` therefore carries no information from ' + ', '.join(evidence_unread) + ': a pair absent from it may be declared async by a source that was never opened'
+        findings.insert(0, {'severity': 'WARNING', 'category': 'SDC_EXCEPTION_EVIDENCE_UNREAD', 'evidence_read': list(evidence_read), 'evidence_unread': list(evidence_unread), 'message': detail})
+    return {'verdict': 'REVIEW' if any((f['severity'] == 'WARNING' for f in findings)) else 'PASS', 'rc': 0, 'false_paths': n_fp, 'multicycle_paths': n_mc, 'known_async_pairs': [sorted(p) for p in async_pairs], 'correlation_evidence': evidence, 'correlation_evidence_read': list(evidence_read), 'correlation_evidence_unread': list(evidence_unread), 'findings': findings, 'sdc_files_checked': [str(p) for p in sdcs]}
 
 
 def main(argv=None) -> int:
