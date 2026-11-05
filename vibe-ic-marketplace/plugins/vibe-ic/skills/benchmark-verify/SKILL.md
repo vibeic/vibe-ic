@@ -193,8 +193,15 @@ A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.
 - `SOURCE_MANIFEST.md` present with GENERATED/REUSED-IP tagged.
 Anything short of that is **NOT complete** — keep working (closed-loop), do not claim done.
 
-> **Plugin-test hard rule.** If the verification run modified any plugin code (e.g. a chip-agnostic fix to `benchmark_verify_report.py` or a checker), re-run the FULL suite before claiming done: `cd <plugin> && pytest -q` (pytest.ini collects BOTH `programs/tests/` AND `tests/`). Never validate with only `programs/tests/` — the integration/regression gates (INDEX freshness, every-skill-has-compliance, orchestrator branch tests) live in `tests/`. See `_shared/TESTING_STRATEGY.md`.
-> *Enforced by `programs/plugin_change_pytest_gate.py`* — detects changed plugin `*.py` (git or an explicit `--changed-files` list) and FAILs DONE unless `--pytest-log` attests a clean run that collected BOTH test trees; ERRORs (never silent-PASSes) when the change state can't be determined.
+If verification changes plugin code, run the relevant existing tests and the
+full suite when requested by the owner. Inspect the current `pytest.ini` and
+`run_tests.sh` discovery so the report distinguishes configured pytest
+collection from other test directories. Use `./run_tests.sh --list-tiers` to
+inspect that discovery and `./run_tests.sh` for the requested full run. Report
+the actual commands, collected and executed tests, failures, skips, and missing
+dependencies. A collection error is not a passing test; a log or added policy
+checker does not replace execution. Keep the IC coverage and engineering
+limits above unchanged.
 
 ## Worked example
 `benchmark_clean/spm/` is a report-shape example only: retain its RTL provenance,
