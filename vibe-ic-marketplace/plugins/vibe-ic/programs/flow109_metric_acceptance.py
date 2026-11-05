@@ -2963,6 +2963,8 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
         bound(str(path.relative_to(project)))
     body = document('reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json')
     l9 = document('phase1/generated_docs/L9_INTEGRATION_SPEC.json')
+    choices = (json.loads((project / 'plugin_output/declaration.json').read_text()).get('core_parameters') or {}
+               if (project / 'plugin_output/declaration.json').is_file() else {})
     demands = body.get('source_demands'); expectations = body.get('expectations')
     if 'source_demands' not in body:
         _, adopted = _d0102_population(project, 'base_01', 'requirements_trace', reads)
@@ -3078,10 +3080,14 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
     actual_parameters = {k:int(v,2) for k,v in raw_parameters.items()}
     declared_parameters = {}
     for parameter in parameters:
-        value = parameter.get('default')
-        if isinstance(value,bool) or not re.fullmatch('[0-9]+',str(value)):
-            raise MetricRefusal('D09_NATIVE_PARAMETER_UNSUPPORTED', 'explicit integer default required')
-        declared_parameters[parameter['name']] = int(value)
+        value = choices.get(parameter['name'], parameter.get('default'))
+        value = None if isinstance(value, bool) else rtl._safe_eval_int(str(value).strip().strip('`'), {})
+        if value is None or value < 0:
+            raise MetricRefusal('D09_NATIVE_PARAMETER_UNSUPPORTED', 'integer default or declared choice required')
+        fixed = rtl._safe_eval_int(str(parameter.get('default')).strip().strip('`'), {})
+        if fixed is not None and fixed >= 0 and value != fixed:
+            interface = False
+        declared_parameters[parameter['name']] = value
     interface = interface and declared_parameters == actual_parameters
     mapped, missing, required, trace = [], [], [], []
     by_id = {e['id']: e for e in expectations}
