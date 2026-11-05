@@ -283,6 +283,28 @@ def require_binding(project: Path, path: Path, nl: "Netlist") -> dict:
     return rec
 
 
+def _load_latched_clock_gates(nl: "Netlist") -> None:
+    """A low-phase latch holds an AND gate's enable throughout clock high."""
+    ports = nl.port_bits
+    for cell in nl.cells.values():
+        conn = cell.get("connections", {})
+        if (cell["type"] not in {"$and", "$logic_and"} or set(conn) != {"A", "B", "Y"}
+                or any(len(bits) != 1 for bits in conn.values())):
+            continue
+        output = conn["Y"][0]
+        for clock, enable in ((conn["A"][0], conn["B"][0]), (conn["B"][0], conn["A"][0])):
+            if (any(nl.is_const(bit) or bit in nl.ambiguous_drivers for bit in (clock, enable, output))
+                    or output in ports or enable in ports):
+                continue
+            driver = nl.drivers.get(enable)
+            latch = nl.cells[driver[0]] if driver and driver[1] == "Q" else {}
+            pins = latch.get("connections", {})
+            if (latch.get("type") == "$dlatch" and pins.get("EN") == [clock]
+                    and pins.get("Q") == [enable]
+                    and _int(latch.get("parameters", {}).get("EN_POLARITY", 1)) == 0):
+                nl.clock_parents[output] = clock
+
+
 def _load_clock_gates(project: Path, nl: "Netlist") -> None:
     """Use the native JsonHeader library configuration for clock-only ancestry."""
     import fnmatch

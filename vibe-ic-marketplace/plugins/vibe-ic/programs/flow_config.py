@@ -34,6 +34,12 @@ def implementation_setting(key: str) -> bool:
     return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
 
 
+def native_defaults(config):
+    """Exclude delay-cell families through LibreLane's native wildcard setting."""
+    excluded = [*(config.get("EXTRA_EXCLUDED_CELLS") or []), "*dly*", "*delay*"]
+    return config.copy(EXTRA_EXCLUDED_CELLS=list(dict.fromkeys(excluded)))
+
+
 def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text()) if path.is_file() else {}
 
