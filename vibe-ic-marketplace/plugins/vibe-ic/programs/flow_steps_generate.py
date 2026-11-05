@@ -178,6 +178,8 @@ def classify_checks(table, native):
             selection = native["row_applicability"][row["name"]]
             row["when"] = selection["when"]
             row["applicability_reason"] = selection["reason"]
+            if "merged_into" in selection:
+                row["merged_into"] = selection["merged_into"]
     steps = table["steps"]
     for row in reversed(steps.copy()):
         source = (row["tool"]["from"] if row["tool"]["kind"] == "native_report"

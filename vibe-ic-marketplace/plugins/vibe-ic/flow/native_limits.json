@@ -4018,7 +4018,12 @@
     },
     "netlist_handoff": {
       "when": "False",
-      "reason": "Merged into Synthesis (native netlist diagnostics), Netlist equivalence (proof), and Pre-layout timing (SDC and timing checks). LibreLane State carries their netlist directly to Die floorplan and macros; the old change ledger is removed."
+      "reason": "Merged into Synthesis (native netlist diagnostics), Netlist equivalence (proof), and Pre-layout timing (SDC and timing checks). LibreLane State carries their netlist directly to Die floorplan and macros; the old change ledger is removed.",
+      "merged_into": [
+        "synthesis",
+        "netlist_equivalence",
+        "pre_layout_timing"
+      ]
     },
     "functional_activity_and_external_loads": {
       "when": "physical",
@@ -4034,7 +4039,10 @@
     },
     "constraint_validation": {
       "when": "False",
-      "reason": "SDC validation runs with native pre-layout STA, where the synthesis netlist exists; duplicate pre-netlist wrapper removed."
+      "reason": "SDC validation runs with native pre-layout STA, where the synthesis netlist exists; duplicate pre-netlist wrapper removed.",
+      "merged_into": [
+        "pre_layout_timing"
+      ]
     }
   },
   "classification_decision": {
@@ -4384,6 +4392,18 @@
       "adapter": "dfm",
       "program": "dfm_screen_check.py",
       "parallel": true
+    },
+    "ip_release_views_and_documentation": {
+      "kind": "adapter",
+      "adapter": "ip_release_docs",
+      "parallel": true,
+      "destination": "phase3/stage4/hardmacro",
+      "formats": {
+        "lef": ".lef",
+        "lib": ".lib",
+        "gds": ".gds",
+        "nl": ".v"
+      }
     }
   },
   "report_check_readers": {

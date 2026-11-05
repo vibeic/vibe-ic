@@ -224,7 +224,7 @@ IP_DOCS: Tuple[DocSpec, ...] = (
         sections=(
             "1. Release Identification",
             "2. Delivered Files",
-            "3. Digest Method",
+            "3. File contents",
         ),
     ),
     DocSpec(

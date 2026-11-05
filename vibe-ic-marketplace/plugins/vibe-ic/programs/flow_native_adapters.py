@@ -748,6 +748,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         import importlib
         native = importlib.import_module("flow_native_" + tool["adapter"])
         return native.execute(project, work, tool, commands, state=state, config=config or {}, route=route)
+    if tool.get("adapter") == "ip_release_docs":
+        from ip_release_docs_gen import execute as release_docs
+        return release_docs(project, work, tool, route, state=state, config=config)
     if tool.get("adapter") == "dfm":
         from dfm_screen_check import execute as dfm
         return dfm(project, work, tool, route, state=state, config=config)

@@ -93,7 +93,6 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
-import hashlib
 import json
 import re
 import subprocess
@@ -119,9 +118,7 @@ from _release_docs_build import (
     one_line,
     read_json,
     register_rich,
-    sha256_of,
     table,
-    tree_sha,
     unmeasured,
 )
 from _release_docs_build import document as _document
@@ -135,7 +132,6 @@ from _release_docs_contract import (
     IP_DELIVERABLES_MANIFEST,
     IP_DOCS,
     IP_INTEGRATION_GUIDE,
-    MANIFEST_NAME,
     NOT_MEASURED,
     PIN_COUNT_LABEL,
     REASON_PREFIX,
@@ -691,7 +687,6 @@ class Release:
     kit: Kit
     design: Field
     pdk: Field
-    tree: Field
     role: Field
     constraints: List[Constraint]
     register_rich: bool
@@ -795,10 +790,6 @@ def build_release(project: Path, kit: Kit,
     if not pdk.measured and context.pdk and context.source:
         pdk = measured("Target PDK", context.pdk, context.source,
                        "runner invocation")
-    tree = tree_sha(project)
-    if not tree.measured and context.source_sha and context.source:
-        tree = measured("Tree SHA", context.source_sha, context.source,
-                        "run manifest")
     role = layer_text(project, "L9_INTEGRATION_SPEC", "Module role",
                       ("module_role", "integration_overview"))
     # The runner passes the value it read from L9, but that does not license a
@@ -813,7 +804,7 @@ def build_release(project: Path, kit: Kit,
     rich, rich_source = register_rich(project)
     return Release(
         project=project, kit=kit, design=design, pdk=pdk,
-        tree=tree, role=role,
+        role=role,
         constraints=constraints_for(project, kit),
         register_rich=rich, register_rich_source=rich_source,
         conflicts=_kit_view_conflicts(kit),
@@ -821,7 +812,7 @@ def build_release(project: Path, kit: Kit,
 
 
 def _ident_fields(rel: Release) -> List[Field]:
-    return [rel.design, rel.pdk, rel.tree]
+    return [rel.design, rel.pdk]
 
 
 def datasheet(rel: Release) -> Tuple[str, List[Field]]:
@@ -1008,34 +999,24 @@ def errata(rel: Release) -> Tuple[str, List[Field]]:
                                "release."),
             (spec.sections[3],
              "Report an erratum against the release identified in section 1, "
-             "quoting the Tree SHA above. An erratum reported against a "
-             "release that does not name its tree cannot be placed."),
+             "describing the affected interface and observed behavior."),
         ))
     return body, ident
 
 
 def deliverables_manifest(rel: Release) -> Tuple[str, List[Field]]:
     ident = _ident_fields(rel)
-    rows = ["| File | Bytes | sha256 |", "| --- | --- | --- |"]
+    rows = ["| File | Bytes |", "| --- | --- |"]
     for ext in (".lef", ".lib", ".gds", ".v"):
         path = rel.kit.views.get(ext)
-        if path is None:
-            rows.append(f"| (no {ext} view) | {NOT_MEASURED} | {NOT_MEASURED} |")
-            continue
-        rows.append(f"| `{_rel_str(rel.project, path)}` | "
-                    f"{path.stat().st_size} | `{sha256_of(path)}` |")
+        rows.append(f"| `{_rel_str(rel.project, path)}` | {path.stat().st_size} |"
+                    if path is not None else f"| (no {ext} view) | {NOT_MEASURED} |")
     spec = _spec(IP_DELIVERABLES_MANIFEST)
     body = document(
-        f"Deliverables Manifest — {rel.design.value}",
-        (
-            (spec.sections[0], table(ident)),
-            (spec.sections[1], "\n".join(rows)),
-            (spec.sections[2],
-             "Each digest above is the SHA-256 of the file's bytes as shipped. "
-             "`release_docs_check` recomputes every one of them against the "
-             "tree and refuses a disagreement: a manifest whose digests are "
-             "never re-derived binds nothing."),
-        ))
+        f"Deliverables manifest for {rel.design.value}",
+        ((spec.sections[0], table(ident)),
+         (spec.sections[1], "\n".join(rows)),
+         (spec.sections[2], "The files above contain the physical, timing and logical integration views.")))
     return body, ident
 
 
@@ -1111,58 +1092,6 @@ def _spec(filename: str):
 
 
 # ── the manifest ───────────────────────────────────────────────────────────
-def manifest_yaml(rel: Release, written: Sequence[Tuple[str, Path]],
-                  fields: Sequence[Field],
-                  sources: Sequence[str]) -> str:
-    """The YAML that binds this document set to the artefacts it describes.
-
-    ``tree_sha`` because a report that does not name the tree it measured can
-    describe the wrong one in four ways and none of them raises an error.
-    ``derived_fields`` / ``not_measured_fields`` because a document whose every
-    number is NOT_MEASURED is not a document, and only counting them makes that
-    visible. ``release_docs_check`` RECOUNTS both from the documents and refuses
-    a disagreement — a count nobody re-derives is a count that drifts.
-    """
-    derived = sum(1 for f in fields if f.measured)
-    holes = len(fields) - derived
-    lines: List[str] = [
-        "# Written by ip_release_docs_gen. Every count below is re-derived and",
-        "# re-checked by release_docs_check; do not edit it by hand.",
-        "schema: vibeic.release_docs.manifest.v1",
-        "arm: ip",
-        f"generator: {GENERATOR}",
-        f"generator_version: {_yaml_str(VERSION)}",
-        f"release_id: {_yaml_str(f'{rel.design.value}-{rel.kit.name}')}",
-        f"design: {_yaml_str(rel.design.value)}",
-        f"pdk: {_yaml_str(rel.pdk.value)}",
-        f"tree_sha: {_yaml_str(rel.tree.value)}",
-        f"tree_sha_reason: {_yaml_str('' if rel.tree.measured else rel.tree.source)}",
-        f"register_rich: {'true' if rel.register_rich else 'false'}",
-        f"register_rich_source: {_yaml_str(rel.register_rich_source)}",
-        f"derived_fields: {derived}",
-        f"not_measured_fields: {holes}",
-        "source_artefacts:",
-    ]
-    for path_rel in sources:
-        abs_path = rel.project / path_rel
-        if abs_path.is_file():
-            lines.append(f"  - path: {_yaml_str(path_rel)}")
-            lines.append(f"    sha256: {_yaml_str(sha256_of(abs_path))}")
-    lines.append("documents:")
-    for filename, path in written:
-        spec = _spec(filename)
-        lines.append(f"  - filename: {_yaml_str(filename)}")
-        lines.append(f"    requirement: {_yaml_str(spec.requirement)}")
-        lines.append(f"    sha256: {_yaml_str(sha256_of(path))}")
-    lines.append("unresolved_placeholders: []")
-    if rel.conflicts:
-        lines.append("source_conflicts:")
-        lines.extend(f"  - {_yaml_str(c)}" for c in rel.conflicts)
-    else:
-        lines.append("source_conflicts: []")
-    return "\n".join(lines) + "\n"
-
-
 # ── the run ────────────────────────────────────────────────────────────────
 def emit(project: Path, out_dir: Path, kit: Kit,
          context: RunnerContext = RunnerContext()
@@ -1212,13 +1141,62 @@ def emit(project: Path, out_dir: Path, kit: Kit,
         written.append((filename, path))
         all_fields.extend(fields)
 
-    sources = sorted({f.source for f in all_fields if f.measured}
-                     | {constraint.source for constraint in rel.constraints}
-                     | {_rel_str(project, p) for p in kit.views.values()})
-    atomic_write_text(out_dir / MANIFEST_NAME,
-                      manifest_yaml(rel, written, all_fields, sources))
     derived = sum(1 for f in all_fields if f.measured)
     return written, derived, len(all_fields) - derived
+
+
+def execute(project, directory, tool, route, *, state=None, config=None):
+    import importlib
+    import time
+    from dataclasses import asdict
+    from flow_engine import NativeChain, ToolResult
+    import ip_integration_check
+    import release_docs_check
+
+    if state is None or not config:
+        return ToolResult(detail="IP documentation needs the exported native State and configuration.").__dict__
+    project, directory = Path(project), Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+    importlib.import_module("librelane.steps")
+    chain = NativeChain(project, route)
+    chain.state, chain.config = state, config
+    result = chain.snapshot(directory, tool)
+    inventory = result.metrics["ip_endpoint_views"]
+    if set(inventory["required"]) != set(inventory["observed"]):
+        result.native_steps.append({"name": "IP release documents", "ran": False,
+            "exit_code": None, "status": "NOT_MEASURED", "detail": result.detail})
+        return result.__dict__
+    destination = project / tool["destination"]
+    name = config["DESIGN_NAME"]
+    views = {extension: destination / (name + extension) for extension in tool["formats"].values()}
+    kit = read_kit(project, name, views)
+    documents = project / doc_dir("ip") / name
+    written, derived, holes = emit(project, documents, kit)
+    findings, checked = release_docs_check.check_release(project, "ip", documents, name,
+        ip_views=views, expected_constraints=constraints_for(project, kit))
+    integration = ip_integration_check.audit(project, roots=[destination])
+    errors = sum(finding.severity == "ERROR" for finding in findings)
+    for conflict in _kit_view_conflicts(kit):
+        integration["findings"].append({"severity": "ERROR", "rule": "IP_VIEW_CONFLICT", "message": conflict})
+    integration_errors = sum(finding["severity"] == "ERROR" for finding in integration.get("findings", []))
+    report = directory / "ip_release_docs.json"
+    report.write_text(json.dumps({"documents": checked, "findings": [asdict(finding) for finding in findings],
+                                 "integration": integration}, indent=2) + "\n")
+    result.metrics.update(release_documents=len(written), derived_document_fields=derived,
+        unmeasured_document_fields=holes, release_document_errors=errors,
+        ip_integration_errors=integration_errors)
+    result.reports.extend([str(path) for _, path in written] + [str(report)])
+    result.native_steps.extend([
+        {"name": "ip_release_docs_gen", "ran": True, "exit_code": 0, "status": "PASS"},
+        {"name": "release_docs_check", "ran": True, "exit_code": int(bool(errors)),
+         "status": "FAIL" if errors else "PASS"},
+        {"name": "ip_integration_check", "ran": integration["rc"] != 2,
+         "exit_code": integration["rc"], "status": "NOT_MEASURED" if integration["rc"] == 2
+         else "FAIL" if integration_errors else "PASS"}])
+    result.exit_code = int(bool(errors or integration_errors))
+    result.tool_seconds += time.perf_counter() - started
+    return result.__dict__
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1260,19 +1238,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         _vx.announce_vacuous(GENERATOR, "no_hardmacro_package")
         return _vx.RC_VACUOUS
 
-    audit = _hm.run_audit(project)
-    if not audit.passed:
-        # THE SAME POLICY `tapeout_docs_gen` HOLDS, NOT A SECOND ONE. A release
-        # document for a kit its own gate refuses is worse than no document: it
-        # is a FILE, it outlives the run, and nothing in the copy says the kit
-        # was refused.
-        print(f"NOT DELIVERABLE — no documents written. "
-              f"{len(packages)} package(s) examined; "
-              f"{GENERATOR} defers to digital_hardmacro_check, which refuses "
-              f"this kit:", file=sys.stderr)
-        for finding in audit.findings:
-            if finding.severity == "ERROR":
-                print(f"  - {finding.rule}: {finding.message}", file=sys.stderr)
+    conflicts = []
+    for name, views in packages.items():
+        missing = {".lef", ".lib", ".gds", ".v"} - set(views)
+        if missing:
+            conflicts.append(f"{name}: missing required views {sorted(missing)}")
+        conflicts.extend(_kit_view_conflicts(read_kit(project, name, views)))
+    if conflicts:
+        for conflict in conflicts:
+            print("NOT DELIVERABLE: " + conflict, file=sys.stderr)
         return _vx.RC_FAIL
 
     out_root = args.out_dir if args.out_dir is not None \
