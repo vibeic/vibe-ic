@@ -1709,8 +1709,7 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
                 launch = contract.local_image_attestation()
             except contract.Refusal as exc:
                 raise MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', str(exc)) from exc
-            original = fp.get('local_image') or {}
-            if any(launch.get(key) != original.get(key) for key in ('image', 'image_id')):
+            if fp.get('image') != launch.get('image'):
                 raise MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'native EQY image differs')
             with tempfile.TemporaryDirectory() as temporary:
                 observed = native.judge_eqy(folder, Path(temporary) / 'lec_eqy.json')
