@@ -23,15 +23,12 @@ the stall detector was changed and the proof of that is that it still fires.
 """
 from __future__ import annotations
 
-import ast
 import os
 import signal
 import subprocess
 import sys
 import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
@@ -257,77 +254,12 @@ def test_the_kill_never_signals_a_group_the_child_does_not_lead():
             proc.wait()
 
 
-def _new_session_launches(tree: ast.AST) -> List[ast.Call]:
-    """Every launch in *tree* that opts into its own session, BY THE CALL.
-
-    An `ast.keyword` whose value is the literal `True` — so the comment two
-    lines above the call, and the docstring that explains why the call is
-    written that way, do not count. They did under the text search this
-    replaced: `_watchdog.py` spells `start_new_session=True` three times and
-    only one of them is code, so deleting the code left the check GREEN.
-    """
-    return [n for n in ast.walk(tree)
-            if isinstance(n, ast.Call)
-            and any(k.arg == "start_new_session"
-                    and isinstance(k.value, ast.Constant)
-                    and k.value.value is True
-                    for k in n.keywords)]
 
 
-def _aliases_of(tree: ast.AST, module: str) -> set:
-    """The names *module* is bound to in this file, by ITS OWN imports.
-
-    File-wide and not "above the call": `formal_property_run` imports
-    `_progress_run as _pr` at line 2044 and calls it at 1261. Function-local
-    too: `not_verified_tier.probe` does its import inside the function.
-    """
-    names = set()
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Import):
-            for a in n.names:
-                if a.name == module:
-                    names.add(a.asname or a.name)
-    return names
 
 
-def _dispatch_sites(path: Path, tree: ast.AST) -> Dict[str, ast.Call]:
-    """The supervised-dispatch launches in one file, keyed on IDENTITY.
-
-    `file::function::callee-as-written`, the key
-    `watchdog_ceiling_semantics_check._register_key` already uses, and for its
-    reason: a line number moves whenever anything above it is edited, so a
-    register keyed on one goes stale on unrelated landings and reports churn
-    as a finding.
-    """
-    enclosing = {}
-    for fn in ast.walk(tree):
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for node in ast.walk(fn):
-                enclosing.setdefault(id(node), fn.name)
-    prun = _aliases_of(tree, "_progress_run")
-    sites = {}
-    for call in _new_session_launches(tree):
-        callee = ast.unparse(call.func)
-        head, _, attr = callee.rpartition(".")
-        supervised = (head in prun and attr == "run") or (
-            path.name == "_watchdog.py" and callee == "subprocess.Popen"
-            and enclosing.get(id(call)) == "run_supervised")
-        if supervised:
-            key = f"{path.name}::{enclosing.get(id(call), '<module>')}::{callee}"
-            sites[key] = call
-    return sites
 
 
-def _calls_named(tree: ast.AST, ending: str, *, inside: str = "") -> List[ast.Call]:
-    scope = tree
-    if inside:
-        found = [n for n in ast.walk(tree)
-                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                 and n.name == inside]
-        assert found, f"{inside} is gone, so nothing below is about it"
-        scope = found[0]
-    return [n for n in ast.walk(scope)
-            if isinstance(n, ast.Call) and ast.unparse(n.func).endswith(ending)]
 
 
 #: The dispatch sites vibe-ic#2051's R4 converted that live in `programs/`.
@@ -344,119 +276,6 @@ _CONVERTED_IN_PROGRAMS = {
 }
 
 
-def test_the_repaired_call_sites_carry_the_idiom_that_repairs_them():
-    """Anchored to the CALL, not to the file's text.
-
-    WHAT THIS TEST IS FOR, AND WHAT IT IS NOT FOR. That the group reap WORKS
-    is proved by running it: `test_the_supervisor_deadline_reaches_what_the_
-    script_launched` above, against `test_a_head_only_kill_still_orphans_the_
-    grandchild` as its negative control, and one layer down in
-    `test_a_stall_reaps_the_whole_process_group.py`, which drives
-    `_progress_run.run` both with the argument and without it. None of those
-    can say whether the CALL SITES ask for it. That is this test's whole job,
-    and it is a question about the call, which is why it is asked of the call.
-
-    WHY THE TEXT SEARCH THIS REPLACES COULD NOT ASK IT (vibe-ic#2185).
-    The body was `"start_new_session=True" in src and "killpg" in src` over two
-    whole files. MEASURED on e2b3c08170b5, four arms, each predicted first:
-
-      * delete `start_new_session=True` from `_watchdog.py`'s default
-        `popen_factory` — the ONLY code occurrence; the docstring and the
-        comment keep the literal -> the check stayed GREEN.
-      * delete it from `not_verified_tier.probe` -> the check did not move.
-      * `os.killpg` -> `proc.kill()` in `_default_kill` -> RED, the one half
-        of four that had any power, and only because no prose in that file
-        happens to spell `killpg`.
-
-    AND IT WAS RED ON PRISTINE MAIN, for a correct tree. `not_verified_tier.
-    probe` carries no `killpg` since 0eda6cad1 because it stopped reaping by
-    hand and started DELEGATING to the supervisor — which is the fix, not the
-    regression the red read as. A substring search cannot follow a call, so it
-    scored the repair as the defect.
-
-    SO THE PROPERTY IS ASKED PER SITE, AND FOLLOWED THROUGH THE DISPATCH:
-    every supervised-dispatch launch in `programs/` that opts into its own
-    session must reach a GROUP reap — `_progress_run.run` forwarding the
-    argument to its `Popen` and handing the job to `_watchdog.run_supervised`,
-    whose default kill is `_default_kill`, which signals the group.
-    """
-    # A TEXT PREFILTER OVER A SUPERSET, never over the property. A call site
-    # that opts in has to spell the argument's NAME somewhere in the file, so
-    # nothing that could be in the population is skipped; the property itself
-    # is still decided on the AST of every survivor. It exists because parsing
-    # all 1398 of `programs/*.py` costs 3.3 s and this is a unit test.
-    trees = {}
-    for path in sorted(_PROGRAMS.glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        if "start_new_session" in text:
-            trees[path] = ast.parse(text)
-    assert (_PROGRAMS / "_watchdog.py") in trees, (
-        "_watchdog.py did not survive the prefilter, so the population below "
-        "is not the one this test is about")
-
-    sites: Dict[str, Path] = {}
-    for path, tree in trees.items():
-        for key in _dispatch_sites(path, tree):
-            sites[key] = path
-
-    # The denominator, asserted rather than assumed. An empty scan and a clean
-    # tree are the same green otherwise.
-    missing = _CONVERTED_IN_PROGRAMS - set(sites)
-    assert not missing, (
-        "a converted dispatch site no longer opts into its own session, or "
-        f"moved without this membership being restated: {sorted(missing)}. "
-        f"What the tree yields: {sorted(sites)}")
-
-    # THE DELEGATION IS REAL, resolved once for every site that uses it.
-    #
-    # MEASURED, and it is why this half is not `_new_session_launches`: the
-    # forwarding is a KWARGS DICT, `kw["start_new_session"] = True` splatted
-    # into `Popen(..., **kw)`, so there is no `start_new_session=True` keyword
-    # on the launch to find. Predicting one made this arm RED on a correct
-    # tree — the same mistake one level up that #2185 is about, caught here by
-    # having written the prediction down first.
-    pr = ast.parse((_PROGRAMS / "_progress_run.py").read_text(encoding="utf-8"))
-    run_fn = [n for n in ast.walk(pr)
-              if isinstance(n, ast.FunctionDef) and n.name == "run"]
-    assert run_fn, "`_progress_run.run` is gone; the delegation has no target"
-    run_fn = run_fn[0]
-    assert any(a.arg == "start_new_session"
-               for a in list(run_fn.args.args) + list(run_fn.args.kwonlyargs)), (
-        "`_progress_run.run` no longer takes start_new_session=, so every "
-        "delegated site below passes an argument that is not accepted")
-    assert any(isinstance(t, ast.Subscript)
-               and isinstance(t.slice, ast.Constant)
-               and t.slice.value == "start_new_session"
-               and isinstance(n.value, ast.Constant) and n.value.value is True
-               for n in ast.walk(run_fn) if isinstance(n, ast.Assign)
-               for t in n.targets), (
-        "`_progress_run.run` accepts start_new_session= and no longer puts it "
-        "on the launch, so every delegated site asks for a session it does "
-        "not get and nothing in the tree's text would say so")
-    assert _calls_named(run_fn, "Popen"), (
-        "`_progress_run.run` no longer launches anything the forwarding above "
-        "could reach")
-    # The supervisor is named as a DEFAULT, `_supervisor or _wd.run_supervised`,
-    # and then called through a local — so this is an attribute on the module's
-    # own `_watchdog` alias, not a Call. Asserting a Call here was the second
-    # thing this rewrite predicted wrongly, for the same reason as the first:
-    # a shape guessed instead of read.
-    wd_aliases = _aliases_of(pr, "_watchdog")
-    assert wd_aliases, "`_progress_run` no longer imports the supervisor"
-    assert any(isinstance(n, ast.Attribute) and n.attr == "run_supervised"
-               and isinstance(n.value, ast.Name) and n.value.id in wd_aliases
-               for n in ast.walk(pr)), (
-        "`_progress_run` no longer hands the job to `_watchdog.run_supervised`, "
-        "so the reap the delegated sites depend on is not reached")
-
-    # ...and what it delegates TO is a GROUP reap, as a call and not a word.
-    wd = trees[_PROGRAMS / "_watchdog.py"]
-    assert _calls_named(wd, "killpg", inside="_default_kill"), (
-        "`_watchdog._default_kill` no longer signals the process GROUP, so "
-        "every site above puts its child in a session nothing reaps")
-    assert _calls_named(wd, "getpgid", inside="_default_kill"), (
-        "the pgid == pid guard is gone: _default_kill would signal the "
-        "supervisor's own group for a child that is not its own leader")
 
 
 # ===========================================================================

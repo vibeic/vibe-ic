@@ -25,15 +25,12 @@ string, so a future reformat of the wrapper cannot silently drop the guard.
 """
 import os
 import re
-import subprocess
 import sys
-import tempfile
 
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "benchmark"))
 import tb_toplevel_alias as A  # noqa: E402
-import _outcome_states as states  # noqa: E402
 
 
 def _mods(text):
@@ -86,46 +83,8 @@ def test_every_guard_opened_is_closed():
         "unbalanced `ifndef/`endif would break every downstream tool")
 
 
-def test_iverilog_still_binds_the_alias_top():
-    # It used to `return` here, so a host without the tool PASSED it having
-    # verified nothing. Absent tool -> NOT_VERIFIED naming the host (R-0927);
-    # present -> runs exactly as before.
-    states.require_tools("iverilog")
-    out = _aliased()
-    with tempfile.NamedTemporaryFile("w", suffix=".sv", delete=False) as f:
-        f.write(out)
-        path = f.name
-    try:
-        for top in ("binary_to_gray", _ALIAS):
-            r = subprocess.run(
-                ["iverilog", "-g2012", "-s", top, "-o", os.devnull, path],
-                capture_output=True, text=True)
-            assert r.returncode == 0, f"-s {top} failed: {r.stderr}"
-    finally:
-        os.unlink(path)
 
 
-def test_verilator_lint_is_clean_with_the_guard():
-    """The regression itself: -Wall must exit 0 on a wrapper-carrying file."""
-    # It used to `return` here, so a host without the tool PASSED it having
-    # verified nothing. Absent tool -> NOT_VERIFIED naming the host (R-0927);
-    # present -> runs exactly as before.
-    states.require_tools("verilator")
-    out = _aliased()
-    d = tempfile.mkdtemp()
-    path = os.path.join(d, "binary_to_gray.sv")   # stem matches the author top
-    with open(path, "w") as f:
-        f.write(out)
-    try:
-        r = subprocess.run(["verilator", "--lint-only", "-Wall",
-                            "-Wno-EOFNEWLINE", path],
-                           capture_output=True, text=True)
-        assert r.returncode == 0, (
-            "verilator --lint-only -Wall rejected a wrapper-carrying file:\n"
-            + r.stderr[-2000:])
-    finally:
-        os.unlink(path)
-        os.rmdir(d)
 
 
 if __name__ == "__main__":

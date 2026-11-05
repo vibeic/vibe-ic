@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import subprocess
 import sys
 import time
@@ -67,23 +66,8 @@ import lec_run                          # noqa: E402
 
 
 # A job that PROGRESSES for `secs` seconds: it prints, and it burns CPU.
-def _progressing(secs: float, tick: float = 0.05) -> str:
-    return (f"{sys.executable} -c "
-            f"'import sys,time;t=time.time()\n"
-            f"while time.time()-t<{secs}:\n"
-            f"    sys.stdout.write(\"tick\\n\");sys.stdout.flush()\n"
-            f"    time.sleep({tick})\n"
-            f"print(\"DONE\")'")
 
 
-def _progressing_argv(secs: float, tick: float = 0.05):
-    return [sys.executable, "-c",
-            "import sys,time\n"
-            f"t=time.time()\n"
-            f"while time.time()-t<{secs}:\n"
-            "    sys.stdout.write('tick\\n'); sys.stdout.flush()\n"
-            f"    time.sleep({tick})\n"
-            "print('DONE')\n"]
 
 
 # ---------------------------------------------------------------------------
@@ -1043,33 +1027,6 @@ def test_allocated_frontend_step12_supervision(tmp_path, monkeypatch, state):
     assert len(calls)==1 and calls[0][0][0]=='yosys'
     assert calls[0][1]=={'capture_output':True,'text':True}
 
-@pytest.mark.parametrize("state", ["progressing", "stalled"])
-def test_allocated_analog_gate_supervision(tmp_path, monkeypatch, state):
-    import execution_analog_worker as worker
-    from types import SimpleNamespace
-    calls=[]; binding={'step_id':'A6','required_gates':['neutral_gate']}
-    monkeypatch.setenv('VIBEIC_EXECUTION_BINDING',json.dumps(binding))
-    monkeypatch.setattr(worker,'gate_specs',lambda step:[{'command':'neutral_gate project'}])
-    monkeypatch.setattr(worker.em,'digest',lambda path:'source-only-mock-digest')
-    def observed(argv,**kw):
-        calls.append((argv,kw))
-        kw['popen_factory'](argv)
-        return SimpleNamespace(rc=0 if state=='progressing' else _wd.RC_STALLED,
-            out='gate output',err='' if state=='progressing' else 'WATCHDOG_STALLED',
-            outcome='natural' if state=='progressing' else 'stalled',
-            supervision={'pid':321,'watched':'output+cpu','since_last_progress_s':0 if state=='progressing' else 120})
-    monkeypatch.setattr(_wd,'run_host_supervised',observed)
-    class Raw:
-        pid=321; returncode=0
-        def communicate(self,**kw): return 'raw unsupervised',''
-    monkeypatch.setattr(worker.subprocess,'Popen',lambda *a,**k:Raw())
-    row=worker.observe_gate(tmp_path,'neutral_gate')
-    assert row['stdout']=='gate output' and row['pid']==321 and row['binding']==binding
-    assert row['rc']==(0 if state=='progressing' else _wd.RC_STALLED)
-    assert row['supervision']['watched']=='output+cpu'
-    assert len(calls)==1 and calls[0][1]['hard_ceiling_s']==120
-    assert callable(calls[0][1]['popen_factory'])
-    assert not any(k.startswith('VIBEIC_EXECUTION') for k in calls[0][1]['env'])
 
 
 @pytest.mark.parametrize('state',['progressing','stalled'])

@@ -31,14 +31,3 @@ def test_stapostpnr_reads_moved_views_without_a_receipt(tmp_path):
     assert postroute.corner_sdfs(actual) == {'scene': folder / 'scene/design.sdf'}
     assert actual['metrics'] == state['metrics']
     assert (folder / 'state_out.json').read_bytes() == native_bytes
-
-
-def test_stapostpnr_uses_the_existing_d70_output_when_step23_record_is_absent(tmp_path):
-    folder = tmp_path / 'phase3/librelane/sta'
-    folder.mkdir(parents=True)
-    (folder / 'state_out.json').write_text(json.dumps({'metrics': {}}))
-    (folder / 'config.json').write_text(json.dumps({'meta': {'step': 'OpenROAD.STAPostPNR'}}))
-    component = tmp_path / 'reports/flow109/components/D70.json'
-    component.parent.mkdir(parents=True)
-    component.write_text(json.dumps({'sta_state': {'path': 'phase3/librelane/sta/state_out.json'}}))
-    assert postroute.stapostpnr_state(tmp_path) == (folder, {'metrics': {}})

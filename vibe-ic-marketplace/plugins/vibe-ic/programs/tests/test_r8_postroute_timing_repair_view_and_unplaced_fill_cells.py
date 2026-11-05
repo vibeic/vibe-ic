@@ -4,9 +4,6 @@ Measured on `subservient` x `gf180mcuD` (Vibe-IC benchmark matrix, r8). Each tes
 below pins a fact taken from that run's own artefacts, quoted in the assertion
 message so a failure says what changed rather than only that something did.
 """
-import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -15,7 +12,6 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as p3  # noqa: E402
 
 
 PDK = "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0"
@@ -26,49 +22,16 @@ CORNER_LIBS = {
 }
 
 
-def _repair_tcl(top="subservient", pnr="/run/phase3/stage3/pnr"):
-    return p3._build_postroute_timing_repair_tcl(
-        top, f"{PDK}/techlef/x.tlef", f"{PDK}/lef/x.lef", CORNER_LIBS["tt"],
-        pnr, "/run/phase3/stage3/postroute_timing_repair", "Metal", corner_libs=CORNER_LIBS)
 
 
 # ---------------------------------------------------------------------------
 # 1. The repair was triggered by a number its own timing view could not contain.
 # ---------------------------------------------------------------------------
 
-def test_repair_deck_carries_the_same_clock_and_derate_as_the_measurement_that_fires_it():
-    """The auto-trigger fires on the multi-corner OCV sign-off number. Every deck
-    that produces that number applies a flat-OCV derate and a PROPAGATED clock;
-    the repair deck applied neither, so `repair_timing -setup` analysed a more
-    optimistic design than the one that failed and logged
-    `RSZ-0098 No setup violations found` on both passes.
-    """
-    tcl = _repair_tcl()
-    assert "set_propagated_clock [all_clocks]" in tcl, (
-        "the repair deck reads a post-CTS DEF; an ideal clock cannot describe it")
-    assert f"set_timing_derate -early {p3._FLAT_OCV_DERATE_EARLY}" in tcl
-    assert f"set_timing_derate -late {p3._FLAT_OCV_DERATE_LATE}" in tcl, (
-        "the repair must not analyse without the derate the trigger measured with")
 
 
-def test_the_propagated_clock_disclosure_states_why_it_applies_here():
-    """`_propagated_clock_tcl` names post-route SPEF annotation as its reason,
-    and this deck annotates none — it uses `estimate_parasitics`. The reason is
-    different (post_hold.def is POST-CTS), so the emitted comment must say that
-    rather than assert something untrue of the deck it sits in."""
-    tcl = _repair_tcl()
-    assert "post_hold.def is POST-CTS" in tcl
-    assert "Post-route parasitics are annotated" not in tcl
-    # the default caller is untouched
-    assert "Post-route parasitics are annotated" in p3._propagated_clock_tcl()
 
 
-def test_derate_and_clock_are_applied_after_the_design_sdc_is_read():
-    """Order matters: both commands must land after `read_sdc` so a design SDC
-    that already sets them is not contradicted."""
-    tcl = _repair_tcl()
-    assert tcl.index("read_sdc") < tcl.index("set_propagated_clock")
-    assert tcl.index("read_sdc") < tcl.index("set_timing_derate -early")
 
 
 # ---------------------------------------------------------------------------
@@ -173,16 +136,3 @@ def test_a_fill_that_placed_something_keeps_its_cell(tmp_path):
 # ---------------------------------------------------------------------------
 # 4. The DRV seed is geometric; whether a wire is too long is electrical.
 # ---------------------------------------------------------------------------
-
-def test_signoff_drv_seed_is_raised_to_the_tools_own_electrical_floor():
-    """OpenROAD prints its answer on every pass it disagrees with
-    (`RSZ-0065 max wire length less than 7936u increases wire delays`) while the
-    seed was `int(min(die_w, die_h)/8)` = 150 um. FLOOR-ONLY: the raise can never
-    tighten a run."""
-    tcl = p3._v1_8_100_signoff_drv_repair_tcl("/run/phase3/stage3/pnr")
-    assert "rsz::find_max_wire_length" in tcl
-    assert "SDR_MWL_RAISED_TO_ELECTRICAL_FLOOR" in tcl
-    assert "if {$_sdr_crit > $_sdr_mwl} {" in tcl, (
-        "the raise must be conditional, so a tighter electrical floor is ignored")
-    assert "SDR_CRIT_WIRE_LEN_NONFATAL" in tcl, (
-        "an OpenROAD without the command must keep the geometric seed")

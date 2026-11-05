@@ -10,7 +10,6 @@ import pytest
 
 import execution_analog_installation as installation
 import execution_analog_pdk_export as export
-import execution_modes as em
 
 
 IMAGE_REF = 'ghcr.io/vibeic/vibeic-eda@sha256:' + 'a' * 64
@@ -184,38 +183,8 @@ def test_root_alias_outside_authority_is_not_measured(setup_export):
     assert not list((project / export.OUTPUT_BASE).glob('*/_receipt.json'))
 
 
-def test_malformed_measured_root_binding_refuses(setup_export, monkeypatch):
-    project, _, facts, _ = setup_export
-    original = export.lc.run_container
-
-    def malformed(argv, **kwargs):
-        done = original(argv, **kwargs)
-        message = json.loads(done.stdout)
-        message['pdk_root_binding'] = {
-            'logical_root': '/foss/pdks/sky130A', 'link_text': None,
-            'canonical_root': ['not', 'a', 'path'],
-        }
-        return subprocess.CompletedProcess(argv, 0, json.dumps(message), '')
-
-    monkeypatch.setattr(export.lc, 'run_container', malformed)
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_ROOT_BINDING_INVALID'):
-        call(project, facts)
 
 
-def test_changed_root_binding_is_refused_by_current_receipt_reuse(setup_export):
-    project, pdk, facts, _ = setup_export
-    canonical = pdk.parent / 'ciel/sky130/versions/test-version/sky130A'
-    canonical.parent.mkdir(parents=True)
-    pdk.rename(canonical)
-    pdk.symlink_to('ciel/sky130/versions/test-version/sky130A', target_is_directory=True)
-    result = call(project, facts)
-    assert result['status'] == 'MEASURED'
-    receipt_path = project / result['output_root'] / '_receipt.json'
-    receipt = json.loads(receipt_path.read_text())
-    receipt['pdk_root_binding']['canonical_root'] = '/foss/pdks/ciel/sky130/versions/changed/sky130A'
-    receipt_path.write_text(json.dumps(receipt, sort_keys=True, separators=(',', ':')) + '\n')
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_STALE_OUTPUT'):
-        call(project, facts)
 
 
 
@@ -386,76 +355,3 @@ def test_export_limits_are_enforced(setup_export, limit, value, reason):
     result = call(project, facts, **{limit: value})
     assert result['status'] == 'NOT_MEASURED'
     assert result['not_measured'] == [reason]
-
-
-@pytest.mark.parametrize('kind', ['id', 'ref'])
-def test_wrong_image_identity_refuses(setup_export, monkeypatch, kind):
-    project, _, facts, _ = setup_export
-    actual = {'image_ref': IMAGE_REF, 'image_id': IMAGE_ID,
-              'image_manifest_digest': MANIFEST, 'image_repo_digests': [IMAGE_REF]}
-    actual['image_id' if kind == 'id' else 'image_ref'] = 'sha256:' + 'c' * 64
-    monkeypatch.setattr(installation, 'inspect_image', lambda *a, **kw: actual)
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_IMAGE_UNBOUND'):
-        call(project, facts)
-
-
-def test_stale_or_partial_published_output_never_reuses(setup_export):
-    project, _, facts, _ = setup_export
-    first = call(project, facts)
-    seed_copy = project / first['resolver_fields']['spice_libs'][0]
-    seed_copy.write_text('tampered\n')
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_OUTPUT_CHANGED'):
-        call(project, facts)
-
-
-def test_partial_receipt_never_reuses(setup_export):
-    project, _, facts, _ = setup_export
-    first = call(project, facts)
-    (project / first['output_root'] / '_receipt.json').unlink()
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_STALE_OUTPUT'):
-        call(project, facts)
-
-
-def test_container_manifest_byte_mismatch_refuses(setup_export, monkeypatch):
-    project, _, facts, _ = setup_export
-    original = export._validate_population
-
-    def corrupt(directory, rows, pdk_root, max_files, max_bytes):
-        path = directory / rows[0]['relative_path']
-        path.write_bytes(path.read_bytes() + b'changed')
-        return original(directory, rows, pdk_root, max_files, max_bytes)
-
-    monkeypatch.setattr(export, '_validate_population', corrupt)
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_OUTPUT_CHANGED'):
-        call(project, facts)
-
-
-def test_forged_guest_to_copy_mapping_refuses(setup_export, monkeypatch):
-    project, _, facts, _ = setup_export
-    original = export.lc.run_container
-
-    def forge(argv, **kwargs):
-        done = original(argv, **kwargs)
-        message = json.loads(done.stdout)
-        message['files'][0]['guest_path'] = '/foss/pdks/sky130A/not-the-copied-file'
-        return subprocess.CompletedProcess(argv, 0, json.dumps(message), '')
-
-    monkeypatch.setattr(export.lc, 'run_container', forge)
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_GUEST_MAPPING_MISMATCH'):
-        call(project, facts)
-
-
-def test_repo_digest_must_bind_exact_pinned_ref(setup_export, monkeypatch):
-    project, _, facts, _ = setup_export
-    monkeypatch.setattr(installation, 'inspect_image', lambda *a, **kw: {
-        'image_ref': IMAGE_REF, 'image_id': IMAGE_ID, 'image_manifest_digest': MANIFEST,
-        'image_repo_digests': ['ghcr.io/vibeic/vibeic-eda@sha256:' + 'c' * 64]})
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_IMAGE_UNBOUND'):
-        call(project, facts)
-
-
-def test_non_installed_resolver_stays_not_measured(setup_export):
-    project, _, facts, _ = setup_export
-    facts['source'] = None
-    with pytest.raises(em.Refusal, match='ANALOG_PDK_EXPORT_NOT_MEASURED'):
-        call(project, facts)

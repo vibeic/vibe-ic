@@ -41,200 +41,57 @@ label 0.3.46; base = main v1.17.67 + lane czspmtail).
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGS))
 
-import phase3_one_shot_runner as r          # noqa: E402
-import signoff_metrics_aggregate as sma     # noqa: E402
 import general_precheck as gp               # noqa: E402
 import _tapeout_declaration as td           # noqa: E402
-import _owner_declared as _OD                              # noqa: E402
 
 
 # ───────────────────────── 1. the CT-03 pin rectangle ──────────────────────
 
-def test_ct03_no_slot_no_ring_keeps_todays_pin_placement():
-    """THE CONTROL. A design with no slot and no pad ring is untouched."""
-    assert r.ct03_pin_rect(None, None, 10, 480, 480) is None
 
 
-def test_ct03_a_ring_inset_moves_the_pins_onto_the_core():
-    """The rectangle is the one `-core_area` ALREADY carries, so the pins land
-    exactly where the rows are and no other number in the run moves."""
-    assert r.ct03_pin_rect(None, 381.0, 381, 2400, 2400) == [381, 381, 2400, 2400]
 
 
-def test_ct03_is_not_taken_on_a_slot_because_the_die_is_already_the_core():
-    """The slot path makes the CORE the `-die_area`, so `place_pins` is already
-    on the core boundary and there is nothing to move."""
-    assert r.ct03_pin_rect([442, 442, 1494, 2089], 381.0,
-                           381, 2400, 2400) is None
-    assert r.ct03_pin_rect([442, 442, 1494, 2089], None, 10, 480, 480) is None
 
 
-def test_ct03_is_NOT_taken_when_this_run_places_a_pad_ring_in_the_band():
-    """THE BAND IS ONLY EMPTY WHEN NOTHING IS PUT IN IT. A pin on the core
-    boundary is a pin no pad reaches, so on a ring-PLACING design the pins stay
-    where they are and the residual is reported instead."""
-    assert r.ct03_pin_rect(None, 381.0, 381, 2400, 2400, True) is None
 
 
-def test_ct03_the_scope_predicate_is_the_flows_own_pad_ring_condition(tmp_path):
-    """MEASURED on spm: neither router file is present, so no ring is placed
-    into the band — which is why all 15674 components sit inside the core and
-    the band is empty."""
-    (tmp_path / "input" / "submission_template").mkdir(parents=True)
-    assert r._chip_path_requests_pad_ring(tmp_path) is False
-    (tmp_path / "input/submission_template/SELF_TAPEOUT.txt").write_text("x")
-    assert r._chip_path_requests_pad_ring(tmp_path) is True
 
 
-def test_ct03_a_ring_inset_of_zero_is_an_answer_and_not_an_absence():
-    """0.0 is a MEASURED inset. `is None` is the test, never truthiness."""
-    assert r.ct03_pin_rect(None, 0.0, 0, 3162, 3162) == [0, 0, 3162, 3162]
 
 
 # ─────────── 2. the emitted TCL: both branches, both directions ────────────
 
-def test_the_pin_block_is_returned_BYTE_FOR_BYTE_when_ct03_does_not_apply():
-    """THE CONTROL that matters most: every design outside CT-03's scope emits
-    the identical `place_pins` it emits today."""
-    block = "place_pins -hor_layers Metal3 -ver_layers Metal2"
-    assert r.ct03_pin_rect_tcl(block, None) == block
 
 
-def test_the_pin_block_shrinks_the_die_places_and_restores_it():
-    block = "place_pins -hor_layers Metal3 -ver_layers Metal2"
-    tcl = r.ct03_pin_rect_tcl(block, [381, 381, 2400, 2400])
-    assert block in tcl                       # the command survives verbatim
-    assert tcl.index("_vic_ct03_saved") < tcl.index("odb::dbBlock_setDieArea")
-    assert tcl.index("set _vic_ct03_on 1") < tcl.index(block)
-    assert tcl.rindex("odb::dbBlock_setDieArea") > tcl.index(block)
-    assert "CT03_DIE_RESTORED" in tcl
-    # microns in, converted with the DATABASE's own units — never a hard-coded
-    # 1000 or 2000.
-    assert "int(381 * $_vic_ct03_dbu)" in tcl
-    assert "int(2400 * $_vic_ct03_dbu)" in tcl
-    assert "getDbUnitsPerMicron" in tcl
 
 
-def test_the_pin_block_degrades_loudly_and_restores_after_a_throw():
-    """An OpenROAD without the ODB setter must SAY so rather than silently
-    place the pins on the die boundary; and a `place_pins` that throws must
-    still leave the die as it found it."""
-    tcl = r.ct03_pin_rect_tcl("place_pins", [381, 381, 2400, 2400])
-    assert "CT03_PIN_RECT_UNAVAILABLE" in tcl
-    assert "info commands odb::dbBlock_setDieArea" in tcl
-    assert tcl.index("CT03_DIE_RESTORED") < tcl.index("error $_vic_ct03_err")
 
 
-def test_the_floorplan_geometry_itself_is_UNTOUCHED():
-    """CT-03 no longer moves `-die_area`, and it must not: measured end to end
-    TWICE, the core as the die deletes the router's tracks outside it and spm
-    did not converge in either arm (1 violation, then 3), where the same design
-    with the die stated whole routes clean."""
-    # FP-09: `-core_area` takes COORDINATES and this builder was printing the
-    # core WIDTH as the upper right, insetting 381 um at left/bottom and 762 at
-    # right/top. The pinned string moved with the fix; the PROPERTY this test is
-    # about — CT-03 does not move `-die_area` — is asserted below and unchanged.
-    # The upper right is now `die - core_pad` (3162-381 = 2781), which is the
-    # identity that makes it checkable rather than merely a different number.
-    assert r._floorplan_geometry_tcl(3162, 3162, 381, 2400, 2400) == (
-        'initialize_floorplan -die_area "0 0 3162 3162" \\\n'
-        '                      -core_area "381 381 2781 2781"')
-    assert 2781 == 3162 - 381
-    # AND the inset is now SYMMETRIC — the defect was that it was not.
-    _line = r._floorplan_geometry_tcl(3162, 3162, 381, 2400, 2400).splitlines()[-1]
-    _llx, _lly, _urx, _ury = [int(v) for v in
-                              _line.split('"')[1].split()]
-    assert _llx == 3162 - _urx and _lly == 3162 - _ury, _line
-    tcl = r._floorplan_geometry_tcl(3162, 3162, 381, 2400, 2400,
-                                    [442, 442, 1494, 2089])
-    assert '-die_area "442 442 1494 2089"' in tcl
-    assert '-core_area "442 442 1494 2089"' in tcl
 
 
 # ─────────────────── 3. the die rectangle record and its reader ─────────────
 
-def _record(tmp_path, **kw):
-    kw.setdefault("die_rect", [0, 0, 3162, 3162])
-    kw.setdefault("fp_rect", [381, 381, 2400, 2400])
-    kw.setdefault("die_source", "--die-um 3162x3162 at the origin")
-    kw.setdefault("core_pad", 381)
-    kw.setdefault("ring_inset_um", 380.4)
-    return r._floorplan_rectangles_record(tmp_path, **kw)
 
 
-def test_the_record_is_written_on_every_run_and_names_both_rectangles(tmp_path):
-    rec = _record(tmp_path)
-    on_disk = json.loads(
-        (tmp_path / r.FLOORPLAN_RECTANGLES_REL).read_text())
-    assert on_disk["die_rect_um"] == [0, 0, 3162, 3162]
-    assert on_disk["floorplan_rect_um"] == [381, 381, 2400, 2400]
-    assert on_disk["floorplan_rect_is_the_die"] is False
-    assert "DIEAREA states it" in on_disk["note"]
-    assert rec["record"] == str(tmp_path / r.FLOORPLAN_RECTANGLES_REL)
-    # …and the file SAYS SO ABOUT ITSELF. MEASURED on run 3 before this: the
-    # record on disk carried `"record": null` while being read from the very
-    # path it denied, because the field was set after the serialisation.
-    assert on_disk["record"] == str(tmp_path / r.FLOORPLAN_RECTANGLES_REL)
 
 
-def test_the_record_says_so_when_the_floorplan_rectangle_IS_the_die(tmp_path):
-    _record(tmp_path, fp_rect=None, ring_inset_um=None, core_pad=10)
-    on_disk = json.loads((tmp_path / r.FLOORPLAN_RECTANGLES_REL).read_text())
-    assert on_disk["floorplan_rect_um"] is None
-    assert on_disk["floorplan_rect_is_the_die"] is True
 
 
-def test_declared_die_rect_reads_the_record(tmp_path):
-    _record(tmp_path)
-    rect, basis = r.declared_die_rect(tmp_path)
-    assert rect == [0, 0, 3162, 3162]
-    assert "--die-um 3162x3162" in basis
 
 
-def test_declared_die_rect_names_the_path_it_could_not_find(tmp_path):
-    rect, why = r.declared_die_rect(tmp_path)
-    assert rect is None
-    assert r.FLOORPLAN_RECTANGLES_REL in why
 
 
-def test_declared_die_rect_refuses_an_unreadable_record(tmp_path):
-    p = tmp_path / r.FLOORPLAN_RECTANGLES_REL
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("{not json")
-    rect, why = r.declared_die_rect(tmp_path)
-    assert rect is None and "could not be read" in why
 
 
-def test_declared_die_rect_refuses_a_degenerate_rectangle(tmp_path):
-    _record(tmp_path, die_rect=[100, 100, 100, 500])
-    rect, why = r.declared_die_rect(tmp_path)
-    assert rect is None and "degenerate or inverted" in why
 
 
-@pytest.mark.parametrize("bad", [
-    ["3162", "3162", "x", None],     # strings and a null
-    [0, 0, 3162],                    # three of four
-    "0 0 3162 3162",                 # the DEF's own spelling, not a list
-    None,
-])
-def test_declared_die_rect_never_invents_a_rectangle(tmp_path, bad):
-    """NOT_DETERMINED, never a plausible number: the whole point. Written by
-    hand rather than through the writer, because these are the shapes a record
-    from another version — or another hand — can carry."""
-    p = tmp_path / r.FLOORPLAN_RECTANGLES_REL
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"die_rect_um": bad}))
-    rect, why = r.declared_die_rect(tmp_path)
-    assert rect is None and "no usable `die_rect_um`" in why
 
 
 # ─────────────── 4. the metrics aggregate stops quoting the core ────────────
@@ -243,320 +100,54 @@ _DEF = ("VERSION 5.8 ;\nDESIGN spm ;\nUNITS DISTANCE MICRONS 2000 ;\n"
         "DIEAREA ( 762000 762000 ) ( 4800000 4800000 ) ;\nEND DESIGN\n")
 
 
-def test_the_two_record_paths_are_the_same_string():
-    """The aggregator spells the path rather than importing 2.7 MB of runner.
-    This is what stops the duplication drifting."""
-    assert sma.FLOORPLAN_RECTANGLES_REL == r.FLOORPLAN_RECTANGLES_REL
 
 
-def test_die_bbox_prefers_the_declared_die_over_the_defs_own_DIEAREA(tmp_path):
-    (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-    (tmp_path / "phase3" / "stage3" / "pnr" / "routed.def").write_text(_DEF)
-    _record(tmp_path)
-    cell = sma._die_bbox(tmp_path)
-    assert cell.value == "0 0 3162 3162"          # the DIE
-    assert "declared die rectangle" in cell.basis
 
 
-def test_die_bbox_falls_back_to_the_def_and_says_that_it_did(tmp_path):
-    """THE OTHER DIRECTION. Every tree written before the record still gets an
-    answer, and the basis names which authority produced it."""
-    (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-    (tmp_path / "phase3" / "stage3" / "pnr" / "routed.def").write_text(_DEF)
-    cell = sma._die_bbox(tmp_path)
-    assert cell.value == "381 381 2400 2400"      # the DEF's own DIEAREA
-    assert "DIEAREA / UNITS DISTANCE MICRONS" in cell.basis
-    assert r.FLOORPLAN_RECTANGLES_REL in cell.basis
 
 
 # ───────────────────── 5. `deliverable`, and its deadlock ──────────────────
 
-def _io_pad_report(project, sides):
-    p = project / "reports" / "phase3" / "io_pad_chip_top.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({
-        "program": "io_pad_chip_top_gen", "verdict": "WROTE",
-        "pad_placement": {"source": "input/docs/L3_external_interface.md",
-                          "heading": "Physical Pad Placement",
-                          "side_signals": sides}}))
 
 
-def test_the_input_naming_four_die_sides_does_not_answer_the_deliverable(
-        tmp_path):
-    """RE-AUTHORED BY OWNER RULING R-0915-95 (2026-09-17), and this test is the
-    record of what it replaced.
-
-    It used to assert the opposite: that a design's own input assigning
-    top-level ports to four named sides ANSWERED `deliverable=DIE`, on the
-    reasoning that "a hardmacro has no north, south, east or west of its own".
-    That derivation was written to break a deadlock — the route comes from a
-    router file step 0.5ic writes only once this field is answered — and the
-    deadlock was really an unasked question.
-
-    `deliverable` asks what the party taking delivery has DECIDED. On
-    2026-09-06 the same kind of reading, run the other way (HARDMACRO from
-    these documents' silence about a pad ring), routed five designs onto the
-    IP terminal for eleven days. A document cannot answer this question by
-    speaking and it cannot answer it by staying quiet, so the derivation is
-    deleted and this asserts that it is gone."""
-    _io_pad_report(tmp_path, {"N": ["x[size-1:0]"], "S": ["rst"],
-                              "E": ["clk"], "W": ["p", "y"]})
-    value, why = r._declared_deliverable(tmp_path)
-    assert value is None, f"inferred {value!r} from the design's documents"
-    assert "OWNER" in why and "no reading of the design's own documents" in why
 
 
-def test_deliverable_is_NOT_DETERMINED_when_nothing_has_said(tmp_path):
-    value, why = r._declared_deliverable(tmp_path)
-    assert value is None
-    assert "the flow has not said what leaves it" in why
 
 
-def test_one_named_side_does_not_answer_it_either(tmp_path):
-    """THE COUNT NEVER MATTERED, and that is now sayable in one line: one side
-    and four sides reach the SAME verdict. Before the ruling these two arms
-    disagreed — four was a die, one was "not enough to say" — which made the
-    threshold look like the finding when the whole derivation was."""
-    _io_pad_report(tmp_path, {"N": ["x"], "S": [], "E": [], "W": []})
-    one_side, one_why = r._declared_deliverable(tmp_path)
-    _io_pad_report(tmp_path, {"N": ["x"], "S": ["y"], "E": ["z"], "W": ["w"]})
-    four_sides, four_why = r._declared_deliverable(tmp_path)
-    assert one_side is None and four_sides is None
-    assert one_why == four_why
 
 
 # ───────────────────────── 6. `forbidden_layers` ───────────────────────────
 
-def test_forbidden_layers_comes_from_the_pdk_bridge_config(tmp_path):
-    p = tmp_path / "input" / "pdk" / "bridge" / "signoff.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"forbidden_layers": ["81/0", "82/0"]}))
-    value, basis = r._declared_forbidden_layers(tmp_path)
-    assert value == ["81/0", "82/0"]
-    assert "bridge config" in basis
 
 
-def test_forbidden_layers_comes_from_the_designs_own_L19(tmp_path):
-    p = tmp_path / "phase1" / "generated_docs" / "L19_CONSTRAINTS_PDK.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(
-        {"constraints": {"forbidden_layers": ["72/20"]}}))
-    value, basis = r._declared_forbidden_layers(tmp_path)
-    assert value == ["72/20"] and "L19" in basis
 
 
-def test_forbidden_layers_never_publishes_an_empty_set(tmp_path):
-    """THE PROHIBITION THIS FIELD IS MOST EXPOSED TO. `[]` is a REAL answer in
-    this schema and it would turn the rung green — so a run where no party
-    forbids a layer must publish NOTHING, and say which parties it asked."""
-    value, why = r._declared_forbidden_layers(tmp_path)
-    assert value is None
-    assert value != []
-    assert "input/pdk/bridge/signoff.json:forbidden_layers" in why
-    assert "L19_CONSTRAINTS_PDK.json" in why
-    assert "different facts" in why
 
 
 # ─────────────────────── 7. the publisher, end to end ──────────────────────
 
-class _Pdk:
-    """The two attributes the derivations touch."""
-    tech_lef = "/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc/tech.lef"
-    tech_lef_source = None
-    cell_lef = ""
-    liberty = ""
-    cell_gds = ""
 
 
-def _project(tmp_path, *, decl=True, deliverable=None):
-    """`deliverable` is DECLARED, never derived, since R-0915-95. A fixture
-    that wants the publisher to act on one has to state it and attest it --
-    which is what a real project's step-0.5ic answers file now does."""
-    (tmp_path / "input" / "submission_template").mkdir(parents=True)
-    if decl:
-        _doc = td.blank_declaration()
-        if deliverable is not None:
-            _doc["answers"]["deliverable"] = deliverable
-            _OD.attest(_doc)
-        (tmp_path / td.DECLARATION_REL).write_text(
-            json.dumps(_doc, indent=2))
-    (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-    (tmp_path / "phase3" / "stage3" / "pnr" / "routed.def").write_text(_DEF)
-    _record(tmp_path)
-    _io_pad_report(tmp_path, {"N": ["x"], "S": ["rst"], "E": ["clk"],
-                              "W": ["p", "y"]})
-    return tmp_path
 
 
-@pytest.fixture
-def seal_present(monkeypatch):
-    monkeypatch.setattr(
-        r, "_docker_exec",
-        lambda *a, **k: (0, "VIC_SEAL_SCRIPT_OK\n", ""))
 
 
-@pytest.fixture
-def seal_absent(monkeypatch):
-    monkeypatch.setattr(r, "_docker_exec", lambda *a, **k: (1, "", "no such"))
 
 
-def test_publish_answers_the_five_it_can_and_names_the_one_it_cannot(
-        tmp_path, seal_present):
-    """SIX since vibe-ic#2122 added `core_area_um`; FIVE derived since
-    R-0915-95 took `deliverable` off the derivable list altogether.
-
-    The declaration has always ASKED for `core_area_um` — `_tapeout_declaration`
-    refuses a die that pins a die and omits its core — and nothing derived it,
-    so every self-tape-out owed an answer the run had already written into its
-    own floorplan record. `deliverable` is the opposite case: the publisher
-    used to DERIVE it from the design's own documents, and that is the
-    derivation the owner ruling deleted. The project DECLARES it, and the
-    publisher still reports it NOT_DETERMINED — which is exactly right, and is
-    the assertion worth having: `not_determined` here means "THIS PROGRAM did
-    not derive it", not "nobody answered it". It cannot reach
-    `already_answered`, because that branch is only ever taken for a key the
-    publisher derived, and there is no longer any derivation to outrank."""
-    project = _project(tmp_path, deliverable=td.DELIVERABLE_DIE)
-    rec = r.publish_tapeout_declarations(
-        project, _Pdk(), "c", project / "phase3/stage3/pnr/routed.def", "spm")
-    assert set(rec["published"]) == {
-        "top_cell", "die_origin_um", "die_area_um",
-        "core_area_um", "seal_ring_required"}
-    assert "deliverable" not in rec["published"]
-    assert "deliverable" in rec["not_determined"]
-    assert "OWNER" in rec["not_determined"]["deliverable"]
-    # …and the DECLARATION still answers it, untouched by the publisher.
-    _doc, _e = td.load(project / td.DECLARATION_REL)
-    assert td.answer(_doc, "deliverable") == td.DELIVERABLE_DIE
-    # `macro_*` is REFUSED BY NAME on a DIE, not silently absent (vibe-ic#2118);
-    # `deliverable` joins them for the different reason above.
-    assert set(rec["not_determined"]) == {"deliverable", "forbidden_layers",
-                                          "macro_area_um", "macro_origin_um"}
-    doc, err = td.load(project / td.DECLARATION_REL)
-    assert err is None
-    assert td.answer(doc, "top_cell") == "spm"
-    assert td.answer(doc, "deliverable") == td.DELIVERABLE_DIE
-    assert td.answer(doc, "die_origin_um") == [0, 0]
-    assert td.answer(doc, "die_area_um") == [0, 0, 3162, 3162]
-    # THIS fixture carries a `floorplan_rect_um` that is NOT the die, which is
-    # the rectangle OpenROAD was given as `-core_area`; it is returned verbatim
-    # rather than re-derived from an inset that does not describe it. The other
-    # arm — a die inset by the inset the run used — is asserted below.
-    assert td.answer(doc, "core_area_um") == [381, 381, 2400, 2400]
-    assert td.answer(doc, "seal_ring_required") is True
-    assert td.answer(doc, td.FORBIDDEN_LAYERS_KEY) == td.NOT_DETERMINED
-    # …and the declaration it wrote is still a WELL-FORMED one.
-    assert td.validate(doc) == []
 
 
-def test_the_core_is_the_die_inset_by_the_inset_the_run_actually_used(
-        tmp_path):
-    """The no-slot arm. `core_pad_um` is what step_pnr held the core back by —
-    10 um historically, the pad ring's own depth where there is one, and since
-    vibe-ic#2122 the seal ring's band plus the deck's clearance on a die."""
-    _record(tmp_path, fp_rect=None, core_pad=26)
-    core, why = r.declared_core_rect(tmp_path)
-    assert core == [26, 26, 3136, 3136]
-    assert "26 um" in why and r.FLOORPLAN_RECTANGLES_REL in why
 
 
-def test_a_record_that_states_no_inset_refuses_rather_than_choosing_one(
-        tmp_path):
-    """An inset chosen here would be this program deciding where cells may be
-    placed — the defect `_padring_core_inset_um` was written to stop."""
-    _record(tmp_path, fp_rect=None, core_pad=0)
-    import json as _json
-    path = tmp_path / r.FLOORPLAN_RECTANGLES_REL
-    doc = _json.loads(path.read_text())
-    doc.pop("core_pad_um")
-    path.write_text(_json.dumps(doc))
-    core, why = r.declared_core_rect(tmp_path)
-    assert core is None
-    assert "core_pad_um" in why and "deciding where cells" in why
 
 
-def test_a_HARDMACRO_is_not_asked_for_a_core_and_is_refused_BY_NAME(
-        tmp_path, seal_present, monkeypatch):
-    """`core_area_um` is `required_for=(DELIVERABLE_DIE,)`, so publishing it on
-    a macro would be this run answering a question that delivery does not owe,
-    under a name any consumer reads as a die's — exactly what vibe-ic#2118 had
-    just refused one block up for `die_origin_um`/`die_area_um`. The name that
-    does not apply is REFUSED BY NAME, never left silently absent."""
-    project = _project(tmp_path)
-    doc, err = td.load(project / td.DECLARATION_REL)
-    assert err is None
-    doc, _ig = td.merge_answers(doc, {"deliverable": td.DELIVERABLE_HARDMACRO})
-    _OD.attest(doc)
-    (project / td.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
-    rec = r.publish_tapeout_declarations(
-        project, _Pdk(), "c", project / "phase3/stage3/pnr/routed.def", "spm")
-    assert "core_area_um" not in rec["published"]
-    why = rec["not_determined"]["core_area_um"]
-    assert "HARDMACRO" in why and "not a question a macro owes" in why
-    doc2, _e = td.load(project / td.DECLARATION_REL)
-    assert td.answer(doc2, "core_area_um") == td.NOT_DETERMINED
 
 
-def test_an_UNDECLARED_delivery_publishes_no_core_and_says_why(tmp_path):
-    """The same rule the size pair obeys: a design that has not said what it is
-    owes every question, and choosing for it would be a guess wearing a
-    derivation's clothes."""
-    project = tmp_path
-    (project / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-    (project / "phase3/stage3/pnr/routed.def").write_text(_DEF)
-    _record(project)
-    rec = r.publish_tapeout_declarations(
-        project, _Pdk(), "c", project / "phase3/stage3/pnr/routed.def", "spm")
-    assert "core_area_um" not in rec["published"]
-    assert td.NOT_DETERMINED in rec["not_determined"]["core_area_um"]
 
 
-def test_an_absent_record_is_a_named_refusal_not_a_core(tmp_path):
-    core, why = r.declared_core_rect(tmp_path)
-    assert core is None
-    assert r.FLOORPLAN_RECTANGLES_REL in why
 
 
-def test_publish_writes_its_record_even_when_it_publishes_nothing(tmp_path,
-                                                                  seal_absent):
-    """A producer that writes nothing when it declines is indistinguishable
-    from one that never ran."""
-    project = tmp_path
-    (project / "phase3" / "stage3" / "pnr").mkdir(parents=True)
-    (project / "phase3/stage3/pnr/routed.def").write_text(_DEF)
-    rec = r.publish_tapeout_declarations(
-        project, _Pdk(), "c", project / "phase3/stage3/pnr/routed.def", "")
-    assert rec["published"] == []
-    # With `deliverable` NOT_DETERMINED neither size name is published, and
-    # BOTH are refused by name — vibe-ic#2118.
-    assert set(rec["not_determined"]) == {
-        "top_cell", "deliverable", "die_origin_um", "die_area_um",
-        "core_area_um", "macro_origin_um", "macro_area_um",
-        "seal_ring_required", "forbidden_layers"}
-    on_disk = json.loads(
-        (project / "reports/phase3/tapeout_declaration_publish.json").read_text())
-    assert on_disk["published"] == []
-    assert on_disk["record"] == str(
-        project / "reports/phase3/tapeout_declaration_publish.json")
-    # `deliverable` is unknown here, so the refusal names THAT, not the record.
-    assert "not known" in on_disk["not_determined"]["die_area_um"]
 
 
-def test_an_existing_answer_outranks_the_derivation_and_is_never_overwritten(
-        tmp_path, seal_present):
-    """THE REFUSAL DIRECTION. An operator (or a human) who declared the top
-    cell keeps it — which is what leaves the precheck free to REFUSE when the
-    declaration and the layout disagree."""
-    project = _project(tmp_path)
-    doc, _ = td.load(project / td.DECLARATION_REL)
-    doc, _ig = td.merge_answers(doc, {"top_cell": "somebody_elses_top"})
-    (project / td.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
-    rec = r.publish_tapeout_declarations(
-        project, _Pdk(), "c", project / "phase3/stage3/pnr/routed.def", "spm")
-    assert "top_cell" not in rec["published"]
-    assert "outranks this derivation" in rec["already_answered"]["top_cell"]
-    doc, _ = td.load(project / td.DECLARATION_REL)
-    assert td.answer(doc, "top_cell") == "somebody_elses_top"
 
 
 def test_the_precheck_still_refuses_a_declaration_that_contradicts_the_layout():

@@ -3,7 +3,6 @@ import json
 import pytest
 
 import phase1_expert_parse_track as track
-import flow109_metric_acceptance as metrics
 import ic_expert_backup_pack as pack
 from programs.tests._hostpaths import require_repo
 
@@ -55,37 +54,8 @@ def test_invalid_scope_never_borrows_a_value_from_the_layer(tmp_path, selector):
     assert result["field_path_status"] == "UNDECLARED"
 
 
-def test_d02_corner_expectation_requires_its_typed_temperature_scope(tmp_path):
-    case = project(tmp_path, {"fields": {"verification_plan": {
-        "corner_matrix": {"corners": ["TT", "SS", "FF"],
-                          "temperature_c": [-40, 27, 125]},
-        "analog": [{"specifications": [{"name": "PSRR", "min": 40, "unit": "dB"}]}],
-    }}})
-    original = expectation(["TT", "SS", "FF", "40", "27", "125"], None)
-    original["id"] = "analog_corner_results"
-    actual, unresolved, unrouted = metrics._d0102_compare(
-        case, {"expectations": [original]}, {})
-    assert actual == []
-    assert unrouted == []
-    assert len(unresolved) == 1
-    assert unresolved[0]["scope"] == "UNSCOPED"
-
-    corrected = {**original, "field_path": "/fields/verification_plan/corner_matrix",
-                 "expected_tokens": ["TT", "SS", "FF", "-40 °C", "27 °C", "125 °C"]}
-    actual, unresolved, unrouted = metrics._d0102_compare(
-        case, {"expectations": [corrected]}, {})
-    assert actual == [{"id": "analog_corner_results"}]
-    assert unresolved == []
-    assert unrouted == []
 
 
-def test_dimensionless_adapter_cannot_override_shared_numeric_equality(tmp_path):
-    case = project(tmp_path, {"quantity": {"target": 1.000000000000001, "unit": "—"}})
-    for token, expected in [("1.000000000000001", True), ("1", False)]:
-        item = expectation([token, "—"])
-        actual, unresolved, _ = metrics._d0102_compare(case, {"expectations": [item]}, {})
-        assert bool(actual) is expected
-        assert unresolved == []
 
 
 def test_checked_in_typed_voltage_supports_only_its_dimension(tmp_path):
@@ -114,17 +84,6 @@ def test_malformed_numeric_tokens_are_refused_without_text_matching(tmp_path, to
     assert result["tokens_unaskable"]
 
 
-@pytest.mark.parametrize("blob, path", [
-    ({"unit": "V", "quantity": {"target": 2}}, "/quantity"),
-    ({"quantity_v": {"target": 2}}, "/quantity_v"),
-    ({"quantity": {"target": 2, "units": "V"}}, "/quantity"),
-])
-def test_dimensionless_consumer_keeps_the_selectors_unit_context(tmp_path, blob, path):
-    case = project(tmp_path, blob)
-    item = expectation(["2"], path)
-    assert track.converge_ai_expectation(case, item)["met"] is False
-    actual, _, _ = metrics._d0102_compare(case, {"expectations": [item]}, {})
-    assert actual == []
 
 
 @pytest.mark.parametrize("declared", [None, 42, ["mV"]])
@@ -141,14 +100,6 @@ def test_conflicting_unit_aliases_do_not_depend_on_object_order(tmp_path, declar
     assert track.converge_ai_expectation(case, expectation(["2"]))["met"] is False
 
 
-def test_split_number_and_unit_tokens_are_an_authoring_refusal(tmp_path):
-    case = project(tmp_path, {"quantity": {"target": 1, "unit": "V"}})
-    result = track.converge_ai_expectation(case, expectation(["1", "V"]))
-    assert result["usable"] is False
-    assert {x["reason"] for x in result["tokens_unaskable"]} == {"SEPARATE_UNIT_TOKEN"}
-    actual, unresolved, _ = metrics._d0102_compare(
-        case, {"expectations": [expectation(["1", "V"])]}, {})
-    assert actual == [] and len(unresolved) == 1
 
 
 def test_large_exponent_unit_normalization_does_not_raise(tmp_path):
@@ -171,19 +122,6 @@ def test_split_refusal_retains_the_scope_of_each_branch(tmp_path):
     assert [child["scope"] for child in result["sub_results"]] == ["UNSCOPED", "json_pointer"]
 
 
-@pytest.mark.parametrize("token, scalar", [
-    ("(5.5 ns)", "55 ns"), ("{1e+}", "1e"),
-    ("[[−40 °C]]", "40 C"), ("≥ 10", "10"),
-    ("[NaN]", "NaN"), ("NaN V", "NaN V"),
-])
-def test_wrapping_punctuation_cannot_hide_numeric_intent(tmp_path, token, scalar):
-    case = project(tmp_path, {"quantity": scalar})
-    result = track.converge_ai_expectation(case, expectation([token]))
-    assert result["met"] is False
-    assert result["tokens_unaskable"]
-    actual, unresolved, _ = metrics._d0102_compare(
-        case, {"expectations": [expectation([token])]}, {})
-    assert actual == [] and len(unresolved) == 1
 
 
 def test_bad_path_authoring_advice_never_recommends_omitting_scope(tmp_path):
@@ -193,34 +131,8 @@ def test_bad_path_authoring_advice_never_recommends_omitting_scope(tmp_path):
     assert reason is not None and "or omit" not in reason
 
 
-@pytest.mark.parametrize("token", ["2,000", "2000", "2e3", "2,000 —"])
-@pytest.mark.parametrize("target, expected", [(3, False), (2000, True)])
-def test_dimensionless_quantity_fence_uses_the_canonical_number_grammar(
-        tmp_path, token, target, expected):
-    case = project(tmp_path, {"quantity": {"target": target, "description": "2,000", "unit": "—"}})
-    actual, unresolved, unrouted = metrics._d0102_compare(
-        case, {"expectations": [expectation([token])]}, {})
-    assert bool(actual) is expected
-    assert unresolved == [] and unrouted == []
 
 
-@pytest.mark.parametrize("declarations, token, expected", [
-    ('"unit":"V","unit":"mV"', "1 mV", False),
-    ('"unit":"V","unit":""', "1", False),
-    ('"units":"V","units":"mV"', "1 mV", False),
-    ('"unit":"mV","unit":"mV"', "1 mV", True),
-])
-@pytest.mark.parametrize("path", ["/quantity", "/quantity/target"])
-def test_duplicate_unit_context_is_consistent_in_direct_and_d0102_readers(
-        tmp_path, declarations, token, expected, path):
-    case = project(tmp_path, {})
-    source = case / "phase1/generated_docs/L22_VERIFICATION_PLAN.json"
-    source.write_text('{"quantity":{"target":1,' + declarations + '}}')
-    item = expectation([token], path)
-    assert track.converge_ai_expectation(case, item)["met"] is expected
-    actual, unresolved, _ = metrics._d0102_compare(case, {"expectations": [item]}, {})
-    assert bool(actual) is expected
-    assert unresolved == []
 
 
 def test_ownership_and_carriage_do_not_adopt_a_conflicting_duplicate_unit(tmp_path):

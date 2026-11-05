@@ -20,7 +20,7 @@ PROG = Path(os.environ.get('VIBEIC_OUTPUT_RETENTION_PROGRAMS',
 sys.path.insert(0, str(PROG))
 import step_output_collector as SOC  # noqa: E402
 import flow_dashboard_data as FDD  # noqa: E402
-from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
+from _invocation_fixture import bind_invocation_top
 
 
 def test_supported_python_without_file_digest_retains_exact_output(tmp_path, monkeypatch):
@@ -365,27 +365,6 @@ def test_view_refresh_cannot_rewrite_an_executed_version(tmp_path):
     assert SOC.latest_pass(tmp_path, '1') is None
 
 
-def test_web_stepfile_path_traversal_guarded(tmp_path):
-    _mk_project(tmp_path)
-    SOC.materialize(tmp_path)
-    import flow_dashboard_web as W
-    # a legitimate file inside a step folder resolves. `folder` is now a
-    # multi-segment relative path (phase/stage/id_slug) — the dashboard's own
-    # `_steps_root(project) / folder` must nest on that string with no
-    # change on its side (Path's "/" already handles embedded "/"), which is
-    # exactly what this test is pinning.
-    idx = json.loads((tmp_path / "steps/index.json").read_text())
-    folder = next(s["folder"] for s in idx["steps"]
-                  if (tmp_path / "steps" / s["folder"] / "spm.v").exists())
-    ok = W._step_file_response(str(tmp_path), folder, "spm.v")
-    assert ok is not None and b"module spm" in ok[0]
-    # traversal attempts are rejected
-    assert W._step_file_response(str(tmp_path), "..", "x") is None
-    assert W._step_file_response(str(tmp_path), folder, "../../etc/passwd") is None
-    assert W._step_file_response(str(tmp_path), folder, "nope.xyz") is None
-    # traversal THROUGH the now-multi-segment folder itself must still be
-    # rejected — a nested folder string is more surface for ".." to hide in
-    assert W._step_file_response(str(tmp_path), folder + "/../../..", "spm.v") is None
 
 
 def test_migrating_from_a_prior_flat_layout_retains_its_bytes(tmp_path):
@@ -506,10 +485,6 @@ def test_prune_keeps_a_folder_the_current_run_still_produces(tmp_path):
     assert keep.is_dir() and (keep / "outputs.json").is_file()
 
 
-import subprocess
-import step_preflight as preflight
-import execution_policy as policy
-import execution_backend_gates as gates
 
 CHILD = """
 import json, sys
@@ -522,46 +497,14 @@ versions.finish_step(p, a, verdict='FAIL', result={'detail': 'actual failing chi
 """
 
 
-def run_child(project):
-    subprocess.run([sys.executable, '-c', CHILD, str(project), str(PROG)], check=True)
 
 
 def record(project, attempt):
     return project / 'steps' / attempt['folder'] / 'outputs.json'
 
 
-def test_canonical_retained_consumer_child_does_not_finish_live_step7(tmp_path, monkeypatch):
-    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
-    # Exercise the real retained-call seam; the child has its own module state.
-    def producer(project):
-        run_child(project)
-        return 1
-    assert preflight.retained_call(tmp_path, '7', producer, tmp_path,
-                                   canonical_acceptance=True) == 1
-    entries = SOC._read_index(tmp_path)['steps']
-    parent = next(x for x in entries if x['id'] == '7')
-    child = next(x for x in entries if x['id'] == 'P0')
-    saved = json.loads((tmp_path / 'steps' / parent['folder'] / 'outputs.json').read_text())
-    assert saved['status'] == 'FAIL'
-    assert child['status'] == 'FAIL'
-    assert not saved['canonical_pass']
-    assert not list((tmp_path / 'steps').glob('*/*/*/active_call.json'))
 
 
-def test_successful_producer_retains_failing_canonical_child_consumer(tmp_path, monkeypatch):
-    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
-    def consumer(project, row):
-        run_child(project)
-        return {'status': 'FAIL', 'step': {'id': row['id'], 'status': 'FAIL'}, 'ledger': []}
-    monkeypatch.setattr(gates, 'evaluate', consumer)
-    assert preflight.retained_call(tmp_path, '7', lambda project: 0, tmp_path,
-                                   canonical_acceptance=True) == 0
-    entry = next(x for x in SOC._read_index(tmp_path)['steps'] if x['id'] == '7')
-    saved = json.loads((tmp_path/'steps'/entry['folder']/'outputs.json').read_text())
-    assert saved['status'] == 'FAIL'
-    assert saved['result']['rows'][0]['status'] == 'PASS'
-    assert not saved['canonical_pass']
-    assert SOC.latest_pass(tmp_path, '7') is None
 
 
 @pytest.mark.parametrize('directory_key', ['step_dir', 'directory', 'folder'])

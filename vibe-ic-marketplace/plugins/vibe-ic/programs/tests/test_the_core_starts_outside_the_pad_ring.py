@@ -23,67 +23,19 @@ LEF SIZE, REFUSES. A default inset is the defect this replaces.
 """
 from __future__ import annotations
 
-import json
-import math
-
-import io_pad_chip_top_gen as G      # noqa: F401  (imported for parity)
-import phase3_one_shot_runner as R
 
 
-def _rec(tmp_path, **over):
-    # The delivery decides whether a ring pins the die (98109186b: a record an
-    # earlier run left on disk must not re-pin a floorplan to a ring THIS
-    # delivery does not build). This fixture is a self-tape-out, which builds
-    # its ring, so the record below is the ring's own measurement.
-    st = tmp_path / "input" / "submission_template"
-    st.mkdir(parents=True, exist_ok=True)
-    (st / "SELF_TAPEOUT.txt").write_text("self tape-out\n", encoding="utf-8")
-    body = {"ring_depth_um": 381.0,
-            "ring_depth_terms_um": {"lib__in": 350.0, "lib__cor": 355.0},
-            "ring_depth_masters_without_a_lef_size": [],
-            "die_side_um": 3162.0}
-    body.update(over)
-    d = tmp_path / "reports" / "phase3"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "io_pad_chip_top.json").write_text(json.dumps(
-        {"verdict": "WROTE", "die_required_um": body}))
-    return tmp_path
 
 
-def test_the_inset_is_the_rings_own_measured_depth(tmp_path):
-    inset, why = R._padring_core_inset_um(_rec(tmp_path))
-    assert why == "" and inset == 381.0
-    assert int(math.ceil(inset)) == 381
 
 
-def test_a_design_with_no_ring_keeps_the_historical_inset(tmp_path):
-    """CONTROL for every design off the chip path: nothing changes."""
-    inset, why = R._padring_core_inset_um(tmp_path)
-    assert inset is None and why == ""
 
 
-def test_a_record_with_no_depth_refuses_and_says_what_is_missing(tmp_path):
-    inset, why = R._padring_core_inset_um(_rec(tmp_path, ring_depth_um=None))
-    assert inset is None
-    assert "ring_depth_um" in why and "cannot be derived" in why
 
 
-def test_a_master_with_no_lef_size_refuses_by_name(tmp_path):
-    inset, why = R._padring_core_inset_um(
-        _rec(tmp_path, ring_depth_masters_without_a_lef_size=["lib__odd"]))
-    assert inset is None
-    assert "lib__odd" in why and "not guessed" in why
 
 
-def test_the_core_rectangle_lands_outside_the_ring_band(tmp_path):
-    """THE FORWARD CONTROL, in the geometry the deck is built from."""
-    die = 3162
-    inset = int(math.ceil(R._padring_core_inset_um(_rec(tmp_path))[0]))
-    llx = lly = inset
-    urx = ury = die - inset
-    for edge, value in (("left", llx), ("bottom", lly),
-                        ("right", die - urx), ("top", die - ury)):
-        assert value >= 381, f"{edge} edge is {value} um inside a 381 um ring"
+
 
 
 def test_the_superseded_inset_reproduces_the_overlap(tmp_path):

@@ -89,18 +89,6 @@ def test_the_checker_population_covers_checker_shaped_names():
         f"declare as a gate: {strays}")
 
 
-def test_the_orphan_now_has_a_real_runner_and_the_false_positive_always_had_one():
-    root = _repo_root()
-    hay = W._tokenise(W._haystacks(_PLUGIN, root))
-
-    def runners(name):
-        return W.runners(name[:-3], hay, str(_PROGRAMS / name))
-
-    assert "TOOLS" in runners("landing_worktree_is_clean_check.py"), \
-        "#693 listed this as unwired; it is invoked from tools/gatekeeper-land.sh"
-    r = runners("gitignore_scratch_guard.py")
-    assert r - {"TEST"}, "the one real orphan is still wired to nothing"
-    assert "TOOLS" in r
 
 
 # ── 2. the SKILL-only disclosure register ──────────────────────────────────

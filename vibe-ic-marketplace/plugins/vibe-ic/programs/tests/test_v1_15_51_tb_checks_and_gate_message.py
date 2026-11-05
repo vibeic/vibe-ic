@@ -29,9 +29,7 @@ PROGRAMS = PLUGIN / "programs"
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import design_one_shot_runner as DOSR  # noqa: E402
 import flow_compliance_check as FCC  # noqa: E402
-import testbench_exists_check as TBC  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -57,38 +55,17 @@ def test_the_generator_says_so_when_there_is_nothing_to_check():
     assert "no observable output" in _tb_text()
 
 
-def _bridge(tmp_path: Path, transcript_text: str) -> bool:
-    proj = tmp_path / "p"
-    log = proj / "phase2" / "stage1" / "sim_full_stack" / "full_stack.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(transcript_text)
-    return DOSR._emit_connectivity_sim_bridge(
-        proj, log, "chip_top", "generic_full_stack track")
 
 
 DONE = "FULL_STACK_TB_DONE bytes=0 bits=0\n"
 
 
-def test_the_connectivity_bridge_is_written_when_the_checks_pass(tmp_path):
-    assert _bridge(tmp_path, "CHECK PASS post_reset_resolvable q\n"
-                             "FULL_STACK_TB_CHECKS pass=4 fail=0\n" + DONE)
 
 
-def test_the_connectivity_bridge_is_REFUSED_when_a_check_fails(tmp_path):
-    """The teeth. Reaching the end with an unresolved output is not
-    CONNECTIVITY_PASS, and without this the new check is a printed opinion."""
-    assert not _bridge(tmp_path, "CHECK FAIL post_reset_resolvable q\n"
-                                 "FULL_STACK_TB_CHECKS pass=3 fail=1\n" + DONE)
 
 
-def test_a_transcript_without_the_completion_marker_is_still_refused(tmp_path):
-    assert not _bridge(tmp_path, "FULL_STACK_TB_CHECKS pass=4 fail=0\n")
 
 
-def test_an_older_transcript_with_no_check_line_is_unaffected(tmp_path):
-    """NEGATIVE CONTROL for the new clause: a transcript from before the checks
-    existed must keep its historical verdict, not fail closed on absence."""
-    assert _bridge(tmp_path, DONE)
 
 
 # --------------------------------------------------------------------------

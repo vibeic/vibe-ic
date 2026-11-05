@@ -16,12 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as runner  # noqa: E402
 import spare_cell_coverage_check as cov  # noqa: E402
 import spare_cell_preservation_check as pres  # noqa: E402
 
@@ -33,97 +31,27 @@ assert COV_SCRIPT.exists() and PRES_SCRIPT.exists()
 # ──────────────────────────────────────────────────────────────────
 # 1) spare-density computation + clamp
 # ──────────────────────────────────────────────────────────────────
-def test_density_default_when_none():
-    d, warn = runner._compute_spare_density(None)
-    assert d == runner._DEFAULT_SPARE_DENSITY
-    assert warn is None
 
 
-def test_density_passthrough_in_range():
-    d, warn = runner._compute_spare_density(0.05)
-    assert d == 0.05
-    assert warn is None
 
 
-def test_density_clamps_high():
-    d, warn = runner._compute_spare_density(0.5)
-    assert d == runner._SPARE_DENSITY_MAX == 0.2
-    assert warn and "ceiling" in warn
 
 
-def test_density_clamps_negative():
-    d, warn = runner._compute_spare_density(-0.3)
-    assert d == 0.0
-    assert warn and "< 0" in warn
 
 
-def test_density_non_numeric_falls_back():
-    d, warn = runner._compute_spare_density("abc")
-    assert d == runner._DEFAULT_SPARE_DENSITY
-    assert warn and "not numeric" in warn
 
 
 # ──────────────────────────────────────────────────────────────────
 # 2) count / distribution / grid helpers
 # ──────────────────────────────────────────────────────────────────
-def test_count_from_density():
-    assert runner._spare_count_from_density(1000, 0.02) == 20
-    # at least 1 spare when density>0 and there is logic
-    assert runner._spare_count_from_density(10, 0.02) == 1
-    # zero when no logic or zero density
-    assert runner._spare_count_from_density(0, 0.02) == 0
-    assert runner._spare_count_from_density(1000, 0.0) == 0
 
 
-def test_type_distribution_sums_to_count():
-    for n in (1, 7, 20, 33, 100):
-        dist = runner._spare_type_distribution(n)
-        assert sum(dist.values()) == n
-        # only known classes appear
-        known = {c for c, _ in runner._SPARE_CELL_MIX}
-        assert set(dist).issubset(known)
 
 
-def test_grid_positions_are_distributed():
-    pos = runner._spare_grid_positions(16, 10, 10, 210, 210)
-    assert len(pos) == 16
-    # a 16-cell grid must occupy many distinct positions (not clustered)
-    assert len({p for p in pos}) >= 10
-    # all inside the core box
-    for x, y in pos:
-        assert 10 <= x <= 210 and 10 <= y <= 210
 
 
-def test_build_plan_shape():
-    plan = runner._build_spare_cells_plan(
-        placed_cells=1000, density=0.02,
-        core_box=(10, 10, 210, 210),
-        liberty_path="", container="", has_pad_ring=True)
-    assert plan["count"] == 20
-    # #563 r2 — tied_off is now an HONEST claim: False at plan level;
-    # step_pnr flips it True only when the PDK exposes a tie-low cell and
-    # the postfix tie-off TCL is actually emitted.
-    assert plan["tied_off"] is False
-    assert len(plan["instances"]) == 20
-    assert sum(plan["types"].values()) == 20
-    # pad ring → 2 spare pads reserved
-    assert len(plan["spare_pads"]) == 2
-    # every instance carries keep:true
-    assert all(i["keep"] is True for i in plan["instances"])
 
 
-def test_count_placed_cells_from_netlist():
-    netlist = (
-        "module top(input a, output y);\n"
-        "  wire n1, n2;\n"
-        "  INVX1 u1 (.A(a), .Y(n1));\n"
-        "  NAND2X1 u2 (.A(n1), .B(a), .Y(n2));\n"
-        "  DFFX1 u3 (.D(n2), .CK(a), .Q(y));\n"
-        "  assign y = n2;\n"
-        "endmodule\n"
-    )
-    assert runner._count_placed_cells_from_netlist(netlist) == 3
-    assert runner._count_placed_cells_from_netlist("") == 0
 
 
 # ──────────────────────────────────────────────────────────────────

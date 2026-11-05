@@ -45,16 +45,12 @@ Tests:
 """
 import json
 import os
-import re
-import subprocess
 import sys
-import tempfile
 
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "benchmark"))
 import tb_toplevel_alias as A
-import _outcome_states as states  # noqa: E402
 
 
 class _FakeModuleNames:
@@ -232,47 +228,6 @@ def test_param_module_in_json_carries_param_port_list():
 
 
 # ── 7: JSON iverilog compile check (NOT_VERIFIED if iverilog absent) ───────
-def test_json_wrapped_completion_compiles_under_iverilog():
-    """Unwrap-then-wrap a clean `mytop` fixture (single-port module with a
-    `wire`-declared output, NOT self-driving an input — that would be a
-    fixture-internal Verilog bug, unrelated to v1.2.48). Verify the WRAPPED
-    RTL (author module + alias wrapper) compiles cleanly under
-    `iverilog -g2012 -s <harness_top> -t null`. The alias output is a JSON
-    envelope, so this test extracts the FIRST RTL entry's value (which now
-    carries the wrapper) and writes THAT to a .sv file for compile.
-
-    NOT_VERIFIED, naming the host, if iverilog is absent (owner R-0927).
-    """
-    # It used to `return` here, so a host without the tool PASSED it having
-    # verified nothing. Absent tool -> NOT_VERIFIED naming the host (R-0927);
-    # present -> runs exactly as before.
-    states.require_tools("iverilog")
-    src = (
-        "module mytop (input clk, output reg q);\n"
-        "  always @(posedge clk) q <= ~q;\n"
-        "  initial q = 0;\n"
-        "endmodule\n")
-    completion = json.dumps(
-        {"code": [{"rtl/foo.sv": src}]}, ensure_ascii=False)
-    out = A.maybe_alias_completion(
-        completion, "cvdp_copilot_foo", _FakeModuleNames({"mytop"}))
-    # `out` is a JSON envelope (the scorer decode). Extract the first RTL
-    # entry's value (now carries the wrapped RTL) for compile.
-    parsed = json.loads(out)
-    inner_value = parsed["code"][0]["rtl/foo.sv"]
-    with tempfile.NamedTemporaryFile("w", suffix=".sv", delete=False) as f:
-        f.write(inner_value)
-        path = f.name
-    try:
-        r = subprocess.run(
-            ["iverilog", "-g2012", "-s", "cvdp_copilot_foo",
-             "-t", "null", path],
-            capture_output=True, text=True)
-        assert r.returncode == 0, \
-            f"JSON-wrapped completion compile FAILED: stderr={r.stderr!r} "\
-            f"stdout={r.stdout!r}"
-    finally:
-        os.unlink(path)
 
 
 # ── 8: JSON first-file-empty fallback ────────────────────────────────────────

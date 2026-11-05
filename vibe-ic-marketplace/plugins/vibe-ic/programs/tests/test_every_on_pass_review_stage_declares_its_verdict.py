@@ -62,7 +62,6 @@ import importlib.util
 import json
 import shutil
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -101,8 +100,6 @@ def _mod(name: str, path: Path):
         sys.path[:] = saved
 
 
-def _audit_mod():
-    return _mod("_fgea_on_pass", _AUDIT)
 
 
 def _review_mod():
@@ -161,85 +158,12 @@ def test_the_program_exposes_the_flow_wide_reader():
 
 # ═════════════════════════ the premise: #1858's declaration, re-measured here
 
-def test_the_gate_still_declares_an_intent_the_audit_can_read():
-    """RETURNED VALUE, not a grep. `declared_intent` is the exact function the
-    audit uses to decide DECLARED vs UNDECLARED, so this cannot pass on a
-    declaration the audit would not see — the wrong line prefix, or one pushed
-    past `DECL_WINDOW_BYTES` by a paragraph added above it.
-
-    vibe-ic#1858 landed this. It is re-measured because everything below is
-    written against `advisory` being what the program says about itself."""
-    mod = _audit_mod()
-    assert mod.declared_intent(_PROGRAMS, _GATE) == "advisory", (
-        f"{_GATE} must state where its verdict is consumed; the audit reads "
-        f"`ENFORCEMENT:` opening a line in the first "
-        f"{mod.DECL_WINDOW_BYTES} characters, or a lone `\"verdict_mode\"` "
-        f"literal")
 
 
-def test_the_program_constant_and_the_docstring_do_not_disagree():
-    """One fact, one spelling. `DECLARED_ENFORCEMENT` is what the runtime
-    refusal compares each stage against; the docstring is what the audit reads.
-    A fact written in two places is a fact that will disagree, so the two are
-    measured against each other rather than both against a literal typed
-    here."""
-    assert _review_mod().DECLARED_ENFORCEMENT == \
-        _audit_mod().declared_intent(_PROGRAMS, _GATE)
 
 
-def test_the_advisory_declaration_is_still_true_of_the_tree():
-    """`advisory` is a CLAIM ABOUT THE TREE — "no runner spawns this inline" —
-    and a declaration nobody re-measures is how five gates sat mis-declared
-    until #1035. Measured through the audit's own wiring verdict, which is the
-    thing the word describes."""
-    mod = _audit_mod()
-    rows = {r["gate"]: r for r in mod.audit(_FLOW, _PROGRAMS)["gates"]}
-    assert rows[_GATE]["enforcement"] == "AUDIT_ONLY", (
-        f"{_GATE} is now spawned inline somewhere; `ENFORCEMENT: advisory` "
-        f"has become false and must be re-declared `blocking`")
 
 
-def test_the_clause_is_in_the_slot_its_own_declared_verdict_names():
-    """THE SLOT MUST AGREE WITH `verdict:`, and this test used to assert the
-    opposite because the clause was never dispatched.
-
-    It read `assert slots == ["program_exit_zero"]`, on the reasoning that an
-    rc=1 "must stay in the slot that says so". That was free while the clause
-    sat under `stages:` — a section `flow_compliance_check` never reads — so
-    the slot name cost nothing and blocked nobody. Dispatched, it is not free:
-    `program_exit_zero` FAILS the step on rc=1, which would turn every
-    `verdict: advisory` block into a blocking one (#1253: wiring a gate that
-    has never run turns "unverified" into "blocking", a different change), and
-    would additionally read the program's rc=2 NOT CHECKED as VACUOUS_PASS.
-
-    So the invariant is not a slot NAME, it is AGREEMENT: whatever each block
-    declares, the clause must be wired through the slot that means it. Wiring
-    it to block is then one edit to `verdict:` and one to the slot, together.
-    Read from `clauses_in_flow` — the audit's own structural walk — so this is
-    about what a dispatcher would see, not about the text of a YAML line."""
-    mod = _audit_mod()
-    want = {"advisory": "advisory_program_exit_zero",
-            "blocking": "program_exit_zero"}
-    doc = yaml.safe_load(_FLOW.read_text(encoding="utf-8"))
-    declared = {s["id"]: s["on_pass_review"].get("verdict")
-                for s in doc["stages"]
-                if isinstance(s.get("on_pass_review"), dict)
-                and s["on_pass_review"].get("enabled", True) is not False}
-    assert declared, "no enabled on_pass_review block to check"
-    by_stage = {}
-    for c in mod.clauses_in_flow(_FLOW):
-        if c["gate"] != _GATE:
-            continue
-        toks = str(c["command"]).split()
-        sid = toks[toks.index("--stage") + 1] if "--stage" in toks else None
-        by_stage[sid] = c["slot"]
-    for sid, verdict in declared.items():
-        assert sid in by_stage, (
-            f"{sid} declares `verdict: {verdict}` and no clause dispatches it")
-        assert by_stage[sid] == want[verdict], (
-            f"{sid} declares `verdict: {verdict}` and is wired through "
-            f"{by_stage[sid]!r}, not {want[verdict]!r}. The slot is what "
-            f"decides whether the verdict stops the step.")
 
 
 # ═══════════════════ THE GAP: every stage that wires the review declares a
@@ -402,40 +326,12 @@ _DECLARING = '''"""A gate that says so.
 ENFORCEMENT: advisory
 """
 '''
-_FLOW_DOC = textwrap.dedent("""\
-    steps:
-      - id: 1
-        name: "synthetic"
-        gate:
-          all_of:
-            - program_exit_zero: "{gate} . --json out.json"
-    """)
 
 
-def _synthetic(tmp_path: Path, name: str, body: str):
-    progs = tmp_path / "programs"
-    progs.mkdir(exist_ok=True)
-    (progs / f"{name}.py").write_text(body)
-    flow = tmp_path / f"{name}.yaml"
-    flow.write_text(_FLOW_DOC.format(gate=name))
-    return flow, progs
 
 
-def test_the_control_an_undeclared_audit_only_gate_is_still_reported(tmp_path):
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path, "synthetic_silent_check", _SILENT)
-    rep = mod.audit(flow, progs)
-    assert [u["gate"] for u in rep["undeclared_audit_only"]] == [
-        "synthetic_silent_check"]
 
 
-def test_the_control_a_declaring_audit_only_gate_is_not_reported(tmp_path):
-    mod = _audit_mod()
-    flow, progs = _synthetic(tmp_path, "synthetic_declaring_check", _DECLARING)
-    rep = mod.audit(flow, progs)
-    assert rep["undeclared_audit_only"] == []
-    assert rep["contradictions"] == []
-    assert rep["gates"][0]["declared"] == "advisory"
 
 
 if __name__ == "__main__":

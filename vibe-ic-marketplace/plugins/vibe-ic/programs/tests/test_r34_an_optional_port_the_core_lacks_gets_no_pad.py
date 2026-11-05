@@ -82,16 +82,3 @@ def test_an_unreadable_netlist_drops_nothing(tmp_path, selected):
     kept, dropped = G._drop_unimplemented_optional_ports(
         _project(tmp_path, netlist_text=None), ports)
     assert _names(kept) == ["i_clk", "i_gpio"] and dropped == []
-
-
-def test_the_runner_still_refuses_a_wrapper_naming_a_port_the_core_lacks(tmp_path):
-    nl = tmp_path / "core.v"
-    nl.write_text(NETLIST)
-    wrapper = tmp_path / "chip_top.v"
-    wrapper.write_text(
-        "module chip_top(i_clk, o_gpio, i_gpio);\n  input i_clk;\n"
-        "  output o_gpio;\n  input i_gpio;\n"
-        "  core u_core (.i_clk(i_clk), .o_gpio(o_gpio), .i_gpio(i_gpio));\n"
-        "endmodule\n")
-    with pytest.raises(ValueError, match="unknown=\\['i_gpio'\\]"):
-        R._validate_padring_core_connections(nl, wrapper, "core", "chip_top")

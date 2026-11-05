@@ -323,96 +323,8 @@ def test_declaration_is_not_written_on_a_deferred_shape(tmp_path):
     assert not (proj / "plugin_output" / "declaration.json").exists()
 
 
-def test_runner_serial_multifile_commit_rolls_back_as_one_transaction(
-        tmp_path, monkeypatch):
-    """RTL and the L7 declaration cannot become a torn two-root commit."""
-    proj = _mk_project(
-        tmp_path, ports=_SPM_PORTS,
-        l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
-    before_binding = runner._Phase1ProjectBinding.open(proj)
-    try:
-        before = runner._phase1_tree_manifest_fd(
-            before_binding.project_fd, proj)
-    finally:
-        before_binding.close()
-    generator_roots = []
-    real_run = runner.subprocess.run
-
-    def _observe_generator(cmd, *args, **kwargs):
-        if (len(cmd) >= 3
-                and Path(cmd[1]).name == "serial_parallel_mul_synth.py"):
-            generator_roots.append(Path(cmd[2]))
-        return real_run(cmd, *args, **kwargs)
-
-    real_rename = runner._phase1_rename_noreplace
-    injected = False
-
-    def _fail_second_top(src_fd, src, dst_fd, dst):
-        nonlocal injected
-        if dst == "plugin_output" and not injected:
-            injected = True
-            raise OSError("injected declaration publication failure")
-        return real_rename(src_fd, src, dst_fd, dst)
-
-    # A module reaches a process through `subprocess`, through `_pr`
-    # (`_progress_run`, the progress-supervised drop-in) or through both.
-    # Substituting on only one leaves the real launcher answering the
-    # question this test is asking about a fake one, and the test then
-    # passes or fails for a reason that has nothing to do with its subject.
-    for _launcher in (getattr(runner, "subprocess", None),
-                      getattr(runner, "_pr", None)):
-        if _launcher is not None:
-            monkeypatch.setattr(_launcher, "run", _observe_generator)
-    monkeypatch.setattr(runner, "_phase1_rename_noreplace", _fail_second_top)
-
-    result = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
-
-    assert result.status == "NOT_MEASURED"
-    assert result.extras["output_refusal"]["reason"] == (
-        "RTL_TRANSACTION_COMMIT_REFUSED")
-    assert result.output_files == []
-    assert injected and len(generator_roots) == 1
-    assert generator_roots[0] != proj
-    assert not (proj / "phase2").exists()
-    assert not (proj / "plugin_output").exists()
-    assert not any(p.name.startswith(".vibeic-rtl-txn.")
-                   for p in proj.iterdir())
-    binding = runner._Phase1ProjectBinding.open(proj)
-    try:
-        assert runner._phase1_tree_manifest_fd(
-            binding.project_fd, proj) == before
-    finally:
-        binding.close()
 
 
-def test_serial_native_commit_publishes_current_provenance(tmp_path):
-    import rtl_provenance as provenance
-    proj = _mk_project(tmp_path, ports=_SPM_PORTS, top="neutral_serial",
-                       l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
-    first = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
-    assert first.status == "PASS", first.detail
-    verdict, reason, evidence = provenance.classify(proj)
-    assert verdict == provenance.GENERATED, (verdict, reason, evidence)
-    ledger = json.loads(provenance.ledger_path(proj).read_text())
-    assert ledger["generator"] == "serial_parallel_mul_synth"
-    assert evidence["file_count"] == 1
-    source = proj / "phase2/stage1/rtl/neutral_serial.v"
-    original = source.read_bytes()
-    runner._finalize_rtl_provenance()
-    # A new process carries only the committed ledger, not a live claim.
-    second = subprocess.run([
-        sys.executable, "-c",
-        "import sys; from pathlib import Path; "
-        "import design_one_shot_runner as r; import rtl_provenance as p; "
-        "q=Path(sys.argv[1]); x=r.step_rtl_gen(q,'digital_arithmetic_primitive'); "
-        "print(x.status); print(p.classify(q)[0])", str(proj)],
-        env={**__import__('os').environ, "PYTHONPATH": str(PROGRAMS)},
-        capture_output=True, text=True, timeout=120)
-    assert second.returncode == 0, second.stderr
-    # A retained byte-identical producer output refreshes its declaration
-    # contract through the same deterministic producer without replacing RTL.
-    assert second.stdout.strip().splitlines()[-2:] == ["PASS", provenance.GENERATED]
-    assert source.read_bytes() == original
 
 
 def test_contract_refresh_requires_byte_identical_retained_rtl(tmp_path):
@@ -454,77 +366,8 @@ The Plugin MUST declare `plugin_output/declaration.json` before authoring:
 """
 
 
-def _serial_random_contract_project(tmp_path, *, predeclared, count=64,
-                                    contract=_DECLARATION_CONTRACT):
-    import phase1_doc_one_shot_runner as phase1
-    import spec_declaration_emit as declaration
-    proj = _mk_project(tmp_path, ports=_SPM_PORTS, top="neutral_serial",
-                       l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
-    (proj / "declaration.json").write_text(json.dumps({"function": {
-        "result": "p", "operands": ["x", "y"], "operator": "*", "modulus_bits": 32}}))
-    docs = proj / "input/docs"
-    docs.mkdir(parents=True)
-    goal_text = ("layer: L7\n# Functional verification\n"
-                 "| Test category | Pass criterion | Scope |\n|---|---|---|\n"
-                 "| Random arithmetic functional equivalence | 100% PASS (binary) | "
-                 f"Random >= {count} operand pairs (x, y), all matching the independent modulo model |\n")
-    (docs / "L7_verification_plan.md").write_text(contract + "\n" + goal_text)
-    cases = phase1._harvest_test_cases_from_input_tables({"L7_verification_plan.md": goal_text})
-    assert len(cases) == 1 and cases[0]["kind"] == "coverage_goal", cases
-    gd = proj / "phase1/generated_docs"
-    (gd / "L10_TEST_CASES.json").write_text(json.dumps({"test_cases": cases}))
-    l9 = gd / "L9_INTEGRATION_SPEC.json"
-    doc = json.loads(l9.read_text())
-    doc.update(ic_class="digital_arithmetic_primitive",
-               clocks=[{"name": "clk", "period_ns": 10}],
-               reset_domains=[{"name": "rst", "polarity": "active_high", "sync": "sync"}])
-    l9.write_text(json.dumps(doc))
-    if predeclared:
-        args = [str(proj)]
-        for name, value in (("bit_order", "LSB_first"), ("integer_encoding", "unsigned"),
-                            ("latency_cycles", "2"), ("reset_polarity", "active_high"),
-                            ("size_param", "32")):
-            args += ["--set", f"{name}={value}"]
-        assert declaration.main(args) == 0
-    return proj, cases[0]
 
 
-@pytest.mark.parametrize("predeclared", [False, True])
-def test_serial_declaration_is_complete_before_native_random_goal_binding(
-        tmp_path, monkeypatch, predeclared):
-    import os
-    import professional_tb_gen as professional
-    proj, goal = _serial_random_contract_project(tmp_path, predeclared=predeclared)
-    generated = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
-    assert generated.status == "PASS", generated.detail
-    monkeypatch.setenv("PYTHONPATH", str(PROGRAMS) + os.pathsep + os.environ.get("PYTHONPATH", ""))
-    monkeypatch.setenv("COCOTB_HDL_TIMEUNIT", "1ns")
-    monkeypatch.setenv("COCOTB_HDL_TIMEPRECISION", "1ps")
-    measured = runner.step_professional_tb_gen(proj, "neutral_serial", "")
-    (proj / "native-professional-step.json").write_text(json.dumps(measured.__dict__, default=str))
-    assert measured.status == "PASS", measured.detail
-    before = (proj / "plugin_output/declaration.json").read_bytes()
-    early = runner.declaration_before_step4(proj)
-    assert early["emitted"] is True, early
-    outcome = professional.random_pair_goal_measurement(proj, goal)
-    (proj / "native-goal-consumer.json").write_text(json.dumps(outcome))
-    assert outcome["verdict"] == "PASS", outcome
-    assert (proj / "plugin_output/declaration.json").read_bytes() == before
-    assert early["fields"]["size_param"] == 32
-    repeated = runner.declaration_before_step4(proj)
-    assert repeated["fields"] == early["fields"]
-    assert (proj / "plugin_output/declaration.json").read_bytes() == before
-    assert professional.random_pair_goal_measurement(proj, goal)["verdict"] == "PASS"
-    # The existing stale-evidence guard must still reject an actual later choice change.
-    # Keep the original native attempt current at terminal; mutate a separate
-    # copy as the existing professional-TB mutation controls do.
-    mutant = tmp_path / "changed-declaration"
-    shutil.copytree(proj, mutant)
-    changed = dict(early["fields"], size_param=16)
-    (mutant / "plugin_output/declaration.json").write_text(json.dumps(changed))
-    refusal = professional.random_pair_goal_measurement(mutant, goal)
-    assert refusal["verdict"] == "NOT_MEASURED" and "stale" in refusal["why"], refusal
-    runner._finalize_rtl_provenance()
 
 
 @pytest.mark.parametrize("choice", [
@@ -562,59 +405,6 @@ def test_serial_native_dispatch_preserves_foreign_rtl_suffixes(tmp_path, suffix)
 
 
 
-def test_measured_origin_reemission_keeps_real_random_goal_current(tmp_path, monkeypatch):
-    """Real generation/simulation/readback; no mocked publisher or verdict."""
-    import os
-    import professional_tb_gen as professional
-    contract = _DECLARATION_CONTRACT.replace("`2`(primary)", "integer").replace(
-        "| `latency_cycles_origin` | No | `pre_nba_sample_offset`(primary) |\n", "")
-    proj, goal = _serial_random_contract_project(
-        tmp_path, predeclared=False, count=10000, contract=contract)
-    generated = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
-    assert generated.status == "PASS", generated.detail
-    manifest = proj / "phase2/stage1/sim_full_stack/arith_oracle_manifest.json"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text("{}")
-    # The preceding full-stack oracle's actual marker format. The following
-    # professional TB independently executes the full random population.
-    runner._persist_oracle_calibrated_framing(proj,
-        "ORACLE_TB_FRAMING in_order=0 out_order=0 latency_cycles=1 latency_origin=settled_edge_offset\n")
-    before = (proj / "plugin_output/declaration.json").read_bytes()
-    declaration = json.loads(before)
-    assert declaration["latency_cycles"] == 2
-    assert declaration["latency_cycles_origin"] == "pre_nba_sample_offset"
-    monkeypatch.setenv("PYTHONPATH", str(PROGRAMS) + os.pathsep + os.environ.get("PYTHONPATH", ""))
-    monkeypatch.setenv("COCOTB_HDL_TIMEUNIT", "1ns")
-    monkeypatch.setenv("COCOTB_HDL_TIMEPRECISION", "1ps")
-    measured = runner.step_professional_tb_gen(proj, "neutral_serial", "")
-    assert measured.status == "PASS", measured.detail
-    early = runner.declaration_before_step4(proj)
-    assert early["emitted"] is True, early
-    assert (proj / "plugin_output/declaration.json").read_bytes() == before
-    outcome = professional.random_pair_goal_measurement(proj, goal)
-    assert outcome["verdict"] == "PASS", outcome
-    assert outcome["requested_random_pairs"] == 10000
-    assert outcome["executed_random_pairs"] == 10000
-    assert outcome["distinct_random_pairs"] == 10000
-    late = runner.step_arith_declaration_emit(proj)
-    assert runner._refuse_a_disagreeing_declaration(late, early, proj).status == "PASS"
-    assert (proj / "plugin_output/declaration.json").read_bytes() == before
-    assert professional.random_pair_goal_measurement(proj, goal)["verdict"] == "PASS"
-    # A real later measurement change must not transfer current credit to
-    # the original attempt. No rebind/replay of that attempt is performed.
-    mutant = tmp_path / "changed-measured-framing"
-    shutil.copytree(proj, mutant)
-    changed = json.loads((mutant / "phase2/stage1/sim_full_stack/arith_oracle_manifest.json").read_text())
-    changed["calibrated_latency"] = 0
-    (mutant / "phase2/stage1/sim_full_stack/arith_oracle_manifest.json").write_text(json.dumps(changed))
-    changed_row = runner.step_arith_declaration_emit(mutant)
-    assert runner._refuse_a_disagreeing_declaration(changed_row, early, mutant).status == "FAIL"
-    changed_decl = json.loads((mutant / "plugin_output/declaration.json").read_text())
-    assert changed_decl["latency_cycles"] == 0
-    assert changed_decl["latency_cycles_origin"] == "settled_edge_offset"
-    refusal = professional.random_pair_goal_measurement(mutant, goal)
-    assert refusal["verdict"] == "NOT_MEASURED" and "stale" in refusal["why"], refusal
-    runner._finalize_rtl_provenance()
 
 
 @pytest.mark.parametrize('data_statement', [

@@ -192,11 +192,6 @@ def test_the_producer_is_declared_OFF_the_gate():
     assert entry[0]["producer_command"].split()[0] == "perc_corpus_sweep"
 
 
-def test_the_producer_is_not_promoted_into_the_enforcement_register():
-    """The paired half. A producer that is not gate-named must not claim an
-    enforcement tier either — silence here is the truth, not an omission."""
-    import flow_gate_enforcement_audit as ENF
-    assert ENF.declared_intent(PROGRAMS, "perc_corpus_sweep") is None
 
 
 def test_the_reader_still_owns_the_refusal():

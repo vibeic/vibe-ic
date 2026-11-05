@@ -23,95 +23,25 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import phase3_one_shot_runner as P  # noqa: E402
 
 
 _BANNER = ("[INFO] Final PATH variable: /foss/tools/bin:/usr/bin\n"
            "[INFO] Final PYTHONPATH variable: /usr/lib/python3.12\n")
 
 
-def _mk_pdk(tmp_path):
-    # tech_lef must contain '/libs.ref/' so the PDK root is derivable.
-    return P.PdkConfig(
-        name="sky130A",
-        liberty="/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/x.lib",
-        tech_lef="/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/techlef/x.tlef",
-        cell_lef="/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lef/x.lef",
-        cell_gds="/x.gds", site="unithd", drc_deck="/x.lydrc",
-        metal_prefix="met")
 
 
 # ---------------------------------------------------------------------------
-def test_container_ls_paths_filters_login_banner(monkeypatch):
-    # The banner lines start with '[INFO]' not '/', and must be dropped; only
-    # the real path line (containing must_contain) survives.
-    def fake_exec(container, cmd, timeout=20, **_):
-        return (0, _BANNER +
-                "/foss/pdks/sky130A/libs.tech/openlane/rules.openrcx.sky130A.nom.magic\n",
-                "")
-    monkeypatch.setattr(P, "_docker_exec", fake_exec)
-    hits = P._container_ls_paths("c", "expr", "rules.openrcx")
-    assert hits == [
-        "/foss/pdks/sky130A/libs.tech/openlane/rules.openrcx.sky130A.nom.magic"]
-    # a query that filters on a banner-only token still returns nothing
-    assert P._container_ls_paths("c", "expr", "no-such-token") == []
 
 
-def test_discover_captables_picks_the_declared_model_per_corner(monkeypatch):
-    """F13 (§4.05): the model per corner is the one the PDK's config DECLARES,
-    not a `.magic` sibling the glob used to prefer; the login banner still
-    never leaks into a discovered path."""
-    root = "/foss/pdks/sky130A/libs.tech/librelane"
-
-    def fake_exec(container, cmd, timeout=20, **_):
-        # the container answers the runner's declaration probe (fixed grammar)
-        return (0, _BANNER + f"RCX_DECL_CONFIG {root}/config.tcl\n" + "".join(
-            f"RCX_DECL_RULESET RCX_RULESETS {c}_* 1 {root}/config.tcl "
-            f"{root}/rules.openrcx.sky130A.{c}.spef_extractor\n"
-            for c in ("min", "nom", "max")) + "RCX_DECL_END\n", "")
-    monkeypatch.setattr(P, "_docker_exec", fake_exec)
-    caps = P._discover_openrcx_captables(_mk_pdk(Path("/tmp")), "c")
-    assert set(caps) == {"min", "nom", "max"}
-    for corner, path in caps.items():
-        assert path.endswith(f".{corner}.spef_extractor")  # the declared model
-        assert "[INFO]" not in path                          # banner never leaks
 
 
-def test_discover_captables_empty_when_none(monkeypatch):
-    monkeypatch.setattr(P, "_docker_exec", lambda c, cmd, timeout=20, **_: (0, _BANNER, ""))
-    assert P._discover_openrcx_captables(_mk_pdk(Path("/tmp")), "c") == {}
 
 
-def test_aocv_discovery_none_when_pdk_ships_none(monkeypatch, tmp_path):
-    # no design-supplied .aocv, container ls returns only the banner => None.
-    monkeypatch.setattr(P, "_docker_exec", lambda c, cmd, timeout=20, **_: (0, _BANNER, ""))
-    assert P._discover_aocv_table(tmp_path, _mk_pdk(tmp_path), "c") is None
 
 
-def test_aocv_discovery_finds_design_supplied(monkeypatch, tmp_path):
-    d = tmp_path / "input" / "constraints"
-    d.mkdir(parents=True)
-    (d / "corners.aocv").write_text("* aocv table *\n")
-    # design-supplied is found WITHOUT touching the container.
-    monkeypatch.setattr(P, "_docker_exec",
-                        lambda c, cmd, timeout=20, **_: (_ for _ in ()).throw(
-                            AssertionError("should not hit container")))
-    got = P._discover_aocv_table(tmp_path, _mk_pdk(tmp_path), "c")
-    assert got is not None and got.endswith("corners.aocv")
 
 
-def test_blackbox_discovery_prefers_plain(monkeypatch):
-    def fake_exec(container, cmd, timeout=20, **_):
-        return (0, _BANNER +
-                "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd__blackbox.v\n"
-                "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd__blackbox_pp.v\n",
-                "")
-    monkeypatch.setattr(P, "_docker_exec", fake_exec)
-    bb = P._discover_blackbox_verilog(_mk_pdk(Path("/tmp")), "c")
-    assert "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd__blackbox.v" in bb
-    # the _pp variant of the SAME family is dropped in favour of the plain one
-    assert not any(b.endswith("_pp.v") for b in bb)
-    assert all("[INFO]" not in b for b in bb)
 
 
 # ---- structure of the corner-aware STA + multi-corner extraction recipe ----

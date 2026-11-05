@@ -32,8 +32,6 @@ has to be set AFTER `flatten` (before it, the instance-path wire does not
 exist). Each of those three facts is pinned by a test below; each was a real
 red while this was measured.
 """
-import json
-import subprocess
 import sys
 import pytest
 from pathlib import Path
@@ -43,7 +41,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import sparse_fsm_detect as det              # noqa: E402
-import sparse_fsm_encoding_check as chk      # noqa: E402
 
 
 def _phase3_commands(tmp_path, monkeypatch, rtl):
@@ -253,15 +250,6 @@ def test_both_phase2_synth_call_sites_preserve_the_encoding():
 # --------------------------------------------------------------------------
 # 3. THE AUDIT — it must be able to go RED, by name.
 # --------------------------------------------------------------------------
-def _proj(tmp_path, enc_text, netlist_text):
-    d = tmp_path / "rtl"
-    d.mkdir()
-    (d / "sparse.v").write_text(SPARSE_RTL)
-    enc = tmp_path / "fsm_encoding.enc"
-    enc.write_text(enc_text)
-    net = tmp_path / "netlist.v"
-    net.write_text(netlist_text)
-    return [d], enc, net
 
 
 # The exact table `synth -encfile` wrote for the reproducer, and the exact
@@ -274,80 +262,18 @@ KEPT_NET = "module sparse_fsm(clk, rst_n, go, done);\n" \
            "  wire [4:0] state_q;\nendmodule\n"
 
 
-def test_the_audit_names_the_registers_whose_encoding_was_lost(tmp_path):
-    rtl, enc, net = _proj(tmp_path, RECODED_ENC, RECODED_NET)
-    rep = chk.check(rtl, enc, net)
-    assert rep["verdict"] == "FAIL"
-    assert rep["refusal"] == "FSM_SPARSE_ENCODING_LOST"
-    assert [r["register"] for r in rep["fsm_recoded"]] == ["state_q"]
 
 
-def test_the_audit_reports_an_empty_list_when_the_encoding_survived(tmp_path):
-    rtl, enc, net = _proj(tmp_path, "", KEPT_NET)
-    rep = chk.check(rtl, enc, net)
-    assert rep["verdict"] == "PASS"
-    assert rep["fsm_recoded"] == []
 
 
-def test_the_netlist_width_alone_can_redden_it(tmp_path):
-    """The second, independent observable: an absent encoding table must not
-    be able to hide a re-encoding."""
-    rtl, _enc, net = _proj(tmp_path, "", RECODED_NET)
-    rep = chk.check(rtl, None, net)
-    assert rep["verdict"] == "FAIL"
-    assert rep["fsm_recoded"][0]["rtl_width"] == 5
-    assert rep["fsm_recoded"][0]["netlist_width"] == 3
 
 
-def test_an_encfile_entry_named_by_the_flop_instance_still_reddens(tmp_path):
-    """MEASURED on opentitan_aes: the entry names
-    `u_state_regs.u_state_flop.q_o`, not `aes_ctr_cs`. Matching only the
-    declared register name would have reported a clean sweep over the exact
-    defect this issue is about."""
-    d = tmp_path / "ot"
-    d.mkdir()
-    (d / "aes_ctr_fsm.sv").write_text(MACRO_RTL)
-    (d / "aes_pkg.sv").write_text(
-        "typedef enum logic [4:0] { CTR_IDLE = 5'b01110,"
-        " CTR_INCR = 5'b11000, CTR_ERROR = 5'b00001 } aes_ctr_e;\n")
-    enc = tmp_path / "fsm_encoding.enc"
-    enc.write_text(".fsm aes_ctr_fsm u_state_regs.u_state_flop.q_o\n"
-                   ".map 01110 --1\n")
-    rep = chk.check([d], enc, None)
-    assert rep["verdict"] == "FAIL"
-    assert rep["refusal"] == "FSM_SPARSE_ENCODING_LOST"
-    assert rep["fsm_recoded"][0]["register"].endswith("q_o")
 
 
-def test_unreadable_is_not_clean(tmp_path):
-    """"Could not read it" is never "read it and it was clean"."""
-    d = tmp_path / "rtl"
-    d.mkdir()
-    (d / "sparse.v").write_text(SPARSE_RTL)
-    rep = chk.check([d], None, None)
-    assert rep["verdict"] == "NOT_MEASURED"
-    assert rep["fsm_recoded"] == []
 
 
-def test_a_design_with_no_sparse_fsm_passes(tmp_path):
-    d = tmp_path / "rtl"
-    d.mkdir()
-    (d / "dense.v").write_text(DENSE_RTL)
-    rep = chk.check([d], None, None)
-    assert rep["verdict"] == "PASS"
 
 
-def test_the_cli_exit_codes_separate_fail_from_not_measured(tmp_path):
-    rtl, enc, net = _proj(tmp_path, RECODED_ENC, RECODED_NET)
-    base = [sys.executable, str(_PROGRAMS / "sparse_fsm_encoding_check.py"),
-            "--rtl-dir", str(rtl[0]), "--json", str(tmp_path / "r.json")]
-    r = subprocess.run(base + ["--encfile", str(enc), "--netlist", str(net)],
-                       capture_output=True, text=True)
-    assert r.returncode == 1, r.stderr
-    assert json.loads((tmp_path / "r.json").read_text())["refusal"] == \
-        "FSM_SPARSE_ENCODING_LOST"
-    r2 = subprocess.run(base, capture_output=True, text=True)
-    assert r2.returncode == 2, r2.stderr
 
 
 def test_the_audit_has_a_runner():

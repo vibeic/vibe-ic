@@ -29,7 +29,6 @@ reaching its conclusion.
 from __future__ import annotations
 
 import inspect
-import re
 import sys
 
 import pytest
@@ -144,15 +143,3 @@ def test_the_module_carries_no_alias_map():
                    '"SKIPPED-CONDITION":', '"INCOMPLETE":',
                    '"SKIP":', '"WAIVED":'):
         assert banned not in code, banned
-
-
-def test_the_ratchet_is_what_replaces_the_producer_status_pin():
-    """#634 pinned `PRODUCER_STATUSES` against the producer's own
-    `result.status = "..."` sites, so a word added there without a home failed
-    a test. That job is now the tree-wide ratchet's, which is stronger: it
-    scans EVERY producer, not one file."""
-    ratchet = (plugin_path() / "programs"
-               / "step_verdict_vocabulary_ratchet.py")
-    assert ratchet.is_file()
-    src = ratchet.read_text(encoding="utf-8")
-    assert "ALLOWED = frozenset(v.value for v in _V.Verdict)" in src

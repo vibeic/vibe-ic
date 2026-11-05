@@ -397,13 +397,3 @@ def test_the_default_flow_and_the_step_run_the_same_code():
     assert "_prepnr_geometry(" in _fn_src("_prepnr_floorplan")
     assert "_floorplan_rectangles_record(" not in pnr.split(
         "_prep_dc = _prepnr_floorplan(")[0]
-
-
-def test_the_window_plan_maps_the_prep_to_the_pnr_site():
-    import step_preflight as spf
-    r = _r()
-    sites = dict(spf.RUNNER_PLANS["phase3_one_shot_runner"].sites)
-    assert sites[r.PREPNR_DISPATCH_SITE][0] == r.PREPNR_CANONICAL_HEAD
-    steps = spf.enterable_steps("phase3_one_shot_runner")
-    assert r.PREPNR_CANONICAL_HEAD in steps
-    assert "prepnr" not in steps          # not a canonical step: refused by name

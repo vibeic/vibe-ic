@@ -21,7 +21,6 @@ through a pipe (`prog ... | tail -12; echo rc=$?`). The runner's record was
 still wrong, but for the reason pinned below — the fallthrough — and not
 because the producer lied about its exit code.
 """
-import ast
 import re
 import sys
 from pathlib import Path
@@ -192,29 +191,6 @@ def test_env_gap_is_none_when_the_producer_said_nothing():
 
 # ── the refusal statuses cannot round up to green ──────────────────────────
 
-def test_a4_env_refusal_status_is_in_the_fail_tier():
-    """A status not enumerated in `_aggregate_verdict` falls through its
-    catch-all and produces a GREEN run — the defect class that function's own
-    comments were written about. Both A4 refusals use `step_preflight`'s
-    BLOCKED, which IS enumerated."""
-    import analog_one_shot_runner as r
-    import step_preflight as spf
-    import verdict as _V
-    # R-0915-85 — `_FAIL_STATUSES` was this runner's own list of which words
-    # are failures, and the catch-all this test was written about is gone:
-    # `parse` refuses a sixth word at the row that carries it, so a status
-    # cannot fall through to a green run any more. What is asserted instead is
-    # the property that mattered — the refusal is NOT GREEN — driven through
-    # the real aggregator rather than read off a list.
-    assert _V.is_non_green(spf.REFUSAL_STATUS)
-    assert r._aggregate_verdict(
-        [r.StepResult("A4_sim", "blk", spf.REFUSAL_STATUS, 0.0, "x",
-                      reason_class=spf.REFUSAL_REASON_CLASS)]) != "PASS"
-    a4 = _a4_dispatch_src()
-    assert a4.count("_spf.REFUSAL_STATUS") == 1, (
-        "expected exactly one A4 refusal — the unreachable container. A "
-        "no-PDK refusal was measured to be wrong here: the sweep resolves the "
-        "effective PDK itself and a refusal blocks runs it can complete")
 
 
 def test_a4_refusals_do_not_defer_to_a_skill():

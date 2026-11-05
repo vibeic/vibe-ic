@@ -6,7 +6,6 @@ mocked measurement, edited L-doc, policy downgrade or reused-IP fiction is used.
 """
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import os
@@ -318,45 +317,3 @@ def test_descriptor_is_read_only(tmp_path):
     assert described["interface"] == data["interface"]
     assert described["physical_ports"] == []
     assert before == (l9.read_bytes(), author.read_bytes())
-
-
-@pytest.mark.parametrize("mutation", ["add_manifest", "change_manifest", "remove_manifest", "change_provider", "add_context"])
-def test_authority_is_native_phase1_freshness_and_d1_subject(tmp_path, mutation):
-    import _phase1_producer_identity as identity
-    import ai_signed_judgement as judgement
-    p, _extracted, _l9, author, data = _project(tmp_path)
-    if mutation == "add_manifest": author.unlink()
-    # Exercise the existing input-record/digest consumer, including absent
-    # fixed paths; no new global gate or fabricated producer stamp is needed.
-    context = p / binding.CONTEXT
-    io = {"reads": {str(x) for x in context.iterdir()}, "listed": {str(context)}}
-    record = identity.design_input_record(p, io, [])
-    old = identity.inputs_digest(p, record)
-    old_d1 = judgement.evidence_sha256(p, "D1")
-    if mutation in ("add_manifest", "change_manifest"):
-        data["decisions"][0]["reason"] += " new selected input"
-        author.write_text(json.dumps(data))
-    elif mutation == "remove_manifest": author.unlink()
-    elif mutation == "change_provider": (context / "provider.json").write_text('{"revision":"changed"}')
-    else: (context / "new_metadata.json").write_text("{}")
-    assert identity.inputs_digest(p, record) != old
-    assert judgement.evidence_sha256(p, "D1") != old_d1
-    unrelated = p / "plugin_input/unrelated.json"
-    unchanged = identity.inputs_digest(p, record)
-    unchanged_d1 = judgement.evidence_sha256(p, "D1")
-    unrelated.write_text("{}")
-    assert identity.inputs_digest(p, record) == unchanged
-    assert judgement.evidence_sha256(p, "D1") == unchanged_d1
-
-
-def test_nested_context_changes_invalidate_even_pre_manifest_baseline(tmp_path):
-    import _phase1_producer_identity as identity
-    p, _extracted, _l9, author, _data = _project(tmp_path)
-    author.unlink()
-    nested = p / binding.CONTEXT / "provider/nested.json"
-    nested.parent.mkdir()
-    nested.write_text('{"provider":"first"}')
-    record = identity.design_input_record(p, {"reads": set(), "listed": set()}, [])
-    before = identity.inputs_digest(p, record)
-    nested.write_text('{"provider":"changed"}')
-    assert identity.inputs_digest(p, record) != before

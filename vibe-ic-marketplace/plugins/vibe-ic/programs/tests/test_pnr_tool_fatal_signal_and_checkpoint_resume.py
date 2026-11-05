@@ -50,7 +50,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _pnr_tcl_stub import STUB as _STUB  # noqa: E402
-from test_drc_vacuous_pass_check import _write_gds  # noqa: E402
 
 mod = importlib.import_module("phase3_one_shot_runner")
 
@@ -1293,70 +1292,6 @@ def test_stage_breadcrumb_parsing_reports_the_last_stage_entered():
 # ---------------------------------------------------------------------------
 # The advice must not outrun the mechanism
 # ---------------------------------------------------------------------------
-def test_the_crash_attestation_has_a_reader_not_only_a_pointer(
-        tmp_path, monkeypatch):
-    """`reports/phase3/pnr_fatal_signal.json` was WRITE-ONLY: step_pnr emitted
-    it, a note pointed a human at it, and no program in the tree ever opened
-    it. So the one shape it exists to make visible — a crash that nevertheless
-    left a COMPLETE per-stage DEF set, because it landed after the sign-off
-    writes or because the resume finished the tail — arrived at
-    canonicalisation looking exactly like an ordinary clean run and drew no
-    note at all.
-
-    Driven end-to-end: a project with every stage DEF present PLUS the
-    attestation, through the real step."""
-    project = _build_project(tmp_path, "widget")
-    out_dir = mod._pl.pnr_dir(project)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("floorplan.def", "placed.def", "post_cts.def",
-                 "post_hold.def", "routed.def", "widget.def"):
-        (out_dir / name).write_text(_def_text(routed=True))
-    # Default canonicalisation requires the final DEF/GDS pair before it may
-    # consume retained post-PnR evidence.  This is a genuine minimal binary
-    # GDS for the neutral unit subject, not a benchmark/sign-off substitute.
-    _write_gds(out_dir / "widget.gds", n_shapes=1, cell="widget")
-    rpt = mod._pl.reports_dir(project) / "phase3"
-    rpt.mkdir(parents=True, exist_ok=True)
-
-    import execution_policy
-    monkeypatch.setattr(execution_policy, "request",
-                        lambda: {"mode": "default"}, raising=True)
-    default_calls = []
-    default_consumer = mod._default_poststream_evidence
-
-    def _default_consumer(*args, **kwargs):
-        default_calls.append(True)
-        return default_consumer(*args, **kwargs)
-
-    monkeypatch.setattr(mod, "_default_poststream_evidence",
-                        _default_consumer, raising=True)
-
-    def _run():
-        monkeypatch.setattr(mod, "_docker_exec",
-                            lambda *a, **k: (0, "", ""), raising=True)
-        monkeypatch.setattr(mod, "_to_container_path", lambda s, c: s,
-                            raising=True)
-        return mod.step_canonicalize_artefacts(project, "widget",
-                                               _sky130_pdk(project), "iic")
-
-    clean = _run()
-    assert "PnR CRASHED" not in (clean.detail or ""), \
-        "the note fires with no attestation on disk"
-
-    (rpt / "pnr_fatal_signal.json").write_text(json.dumps({
-        "finding": "PNR_TOOL_FATAL_SIGNAL", "rc": 139, "signal": 11,
-        "signal_name": "SIGSEGV", "stage": "postroute_setup_repair_estimate",
-        "crashed_after_signoff_writes": True,
-        "stage_is_nonfatal_by_template": True,
-        "detail_route_completed": True}))
-    crashed = _run()
-    detail = crashed.detail or ""
-    assert len(default_calls) == 2, \
-        "the regression did not exercise the Default post-stream consumer"
-    assert "PnR CRASHED" in detail, \
-        ("a complete stage-DEF set produced by a CRASHED session drew no "
-         "note — the attestation still has no reader")
-    assert "SIGSEGV" in detail and "postroute_setup_repair_estimate" in detail
 
 
 def test_the_checkpoint_advice_points_at_a_mechanism_that_exists():

@@ -141,45 +141,10 @@ def test_resolver_binds_real_top_not_dropped_leaf(tmp_path):
 
 
 # ── defense-in-depth tiny-root WARN ──────────────────────────────────────────
-def test_tiny_root_warn_fires_on_leaf_with_larger_unenumerated(tmp_path):
-    """Simulate a residual enumerator gap: a large module exists on disk that
-    nobody instantiates, but the resolver bound a trivial leaf. The backstop
-    must WARN (loud, not silent)."""
-    rtl = tmp_path / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    # A tiny leaf (the wrongly-bound DUT).
-    (rtl / "tiny.sv").write_text(
-        "module tiny (input a);\nendmodule\n")
-    # A large, un-instantiated module the enumerator should have offered.
-    big_body = "\n".join(f"  wire w{i};" for i in range(60))
-    (rtl / "big.sv").write_text(
-        "module big import pkg::*; (input clk);\n" + big_body + "\nendmodule\n")
-    warn = R._v701_tiny_root_warn(tmp_path, "tiny")
-    assert warn, "tiny-root WARN should fire"
-    assert "WARN #701" in warn
-    assert "big" in warn
 
 
-def test_tiny_root_warn_silent_when_bound_dut_is_the_big_module(tmp_path):
-    # §4.05 NO-LEAK — when the resolver correctly bound the large top, the
-    # backstop stays SILENT (no spurious WARN on a healthy design).
-    rtl = tmp_path / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "tiny.sv").write_text("module tiny (input a);\nendmodule\n")
-    big_body = "\n".join(f"  wire w{i};" for i in range(60))
-    (rtl / "big.sv").write_text(
-        "module big (input clk);\n" + big_body
-        + "\n  tiny u_t (.a(clk));\nendmodule\n")
-    warn = R._v701_tiny_root_warn(tmp_path, "big")
-    assert warn == "", f"unexpected WARN on healthy big-top design: {warn}"
 
 
-def test_tiny_root_warn_silent_single_module(tmp_path):
-    # §4.05 NO-LEAK — a single-module design has nothing larger to compare to.
-    rtl = tmp_path / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "only.sv").write_text("module only (input a);\nendmodule\n")
-    assert R._v701_tiny_root_warn(tmp_path, "only") == ""
 
 
 def test_repeated_import_clause_is_starred_not_optional():

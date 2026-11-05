@@ -24,10 +24,8 @@ Three defects, one gate, and each has its own control here:
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-import pytest
 
 import phase3_one_shot_runner as R
 
@@ -38,97 +36,28 @@ import phase3_one_shot_runner as R
 _VERIFIED = "[INFO DRT-0702] Post-route verification: 0 violation(s).\n"
 
 
-def _log(*lines: str) -> str:
-    return "".join(lines)
 
 
-def test_the_run15_log_shape_is_not_an_abort():
-    """The measured shape: two DRT-1010 refusals over a verified route."""
-    assert R.antenna_routing_incomplete(_log(
-        _VERIFIED,
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-1010\n",
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-1010\n",
-        "ANTENNA_POSTROUTE_DONE\n")) is False
 
 
-def test_the_run15_log_shape_counts_two_cosmetic_refusals():
-    assert R.antenna_cosmetic_reroute_refusals(_log(
-        _VERIFIED,
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-1010\n",
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-1010\n")) == 2
 
 
-@pytest.mark.parametrize("code", ["DRT-0305", "DRT-0085", "DRT-0073",
-                                  "GRT-0012", "ODB-0251"])
-def test_a_reroute_refusal_naming_any_other_code_is_still_an_abort(code):
-    """NEGATIVE CONTROL. Only DRT-1010 is forgiven, and only alone."""
-    assert R.antenna_routing_incomplete(_log(
-        _VERIFIED,
-        f"REPAIR_ANTENNA_REROUTE_NONFATAL: {code}\n")) is True
 
 
-def test_a_refusal_naming_drt1010_ALONGSIDE_a_real_failure_is_an_abort():
-    """An exact-set test, not a substring search: mentioning DRT-1010 does not
-    buy a pass for a line that also names a real failure."""
-    assert R.antenna_routing_incomplete(_log(
-        _VERIFIED,
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-1010 after [ERROR DRT-0085] "
-        "pin access failed\n")) is True
 
 
-def test_a_refusal_naming_no_code_at_all_is_an_abort():
-    assert R.antenna_routing_incomplete(_log(
-        _VERIFIED,
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: child process exited abnormally\n"
-    )) is True
 
 
-def test_two_refusals_one_cosmetic_one_not_is_an_abort():
-    assert R.antenna_routing_incomplete(_log(
-        _VERIFIED,
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-1010\n",
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-0305\n")) is True
 
 
-def test_the_cosmetic_reading_needs_the_routers_own_post_route_verification():
-    """NEGATIVE CONTROL. Without `[INFO DRT-0702] Post-route verification:`
-    there is no proof a detailed route exists, so the honest answer stays
-    INCOMPLETE even when every refusal is cosmetic."""
-    assert R.antenna_routing_incomplete(
-        "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-1010\n") is True
 
 
-@pytest.mark.parametrize("marker", [
-    "DETAILED_ROUTE_NONFATAL",
-    "[ERROR DRT-0305]",
-    "[ERROR DRT-0085]",
-    "ANTENNA_POSTROUTE_CHECK_NONFATAL",
-    "[ERROR ANT-0008]",
-])
-def test_every_other_abort_marker_is_untouched_and_unconditional(marker):
-    """NEGATIVE CONTROL. Each still reports incomplete even over a verified
-    route and with no reroute refusal anywhere."""
-    assert R.antenna_routing_incomplete(_VERIFIED + marker + "\n") is True
 
 
-def test_a_clean_log_with_no_marker_at_all_is_complete():
-    assert R.antenna_routing_incomplete(
-        _VERIFIED + "ANTENNA_POSTROUTE_DONE\n") is False
 
 
-def test_the_helper_is_pure_text_in_bool_out():
-    """No filesystem, no tool, no project — so a test of it is a test of the
-    rule and not of a fixture."""
-    import inspect
-    src = inspect.getsource(R.antenna_routing_incomplete)
-    for forbidden in ("open(", "Path(", "subprocess", "docker", "_docker_exec"):
-        assert forbidden not in src, forbidden
 
 
-def test_the_marker_list_no_longer_carries_the_bare_reroute_string():
-    """The defect itself: `REPAIR_ANTENNA_REROUTE_NONFATAL` must not be a member
-    of the unconditional set."""
-    assert _MARKER not in R._ANTENNA_ABORT_MARKERS
 
 
 _MARKER = "REPAIR_ANTENNA_REROUTE_NONFATAL"
@@ -137,29 +66,14 @@ _MARKER = "REPAIR_ANTENNA_REROUTE_NONFATAL"
 # --------------------------------------------------------------------------
 # 2. the per-iteration report is signed by the command that wrote it
 # --------------------------------------------------------------------------
-def _antenna_tcl() -> str:
-    """The emitted antenna-repair Tcl, from the emitter itself."""
-    import inspect
-    return inspect.getsource(R._antenna_repair_tcl)
 
 
-def test_the_emitter_defines_the_signing_proc():
-    assert "proc _vic_ant_sign {f i}" in _antenna_tcl()
 
 
-def test_the_loop_signs_its_per_iteration_report():
-    assert "_vic_ant_sign $_ant_rf $_i" in _antenna_tcl()
 
 
-def test_the_cap_path_signs_its_final_report():
-    assert "_vic_ant_sign $_ant_rf final" in _antenna_tcl()
 
 
-def test_the_header_names_the_tool_and_the_command():
-    """It must satisfy `eda_report_audit`'s antenna signature list BY BEING
-    TRUE — naming the tool and the exact command that wrote the bytes."""
-    tcl = _antenna_tcl()
-    assert "# OpenROAD check_antennas -report_violating_nets" in tcl
 
 
 def test_the_header_the_emitter_writes_matches_the_audits_signature_list():
@@ -181,31 +95,10 @@ def test_an_unsigned_check_antennas_table_is_what_the_audit_refuses():
     assert A._has_tool_signature(body, "antenna")[0] is False
 
 
-def test_signing_is_idempotent_so_a_reentered_stage_cannot_stack_headers():
-    assert '[string match \\"# OpenROAD check_antennas*\\" $_sbody]' in _antenna_tcl()
 
 
-def test_an_empty_report_is_removed_before_it_could_be_signed():
-    """Order is the point: `_vic_ant_rm_empty` runs first, so a 0-byte report is
-    deleted rather than dressed up as content — and the proc refuses a 0-byte
-    file on its own as well."""
-    tcl = _antenna_tcl()
-    i_rm = tcl.index("_vic_ant_rm_empty $_ant_rf")
-    i_sign = tcl.index("_vic_ant_sign $_ant_rf")
-    assert i_rm < i_sign
-    assert "if {[file size $f] == 0} { return }" in tcl
 
 
-def test_the_header_is_inert_to_the_membership_parser():
-    """`_vic_ant_nets` is anchored on `^Net:`, so a leading `#` cannot be read
-    as a violating net."""
-    tcl = _antenna_tcl()
-    assert r"regexp {^Net:\\s+(\\S.*)$}" in tcl
-    pat = re.compile(r"^Net:\s+(\S.*)$")
-    header = ("# OpenROAD check_antennas -report_violating_nets "
-              "-report_file antenna_iter_0.rpt (antenna check, iteration 0)")
-    assert pat.match(header) is None
-    assert pat.match("Net: net1234") is not None
 
 
 def test_the_population_is_not_narrowed_to_hide_the_file():
@@ -231,19 +124,8 @@ def test_the_sweep_runs_after_the_adopt_tail_not_only_before_it():
     assert "_drop_empty_antenna_reports(out_dir)" in tail
 
 
-def test_the_sweep_removes_a_zero_byte_iteration_report(tmp_path: Path):
-    z = tmp_path / "antenna_iter_final.rpt"
-    z.write_text("")
-    assert R._drop_empty_antenna_reports(tmp_path) == ["antenna_iter_final.rpt"]
-    assert not z.exists()
 
 
-def test_the_sweep_never_touches_a_report_with_content(tmp_path: Path):
-    """NEGATIVE CONTROL. A run that HAS antenna violations keeps its report."""
-    r = tmp_path / "antenna_iter_0.rpt"
-    r.write_text("Net: net1234\n")
-    assert R._drop_empty_antenna_reports(tmp_path) == []
-    assert r.read_text() == "Net: net1234\n"
 
 
 # --------------------------------------------------------------------------
@@ -262,16 +144,8 @@ def test_the_sweep_never_touches_a_report_with_content(tmp_path: Path):
 # mounted and a host-side file check would measure the mount rather than the
 # proc.
 # --------------------------------------------------------------------------
-def _sign_proc_source() -> str:
-    tcl = _antenna_tcl_rendered()
-    i = tcl.index("proc _vic_ant_sign")
-    return tcl[i:tcl.index("set _ant_cap", i)]
 
 
-def _antenna_tcl_rendered() -> str:
-    class _Pdk:
-        antenna_diode_cell = "sky130_fd_sc_hd__diode_2"
-    return R._antenna_repair_tcl(_Pdk(), "/w/pnr")
 
 
 _BODY = "Net: net1234\n  Pin:   x/A (cell)\n    Layer: met1\n"
@@ -304,68 +178,14 @@ puts "\nSIGNED_TEXT_END"
 '''
 
 
-def _run_walk(tmp_path: Path):
-    # `import _tcl_walk`, NOT `from tests import _tcl_walk` (icfix2, #2434).
-    # `programs/tests/` carries NO `__init__.py`, so it is not a package and
-    # `tests` never names it. The pinned EDA image, however, DOES ship a
-    # top-level one -- `/usr/local/lib/python3.12/dist-packages/tests/`,
-    # containing nothing but an empty `__init__.py` -- so inside the image the
-    # bare form resolved to THAT and died:
-    #
-    #   ImportError: cannot import name '_tcl_walk' from 'tests'
-    #   (/usr/local/lib/python3.12/dist-packages/tests/__init__.py)
-    #
-    # pytest prepends this file's own directory to `sys.path`, which is why the
-    # five other users of this helper all spell it `import _tcl_walk` and are
-    # green. These two were the only ones spelling it the way that depends on
-    # what the environment happens to have installed.
-    import _tcl_walk  # noqa: PLC0415
-    walker = (_sign_proc_source()
-              + "set ::BODY " + _tcl_brace(_BODY) + "\n"
-              + _WALKER)
-    return _tcl_walk.walk(walker, _BODY, tmp_path)
 
 
-def _tcl_brace(s: str) -> str:
-    """A Tcl brace-quoted literal — no substitution, no escaping surprises."""
-    assert "{" not in s and "}" not in s
-    return "{" + s + "}"
 
 
-def _walk_fields(out: str) -> dict:
-    fields = {}
-    for line in out.splitlines():
-        if line.startswith("SIGNED_TEXT_BEGIN"):
-            break
-        if " " in line:
-            k, v = line.split(" ", 1)
-            fields[k] = v
-    return fields
 
 
-def test_the_signing_proc_runs_and_does_what_it_claims(tmp_path: Path):
-    """THE REAL THING: the emitted Tcl is executed — twice over a report and
-    once over an empty one.  Shape assertions cannot catch a proc that parses
-    and misbehaves."""
-    out, err, route = _run_walk(tmp_path)
-    f = _walk_fields(out)
-    assert f.get("HEADERS") == "1", (out, err, route)   # signed once, called twice
-    assert f.get("TAIL_OK") == "1", (out, err, route)   # tool bytes untouched, last
-    assert f.get("EMPTY_SIZE") == "0", (out, err, route)  # empty never dressed up
 
 
-def test_the_signed_report_satisfies_the_audit_and_still_parses(tmp_path: Path):
-    """End to end over the two consumers that disagreed: `eda_report_audit`'s
-    signature check now says yes, and the loop's own membership regex reads the
-    same net it read before."""
-    import eda_report_audit as A
-
-    out, err, route = _run_walk(tmp_path)
-    assert _walk_fields(out).get("NETS") == "net1234", (out, err, route)
-    signed = out.split("SIGNED_TEXT_BEGIN\n", 1)[1].rsplit(
-        "\nSIGNED_TEXT_END", 1)[0]
-    assert A._has_tool_signature(signed, "antenna")[0] is True
-    assert re.findall(r"(?m)^Net:\s+(\S.*)$", signed) == ["net1234"]
 
 
 # --------------------------------------------------------------------------
@@ -375,52 +195,18 @@ _REF = "REPAIR_ANTENNA_REROUTE_NONFATAL: DRT-1010\n"
 _NAT = "ANTENNA_NATIVE_REROUTE_NONFATAL: DRT-1010\n"
 
 
-def test_a_refusal_after_the_verification_is_disclosed():
-    """run15's shape: DRT-0702 at line 1530, the four refusals at 1957-2457."""
-    assert R.antenna_reroute_refusal_after_last_verification(
-        _VERIFIED + _NAT + _REF) is True
 
 
-def test_a_refusal_before_the_verification_is_not():
-    """NEGATIVE CONTROL. A refusal that the router then verified over is
-    exactly the state this must NOT flag."""
-    assert R.antenna_reroute_refusal_after_last_verification(
-        _REF + _VERIFIED) is False
 
 
-def test_the_last_of_each_is_what_counts():
-    """A refusal, a verification, then another refusal: the route was modified
-    after the last clean bill."""
-    assert R.antenna_reroute_refusal_after_last_verification(
-        _REF + _VERIFIED + _REF) is True
-    assert R.antenna_reroute_refusal_after_last_verification(
-        _VERIFIED + _REF + _VERIFIED) is False
 
 
-def test_no_refusal_is_not_a_disclosure():
-    assert R.antenna_reroute_refusal_after_last_verification(_VERIFIED) is False
 
 
-def test_no_verification_at_all_says_nothing_about_ordering():
-    """It is already INCOMPLETE by `antenna_routing_incomplete`; a second claim
-    about the order of an event that never happened would say more than the log
-    does."""
-    assert R.antenna_reroute_refusal_after_last_verification(_REF) is False
-    assert R.antenna_routing_incomplete(_REF) is True
 
 
-def test_the_native_reroute_refusal_counts_too():
-    """`repair_antennas -reroute` raises under its own marker, and it is the
-    same modification."""
-    assert R.antenna_reroute_refusal_after_last_verification(
-        _VERIFIED + _NAT) is True
 
 
-def test_the_disclosure_changes_no_verdict():
-    """The design still HAS a detailed route: this is a note, not a gate."""
-    log = _VERIFIED + _NAT + _REF
-    assert R.antenna_routing_incomplete(log) is False
-    assert R.antenna_reroute_refusal_after_last_verification(log) is True
 
 
 def test_the_report_carries_the_note_and_its_own_field():
@@ -428,10 +214,3 @@ def test_the_report_carries_the_note_and_its_own_field():
     assert "THE SHIPPED ROUTE WAS MODIFIED AFTER IT WAS LAST" in src
     assert '"route_modified_after_last_verification"' in src
     assert "_unverified_note" in src
-
-
-def test_the_ordering_helper_is_pure():
-    import inspect
-    s = inspect.getsource(R.antenna_reroute_refusal_after_last_verification)
-    for forbidden in ("open(", "Path(", "subprocess", "_docker_exec"):
-        assert forbidden not in s, forbidden

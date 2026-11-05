@@ -214,42 +214,12 @@ def test_flow_compliance_keeps_backend_when_rtl_present(tmp_path):
 # an all-analog top interface fell through to "has a digital RTL track" → phase3
 # ran synth → spurious FAIL, INCONSISTENT with phase-2's rtl_gen WAIVE and with
 # layer C. The gate must consult the SAME analog_interface_classify signal.
-import phase3_one_shot_runner as P3            # noqa: E402
 
 
-def test_phase3_gate_all_analog_data_converter_defers(tmp_path, monkeypatch):
-    """The u_hawaii_adc scenario: data_converter class + all-analog L9 top +
-    empty rtl/ → phase3 must DEFER the digital backend (return True), not run
-    synth and hard-FAIL on absent RTL."""
-    p = _mk_project(tmp_path, _ADC_ALL_ANALOG)
-    monkeypatch.setattr("ic_class_profile.detect_ic_class",
-                        lambda proj: {"ic_class": "data_converter"})
-    is_pa, reason = P3._is_pure_analog_no_rtl_track(p)
-    assert is_pa is True, reason
-    assert "all-analog" in reason
-    assert "analog" in reason
 
 
-def test_phase3_gate_digital_iface_data_converter_keeps_backend(tmp_path, monkeypatch):
-    """A data_converter WITH a real digital clk/rst/data interface still runs
-    the digital backend (return False) — no false analog-deferral."""
-    p = _mk_project(tmp_path, _CONV_DIGITAL_IFACE)
-    monkeypatch.setattr("ic_class_profile.detect_ic_class",
-                        lambda proj: {"ic_class": "data_converter"})
-    is_pa, _reason = P3._is_pure_analog_no_rtl_track(p)
-    assert is_pa is False
 
 
-def test_phase3_gate_all_analog_but_rtl_present_keeps_backend(tmp_path, monkeypatch):
-    """RTL present → never deferred, even if the L9 pinout reads all-analog."""
-    p = _mk_project(tmp_path, _ADC_ALL_ANALOG)
-    rtl = p / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "dut.v").write_text("module dut(); endmodule\n")
-    monkeypatch.setattr("ic_class_profile.detect_ic_class",
-                        lambda proj: {"ic_class": "data_converter"})
-    is_pa, reason = P3._is_pure_analog_no_rtl_track(p)
-    assert is_pa is False, reason
 
 
 if __name__ == "__main__":

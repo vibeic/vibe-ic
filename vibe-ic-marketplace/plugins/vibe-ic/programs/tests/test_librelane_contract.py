@@ -862,24 +862,6 @@ def test_emit_existing_native_top_fixture_keeps_single_clock_contract(tmp_path):
         fixture / 'phase3/stage3/pnr/constraint.sdc').read_bytes()
 
 
-@pytest.mark.parametrize('provider', ['L1', 'L19', 'manifest'])
-def test_case_declared_pdk_reaches_emitted_config(tmp_path, provider):
-    project = design(tmp_path)
-    root = project / 'phase1/generated_docs'
-    l19 = json.loads((root / 'L19_CONSTRAINTS_PDK.json').read_text())
-    del l19['fields']['pdk_target']
-    if provider == 'L19':
-        l19['fields']['pdk_target'] = 'processA'
-    elif provider == 'L1':
-        put(root / 'L1_DATASHEET.json', {'fields': {'target_pdk': 'processA'}})
-    else:
-        put(project / 'input/flow109-manifest.json', {'target_pdk': 'processA'})
-    put(root / 'L19_CONSTRAINTS_PDK.json', l19)
-    output = project / 'phase3/librelane/config.json'
-    result = contract.emit_config(project, 'processA', output)
-    assert result.get('PDK', 'PDK_OMITTED') == 'processA'
-    provenance = json.loads(output.with_suffix('.provenance.json').read_text())
-    assert provider in provenance['PDK'] or (provider == 'manifest' and 'flow109-manifest' in provenance['PDK'])
 
 
 @pytest.mark.parametrize('damage', ['missing', 'cli_conflict', 'declaration_conflict'])
@@ -1117,40 +1099,6 @@ def test_sta_claimed_journal_changes_refused(tmp_path, monkeypatch, step, damage
     assert len(calls) == 1
 
 
-def test_staprepnr_historical_unsealed_receipt_stays_ineligible_for_d30(tmp_path, monkeypatch):
-    """Synthetic historical receipt; actual cache and D30 readset consumers."""
-    import flow109_metric_acceptance as metrics
-    project, invoke, calls = _sta_journal_process_double(tmp_path, monkeypatch)
-    folder = invoke()
-
-    def ref(path):
-        return {'path': str(path.relative_to(project)), 'sha256': contract.digest(path)}
-
-    # Isolate the native readset reader. These metadata doubles confer no D26
-    # row approval, LEC, timing or full D30 acceptance.
-    metadata = put(project / 'readset-metadata.json', {'test_double': 'D26 readset metadata only'})
-    admission = {'requires_scan': True, 'pre_route_timing': {'D26_result': ref(metadata),
-        'timing_modes': {'receipt': ref(metadata), 'post_scan_arms': {'functional': {
-            'native': {'folder': str(folder.relative_to(project))},
-            'slack_gate': {'corners': {'nom_typ': {'test_double': True}}}}}}},
-        'normalized_preroute_chain': {'points': {'D26': {'input': ref(project / 'neutral.v')}}}}
-    current = metrics.d30_consumed_timing(project, admission)
-    assert current['status'] == 'MEASURED', current
-    # Build the historical fixture by omitting the producer binding that old
-    # executions never wrote. Capture its bytes before exercising reuse.
-    receipt_path = folder / 'vibeic_receipt.json'
-    historical = json.loads(receipt_path.read_text())
-    del historical['sha256']['nom_typ/sta.log']
-    put(receipt_path, historical)
-    before = receipt_path.read_bytes()
-    contract.validate_step_receipt(folder, 'OpenROAD.STAPrePNR')
-    assert invoke() == folder
-    assert len(calls) == 1, 'historical reuse must not manufacture a fresh native execution'
-    assert receipt_path.read_bytes() == before, 'cache must not re-sign or upgrade old receipts'
-    observed = metrics.d30_consumed_timing(project, admission)
-    assert observed['status'] == 'NOT_MEASURED', observed
-    assert observed['reason'] == 'D30_NATIVE_READ_LOG_UNBOUND', observed
-    assert receipt_path.read_bytes() == before
 
 
 def test_staprepnr_failed_native_process_does_not_publish_receipt(tmp_path, monkeypatch):

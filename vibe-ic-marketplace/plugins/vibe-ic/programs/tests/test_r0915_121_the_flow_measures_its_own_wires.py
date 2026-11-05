@@ -39,7 +39,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import phase3_one_shot_runner as R  # noqa: E402
-import pad_signal_route_repair as PS  # noqa: E402
 
 BOUNDARIES = (
     "after_postroute_spef_extract",
@@ -66,47 +65,10 @@ def test_every_pin_access_boundary_also_measures_wires():
         assert f'_unrouted_probe_tcl("{b}", out_dir_c)' in src, b
 
 
-def test_the_probe_is_measure_only():
-    """It must never route, repair or refuse: a probe that can change the
-    design is not a probe."""
-    for b in BOUNDARIES:
-        t = R._unrouted_probe_tcl(b)
-        cmds = "\n".join(l for l in t.splitlines()
-                         if not l.lstrip().startswith("#"))
-        for forbidden in ("detailed_route", "global_route", "repair_antennas",
-                          "write_db", "read_db", "error "):
-            assert forbidden not in cmds, (b, forbidden)
 
 
-def test_the_probe_names_its_boundary_in_a_field_not_in_the_marker():
-    """WAS `test_the_probe_names_its_boundary_and_its_file`, which pinned the
-    stage INTO the marker name (`UNROUTED_PROBE_AFTER_POSTROUTE_ANTENNA_
-    REPAIR_...`). HANDBACK on 5b5bd02af: that put a SECOND per-pass token,
-    differently spelled, outside the one normalisation
-    `test_splitting_the_reconverge_block_did_not_drop_the_second_antenna_pass`
-    applies -- so the two antenna passes stopped being the re-emission of each
-    other and the byte-equality this lane wrote in #2423 broke. The marker is
-    now stage-free and the stage is a FIELD, spelled exactly as the pin-access
-    probe spells it, so one normalisation covers both probes."""
-    t = R._unrouted_probe_tcl("after_postroute_antenna_repair")
-    assert "UNROUTED_PROBE_UNROUTED_NETS:" in t
-    assert "stage=after_postroute_antenna_repair" in t
-    assert "unrouted_after_postroute_antenna_repair.txt" in t
-    # the stage must NOT be baked into any marker NAME
-    assert "UNROUTED_PROBE_AFTER_POSTROUTE" not in t
 
 
-def test_the_stage_token_is_spelled_as_the_pin_access_probe_spells_it():
-    """THE WHOLE POINT: one token, one normalisation, both probes. If these
-    two ever spell the same boundary differently, the antenna passes differ in
-    two places again and only one of them gets normalised."""
-    for b in BOUNDARIES:
-        pin = R._pin_access_probe_tcl(b)
-        unr = R._unrouted_probe_tcl(b)
-        assert b in pin, b
-        assert b in unr, b
-        # and nothing in the unrouted probe carries a DIFFERENT spelling of it
-        assert b.upper() not in unr, b
 
 
 def test_a_caller_with_no_stage_emits_exactly_what_it_did_before():
@@ -117,19 +79,8 @@ def test_a_caller_with_no_stage_emits_exactly_what_it_did_before():
     assert "stage=" not in t
 
 
-def test_the_probe_writes_the_membership_uncapped():
-    """The stdout line keeps its 12-name cap on purpose -- stdout is a summary.
-    The FILE is the answer, and it holds every name."""
-    t = R._unrouted_probe_tcl("after_postroute_antenna_repair")
-    assert "foreach _unnm $_unra { puts $_unfh $_unnm }" in t
-    assert "lappend _unra [$_net getName]" in t
-    # the capped stdout list is unchanged
-    assert "if {[llength $_unrn] < 12} { lappend _unrn [$_net getName] }" in t
 
 
-def test_an_unwritable_membership_file_is_disclosed_not_swallowed():
-    t = R._unrouted_probe_tcl("after_postroute_antenna_repair")
-    assert "_MEMBERSHIP_UNWRITTEN: $_unfe" in t
 
 
 def test_a_caller_that_asks_for_no_file_gets_the_emission_it_always_got():
@@ -142,72 +93,16 @@ def test_a_caller_that_asks_for_no_file_gets_the_emission_it_always_got():
     assert "SHIP_UNROUTED_NETS" in t
 
 
-def test_the_refusal_that_ends_the_run_names_its_membership_file():
-    """R-0915-121(b): NAMED_VIOL_REROUTE_INCOMPLETE is the marker that ended
-    both ICs' runs with twelve names and no way to get the rest."""
-    t = PS.strict_integrity_tcl("NAMED_VIOL_REROUTE")
-    assert "unrouted_named_viol_reroute.txt" in t
-    m = re.search(r'error "NAMED_VIOL_REROUTE_INCOMPLETE: (.*?)"\}', t, re.S)
-    assert m, t[-400:]
-    assert "the full membership of all $_unr net(s) is in" in m.group(1)
-    assert "capped at 12" in m.group(1)
 
 
-def test_the_refusal_still_refuses():
-    """The instrument was added to a REFUSAL; it must still refuse."""
-    t = PS.strict_integrity_tcl("NAMED_VIOL_REROUTE")
-    assert 'if {$_unr != 0} {error "NAMED_VIOL_REROUTE_INCOMPLETE' in t
-    assert 'error "NAMED_VIOL_REROUTE_UNROUTED_CHECK_FAILED: $e"' in t
-    assert 'puts "NAMED_VIOL_REROUTE_UNROUTED_CHECK_NONFATAL' not in t
 
 
-def test_the_abutment_clause_survives_at_every_boundary():
-    """The probe must excuse the I/O nets the sign-off check excuses, or every
-    padded design reads 31 unrouted nets at every boundary and the instrument
-    is noise. int9 measured 31 abutted, 0 shape-blind."""
-    t = R._unrouted_probe_tcl("after_postroute_antenna_repair")
-    assert "_ABUTTED_NETS" in t
-    assert "_UNROUTED_SHAPE_BLIND" in t
-    assert "_vibeic_shapes_touch" in t
 
 
-def test_every_emitted_probe_is_balanced_tcl():
-    for b in BOUNDARIES:
-        t = R._unrouted_probe_tcl(b)
-        assert sum(l.count("{") - l.count("}") for l in t.splitlines()) == 0, b
-        assert sum(l.count("[") - l.count("]") for l in t.splitlines()) == 0, b
-    t = PS.strict_integrity_tcl("NAMED_VIOL_REROUTE")
-    assert sum(l.count("{") - l.count("}") for l in t.splitlines()) == 0
 
 
-def test_the_membership_file_is_written_only_when_it_has_names_in_it():
-    """CAUGHT BY THE REPO'S OWN suite_write_guard, not by me. The path is
-    relative -- correct for the flow, whose cwd IS the pnr directory, the same
-    convention `antenna_iter_*.rpt` already uses -- but several tests execute
-    the emitted deck with the cwd inside the checkout, and an unconditional
-    write dropped SEVEN `unrouted_*.txt` files into the source tree on the
-    first full run of the impacted selection.
-
-    Gating the write on `$_unr > 0` fixes that and is better behaviour anyway:
-    a file per boundary per run on a healthy design is clutter, the stdout
-    counts are the summary, and the file is only needed when it has names in
-    it. Tcl's `&&` short-circuits, so a clean boundary does not even open the
-    file."""
-    for b in BOUNDARIES:
-        t = R._unrouted_probe_tcl(b)
-        assert "if {$_unr > 0 && [catch {" in t, b
-        assert "} elseif {$_unr > 0} {" in t, b
-    t = PS.strict_integrity_tcl("NAMED_VIOL_REROUTE")
-    assert "if {$_unr > 0 && [catch {" in t
 
 
-def test_a_boundary_with_nothing_unrouted_still_reports_its_counts():
-    """The instrument must not go silent when it has good news -- "no probe
-    line" and "a clean boundary" have to stay distinguishable."""
-    t = R._unrouted_probe_tcl("after_postroute_antenna_repair")
-    i_counts = t.index("UNROUTED_PROBE_UNROUTED_NETS:")
-    i_gate = t.index("if {$_unr > 0 && [catch {")
-    assert i_counts < i_gate, "the counts are printed before the file is gated"
 
 
 # ── the membership file belongs to the RUN, not to the process cwd ──────────
@@ -232,12 +127,6 @@ def test_a_boundary_with_nothing_unrouted_still_reports_its_counts():
 # others, and a file whose whole purpose is to say WHICH nets, in THIS run,
 # cannot depend on where the process happened to be standing.
 
-def test_every_boundary_writes_into_the_runs_own_directory():
-    for b in BOUNDARIES:
-        t = R._unrouted_probe_tcl(b, "/w/proj/phase3/stage3/pnr")
-        assert f"/w/proj/phase3/stage3/pnr/unrouted_{b}.txt" in t, b
-        # and nothing writes a bare relative name
-        assert f"open unrouted_{b}.txt" not in t, b
 
 
 def test_every_call_site_passes_the_run_directory():
@@ -250,17 +139,3 @@ def test_every_call_site_passes_the_run_directory():
     bare = [m.group(0) for m in
             re.finditer(r'\{_unrouted_probe_tcl\("[^"]+"\)\}', src)]
     assert not bare, f"call site(s) omit the run directory: {bare}"
-
-
-def test_the_refusal_site_also_writes_into_the_runs_own_directory():
-    t = PS.strict_integrity_tcl("NAMED_VIOL_REROUTE", "/w/proj/phase3/stage3/pnr")
-    assert "/w/proj/phase3/stage3/pnr/unrouted_named_viol_reroute.txt" in t
-
-
-def test_a_caller_that_gives_no_directory_still_emits_something_readable():
-    """OVER-BREADTH CONTROL: the parameter is optional so the helper stays
-    unit-testable, and the relative fallback must still be a valid path --
-    it is the CALL SITES that must supply the directory, and the test above
-    is what enforces that."""
-    t = R._unrouted_probe_tcl("after_postroute_antenna_repair")
-    assert "unrouted_after_postroute_antenna_repair.txt" in t

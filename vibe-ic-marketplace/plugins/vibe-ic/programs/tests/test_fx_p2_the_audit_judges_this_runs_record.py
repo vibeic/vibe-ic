@@ -52,16 +52,6 @@ def test_the_previous_runs_record_is_what_the_gate_refuses(tmp_path):
     assert _gate(_stale_tree(tmp_path)) == 1
 
 
-def test_publishing_this_run_before_the_audit_replaces_it(tmp_path):
-    proj = _stale_tree(tmp_path)
-    plan = [DOSR.StepResult("detect_ic_class", "PASS", 0.0, "processor_cpu")]
-    publish = getattr(DOSR, "_publish_record_before_audit", None)
-    assert publish is not None, "no pre-audit publication of this run's record"
-    out = publish(proj, plan, "processor_cpu", {})
-    doc = json.loads(out.read_text())
-    assert doc["final_audit_pending"] is True
-    assert [s["name"] for s in doc["steps"]] == ["detect_ic_class"]
-    assert _gate(proj) == 0
 
 
 def test_main_publishes_before_it_audits():

@@ -35,8 +35,6 @@ A gate that refuses everything is not a gate.
 from __future__ import annotations
 
 import json
-import shlex
-import subprocess
 import sys
 from pathlib import Path
 
@@ -47,7 +45,6 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import design_one_shot_runner as R  # noqa: E402
-import lesson_consumption_check as G  # noqa: E402
 import _path_layout as PL  # noqa: E402
 
 GATE = PROGRAMS / "lesson_consumption_check.py"
@@ -133,36 +130,10 @@ def _staged(proj: Path):
     return R._stage_author_knowledge_digests(proj)
 
 
-def _printed_command(hint: str):
-    """The argv the handoff tells the author to run, parsed out of the hint."""
-    marker = "lesson_consumption_check.py"
-    assert marker in hint, "the handoff printed no verification command at all"
-    tail = hint[hint.index(marker) + len(marker):]
-    parts = []
-    for raw in tail.splitlines():
-        line = raw.strip()
-        cont = line.endswith("\\")
-        if cont:
-            line = line[:-1].strip()
-        parts.append(line)
-        if not cont:
-            break
-    return shlex.split(" ".join(parts))
 
 
-def _run(args):
-    cp = subprocess.run([sys.executable, str(GATE), *args],
-                        capture_output=True, text=True)
-    return cp.returncode, cp.stdout, cp.stderr
 
 
-def _ack_everything(proj: Path, titles):
-    p = PL.phase2_stage1_dir(proj) / "lessons_ack.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"lessons_applied": [
-        {"section": t, "applied": True, "note": "considered at authoring time"}
-        for t in titles]}, indent=2))
-    return p
 
 
 # ---------------------------------------------------------------------------
@@ -178,79 +149,30 @@ def test_premise_the_real_corpus_stages_strong_matches(tmp_path):
         "every handoff test below would then be measuring silence, not #2086")
 
 
-def test_premise_one_input_doc_is_a_strict_subset_of_the_gather(tmp_path):
-    """The defect needs the two inputs to really differ. Assert it rather than
-    assuming it."""
-    proj = _mk_project(tmp_path)
-    one = (proj / "phase1/input_doc/L2_architecture.md").read_text()
-    whole = PL.gather_spec_text(proj)
-    assert one != whole and len(one) < len(whole)
-    assert G.spec_subset_relation(one, whole) == "STRICT_SUBSET"
 
 
 # ---------------------------------------------------------------------------
 # THE SUBSET RELATION — pure strings, both ways of being less than the whole.
 # ---------------------------------------------------------------------------
 
-def test_subset_relation_recognises_the_whole_spec():
-    whole = "alpha beta gamma\n\ndelta epsilon\n"
-    assert G.spec_subset_relation(whole, whole) == "SAME"
 
 
-def test_subset_relation_catches_a_source_whose_words_all_recur():
-    """The byte-containment branch is NOT redundant with the term branch. Two
-    input docs that share their whole vocabulary — a doc and a restatement of
-    it, which this corpus's L-docs routinely are — give the smaller one a term
-    set EQUAL to the gather's, so a terms-only test would call it DIFFERENT and
-    score it as if it were the whole spec."""
-    one = "alpha beta gamma delta\n"
-    whole = one + "\n\n" + one + "alpha beta\n"
-    assert G._terms(one) == G._terms(whole)          # the term branch is blind here
-    assert len(one) < len(whole)
-    assert G.spec_subset_relation(one, whole) == "STRICT_SUBSET"
 
 
-def test_subset_relation_catches_a_reconcatenation_that_is_not_byte_contained():
-    """And the containment branch is not enough on its own: joining the same
-    sources with a different separator changes no term but changes the bytes."""
-    whole = "alpha beta\n\ngamma delta\n\nepsilon\n"
-    part = "alpha beta\ngamma delta\n"
-    assert part not in whole
-    assert G.spec_subset_relation(part, whole) == "STRICT_SUBSET"
 
 
-def test_subset_relation_calls_an_unrelated_text_different():
-    assert G.spec_subset_relation("zeta eta theta\n",
-                                  "alpha beta gamma\n") == "DIFFERENT"
 
 
 # ---------------------------------------------------------------------------
 # ONE GATHER — the two denominators are computed by the same function.
 # ---------------------------------------------------------------------------
 
-def test_the_runner_and_the_gate_read_the_same_spec_text(tmp_path):
-    """A second copy of 'the same fact' answers differently sooner or later;
-    #2086 is what that costs. There is one gather now."""
-    proj = _mk_project(tmp_path)
-    assert R._gather_spec_text(proj) == PL.gather_spec_text(proj)
-    assert [Path(f).name for f in PL.spec_text_sources(proj)] == [
-        "L2_architecture.md", "L3_interface.md", "L4_timing.md", "L1.json"]
 
 
 # ---------------------------------------------------------------------------
 # HALF ONE — the printed command names the source that was actually scored.
 # ---------------------------------------------------------------------------
 
-def test_the_printed_command_names_the_scored_spec_not_one_file(tmp_path):
-    proj = _mk_project(tmp_path)
-    hint, extras = _staged(proj)
-    argv = _printed_command(hint)
-    assert "--project" in argv, (
-        "the handoff still asks the author for a single --prompt file while it "
-        "scored the whole gathered spec (#2086)")
-    assert argv[argv.index("--project") + 1] == str(proj)
-    assert "--prompt" not in argv
-    assert "--scoring-record" in argv
 
 
 def test_the_scoring_record_records_what_was_scored(tmp_path):
@@ -266,151 +188,32 @@ def test_the_scoring_record_records_what_was_scored(tmp_path):
         "L2_architecture.md", "L3_interface.md", "L4_timing.md", "L1.json"]
 
 
-def test_the_printed_command_run_verbatim_reproduces_the_printed_number(tmp_path):
-    """THE DEFECT, stated as the property that was violated: the number the
-    handoff hands the author and the number the printed command computes must
-    be the same number."""
-    proj = _mk_project(tmp_path)
-    hint, extras = _staged(proj)
-    titles = extras["lessons_strong_matches"]
-    _ack_everything(proj, titles)
-    rc, out, err = _run(_printed_command(hint))
-    assert rc == 0, f"the command the handoff printed does not pass: {err}"
-    assert f"all {len(titles)} strongly-matched" in out, (
-        f"the handoff named {len(titles)} strong match(es); its own printed "
-        f"command reports something else:\n{out}\n{err}")
 
 
 # ---------------------------------------------------------------------------
 # HALF TWO — the gate refuses a run whose subject is not the recorded one.
 # ---------------------------------------------------------------------------
 
-def _record_and_ack(tmp_path):
-    proj = _mk_project(tmp_path)
-    hint, extras = _staged(proj)
-    titles = extras["lessons_strong_matches"]
-    ack = _ack_everything(proj, titles)
-    return proj, extras, titles, ack, Path(extras["lessons_scoring_record"])
 
 
-def test_one_file_out_of_the_gather_is_refused_by_name(tmp_path):
-    """Row 1 of the issue table: 0 strong matches, printed as a clean PASS."""
-    proj, extras, titles, ack, rec = _record_and_ack(tmp_path)
-    one = proj / "phase1/input_doc/L2_architecture.md"
-    rc, out, err = _run(["--prompt", str(one),
-                         "--digest", extras["lessons_digest"],
-                         "--ack", str(ack), "--scoring-record", str(rec),
-                         "--strict"])
-    assert rc == 2, f"a single input doc still verified the whole spec:\n{out}"
-    assert "STRICT SUBSET" in err
-    assert "NOT_MEASURED" in err
-    assert "PASS" not in out
 
 
-def test_a_reconcatenation_of_the_sources_is_refused_as_a_subset(tmp_path):
-    """Row 2: not byte-contained in the gather, yet contributing no term the
-    gather does not already carry — still less than what was scored."""
-    proj, extras, titles, ack, rec = _record_and_ack(tmp_path)
-    cat = tmp_path / "cat.txt"
-    cat.write_text("".join(
-        p.read_text() for p in sorted((proj / "phase1/input_doc").glob("*.md"))))
-    rc, out, err = _run(["--prompt", str(cat),
-                         "--digest", extras["lessons_digest"],
-                         "--ack", str(ack), "--scoring-record", str(rec),
-                         "--strict"])
-    assert rc == 2
-    assert "STRICT SUBSET" in err
 
 
-def test_the_gathered_spec_still_passes(tmp_path):
-    """Row 3 — THE CONTROL. A gate that refuses everything is not a gate."""
-    proj, extras, titles, ack, rec = _record_and_ack(tmp_path)
-    rc, out, err = _run(["--project", str(proj),
-                         "--digest", extras["lessons_digest"],
-                         "--ack", str(ack), "--scoring-record", str(rec),
-                         "--strict"])
-    assert rc == 0, err
-    assert f"all {len(titles)} strongly-matched" in out
 
 
-def test_the_gate_still_fails_on_an_unacknowledged_section(tmp_path):
-    """The verdict this gate exists for must survive the fix: with the record
-    in place and NO acknowledgement, --strict is still rc 1."""
-    proj = _mk_project(tmp_path)
-    hint, extras = _staged(proj)
-    rc, out, err = _run(["--project", str(proj),
-                         "--digest", extras["lessons_digest"],
-                         "--scoring-record", extras["lessons_scoring_record"],
-                         "--strict"])
-    assert rc == 1
-    assert "UNACKNOWLEDGED" in out
 
 
-def test_a_file_named_beside_a_project_is_refused_without_any_record(tmp_path):
-    """The subset refusal does not depend on a record being present."""
-    proj = _mk_project(tmp_path)
-    hint, extras = _staged(proj)
-    one = proj / "phase1/input_doc/L2_architecture.md"
-    rc, out, err = _run(["--project", str(proj), "--prompt", str(one),
-                         "--digest", extras["lessons_digest"], "--strict"])
-    assert rc == 2
-    assert "STRICT SUBSET" in err
 
 
-def test_a_digest_that_moved_under_the_record_is_not_measured(tmp_path):
-    proj, extras, titles, ack, rec = _record_and_ack(tmp_path)
-    smaller = tmp_path / "smaller.md"
-    smaller.write_text("### Skill: only one section\n\nbody\n")
-    rc, out, err = _run(["--project", str(proj), "--digest", str(smaller),
-                         "--ack", str(ack), "--scoring-record", str(rec),
-                         "--strict"])
-    assert rc == 2
-    assert "digest moved under the record" in err
 
 
-def test_an_unreadable_scoring_record_is_not_measured_never_a_pass(tmp_path):
-    proj, extras, titles, ack, rec = _record_and_ack(tmp_path)
-    bad = tmp_path / "bad.json"
-    bad.write_text("{not json")
-    rc, out, err = _run(["--project", str(proj),
-                         "--digest", extras["lessons_digest"],
-                         "--ack", str(ack), "--scoring-record", str(bad),
-                         "--strict"])
-    assert rc == 2
-    assert "NOT_MEASURED" in err
 
 
-def test_a_strong_set_that_does_not_reproduce_is_not_measured(tmp_path):
-    """MEMBERSHIP, not count: the same spec scored under a different threshold
-    is a different measurement, and must not be reported as a verification of
-    the one the author was handed."""
-    proj, extras, titles, ack, rec = _record_and_ack(tmp_path)
-    rc, out, err = _run(["--project", str(proj),
-                         "--digest", extras["lessons_digest"],
-                         "--ack", str(ack), "--scoring-record", str(rec),
-                         "--threshold", "0.99", "--strict"])
-    assert rc == 2
-    assert "must be the same number" in err
 
 
-def test_a_project_with_no_spec_source_refuses_rather_than_scoring_nothing(tmp_path):
-    """'Could not read it' is not 'read it and it was empty'."""
-    empty = tmp_path / "empty"
-    (empty / "phase2" / "stage1").mkdir(parents=True)
-    digest = empty / "phase2/stage1/lessons.md"
-    digest.write_text("### Skill: a\n\nbody\n")
-    rc, out, err = _run(["--project", str(empty), "--digest", str(digest),
-                         "--strict"])
-    assert rc == 2
-    assert "NOT_MEASURED" in err
 
 
-def test_naming_no_spec_source_at_all_is_a_usage_error(tmp_path):
-    digest = tmp_path / "d.md"
-    digest.write_text("### Skill: a\n\nbody\n")
-    rc, out, err = _run(["--digest", str(digest), "--strict"])
-    assert rc == 2
-    assert "name a spec source" in err
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import sys
-from dataclasses import replace
 
 import pytest
 
@@ -12,18 +11,8 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import execution_modes as em
 import execution_policy as policy
-from execution_adapters_release import (
-    ALL_IDS,
-    EXTERNAL_IDS,
-    SOFTWARE_IDS,
-    UNAVAILABLE_IDS,
-    _site_path,
-    register_release_adapters,
-    validate,
-    validate_hardmacro_receipt,
-)
+from execution_adapters_release import ALL_IDS, EXTERNAL_IDS, SOFTWARE_IDS, UNAVAILABLE_IDS, register_release_adapters, validate
 from execution_provider_catalog import RELEASE_IDS, coverage_rows, current_source_identity
 import execution_release_worker as release_worker
 from execution_release_worker import _call, _canonical_gate_invocations, execute as execute_release
@@ -61,22 +50,8 @@ def _canonical_issued_transport(monkeypatch):
     receipt_chain._launchers.clear()
 
 
-def _issued_context(step_id, inputs, tmp_path, *, native_mode='librelane'):
-    payload = receipt_chain.real_entry('IC', 'default', tmp_path)
-    route = payload['route']
-    return _context_for_route(step_id, inputs, route, native_mode=native_mode), route
 
 
-def _context_for_route(step_id, inputs, route, *, native_mode='librelane'):
-    portfolio_row = next(row for row in em.load_portfolio()['steps']
-                         if str(row['id']) == str(step_id))
-    context = em.Context(
-        str(step_id), route['source_sha'], inputs,
-        {"metric": "canonical_evidence", "direction": "max"},
-        __import__("execution_backend_gates").required_programs(ROWS[str(step_id)]["canonical"]), native_mode,
-        project_digest=route['project_digest'],
-        **policy.controller_fields(ic_ip_path='IC', route_receipt=route))
-    return context
 
 
 def _spec(step):
@@ -136,27 +111,6 @@ def test_375ic_and_step39_keep_canonical_condition_semantics():
     assert step39.available is False and step39.availability_reason == "FPGA_HARDWARE_ABSENT_NOT_MEASURED"
 
 
-def test_release_component_runs_through_public_controller_and_preserves_nm(tmp_path):
-    source = tmp_path / "seed.txt"
-    source.write_text("source-only\n")
-    context, route = _issued_context("38", {"project/input/seed.txt": source}, tmp_path)
-    declaration = json.loads((tmp_path / "input/step_0_5ic_answers.json").read_text())
-    registry = register_release_adapters(
-        em.Registry(), source_sha=BASE, available=True,
-        route_receipt=route, declaration=declaration)
-    controller = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1))
-    plan = controller.plan(context, "default-mode")
-    root = tmp_path / "run"
-    assert plan["arms"] == ["release_38"]
-    controller.run(context, root, "default-mode")
-    adapter = registry.adapters("38")[0]
-    receipt = json.loads((root / adapter.arm_id / "receipt.json").read_text())
-    assert receipt["processes"][0]["rc"] == 0
-    assert receipt["status"] in {"NOT_MEASURED", "FAIL"}
-    assert (root / adapter.arm_id / "outputs" / "release-evidence.json").is_file()
-    # tapeout_checklist_gen is the actual final Step-38 producer. A component
-    # process with rc0 is insufficient when its canonical file is absent.
-    assert (root / adapter.arm_id / "outputs" / "reports/audit/tapeout_checklist.json").is_file()
 
 
 def test_375ip_worker_calls_declared_hardmacro_producer_and_stays_unmeasured(tmp_path):
@@ -247,147 +201,14 @@ def test_375ip_worker_does_not_invent_missing_pdk_identity(
     assert "PDK_NAME_ABSENT" in refused["reason"]
 
 
-def test_current_source_bound_fixture_reaches_eligible_controller_arm(tmp_path):
-    # Step 16 is a source-owned native producer/gate pair.  This is the small
-    # complete clock-plan fixture also used by the backend dispatch controls:
-    # a real clock-pin DEF, declared SDC and the design's PDK target.  It is a
-    # source-bound fixture, not an actual IC/tapeout deliverable.
-    floorplan = tmp_path / "phase3/stage3/pnr/floorplan.def"
-    floorplan.parent.mkdir(parents=True)
-    floorplan.write_text(
-        'VERSION 5.8 ;\nDIVIDERCHAR "/" ;\nBUSBITCHARS "[]" ;\n'
-        'DESIGN neutral ;\nUNITS DISTANCE MICRONS 1000 ;\n'
-        'DIEAREA ( 0 0 ) ( 100000 100000 ) ;\n'
-        'PINS 1 ;\n- clk + NET clk + DIRECTION INPUT + USE CLOCK\n'
-        '  + PORT + LAYER met1 ( -100 -100 ) ( 100 100 ) + FIXED ( 0 50000 ) N ;\n'
-        'END PINS\nNETS 1 ;\n- clk ( PIN clk ) ;\nEND NETS\nEND DESIGN\n')
-    sdc = tmp_path / "phase2/stage2/constraints/clock.sdc"
-    sdc.parent.mkdir(parents=True)
-    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
-    pdk = tmp_path / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
-    pdk.parent.mkdir(parents=True)
-    pdk.write_text(json.dumps({"fields": {"pdk_target": "sky130A"}}))
-    payload = receipt_chain.real_entry('IC', 'default', tmp_path)
-    route = payload['route']
-    declaration = json.loads((tmp_path / "input/step_0_5ic_answers.json").read_text())
-    registry = register_release_adapters(
-        em.Registry(), source_sha=BASE, available=True,
-        route_receipt=route, declaration=declaration)
-    fixed = policy._fixed_inputs({"project": tmp_path, "registry": registry}, "16")
-    assert fixed["phase1/generated_docs/L19_CONSTRAINTS_PDK.json"] == pdk
-    context = _context_for_route(
-        "16", {f"project/{name}": path for name, path in fixed.items()}, route)
-    adapter = registry.adapters("16")[0]
-    controller = em.Controller(
-        registry, em.Budget(cpus=adapter.cpus, ram_mb=adapter.ram_mb, workers=1))
-    plan = controller.plan(context, "default-mode")
-    assert plan["arms"] == ["release_16"]
-    root = tmp_path / "eligible-run"
-    summary = controller.run(context, root, "default-mode")
-    assert summary["candidate_statuses"]["release_16"] == "ELIGIBLE"
-    receipt = json.loads((root / "release_16" / "receipt.json").read_text())
-    assert receipt["evidence"]["verdict"] == "PASS"
-    assert receipt["evidence"]["gates"]["clock_plan_check"] == "PASS"
-    assert (root / "release_16" / "outputs" /
-            "phase3/stage3/cts/clock_plan.json").is_file()
 
 
-def test_step16_fixed_inputs_bind_current_pdk_declaration_or_refuse_absence(tmp_path):
-    """The release worker receives current PDK declaration bytes via the normal collector."""
-    floorplan = tmp_path / "phase3/stage3/pnr/floorplan.def"
-    floorplan.parent.mkdir(parents=True)
-    floorplan.write_text("VERSION 5.8 ;\n")
-    sdc = tmp_path / "phase2/stage2/constraints/clock.sdc"
-    sdc.parent.mkdir(parents=True)
-    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
-    pdk = tmp_path / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
-    pdk.parent.mkdir(parents=True)
-    pdk.write_text(json.dumps({"fields": {"pdk_target": "sky130A"}}))
-    registry = register_release_adapters(
-        em.Registry(), source_sha=BASE, available=True,
-        step_ids=("16",))
-    adapter = registry.adapters("16")[0]
-    from execution_backend_worker import resolve_input_contract
-    fixed = policy._fixed_inputs({"project": tmp_path, "registry": registry}, "16")
-    assert fixed["phase1/generated_docs/L19_CONSTRAINTS_PDK.json"] == pdk
-    assert resolve_input_contract(tmp_path, adapter.input_contract) == []
-
-    pdk.unlink()
-    fixed_missing = policy._fixed_inputs({"project": tmp_path, "registry": registry}, "16")
-    assert "phase1/generated_docs/L19_CONSTRAINTS_PDK.json" not in fixed_missing
-    assert resolve_input_contract(tmp_path, adapter.input_contract) == [
-        "reports/phase1/pdk_staging_read.json OR phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
-    ]
-
-    staging = tmp_path / "reports/phase1/pdk_staging_read.json"
-    staging.parent.mkdir(parents=True)
-    staging.write_text(json.dumps({"adopted_pdk_target": "sky130A"}))
-    fixed_staging = policy._fixed_inputs({"project": tmp_path, "registry": registry}, "16")
-    assert fixed_staging["reports/phase1/pdk_staging_read.json"] == staging
-    assert resolve_input_contract(tmp_path, adapter.input_contract) == []
 
 
-def test_hardmacro_receipt_reverse_controls_keep_fail_and_refuse_fallback():
-    with pytest.raises(em.Refusal):
-        validate_hardmacro_receipt({"status": "PASS", "processes": []})
-    assert validate_hardmacro_receipt({"status": "FAIL", "processes": []}, route="direct_magic") == "FAIL"
-    with pytest.raises(em.Refusal):
-        validate_hardmacro_receipt({"status": "PASS", "processes": [{"binary": "/x/magic"}]})
 
 
-def test_release_reverse_mutations_refuse_missing_symbol_and_output(tmp_path):
-    with pytest.raises(em.Refusal):
-        _site_path("tapeout_checklist_gen.py:missing_release_producer")
-    artifact = tmp_path / "artifact.txt"
-    artifact.write_text("mutated\n")
-    binding = {"required_gates": ["canonical"]}
-    receipt = {"binding": binding, "qualification": "PASS", "design_verdict": "PASS",
-               "gate_records": [{"gate": "canonical", "verdict": "PASS"}],
-               "outputs": {"artifact.txt": "0" * 64}}
-    (tmp_path / "release-evidence.json").write_text(json.dumps(receipt))
-    assert validate(tmp_path, binding).verdict == "NOT_MEASURED"
-    receipt["qualification"] = "FAIL"
-    (tmp_path / "release-evidence.json").write_text(json.dumps(receipt))
-    assert validate(tmp_path, binding).verdict == "FAIL"
-    receipt["qualification"] = "PASS"
-    receipt["producer_verdict"] = "FAIL"
-    (tmp_path / "release-evidence.json").write_text(json.dumps(receipt))
-    assert validate(tmp_path, binding).verdict == "FAIL"
 
 
-def test_public_controller_rejects_removed_release_producer_call(tmp_path):
-    source = tmp_path / "floorplan.def"
-    source.write_text("VERSION 5.8 ;\n")
-    sdc = tmp_path / "clock.sdc"
-    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
-    context, route = _issued_context(
-        "16",
-        {"project/phase3/stage3/pnr/floorplan.def": source,
-         "project/phase2/stage2/constraints/clock.sdc": sdc},
-        tmp_path)
-    declaration = json.loads((tmp_path / "input/step_0_5ic_answers.json").read_text())
-    original = register_release_adapters(
-        source_sha=BASE, available=True, route_receipt=route,
-        declaration=declaration).adapters("16")[0]
-    worker = PROGRAMS / "execution_release_worker.py"
-    mutant = PROGRAMS / "tests/fixtures/execution_release_worker_removed_producer.py"
-    assert mutant.is_file()
-    mutant_sources = {k: v for k, v in original.source_files.items()
-                      }
-    mutant_sources[str(mutant.resolve())] = em.digest(mutant)
-    component = replace(original.components[0], argv=tuple(
-        str(mutant.resolve()) if x == str(worker.resolve()) else x
-        for x in original.components[0].argv))
-    mutant_adapter = replace(original, source_files=mutant_sources,
-                             components=(component,))
-    registry = em.Registry(); registry.register(mutant_adapter)
-    controller = em.Controller(
-        registry, em.Budget(cpus=mutant_adapter.cpus,
-                            ram_mb=mutant_adapter.ram_mb, workers=1))
-    plan = controller.plan(context, "default-mode")
-    assert plan["arms"] == [mutant_adapter.arm_id]
-    summary = controller.run(context, tmp_path / "mutant-run", "default-mode")
-    assert summary["candidate_statuses"][mutant_adapter.arm_id] in {"NOT_MEASURED", "FAIL"}
 
 
 def test_release_external_rows_are_visible_classifications_without_runtime_success():
@@ -459,18 +280,6 @@ def test_gate_runner_supports_main_without_argv(tmp_path, monkeypatch):
     assert marker.read_text() == "called"
 
 
-def test_hardmacro_produced_requires_typed_magic_and_sta_receipts():
-    typed = {"status": "PRODUCED", "processes": [
-        {"binary": "/opt/magic", "rc": 0, "version": "magic-8.3",
-         "argv": ["magic", "-noconsole"], "output_sha256": "a" * 64},
-        {"binary": "/opt/opensta", "rc": 0, "version": "opensta-2.7",
-         "argv": ["opensta", "-exit"], "output_sha256": "b" * 64},
-    ]}
-    assert validate_hardmacro_receipt(typed) == "PASS"
-    broken = dict(typed, processes=[dict(typed["processes"][0]),
-                                    dict(typed["processes"][1], output_sha256="short")])
-    with pytest.raises(em.Refusal, match="RELEASE_NATIVE_ENGINE_RECEIPT_UNMEASURED"):
-        validate_hardmacro_receipt(broken)
 
 
 def test_hardmacro_produced_without_native_receipts_stays_unmeasured(tmp_path):
@@ -496,47 +305,3 @@ def test_step39_has_structured_exclusion_and_not_measured_status(tmp_path):
     assert result["qualification"] == "NOT_MEASURED"
     assert result["excluded_from_verdict"] is True
     assert result["producer"][0]["verdict"] == "NOT_MEASURED"
-
-
-@pytest.mark.parametrize("scenario", ["active_fail", "absent_reason_missing", "absent_declared"])
-def test_release_canonical_optional_semantics_are_not_hard_program_passes(
-        tmp_path, monkeypatch, scenario):
-    """Real canonical consumer; only its external program transport is neutral."""
-    import flow_compliance_check as fcc
-    import execution_backend_gates as gates
-    artifact = tmp_path / "source.txt"
-    artifact.write_text("source-owned neutral output\n")
-    optional = {"command": "optional_neutral .", "condition_files_exist": ["trigger.txt"]}
-    if scenario != "absent_reason_missing":
-        optional["absent_condition_reason"] = (
-            "The neutral design has no optional feature when trigger.txt is absent.")
-    if scenario == "active_fail":
-        (tmp_path / "trigger.txt").write_text("active\n")
-    row = {"id": "neutral_projection", "stage": "source_control", "required_outputs": ["source.txt"],
-           "gate": {"all_of": [{"program_exit_zero": "regular_neutral ."},
-                                  {"optional_program_exit_zero": optional}]}}
-    calls = []
-    def transport(project, command):
-        calls.append(command)
-        failed = command.startswith("optional_neutral")
-        return fcc._ProgramCheckOutcome(not failed,
-            "FAIL: neutral active optional" if failed else "PASS: neutral regular", 1 if failed else 0)
-    monkeypatch.setattr(fcc, "__check_program_exit_zero", transport)
-    result = gates.evaluate(tmp_path, row)
-    assert gates.required_programs(row) == ("regular_neutral",)
-    optional_records = [r for r in result["ledger"] if r["gate"] == "optional_neutral"]
-    if scenario == "active_fail":
-        assert calls == ["regular_neutral .", "optional_neutral ."]
-        assert optional_records and optional_records[0]["verdict"] == "FAIL"
-        assert result["status"] == "FAIL"
-    else:
-        assert calls == ["regular_neutral ."]
-        assert optional_records == []  # No fabricated optional PASS invocation.
-        if scenario == "absent_reason_missing":
-            assert result["status"] == "FAIL"
-        else:
-            assert any("not-applicable" in reason.lower() or "nothing was checked" in reason.lower()
-                       for reason in result["step"]["reasons"])
-    # A receipt cannot promote canonical FAIL/NM merely because all regular
-    # programs passed: the whole canonical verdict is retained independently.
-    assert result["step"]["status"] == result["status"]

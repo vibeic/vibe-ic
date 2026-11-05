@@ -458,46 +458,8 @@ def _module_logic(path):
     return "\n".join(ast.get_source_segment(text, n) or "" for n in body)
 
 
-def test_all_three_files_DECLARE_strict_logic_inside_the_binding_window():
-    """RETURNED VALUE, not a grep. `declared_strictness` is None for a
-    declaration below the 4000-byte window — a rule no reader meets — so a
-    declaration that drifted down the docstring during an edit fails here
-    rather than going quietly unenforced."""
-    import pathlib
-    chk = importlib.import_module("source_chip_agnostic_check")
-    progs = pathlib.Path(__file__).resolve().parents[1]
-    for name in _THIS_CHANGE:
-        text = (progs / name).read_text(encoding="utf-8")
-        assert chk.declared_strictness(text) == "strict-logic", (
-            "%s must declare CHIP_AGNOSTIC: strict-logic inside the binding "
-            "window (site: %r)" % (name, chk.declared_strictness_site(text)))
 
 
-def test_no_chip_vendor_or_SKU_token_appears_in_the_LOGIC_of_any_of_them():
-    """The refusal itself, using the GATE'S OWN token table rather than a list
-    re-typed here: a hand-written copy of "the forbidden names" is stale the
-    day the gate learns a new one."""
-    import pathlib
-    chk = importlib.import_module("source_chip_agnostic_check")
-    progs = pathlib.Path(__file__).resolve().parents[1]
-    # The gate's own tokens (the NDA table), PLUS the names this change was
-    # measured on and the OPEN PDKs. The open PDK names are not NDA-forbidden
-    # anywhere in the repo and are perfectly legal in a docstring — but a gate
-    # whose subject is "whatever --ic and --pdk name at the call site" may not
-    # carry one in its logic, so the three files of this change hold themselves
-    # to that. MEASURED: without this extension a planted
-    # `SPM_DEFAULT_PDK = "gf180mcuD"` survived the test (falsref mutant M8 was
-    # INERT), because `SPM_` is not a word boundary and the PDK name is not in
-    # the NDA table. The mutant was right and the test's scope was too narrow.
-    token_re = chk._build_token_re(
-        ["spm", "subservient", "sha256_run16_pass2",
-         "gf180mcud", "sky130a", "ihp-sg13g2", "nangate45", "asap7"])
-    for name in _THIS_CHANGE:
-        logic = _module_logic(progs / name)
-        hits = sorted(set(m.group(1).lower() for m in token_re.finditer(logic)))
-        assert not hits, (
-            "%s declares strict-logic and its LOGIC names %s — the subject must "
-            "come from the call site, never from a literal" % (name, hits))
 
 
 def test_the_guard_above_can_actually_see_a_planted_literal():

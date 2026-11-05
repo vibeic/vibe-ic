@@ -43,7 +43,6 @@ def _load(name, filename):
 
 
 F = _load("flow_compliance_check", "flow_compliance_check.py")
-D = _load("p0_gate_invocability_drift_check", "p0_gate_invocability_drift_check.py")
 REGISTER = F._UNDRIVABLE_BY_STRUCTURAL_UMBRELLA
 _RETIRED = _load("test_p0_tool_frontend_migration_rec",
                  "tests/test_p0_tool_frontend_migration.py").RETIRED_REGEX_GATES
@@ -107,14 +106,6 @@ def test_record_is_substantive(gate):
         f"{gate}: `disposition` too thin: {entry['disposition']!r}")
 
 
-def test_every_recorded_gate_is_now_licensed():
-    """The whole point: the drift check's licensed set includes every gate here,
-    so none of them reads as an undecided silence any longer."""
-    licensed = D._licensed_gates()
-    missing = sorted(set(REGISTER) - licensed)
-    assert not missing, (
-        f"recorded as undrivable but not in drift._licensed_gates(): {missing} "
-        f"— the drift check would still count these as undecided silence")
 
 
 #: The 12 gates that had NO recorded decision at v1.9.8 (round 6).

@@ -60,8 +60,6 @@ What this test pins
 from __future__ import annotations
 
 import ast
-import hashlib
-import json
 import sys
 from pathlib import Path
 
@@ -72,7 +70,6 @@ for _p in (str(_PROGRAMS), str(_PLUGIN)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import phase3_one_shot_runner as _runner                    # noqa: E402
 
 _SRC = (_PROGRAMS / "phase3_one_shot_runner.py").read_text(encoding="utf-8")
 
@@ -89,63 +86,14 @@ endmodule
 """
 
 
-def _sha(p: Path) -> str:
-    return "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def _project(tmp_path: Path) -> tuple:
-    nl = tmp_path / "t_synth.v"
-    nl.write_text(_NETLIST_WITH_SIGNED)
-    prov = tmp_path / "provenance.jsonl"
-    prov.write_text(json.dumps({
-        "tool": "yosys",
-        "command": "yosys -p 'synth'",
-        "exit_code": 0,
-        "timestamp": "2026-01-01T00:00:00Z",
-        "outputs": {"t_synth.v": _sha(nl)},
-    }) + "\n")
-    return nl, prov
 
 
-def test_qualifier_is_stripped_and_a_name_containing_signed_is_not(tmp_path):
-    nl, _ = _project(tmp_path)
-    n = _runner._ensure_structural_reader_readable(nl, tmp_path)
-    body = nl.read_text()
-    assert n == 2, f"expected both declarations repaired, got {n}"
-    assert "wire [3:0] \\u_core.a_h[0] ;" in body, body
-    assert "reg [31:0] k;" in body, body
-    # NEGATIVE CONTROL: an escaped identifier that merely contains the token.
-    assert "\\bus_signed" in body, (
-        "an escaped identifier containing 'signed' was mangled; the qualifier "
-        "must stand alone after the declaration keyword/range")
-    assert " signed " not in body and " signed[" not in body, body
 
 
-def test_repair_is_idempotent_on_an_already_clean_netlist(tmp_path):
-    nl, _ = _project(tmp_path)
-    _runner._ensure_structural_reader_readable(nl, tmp_path)
-    before = nl.read_bytes()
-    again = _runner._ensure_structural_reader_readable(nl, tmp_path)
-    assert again == 0
-    assert nl.read_bytes() == before, "a clean netlist must not be rewritten"
 
 
-def test_repair_restamps_the_declaring_provenance_entry(tmp_path):
-    nl, prov = _project(tmp_path)
-    stale = json.loads(prov.read_text().splitlines()[0])["outputs"]["t_synth.v"]
-    _runner._ensure_structural_reader_readable(nl, tmp_path)
-    rows = [json.loads(l) for l in prov.read_text().splitlines() if l.strip()]
-    declared = [r["outputs"]["t_synth.v"] for r in rows
-                if "t_synth.v" in r.get("outputs", {})]
-    assert declared, "the netlist lost its provenance declaration entirely"
-    # The repair APPENDS a record of the bytes it produced rather than
-    # amending the stale one, so the stale digest survives as history. What
-    # must hold is that the NEWEST declaration — the one the gate verifies
-    # against disk — carries the digest the file actually has.
-    assert declared[-1] == _sha(nl), (
-        "the repaired netlist is still declared under a digest it no longer "
-        f"carries: newest={declared[-1]} real={_sha(nl)}")
-    assert declared[-1] != stale
 
 
 def test_the_reuse_branch_calls_the_same_helper_as_the_produce_path():

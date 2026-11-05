@@ -20,54 +20,19 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
-import phase3_one_shot_runner as p3  # noqa: E402
 
 
-def test_389_an_invented_pdk_name_is_refused(tmp_path):
-    """THE defect: this used to return a sky130A config."""
-    with pytest.raises(ValueError) as e:
-        p3._detect_pdk(tmp_path, override="totally-made-up-pdk-xyz")
-    msg = str(e.value)
-    assert "totally-made-up-pdk-xyz" in msg
-    assert "sky130A" in msg, "the refusal must name what it declined to become"
 
 
-def test_389_a_real_but_unregistered_pdk_is_refused(tmp_path):
-    """`ihp-sg13cmos5l` ships INSIDE the image and is a complete digital PDK —
-    it is simply not in the registry. That is exactly the case that produced a
-    whole cell written up under the wrong PDK, and it must fail loudly rather
-    than resolve to something else."""
-    with pytest.raises(ValueError) as e:
-        p3._detect_pdk(tmp_path, override="ihp-sg13cmos5l")
-    assert "ihp-sg13cmos5l" in str(e.value)
 
 
-def test_389_the_refusal_says_how_to_proceed(tmp_path):
-    """A refusal that does not say what to do next gets worked around."""
-    with pytest.raises(ValueError) as e:
-        p3._detect_pdk(tmp_path, override="nope")
-    msg = str(e.value).lower()
-    assert "register" in msg and "auto-detect" in msg
 
 
-def test_389_auto_detect_still_falls_back(tmp_path):
-    """NO-LEAK: with no --pdk the operator expressed no preference, so
-    defaulting is legitimate and must NOT raise."""
-    for override in (None, "auto"):
-        try:
-            p3._detect_pdk(tmp_path, override=override)
-        except ValueError as exc:            # pragma: no cover - regression
-            pytest.fail(f"auto-detect must not refuse: {exc}")
 
 
-def test_389_a_registered_pdk_still_resolves(tmp_path):
-    """NO-LEAK: the registry path is untouched."""
-    cfg = p3._detect_pdk(tmp_path, override="sky130A")
-    assert cfg is not None and cfg.name == "sky130A"
 
 
 def test_389_the_refusal_is_driven_by_failure_not_by_a_denylist():

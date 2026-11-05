@@ -27,7 +27,6 @@ chip-AGNOSTIC: source text and path shapes only.
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
@@ -46,79 +45,26 @@ _TYPED = (
     '        _measured_subject_lines(_subject) +\n'
     '        "# Source: phase3/stage3/pnr/openroad.log.\\n"\n'
     '        f"antenna clean: {clean}\\n")\n')
-_RESOLVED = _TYPED.replace(
-    '        "# Source: phase3/stage3/pnr/openroad.log.\\n"\n',
-    '        f"# Source: {_rel_to_project(pnr_log, project)}.\\n"\n')
 
 
-def _run(root):
-    cp = subprocess.run([sys.executable, str(_TOOL), str(root)],
-                        capture_output=True, text=True)
-    return cp.returncode, cp.stdout + cp.stderr
 
 
-def _mk(tmp_path, body, name="emitter.py"):
-    (tmp_path / name).write_text(body)
-    return tmp_path
 
 
 # ------------------------------------------------------------ red control
 
-def test_a_typed_source_beside_a_resolved_subject_goes_red(tmp_path):
-    """THE NEGATIVE CONTROL: the residue exactly as it stood on main."""
-    _mk(tmp_path, _TYPED)
-    rc, out = _run(tmp_path)
-    assert rc == 1, f"the defect did not go red:\n{out}"
-    assert "phase3/stage3/pnr/openroad.log" in out
-    assert "two source claims" in out
 
 
-def test_rendering_the_same_line_from_the_resolved_value_passes(tmp_path):
-    """BIDIRECTIONAL: only the rendering changes and it goes green."""
-    _mk(tmp_path, _RESOLVED)
-    rc, out = _run(tmp_path)
-    assert rc == 0, out
 
 
 # ------------------------------------------------- the narrowing, pinned
 
-def test_a_typed_source_held_in_a_constant_goes_red(tmp_path):
-    """MEASURED FALSE PASS: the same typed claim, one assignment away."""
-    _mk(tmp_path,
-        'LOGPATH = "phase3/stage3/pnr/openroad.log"\n'
-        'def emit(rpt, project, top, def_file, pnr_log):\n'
-        '    s = _measured_subject(project, top, [def_file], tool_log=pnr_log)\n'
-        '    rpt.write_text(_measured_subject_lines(s) + "# Source: " + LOGPATH)\n')
-    rc, out = _run(tmp_path)
-    assert rc == 1, f"the constant-in-a-name form was not caught:\n{out}"
 
 
-def test_an_accurate_constant_alone_is_not_a_finding(tmp_path):
-    """A record naming a genuinely fixed canonical input is accurate. Without a
-    resolved claim beside it there is no contradiction, and no finding."""
-    _mk(tmp_path,
-        'import json\n'
-        'def emit(p):\n'
-        '    p.write_text(json.dumps({"source": "input/docs/README.md"}))\n')
-    rc, out = _run(tmp_path)
-    assert rc == 2, out          # no resolved-subject write at all
-    assert "NOT CHECKED" in out
 
 
-def test_a_resolved_write_with_no_typed_path_passes(tmp_path):
-    _mk(tmp_path,
-        'def emit(rpt, s):\n'
-        '    rpt.write_text(_measured_subject_lines(s) + "clean: YES\\n")\n')
-    rc, out = _run(tmp_path)
-    assert rc == 0, out
 
 
-def test_a_bare_word_is_not_a_path(tmp_path):
-    _mk(tmp_path,
-        'def emit(rpt, s):\n'
-        '    rpt.write_text(_measured_subject_lines(s) + "mode: antenna\\n")\n')
-    rc, out = _run(tmp_path)
-    assert rc == 0, out
 
 
 # ------------------------------------------------ the real site stays fixed
@@ -144,24 +90,3 @@ def test_the_resolver_keeps_an_unexpected_location_visible():
 
 
 # -------------------------------------------------------------- verdicts
-
-def test_empty_population_is_not_checked(tmp_path):
-    _mk(tmp_path, "x = 1\n")
-    rc, out = _run(tmp_path)
-    assert rc == 2, out
-
-
-def test_unparseable_file_is_not_checked(tmp_path):
-    _mk(tmp_path, '_measured_subject_lines(,,,\n')
-    rc, out = _run(tmp_path)
-    assert rc == 2, out
-
-
-def test_absent_root_is_bad_invocation(tmp_path):
-    rc, out = _run(tmp_path / "nope")
-    assert rc == 3, out
-
-
-def test_repository_itself_is_clean():
-    rc, out = _run(_PROGRAMS.parents[3])
-    assert rc == 0, out

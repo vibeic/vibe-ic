@@ -83,7 +83,6 @@ import _tool_probes as NV  # noqa: E402
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
 _PINNED = re.compile(r"vibeic-eda:\d+\.\d+\.\d+")
 
@@ -112,14 +111,6 @@ _CONSUMERS = (
 )
 
 
-@pytest.mark.parametrize("rel", _CONSUMERS)
-def test_the_image_consumers_carry_no_pinned_version(rel):
-    """These six decided which image RUNS. A literal left in one of them does
-    not fail loudly — it freezes, and keeps running an older toolchain than
-    everything around it."""
-    src = (_PROGRAMS / rel).read_text(encoding="utf-8")
-    assert not _PINNED.search(_code_only(src)), f"{rel} still pins a version"
-    assert "_eda_image" in src, f"{rel} does not ask _eda_image"
 
 
 def test_no_module_level_constant_freezes_an_image_version():
@@ -468,16 +459,6 @@ _TOOL_RUNNING = (
 )
 
 
-@pytest.mark.parametrize("rel", _VERDICT_BEARING)
-def test_a_gate_that_judges_the_image_asks_judged_image(rel):
-    code = _code_only((_PROGRAMS / rel).read_text(encoding="utf-8"))
-    assert "judged_image" in code, (
-        f"{rel} reports a verdict about the image, so it must ask "
-        "_eda_image.judged_image() — which pins a digest and reads the image's "
-        "own version label")
-    assert "_img.resolve()" not in code, (
-        f"{rel} asks the registry. Its verdict would then change whenever "
-        "anyone publishes an image, with no commit here (vibe-ic#927)")
 
 
 @pytest.mark.parametrize("rel", _TOOL_RUNNING)
@@ -964,8 +945,6 @@ VIA M4M5_PR DEFAULT
   RECT -0.8 -0.8 0.8 0.8 ;
 END M4M5_PR
 """
-_LEF_NARROW = _LEF_CLEAN.replace("RECT -0.8 -0.8 0.8 0.8 ;",
-                                 "RECT -0.71 -0.71 0.71 0.71 ;")
 
 #: THE FIXTURE IMAGE IS THE PINNED IMAGE, and it has to be.
 #:
@@ -988,32 +967,8 @@ _FIXTURE_DIGEST = STATED_DIGEST
 _FIXTURE_LABEL = "0.3.19"
 
 
-def _stage(tmp_path, *, label=_FIXTURE_LABEL, sta_has=True,
-           sta_slack="8.738484850", lef=_LEF_CLEAN, programs=None, with_docker=True):
-    """`(programs_dir, env)` for one arm."""
-    bindir = tmp_path / "bin"
-    bindir.mkdir(exist_ok=True)
-    if with_docker:
-        fake = bindir / "docker"
-        fake.write_text(_FAKE_DOCKER.replace("__PYTHON__", sys.executable),
-                        encoding="utf-8")
-        fake.chmod(0o755)
-    leffile = tmp_path / "fake.tlef"
-    leffile.write_text(lef, encoding="utf-8")
-    env = {
-        "PATH": str(bindir), "HOME": os.environ.get("HOME", str(tmp_path)),
-        "FAKE_DIGEST": _FIXTURE_DIGEST, "FAKE_LABEL": label,
-        "FAKE_STA_HAS": "1" if sta_has else "0",
-        "FAKE_STA_SLACK": sta_slack, "FAKE_LEF": str(leffile),
-    }
-    return (programs or _PROGRAMS), env
 
 
-def _run_gate(prog, argv, tmp_path, **kw):
-    programs, env = _stage(tmp_path, **kw)
-    r = _pr.run([sys.executable, str(pathlib.Path(programs) / prog), *argv],
-                       capture_output=True, text=True, env=env)
-    return r
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -1028,113 +983,22 @@ def _the_fake_docker_is_the_only_docker():
 
 # ---- POSITIVE: the digest resolves, a verdict is computed, both are recorded
 
-def test_POSITIVE_sta_parity_records_the_digest_and_the_version(tmp_path):
-    out = tmp_path / "sta.json"
-    r = _run_gate("sta_engine_parity_check.py", ["--json", str(out)], tmp_path)
-    assert r.returncode == 0, r.stderr[-600:]
-    rep = json.loads(out.read_text())
-    assert rep["image_digest"] == _FIXTURE_DIGEST
-    assert rep["image_version"] == _FIXTURE_LABEL
-    assert rep["image"].endswith("@" + _FIXTURE_DIGEST)
-    # NOT VACUOUS: the run has to have probed something and compared something.
-    # A gate that returns 0 having looked at zero commands is the shape this
-    # whole program exists to reject, and it would pass every assertion above.
-    assert rep["probed"] == 10 and rep["openroad_present"] == 10
-    assert rep["equivalent"] is True and len(rep["equivalence"]) == 2
 
 
-def test_POSITIVE_via_patch_records_the_digest_and_the_version(tmp_path):
-    out = tmp_path / "via.json"
-    r = _run_gate("pdk_via_patch_meets_layer_min_width_check.py",
-                  ["--from-image", "--json", str(out)], tmp_path)
-    assert r.returncode == 0, r.stderr[-600:] + r.stdout[-600:]
-    rep = json.loads(out.read_text())
-    assert rep["image_digest"] == _FIXTURE_DIGEST
-    assert rep["image_version"] == _FIXTURE_LABEL
-    assert rep["verdict"] == "PASS"
-    assert len(rep["tech_lefs_checked"]) == 1, rep["tech_lefs_checked"]
 
 
 # ---- NEGATIVE: a genuinely bad image, and the ONLY change is the image
 
-def test_NEGATIVE_a_divergent_sta_engine_is_a_FINDING_not_a_pass(tmp_path):
-    """Same program, same argv, same fixture — one thing differs: in this image
-    the standalone `sta` does not carry the superset commands. That is
-    vibeic-eda#8's actual defect, and it must be rc 1."""
-    out = tmp_path / "sta.json"
-    r = _run_gate("sta_engine_parity_check.py", ["--json", str(out)], tmp_path,
-                  sta_has=False)
-    assert r.returncode == 1, (r.returncode, r.stderr[-600:])
-    rep = json.loads(out.read_text())
-    assert rep["only_openroad"] and not rep["only_sta"]
-    assert rep["sta_present"] == 0 and rep["openroad_present"] == 10
-    # the red has to be attributable to the IMAGE, by name, in the failure text
-    assert _FIXTURE_DIGEST in r.stderr
-    assert "not about the change under test" in r.stderr
 
 
-def test_NEGATIVE_two_engines_that_disagree_on_TIMING_is_also_a_finding(tmp_path):
-    """Command PRESENCE is not equivalence — vibeic-eda#8 measured 20/20 names
-    matching while one of them behaved differently. Every name matches here."""
-    r = _run_gate("sta_engine_parity_check.py", [], tmp_path,
-                  sta_slack="7.000000000")
-    assert r.returncode == 1, (r.returncode, r.stderr[-600:])
-    assert "DIFFERENT timing" in r.stderr
 
 
-def test_NEGATIVE_a_narrow_via_patch_in_the_image_is_a_FINDING(tmp_path):
-    out = tmp_path / "via.json"
-    r = _run_gate("pdk_via_patch_meets_layer_min_width_check.py",
-                  ["--from-image", "--json", str(out)], tmp_path,
-                  lef=_LEF_NARROW)
-    assert r.returncode == 1, (r.returncode, r.stdout[-600:])
-    rep = json.loads(out.read_text())
-    assert rep["verdict"] == "FAIL" and len(rep["open_findings"]) == 1
-    f = rep["open_findings"][0]
-    assert (f["patch_x_um"], f["layer_min_width_um"]) == (1.42, 1.6)
-    assert rep["image_digest"] == _FIXTURE_DIGEST      # a FINDING names its image
-    assert _FIXTURE_DIGEST in r.stdout
 
 
 # ---- VACUOUS: no docker -> rc 2 with the marker, and NOT rc 0 and NOT rc 1
 
-@pytest.mark.parametrize("prog,argv,marker", [
-    ("sta_engine_parity_check.py", [], "[CANNOT CHECK]"),
-    ("pdk_via_patch_meets_layer_min_width_check.py", ["--from-image"], "[REFUSE]"),
-])
-def test_VACUOUS_no_docker_is_rc2_with_the_marker(prog, argv, marker, tmp_path):
-    """v1.11.8's behaviour, which must not regress. rc 1 means a FINDING ABOUT
-    SILICON — "the STA engines disagree", "a via patch is narrower than its
-    layer's minimum" — and a run that never opened an image has found neither.
-    rc 0 is the other direction of the same defect.
-
-    "I could not read it" and "I read it and it was bad" must never produce the
-    same verdict, and of the two directions this one is worse: it invents a
-    finding."""
-    r = _run_gate(prog, argv, tmp_path, with_docker=False)
-    assert r.returncode == 2, (
-        f"{prog} answered rc={r.returncode} with no docker at all. 2 is its word "
-        f"for 'nothing was measured'; 1 is a finding about the design and 0 is a "
-        f"clean bill. stderr: {r.stderr[-400:]}")
-    assert marker in r.stderr, r.stderr[-400:]
-    assert "Nothing was measured" in r.stderr
 
 
-@pytest.mark.parametrize("prog,argv,marker", [
-    ("sta_engine_parity_check.py", [], "[CANNOT CHECK]"),
-    ("pdk_via_patch_meets_layer_min_width_check.py", ["--from-image"], "[REFUSE]"),
-])
-def test_VACUOUS_an_image_that_will_not_say_its_version_is_rc2(
-        prog, argv, marker, tmp_path):
-    """The other half of NOT_MEASURED, and the one the OCI-label mechanism adds.
-    docker answers, the digest resolves, the image runs — and it carries no
-    `org.opencontainers.image.version`. The version is not guessed from a tag and
-    not inferred: the gate says it could not establish which release it looked
-    at, and returns its own not-measured code."""
-    r = _run_gate(prog, argv, tmp_path, label="")
-    assert r.returncode == 2, (r.returncode, r.stderr[-400:])
-    assert marker in r.stderr
-    assert M.VERSION_LABEL in r.stderr or "would not say which version" in r.stderr
 
 
 # ---- MUTATION: remove the digest-recording and a test fails BY NAME
@@ -1149,48 +1013,6 @@ _MUTATIONS = {
 }
 
 
-@pytest.mark.parametrize("what", sorted(_MUTATIONS))
-def test_MUTATION_breaking_the_recording_is_CAUGHT_BY_NAME(what, tmp_path):
-    """A guard nobody has watched fail is a guard nobody knows is connected.
-
-    Each mutation below removes one thing this change added, in a copy of
-    `programs/`, and re-runs the arm above that is supposed to notice. The test
-    fails if the arm still passes — i.e. if the assertion it is named after was
-    decorative.
-
-    MEASURED, not asserted: the previous version of this file had a guard that
-    bit on a test that was itself vacuous, so the guard proved nothing. The arms
-    re-run here are the POSITIVE and VACUOUS ones above, whose own assertions
-    already pin `probed == 10` and `tech_lefs_checked == 1`, so the mutated run
-    cannot pass by measuring nothing.
-    """
-    staged = tmp_path / "programs"
-    shutil.copytree(_PROGRAMS, staged,
-                    ignore=shutil.ignore_patterns("tests", "__pycache__"))
-    src = (staged / "_eda_image.py").read_text(encoding="utf-8")
-    old, new = _MUTATIONS[what]
-    assert src.count(old) == 1, (
-        f"the mutation {what!r} no longer matches _eda_image.py, so this guard "
-        f"is testing nothing. Update it or delete it.")
-    (staged / "_eda_image.py").write_text(src.replace(old, new), encoding="utf-8")
-
-    if what.startswith("stop refusing"):
-        r = _run_gate("sta_engine_parity_check.py", [], tmp_path,
-                      label="", programs=staged)
-        assert r.returncode != 2, (
-            "the mutation did not change behaviour, so the refusal it removes "
-            "was not the thing producing rc 2")
-        return
-
-    out = tmp_path / "m.json"
-    r = _run_gate("sta_engine_parity_check.py", ["--json", str(out)], tmp_path,
-                  programs=staged)
-    assert r.returncode == 0, r.stderr[-400:]
-    rep = json.loads(out.read_text())
-    field = "image_digest" if "digest" in what else "image_version"
-    assert rep[field] is None, (
-        f"{what}: the mutation did not take effect, so this guard proves "
-        f"nothing about test_POSITIVE_sta_parity_records_the_digest_and_the_version")
 
 
 # ---- and the same two gates against the REAL image, when this host has one

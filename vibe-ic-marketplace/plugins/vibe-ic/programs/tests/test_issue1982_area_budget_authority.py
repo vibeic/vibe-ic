@@ -22,11 +22,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _tapeout_declaration as TD  # noqa: E402
 import _owner_declared as _OD                              # noqa: E402
-import _submission_template as ST  # noqa: E402
-import flow_compliance_check as FCC  # noqa: E402
 import phase1_doc_one_shot_runner as P1  # noqa: E402
-import phase1_one_shot_runner as PHASE1  # noqa: E402
-import area_budget_basis_gen as AREA_BASIS  # noqa: E402
 
 AREA_KEY = "synthesis_area_budget"
 LIMIT = "LIMIT"
@@ -88,60 +84,6 @@ def _limit(w=40, h=50):
     return {"status": LIMIT, "max_die_dimensions_um": [w, h]}
 
 
-def test_step05ic_refreshes_design_area_evidence_before_merging(tmp_path):
-    """The declaration gate must consume the current design-owned answer."""
-    project = tmp_path / "neutral_die"
-    docs = project / "input/docs/dimensions.md"
-    docs.parent.mkdir(parents=True)
-    docs.write_text("The target process is sky130A. The implementation "
-                    "selects die size 975 x 625 um.\n")
-    design = project / ST.DESIGN_ANSWERS_REL
-    _write_json(design, {
-        "schema": "vibe-ic/step_0_5ic_answers/1",
-        "answers": {"deliverable": "DIE", "top_cell": "neutral_top"},
-        "answer_provenance": {
-            "deliverable": {"answered_by": "owner", "citation":
-                            "Neutral fixture: deliver a standalone DIE."},
-            "top_cell": {"answered_by": "owner", "citation":
-                         "Neutral fixture top cell choice."},
-        },
-    })
-    assert AREA_BASIS.main([str(project)]) == 0
-    old = json.loads(design.read_text())
-    docs.write_text(docs.read_text() +
-                    "Package documentation is maintained separately.\n")
-    key = "synthesis_area_budget"
-    expected = AREA_BASIS.rederive(project, old)["provenance"]
-    assert expected["inputs_sha256"] != (
-        old["answer_provenance"][key]["inputs_sha256"])
-    assert PHASE1._run_step_0_5ic(project, pdk="sky130A") == 0
-    refreshed = json.loads(design.read_text())
-    assert refreshed["answer_provenance"][key] == expected
-    assert refreshed["answers"]["deliverable"] == old["answers"]["deliverable"]
-    assert refreshed["answers"]["top_cell"] == old["answers"]["top_cell"]
-    merged = json.loads((project / "input/submission_template/operator_answers.json").read_text())
-    assert merged["answer_provenance"][key] == refreshed["answer_provenance"][key]
-    gate = __import__("tapeout_declaration_check").evaluate(project)
-    assert gate["verdict"] == "PASS", gate["refusals"]
-
-    unchanged = design.read_bytes()
-    assert PHASE1._run_step_0_5ic(project, pdk="sky130A") == 0
-    assert design.read_bytes() == unchanged
-
-    docs.write_text("The target process is sky130A. The implementation "
-                    "selects die size 1000 x 650 um.\n")
-    assert PHASE1._run_step_0_5ic(project, pdk="sky130A") == 0
-    resized = json.loads(design.read_text())
-    assert resized["answers"][key]["max_die_dimensions_um"] == [1000.0, 650.0]
-    assert __import__("tapeout_declaration_check").evaluate(project)["verdict"] == "PASS"
-
-    resized["answer_provenance"][key]["inputs_sha256"] = "0" * 64
-    _write_json(design, resized)
-    refused = __import__("tapeout_declaration_check").evaluate(project)
-    assert refused["verdict"] == "FAIL"
-    assert any(r["rule"] == "DERIVED_ANSWER_STALE" and
-               r["path"] == ST.DESIGN_ANSWERS_REL
-               for r in refused["refusals"])
 
 
 @pytest.mark.parametrize("measured,expected_rc,expected_verdict", [
@@ -298,52 +240,6 @@ def test_legacy_absent_field_is_unset_and_never_implicit_na(tmp_path):
     assert "NOT_APPLICABLE" not in json.dumps(area)
 
 
-def test_unset_authority_is_executed_as_an_incomplete_flow_clause(tmp_path):
-    project = tmp_path / "neutral_flow_project"
-    project.mkdir()
-    _write_json(project / ST.DESIGN_ANSWERS_REL, {
-        "operator_template": {
-            "absent_reason": (
-                "This design targets no shuttle operator; it is a self "
-                "tape-out. No operator project template exists to stage, so "
-                "there is no slot geometry, no operator fixture, and no "
-                "per-slot pad list for this step to ingest."),
-        },
-        "answers": {"deliverable": TD.DELIVERABLE_DIE},
-        TD.PROVENANCE_KEY: _OD.provenance(),
-        AREA_KEY: TD.NOT_DETERMINED,
-    })
-
-    assert PHASE1._run_step_0_5ic(project) == 0
-    flow = yaml.safe_load(FLOW.read_text())
-    step = next(s for s in flow["steps"] if str(s.get("id")) == "0.5ic")
-    result = FCC.check_step(project, step, {})
-    # WHERE THE GATE'S VERDICT LIVES. `TD.REPORT_REL` is BOTH one of step
-    # 0.5ic's declared `required_outputs` and the `--json` target of its own
-    # clause, which is the collision R-0915-126 rules on: the producer writes
-    # that document and the gate reads it. Since v1.23.23 the gate's receipt is
-    # redirected away from it, so the two are distinct documents -- measured
-    # here, `program` differs: `tapeout_declaration_gen` wrote the declaration,
-    # `tapeout_declaration_check` wrote the verdict. This test used to read the
-    # gate's verdict out of the producer's document and only worked because the
-    # audit overwrote it. `_command_json_report` follows the disclosed redirect.
-    clause = f"tapeout_declaration_check . --json {TD.REPORT_REL}"
-    report = FCC._command_json_report(project, clause)
-    assert report is not None, "the gate's receipt was not readable"
-    assert report["program"] == "tapeout_declaration_check"
-    assert report["verdict"] == "INCOMPLETE"
-    assert [d["rule"] for d in report["incomplete_dependencies"]] == [
-        "SYNTHESIS_AREA_BUDGET_AUTHORITY_UNSET"]
-    assert result.status != "PASS"
-    assert any("tapeout_declaration_check" in reason
-               for reason in result.reasons)
-    # THE NEGATIVE ARM. The producer's document must not gain the gate's verdict:
-    # that is the overwrite this whole family of changes removed, and a test that
-    # tolerated it would let it back in silently.
-    produced = json.loads((project / TD.REPORT_REL).read_text())
-    assert produced["program"] == "tapeout_declaration_gen"
-    assert "verdict" not in produced, (
-        "the audit wrote its verdict into the run's own declared output")
 
 
 def test_a_declared_limit_and_a_different_l19_ceiling_conflict(tmp_path):

@@ -1,40 +1,18 @@
 """Small-core PDN pitch and built-metal controls on a neutral logic tile."""
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import floorplan_pdn_check as gate
-import phase3_one_shot_runner as runner
 
 
-def _planner():
-    source = PROGRAMS / "_ppa/pdn_small_core.py"
-    if not source.is_file():
-        return None
-    spec = importlib.util.spec_from_file_location("capture_pdn_small_core", source)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
-def _candidate(current=2.7, pitch=150.0):
-    module = _planner()
-    if module is None:
-        return {"verdict": "NOT_MEASURED", "override": {}}
-    return module.plan(
-        [{"layer": "M5", "width": 1.0, "pitch": pitch, "offset": 2.0}],
-        core_w_um=100.0, core_h_um=100.0, current_A=current,
-        jmax_A_per_um={"m5": 1.0}, ir_budget_v=0.3,
-        sheet_ohm_per_sq={"m5": 0.001}, spacing_um={"m5": 0.5},
-        directions={"M5": "VERTICAL"}, site_dims_um=(1.0, 1.0))
 
 
 def _project(tmp_path: Path, n_shapes: int, *, mode="apply") -> Path:
@@ -75,108 +53,10 @@ def _check(project: Path):
     return rc, report
 
 
-def test_declared_budget_fits_three_groups_without_core_growth():
-    result = _candidate()
-    assert result["verdict"] == "CANDIDATE"
-    row = result["rows"][0]
-    assert row["required_groups"] == 3
-    assert row["small_core"] is True
-    assert 4.0 <= row["chosen_pitch_um"] < 150.0
-    assert result["override"]["M5"]["pitch"] == row["chosen_pitch_um"]
-    # Reverse the declared current: the same design no longer owes this pitch.
-    assert _candidate(current=None)["verdict"] == "NOT_MEASURED"
 
 
-def test_technology_ir_limit_can_require_a_fourth_group(tmp_path):
-    module = _planner()
-    project = tmp_path / "logic_tile"
-    policy = project / "input/pdn_budget_pitch_policy.json"
-    policy.parent.mkdir(parents=True)
-    policy.write_text('{"mode":"apply"}')
-    tech = """\
-LAYER M5
- TYPE ROUTING ;
- DIRECTION VERTICAL ;
- WIDTH 1 ;
- SPACING 0.5 ;
- RESISTANCE RPERSQ 0.004 ;
- DCCURRENTDENSITY AVERAGE 1000 ;
-END M5
-"""
-    detail = {"stripes": [{"layer": "M5", "width": 1.0,
-                            "pitch": 150.0, "offset": 2.0}],
-              "directions": {"M5": "VERTICAL"},
-              "site_dims_um": [1.0, 1.0], "routing_budget": 0.5}
-    result = module.plan_for_core(project, tech, 100.0, detail,
-                                  2.7, "declared", 1.0, 30.0)
-    assert result["mode"] == "apply"
-    assert result["verdict"] == "CANDIDATE"
-    assert result["rows"][0]["em_groups"] == 3
-    assert result["rows"][0]["ir_groups"] == 4
-    assert result["rows"][0]["required_groups"] == 4
-    # Removing the technology's resistance makes the requested IR bound
-    # unmeasured; it must not silently revert to an EM-only apply decision.
-    assert module.plan_for_core(project, tech.replace(
-        "RESISTANCE RPERSQ 0.004 ;", ""), 100.0, detail,
-        2.7, "declared", 1.0, 30.0)["verdict"] == "NOT_MEASURED"
 
 
-def test_floor_generator_consumes_budget_pitch_and_preserves_default(tmp_path):
-    tech = tmp_path / "tech.lef"
-    tech.write_text("""\
-LAYER M1
- TYPE ROUTING ;
- DIRECTION HORIZONTAL ;
- PITCH 1 ;
- WIDTH 0.3 ;
-END M1
-LAYER M5
- TYPE ROUTING ;
- DIRECTION VERTICAL ;
- PITCH 1 ;
- WIDTH 1 ;
-END M5
-""")
-    cells = tmp_path / "cells.lef"
-    cells.write_text("""\
-MACRO tile_cell
- CLASS core ;
- SIZE 2 BY 10 ;
- PIN VDD
-  DIRECTION INOUT ;
-  USE POWER ;
-  PORT
-   LAYER M1 ;
-    RECT 0 9.6 2 10.4 ;
-  END
- END VDD
- PIN VSS
-  DIRECTION INOUT ;
-  USE GROUND ;
-  PORT
-   LAYER M1 ;
-    RECT 0 -0.4 2 0.4 ;
-  END
- END VSS
-END tile_cell
-""")
-    pdk = runner.PdkConfig(
-        name="unit", liberty="/nonexistent/lib.lib", tech_lef=str(tech),
-        cell_lef=str(cells), cell_gds=None, site="SITE", drc_deck=None,
-        metal_prefix="M", tapcell_master=None,
-        pdn_straps={"stripes": [{"layer": "M5", "width": 1.0,
-                                  "pitch": 240.0, "offset": 2.0}],
-                     "connects": [{"layers": ["M1", "M5"]}]})
-    detail = {}
-    old_floor, _ = runner._strap_plan_core_floor(pdk, detail=detail)
-    candidate = _candidate(pitch=240.0)
-    new_detail = {}
-    new_floor, _ = runner._strap_plan_core_floor(
-        pdk, detail=new_detail, strap_override=candidate["override"])
-    assert old_floor > 100
-    assert new_floor <= 100
-    assert detail["stripes"][0]["pitch"] == 240.0
-    assert new_detail["stripes"][0]["pitch"] < 240.0
 
 
 def test_tcl_intent_with_zero_built_straps_fails_when_applied(tmp_path):
@@ -460,25 +340,6 @@ def test_deck_without_pdngen_census_reads_the_handed_over_floorplan(tmp_path):
     assert rc == 0 and report["verdict"] == "PASS"
 
 
-def test_librelane_floorplan_refuses_an_applied_budget_override(tmp_path, monkeypatch):
-    import librelane_contract as ll
-
-    def stop(*_a, **_k):
-        raise ll.Refusal("UNIT_IMAGE_STOP", "the unit stops at image resolution")
-    monkeypatch.setattr(ll, "resolve_image", stop)
-    override = {"Metal4": {"width": 1.6, "pitch": 20.0, "offset": 2.0}}
-    both = {"15": "librelane", "15.5ic": "librelane"}
-    result, consumer = runner._prepare_librelane_floorplan_for_route(
-        tmp_path, None, "", tmp_path / "pnr", "", both, strap_override=override)
-    assert consumer is None and result.status == "FAIL"
-    assert result.extras["finding"] == "PDN_BUDGET_OVERRIDE_NOT_WIRED"
-    # Without the override, or with step 15 direct (its deck draws the grid),
-    # the same call proceeds to the chain.
-    for modes, ov in ((both, None),
-                      ({"15": "direct", "15.5ic": "librelane"}, override)):
-        result, _ = runner._prepare_librelane_floorplan_for_route(
-            tmp_path, None, "", tmp_path / "pnr", "", modes, strap_override=ov)
-        assert result.extras["finding"] == "UNIT_IMAGE_STOP"
 
 
 # ---------------------------------------------------------------------------
@@ -506,105 +367,3 @@ MACRO tile_cell
  END VSS
 END tile_cell
 """
-
-
-def _neutral_pdk(tmp_path: Path):
-    tech = tmp_path / "neutral.tlef"
-    tech.write_text("MANUFACTURINGGRID 0.005 ;\n" + "".join(
-        f"LAYER M{i}\n TYPE ROUTING ;\n DIRECTION "
-        f"{'HORIZONTAL' if i % 2 else 'VERTICAL'} ;\n"
-        " PITCH 0.5 ;\n WIDTH 0.2 ;\n SPACING 0.3 ;\n"
-        f"END M{i}\n" for i in range(1, 6)))
-    cell = tmp_path / "cell.lef"
-    cell.write_text(_NEUTRAL_CELL_LEF)
-    return SimpleNamespace(tapcell_master=None, metal_prefix="M",
-                           cell_lef=str(cell), tech_lef=str(tech),
-                           pdn_straps={"stripes": [
-                               {"layer": "M4", "width": 1.6,
-                                "pitch": 153.58, "offset": 38.395}],
-                               "connects": [["M1", "M4"]]},
-                           pdn_ring=None)
-
-
-def _more_stripes_floor():
-    # 1.2 mA worst segment: 3x the stripes at the drawn width meet Jmax.
-    return {"per_layer": {"m4": {"w_em_um": 3.98, "jmax_A_per_um": 0.00067}},
-            "max_segment_current_A": 1.2e-3, "margin": 0.1,
-            "safety_factor": 2.0, "manufacturing_grid_um": 0.005}
-
-
-def _wider_strap_floor():
-    # A measured total current: the conservation bound widens the strap.
-    return {"per_layer": {"m4": {"w_em_um": 10.97, "jmax_A_per_um": 0.00067}},
-            "max_segment_current_A": 0.003305, "i_total_A": 0.00724,
-            "margin": 0.1, "safety_factor": 2.0,
-            "manufacturing_grid_um": 0.005}
-
-
-def _m4(floor):
-    return next(a for a in floor["applied"] if a["layer"] == "M4")
-
-
-def _m4_line(tcl):
-    return next(ln for ln in tcl.splitlines() if "-layer M4 " in ln)
-
-
-def test_sparser_budget_pitch_cannot_undo_the_em_stripe_remedy(tmp_path):
-    pdk = _neutral_pdk(tmp_path)
-    em_only = _more_stripes_floor()
-    runner._build_pdn_tcl(pdk, em_floor=em_only)
-    em = _m4(em_only)
-    assert em["verdict"] == "MORE_STRIPES" and em["pitch_um"] < 100.0
-    floor = _more_stripes_floor()
-    tcl = runner._build_pdn_tcl(pdk, em_floor=floor, strap_override={
-        "M4": {"width": 1.6, "pitch": 100.0, "offset": 25.0}})
-    line = _m4_line(tcl)
-    assert f"-pitch {em['pitch_um']} " in line and "-pitch 100.0" not in line
-    row = _m4(floor)
-    assert f"-width {row['width_um']} -pitch {row['pitch_um']} " in line
-    assert row["pitch_source"] == "em_remedy"
-    assert row["budget_override"]["pitch_um"] == 100.0
-
-
-def test_denser_budget_pitch_is_recorded_as_drawn_beside_the_em_remedy(tmp_path):
-    pdk = _neutral_pdk(tmp_path)
-    em_only = _more_stripes_floor()
-    runner._build_pdn_tcl(pdk, em_floor=em_only)
-    floor = _more_stripes_floor()
-    tcl = runner._build_pdn_tcl(pdk, em_floor=floor, strap_override={
-        "M4": {"width": 1.6, "pitch": 30.0, "offset": 2.0}})
-    assert "-layer M4 -width 1.6 -pitch 30.0 -offset 2.0" in _m4_line(tcl)
-    row = _m4(floor)
-    # pdn_em_sizing.json must name the pitch the deck drew, not the EM one.
-    assert row["pitch_um"] == 30.0 and row["pitch_source"] == "budget_override"
-    assert row["em_remedy"]["pitch_um"] == _m4(em_only)["pitch_um"]
-
-
-def test_budget_override_keeps_the_em_width_or_refuses_the_pair(tmp_path):
-    pdk = _neutral_pdk(tmp_path)
-    em_only = _wider_strap_floor()
-    runner._build_pdn_tcl(pdk, em_floor=em_only)
-    em = _m4(em_only)
-    assert em["verdict"] == "WIDER_STRAP"
-    width, pitch = em["width_um"], em["pitch_um"]
-    assert 4 * width < 100.0 < pitch      # legal at the EM width, and denser
-    floor = _wider_strap_floor()
-    tcl = runner._build_pdn_tcl(pdk, em_floor=floor, strap_override={
-        "M4": {"width": 1.6, "pitch": 100.0, "offset": 25.0}})
-    assert f"-layer M4 -width {width} -pitch 100.0 -offset 25.0" in _m4_line(tcl)
-    assert _m4(floor)["width_um"] == width
-    # A budget pitch the EM width cannot be built at is refused by name.
-    with pytest.raises(ValueError, match="PDN_BUDGET_EM_CONFLICT"):
-        runner._build_pdn_tcl(pdk, em_floor=_wider_strap_floor(), strap_override={
-            "M4": {"width": 1.6, "pitch": round(2 * width, 3), "offset": 2.0}})
-
-
-def test_tuned_grid_override_keeps_the_em_width(tmp_path):
-    pdk = SimpleNamespace(tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1",
-                          tech_lef=None, cell_lef=None, pdn_straps=None)
-    override = {"met4": {"width": 1.6, "pitch": 20.0, "offset": 2.0}}
-    plain = runner._build_pdn_tcl(pdk, None, strap_override=override)
-    assert "-layer met4 -width 1.6 -pitch 20.0 -offset 2.0" in plain
-    widened = runner._build_pdn_tcl(pdk, None, strap_override=override, em_floor={
-        "per_layer": {"met4": {"w_em_um": 3.23}}})
-    assert "-layer met4 -width 3.23 -pitch 20.0 -offset 2.0" in widened

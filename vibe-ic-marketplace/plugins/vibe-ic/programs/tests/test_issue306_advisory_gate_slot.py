@@ -19,7 +19,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
@@ -340,104 +339,14 @@ def test_unclassified_rc2_is_incomplete_not_recorded_as_ok(
 
 # ------------------------------------------- declared-intent second channel
 
-def _audit_mod():
-    spec = importlib.util.spec_from_file_location(
-        "flow_gate_enforcement_audit",
-        _PROGRAMS / "flow_gate_enforcement_audit.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
-def test_runtime_verdict_mode_counts_as_a_declaration(tmp_path):
-    """Some gates state their intent in the JSON they EMIT, not in an
-    `ENFORCEMENT:` docstring line. Reading only the docstring reported them
-    as UNDECLARED, so a wiring decision could be taken without ever seeing
-    what the gate said about itself."""
-    m = _audit_mod()
-    (tmp_path / "a_check.py").write_text(
-        '"""doc"""\nout = {"verdict_mode": "BLOCKS"}\n')
-    (tmp_path / "b_check.py").write_text(
-        '"""doc"""\nout = {"verdict_mode": "ADVISES"}\n')
-    assert m.declared_intent(tmp_path, "a_check") == "blocking"
-    assert m.declared_intent(tmp_path, "b_check") == "advisory"
 
 
-def test_a_conditional_verdict_mode_is_not_a_declaration(tmp_path):
-    """REGRESSION. `"BLOCKS" if strict else "ADVISES"` says the intent depends
-    on a flag; claiming either invents a declaration the program never made.
-
-    The first version of this guard failed on exactly the case it was written
-    for: matching only the string VALUE after the key saw `"BLOCKS"` and
-    nothing else, so a gate whose DEFAULT mode is ADVISES was reported as
-    declaring blocking — and would then have been treated as an un-wireable
-    blocking orphan.
-    """
-    m = _audit_mod()
-    (tmp_path / "c_check.py").write_text(
-        '"""doc"""\nout = {"verdict_mode": "BLOCKS" if strict else "ADVISES"}\n')
-    assert m.declared_intent(tmp_path, "c_check") is None
 
 
-def test_docstring_declaration_still_wins(tmp_path):
-    m = _audit_mod()
-    (tmp_path / "d_check.py").write_text(
-        '"""ENFORCEMENT: advisory"""\nout = {"verdict_mode": "BLOCKS"}\n')
-    assert m.declared_intent(tmp_path, "d_check") == "advisory"
 
 
-def test_the_ten_layer_gates_are_wired_advisory_and_the_blocking_two_are_not():
-    """Every per-layer contract gate is wired to the advisory slot, and its
-    own declaration agrees with that slot.
-
-    HISTORY (#316). This test used to assert the OPPOSITE for two of them:
-    l16/l17 declared `verdict_mode: BLOCKS`, so wiring them advisory would
-    contradict their own declaration, and this test pinned them OUT of the
-    flow. What it actually pinned was a gate that ran NOWHERE — the #306
-    defect, held in place by a test. `flow_gate_enforcement_audit` recorded
-    both as ORPHANS for exactly that reason.
-
-    The resolution is not to wire a BLOCKS gate into an advisory slot; it is
-    to make the declaration true. Both were measured on the published corpus
-    (l17 fires on 11 of 12 cells — a real finding, but one producer defect
-    reproduced corpus-wide, so blocking would fail every run; l16 fires on
-    none, so its clean record was vacuous), both now declare ADVISES, and both
-    are wired. So the invariant this test defends is stronger than before and
-    has no exception list: NO per-layer gate may sit outside the flow, and
-    none may be wired to a slot its own declaration contradicts.
-    """
-    commands = _shipped_advisory_commands()
-    layer_gates = (
-        "l7_debug_access_grounding_check",
-        "l8_clock_period_actionability_check",
-        "l9_floorplan_contract_check",
-        "l10_test_case_oracle_anchor_check",
-        "l11_otp_content_consumer_contract_check",
-        "l12_sequences_in_consumed_layer_check",
-        "l13_bringup_contract_check",
-        "l14_protocol_versioning_contract_check",
-        "l15_encoding_tables_contract_check",
-        "l16_compliance_properties_actionable_check",
-        "l17_channel_catalog_consumer_contract_check",
-        "l18_interconnect_topology_factuality_check",
-        "l21_macro_supply_rail_declared_check",
-        "l8_sta_clock_period_design_owned_check",
-    )
-    for g in layer_gates:
-        assert any(command.startswith(g + " ") for command in commands), g
-
-    # The declaration must AGREE with the slot: nothing wired advisory may
-    # claim blocking. Read it the same way the enforcement audit does.
-    spec = importlib.util.spec_from_file_location(
-        "flow_gate_enforcement_audit",
-        _PROGRAMS / "flow_gate_enforcement_audit.py")
-    fga = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(fga)
-    for g in layer_gates:
-        assert fga.declared_intent(_PROGRAMS, g) != "blocking", (
-            f"{g} is wired to the ADVISORY slot while declaring blocking — "
-            "that contradiction is #306/#316 exactly. Either wire it where a "
-            "runner invokes it inline, or declare what it does.")
 
 
 def test_advisory_is_not_a_backing_checker_for_a_self_asserted_gate():

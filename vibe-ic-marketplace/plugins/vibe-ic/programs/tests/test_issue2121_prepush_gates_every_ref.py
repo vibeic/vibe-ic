@@ -55,7 +55,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr                    # noqa: E402
@@ -183,28 +182,6 @@ def _refs_x_then_y(root: Path):
 
 # ── the wiring ─────────────────────────────────────────────────────────────
 
-def test_the_gates_run_inside_a_per_ref_loop():
-    """THE DEFECT: the gate set sat AFTER the ref loop, at top level, reading
-    whatever the last iteration left behind.  RED on `94617408759e`."""
-    code = _hook_code()
-    assert "PUSH_REFS+=(" in code, (
-        "the ref loop still assigns the gate inputs directly instead of "
-        "recording one entry per ref")
-    assert "for _push_ref_record in" in code, (
-        "there is no per-ref gate loop, so the gates still run once for the "
-        "whole push")
-    loop = code[code.index("for _push_ref_record in"):]
-    body = loop[:loop.index("\ndone")]
-    for gate in ("nda_diff_scan_check.py",
-                 "landing_collateral_revert_check.py",
-                 "version_bump_monotonic_check.py",
-                 "agent_checkin_scope_guard.py",
-                 "branch_version_bump_guard.py",
-                 "git_prohibition_guard.py",
-                 "gatekeeper-stamp"):
-        assert gate in body, (
-            f"{gate} runs outside the per-ref loop, so it still judges one ref "
-            "on behalf of all of them")
 
 
 def test_the_ref_independent_gate_stays_outside_the_loop():

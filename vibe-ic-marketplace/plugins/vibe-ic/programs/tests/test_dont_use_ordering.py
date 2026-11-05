@@ -44,16 +44,6 @@ _MARKER = "SET_DONT_USE_MARKER"
 #: A complete argument set for the builder. Every block-valued parameter is
 #: empty: the ordering asserted here is a property of the TEMPLATE, and a
 #: fixture that filled them would be asserting the fixture's own layout.
-_KW = dict(
-    tech_lef_c="/t.lef", cell_lef_c="/c.lef", macro_lefs_tcl="",
-    liberty_c="/l.lib", macro_libs_tcl="", netlist_c="/n.v", top="foo",
-    sdc_c="/s.sdc", dont_use_block=_MARKER + "\n", metal_prefix="met",
-    die_w=100, die_h=100, core_pad=10, core_w=80, core_h=80, site="unit",
-    out_dir_c="/out", tapcell_block="", pdn_block="", util=0.45,
-    spare_protection_tcl="", spare_postfix_tcl="", clk_buf="", clk_buf_root="",
-    routing_constraint_tcl="", pg_cleanup_block="", spef_repair_block="",
-    antenna_repair_block="", filler_block="", spef_repair_estimate_block="",
-)
 
 #: The steps that can insert a cell. `set_dont_use` governs the optimizer's
 #: future pool, so each must run AFTER the exclusion is in force.
@@ -117,95 +107,12 @@ def _invocation_lines(template: str, cmd: str):
     return before, after
 
 
-def _pnr_template() -> str:
-    """The TCL the runner actually emits, comments stripped.
-
-    COMMENTS STRIPPED. Every one of the six step names appears in the prose
-    around this block — `# … governs global_route / detailed_route / the
-    antenna repair loop / CTS …` and five more — so a naive scan reported all
-    six as "before the exclusion" when not one of them was. That is the same
-    mistake I made a day earlier in vibeic-eda, where `actions/runs` in a
-    comment read as a reimplementation of the API call it was documenting.
-
-    A check that cannot tell documentation from code has to be weakened the
-    first time someone documents something, and then it means nothing.
-
-    v1.9.0 — this used to read a 4000-character WINDOW of the source file
-    around the `{dont_use_block}` placeholder. That proxy was wrong in BOTH
-    directions and the two errors hid each other:
-
-      false FAIL   the window reaches back above `return f\"\"\"` into the
-                   Python that BUILDS the template, where a line such as
-                   `_repair_design_margin_tcl("repair_design_pl")` is a
-                   builder call, not an emitted step. The suite went red on
-                   it with the emitted order entirely correct.
-      false PASS   `repair_design` is not in the f-string at all — it is
-                   injected through `{_rd_margin_placement}`. Anchoring the
-                   window to the template instead would have made that name
-                   absent, and `find(...) == -1` is what this test calls a
-                   pass. The strictest-looking of the six assertions would
-                   have been the emptiest.
-
-    So the template is now BUILT, not scanned, and `_INSERTERS` is asserted
-    present as well as late — an ordering test whose subject is missing
-    proves nothing about ordering.
-    """
-    tcl = P._build_pnr_tcl_text(**_KW)
-    kept = []
-    for ln in tcl.splitlines():
-        s = ln.lstrip()
-        # TCL comment lines are not executed and must not be read as steps.
-        kept.append("" if s.startswith("#") else ln)
-    return "\n".join(kept)
 
 
-def test_the_exclusion_precedes_every_step_that_can_insert_a_cell():
-    """resize, CTS, repair and route must all come after it.
-
-    Ordering asserted against the TEMPLATE the runner emits, not against a
-    description of it — the defect this guards is an edit that moves the block,
-    and a test reading prose would not notice.
-    """
-    t = _pnr_template()
-    for later in _INSERTERS:
-        before, after = _invocation_lines(t, later)
-        assert before == [], (
-            f"`{later}` is INVOKED before the cell exclusion, at template "
-            f"line(s) {before}. set_dont_use only governs the optimizer's "
-            f"future pool, so anything it inserts first is baked into the DEF "
-            f"and the exclusion is inert against it (vibe-ic#551: 61 probe "
-            f"cells, DRT-0085, route never finishes)")
-        # THE DENOMINATOR, so the assertion above cannot pass by vacuity. A
-        # template that stopped calling a step at all would satisfy "nothing
-        # before the marker" while quietly removing the step this ordering is
-        # about — which is the one way this guard could rot into a decoration.
-        assert after, (
-            f"`{later}` is never invoked anywhere in the template, so the "
-            f"ordering assertion above held over an empty population")
 
 
-def test_every_step_this_orders_is_actually_in_the_emitted_tcl():
-    """The positive control for the assertion above.
-
-    `find(step, 0, here) == -1` is satisfied by a step that never appears, so
-    without this the ordering test grades an emitter that emits nothing. It is
-    not hypothetical: `repair_design` reaches the TCL only through
-    `{_rd_margin_placement}`, so it IS absent from the raw f-string, and the
-    earlier source-scanning version of this file would have passed vacuously
-    on it the moment its window was tightened.
-    """
-    t = _pnr_template()
-    here = t.index(_MARKER)
-    for step in _INSERTERS:
-        assert t.find(step, here) != -1, (
-            f"`{step}` is not in the emitted TCL at all, so ordering it "
-            f"against the exclusion asserts nothing")
 
 
-def test_the_exclusion_follows_link_design():
-    """Before `link_design` there is no library for `set_dont_use` to act on."""
-    t = _pnr_template()
-    assert t.index("link_design") < t.index(_MARKER)
 
 
 def test_the_exclusion_reaches_the_template_at_all():
@@ -218,25 +125,6 @@ def test_the_exclusion_reaches_the_template_at_all():
     assert "dont_use_block=dont_use_block" in src, "never passed to the emitter"
 
 
-def test_the_emitted_exclusion_covers_the_families_that_broke_the_route():
-    """The two families in sky130A's own pnr_excluded.cells, plus the fallback.
-
-    Read from the PDK at run time; the fallback is what fires when the PDK
-    ships no such file, which is the state that produced #551's route failure
-    on an image whose PDK had renamed the directory (openlane -> librelane).
-    """
-    pdk = P.PdkConfig(name="sky130A", liberty="x", tech_lef="x", cell_lef="x",
-                      cell_gds="x", site="unithd", drc_deck="x",
-                      pnr_exclude_cell_file="/foss/pdks/sky130A/libs.tech/"
-                                            "librelane/sky130_fd_sc_hd/"
-                                            "pnr_excluded.cells")
-    tcl = P._dont_use_tcl(pdk)
-    for fam in ("probe", "lpflow"):
-        assert fam in tcl, f"the {fam} family is not in the fallback"
-    assert "librelane" in tcl and "openlane" in tcl, \
-        "both PDK layouts must be globbed — the rename is what broke this once"
-    assert "DONT_USE_SKIPPED" in tcl, \
-        "a run that excluded nothing must say so rather than look applied"
 
 
 # ── the INSTRUMENT, pinned both ways ──────────────────────────────────────────

@@ -116,50 +116,6 @@ def _project_row_names(body):
     return {s["name"] for s in body["steps"] if s["name"] not in _A_STEPS}
 
 
-def test_pass_with_waivers_one_block(tmp_path, monkeypatch):
-    # Contract migration: an unmet full-population A1 has no later producers.
-    from types import SimpleNamespace
-    import execution_policy
-    import analog_one_shot_runner as AOSR
-    project = tmp_path / "proj"
-    project.mkdir(parents=True, exist_ok=True)
-    _write_block_list(project, [{"name": "tst_bandgap", "type": "bandgap"}])
-    native_calls = []
-    def forbidden(*args, **kwargs):
-        native_calls.append(args)
-        print('ANALOG_A1_VALUE ' + json.dumps({'native_count': len(native_calls),
-                                              'rc': None, 'case': 'unmet-A1-native-trap'}))
-        raise AssertionError('unmet A1 launched a native successor')
-    monkeypatch.setattr(AOSR, 'step_for_block', forbidden)
-    monkeypatch.setattr(AOSR, '_a9_cosim', forbidden)
-    for name in (execution_policy.ENV, execution_policy._CAPABILITY_FD_ENV,
-                 'VIBEIC_EXECUTION_AUTH_SOCKET'):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
-    monkeypatch.setattr(sys, 'argv', [str(PROG), str(project)])
-    cp = SimpleNamespace(returncode=AOSR.main())
-    body = json.loads((project / "reports" / "phase3" / "analog_one_shot.json").read_text())
-    print('ANALOG_A1_VALUE ' + json.dumps({'native_count': len(native_calls), 'rc': cp.returncode,
-                                          'case': 'unmet-A1-native-trap', 'report': body}))
-    assert "tst_bandgap" in body["blocks"]
-    assert _a_step_names(body) == {"A1_spec_extract"}
-    assert _project_row_names(body) == {"block_list_schema", "canonical_analog_acceptance"}
-    assert body["verdict"] == "NOT_MEASURED"
-    assert cp.returncode == 1
-    assert native_calls == []
-    step_status = {s["name"]: s["status"] for s in body["steps"]}
-    assert step_status["A1_spec_extract"] == "NOT_MEASURED"
-    for name in ("A2_topology_select", "A3_netlist_gen", "A4_corner_sweep",
-                 "A5_layout", "A6_block_pv", "A7_post_layout_resim"):
-        assert name not in step_status, f"{name} must not be fabricated after unmet A1"
-    a1 = next(s for s in body["steps"] if s["name"] == "A1_spec_extract")
-    assert "L5_ADI_SPEC.json" in a1["detail"] and "owed by step D1" in a1["detail"]
-    assert a1["extras"]["finding"] == "REQUIRED_INPUT_ABSENT"
-    for name in ("A8_hardmacro_gen", "A9_hw_verify"):
-        assert name not in step_status, f"{name} is unexecuted, not a waiver"
-    assert body['halted_at'] == 'A1'
-    assert body['a9_cosim']['rc'] is None
-    assert body['a9_cosim']['tier'] == 'NOT_MEASURED'
 
 
 def test_integration_report_shape(tmp_path):

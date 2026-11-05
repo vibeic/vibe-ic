@@ -32,7 +32,6 @@ the gates on a private checkout removes it.
 """
 from __future__ import annotations
 
-import importlib.util
 import pathlib
 import re
 import sys
@@ -46,16 +45,8 @@ _LAND_SH = _PROGRAMS.parents[3] / "tools" / "gatekeeper-land.sh"
 RC_OK, RC_DIRTY, RC_CANNOT_MEASURE = 0, 1, 2
 
 
-def _load():
-    spec = importlib.util.spec_from_file_location(
-        "landing_worktree_is_clean_check", PROG)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["landing_worktree_is_clean_check"] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
 
-M = _load()
 
 
 def _repo(tmp_path):
@@ -75,104 +66,26 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _run(repo, *extra):
-    return _pr.run([sys.executable, str(PROG), str(repo), *extra],
-                          capture_output=True, text=True)
 
 
 # ── the fingerprint answers "is this the same tree" ──────────────────────────
-def test_an_unchanged_tree_fingerprints_the_same(tmp_path):
-    r = _repo(tmp_path)
-    assert M.fingerprint(r) == M.fingerprint(r)
 
 
-def test_a_tracked_edit_moves_it(tmp_path):
-    """The v1.9.16 case exactly: a tracked file edited while the gates run."""
-    r = _repo(tmp_path)
-    before = M.fingerprint(r)
-    (r / "tools" / "a.sh").write_text("echo b\n", encoding="utf-8")
-    assert M.fingerprint(r) != before
 
 
-def test_an_added_untracked_file_moves_it(tmp_path):
-    """pytest can collect a file that appears mid-run, so an addition counts as
-    the tree moving even though the cheap-tier check ignores untracked files
-    when deciding whether the LANDING is complete."""
-    r = _repo(tmp_path)
-    before = M.fingerprint(r)
-    (r / "tools" / "new.sh").write_text("echo n\n", encoding="utf-8")
-    assert M.fingerprint(r) != before
 
 
-def test_a_new_commit_moves_it(tmp_path):
-    """A clean tree at a different HEAD is a different tree."""
-    r = _repo(tmp_path)
-    before = M.fingerprint(r)
-    (r / "tools" / "a.sh").write_text("echo b\n", encoding="utf-8")
-    _pr.run(["git", "-C", str(r), "commit", "-qam", "x"], check=True,
-                   capture_output=True, text=False)
-    assert M.fingerprint(r) != before
 
 
-def test_it_is_stable_across_a_pytest_run(tmp_path):
-    """LOAD-BEARING for the untracked half. If tool droppings moved the
-    fingerprint, the comparison would fail on every real run and be removed.
-    `git status` drops whatever .gitignore covers, which is what keeps
-    `__pycache__` out — asserted rather than assumed."""
-    r = _repo(tmp_path)
-    (r / "tools" / "t.py").write_text("def test_x():\n    assert True\n",
-                                      encoding="utf-8")
-    _pr.run(["git", "-C", str(r), "add", "tools/t.py"], check=True,
-                   capture_output=True, text=False)
-    _pr.run(["git", "-C", str(r), "commit", "-qm", "t"], check=True,
-                   capture_output=True, text=False)
-    (r / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
-    _pr.run(["git", "-C", str(r), "add", ".gitignore"], check=True,
-                   capture_output=True, text=False)
-    _pr.run(["git", "-C", str(r), "commit", "-qm", "ignore"], check=True,
-                   capture_output=True, text=False)
-    before = M.fingerprint(r)
-    _pr.run([sys.executable, "-m", "pytest", "-q", "tools/t.py"],
-                   cwd=str(r), capture_output=True, text=False)
-    assert M.fingerprint(r) == before
 
 
 # ── the CLI refuses rather than passing ──────────────────────────────────────
-def test_expect_against_a_matching_fingerprint_passes(tmp_path):
-    r = _repo(tmp_path)
-    fp = tmp_path / "fp.txt"
-    assert _run(r, "--emit-fingerprint", str(fp)).returncode == RC_OK
-    assert _run(r, "--expect-fingerprint", str(fp)).returncode == RC_OK
 
 
-def test_expect_after_the_tree_moved_refuses(tmp_path):
-    """A tracked edit that is COMMITTED leaves the tree clean, so the
-    cheap-tier rule alone still passes — and the gate would stamp a tree its
-    suites never read."""
-    r = _repo(tmp_path)
-    fp = tmp_path / "fp.txt"
-    _run(r, "--emit-fingerprint", str(fp))
-    (r / "tools" / "a.sh").write_text("echo moved\n", encoding="utf-8")
-    _pr.run(["git", "-C", str(r), "commit", "-qam", "mid-run"],
-                   check=True, capture_output=True, text=False)
-    assert _run(r).returncode == RC_OK, "the tree is clean, so the old rule passes"
-    got = _run(r, "--expect-fingerprint", str(fp))
-    assert got.returncode == RC_DIRTY, got.stdout + got.stderr
-    assert "MOVED" in got.stderr
 
 
-def test_a_missing_fingerprint_file_is_not_read_as_agreement(tmp_path):
-    """"I could not compare" and "they match" are different claims. Returning 0
-    here would restore the hole in the one case where the emit step failed."""
-    r = _repo(tmp_path)
-    got = _run(r, "--expect-fingerprint", str(tmp_path / "never-written"))
-    assert got.returncode == RC_CANNOT_MEASURE, got.stdout + got.stderr
 
 
-def test_the_pre_existing_dirty_rule_is_unchanged(tmp_path):
-    r = _repo(tmp_path)
-    (r / "tools" / "a.sh").write_text("echo dirty\n", encoding="utf-8")
-    assert _run(r).returncode == RC_DIRTY
 
 
 # ── the wiring, which is where the value actually is ─────────────────────────

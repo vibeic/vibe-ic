@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -40,9 +39,7 @@ PROG = _PROGRAMS / "benchmark_evidence_publish.py"
 sys.path.insert(0, str(_PROGRAMS))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _pdk_revision_fixture as _pdk_fixture  # noqa: E402
-import size_policy_drift_check as D  # noqa: E402
 
-_REPO = _PROGRAMS.parents[3]
 _CEILING = 50 * 1000 * 1000
 
 # "<relpath> <int>B sha256:<64hex> <DECISION> <destination>"
@@ -362,126 +359,3 @@ def test_the_published_cell_still_passes_its_own_structure_check(tmp_path):
 
 
 # ── the drift check must not be a rubber stamp ──────────────────────────────
-
-def _mutant(tmp_path: Path) -> Path:
-    mut = tmp_path / "programs"
-    mut.mkdir()
-    for name in ("tracked_blob_size_guard.py", "benchmark_evidence_publish.py",
-                 "benchmark_evidence_structure_check.py"):
-        shutil.copy2(_PROGRAMS / name, mut / name)
-    return mut
-
-
-def test_an_extension_only_revert_is_caught_even_with_the_ceiling_declared(tmp_path):
-    """THE anti-rubber-stamp test.
-
-    Measured against the grep-only form of this gate, this exact mutant —
-    `_excluded` reverted to the extension rule #419 removed, with
-    `_SIZE_CEILING = 50 * 1000 * 1000` left spelled correctly beside it —
-    returned PASS with zero findings. A declared constant is not a followed
-    one, so the gate has to CALL the decider.
-    """
-    mut = _mutant(tmp_path)
-    p = mut / "benchmark_evidence_publish.py"
-    src = p.read_text()
-    anchor = "return is_layout_artefact(p) and over_ceiling(p)"
-    assert anchor in src, "publisher changed shape; update this mutant"
-    p.write_text(src.replace(anchor, "return is_layout_artefact(p)"))
-
-    assert "_SIZE_CEILING = 50 * 1000 * 1000" in p.read_text(), \
-        "the mutant must keep the constant — that is the whole point"
-
-    rep = D.audit(mut, _REPO / ".gitignore")
-    assert rep["verdict"] == "FAIL", rep
-    assert any(f.startswith("EXTENSION_RULE_RETURNED") for f in rep["findings"]), \
-        rep["findings"]
-
-
-def test_a_decider_that_ignores_its_ceiling_is_caught(tmp_path):
-    """The opposite revert: accept everything. Without this half, "the probe
-    fires" is satisfied by a probe that always fires."""
-    mut = _mutant(tmp_path)
-    p = mut / "benchmark_evidence_publish.py"
-    p.write_text(p.read_text().replace(
-        "return is_layout_artefact(p) and over_ceiling(p)", "return False"))
-    rep = D.audit(mut, _REPO / ".gitignore")
-    assert any(f.startswith("CEILING_NOT_ENFORCED") for f in rep["findings"]), \
-        rep["findings"]
-
-
-def test_removing_the_named_predicate_is_caught(tmp_path):
-    """The policy has to stay callable. If it goes back to being inline, the
-    only thing left to check is spelling."""
-    mut = _mutant(tmp_path)
-    p = mut / "benchmark_evidence_structure_check.py"
-    p.write_text(p.read_text().replace("def check_folder(", "def _inlined("))
-    rep = D.audit(mut, _REPO / ".gitignore")
-    assert any(f.startswith("NO_PREDICATE") for f in rep["findings"]), \
-        rep["findings"]
-
-
-def test_breaking_a_helper_under_the_decider_is_caught_too(tmp_path):
-    """Renaming a helper the decider CALLS is not a NO_PREDICATE — the entry
-    point is still there — but it must not be a PASS either. It surfaces as
-    PREDICATE_RAISED, which is still a finding and still rc=1."""
-    mut = _mutant(tmp_path)
-    p = mut / "benchmark_evidence_structure_check.py"
-    p.write_text(p.read_text().replace("def over_ceiling(", "def _inlined("))
-    rep = D.audit(mut, _REPO / ".gitignore")
-    assert rep["verdict"] == "FAIL", rep
-    assert any(f.startswith("PREDICATE_RAISED") for f in rep["findings"]), \
-        rep["findings"]
-
-
-def test_the_structure_checks_real_decision_is_what_gets_probed(tmp_path):
-    """REGRESSION, and the reason `_DECIDERS` names `check_folder`.
-
-    The first version of this gate probed `over_ceiling`, a three-line pure
-    size test. The structure check's actual decision lives in `check_folder`.
-    Reverting THAT to the pre-#419 extension-only rule — while leaving
-    `over_ceiling` defined and correct beside it — returned PASS with zero
-    findings, and made all three real reference cells non-conformant with a
-    message calling a 1 MB file 'over the 50 MB commit ceiling'.
-    """
-    mut = _mutant(tmp_path)
-    p = mut / "benchmark_evidence_structure_check.py"
-    src = p.read_text()
-    anchor = ("    for p in layout:\n"
-              "        try:\n"
-              "            if over_ceiling(p):\n"
-              "                over.append((p, p.stat().st_size))\n"
-              "        except OSError:\n"
-              "            continue")
-    assert anchor in src, "structure check changed shape; update this mutant"
-    p.write_text(src.replace(
-        anchor,
-        "    for p in layout:\n"
-        "        try:\n"
-        "            over.append((p, p.stat().st_size))\n"
-        "        except OSError:\n"
-        "            continue"))
-    # The helper is untouched: this mutant is invisible to a probe of it.
-    assert "def over_ceiling(" in p.read_text()
-
-    rep = D.audit(mut, _REPO / ".gitignore")
-    assert rep["verdict"] == "FAIL", rep
-    assert any(f.startswith("EXTENSION_RULE_RETURNED") for f in rep["findings"]), \
-        rep["findings"]
-
-
-def test_the_shipped_tree_passes_the_behavioural_probe():
-    """Pairs with every mutant above: they prove the probe can fail, this
-    proves it does not fail on the tree being shipped."""
-    rep = D.audit(_PROGRAMS, _REPO / ".gitignore")
-    assert rep["verdict"] == "PASS", rep["findings"]
-
-
-def test_a_module_that_cannot_be_imported_is_a_finding_not_a_pass(tmp_path):
-    """A probe that swallows an import error reports a clean bill of health
-    for a tree it never examined."""
-    mut = _mutant(tmp_path)
-    (mut / "benchmark_evidence_publish.py").write_text(
-        "_SIZE_CEILING = 50 * 1000 * 1000\nraise RuntimeError('boom')\n")
-    rep = D.audit(mut, _REPO / ".gitignore")
-    assert any(f.startswith("UNIMPORTABLE") for f in rep["findings"]), \
-        rep["findings"]

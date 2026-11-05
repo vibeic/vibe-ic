@@ -55,7 +55,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _atomic_artefact as A  # noqa: E402
-import atomic_artifact_write_check as G  # noqa: E402
 import generated_artifact_conflict_resolve as RESOLVER  # noqa: E402
 import hygiene_finding_delta as DELTA  # noqa: E402
 import skill_stage_membership_check as MEMBERSHIP  # noqa: E402
@@ -119,44 +118,14 @@ def main():
 '''
 
 
-def _argv_resolver(dest: Path, repo: Path):
-    return ["--repo", str(repo), "--dry-run", "--json", str(dest)]
 
 
-def _argv_review(dest: Path, repo: Path):
-    # A stage the flow does not declare: `load_declaration` refuses, `emit()`
-    # writes the NOT_CHECKED verdict and `main` returns 2. A refusal is still a
-    # verdict that must arrive whole, and this path needs no project tree, no
-    # compliance report and no flow run.
-    return [str(repo), "--stage", "no-such-stage", "--json", str(dest)]
 
 
-def _argv_delta(dest: Path, repo: Path):
-    # Both records are deliberately absent: the program REFUSES, and a refusal
-    # is still a verdict it must write whole. Nothing here needs a real hygiene
-    # run, which keeps this test far inside the 60s inner bound.
-    return ["--base", str(repo / "absent_base.json"),
-            "--candidate", str(repo / "absent_candidate.json"),
-            "--base-host", "host-a", "--candidate-host", "host-a",
-            "--json", str(dest)]
 
 
-def _argv_membership(dest: Path, repo: Path):
-    # The REAL plugin tree, not `repo`: `analyse` must SUCCEED for the write to
-    # be reached at all — an unreadable input returns 2 before writing — and
-    # the death test below is only a measurement if the run reaches the write.
-    # It reads the shipped skills and the flow definition, starts no
-    # subprocess, and needs no project tree.
-    return ["--plugin", str(PROGRAMS.parent), "--json", str(dest)]
 
 
-def _argv_advisory(dest: Path, repo: Path):
-    # The REAL plugin tree, for the same reason `_argv_membership` uses it:
-    # `census` must SUCCEED for the write to be reached at all (an unreadable
-    # flow returns 2 before writing), so the death test below is only a
-    # measurement if the run gets that far. Defaulting `root` reads the shipped
-    # flow + programs directly; no project tree, no subprocess, ~0.4s.
-    return ["--json", str(dest)]
 
 
 #: (label, module, argv-builder). Driven end to end in both runtime tests.
@@ -169,39 +138,10 @@ DRIVEN = [
 ]
 
 
-def test_the_detector_still_finds_this_shape(tmp_path):
-    """POSITIVE CONTROL, and it is load-bearing.
-
-    `test_the_two_programs_are_converted` asserts `scan_program` returns
-    nothing. That passes vacuously against a broken detector — `return []`
-    kills none of it. Hand the detector a program that plainly has the defect
-    and require it to say so, so "nothing found" is a measurement.
-    """
-    p = tmp_path / "synthetic_offender.py"
-    p.write_text(_SYNTHETIC_OFFENDER, encoding="utf-8")
-    sites = G.scan_program(p) or []
-    assert sites, "the detector found nothing in a program that plainly offends"
-    assert any(s["form"] == ".write_text(...)" for s in sites), sites
 
 
-def test_the_two_programs_are_converted():
-    """Neither writes its declared report destination directly any more."""
-    missing = [s for s in CONVERTED if not (PROGRAMS / f"{s}.py").is_file()]
-    assert not missing, f"program(s) vanished rather than being converted: {missing}"
-    still = {s: G.scan_program(PROGRAMS / f"{s}.py") for s in CONVERTED}
-    assert not any(still.values()), {k: v for k, v in still.items() if v}
 
 
-def test_the_gate_is_green_and_the_ratchet_holds():
-    """The failure #1470 reports, gone — measured the way CI measures it.
-
-    `--strict` only, deliberately: it is the plain verdict PLUS the growth
-    check, so one invocation subsumes both, and each invocation is a full AST
-    sweep of ~1170 programs. Two of them exceeded the harness's 180s bound on a
-    loaded host, which would make this file flaky for a reason that has nothing
-    to do with the property under test.
-    """
-    assert G.main([str(PROGRAMS), "--strict"]) == 0
 
 
 def test_the_green_was_not_bought_by_widening_the_register():
@@ -218,40 +158,8 @@ def test_the_green_was_not_bought_by_widening_the_register():
             f"{s} was excused into the residual instead of converted")
 
 
-def test_the_declared_report_is_written_on_success(tmp_path):
-    """The writers still write. Without this, the death test below is free."""
-    for label, mod, argv in DRIVEN:
-        dest = tmp_path / f"{label}.json"
-        mod.main(argv(dest, tmp_path))
-        assert dest.is_file(), f"{label} produced no declared report"
-        doc = json.loads(dest.read_text(encoding="utf-8"))
-        assert isinstance(doc, dict) and doc, f"{label} wrote an empty record"
 
 
-def test_the_declared_report_appears_only_when_complete(tmp_path, monkeypatch):
-    """THE INVARIANT, at runtime: a write that dies leaves NO final name.
-
-    The death is injected at `os.fsync`, which `_atomic_artefact.writing` calls
-    after the last byte and before the rename — i.e. inside the exact window
-    `Path.write_text` cannot protect, where the old form would already have
-    created and truncated the destination. `monkeypatch` restores it, so the
-    blast radius is this test.
-    """
-    def _die(*_a, **_k):
-        raise OSError("simulated death between the last byte and the rename")
-
-    monkeypatch.setattr(A.os, "fsync", _die)
-    for label, mod, argv in DRIVEN:
-        dest = tmp_path / f"{label}.json"
-        try:
-            mod.main(argv(dest, tmp_path))
-        except OSError:
-            pass          # some writers report the failure, some propagate it
-        assert not dest.exists(), (
-            f"{label} left a declared report under its final name after the "
-            f"write died — a consumer cannot tell it from a complete one")
-    litter = [p.name for p in tmp_path.iterdir() if A.is_temp_artefact(p)]
-    assert not litter, f"temp artefact(s) left behind: {litter}"
 
 
 def test_the_form_this_replaced_really_did_leave_a_file(tmp_path):

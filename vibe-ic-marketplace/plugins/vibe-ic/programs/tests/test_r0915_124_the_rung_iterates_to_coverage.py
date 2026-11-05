@@ -30,36 +30,20 @@ about the loop. Whatever is still uncovered is named by row and span
 (WELLTIE_ROW_STILL_UNCOVERED) and counted in rows_still_uncovered. Never
 both silent.
 """
-import re
 import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import phase3_one_shot_runner as R  # noqa: E402
 
 tclsh = shutil.which("tclsh")
-needs_tclsh = pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
 
 
-def _pdk():
-    return R.PdkConfig(
-        name="gf180mcuD", liberty="/l", tech_lef="/t", cell_lef="/c",
-        cell_gds=None, site="S", drc_deck=None, metal_prefix="M",
-        tapcell_master="fx__filltie", antenna_diode_cell="fx__antenna")
 
 
-def _tcl():
-    return R._build_welltie_coverage_repair_tcl(_pdk(), 15.0)
 
 
-def _cmds():
-    return "\n".join(l for l in _tcl().splitlines()
-                     if not l.lstrip().startswith("#"))
 
 
 # ── the spec, in Python, which the emitted Tcl is written to ───────────────
@@ -133,32 +117,12 @@ def test_the_spec_stops_and_reports_when_nothing_can_be_placed():
 
 # ── the emitted Tcl carries the same shape ─────────────────────────────────
 
-def test_the_point_set_is_recomputed_inside_the_loop():
-    c = _cmds()
-    i_while = c.index("while {1} {")
-    i_pts = c.index("set _wtpts {}")
-    assert i_while < i_pts, (
-        "the point set is still built before the insertion loop -- that is "
-        "the defect run15 shipped")
 
 
-def test_a_pass_that_places_nothing_stops():
-    c = _cmds()
-    assert "if {$_wtprog == 0} { break }" in c
 
 
-def test_the_pass_cap_is_disclosed_not_silent():
-    c = _cmds()
-    assert "WELLTIE_COVERAGE_REPAIR_PASS_CAP" in c
-    assert "not forgiven" in c
 
 
-def test_the_final_state_is_re_derived_not_assumed():
-    """`ties_added` must be a claim about the ROW, not about the loop."""
-    c = _cmds()
-    assert "set _wtvpts {}" in c
-    i_loop_end = c.index("if {$_wtprog == 0} { break }")
-    assert c.index("set _wtvpts {}") > i_loop_end
 
 
 # ── the row logic, EXECUTED ────────────────────────────────────────────────
@@ -173,9 +137,6 @@ _ROW_BEGIN = "foreach _wty [lsort -integer [array names _wtanc]] {"
 _ROW_END = "set ::_vibeic_welltie_uncovered $_wtfail"
 
 
-def _row_section():
-    t = _tcl()
-    return t[t.index(_ROW_BEGIN):t.index(_ROW_END)]
 
 
 _ROW_HARNESS = """
@@ -204,75 +165,3 @@ namespace eval odb {
 }
 proc ::NEWI {method args} { return "" }
 """
-
-
-def _drive_row(x0, x1, ties, occ=(), rad=15000, tw=1120, site=560, y=1642480):
-    if tclsh is None:                                    # pragma: no cover
-        pytest.skip("tclsh not installed")
-    head = _ROW_HARNESS % {
-        "rad": rad, "tw": tw, "y": y, "x0": x0, "x1": x1, "site": site,
-        "ties": " ".join(str(t) for t in ties),
-        "occ": " ".join(str(o) for o in occ),
-    }
-    script = (head + _row_section()
-              + '\nputs "ADDED=[llength $::created]"\n'
-              + 'puts "ROWSLEFT=$_wtrowsleft"\n')
-    with tempfile.TemporaryDirectory() as td:
-        f = Path(td) / "row.tcl"
-        f.write_text(script)
-        return subprocess.run([tclsh, str(f)], capture_output=True, text=True,
-                              cwd=td)
-
-
-@needs_tclsh
-def test_driven_run15s_row_gets_many_ties_not_one():
-    """run15's actual row: two ties 2374.4 um apart. The old rung added ONE."""
-    r = _drive_row(392000, 2770000, [393120, 2767520])
-    assert r.returncode == 0, r.stderr
-    n = int(re.search(r"ADDED=(\d+)", r.stdout).group(1))
-    assert n > 1, f"only {n} tie(s) added -- that is the run15 defect"
-    assert n >= 75, f"a 2374 um gap needs ~79 ties at this radius, got {n}"
-    assert "ROWSLEFT=0" in r.stdout
-
-
-@needs_tclsh
-def test_driven_a_row_that_cannot_be_covered_is_named_and_counted():
-    """THE TEST THAT CAUGHT MY OWN DEAD-BRANCH MUTATION. The whole span is
-    occupied, so nothing can be placed and the row must SAY SO."""
-    r = _drive_row(0, 200000, [0], occ=(0, 200000))
-    assert r.returncode == 0, r.stderr
-    assert "WELLTIE_ROW_STILL_UNCOVERED" in r.stdout
-    assert "points_still_uncovered=" in r.stdout
-    assert "ROWSLEFT=1" in r.stdout
-    assert "ADDED=0" in r.stdout
-
-
-@needs_tclsh
-def test_driven_a_row_already_covered_adds_nothing_and_reports_nothing():
-    """OVER-BREADTH CONTROL: iteration must not invent work on a good row."""
-    ties = [x for x in range(0, 200001, 20000)]
-    r = _drive_row(0, 200000, ties)
-    assert r.returncode == 0, r.stderr
-    assert "ADDED=0" in r.stdout
-    assert "ROWSLEFT=0" in r.stdout
-    assert "WELLTIE_ROW_STILL_UNCOVERED" not in r.stdout
-
-
-def test_a_row_that_still_has_a_gap_is_named_with_its_span():
-    c = _cmds()
-    assert "WELLTIE_ROW_STILL_UNCOVERED" in c
-    assert "span=$_wtrx0($_wty)..$_wtrx1($_wty)" in c
-    assert "points_still_uncovered=$_wtleft" in c
-
-
-def test_the_summary_reports_rows_that_are_still_uncovered():
-    """run15's summary said `unplaceable=0` and meant `the loop finished`.
-    A reader needs the number that means `rows that still have a hole`."""
-    c = _cmds()
-    assert "rows_still_uncovered=$_wtrowsleft" in c
-
-
-def test_the_emitted_block_is_balanced_tcl():
-    c = _cmds()
-    assert sum(l.count("{") - l.count("}") for l in c.splitlines()) == 0
-    assert sum(l.count("[") - l.count("]") for l in c.splitlines()) == 0

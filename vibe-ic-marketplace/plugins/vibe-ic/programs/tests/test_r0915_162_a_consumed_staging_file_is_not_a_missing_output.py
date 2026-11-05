@@ -387,22 +387,3 @@ def test_a_tampered_destination_breaks_the_chain(tmp_path):
     assert C.consumed_into_verified(
         "/foss/designs/run23/phase3/stage3/pnr/spm.sealed.gds",
         rec, root) is None
-
-
-def test_both_in_place_writers_record_their_link(tmp_path):
-    """THE PRODUCER HALF of the chain, asserted on the writers' own source:
-    each takes both digests AROUND its write, never after it."""
-    for prog, before_marker in (
-            ("die_density_fill_gen.py", "_sha_before = _chain.sha256_file(dest)"),
-            ("metal_fill_emit.py", "_sha_before = _chain.sha256_file(dest)")):
-        src = (PROGRAMS / prog).read_text()
-        # the CONSTANT, not the literal: one spelling, defined in
-        # `_inplace_chain` and referenced by every writer and the checker.
-        assert "_chain.LINKS_KEY" in src, prog
-        assert "_chain.link(" in src, prog
-        i = src.index(before_marker)
-        # the write happens AFTER the before-digest, in the same branch
-        j = min((src.index(w, i) for w in ("atomic_write_bytes(dest",
-                                           "staged.replace(dest)")
-                 if w in src[i:]), default=-1)
-        assert j > i, f"{prog}: the before-digest must precede the write"

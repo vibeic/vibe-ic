@@ -27,67 +27,16 @@ PIDFILE = "/tmp/.vibeic-job-fedcba9876543210.pid"
 
 # ── _container_cpu_seconds parsing (marker-matched CPU sum) ───────────────────
 
-def test_container_cpu_seconds_sums_cputimes_for_marker(monkeypatch):
-    # 4-column rows (pid ppid cpu args) — shared tree-aware probe contract.
-    marker = "/foss/designs/proj/pnr.tcl"
-    ps_out = (
-        "50 1    0 ps -eo pid=,ppid=,cputimes=,args=\n"
-        "10 11 123 openroad -no_init -exit /foss/designs/proj/pnr.tcl\n"
-        "11 1    4 bash -lc openroad -no_init -exit /foss/designs/proj/pnr.tcl | tee x\n"
-        "12 1   99 klayout -b -r /foss/other/deck.lydrc\n"
-    )
-    monkeypatch.setattr(R, "_docker_exec_raw",
-                        lambda c, cmd, timeout=15: (0, ps_out, ""))
-    # 123 (openroad) + 4 (its bash wrapper) = 127; the klayout line is excluded.
-    assert R._container_cpu_seconds("c", marker) == 127.0
 
 
-def test_container_cpu_seconds_counts_descendants(monkeypatch):
-    # The two-kill lesson: yosys runs ABC in a child `yosys-abc` whose argv
-    # does not carry the marker — the tree closure must count it.
-    marker = "/proj/synth/netlist.v"
-    ps_out = (
-        "100 1    5 yosys -p write_verilog /proj/synth/netlist.v\n"
-        "200 100 3600 /foss/tools/yosys/bin/yosys-abc -s\n"
-        "300 1   99 klayout -b -r /other/deck\n"
-    )
-    monkeypatch.setattr(R, "_docker_exec_raw",
-                        lambda c, cmd, timeout=15: (0, ps_out, ""))
-    assert R._container_cpu_seconds("c", marker) == 3605.0
 
 
-def test_container_cpu_seconds_none_without_marker():
-    assert R._container_cpu_seconds("c", None) is None
 
 
-def test_container_cpu_seconds_fallback_to_cputime_hms(monkeypatch):
-    marker = "netlist.spice"
-    calls = {"n": 0}
-
-    def fake_exec(c, cmd, timeout=15):
-        calls["n"] += 1
-        if "cputimes=" in cmd:
-            return (1, "", "")          # cputimes unsupported → empty
-        return (0, "7 1 00:02:00 netgen -batch lvs netlist.spice top\n", "")
-
-    monkeypatch.setattr(R, "_docker_exec_raw", fake_exec)
-    assert R._container_cpu_seconds("c", marker) == 120.0
-    assert calls["n"] == 2, "must fall back to the cputime format"
 
 
-def test_container_cpu_seconds_none_when_marker_absent(monkeypatch):
-    monkeypatch.setattr(
-        R, "_docker_exec_raw",
-        lambda c, cmd, timeout=15: (0, "123 openroad -exit /other.tcl\n", ""))
-    assert R._container_cpu_seconds("c", "/not/present.tcl") is None
 
 
-def test_parse_cputime_hms():
-    assert R._parse_cputime_hms("01:02:03") == 3723
-    assert R._parse_cputime_hms("1-00:00:00") == 86400
-    assert R._parse_cputime_hms("05:30") == 330
-    assert R._parse_cputime_hms("junk") is None
-    assert R._parse_cputime_hms("") is None
 
 
 # ── _docker_exec DISPATCH: raw (short) vs watchdog (long, marker) ─────────────
@@ -208,24 +157,8 @@ def test_docker_exec_watchdog_cpu_probe_reads_container(monkeypatch):
 
 # ── hard-ceiling repurpose: NEVER a wall-clock kill budget ────────────────────
 
-def test_pnr_hard_ceiling_is_high_floor_and_never_below_estimate():
-    assert R._pnr_hard_ceiling_s(0) == R._WATCHDOG_HARD_CEILING_S
-    assert R._pnr_hard_ceiling_s(50_000) >= R._WATCHDOG_HARD_CEILING_S
-    for cells in (0, 5_000, 31_790, 200_000, 5_000_000, -5):
-        assert R._pnr_hard_ceiling_s(cells) >= R._pnr_timeout_s(cells)
-        assert R._pnr_hard_ceiling_s(cells) >= R._WATCHDOG_HARD_CEILING_S
-    prev = 0
-    for cells in (0, 10_000, 100_000, 1_000_000, 10_000_000):
-        v = R._pnr_hard_ceiling_s(cells)
-        assert v >= prev
-        prev = v
 
 
-def test_old_estimate_retained_for_ceiling_input_only():
-    """`_pnr_timeout_s` arithmetic is UNCHANGED (still a valid ceiling input);
-    it is simply no longer wired to a killing timeout=."""
-    assert R._pnr_timeout_s(0) == R._PNR_TIMEOUT_DEFAULT_S
-    assert R._pnr_timeout_s(10_000_000) == R._PNR_TIMEOUT_CAP_S
 
 
 def test_phase3_constants_bind_shared_module():

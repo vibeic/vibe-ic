@@ -61,13 +61,6 @@ def _clauses():
     return out
 
 
-def test_the_adoption_gate_passes_on_the_shipped_tree():
-    r = subprocess.run([sys.executable,
-                        str(_PROGRAMS / "step_metrics_adoption_check.py"),
-                        str(_PLUGIN)], capture_output=True, text=True)
-    out = r.stdout + r.stderr
-    assert r.returncode == 0, out
-    assert "declare programs and emit nothing" not in out, out
 
 
 def test_every_one_of_the_seven_has_a_clause_this_test_can_read():

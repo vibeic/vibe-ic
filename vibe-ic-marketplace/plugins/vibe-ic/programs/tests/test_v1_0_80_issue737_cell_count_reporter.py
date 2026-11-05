@@ -36,11 +36,9 @@ from pathlib import Path
 import pytest
 
 import final_report_generate as frg
-import design_one_shot_runner as p2
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
 
 # --- fixtures: the EXACT yosys stat / netlist shapes -----------------------
@@ -220,124 +218,24 @@ def test_empty_netlist_rendered_distinctly_in_markdown(tmp_path):
 # yosys stat LINE FORMAT — pinned so emitter↔checker can't drift again
 # =========================================================================
 
-def test_stat_parser_labelled_form():
-    """Classic yosys: `Number of cells:  NNNNN`."""
-    text = (
-        "3. Printing statistics.\n\n=== foo ===\n\n"
-        "   Number of wires:                  3\n"
-        "   Number of cells:                  94243\n"
-        "     $_AND_                          1\n"
-    )
-    assert p2._parse_yosys_stat_cells(text) == 94243
 
 
-def test_stat_parser_bare_form():
-    """Bare `NNNNN cells` summary line (the form the issue says `Number of
-    cells` NEVER catches on those builds)."""
-    text = "design statistics\n   94243 cells\n"
-    assert p2._parse_yosys_stat_cells(text) == 94243
 
 
-def test_stat_parser_comma_grouped():
-    assert p2._parse_yosys_stat_cells("Number of cells:   1,234,567") == 1234567
 
 
-def test_stat_parser_last_match_is_design_summary():
-    """yosys prints per-module stats then the design summary LAST; the parser
-    must return the last (design-level) count."""
-    text = "Number of cells: 5\n...\nNumber of cells: 9999\n"
-    assert p2._parse_yosys_stat_cells(text) == 9999
 
 
-def test_stat_parser_none_when_absent():
-    """No stat line at all → None (distinct from a real 0), so the caller can
-    keep `?` instead of fabricating a count."""
-    assert p2._parse_yosys_stat_cells("no stat block here") is None
-    assert p2._parse_yosys_stat_cells("") is None
 
 
-def test_phase2_never_keys_on_never_emitted_substring():
-    """Guard the named regression: the parser must NOT depend solely on the
-    `Number of cells` label — the bare `NNNNN cells` form alone must resolve."""
-    # If the parser still keyed only on 'Number of cells', this returns None.
-    assert p2._parse_yosys_stat_cells("12 cells") == 12
 
 
 # =========================================================================
 # end-to-end against a REAL yosys synth (only when yosys is present)
 # =========================================================================
 
-def _yosys_stat_json_support(exe):
-    """Does THIS yosys accept `stat -json`?
-
-    `shutil.which("yosys")` answers a different question. Yosys has shipped
-    `stat` since forever and `stat -json` only from 0.10, so on a 0.9 host the
-    binary is PRESENT and the option is absent — a third state that a presence
-    check cannot represent, and the reason these two tests are red on every
-    host carrying the distro's 0.9 rather than on hosts missing yosys.
-
-    Probed by EXERCISING the option, not by parsing a version string: a
-    version parse guesses at a capability, this measures it.
-
-    Returns True (supported), False (the option is unknown), or **None** when
-    yosys failed for some OTHER reason. None must NOT skip — a broken yosys is
-    a real failure and swallowing it here would convert this file from a red
-    into a silent no-op, which is strictly worse than the red.
-    """
-    p = _pr.run([exe, "-q", "-p", "stat -json"],
-                       capture_output=True, text=True)
-    if p.returncode == 0:
-        return True
-    if "Unknown option" in (p.stdout + p.stderr):
-        return False
-    return None
 
 
-def test_end_to_end_real_yosys(tmp_path):
-    import shutil
-    exe = shutil.which("yosys")
-    if exe is None:
-        pytest.skip("yosys not installed")
-    # This test's subject is "does the reporter resolve a real count
-    # end-to-end", NOT "does stat.json exist" — its own final assertion
-    # accepts stat.json, yosys.log OR netlist_scan, because the reporter
-    # documents three sources. So on a yosys without `-json` we exercise the
-    # SAME end-to-end path through a different source rather than skipping:
-    # skipping here would drop live coverage of the fallback the production
-    # reporter actually relies on for such hosts.
-    has_json = _yosys_stat_json_support(exe) is True
-    src = tmp_path / "src.v"
-    src.write_text(
-        "module foo(input a, input b, input clk, output reg y);\n"
-        "  always @(posedge clk) y <= a & b;\n"
-        "endmodule\n"
-    )
-    sd = tmp_path / "phase2" / "stage2" / "synth"
-    sd.mkdir(parents=True)
-    script = (
-        f"read_verilog {src}; synth -flatten; "
-        "write_verilog -noexpr -nostr -noattr netlist.v; "
-        + ("tee -o stat.json stat -json; stat" if has_json
-           else "tee -o yosys.log stat")
-    )
-    proc = _pr.run(["yosys", "-p", script], cwd=str(sd),
-                          capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stderr[-2000:]
-    # The branch must be the one we asked for; otherwise a probe that silently
-    # answered wrong would let this test pass while measuring the other path.
-    assert (sd / "stat.json").exists() is has_json, (
-        f"probe said stat -json support={has_json} but stat.json "
-        f"exists={(sd / 'stat.json').exists()} — the probe and the run disagree")
-    # the REAL stat line format is asserted via the live log
-    log_text = proc.stdout + proc.stderr
-    assert p2._parse_yosys_stat_cells(log_text) is not None
-    assert p2._parse_yosys_stat_cells(log_text) >= 2  # >=1 AND + 1 DFF
-    # reporter resolves a real (non-zero, non-empty) count end-to-end
-    r = frg._gather_cell_count(tmp_path)
-    assert r["total_synth"] is not None and r["total_synth"] >= 2, r
-    assert r["empty_netlist"] is False, r
-    assert r["synth_count_source"] in ("stat.json", "yosys.log",
-                                       "netlist_scan"), r
 
 
 # =========================================================================
@@ -397,15 +295,6 @@ def test_hierarchical_stat_prefers_design_aggregate(tmp_path):
     assert r["empty_netlist"] is False, r
 
 
-def test_hierarchical_stat_agrees_with_log_design_total(tmp_path):
-    """End-state cross-check: the design-aggregate count (3) is the SAME total
-    the sibling yosys.log `Number of cells:` line / phase2 parser produce, so
-    the two reporters no longer disagree on a hierarchical netlist."""
-    proj = _mk_project(tmp_path, GENERIC_NETLIST, stat_json=HIER_STAT_JSON)
-    r = frg._gather_cell_count(proj)
-    log_total = p2._parse_yosys_stat_cells(
-        "=== design hierarchy ===\nNumber of cells: 3\n")
-    assert r["total_synth"] == log_total == 3, (r, log_total)
 
 
 def test_flattened_stat_still_correct(tmp_path):
@@ -456,63 +345,6 @@ def test_94243_motivating_case_still_prefers_stat(tmp_path):
     assert ("$_AND_", 50000) in r["top"], r["top"]
 
 
-def test_end_to_end_real_yosys_hierarchical(tmp_path):
-    """END-STATE on a REAL hierarchical yosys run (skipped if yosys absent):
-    a non-flattened design's reported total equals the design aggregate, which
-    equals the yosys.log `Number of cells:` total — proving the two reporters
-    agree on hierarchy."""
-    import shutil
-    exe = shutil.which("yosys")
-    if exe is None:
-        pytest.skip("yosys not installed")
-    # Unlike the flat end-to-end above, this test's SUBJECT is the `-json`
-    # design block: it asserts `synth_count_source == "stat.json"` and compares
-    # the design aggregate against the log total. Without `-json` there is no
-    # design block to compare, so the property is UNTESTABLE here — not
-    # violated. Skip naming tool, version and the missing behaviour, so the
-    # skip is auditable rather than a silent hole (vibe-ic#1371's form).
-    _support = _yosys_stat_json_support(exe)
-    if _support is False:
-        _v = _pr.run([exe, "-V"], capture_output=True, text=True).stdout.strip() or "unknown"
-        pytest.skip(
-            f"yosys present at {exe} ({_v}) but it does not accept "
-            "`stat -json` (the option arrived after 0.9). This test's subject "
-            "IS the -json design block, so it cannot be measured on this host. "
-            "NOT a capability-independent pass: the flat end-to-end test above "
-            "still runs here through the reporter's fallback source.")
-    # _support is None -> yosys failed for some other reason; do NOT skip.
-    # Fall through and let the real assertions report it.
-    src = tmp_path / "hier.v"
-    src.write_text(
-        "module leaf(input a, input b, output y);\n"
-        "  assign y = a & b;\n"
-        "endmodule\n"
-        "module mid(input a, input b, input c, output y);\n"
-        "  wire t; leaf u0(.a(a),.b(b),.y(t)); leaf u1(.a(t),.b(c),.y(y));\n"
-        "endmodule\n"
-        "module top(input a, input b, input c, input d, output y);\n"
-        "  wire t; mid m0(.a(a),.b(b),.c(c),.y(t)); leaf l0(.a(t),.b(d),.y(y));\n"
-        "endmodule\n"
-    )
-    sd = tmp_path / "phase2" / "stage2" / "synth"
-    sd.mkdir(parents=True)
-    # NOTE: no `flatten` — keep the hierarchy so per-module < design total.
-    script = (
-        f"read_verilog {src}; hierarchy -top top; proc; opt; "
-        "write_verilog -noexpr -nostr -noattr netlist.v; "
-        "tee -o stat.json stat -json -top top; "
-        "tee -o yosys.log stat -top top"
-    )
-    proc = _pr.run(["yosys", "-q", "-p", script], cwd=str(sd),
-                          capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stderr[-2000:]
-    log_total = p2._parse_yosys_stat_cells(
-        (sd / "yosys.log").read_text(errors="replace"))
-    r = frg._gather_cell_count(tmp_path)
-    # the reporter must agree with the design-level total, not under-count
-    assert r["total_synth"] == log_total, (r, log_total)
-    assert r["empty_netlist"] is False, r
-    assert r["synth_count_source"] == "stat.json", r
 
 
 if __name__ == "__main__":

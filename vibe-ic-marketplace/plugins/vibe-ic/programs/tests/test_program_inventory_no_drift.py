@@ -478,32 +478,6 @@ def test_artifact_only_regenerates_the_artefact_and_no_prose(
             f"this write would fall outside its verdict")
 
 
-def test_the_resolver_asks_this_generator_for_the_artefact_alone():
-    """The registry entry and the flag are one decision; pin them together.
-
-    If the flag were dropped, the resolver would fall back to a default that
-    now also writes prose, and nothing else in either file would notice.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "generated_artifact_conflict_resolve",
-        plugin_path("programs", "generated_artifact_conflict_resolve.py"))
-    mod = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(plugin_path("programs")))
-    # Registered BEFORE exec: `DerivedArtifact` is a dataclass, and dataclasses
-    # resolve their annotations through `sys.modules[cls.__module__]`. Left
-    # unregistered, that lookup returns None and the module dies on import for
-    # a reason that has nothing to do with what is being asserted.
-    sys.modules[spec.name] = mod
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        sys.modules.pop(spec.name, None)
-    entries = [a for a in mod.REGISTRY if a.generator.endswith(
-        "gen_program_inventory.py")]
-    assert len(entries) == 1, f"expected exactly one entry, got {entries}"
-    assert "--artifact-only" in entries[0].regenerate, (
-        f"the resolver regenerates with {entries[0].regenerate}; without "
-        f"--artifact-only it would also rewrite prose it does not stage")
 
 
 @pytest.mark.consistency

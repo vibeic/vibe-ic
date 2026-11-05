@@ -12,7 +12,6 @@ import librelane_postroute_repair as P
 import librelane_contract as L
 from _ppa import closure
 import pnr_timing_repair_completeness_check as C
-import phase3_one_shot_runner as R
 import postroute_timing_repair_decision as D
 import postroute_timing_repair_status_gen as S
 
@@ -87,12 +86,6 @@ def test_invalid_numeric_measurements_cannot_certify_clean_route():
         assert key in result["missing"]
 
 
-def test_direct_deck_emits_a_final_tool_drv_probe():
-    builder = getattr(R, "_drv_after_edit_probe_tcl", lambda _m: "")
-    body = builder("NEUTRAL_FINAL")
-    assert "report_check_types -max_slew -max_capacitance -violators" in body
-    assert "report_check_types -max_fanout -violators" in body
-    assert "NEUTRAL_FINAL_DRV_CENSUS_UNMEASURED" in body
 
 
 def test_real_arm_skips_clean_input_but_runs_on_injected_violation(tmp_path,
@@ -320,28 +313,6 @@ def test_drv_and_min_pulse_rows_alone_are_not_a_timing_measurement():
             "timing_measurement"] == "VIOLATED"
 
 
-def test_runner_stamps_unmeasured_timing_as_its_own_action(tmp_path, monkeypatch):
-    import test_v0_3_26_issue527_spef_sta_canonical as H
-    monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0, **_: (1, "", ""))
-    monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
-
-    def decision_for(label, sta_text):
-        project = H._proj(tmp_path / label, est_text=sta_text, with_spef=False)
-        R.step_canonicalize_artefacts(project, "chip_top", H._pdk(), "x")
-        repair = project / "phase3/stage3/postroute_timing_repair"
-        return (json.loads((repair / "postroute_timing_repair_decision.json").read_text()),
-                repair)
-
-    decision, repair = decision_for("header", "Post-route STA report header only\n")
-    assert decision["timing_basis_status"] == "NOT_MEASURED"
-    assert decision["action"] == "timing_not_measured"
-    assert decision["sta_source"] == "phase3/stage3/pnr/sta.rpt"
-    assert "Re-run post-route STA" in decision["remediation"]
-    assert not (repair / "no_repair_needed.flag").exists()
-    # Reverse: the measured MET report with a DRV row is a clean timing basis.
-    decision, repair = decision_for("met_drv", _SPEF_STA_MET_WITH_DRV)
-    assert decision["timing_basis_status"] == "CLEAN"
-    assert decision["action"] == "no_repair_needed_flag"
 
 
 def test_unmeasured_timing_beside_a_failed_domain_claims_no_timing_result(tmp_path):

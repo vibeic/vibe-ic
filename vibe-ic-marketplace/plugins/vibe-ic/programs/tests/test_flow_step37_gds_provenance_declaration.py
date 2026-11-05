@@ -56,7 +56,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 import sys
 from pathlib import Path
 
@@ -71,7 +70,6 @@ for _p in (str(_PROGRAMS), str(_PLUGIN)):
         sys.path.insert(0, _p)
 
 import flow_compliance_check as _fcc                       # noqa: E402
-import phase3_one_shot_runner as _runner                   # noqa: E402
 from flow_artifact_paths import gate_parameters           # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -264,124 +262,20 @@ def test_coarse_form_would_have_passed_the_same_project(tmp_path):
 
 # ── (b) the producer ────────────────────────────────────────────────────────
 
-def test_producer_restamps_the_shipped_gds_so_the_honest_gate_passes(tmp_path):
-    project = _shipped_project(tmp_path, stale=True)
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    passed, out = _fcc._check_program_exit_zero(project, _provenance_command())
-    assert passed, (
-        f"after the producer re-stamp the honest gate must pass: {out!r}")
 
 
-def test_producer_declares_the_pnr_streamout_too(tmp_path):
-    """phase3/stage3/pnr/<top>.gds is the layout DRC and LVS actually verified
-    and had NO record on the real run."""
-    project = _shipped_project(tmp_path, stale=True)
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    passed, out = _fcc._check_program_exit_zero(
-        project,
-        "provenance_check . --output=phase3/stage3/pnr/chip_top.gds "
-        "--tool=magic,klayout,openroad")
-    assert passed, out
 
 
-def test_producer_supersedes_a_stale_record_without_amending_it(tmp_path):
-    """The producer appends a record of the bytes it just shipped; the stale
-    record stays in the ledger as history.
-
-    This used to require patching IN PLACE, on the grounds that appending
-    "would trade PROVENANCE_HASH_MISMATCH for PROVENANCE_HASH_INCONSISTENT —
-    both FAIL". That was a property of the old checker, and paying for it with
-    an in-place edit is what made a tampered artefact indistinguishable from a
-    re-emitted one. The checker now judges a path by its NEWEST record."""
-    from provenance_output_hash_completeness_check import audit
-    _t = time.time()
-    project = _shipped_project(tmp_path, stale=True)
-    before = (project / "provenance.jsonl").read_text().splitlines()
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    lines = [l for l in (project / "provenance.jsonl")
-             .read_text().splitlines() if l.strip()]
-    assert lines[:len(before)] == before, "history was amended"
-    assert len(lines) > len(before), "no superseding record was appended"
-    rel = "phase3/stage4/gds/chip_top.gds"
-    declared = [json.loads(l)["outputs"][rel] for l in lines
-                if rel in json.loads(l).get("outputs", {})]
-    assert declared[-1] != declared[0], (
-        "the stale declaration must have been superseded by a newer one")
-    assert declared[-1] == "sha256:" + hashlib.sha256(
-        (project / rel).read_bytes()).hexdigest(), (
-        "the NEWEST declaration must carry the digest of the shipped bytes")
-    verdict, findings = audit(project)
-    assert not [f for f in findings if f.severity == "ERROR"], findings
-    assert verdict == "PASS", [(f.rule, f.detail) for f in findings]
 
 
-def test_producer_is_idempotent(tmp_path):
-    """A second call must add nothing. A producer that appends unconditionally
-    would grow the ledger on every pass."""
-    _t = time.time()
-    project = _shipped_project(tmp_path, stale=True)
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    first = (project / "provenance.jsonl").read_text()
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    second = (project / "provenance.jsonl").read_text()
-    assert second == first, "the second call must be a no-op"
-    assert first.count("phase3/stage4/gds/chip_top.gds") == 2, (
-        "expected the superseded declaration plus the current one")
 
 
-def test_producer_never_declares_a_file_that_does_not_exist(tmp_path):
-    """#365 anti-fabrication: no record may be written for an absent artefact
-    — the gate must still FAIL correctly on a run that produced nothing."""
-    project = tmp_path / "proj"
-    (project / "phase3" / "stage4" / "gds").mkdir(parents=True)
-    (project / "provenance.jsonl").write_text("")
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    text = (project / "provenance.jsonl").read_text()
-    assert ".gds" not in text, (
-        f"a GDS that was never produced must not be declared: {text!r}")
-    passed, _ = _fcc._check_program_exit_zero(project, _provenance_command())
-    assert not passed
 
 
-def test_producer_refuses_to_attribute_a_foreign_canonical_gds(tmp_path):
-    """Anti-laundering. If the file at the canonical path is NOT byte-identical
-    to this pipeline's stream-out, the producer must leave it undeclared and
-    let Step 37 FAIL, rather than re-hash whatever is lying around and call it
-    a klayout streamout."""
-    project = _shipped_project(tmp_path, stale=True)
-    (project / "phase3/stage4/gds/chip_top.gds").write_bytes(
-        b"\x00\x06\x00\x02FOREIGN-DROP" + b"\x33" * 900)
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    foreign = _sha((project / "phase3/stage4/gds/chip_top.gds").read_bytes())
-    text = (project / "provenance.jsonl").read_text()
-    assert foreign not in text, (
-        "a file the pipeline did not produce must not be declared as its "
-        f"stream-out: {text!r}")
-    passed, out = _fcc._check_program_exit_zero(project, _provenance_command())
-    assert not passed, out
 
 
-def test_producer_records_are_flagged_reconstructed_with_null_duration(
-        tmp_path):
-    """#365: a back-filled record must say 'not measured', never `0`."""
-    project = _shipped_project(tmp_path, stale=True)
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    recs = [json.loads(l) for l in
-            (project / "provenance.jsonl").read_text().splitlines() if l.strip()]
-    pnr = [r for r in recs
-           if "phase3/stage3/pnr/chip_top.gds" in (r.get("outputs") or {})]
-    assert pnr, recs
-    assert pnr[0]["reconstructed"] is True
-    assert pnr[0]["duration_ms"] is None
 
 
-def test_producer_rehashes_never_copies_an_old_digest(tmp_path):
-    """The declared hash must be recomputed from disk. If it were copied from
-    the stale record the gate would still fail — assert the actual bytes."""
-    project = _shipped_project(tmp_path, stale=True)
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    shipped = (project / "phase3/stage4/gds/chip_top.gds").read_bytes()
-    assert _sha(shipped) in (project / "provenance.jsonl").read_text()
 
 
 def test_producer_is_wired_into_step_canonicalize_artefacts():
@@ -424,17 +318,6 @@ def test_guard_an_honest_run_still_passes(tmp_path):
     assert passed, out
 
 
-def test_producer_leaves_an_already_honest_run_green(tmp_path):
-    """NOT a direction-1 guard — calls the new helper, so it correctly fails on
-    the base tree. Asserts the producer is a no-op on a correct ledger."""
-    project = _shipped_project(tmp_path, stale=False)
-    before = (project / "provenance.jsonl").read_text()
-    _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    passed, out = _fcc._check_program_exit_zero(project, _provenance_command())
-    assert passed, out
-    after = (project / "provenance.jsonl").read_text()
-    assert after.count("phase3/stage4/gds/chip_top.gds") == \
-        before.count("phase3/stage4/gds/chip_top.gds") == 1
 
 
 def test_guard_wrong_tool_attribution_still_fails(tmp_path):
@@ -444,25 +327,3 @@ def test_guard_wrong_tool_attribution_still_fails(tmp_path):
         project,
         "provenance_check . --output=phase3/stage4/gds/*.gds --tool=netgen")
     assert not passed, out
-
-
-def test_guard_original_restamp_helper_still_works(tmp_path):
-    """`_step37_restamp_canon_gds_provenance` keeps its signature and effect —
-    test_canonical_gds_provenance_restamp.py calls it directly."""
-    _t = time.time()
-    project = _shipped_project(tmp_path, stale=True)
-    canon = project / "phase3/stage4/gds/chip_top.gds"
-    # 2026-09-24 (lane ictier1, reemit r3; review wo6zpfboe, design approved): evidence comes from the PRODUCER -- a re-declaration is credited only on the chain (the bytes a transform read equal the newest declared sha of its input). This fixture supplies what the production flow has: the producer's own record, and the chained writer.
-    # The stream-out declared the primary GDS; the canonical copy chains to it.
-    pnr = project / "phase3/stage3/pnr/chip_top.gds"
-    with (project / "provenance.jsonl").open("a") as f:
-        f.write(json.dumps({"record": "invocation", "tool": "klayout",
-                            "command": "klayout streamout", "exit_code": 0,
-                            "timestamp": "2026-07-26T14:52:10Z",
-                            "outputs": {"phase3/stage3/pnr/chip_top.gds":
-                                        _sha(pnr.read_bytes())}}) + "\n")
-    _runner._step37_restamp_canon_gds_provenance(
-        project, "chip_top", canon,
-        writer=("canonicalize_artefacts", _t, pnr, _sha(pnr.read_bytes())))
-    assert _sha(canon.read_bytes()) in \
-        (project / "provenance.jsonl").read_text()

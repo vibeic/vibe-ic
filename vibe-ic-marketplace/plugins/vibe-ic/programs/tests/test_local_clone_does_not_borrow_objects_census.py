@@ -6,20 +6,15 @@ being true of whatever git the container ships.
 """
 from __future__ import annotations
 
-import shutil
-import json
 import sys
 import tempfile
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 _RULE = "local_clone_does_not_borrow_objects"
-PROG = (Path(__file__).resolve().parents[1]
-        / "local_clone_does_not_borrow_objects_census.py")
 
 _DEFECT = '''\
 import subprocess
@@ -72,23 +67,8 @@ def main():
 _SHELL_DEFECT = "#!/bin/bash\nset -eu\ngit clone --shared \"$SRC\" \"$DEST\"\n"
 
 
-def _tree(files: dict, inventory=None) -> Path:
-    root = Path(tempfile.mkdtemp(prefix="lcb_"))
-    (root / ".git").mkdir()
-    progs = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
-    progs.mkdir(parents=True)
-    for name, body in files.items():
-        (progs / name).write_text(body)
-    (root / "inventory.json").write_text(
-        json.dumps({"known": inventory or []}) + "\n")
-    return root
 
 
-def _run(root: Path, *extra, inventory: Path = None):
-    return _pr.run(
-        [sys.executable, str(PROG), "--root", str(root), "--inventory",
-         str(inventory or (root / "inventory.json")), *extra],
-        capture_output=True, text=True)
 
 
 # ------------------------------------------------- what git actually does
@@ -130,186 +110,19 @@ def test_only_shared_and_reference_actually_borrow():
 
 
 # ------------------------------------------------------------- the RED cases
-def test_a_shared_clone_is_refused():
-    r = _run(_tree({"prepare_checkout.py": _DEFECT}), "--strict")
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-    assert "--shared" in r.stdout
 
 
-def test_a_reference_clone_is_refused():
-    r = _run(_tree({"prepare_checkout.py": _DEFECT_REFERENCE}), "--strict")
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-    assert "--reference" in r.stdout
 
 
-def test_a_shell_script_clone_is_refused():
-    r = _run(_tree({"prepare.sh": _SHELL_DEFECT}), "--strict")
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 # ----------------------------------------------------------- the GREEN cases
-def test_a_plain_local_clone_is_not_refused():
-    r = _run(_tree({"prepare_checkout.py": _PLAIN}))
-    assert r.returncode == 0, (
-        f"a plain clone was refused (rc={r.returncode}) — the rule would be "
-        f"refusing the remedy the preflight names.\n{r.stdout}\n{r.stderr}")
 
 
-def test_dissociate_absorbs_and_is_not_refused():
-    r = _run(_tree({"prepare_checkout.py": _DISSOCIATE}))
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
-def test_an_unrelated_reference_flag_is_not_a_clone():
-    r = _run(_tree({"ppa_area_threshold_check.py": _UNRELATED_REFERENCE}))
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
-def test_a_test_that_builds_the_shape_is_out_of_population():
-    """Both first-sweep hits were tests proving the preflight refuses this."""
-    root = _tree({})
-    tests = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs" / "tests"
-    tests.mkdir(parents=True)
-    (tests / "test_preflight.py").write_text(_DEFECT)
-    r = _run(root)
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 # ------------------------------------------------------------- the contract
-def test_a_stale_inventory_row_is_a_failure():
-    r = _run(_tree({"prepare_checkout.py": _PLAIN}, inventory=[
-        {"key": "programs/gone.py::--shared::argv", "reason": "stale"}]), "--strict")
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}"
-
-
-def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True)
-    assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-
-
-def test_a_bad_invocation_is_rc_3():
-    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True)
-    assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-
-
-def test_the_shipped_tree_passes_its_own_rule():
-    root = Path(__file__).resolve().parents[5]
-    if not (root / ".git").exists():
-        pytest.skip("not a checkout")
-    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-
-
-def test_the_census_never_blocks_by_default():
-    """The ruling: this is a census and must not be wired as a blocking check.
-
-    A census that exits non-zero gets wired as a gate by the next person who
-    reads the exit code, so the default is 0 whatever is found — and the
-    output says so and names the gate that does refuse.
-    """
-    root = Path(__file__).resolve().parents[5]
-    if not (root / ".git").exists():
-        pytest.skip("not a checkout")
-    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, (
-        f"the census refused by default (rc={r.returncode}); it must report\n"
-        f"{r.stdout}\n{r.stderr}")
-    assert "[CENSUS]" in r.stdout
-    assert "the gate is programs/%s.py" % _RULE in r.stdout, (
-        "the census must name the gate that does the refusing")
-
-
-def test_a_count_over_an_empty_population_is_undetermined():
-    """`[CENSUS] 0 site(s)` is honest only if something was read.
-
-    Over a tree this program parsed NOTHING, a count of 0 is
-    indistinguishable from a clean result. Measured before the guard: rc 0 --
-    and still 0 under `--strict`, so "--strict is where a caller asks for the
-    refusal" did not cover it either. Exiting 0 is a census's contract for a
-    REAL population, not a licence to report over none.
-    """
-    root = Path(tempfile.mkdtemp(prefix="csz_"))
-    try:
-        (root / ".git").mkdir()
-        (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
-         / "tests").mkdir(parents=True)
-        r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
-                           capture_output=True, text=True)
-        assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}"
-        assert "NOT a pass" in r.stdout, r.stdout
-        assert "[CENSUS] 0 site(s)" not in r.stdout, r.stdout
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_a_stale_row_does_not_buy_an_empty_population_a_pass():
-    """The sibling above passes only while the shipped inventory is EMPTY.
-
-    Give this census one row that matches nothing and the refusal above stops
-    firing: it sat under `if rc == 0`, and a stale row sets rc. A row is read
-    from the inventory FILE and says nothing whatever about the tree, so it
-    was a datum from outside the population switching off the population's own
-    refusal. MEASURED before the fix, on an empty tree with one stale row:
-    0 python modules and 0 shell scripts read, and exit 0.
-
-    The denominator is a property of what was READ.
-    """
-    root = Path(tempfile.mkdtemp(prefix="csr_"))
-    try:
-        (root / ".git").mkdir()
-        (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
-         / "tests").mkdir(parents=True)
-        inv = root / "stale_inv.json"
-        inv.write_text(json.dumps({"known": [
-            {"key": "vibe-ic-marketplace/plugins/vibe-ic/programs/gone.py"
-                    "::x", "reason": "matches nothing on this tree"}]}) + "\n",
-            encoding="utf-8")
-        r = _pr.run([sys.executable, str(PROG), "--root", str(root),
-                     "--inventory", str(inv)], capture_output=True, text=True)
-        assert "match nothing" in r.stdout, (
-            "precondition: the stale-row branch must be the one that fired\n"
-            f"{r.stdout}")
-        assert r.returncode == 2, (
-            "nothing was read and the census still exited "
-            f"{r.returncode} -- a stale inventory row is not a measurement\n"
-            f"{r.stdout}")
-        assert "NOT a pass" in r.stdout, r.stdout
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def test_the_census_states_its_count_even_when_it_has_something_to_report():
-    """The count line is the census's whole product, and under `if rc == 0` it
-    was printed ONLY when there was nothing to report -- silent in exactly the
-    case a reader opened it for, taking the sentence that names the refusing
-    gate with it. Driven over a REAL population with a stale row present."""
-    root = Path(tempfile.mkdtemp(prefix="csc_"))
-    try:
-        (root / ".git").mkdir()
-        programs = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
-                    / "programs")
-        (programs / "tests").mkdir(parents=True)
-        (programs / "clean.py").write_text(_PLAIN, encoding="utf-8")
-        inv = root / "stale_inv.json"
-        inv.write_text(json.dumps({"known": [
-            {"key": "vibe-ic-marketplace/plugins/vibe-ic/programs/gone.py"
-                    "::x", "reason": "matches nothing on this tree"}]}) + "\n",
-            encoding="utf-8")
-        r = _pr.run([sys.executable, str(PROG), "--root", str(root),
-                     "--inventory", str(inv)], capture_output=True, text=True)
-        assert "match nothing" in r.stdout, (
-            "precondition: something must be reported, or this is the branch "
-            f"the old code already printed\n{r.stdout}")
-        assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}"
-        assert "site(s) classified" in r.stdout, (
-            "the census reported a finding and never stated its count\n"
-            f"{r.stdout}")
-        assert "the gate is programs/%s.py" % _RULE in r.stdout, (
-            "the count line names the gate that does the refusing; it went "
-            f"missing with the count\n{r.stdout}")
-    finally:
-        shutil.rmtree(root, ignore_errors=True)

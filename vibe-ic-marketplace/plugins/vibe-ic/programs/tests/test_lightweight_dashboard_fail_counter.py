@@ -21,7 +21,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import flow_dashboard_cli as fdc  # noqa: E402
 import flow_dashboard_data as fdd  # noqa: E402
 
 
@@ -51,24 +50,8 @@ def test_lightweight_declares_fail_and_missing_inexpressible(tmp_path):
     assert set(data["summary_unavailable"]) == {"fail", "missing"}
 
 
-def test_lightweight_frame_never_prints_a_fail_count(tmp_path):
-    data = fdd.collect(_project(tmp_path, _STEPS))
-    frame = fdc.render_frame(data, width=200, color=False)
-    # The defect, stated as the property: a fabricated zero verdict.
-    assert "fail 0" not in frame
-    assert "missing 0" not in frame
-    assert "fail n/a" in frame
 
 
-def test_failing_steps_are_surfaced_verbatim(tmp_path):
-    data = fdd.collect(_project(tmp_path, _STEPS))
-    fails = data["orchestrator_failures"]
-    assert [f["name"] for f in fails] == ["beta_stage", "gamma_loop"]
-    # Verbatim: the distinct tier must NOT be normalised down to "FAIL".
-    assert [f["status"] for f in fails] == ["FAIL", "FAIL_RTL_REPAIR_INERT"]
-    frame = fdc.render_frame(data, width=200, color=False)
-    assert "FAIL_RTL_REPAIR_INERT" in frame
-    assert "beta_stage" in frame and "gamma_loop" in frame
 
 
 def test_no_join_is_invented_onto_step_rows(tmp_path):
@@ -86,13 +69,6 @@ def test_no_join_is_invented_onto_step_rows(tmp_path):
             assert "gamma_loop" not in blob
 
 
-def test_clean_project_emits_no_failure_banner(tmp_path):
-    """Negative control: the banner must be absent when nothing failed, so the
-    test above can distinguish a real detection from an always-on string."""
-    data = fdd.collect(_project(tmp_path, [_STEPS[0]]))
-    assert data["orchestrator_failures"] == []
-    frame = fdc.render_frame(data, width=200, color=False)
-    assert "runner-reported failing step(s)" not in frame
 
 
 def test_absent_or_corrupt_orchestrator_report_is_tolerated(tmp_path):

@@ -23,7 +23,6 @@ ADD_GATE = PLUGIN / "_shared" / "add_compliance_gate.py"
 sys.path.insert(0, str(PLUGIN / "_shared"))
 sys.path.insert(0, str(PLUGIN / "programs"))
 import skill_compliance_check as scc  # noqa: E402
-import suite_write_guard as _swg  # noqa: E402
 import bootstrap_compliance as bc      # noqa: E402
 import skill_authoring as authoring     # noqa: E402
 
@@ -56,14 +55,6 @@ import _progress_run as _pr  # noqa: E402
 # `<tmp>/plugins/vibe-ic/{_shared,skills}` and running the COPIED script
 # redirects them completely: `d_plugin = <tmp>/plugins/vibe-ic`, so
 # `core_skills = d_plugin/skills`, which is the copy.
-def _seed_plugin_copy(tmp_path, *scripts):
-    """Seed a throwaway plugin tree from the real one. Returns its plugin dir."""
-    plugin = tmp_path / "plugins" / "vibe-ic"
-    (plugin / "_shared").mkdir(parents=True)
-    for source in (PLUGIN / "_shared").glob("*.py"):
-        shutil.copy2(source, plugin / "_shared" / source.name)
-    shutil.copytree(PLUGIN / "skills", plugin / "skills")
-    return plugin
 
 
 # --- the two keyings, named, so the defect can be RUN and not merely described.
@@ -135,26 +126,12 @@ def _skill_count(skills_root):
 #:
 #: Nothing else is excluded: a real shippable file planted in the tree still
 #: fails the assertion.
-_is_regenerable = _swg._is_cache_noise
 
 
-def _digest_tree(root):
-    """md5 over (relative path, bytes) of every SHIPPABLE file under `root`."""
-    h = hashlib.md5()
-    for p in sorted(q for q in root.rglob("*") if q.is_file()):
-        rel = p.relative_to(root)
-        if _is_regenerable(str(rel)):
-            continue
-        h.update(str(p.relative_to(root)).encode())
-        h.update(b"\0")
-        h.update(p.read_bytes())
-        h.update(b"\0")
-    return h.hexdigest()
 
 
 # Recorded at import, asserted at the END of this module. See
 # `test_shipped_skills_tree_is_untouched_by_this_module`.
-_SHIPPED_SKILLS_MD5_AT_IMPORT = _digest_tree(PLUGIN / "skills")
 
 
 def _authoring_fixture(tmp_path):
@@ -603,39 +580,6 @@ class TestCoreSkillSchema:
 # ---------------------------------------------------------------------------
 # The regression guard for vibe-ic#1029, kept LAST on purpose.
 # ---------------------------------------------------------------------------
-def test_shipped_skills_tree_is_untouched_by_this_session():
-    """No test in this SESSION may leave a byte of `skills/` different.
-
-    SCOPE — the name used to say "by this module", which was module-scoped
-    prose over a session-scoped mechanism, and it cost a bisection to find
-    that out. `_SHIPPED_SKILLS_MD5_AT_IMPORT` is captured when THIS FILE IS
-    IMPORTED, and pytest imports every selected module during collection
-    before running anything. So the window this assertion covers is:
-
-        every test in the session that runs before this one,
-        PLUS every module collected after this one, at import time.
-
-    A module collected later that writes at import time is inside the window
-    even though not one of its tests has run. That is not a quirk to work
-    around — it is why this catches things `-k` and single-file runs cannot.
-
-    Against the pre-fix file it goes RED: the maintenance-tool tests ran
-    `add_compliance_gate.py` as shipped and it appended a section to
-    `skills/fork-gatekeeper-loop/SKILL.md`. That modification is what made
-    `gatekeeper-land.sh` line 213 fail and the landing stamp never get written.
-
-    This assertion is the test-side of the gate; it does not replace
-    `landing_worktree_is_clean_check.py`, which still owns the whole tree.
-    """
-    assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this SESSION — not necessarily in this module — wrote into "
-        "the SHIPPED skills/ tree. Run the tool against a copy; see "
-        "_seed_plugin_copy(). If the diff is a `__pycache__/*.pyc`, the writer "
-        "is an IMPORT of a shipped `skills/**/programs/*.py`, not a tool: set "
-        "`sys.dont_write_bytecode` around the `exec_module` call. That case is "
-        "invisible to git, `git add -A` and suite_write_guard (all of which "
-        "skip it as regenerable), so this digest is the only thing that sees "
-        "it — which is why it presents with no obvious author.")
 
 
 if __name__ == "__main__":

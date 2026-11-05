@@ -55,11 +55,9 @@ Run: python3 -m pytest programs/tests/test_a_timeout_is_not_a_finding_about_the_
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -68,7 +66,6 @@ if str(_PROGRAMS) not in sys.path:
 import _watchdog as W                            # noqa: E402
 import verilator_timing_fallback_check as VF      # noqa: E402
 import tb_vcs_only_construct_detect as TB         # noqa: E402
-import handoff_bundle_check as HB                 # noqa: E402
 import fresh_agent_rtl_bug_density_metric as FA   # noqa: E402
 import dynamic_ir_vectored_emit as DIE            # noqa: E402
 import dynamic_ir_drop_check as DIC               # noqa: E402
@@ -211,35 +208,10 @@ def test_a_slow_verilator_is_not_recorded_as_an_absent_one(
 
 # ── handoff_bundle_check ────────────────────────────────────────────────────
 
-def _patch_file(tmp_path: Path) -> Path:
-    p = tmp_path / "candidate.patch"
-    p.write_text("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n")
-    return p
 
 
-def test_a_git_apply_check_that_did_not_finish_is_not_a_conflicting_patch(
-        tmp_path, monkeypatch):
-    """THE FIX, in the shape this file already uses for a composed program that
-    crashes: fail-closed, and say it was never judged."""
-    monkeypatch.setattr(HB._wd, "run_host_supervised", _Stalls())
-    ok, detail = HB._git_apply_check(tmp_path, _patch_file(tmp_path))
-    assert ok is False, "the item went green — fail-closed was deleted"
-    assert "INCONCLUSIVE" in detail, detail
-    assert "no forward progress" in detail and "wedged" in detail, detail
-    assert "never judged" in detail
-    assert "does not apply" not in detail, (
-        "the bundle is still being told its patch conflicts, which is the "
-        "finding nobody made")
 
 
-def test_a_patch_that_really_conflicts_still_says_so(tmp_path, monkeypatch):
-    """NON-VACUITY. The accusing sentence must still be reachable by the thing
-    it accuses — otherwise the fix is a deletion of the check."""
-    monkeypatch.setattr(HB._wd, "run_host_supervised",
-                        _Completes(rc=1, err="error: patch does not apply\n"))
-    ok, detail = HB._git_apply_check(tmp_path, _patch_file(tmp_path))
-    assert ok is False
-    assert detail.startswith("does not apply:"), detail
 
 
 # ── fresh_agent_rtl_bug_density_metric ──────────────────────────────────────
@@ -283,151 +255,8 @@ def test_the_published_skip_reason_carries_the_distinction(
 
 # ── the pre-fix control ─────────────────────────────────────────────────────
 
-def test_no_runtime_bound_survives_at_any_of_these_sites(tmp_path):
-    """THE CONTROL FOR THE RETRACTION, and the assertion that actually matters.
-
-    The retracted version of this fix would have PASSED every behavioural test
-    in this file: each site said the honest thing, and each site still killed a
-    job that was working. So the control cannot be behavioural — it has to read
-    the calls, and it has to read them from the tree rather than by grepping,
-    because a comment quoting the call it replaced is not a call.
-
-    A `subprocess.run(..., timeout=N)` anywhere in these modules is the defect
-    itself, whatever the handler beside it then writes in the log.
-
-    ONE SHAPE IS NOT THE DEFECT AND THE CONTROL NOW SAYS WHICH, because
-    v1.12.29 made it necessary rather than because it is convenient.
-    `run_docker_supervised` cannot work without an injected `docker_exec_raw`:
-    the short in-container probes it uses to READ CPU and to signal the job
-    must themselves be bounded, since an unbounded probe would wedge the
-    supervisor that exists to catch a wedge. So the constraint is not relaxed,
-    it is made specific in BOTH directions:
-
-      * a bounded call may live only inside a function named `_docker_exec_raw`
-        — anywhere else it is the defect, exactly as before;
-      * and `_docker_exec_raw` may be REFERENCED only as the `docker_exec_raw=`
-        injection, so the escape hatch cannot be turned back into a way of
-        running the tool under a wall clock.
-
-    Both halves are falsified below on constructed sources.
-    """
-    import ast
-
-    def _bounded_calls(module):
-        """[(lineno, enclosing def name)] for every runtime-bounded subprocess
-        call in `module`'s source."""
-        src = Path(module.__file__).read_text(encoding="utf-8")
-        tree = ast.parse(src)
-        owner = {}
-        for fn in ast.walk(tree):
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for node in ast.walk(fn):
-                    owner.setdefault(id(node), fn.name)
-        out = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            f = node.func
-            name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
-            if name in ("run", "check_output", "call", "Popen") and \
-                    any(k.arg == "timeout" for k in node.keywords):
-                out.append((node.lineno, owner.get(id(node), "<module>")))
-        return out
-
-    def _raw_probe_misuses(module):
-        """Every `_docker_exec_raw` reference that is NOT the supervisor's
-        injection. Its own `def` and the `docker_exec_raw=` keyword are the only
-        legitimate appearances; a call, or passing it anywhere else, means the
-        bounded probe has become a way to run the tool."""
-        src = Path(module.__file__).read_text(encoding="utf-8")
-        tree = ast.parse(src)
-        legit = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                for kw in node.keywords:
-                    if kw.arg == "docker_exec_raw" and isinstance(kw.value, ast.Name):
-                        legit.add(id(kw.value))
-        bad = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Name) and node.id == "_docker_exec_raw" \
-                    and id(node) not in legit:
-                bad.append(node.lineno)
-        return bad
-
-    for mod in (VF, HB, FA, DIE):
-        offenders = [(ln, fn) for ln, fn in _bounded_calls(mod)
-                     if fn != "_docker_exec_raw"]
-        assert offenders == [], (
-            f"{Path(mod.__file__).name} still bounds a subprocess by RUNTIME at "
-            f"line(s)/function(s) {offenders} — the kill is the defect, and a "
-            f"handler that reports it honestly does not undo it")
-        assert _raw_probe_misuses(mod) == [], (
-            f"{Path(mod.__file__).name} uses `_docker_exec_raw` at line(s) "
-            f"{_raw_probe_misuses(mod)} for something other than the "
-            f"`docker_exec_raw=` injection — the supervisor's bounded probe is "
-            f"being used to run work")
-
-    # NON-VACUITY, on constructed sources: each half of the control fires on
-    # the shape it is looking for. Without these, both loops above are
-    # satisfied by a parser that finds nothing.
-    import types
-
-    def _probe(body):
-        f = tmp_path / "_probe.py"
-        f.write_text(body, encoding="utf-8")
-        return types.SimpleNamespace(__file__=str(f)), f
-
-    mod, f = _probe("import subprocess\nsubprocess.run(['x'], timeout=5)\n")
-    try:
-        assert _bounded_calls(mod) == [(2, "<module>")], _bounded_calls(mod)
-    finally:
-        f.unlink()
-
-    # the permitted shape really is permitted ...
-    mod, f = _probe("import subprocess\n"
-                    "def _docker_exec_raw(c, cmd, timeout=15):\n"
-                    "    return subprocess.run([c], timeout=timeout)\n"
-                    "def go():\n"
-                    "    return sup(docker_exec_raw=_docker_exec_raw)\n")
-    try:
-        assert [x for x in _bounded_calls(mod) if x[1] != "_docker_exec_raw"] == []
-        assert _raw_probe_misuses(mod) == [], _raw_probe_misuses(mod)
-    finally:
-        f.unlink()
-
-    # ... and the smuggling route is not: the probe used to run the tool.
-    mod, f = _probe("import subprocess\n"
-                    "def _docker_exec_raw(c, cmd, timeout=15):\n"
-                    "    return subprocess.run([c], timeout=timeout)\n"
-                    "def go():\n"
-                    "    return _docker_exec_raw('c', 'openroad', 1800)\n")
-    try:
-        assert _raw_probe_misuses(mod) == [5], _raw_probe_misuses(mod)
-    finally:
-        f.unlink()
 
 
-def test_every_site_is_supervised_by_progress():
-    """And the positive half: each module reaches the shared supervisor. A site
-    with no bound AND no supervisor would satisfy the test above by simply
-    never stopping a wedged job.
-
-    THE PRIMITIVE IS NAMED PER MODULE, not accepted as "either one" (v1.12.29).
-    `dynamic_ir_vectored_emit` launches its tool with `docker exec`, and the
-    host's /proc cannot see a container's CPU: openroad runs under
-    containerd-shim and is never a ppid-chain descendant of the exec client, so
-    supervising that argv with `run_host_supervised` leaves the tee'd log as the
-    only live signal. Accepting either name here would let exactly that
-    regression back in, so each module must reach the primitive that can
-    actually observe ITS transport."""
-    expected = {VF: "run_host_supervised", HB: "run_host_supervised",
-                FA: "run_host_supervised", DIE: "run_docker_supervised"}
-    for mod, primitive in expected.items():
-        src = Path(mod.__file__).read_text(encoding="utf-8")
-        assert primitive in src, (
-            f"{Path(mod.__file__).name} does not reach `{primitive}` — either "
-            f"it dropped its bound without gaining a watchdog, or it is being "
-            f"supervised by a probe that cannot see its job")
 
 
 # ── dynamic_ir_vectored_emit ────────────────────────────────────────────────

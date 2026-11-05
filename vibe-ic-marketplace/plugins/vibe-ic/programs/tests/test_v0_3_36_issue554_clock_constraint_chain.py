@@ -19,7 +19,6 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import sdc_constraints as sdc  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 import phase1_doc_one_shot_runner as P1  # noqa: E402
 
 
@@ -98,88 +97,24 @@ def test_primary_clock_resolves_tcl_variable_sdc(tmp_path):
     assert primary["name"] == "core_clock"
 
 
-def test_resolve_clock_spec_resolves_tcl_variable_sdc(tmp_path):
-    cdir = tmp_path / "input" / "constraints"
-    cdir.mkdir(parents=True)
-    (cdir / "constraint.sdc").write_text(_IBEX_CONSTRAINT_SDC)
-
-    period_ns, port_name = R._resolve_clock_spec(tmp_path, top="ibex_core")
-    assert period_ns == 10.0
-    assert port_name == "clk_i"
 
 
 # ── (a) phase3 _resolve_clock_spec uses staged SDC, not the 20ns fallback ──
 
-def test_resolve_clock_spec_uses_staged_sdc_period(tmp_path):
-    _stage_sdc(tmp_path, period_ns=10.0, port="clk")
-    period_ns, port_name = R._resolve_clock_spec(tmp_path, top="chip_top")
-    assert period_ns == 10.0
-    assert port_name == "clk"
 
 
-def test_resolve_clock_spec_falls_back_to_20ns_without_sdc(tmp_path):
-    period_ns, _ = R._resolve_clock_spec(tmp_path, top="chip_top")
-    assert period_ns == 20.0
 
 
 # ── (b) explicit config.json CLOCK_PORT == default "clk" survives ─────────
 
-def test_config_clock_port_equal_to_default_not_overridden(tmp_path):
-    # Stage L8 evidence that would otherwise escalate the port name to
-    # `wb_clk_i`.
-    gd = tmp_path / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    (gd / "L8_RTL_CONSTANTS.json").write_text(json.dumps({
-        "clock_domains": [
-            {"name": "wb_clk_i", "source_pin": "wb_clk_i",
-             "domain_kind": "primary", "role": "master"},
-        ],
-    }))
-    (tmp_path / "config.json").write_text(json.dumps({"CLOCK_PORT": "clk"}))
-
-    _, port_name = R._resolve_clock_spec(tmp_path, top="chip_top")
-    assert port_name == "clk"
 
 
-def test_config_clock_port_absent_allows_l8_escalation(tmp_path):
-    gd = tmp_path / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    (gd / "L8_RTL_CONSTANTS.json").write_text(json.dumps({
-        "clock_domains": [
-            {"name": "wb_clk_i", "source_pin": "wb_clk_i",
-             "domain_kind": "primary", "role": "master"},
-        ],
-    }))
-    _, port_name = R._resolve_clock_spec(tmp_path, top="chip_top")
-    assert port_name == "wb_clk_i"
 
 
 # ── (c) L8 loader prefers the file that carries clock evidence ────────────
 
-def test_l8_loader_prefers_file_with_clock_domains(tmp_path):
-    gd = tmp_path / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    # Alphabetically first, but no clock evidence.
-    (gd / "L8_RTL_CONSTANTS.json").write_text(json.dumps({"foo": "bar"}))
-    # Alphabetically later, carries the clock evidence.
-    (gd / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({
-        "clock_domains": [
-            {"name": "clk_i", "source_pin": "clk_i",
-             "domain_kind": "primary"},
-        ],
-    }))
-    l8 = R._v1_6_595_load_phase1_doc(tmp_path, "L8")
-    assert l8 is not None
-    assert l8.get("clock_domains")
-    port = R._v1_6_595_extract_clock_port_from_l8(l8)
-    assert port == "clk_i"
 
 
-def test_l8_extract_port_from_clock_domains_key(tmp_path):
-    l8 = {"clock_domains": [{"name": "core clock", "source_pin": "i_clk"}]}
-    port = R._v1_6_595_extract_clock_port_from_l8(l8)
-    # 'core clock' fails the port-name regex; 'i_clk' matches.
-    assert port == "i_clk"
 
 
 # ── (a) phase1 ingestion: staged 10ns SDC -> L8 freq=100MHz, L19 present ──

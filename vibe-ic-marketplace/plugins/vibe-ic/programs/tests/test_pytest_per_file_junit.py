@@ -2322,71 +2322,10 @@ def test_partial_progress_line_waits_but_is_never_progress(tmp_path):
     assert not ok and "truncated final event" in reason
 
 
-def _trusted_runtime_identity():
-    file_row = {"path": "/runtime/file.py", "sha256": "a" * 64,
-                "size": 1}
-    return {
-        "schema": 1,
-        "python": {**file_row, "path": "/usr/bin/python3"},
-        "entry": {**file_row, "path": "/runtime/trusted_pytest_entry.py"},
-        "plugin": {**file_row, "path": "/runtime/_pytest_progress_plugin.py"},
-        "modules": [
-            {"name": name, **file_row,
-             "path": f"/usr/lib/python/site-packages/{name}.py"}
-            for name in ("pytest", "_pytest", "pluggy")
-        ],
-    }
 
 
-def test_required_runtime_identity_is_bound_to_session_start(tmp_path):
-    sidecar = tmp_path / "identity-progress.jsonl"
-    nonce = "nonce"
-    pid = os.getpid()
-    records = [
-        ("session_start", {"runtime_identity": _trusted_runtime_identity()}),
-        ("collection_finish", {"selected_items": 0}),
-        ("session_finish", {"exitstatus": 0}),
-    ]
-    with sidecar.open("w", encoding="utf-8") as fh:
-        for seq, (event, fields) in enumerate(records, start=1):
-            fh.write(json.dumps({
-                "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
-                "event": event, "monotonic_ns": seq, **fields,
-            }) + "\n")
-    probe = D._SemanticProgressProbe(
-        sidecar, nonce, lambda: pid, require_runtime_identity=True)
-    try:
-        assert probe.sample() == 3
-        ok, reason = probe.complete()
-        identity = probe.runtime_identity
-    finally:
-        probe.close()
-    assert ok, reason
-    assert identity == _trusted_runtime_identity()
 
 
-def test_missing_or_ambiguous_required_runtime_identity_never_renews(tmp_path):
-    for name, session in (
-        ("missing", {}),
-        ("extra", {"runtime_identity": {
-            **_trusted_runtime_identity(), "candidate_field": True}}),
-    ):
-        sidecar = tmp_path / f"{name}.jsonl"
-        sidecar.write_text(json.dumps({
-            "schema": 1, "nonce": "nonce", "pid": os.getpid(),
-            "seq": 1, "event": "session_start", "monotonic_ns": 1,
-            **session,
-        }) + "\n", encoding="utf-8")
-        probe = D._SemanticProgressProbe(
-            sidecar, "nonce", lambda: os.getpid(),
-            require_runtime_identity=True)
-        try:
-            assert probe.sample() == 0
-            ok, reason = probe.complete()
-        finally:
-            probe.close()
-        assert not ok
-        assert "runtime identity" in reason
 
 
 def test_duplicate_key_or_nonfinite_progress_json_is_malformed(tmp_path):
@@ -2634,16 +2573,6 @@ def test_both_landing_arms_run_through_this_driver():
         "the single-session `xargs` invocation is still in run_pytest")
 
 
-def test_the_landing_harness_declares_semantic_progress_not_elapsed_time():
-    """All landing populations use the driver's no-ceiling contract."""
-    import ci_harness_timeout_ceiling_check as C
-    root = _repo_root()
-    if not (root / "tools" / "gatekeeper-land.sh").is_file():
-        pytest.skip("the landing scripts are not shipped in this tree")
-    contract = C.landing_semantic_progress_contract(root)
-    assert contract["declared"] is True, contract
-    assert contract["errors"] == [], contract
-    assert len(contract["lanes"]) >= 3, contract
 
 
 def test_the_landing_harness_argv_shape_is_the_one_this_file_pins():

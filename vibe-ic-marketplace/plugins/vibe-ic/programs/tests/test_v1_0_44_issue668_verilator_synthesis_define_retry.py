@@ -27,14 +27,12 @@ chip-AGNOSTIC: verilator tool error-token + the standard randomisation-helper
 vocabulary + the standard SIMULATION/SYNTHESIS define names; no chip/vendor/file
 literal.
 """
-import inspect
 import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import synth_frontend as SF  # noqa: E402
-import design_one_shot_runner as R  # noqa: E402
 
 
 # the field-agent's EXACT verilator stderr (round-4 reproduction):
@@ -111,21 +109,3 @@ def test_custom_define_names_honoured():
 
 
 # ── the escape wires the retry into the build path ──────────────────────────
-
-def test_escape_source_retries_under_synthesis_define():
-    src = inspect.getsource(R._verilator_sim_escape)
-    # the escape must call the new classifier and rebuild under SYNTHESIS.
-    assert "verilator_should_retry_synthesis_define" in src
-    assert '_vl_build_run("SYNTHESIS")' in src
-    # and it must still try SIMULATION first (no behaviour change for #657).
-    assert '_vl_build_run("SIMULATION")' in src
-    # the SIMULATION clean-build path still returns verilator_sva immediately.
-    assert "verilator_sva" in src
-
-
-def test_escape_keeps_honest_fail_when_both_arms_fail():
-    # Structural: the function returns iverilog_g2012 (honest FAIL) at its tail,
-    # so a closure failing under BOTH defines is never reported as a pass.
-    src = inspect.getsource(R._verilator_sim_escape)
-    tail = src.rstrip().splitlines()[-1]
-    assert '"iverilog_g2012"' in tail

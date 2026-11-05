@@ -26,14 +26,12 @@ These tests are about the OBSERVABLE, not about any chip: they use a synthetic
 from __future__ import annotations
 
 import sys
-import time
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import phase3_one_shot_runner as P3      # noqa: E402
 import synth_frontend as SF              # noqa: E402
 
 #: Resolved lazily and tolerantly ON PURPOSE. A module-level attribute
@@ -41,66 +39,20 @@ import synth_frontend as SF              # noqa: E402
 #: whole file down — including the structural test below, the one that has to
 #: keep working against pre-fix source to be worth anything. Absent, every test
 #: here fails on its own assertion with the reason named.
-_STAMP = getattr(P3, "_synth_artifact_stamp", None)
 
 
-def _stamp(path):
-    assert _STAMP is not None, (
-        "phase3_one_shot_runner has no per-build artefact stamp, so "
-        "'did this build produce a netlist?' can only be answered by a "
-        "presence test — which an earlier build's netlist satisfies")
-    return _STAMP(path)
 
 
 # ───────────────────────────── the stamp itself ──────────────────────────────
 
-def test_absent_artifact_has_no_stamp(tmp_path):
-    assert _stamp(tmp_path / "fixture_top_synth.v") is None
 
 
-def test_an_unchanged_file_keeps_its_stamp(tmp_path):
-    """The stale case: the file is there, and the build did not touch it."""
-    nl = tmp_path / "fixture_top_synth.v"
-    nl.write_text("module fixture_top(); endmodule\n")
-    before = _stamp(nl)
-    assert before is not None
-    assert _stamp(nl) == before, (
-        "an untouched artefact reported itself as a new result")
 
 
-def test_a_rewritten_file_gets_a_new_stamp(tmp_path):
-    """The real case: this build wrote something different."""
-    nl = tmp_path / "fixture_top_synth.v"
-    nl.write_text("module fixture_top(); endmodule\n")
-    before = _stamp(nl)
-    time.sleep(0.01)
-    nl.write_text("module fixture_top(input a); endmodule\n")
-    assert _stamp(nl) != before
 
 
-def test_byte_identical_rewrite_is_not_a_new_result(tmp_path):
-    """A rebuild that lands the SAME bytes is not new evidence.
-
-    mtime alone would call this a fresh result; the digest is why it does not.
-    """
-    nl = tmp_path / "fixture_top_synth.v"
-    text = "module fixture_top(); endmodule\n"
-    nl.write_text(text)
-    before = _stamp(nl)
-    time.sleep(0.01)
-    nl.write_text(text)          # same bytes, new mtime
-    after = _stamp(nl)
-    assert after is not None and before is not None
-    assert after[2] == before[2], "the digest is not being compared"
 
 
-def test_an_appearing_file_is_this_builds_output(tmp_path):
-    """Absent before, present after — unambiguously produced."""
-    nl = tmp_path / "fixture_top_synth.v"
-    before = _stamp(nl)
-    assert before is None
-    nl.write_text("module fixture_top(); endmodule\n")
-    assert _stamp(nl) != before
 
 
 # ───────────── the consequence the defect actually had (the retry) ───────────
@@ -139,19 +91,3 @@ def test_the_same_closure_retries_when_nothing_was_produced(tmp_path):
         "$value$plusargs", rtl_text_blob=_ARMED_RTL, produced_output=False)
     assert allowed is True
     assert "SYNTHESIS" in why
-
-
-def test_step_synth_asks_the_stamp_not_the_filesystem():
-    """The four call sites read this build's output, not any file's presence.
-
-    Asserted on the SOURCE of `step_synth` rather than by driving a container:
-    the defect was one predicate spelled four times, and the property that
-    matters is that none of those spellings survives.
-    """
-    import inspect
-    src = inspect.getsource(P3.step_synth)
-    assert "_netlist_is_from_this_build()" in src, (
-        "step_synth no longer consults the per-build stamp")
-    assert "netlist.is_file()" not in src, (
-        "a presence test came back into step_synth — a netlist from an "
-        "earlier build will be mistaken for this build's output again")

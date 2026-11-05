@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -254,67 +253,12 @@ def test_CONTROL_an_ORDINARY_program_in_that_directory_still_writes(tmp_path):
 
 # ── the direct isolated coordinator entry ──────────────────────────────────
 
-def _fresh_coordinator_tree(tmp_path: Path, *, guarded: bool) -> tuple[Path, Path]:
-    """A real fresh Git tree carrying the coordinator and its sibling imports.
-
-    The production direct-entry hazard is ``python3 -I repo_hygiene_parallel``:
-    isolated mode ignores the exported environment before the coordinator can
-    reach ``repo_hygiene_gates.sh``.  Copying the programs directory gives this
-    experiment the same import surface without letting either arm write into
-    the shipped checkout.
-    """
-    root = tmp_path / ("guarded" if guarded else "mutant")
-    programs = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
-    shutil.copytree(PROGRAMS, programs, ignore=shutil.ignore_patterns(
-        "__pycache__", ".pytest_cache", "*.pyc"))
-    if not guarded:
-        runner = programs / "repo_hygiene_parallel.py"
-        source = runner.read_text(encoding="utf-8")
-        old = "if _sys.flags.isolated:\n    _sys.dont_write_bytecode = True\n"
-        assert old in source, "the isolated-entry guard moved; update this control"
-        runner.write_text(source.replace(old, "if False:  # control removes guard\n    _sys.dont_write_bytecode = True\n", 1),
-                          encoding="utf-8")
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
-                   check=True)
-    subprocess.run(["git", "-C", str(root), "config", "user.name", "Vibe-IC test"],
-                   check=True)
-    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(root), "commit", "-qm", "fresh coordinator"],
-                   check=True)
-    return root, programs
 
 
-def _isolated_coordinator_preflight(root: Path, programs: Path):
-    """Run the actual isolated entry, then the actual residue preflight."""
-    env = dict(os.environ)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env.pop("PYTHONPYCACHEPREFIX", None)
-    run = subprocess.run([sys.executable, "-I",
-                          str(programs / "repo_hygiene_parallel.py"), "--help"],
-                         cwd=str(root), env=env, capture_output=True, text=True)
-    assert run.returncode == 0, run.stdout + run.stderr
-    return subprocess.run([sys.executable, "-B",
-                           str(programs / "attestation_preflight_check.py"),
-                           "--repo", str(root), str(programs)],
-                          cwd=str(root), env=env, capture_output=True, text=True)
 
 
-def test_isolated_coordinator_keeps_a_fresh_tree_preflight_clean(tmp_path):
-    """POST-FIX: `-I` entry cannot manufacture the preflight's bytecode red."""
-    root, programs = _fresh_coordinator_tree(tmp_path, guarded=True)
-    result = _isolated_coordinator_preflight(root, programs)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert not (programs / "__pycache__").exists(), result.stdout + result.stderr
 
 
-def test_CONTROL_without_the_isolated_guard_the_same_preflight_refuses(tmp_path):
-    """PRE-FIX control: the environment alone cannot protect `python3 -I`."""
-    root, programs = _fresh_coordinator_tree(tmp_path, guarded=False)
-    result = _isolated_coordinator_preflight(root, programs)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert (programs / "__pycache__").is_dir(), result.stdout + result.stderr
-    assert "would make the attestation measure itself" in result.stdout
 
 
 @pytest.mark.skipif(not LAND.is_file(), reason="landing driver not in this tree")

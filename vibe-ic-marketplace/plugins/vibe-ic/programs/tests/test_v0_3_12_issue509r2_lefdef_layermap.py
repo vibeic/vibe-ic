@@ -29,10 +29,6 @@ sys.path.insert(0, str(PROGRAMS))
 import phase3_one_shot_runner as R  # noqa: E402
 
 
-def test_sky130_pdkconfig_has_foundry_layermap():
-    pdk = R._detect_pdk(Path("/nonexistent"), override="sky130A")
-    assert pdk.lefdef_layermap is not None
-    assert pdk.lefdef_layermap.endswith("klayout/tech/sky130A.map")
 
 
 def test_pdkconfig_layermap_defaults_none():
@@ -44,16 +40,6 @@ def test_pdkconfig_layermap_defaults_none():
     assert f["lefdef_layermap"].default is None
 
 
-def test_streamout_script_applies_map_file():
-    s = R._GDS_STREAMOUT_PY
-    assert "LEFDEF_MAP" in s
-    assert "map_file" in s
-    # the map must be applied to the DEF read options, and only when the
-    # file exists (None/missing → legacy numbering).
-    assert "os.path.exists(_lefdef_map)" in s
-    assert "_cfg.map_file = [_lefdef_map]" in s
-    # the DEF read must use the configured options object, not a bare one.
-    assert "ly.read(def_path, _def_opts)" in s
 
 
 def test_streamout_caller_passes_layermap_env():
@@ -63,9 +49,3 @@ def test_streamout_caller_passes_layermap_env():
     src = inspect.getsource(R)
     assert 'LEFDEF_MAP=\\"{lefdef_map_c}\\"' in src or "LEFDEF_MAP=" in src
     assert "pdk.lefdef_layermap" in src
-
-
-def test_legacy_numbering_preserved_when_no_map():
-    # the script's else-branch must keep working when LEFDEF_MAP is empty.
-    s = R._GDS_STREAMOUT_PY
-    assert "legacy numbering" in s

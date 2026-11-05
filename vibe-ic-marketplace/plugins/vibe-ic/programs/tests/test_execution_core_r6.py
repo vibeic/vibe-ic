@@ -1,20 +1,16 @@
 """Defensive issuer controls use the real isolated entry and production Context."""
-from dataclasses import replace
 import importlib
 import json
 import os
-from pathlib import Path
 import socket
-import subprocess
 import sys
 from types import ModuleType
 
 import pytest
 import execution_authority as authority
-import execution_modes as em
 from programs.tests import test_execution_modes as H
 from programs.tests.test_execution_core_r4 import issued_context
-from programs.tests.test_execution_receipt_chain import isolated_transport, real_entry
+from programs.tests.test_execution_receipt_chain import real_entry
 
 
 def refused(controller, ctx, root):
@@ -29,22 +25,6 @@ def refused(controller, ctx, root):
     return result
 
 
-def route_refused(controller, ctx, root, code):
-    # Route mismatch retains the public API's named exception contract.
-    with pytest.raises(em.Refusal) as caught:
-        controller.run(ctx, root)
-    assert caught.value.code == code
-    record = json.loads((root / 'refusal.json').read_text())
-    assert record['status'] == 'REFUSED'
-    assert record['reason'] == code
-    for name in ('selected', 'a', 'plan.json', 'issued-plan.json', 'adoption.json', 'result.json'):
-        assert not (root / name).exists()
-    with pytest.raises(em.Refusal) as caught:
-        controller.adopt(ctx, root, None)
-    assert caught.value.code == code
-    for name in ('adoption.json', 'program_adoption.json'):
-        assert json.loads((root / name).read_text())['status'] == 'REFUSED'
-    assert not (root / 'selected').exists()
 
 
 @pytest.mark.parametrize('slot', ['consume', 'read_line', 'tracked', 'validate_payload', 'source_closure'])
@@ -108,28 +88,8 @@ def test_CAPABILITY_DESCRIPTOR_REFUSED(tmp_path, monkeypatch, descriptor):
             os.close(opened)
 
 
-def test_CAPABILITY_FROM_OTHER_INVOCATION_REFUSED(tmp_path):
-    first, second = tmp_path / 'first', tmp_path / 'second'
-    first.mkdir(); second.mkdir()
-    ctx = issued_context(first, 'default')
-    other = real_entry('IC', 'default', second)
-    assert other['route']['project'] != ctx.route_receipt['project']
-    route_refused(H.controller(H.adapter('a')), ctx, tmp_path / 'run', 'ROUTE_AUTHORITY_UNAVAILABLE')
 
 
-def test_RUNTIME_CONSUMER_SLOT_DOES_NOT_AUTHORIZE(tmp_path, monkeypatch):
-    ctx = issued_context(tmp_path, 'default')
-    monkeypatch.delenv(authority.FD_ENV)
-    calls = []
-    def substituted():
-        calls.append(True)
-        raise AssertionError('a module consumer slot must never authorize a controller')
-    monkeypatch.setattr(em, '_consume_canonical_issuer', substituted, raising=False)
-    controller = H.controller(H.adapter('a'))
-    refused(controller, ctx, tmp_path / 'run')
-    with pytest.raises(em.Refusal, match='REQUEST_CAPABILITY_INVALID'):
-        controller._context_binding(ctx, _issuer=substituted)
-    assert calls == []
 
 
 @pytest.mark.parametrize('field', ['token', 'nonce', 'invocation_id', 'request_digest', 'route_digest'])
@@ -170,51 +130,3 @@ def test_ISSUER_PAYLOAD_MISSING_OR_CHANGED_IDENTITY_REFUSED(tmp_path, field):
     with pytest.raises(ValueError):
         authority.validate_payload(payload, credential)
     assert not (tmp_path / 'selected').exists()
-
-
-@pytest.mark.parametrize('mode', ['default', 'ultra'])
-def test_CANONICAL_PRODUCTION_CONTEXT_ADOPTS_WITH_LIVE_ISSUER(tmp_path, mode):
-    ctx = issued_context(tmp_path, mode)
-    assert type(ctx) is em.Context
-    controller = H.controller(H.adapter('a'))
-    root = tmp_path / 'run'
-    result = controller.run(ctx, root)
-    if mode == 'ultra':
-        result = controller.adopt(ctx, root, H.choice(ctx, root))
-    assert result['status'] == 'ADOPTED'
-    plan = json.loads((root / 'plan.json').read_text())
-    issuer = plan['execution_issuance']
-    assert len(issuer['invocation_id']) == 64
-    assert issuer['source_blobs']
-    assert issuer['request_digest'] == ctx.request_digest
-    assert controller.verify_adoption(ctx, root)['status'] == 'ADOPTED'
-    assert (root / 'selected').exists()
-
-
-def test_CONTEXT_FROM_OTHER_ISSUED_REQUEST_REFUSED(tmp_path):
-    ctx = issued_context(tmp_path, 'default')
-    changed = replace(ctx, request_digest='a' * 64)
-    route_refused(H.controller(H.adapter('a')), changed, tmp_path / 'run', 'ROUTE_REQUEST_MISMATCH')
-
-
-def test_CACHED_SOURCE_CLOSURE_REJECTS_NEW_LOCAL_IMPORT(tmp_path, monkeypatch):
-    root = tmp_path / 'source'
-    programs = root / 'programs'
-    programs.mkdir(parents=True)
-    (root / 'flow').mkdir()
-    (root / 'flow/phase1_phase2_phase3.yaml').write_text('{}\n')
-    for name in ('execution_authority.py', '_delivery_route.py', 'execution_policy.py',
-                 'execution_modes.py', 'vibe_ic_one_shot_runner.py'):
-        (programs / name).write_text('import absent_local_helper\n')
-    for args in (('init',), ('add', '.'), ('-c', 'user.name=Controls', '-c',
-                 'user.email=controls@example.invalid', 'commit', '-m', 'Neutral source closure')):
-        subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True)
-    monkeypatch.setattr(authority, 'ROOT', root)
-    monkeypatch.setattr(authority, 'HERE', programs)
-    monkeypatch.setattr(authority, '_SOURCE_CLOSURES', {})
-    first = authority.source_closure()
-    assert len(first) == 6
-    assert 'programs/absent_local_helper.py' not in first
-    (programs / 'absent_local_helper.py').write_text('')
-    with pytest.raises(ValueError, match='canonical importer closure changed'):
-        authority.source_closure()

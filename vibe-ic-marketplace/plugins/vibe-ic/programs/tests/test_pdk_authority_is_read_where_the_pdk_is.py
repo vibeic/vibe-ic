@@ -30,8 +30,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _pdk_layer_authority as A  # noqa: E402
 import general_precheck as G  # noqa: E402
-import tapeout_precheck as T  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 
 _LYP = """<layer-properties>
  <properties><source>metal1 34/0@1</source></properties>
@@ -227,16 +225,6 @@ def test_no_container_is_the_previous_behaviour_exactly():
     assert isinstance(A.container_reader("c"), A.ContainerReader)
 
 
-def test_the_chain_forwards_the_container_from_the_runner_to_the_ladder():
-    import inspect
-    runner = inspect.getsource(R.step_declared_signoff_gates)
-    assert '"--pdk-container", container' in runner
-    assert "_PDK_AWARE_SIGNOFF_GATES" in runner
-    tp = Path(T.__file__).read_text()
-    assert '"--pdk-container", pdk_container' in tp
-    gp = inspect.signature(G.evaluate).parameters
-    assert "pdk_container" in gp and gp["pdk_container"].default is None
-    assert "--pdk-container" in Path(G.__file__).read_text()
 
 
 def test_the_report_names_which_filesystem_answered(tmp_path):

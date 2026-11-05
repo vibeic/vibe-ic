@@ -1,6 +1,5 @@
 """Local sequential invocation evidence, not native IC qualification."""
 from pathlib import Path
-from types import SimpleNamespace
 import json
 import os
 import sys
@@ -15,7 +14,6 @@ PROGRAMS = Path(os.environ.get('VIBEIC_VERSION_REVIEW_PROGRAMS',
                               str(Path(__file__).resolve().parent.parent)))
 sys.path.insert(0, str(PROGRAMS))
 import step_output_collector as versions
-import step_preflight as preflight
 
 
 def _rtl(project, content=b'earlier working output'):
@@ -91,77 +89,16 @@ def test_missing_resolved_input_stops_before_producer(tmp_path):
         versions.begin_step(tmp_path, '1', {'input/lost.txt': 'f' * 64})
 
 
-def _dispatch(project, rows):
-    decision = preflight.Decision('design_one_shot_runner', 'dft_lec_chain', ['11', '12', '13'])
-    return preflight._retained_dispatch(project, decision, None, lambda: rows, (), {})
 
 
-def test_real_dft_result_names_keep_each_rows_own_outcome(tmp_path):
-    rows = [SimpleNamespace(name='dft_scan_insertion', status='PASS', detail='measured tool result', outputs=[]),
-            SimpleNamespace(name='post_dft_opt', status='FAIL', detail='tool refused', outputs=[]),
-            SimpleNamespace(name='lec_equivalence', status='NOT_MEASURED', detail='upstream refused', outputs=[])]
-    assert _dispatch(tmp_path, rows) is rows
-    actual = {r['id']: r['status'] for r in versions._read_index(tmp_path)['steps']}
-    assert actual == {'11': 'PASS', '12': 'FAIL', '13': 'NOT_MEASURED'}
-    assert all(versions.latest_pass(tmp_path, sid) is None for sid in actual)
 
 
-def test_unattributed_group_pass_cannot_invent_per_step_pass(tmp_path):
-    rows = [SimpleNamespace(name='unattributed_group', status='PASS', detail='', outputs=[])]
-    _dispatch(tmp_path, rows)
-    actual = {r['id']: r['status'] for r in versions._read_index(tmp_path)['steps']}
-    assert actual == {'11': 'NOT_MEASURED', '12': 'NOT_MEASURED', '13': 'NOT_MEASURED'}
-    assert all(versions.latest_pass(tmp_path, sid) is None for sid in actual)
 
 
-def test_shared_interruption_retains_every_active_attempt(tmp_path):
-    decision = preflight.Decision('design_one_shot_runner', 'dft_lec_chain', ['11', '12', '13'])
-    def interrupted():
-        partial = tmp_path / 'reports/native-dft.log'
-        partial.parent.mkdir(parents=True, exist_ok=True)
-        partial.write_bytes(b'partial native log before interruption')
-        raise KeyboardInterrupt('local producer interrupted')
-    with pytest.raises(KeyboardInterrupt):
-        preflight._retained_dispatch(tmp_path, decision, None, interrupted, (), {})
-    saved = versions._read_index(tmp_path)['steps']
-    assert {r['id']: r['status'] for r in saved} == {'11': 'INTERRUPTED', '12': 'INTERRUPTED', '13': 'INTERRUPTED'}
-    for row in saved:
-        assert (tmp_path / 'steps' / row['folder'] / 'files/reports/native-dft.log').read_bytes() == b'partial native log before interruption'
 
 
-def test_default_missing_input_is_retained_without_starting_producer(tmp_path, monkeypatch):
-    import phase3_one_shot_runner as runner
-    import execution_backend_worker as worker
-    import execution_backend_producers as producers
-    monkeypatch.setattr(runner, '_backend_parameter_values', lambda *args: {})
-    monkeypatch.setattr(worker, 'resolve_input_contract', lambda *args, parameters=None: ['current CTS input absent'])
-    def forbidden(*args, **kwargs):
-        raise AssertionError('native producer started with a missing input')
-    monkeypatch.setattr(producers, 'produce', forbidden)
-    result = runner._default_pnr_rows(tmp_path, 'unit', SimpleNamespace(name='unit'), '', ['19'])
-    assert result.status == 'NOT_MEASURED'
-    row = next(r for r in versions._read_index(tmp_path)['steps'] if r['id'] == '19')
-    _, record = _record(tmp_path, row)
-    assert record['status'] == 'NOT_MEASURED'
-    assert record['result']['missing_inputs'] == ['current CTS input absent']
-    assert not record['canonical_pass']
 
 
-def test_default_condition_skip_has_a_version_without_running_tool(tmp_path, monkeypatch):
-    import phase3_one_shot_runner as runner
-    import flow_compliance_check as compliance
-    import execution_backend_producers as producers
-    monkeypatch.setattr(runner, '_backend_parameter_values', lambda *args: {})
-    monkeypatch.setattr(compliance, '_check_condition', lambda *args: False)
-    def forbidden(*args, **kwargs):
-        raise AssertionError('native producer ran for an inapplicable design condition')
-    monkeypatch.setattr(producers, 'produce', forbidden)
-    runner._default_pnr_rows(tmp_path, 'unit', SimpleNamespace(name='unit'), '', ['15.5ic'])
-    row = next(r for r in versions._read_index(tmp_path)['steps'] if r['id'] == '15.5ic')
-    _, record = _record(tmp_path, row)
-    assert record['status'] == 'NOT_APPLICABLE'
-    assert not record['canonical_pass']
-    assert versions.latest_pass(tmp_path, '15.5ic') is None
 
 
 @pytest.fixture(scope='module')

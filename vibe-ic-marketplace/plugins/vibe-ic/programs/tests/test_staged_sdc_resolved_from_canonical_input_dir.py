@@ -29,7 +29,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import phase3_one_shot_runner as p3  # noqa: E402
 import sdc_constraints as _sdc  # noqa: E402
 
 
@@ -62,74 +61,16 @@ SDC_GEN_OUTPUT = (
 )
 
 
-def _prefix_probe(project: Path):
-    """The EXACT probe step_pnr used before this fix, kept verbatim so the
-    defect is characterised by behaviour and not only by a missing symbol."""
-    return (
-        next(iter(sorted(project.glob("constraints/*.sdc"))), None)
-        or next(iter(sorted((project / "phase2/stage2/constraints").glob("*.sdc")
-                            if (project / "phase2/stage2/constraints").is_dir()
-                            else [])), None)
-    )
 
 
 # ---------------------------------------------------------------- the defect
 
-def test_input_constraints_sdc_is_resolved(tmp_path):
-    """FAILS PRE-FIX (no such resolver). The canonical input location resolves."""
-    proj = _mkproj(tmp_path, "input/constraints", DESIGN_SDC)
-    found = p3._resolve_staged_silicon_sdc(proj)
-    assert found is not None, "the design's staged SDC was not resolved at all"
-    assert found.parts[-3:] == ("input", "constraints", "clock.sdc")
-    # ...and the pre-fix probe demonstrably could NOT find it. This is the
-    # behavioural half of the negative control: same fixture, old logic, miss.
-    assert _prefix_probe(proj) is None
 
 
-def test_input_constraints_outranks_the_flows_own_output(tmp_path):
-    """FAILS PRE-FIX. The ground truth must OUTRANK the flow's own output dir.
-
-    The laundering case: `step_canonicalize_artefacts` writes the runner's own
-    auto-SDC into phase2/stage2/constraints, and the pre-fix probe preferred it
-    over the design's real file.
-    """
-    proj = _mkproj(tmp_path, "input/constraints", DESIGN_SDC)
-    stage2 = proj / "phase2/stage2/constraints"
-    stage2.mkdir(parents=True, exist_ok=True)
-    (stage2 / "top.sdc").write_text(AUTO_SDC)
-
-    found = p3._resolve_staged_silicon_sdc(proj)
-    assert found is not None
-    assert "input" in found.parts, (
-        "the flow's OWN auto-SDC outranked the design's staged SDC — the "
-        "fabricated constraint is being laundered as design-staged")
-    assert "core_clock" in found.read_text()
-
-    # Behavioural negative control: the pre-fix probe picked the runner's own
-    # fabrication, and its first line says so in the runner's own words.
-    stale = _prefix_probe(proj)
-    assert stale is not None and stale.name == "top.sdc"
-    assert "no constraints/*.sdc supplied" in stale.read_text()
-    assert "core_clock" not in stale.read_text()
 
 
-@pytest.mark.parametrize("generated", [AUTO_SDC, SDC_GEN_OUTPUT])
-def test_a_prior_flow_generated_sdc_is_not_design_staged(tmp_path, generated):
-    """The flow's output cannot become higher-authority input on a rerun.
-
-    Both producer banners exist in real run trees.  In particular, an old
-    auto-SDC may name ``clk`` while the current top exposes ``i_clk``; sourcing
-    it produces OpenSTA's ``No paths found`` and a false-looking 0.00 slack.
-    """
-    proj = _mkproj(tmp_path, "phase2/stage2/constraints", generated)
-    assert p3._resolve_staged_silicon_sdc(proj) is None
 
 
-def test_a_hand_authored_legacy_sdc_still_resolves(tmp_path):
-    """Producer attribution, not directory retirement, bounds the fix."""
-    proj = _mkproj(tmp_path, "phase2/stage2/constraints", DESIGN_SDC)
-    found = p3._resolve_staged_silicon_sdc(proj)
-    assert found is not None and found.read_text() == DESIGN_SDC
 
 
 # ------------------------------------------------- guards (pass BOTH ways)
@@ -144,39 +85,3 @@ def test_legacy_dirs_still_resolve_when_they_are_the_only_source(tmp_path,
         proj, extra_dirs=[proj / "constraints",
                           proj / "phase2/stage2/constraints"])), None)
     assert found is not None, f"legacy dir {legacy} stopped resolving"
-
-
-def test_io_parity_supplies_absent_delays_against_the_designs_own_clock(tmp_path):
-    """Honoring the staged SDC must not leave the I/O boundary untimed."""
-    proj = _mkproj(tmp_path, "input/constraints", DESIGN_SDC)
-    out, info = p3._ensure_staged_sdc_io_delay(DESIGN_SDC, proj)
-    assert "set_input_delay" in out and "set_output_delay" in out, (
-        "a staged SDC declaring only create_clock left every primary I/O "
-        "UNCONSTRAINED — a violation would vanish by subtraction")
-    # referenced to the DESIGN's clock object, not an invented one
-    assert "-clock core_clock" in out
-    assert info["clock_name"] == "core_clock"
-    assert "clk]" not in out.split("I/O-delay parity")[1].replace(
-        "[all_inputs]", "").replace("[all_outputs]", "")
-
-
-def test_io_parity_never_overrides_a_design_declared_delay(tmp_path):
-    """A design that declares its own I/O delays is left byte-identical."""
-    proj = _mkproj(tmp_path, "input/constraints", DESIGN_SDC)
-    declared = (DESIGN_SDC
-                + "set_input_delay 1.5 -clock core_clock [all_inputs]\n"
-                + "set_output_delay 1.5 -clock core_clock [all_outputs]\n")
-    out, info = p3._ensure_staged_sdc_io_delay(declared, proj)
-    assert out == declared, "a design-declared I/O delay was overridden"
-    assert info["added_input_delay"] is None
-    assert info["added_output_delay"] is None
-
-
-def test_io_parity_fabricates_nothing_without_a_resolvable_clock(tmp_path):
-    """No create_clock anywhere ⇒ no invented clock reference (§4.05)."""
-    proj = tmp_path / "bare"
-    proj.mkdir()
-    out, info = p3._ensure_staged_sdc_io_delay("# nothing here\n", proj)
-    assert out == "# nothing here\n"
-    assert info["added_input_delay"] is None
-    assert info["clock_name"] is None

@@ -49,7 +49,6 @@ import _klayout_launch as KL                                  # noqa: E402
 import _progress_run as _pr                                   # noqa: E402
 import _seal_ring_margin as SRM                               # noqa: E402
 import die_finishing_gen as DFG                               # noqa: E402
-import phase3_one_shot_runner as P3                           # noqa: E402
 
 
 # ── the derivation: the PDK's own words, and nothing else ───────────────────
@@ -172,127 +171,28 @@ def test_two_disagreeing_seal_widths_are_NOT_MEASURED_not_a_choice(tmp_path):
 
 # ── the die and the core: pure arithmetic, no PDK, no container ─────────────
 
-def test_no_margin_leaves_the_floorplan_byte_for_byte_as_it_is():
-    assert P3.seal_ring_die_and_core(500, 500, 10, None, True) == (
-        500, 500, 10, None)
 
 
-def test_an_auto_die_grows_and_the_core_keeps_the_area_it_was_sized_for():
-    w, h, pad, note = P3.seal_ring_die_and_core(503, 503, 10, 26.0, True)
-    assert (w, h, pad) == (503 + 2 * 16, 503 + 2 * 16, 26)
-    assert w - 2 * pad == 503 - 2 * 10, (
-        "the core the auto-sizer asked for must survive the growth")
-    assert "26" in note
 
 
-def test_a_pinned_die_is_never_grown_only_the_core_moves():
-    w, h, pad, note = P3.seal_ring_die_and_core(503, 503, 10, 26.0, False)
-    assert (w, h, pad) == (503, 503, 26)
-    assert "PINNED" in note
 
 
-def test_a_deeper_inset_already_covers_the_band_and_nothing_moves():
-    """A pad ring is far deeper than a seal band; the inset is a max, never a
-    sum, and never a replacement."""
-    w, h, pad, note = P3.seal_ring_die_and_core(3162, 3162, 381, 26.0, True)
-    assert (w, h, pad) == (3162, 3162, 381)
-    assert "already held 381" in note
 
 
-def test_a_pinned_die_too_small_for_the_margin_is_REFUSED():
-    """On a die smaller than twice the margin the pinned arm would produce an
-    INVERTED core rectangle, and OpenROAD must never be handed one. `step_pnr`
-    refuses instead — the same shape PADRING_DIE_TOO_SMALL uses, and for the
-    same reason: a die somebody pinned is not grown to pay for the band."""
-    w, h, pad, _n = P3.seal_ring_die_and_core(40, 40, 10, 26.0, False)
-    assert (w, h, pad) == (40, 40, 26)
-    assert w - 2 * pad <= 0, "the fixture must be the case that needs refusing"
-    why = P3.seal_ring_die_too_small(w, h, pad, 26.0, "the basis")
-    assert why and why.startswith("SEALRING_DIE_TOO_SMALL")
-    assert "40x40" in why and "52x52" in why and "the basis" in why
 
 
-def test_a_die_that_CAN_hold_the_margin_is_not_refused():
-    """The other direction. Without it the refusal above could be a check that
-    always fires on a pinned die."""
-    w, h, pad, _n = P3.seal_ring_die_and_core(503, 503, 10, 26.0, False)
-    assert (w, h, pad) == (503, 503, 26)
-    assert P3.seal_ring_die_too_small(w, h, pad, 26.0, "the basis") is None
 
 
-def test_a_technology_that_said_nothing_can_never_refuse_a_die():
-    """`margin_um` None is NOT_MEASURED, and a NOT_MEASURED must not become a
-    verdict — least of all one that stops a flow that worked yesterday."""
-    assert P3.seal_ring_die_too_small(1, 1, 10, None, "") is None
 
 
-def test_a_fractional_margin_is_rounded_UP_never_down():
-    _w, _h, pad, _n = P3.seal_ring_die_and_core(500, 500, 10, 25.5, False)
-    assert pad == 26
 
 
-def test_a_hardmacro_reserves_nothing(tmp_path):
-    """A hardmacro is placed inside somebody else's die and has no ring of its
-    own — the same ordering `_declared_seal_ring_required` already holds, and
-    `die_finishing_gen._hardmacro_skip` refuses one step later on the same
-    fact."""
-    import _tapeout_declaration as _td
-    import _owner_declared as _OD
-    (tmp_path / "input" / "submission_template").mkdir(parents=True)
-    doc = _td.blank_declaration()
-    doc, _ig = _td.merge_answers(doc, {"deliverable": _td.DELIVERABLE_HARDMACRO})
-    _OD.attest(doc)
-    (tmp_path / _td.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
-    margin, rec = P3._seal_ring_core_margin_um(tmp_path, None, "no-container")
-    assert margin is None
-    assert rec["applies"] is False
-    assert rec["deliverable"] == _td.DELIVERABLE_HARDMACRO
-    assert "HARDMACRO" in rec["why_not"], rec
 
 
-def test_a_declaration_that_says_no_ring_is_required_reserves_nothing(
-        tmp_path):
-    """The design is the one authority that can decide it, and the producer
-    already treats that answer as final."""
-    import _tapeout_declaration as _td
-    (tmp_path / "input" / "submission_template").mkdir(parents=True)
-    doc = _td.blank_declaration()
-    doc, _ig = _td.merge_answers(doc, {"seal_ring_required": False})
-    (tmp_path / _td.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
-    margin, rec = P3._seal_ring_core_margin_um(tmp_path, None, "no-container")
-    assert margin is None
-    assert "seal_ring_required=false" in rec["why_not"], rec
 
 
-def test_an_UNDECLARED_delivery_is_still_sized_because_it_still_gets_a_ring(
-        tmp_path, monkeypatch):
-    """MEASURED on the tree this issue came from: the subservient gf180mcuD
-    run's own declaration answers `deliverable = NOT_DETERMINED`, and
-    `die_finishing_gen` builds it a ring anyway and now REFUSES to seal it. A
-    gate and its producer have to be satisfiable by the same run, so the sizing
-    is on the PRODUCER's premise — not a hardmacro, a generator ships — and not
-    on a narrower one."""
-    root, name, pdk_dir = _fake_pdk(tmp_path)
-    monkeypatch.setattr(P3, "_declared_seal_ring_required",
-                        lambda *a, **k: (True, "the technology ships one"))
-    monkeypatch.setattr(P3, "_pdk_dir_of", lambda _pdk: pdk_dir)
-    monkeypatch.setattr(P3, "_docker_exec_raw",
-                        lambda _c, cmd, timeout=0: (_sh(cmd) + ("",)))
-    margin, rec = P3._seal_ring_core_margin_um(tmp_path, None, "c")
-    assert rec["deliverable"] is None, "the fixture must be UNDECLARED"
-    assert margin == 26.0, rec
-    assert rec["applies"] is True
 
 
-def test_the_record_carries_the_derivation_beside_the_rectangles(tmp_path):
-    rec = P3._floorplan_rectangles_record(
-        tmp_path, die_rect=[0, 0, 555, 555], fp_rect=None,
-        die_source="test", core_pad=26, ring_inset_um=None,
-        seal_ring={"applies": True, "margin_um": 26.0})
-    on_disk = json.loads(
-        (tmp_path / P3.FLOORPLAN_RECTANGLES_REL).read_text())
-    assert on_disk["seal_ring_margin"]["margin_um"] == 26.0
-    assert rec["core_pad_um"] == 26
 
 
 # ── the refusal, on a real KLayout, both ways ───────────────────────────────

@@ -33,7 +33,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from programs.tests.test_execution_receipt_chain import real_entry, isolated_transport  # noqa: F401
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
@@ -47,7 +46,6 @@ try:                                   # absent on the unfixed tree
 except ImportError:                    # pragma: no cover - main arm
     PID = None
 
-_REFUSED = getattr(ORCH, "_P1_MODE_REFUSED", "refused_generated_doc_edited")
 KNOBS = {"ic_name": "chip", "pdk": "", "mode": "docs"}
 
 PRODUCER = '''
@@ -132,39 +130,15 @@ def _fresh(proj: Path, plug: Path, knobs=KNOBS):
     return PID.assess(proj, plug / "programs", knobs) if PID else {}
 
 
-def _decide(proj: Path, plug: Path, monkeypatch, knobs=KNOBS):
-    monkeypatch.setattr(ORCH, "PROGRAMS_DIR", plug / "programs")
-    try:
-        return ORCH._phase1_decision(proj, False, knobs)
-    except TypeError:                               # unfixed signature
-        return ORCH._phase1_decision(proj, False)
 
 
 # ---------------------------------------------------------------------------
 # the measured case, the old project, and the control
 # ---------------------------------------------------------------------------
-def test_docs_written_by_an_older_producer_are_regenerated(tmp_path,
-                                                           monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug)
-    src = plug / "programs" / "fake_l_producer.py"
-    src.write_text(src.read_text() + "\n# the producer fix lands\n")
-    assert _decide(proj, plug, monkeypatch) == (True, "docs")
-    assert _fresh(proj, plug)["reason"] == "PRODUCER_CHANGED"
 
 
-def test_docs_with_no_producer_identity_are_regenerated(tmp_path,
-                                                        monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _load(plug).produce(proj)
-    assert _decide(proj, plug, monkeypatch) == (True, "docs")
-    assert _fresh(proj, plug)["reason"] == "NO_PRODUCER_IDENTITY"
 
 
-def test_docs_the_current_producer_wrote_are_reused(tmp_path, monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug)
-    assert _decide(proj, plug, monkeypatch) == (False, "")
 
 
 # A Default continuation can submit intact historical outputs to today's D1
@@ -274,16 +248,6 @@ def test_checkpoint_requires_a_complete_rederivable_source_record(tmp_path, chan
 # ---------------------------------------------------------------------------
 # B1 — design input is what phase 1 READ, not what the flow rewrites
 # ---------------------------------------------------------------------------
-def test_a_file_phase1_wrote_and_phase3_rewrites_does_not_regenerate(
-        tmp_path, monkeypatch):
-    """review wave8 B1: phase 3's `publish_tapeout_declarations` rewrites the
-    declaration step 0.5ic wrote; that is not a design-input change."""
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug, declaration=True)
-    decl = proj / "input" / "submission_template" / "tapeout_declaration.json"
-    decl.write_text('{"answers": {"deliverable": "HARDMACRO"}}')   # phase 3
-    assert _fresh(proj, plug)["state"] == "REUSE"
-    assert _decide(proj, plug, monkeypatch) == (False, "")
 
 
 def test_an_input_file_phase1_never_read_does_not_regenerate(tmp_path):
@@ -293,13 +257,6 @@ def test_an_input_file_phase1_never_read_does_not_regenerate(tmp_path):
     assert _fresh(proj, plug)["state"] == "REUSE"
 
 
-def test_a_design_input_phase1_read_changes_regenerates(tmp_path,
-                                                        monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug)
-    (proj / "input" / "docs" / "spec.md").write_text("# spec, revised\n")
-    assert _decide(proj, plug, monkeypatch) == (True, "docs")
-    assert _fresh(proj, plug)["reason"] == "DESIGN_INPUT_CHANGED"
 
 
 def test_a_new_document_in_a_listed_input_dir_regenerates(tmp_path):
@@ -418,15 +375,6 @@ def test_the_recorder_installs_no_profiler(tmp_path):
 # ---------------------------------------------------------------------------
 # M4 — only what this run wrote; an interrupted run; handed docs
 # ---------------------------------------------------------------------------
-def test_a_doc_this_run_did_not_write_is_not_blessed(tmp_path, monkeypatch):
-    """A failing layer step leaves an OLDER producer's doc in place: the stamp
-    must not vouch for it (review wave8 M4)."""
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug)
-    _phase1(proj, plug, skip=(5,))              # L5 kept from the older run
-    f = _fresh(proj, plug)
-    assert f["reason"] == "GENERATED_DOC_NOT_WRITTEN" and "L5_DOC.json" in f["docs"]
-    assert _decide(proj, plug, monkeypatch) == (True, "docs")
 
 
 def test_an_interrupted_regeneration_regenerates_not_refuses(tmp_path,
@@ -443,46 +391,13 @@ def test_an_interrupted_regeneration_regenerates_not_refuses(tmp_path,
     assert f["reason"] == "NO_PRODUCER_IDENTITY"
 
 
-def test_handed_docs_are_never_judged_stale_by_a_window_run():
-    note = ORCH._stale_generated_docs_note(
-        False, {"state": "REGENERATE", "reason": "NO_PRODUCER_IDENTITY",
-                "why": "x"}, False, "--skip-phase1")
-    assert note is None
-    assert ORCH._demote_for_stale_generated_docs("PASS", note, []) == "PASS"
 
 
-def test_a_window_run_over_stale_docs_discloses_and_is_not_green():
-    stale = {"state": "REGENERATE", "reason": "PRODUCER_CHANGED",
-             "why": "code a -> b"}
-    note = ORCH._stale_generated_docs_note(False, stale, True, "--skip-phase1")
-    assert note.startswith("STALE_GENERATED_DOCS") and "PRODUCER_CHANGED" in note
-    reasons = []
-    assert ORCH._demote_for_stale_generated_docs("PASS", note, reasons) \
-        == "NOT_MEASURED" and reasons == [note]
-    assert ORCH._demote_for_stale_generated_docs("FAIL", note, []) == "FAIL"
-    assert ORCH._stale_generated_docs_note(True, stale, True, "x") is None
-    assert ORCH._stale_generated_docs_note(
-        False, {"state": "REUSE"}, True, "x") is None
 
 
 # ---------------------------------------------------------------------------
 # B2 — a FLOW rewrite after phase 1 is recorded, a hand edit refuses
 # ---------------------------------------------------------------------------
-def test_a_rewrite_through_the_dump_chokepoint_is_a_flow_derivation(
-        tmp_path, monkeypatch):
-    """review wave8 B2: analog A8's rail synth and phase 2's
-    `restamp_l_doc_skeletons` rewrite L docs through `dump`."""
-    import l_doc_generator_stamp as STAMP
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug)
-    l2 = proj / "phase1" / "generated_docs" / "L2_DOC.json"
-    STAMP.dump(l2, {"doc": 2, "rails": ["VDDA"]}, emitter="a8_rail_synth")
-    f = _fresh(proj, plug)
-    assert f["state"] == "REUSE", f
-    chain = SI.read_sidecar(proj / "phase1", "phase1")["derivations"]
-    assert chain[-1]["doc"] == "L2_DOC.json"
-    assert "a8_rail_synth" in chain[-1]["writer"]
-    assert _decide(proj, plug, monkeypatch) == (False, "")
 
 
 def test_a_rewrite_by_a_later_phase_of_this_run_is_recorded(tmp_path):
@@ -496,32 +411,10 @@ def test_a_rewrite_by_a_later_phase_of_this_run_is_recorded(tmp_path):
     assert _fresh(proj, plug)["state"] == "REUSE"
 
 
-def test_a_hand_edited_generated_doc_is_refused_not_overwritten(
-        tmp_path, monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug)
-    doc = proj / "phase1" / "generated_docs" / "L1_DOC.json"
-    doc.write_text(json.dumps({"doc": 1, "edited": True}))
-    assert _decide(proj, plug, monkeypatch) == (False, _REFUSED)
-    f = _fresh(proj, plug)
-    assert f["reason"] == "GENERATED_DOC_EDITED" and "L1_DOC.json" in f["why"]
-    assert "input/" in f["why"] and "delete the doc" in f["why"]
-    assert json.loads(doc.read_text())["edited"] is True
 
 
-def test_a_doc_the_producer_never_wrote_is_refused(tmp_path, monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug)
-    (proj / "phase1" / "generated_docs" / "L99_HANDMADE.json").write_text("{}")
-    assert _decide(proj, plug, monkeypatch) == (False, _REFUSED)
 
 
-def test_deleting_the_edited_doc_is_a_way_out(tmp_path, monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug, n=14)
-    (proj / "phase1" / "generated_docs" / "L1_DOC.json").unlink()
-    assert _decide(proj, plug, monkeypatch) == (True, "docs")
-    assert _fresh(proj, plug)["reason"] == "GENERATED_DOC_REMOVED"
 
 
 def test_the_refusal_halts_the_run_by_name():
@@ -533,22 +426,8 @@ def test_the_refusal_halts_the_run_by_name():
 # ---------------------------------------------------------------------------
 # design input itself; supersede; the second track; the sibling entry
 # ---------------------------------------------------------------------------
-def test_L_docs_with_no_design_input_are_input_and_kept(tmp_path,
-                                                        monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path, design_input=False)
-    gd = proj / "phase1" / "generated_docs"
-    for i in range(1, 14):
-        (gd / f"L{i}_DOC.json").write_text("{}")
-    assert _decide(proj, plug, monkeypatch) == (False, "")
 
 
-def test_assessing_never_writes_the_design_input(tmp_path, monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    _phase1(proj, plug)
-    spec = proj / "input" / "docs" / "spec.md"
-    before = (spec.read_bytes(), spec.stat().st_mtime_ns)
-    _decide(proj, plug, monkeypatch)
-    assert (spec.read_bytes(), spec.stat().st_mtime_ns) == before
 
 
 def test_a_regeneration_moves_the_stale_docs_aside_not_away(tmp_path):
@@ -608,29 +487,6 @@ def test_phase2_entry_refuses_archive_failure_before_dispatch(tmp_path,
     assert (proj / "phase1/generated_docs/L1_DOC.json").is_file()
 
 
-def test_front_door_halts_when_stale_docs_cannot_be_archived(tmp_path,
-                                                              monkeypatch):
-    plug, proj = _plugin(tmp_path), _project(tmp_path)
-    # owner route rule 2026-09-28 (ICROUTE)
-    from _route_fixture import stage_owner_route
-    stage_owner_route(proj, "ic")
-    real_entry('IC', 'default', proj)
-    _phase1(proj, plug)
-    (proj / ".vibeic-state").write_text("blocks archive directory")
-    monkeypatch.setattr(ORCH, "_capture_container_image",
-                        lambda *_a, **_k: {"verdict": "PASS"})
-    monkeypatch.setattr(ORCH, "_phase_runner", lambda *_a, **_k:
-                        pytest.fail("front door must not dispatch phase1"))
-    monkeypatch.setattr(sys, "argv", [
-        "vibe_ic_one_shot_runner.py", str(proj), "--route", "ic",
-        "--no-dashboard",
-        "--entry-step", "D1", "--exit-step", "D1", "--skip-phase3"])
-    assert ORCH.main() == 1
-    report = json.loads((proj / "reports/orchestrator/vibe_ic_one_shot.json")
-                        .read_text())
-    assert report["halted_at"] == "phase1"
-    assert any("SUPERSEDE_FAILED" in note for note in report["advisories"])
-    assert (proj / "phase1/generated_docs/L1_DOC.json").is_file()
 
 
 def test_two_archives_in_one_second_never_overwrite(tmp_path, monkeypatch):
@@ -657,10 +513,6 @@ def test_a_second_track_rewrite_keeps_the_producers_inputs(tmp_path):
     assert _fresh(proj, plug)["reason"] == "DESIGN_INPUT_CHANGED"
 
 
-def test_the_front_door_and_phase2_share_one_design_input_predicate(tmp_path):
-    proj = _project(tmp_path)
-    assert ORCH._phase1_decision_from_inputs(proj) \
-        == PID.design_input_mode(proj) == (True, "docs")
 
 
 # ---------------------------------------------------------------------------

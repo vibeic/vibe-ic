@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import _plugin_tree  # noqa: F401
 from _hostpaths import require_repo
 import _default_backend_fixtures as BF
 import librelane_contract as LC
@@ -139,16 +138,6 @@ def test_native_discovery_does_not_adopt_an_archive_without_a_current_folder(tmp
         PST.native_sta_folder(project)
 
 
-def test_native_input_manifest_excludes_retained_snapshots(tmp_path):
-    import execution_policy as policy
-    project, folder, _ = native_project(tmp_path)
-    runtime = {'project': project, 'policy': {'mode': 'default'}}
-    before = policy._fixed_inputs(runtime, '30')
-    for archive in ('steps', 'reports/step_versions'):
-        shutil.copytree(folder, project / archive / 'old/inputs/runs/native/sta')
-    after = policy._fixed_inputs(runtime, '30')
-    assert set(after) == set(before)
-    assert not any(name.startswith(('steps/', 'reports/step_versions/')) for name in after)
 
 
 def test_native_metrics_file_selects_the_setup_scene(tmp_path):

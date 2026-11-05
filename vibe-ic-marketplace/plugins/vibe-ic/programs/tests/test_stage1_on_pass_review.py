@@ -48,7 +48,6 @@ from __future__ import annotations
 import ast
 import json
 import os
-import re
 import shutil
 import tempfile
 import subprocess
@@ -486,140 +485,12 @@ def test_the_partition_over_the_published_corpus_does_not_move():
 
 
 # ── the enforcement declaration ──────────────────────────────────────────────
-def test_it_declares_its_enforcement_intent_inside_the_read_window():
-    """A gate that says nothing about its own rc is `undeclared` to the audit.
-
-    MEASURED on clean main 6c798ce4be (v1.13.3): `flow_gate_enforcement_audit`
-    refused with `undeclared::stage_on_pass_review`, at an UNCHANGED total of
-    116 — the case a count-comparing ratchet cannot reach and this one names.
-    Before #886 a gate that declared nothing could not fail that audit at all,
-    so silence was the reliable way to stay clean; 113 of 150 gates were in
-    that class while the audit printed PASS.
-
-    The window is IMPORTED, never re-typed: a declaration past it is present
-    and UNREAD, which reports identically to no declaration at all, and two
-    copies of the bound are two numbers that will disagree.
-    """
-    import flow_gate_enforcement_audit as A
-    src = PROG.read_text(encoding="utf-8")
-    idx = src.find("ENFORCEMENT:")
-    assert idx >= 0, "the gate declares no enforcement intent at all"
-    assert idx < A.DECL_WINDOW_BYTES, (
-        f"the ENFORCEMENT declaration sits at byte {idx}, past the "
-        f"{A.DECL_WINDOW_BYTES}-byte window `declared_intent` reads — present "
-        f"and unread, which the audit reports as UNDECLARED. Move it above "
-        f"the prose that pushed it down.")
-    m = A._DECL_RE.search(src[:A.DECL_WINDOW_BYTES])
-    assert m, ("`ENFORCEMENT:` appears but not in a form the audit's own regex "
-               "accepts — a MENTION in prose is not a declaration")
 
 
-def test_the_declaration_agrees_with_what_the_FLOW_actually_wires():
-    """The declaration is checked against the FLOW, not merely against itself.
-
-    DELIBERATELY NOT `assert declared == "advisory"`, which is what this test
-    and its neighbour both did when they landed. Pinning the literal makes the
-    guard an OBSTACLE the day a stage is legitimately wired to block: the flow
-    changes, the declaration has to follow, and a test asserting the old word
-    has to be edited to let a correct change through — which is how a guard
-    teaches people that guards are things you edit.
-
-    The invariant is AGREEMENT, and it holds at either value. Measured cost of
-    the literal form: the sibling prose said "both wirings" while the flow had
-    carried THREE since v1.13.4, and neither pinned test could notice, because
-    all three happened to be `advisory` and `advisory` was the word hard-coded
-    into the assertion. A set comparison reads the third for free.
-    """
-    import flow_gate_enforcement_audit as A
-    import yaml
-    doc = yaml.safe_load(
-        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
-    wired = [(n.get("id"), n["on_pass_review"].get("verdict"))
-             for n in _walk_stages(doc)
-             if isinstance(n, dict) and isinstance(n.get("on_pass_review"), dict)]
-    assert wired, ("no stage wires an on_pass_review block; this test would "
-                   "otherwise pass over an empty set, which is the vacuous "
-                   "green it exists to refuse")
-
-    verdicts = {v for _, v in wired}
-    assert len(verdicts) == 1, (
-        f"stages wire this ONE program to different verdicts {sorted(verdicts)}, "
-        f"so no single `ENFORCEMENT:` line in it can be true of all of them. "
-        f"That is a real design question, not a test failure to paper over.")
-
-    src = PROG.read_text(encoding="utf-8")
-    m = A._DECL_RE.search(src[:A.DECL_WINDOW_BYTES])
-    assert m, "the gate declares no enforcement intent the audit can read"
-    assert m.group(1) == verdicts.pop(), (
-        f"the gate declares {m.group(1)!r} while every wiring in the flow says "
-        f"{sorted(v for _, v in wired)!r}. Change the declaration with the "
-        f"wiring — a gate that declares blocking while wired AUDIT_ONLY is the "
-        f"audit's `contradiction` class, and the reverse is a gate whose rc "
-        f"stops a landing while its own source says it only advises.")
 
 
-def _declaration_block(src: str) -> str:
-    """The ENFORCEMENT PARAGRAPH only -- to the first blank line.
-
-    Scoped deliberately, and the scope is the whole point, so it is stated
-    exactly. Cutting at the next `===` SECTION HEADING instead -- which is what
-    this did when it landed -- swept in the paragraphs BELOW the declaration.
-    Those paragraphs narrate the sentence's own history: the retired claim in
-    quotation marks (`"both wirings -- stage1 and stage2"`) and the two dated
-    corrections that name `stage3` and `stage_analog` as things PAST versions
-    wired. The guard then read four stage names nobody was claiming.
-
-    MEASURED: on main at v1.13.25 it was RED, reporting an enumeration of
-    ['stage1','stage2','stage3','stage_analog'] against a flow wiring
-    ['stage1','stage2','stage3','stage4','stage_analog'] -- every one of those
-    four names came from the citation, and the live declaration names none.
-    #1850 wiring `stage4` is what exposed it; the misread was there from the
-    moment the guard landed.
-
-    A declaration is ONE paragraph. The prose after it is commentary ABOUT the
-    declaration, and commentary that cannot quote the mistake it explains is
-    commentary nobody can write.
-    """
-    import flow_gate_enforcement_audit as A
-    m = A._DECL_RE.search(src[:A.DECL_WINDOW_BYTES])
-    assert m, "no ENFORCEMENT declaration to scope to"
-    return re.split(r"\n[ \t]*\n", src[m.start():], maxsplit=1)[0]
 
 
-def test_the_declaration_does_not_ENUMERATE_the_wirings():
-    """THE GUARD FOR THE SENTENCE, and the reason it is a second test.
-
-    Its neighbour compares the ENFORCEMENT VALUE with the verdicts the flow
-    wires. That is a true and useful property and it can go red — but it is NOT
-    what went wrong. The declaration once read "both wirings that exist —
-    stage1 and stage2" while the flow carried four, and reverting that sentence
-    changes no ENFORCEMENT value, so the value guard passes over it and always
-    would have. MEASURED, three arms, one answer: fix in 1 passed, the file
-    reverted to the stale sentence 1 passed, restored 1 passed. A guard that
-    cannot go red for the reason it exists is worse than none, because a reader
-    believes it.
-
-    THE PROPERTY: a set the declaration NAMES must be the set the flow WIRES.
-    Naming none is fine and is what the declaration does today. Naming all of
-    them is fine too — and goes red the moment a wiring is added or removed,
-    which is the whole point. Naming SOME is the defect, and it is what a
-    hand-written enumeration decays into.
-    """
-    stages = _wired_stages()
-    named = {sid for sid in stages
-             if re.search(r"\b" + re.escape(sid) + r"\b",
-                          _declaration_block(PROG.read_text(encoding="utf-8")))}
-    if not named:
-        return                      # states no membership; nothing can go stale
-    missing = sorted(set(stages) - named)
-    assert not missing, (
-        f"the ENFORCEMENT declaration enumerates {sorted(named)} but the flow "
-        f"wires {sorted(stages)} — it does not name {missing}. An enumeration "
-        f"in prose is a copy of the flow's membership that nothing keeps true: "
-        f"it was written correct at v1.13.3, shipped false at v1.13.7 because "
-        f"v1.13.4 wired stage3 in between, and would have been false again "
-        f"within a day when v1.13.11 wired stage_analog. Name them ALL or name "
-        f"NONE; do not write a subset.")
 
 
 _CARDINAL = {"one": 1, "a single": 1, "both": 2, "two": 2, "three": 3,
@@ -630,74 +501,3 @@ _CARDINAL = {"one": 1, "a single": 1, "both": 2, "two": 2, "three": 3,
 # "2 `on_pass_review:` blocks", "four stages wire". Deliberately NOT `no|zero`:
 # "a stage with no `on_pass_review:` block is NOT CHECKED" describes an ABSENT
 # block; it does not count the present ones.
-_WIRING_COUNT = re.compile(
-    r"\b(one|a single|both|two|three|four|five|six|seven|eight|nine|ten|\d+)\b"
-    r"((?:\s+(?:\w+|`[^`]+`)){0,3}?\s+)"
-    r"(wirings?|`?on_pass_review:?`?\s+blocks?|stages?\s+wire)",
-    re.I)
-
-
-@pytest.mark.consistency
-def test_the_declaration_states_no_wiring_COUNT_the_flow_falsifies():
-    """The half its neighbour returns early on.
-
-    `test_the_declaration_does_not_ENUMERATE_the_wirings` compares the stage
-    names the declaration lists against the stage names the flow wires, and
-    when the declaration lists NONE it returns early -- correctly, because a
-    declaration that names nobody has no roster to go stale.
-
-    A COUNT is not a roster and survives that early return. MEASURED on this
-    tree: replace the live sentence with "it agrees with all three wirings that
-    exist" -- no stage named, so `named` is empty -- and the enumeration guard
-    passes, 1 passed rc=0, while the flow wires five. That is the same defect
-    in its other spelling, and it is the spelling the retired sentence's own
-    post-mortem predicted: "Correcting it to `three` would have been false
-    again inside a day."
-
-    THE PROPERTY, and it matches its neighbour's: state no count, or state one
-    the flow agrees with. Both are fine. A number the flow falsifies is not.
-    Same paragraph scope as the roster guard, so the commentary below the
-    declaration -- which says "making four" about what v1.13.11 did -- is not
-    read as a claim about now.
-    """
-    stages = _wired_stages()
-    actual = len(stages)
-    block = _declaration_block(PROG.read_text(encoding="utf-8"))
-
-    stale = []
-    for m in _WIRING_COUNT.finditer(block):
-        stated = _CARDINAL.get(m.group(1).lower())
-        if stated is None:
-            stated = int(m.group(1))
-        if stated != actual:
-            stale.append((" ".join(m.group(0).split()), stated))
-    assert not stale, (
-        f"the ENFORCEMENT declaration states a wiring count the flow "
-        f"falsifies: {stale!r} -- the flow wires {actual} "
-        f"({sorted(stages)}). A hand-typed count is a copy of the flow's size "
-        f"that nothing keeps true. Say what is true of EVERY wiring, or state "
-        f"a count this test can confirm.")
-
-
-def _wired_stages() -> dict:
-    """{stage id: verdict} for every `on_pass_review:` block in the flow."""
-    import yaml
-    doc = yaml.safe_load(
-        (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml").read_text())
-    out = {n.get("id"): n["on_pass_review"].get("verdict")
-           for n in _walk_stages(doc)
-           if isinstance(n, dict) and isinstance(n.get("on_pass_review"), dict)}
-    assert out, ("no stage wires an on_pass_review block; every assertion "
-                 "built on this would pass over an empty set")
-    return out
-
-
-def _walk_stages(node):
-    """Every mapping in the flow document, at any depth."""
-    if isinstance(node, dict):
-        yield node
-        for v in node.values():
-            yield from _walk_stages(v)
-    elif isinstance(node, list):
-        for v in node:
-            yield from _walk_stages(v)

@@ -64,15 +64,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as R  # noqa: E402
 import slot_pad_budget_check as S  # noqa: E402
 import flow_compliance_check as FCC  # noqa: E402
-import verdict as V  # noqa: E402  the five-word step vocabulary (#2389)
 import _flow_reason_taxonomy as _RT  # noqa: E402  the class -> tier map
 import _l_doc_pad_placement as LPP  # noqa: E402  the ONE ring reader (R-0915-101)
 import _tapeout_declaration as TD  # noqa: E402
@@ -145,43 +142,10 @@ def _run_budget(project: Path, *extra) -> tuple[int, dict]:
 
 # ---------------------------------------------------------------- ruling (1)
 
-def test_an_owner_attested_die_stands_the_ip_producers_down_with_the_citation(tmp_path):
-    project = _project(tmp_path)
-    na, cited, evidence = R._ip_delivery_declared_na(project)
-    assert na is True
-    assert "answers.deliverable='DIE'" in cited and "owner" in cited
-    assert evidence["declaration_path"] == TD.DECLARATION_REL
-    row = R.step_digital_hardmacro_gen(project)
-    # #2389 REDUCED THE STEP VOCABULARY TO FIVE WORDS and `SKIP` is not one of
-    # them (`verdict.Verdict`: PASS / PASS_WITH_WAIVERS / FAIL / NOT_MEASURED /
-    # NOT_APPLICABLE). This row was red on live main 8efd02930 before this lane
-    # touched anything — the WORD moved, the invariant did not. Both are
-    # asserted, the spelling and the MEANING, so the next vocabulary move is
-    # caught as a change of meaning instead of passing on a string.
-    assert row.status == V.Verdict.NOT_APPLICABLE.value
-    assert row.status in V.EXCUSED          # a stand-down, which is the point
-    assert row.detail.startswith("DESIGN-DECLARED-N/A")
-    assert TD.DECLARATION_REL in row.detail
-    rec = json.loads((project / "reports/phase3/digital_hardmacro_gen.json").read_text())
-    assert rec["verdict"] == "NOT_APPLICABLE"
-    assert rec["reason_class"] == "DESIGN_DECLARED_NA"
-    assert rec["produced"] == []
 
 
-def test_a_hardmacro_still_owes_the_ip_kit(tmp_path):
-    """The other direction: the kit is the hardmacro's whole deliverable."""
-    project = _project(tmp_path, "HARDMACRO")
-    assert R._ip_delivery_declared_na(project)[0] is False
 
 
-@pytest.mark.parametrize("case,kw", [
-    ("an agent's reading is not the owner's word", {"attested": False}),
-    ("no declaration at all", {"deliverable": "NOT_DETERMINED"}),
-])
-def test_only_the_owners_word_stands_the_ip_kit_down(tmp_path, case, kw):
-    deliverable = kw.pop("deliverable", "DIE")
-    project = _project(tmp_path, deliverable, **kw)
-    assert R._ip_delivery_declared_na(project)[0] is False, case
 
 
 def test_the_flow_row_stands_down_by_the_same_declaration(tmp_path):

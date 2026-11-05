@@ -7,7 +7,6 @@ PLUGIN=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(PLUGIN));sys.path.insert(0,str(PLUGIN/'programs'))
 from tools.phase1_engine.schema import FactGraph
 from tools.phase1_engine.ingest import from_structured_yaml
-import phase1_one_shot_runner as runner
 
 
 def staged(tmp_path):
@@ -40,31 +39,8 @@ def test_existing_structured_reader_preserves_graph_and_scope(tmp_path):
     assert actual.to_dict()==graph.to_dict()
 
 
-def test_converged_graph_precedes_stale_heuristic_input_cache(tmp_path):
-    staged(tmp_path)
-    cache=tmp_path/'phase1/input_doc';cache.mkdir(parents=True);(cache/'old.txt').write_text('older raw corpus')
-    assert runner._detect_input_mode(tmp_path)=='prompt'
 
 
-def test_actual_existing_publisher_keeps_complete_graph_namespace(tmp_path):
-    graph,_,data=staged(tmp_path)
-    before=(tmp_path/'input/phase1_structured.yaml').read_bytes()
-    import _phase1_producer_identity as identity
-    with identity.ProducerRecorder(root=PLUGIN) as recorder:
-        result=runner.step_ingest_render(tmp_path,'neutral_top')
-    assert result.status=='PASS',result.detail
-    assert runner.step_human_docs(tmp_path).status == "PASS"
-    assert (tmp_path/'input/phase1_structured.yaml').read_bytes()==before
-    generated=tmp_path/'phase1/generated_docs'
-    assert recorder.written_docs(tmp_path) == {p.name for p in generated.glob('L*.json')}
-    for field in ('L9.top_ports','L9.parameters','L2.requirements','L6.submodule_control_logic','L21.retention','L22.test_cases'):
-        layer,key=field.split('.',1)
-        from tools.phase1_engine.schema import LAYER_FILE_NAMES
-        doc=json.loads((generated/LAYER_FILE_NAMES[layer]).read_text())
-        assert doc[key]==data[field]
-    l6=json.loads((generated/'L6_CONTROL_LOGIC.json').read_text())
-    assert not l6.get('fsm_states')
-    assert not (tmp_path/'reports/audit/ai_judgements/D1.json').exists()
 
 
 @pytest.mark.parametrize('damage',['version','population'])

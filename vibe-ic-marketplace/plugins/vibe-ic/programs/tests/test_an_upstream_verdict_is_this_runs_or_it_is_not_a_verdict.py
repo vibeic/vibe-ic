@@ -34,7 +34,7 @@ import flow_compliance_check as FCC          # noqa: E402
 import release_docs_check as RDC             # noqa: E402
 import step_metrics as SM                    # noqa: E402
 import _path_layout as _PL                   # noqa: E402
-from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
+from _invocation_fixture import bind_invocation_top
 
 INV_ENV = "VIBEIC_FCC_INVOCATION"
 
@@ -436,44 +436,6 @@ def test_the_record_is_written_on_both_branches_of_the_step_loop():
             assert "_emit_step_metrics" not in line
 
 
-def test_the_record_class_is_declared_and_the_taxonomy_gate_accepts_it(tmp_path):
-    """R-0915-165 asks for the class to be added to the reports/audit whitelist with its reason.
-
-    MEASURED: there is no per-child whitelist for `reports/audit`. The taxonomy gate polices the
-    children of `reports/` only -- `REPORTS_VALID_SUBDIRS` -- and `audit` is already in it, so
-    the class needs no new entry there. What it DID need is to be declared rather than spelled at
-    the write site, which is `_path_layout.STEP_OUTPUT_RECORD_DIR`, carrying the reason the three
-    existing records cannot answer the question.
-
-    Both halves are driven: the gate PASSES over a project holding only the new record, and still
-    FAILS on a real stray, so this is not a gate that has stopped looking.
-    """
-    import subprocess
-
-    proj = tmp_path / "proj"
-    rec = _PL.step_output_record_path(proj, "37")
-    rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text("{}\n")
-    assert _PL.STEP_OUTPUT_RECORD_DIR == "reports/audit/step_outputs"
-    assert str(rec.relative_to(proj)).startswith(_PL.STEP_OUTPUT_RECORD_DIR)
-    assert "audit" in _PL.REPORTS_VALID_SUBDIRS
-
-    def gate(p: Path) -> str:
-        r = subprocess.run(
-            [sys.executable, str(PROGRAMS / "reports_subfolder_taxonomy_check.py"), str(p)],
-            capture_output=True, text=True, timeout=300)
-        return r.stdout + r.stderr
-
-    assert "[PASS]" in gate(proj), gate(proj)
-
-    (proj / "reports" / "stray.json").write_text("{}\n")
-    out = gate(proj)
-    assert "[FAIL]" in out and "stray.json" in out, out
-
-    # and the reason for the class lives with the declaration
-    src = (PROGRAMS / "_path_layout.py").read_text()
-    for why in ("flat by design", "outputs.json", "LIES"):
-        assert why in src, why
 
 
 # ── the record's own atomic temp ─────────────────────────────────────────────

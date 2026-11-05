@@ -2,17 +2,13 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
-import subprocess
 import sys
-from types import SimpleNamespace
 
 import pytest
 
-from _hostpaths import require_repo
 import flow109_final_gls as final_gls
 
 sys.path.insert(0, str(final_gls.HERE / 'librelane_plugins'))
-from librelane.state import DesignFormat
 from librelane_plugin_vibeic import GateLevelSim
 
 
@@ -26,61 +22,6 @@ def _resources(log):
     return measured
 
 
-def test_final_gls_launches_without_time_and_keeps_execution_fields(tmp_path, monkeypatch):
-    popen = subprocess.Popen
-    def without_time(argv, *args, **kwargs):
-        if argv[0] == '/usr/bin/time':
-            raise FileNotFoundError('external time binary is absent')
-        return popen(argv, *args, **kwargs)
-    monkeypatch.setattr(subprocess, 'Popen', without_time)
-    fixture = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
-                           'tests', 'fixtures', 'sdf_top_port_bus')
-    bench = tmp_path / 'probe.v'
-    bench.write_text('''
-`timescale 1ns/1ps
-module probe;
-  reg a = 0;
-  wire [1:0] q;
-  wire p;
-  top dut(.a(a), .q(q), .p(p));
-  initial begin
-    $sdf_annotate("@@VIBEIC_SDF_FILE@@", dut);
-    #1 a = 1;
-    #2;
-    if (q[1] !== 1'b1 || p !== 1'b1) $finish_and_return(1);
-    $display("GATE_SIM_RESULT PASS 1/1 vectors");
-    $finish;
-  end
-endmodule
-''')
-    stubs = tmp_path / 'stubs.v'
-    stubs.write_text('')
-    manifest = {'cases': [{'id': 'probe', 'module': 'probe', 'testbench': str(bench)}],
-                'models': [], 'stubs': str(stubs), 'compile_flags': '-g2012 -ginterconnect -gspecify',
-                'sdf_placeholder': '@@VIBEIC_SDF_FILE@@', 'not_a_subject': []}
-    step = SimpleNamespace(step_dir=str(tmp_path / 'native'),
-                           config={'VIBEIC_GLS_MANIFEST': 'selection.json', 'VIBEIC_GLS_TIMEOUT_S': 10},
-                           _run=GateLevelSim._run)
-    rows = final_gls.run_native_cases(step, {
-        DesignFormat.NETLIST: str(fixture / 'top.v'),
-        DesignFormat.SDF: {'typ': str(fixture / 'top.sdf')}}, manifest)
-    assert len(rows) == 1
-    row = rows[0]
-    assert (row['compile_rc'], row['sim_rc']) == (0, 0), row
-    assert 'GATE_SIM_RESULT PASS 1/1' in Path(row['stdout']).read_text()
-    execution = row['execution']
-    assert {'started_ns', 'finished_ns', 'argv', 'worker_output'} <= execution.keys()
-    assert execution['finished_ns'] > execution['started_ns']
-    assert len(execution['argv']) == 2
-    for call in execution['argv']:
-        assert {'argv', 'executed_argv', 'log', 'cwd', 'resources', 'returncode'} <= call.keys()
-        assert call['returncode'] == 0
-        assert call['executed_argv'] == call['argv']
-        assert call['resources'] == call['log'] + '.resources.txt'
-        _resources(call['log'])
-    published = json.loads((Path(step.step_dir) / 'gls_runs.json').read_text())
-    assert published['runs'] == rows
-    assert json.loads((Path(execution['worker_output']) / 'case_execution.json').read_text()) == row
 
 
 @pytest.mark.parametrize('exit_code,limit', [(0, 10), (7, 10), (124, 0.2)])

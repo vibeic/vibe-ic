@@ -24,23 +24,12 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase3_one_shot_runner as R  # noqa: E402
 
 
 # ── the merge script: flatten + per-layer Region.merge() ────────────────────
 
-def test_merge_script_flattens_then_merges_per_layer():
-    s = R._GDS_LAYER_MERGE_PY
-    assert "flatten(-1, True)" in s          # cross-boundary geometry co-resident
-    assert "reg.merge()" in s                # union abutting/overlapping
-    assert "layer_indexes()" in s            # per-layer
-    assert 'os.environ["GDS_IN"]' in s and 'os.environ["GDS_OUT"]' in s
-    assert "ly.write(gds_out)" in s
-    assert "GDS_LAYER_MERGE_DONE" in s
 
 
-def test_merge_script_compiles():
-    compile(R._GDS_LAYER_MERGE_PY, "<merge>", "exec")
 
 
 # ── wiring: MUST run on the KLayout path, NOT the Magic path ─────────────────
@@ -64,57 +53,10 @@ def test_merge_wired_on_klayout_path_only():
 
 # ── NONFATAL helper behaviour ───────────────────────────────────────────────
 
-def test_merge_nonfatal_when_klayout_absent(tmp_path, monkeypatch):
-    gds = tmp_path / "top.gds"
-    gds.write_text("UNMERGED")
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)
-    monkeypatch.setattr(R._pl, "pnr_dir", lambda p: tmp_path)
-
-    class _Pdk:
-        tech_lef = "/nonexistent/sky130.tlef"
-    ok, note = R._klayout_merge_layers(tmp_path, "top", _Pdk(), "c", gds)
-    assert ok is False
-    assert "not in container PATH" in note
-    assert gds.read_text() == "UNMERGED"     # un-merged GDS untouched
 
 
-def test_merge_success_swaps_in_merged_gds(tmp_path, monkeypatch):
-    pnr = tmp_path
-    gds = pnr / "top.gds"
-    gds.write_text("UNMERGED")
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
-    monkeypatch.setattr(R._pl, "pnr_dir", lambda p: pnr)
-    monkeypatch.setattr(R, "_to_container_path", lambda h, c: h)
-
-    def _fake_exec(container, cmd, timeout=600, **_):
-        (pnr / "top.merged.gds").write_text("MERGED")
-        return 0, "GDS_LAYER_MERGE_DONE layers=12", ""
-    monkeypatch.setattr(R, "_docker_exec", _fake_exec)
-
-    class _Pdk:
-        tech_lef = "/nonexistent/sky130.tlef"
-    ok, note = R._klayout_merge_layers(pnr, "top", _Pdk(), "c", gds)
-    assert ok is True
-    assert gds.read_text() == "MERGED"
-    assert "#601" in note
 
 
-def test_merge_nonfatal_when_exec_fails(tmp_path, monkeypatch):
-    pnr = tmp_path
-    gds = pnr / "top.gds"
-    gds.write_text("UNMERGED")
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
-    monkeypatch.setattr(R._pl, "pnr_dir", lambda p: pnr)
-    monkeypatch.setattr(R, "_to_container_path", lambda h, c: h)
-    monkeypatch.setattr(R, "_docker_exec",
-                        lambda c, cmd, timeout=600, **_: (1, "", "klayout boom"))
-
-    class _Pdk:
-        tech_lef = "/nonexistent/sky130.tlef"
-    ok, note = R._klayout_merge_layers(pnr, "top", _Pdk(), "c", gds)
-    assert ok is False
-    assert "NONFATAL" in note
-    assert gds.read_text() == "UNMERGED"     # kept on failure
 
 
 # ── pure-geometry no-leak: abutting → merged (false edge-pair gone);

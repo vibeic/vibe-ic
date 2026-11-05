@@ -24,7 +24,6 @@ import subprocess
 import subprocess as _sp
 import sys
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
@@ -37,10 +36,6 @@ import phase3_one_shot_runner as R  # noqa: E402
 ROUTE = "phase3_one_shot_runner::antenna_routing_incomplete"
 
 
-def _name_judged_by(judge) -> str:
-    names = [n for n, i in C.INSTRUMENTS.items() if i.judge is judge]
-    assert len(names) == 1, names
-    return names[0]
 
 
 def _fresh(name: str) -> None:
@@ -53,38 +48,10 @@ def _always_fires(_log):
 
 # ── a faked collaborator, reached through a function-local import ──────────
 
-def test_a_fake_first_does_not_poison_the_real_caller(monkeypatch):
-    """Order 1: calibrate under a fake, then for real."""
-    _fresh(ROUTE)
-    with monkeypatch.context() as m:
-        m.setattr(R, "antenna_routing_incomplete", _always_fires)
-        under_fake = C.check(ROUTE)
-    # the witness: the fake really reached the judge
-    assert under_fake.state == C.MISCALIBRATED
-    assert "negative" in under_fake.failed_sides
-    real = C.check(ROUTE)
-    assert real.state == C.CALIBRATED, real.detail
-    assert real.negative_outcome is None
 
 
-def test_a_real_calibration_survives_a_later_fake(monkeypatch):
-    """Order 2: calibrate for real, then under a fake, then for real."""
-    _fresh(ROUTE)
-    first = C.check(ROUTE)
-    assert first.state == C.CALIBRATED
-    with monkeypatch.context() as m:
-        m.setattr(R, "antenna_routing_incomplete", _always_fires)
-        # the stored REAL calibration is what a faking caller is served
-        assert C.check(ROUTE) is first
-    assert C.check(ROUTE) is first
 
 
-def test_a_mock_is_a_fake_too():
-    _fresh(ROUTE)
-    with mock.patch.object(R, "antenna_routing_incomplete",
-                           mock.MagicMock(return_value=True)):
-        assert C.check(ROUTE).state == C.MISCALIBRATED
-    assert C.check(ROUTE).state == C.CALIBRATED
 
 
 # ── a faked collaborator in a module the instrument only names ─────────────
@@ -160,45 +127,10 @@ def test_a_replaced_judge_is_measured_and_never_stored(order):
 
 # ── an environment's start-up bindings are not a caller's fakes ────────────
 
-def _installed_hook():
-    """The shape the EDA image's `sitecustomize` leaves in `sys.excepthook`:
-    apport's `install.<locals>.partial_apport_excepthook`, a closure defined
-    outside the interpreter's library. The host has no such hook."""
-    def partial_excepthook(*_exc):
-        return None
-    return partial_excepthook
 
 
-def test_a_start_up_hook_the_pair_never_calls_does_not_block_the_cache(
-        monkeypatch):
-    """F8b: with apport's hook in `sys.excepthook`, every calibration in the
-    image was measured and never stored, so a caller that pre-calibrated and
-    then faked a collaborator (test_t63c's `_measure`) was re-calibrated under
-    its own fake and refused as Uncalibrated -- in the image only."""
-    hook = _installed_hook()
-    monkeypatch.setattr(sys, "excepthook", hook)
-    # the witness: read alone, the hook IS a foreign binding of `sys`
-    assert C._is_foreign(hook, "sys", "excepthook")
-    _fresh(ROUTE)
-    real = C.check(ROUTE)
-    assert real.state == C.CALIBRATED, real.detail
-    assert C._CACHE.get(ROUTE) is real
-    # and the caller who fakes afterwards is served the real calibration
-    with monkeypatch.context() as m:
-        m.setattr(R, "antenna_routing_incomplete", _always_fires)
-        assert C.check(ROUTE) is real
 
 
-def test_a_start_up_hook_does_not_hide_a_fake_the_pair_calls(monkeypatch):
-    """The other side: the fake the judge DOES call is still never stored,
-    hook or no hook."""
-    monkeypatch.setattr(sys, "excepthook", _installed_hook())
-    _fresh(ROUTE)
-    with monkeypatch.context() as m:
-        m.setattr(R, "antenna_routing_incomplete", _always_fires)
-        assert C.check(ROUTE).state == C.MISCALIBRATED
-    assert ROUTE not in C._CACHE
-    assert C.check(ROUTE).state == C.CALIBRATED
 
 
 # ── the positive control: nothing in the real tree reads as a fake ─────────

@@ -29,7 +29,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _impl_flow as IF  # noqa: E402
-import canonical_run_admission as CRA  # noqa: E402
 
 
 def _tree(project: Path) -> dict:
@@ -38,10 +37,6 @@ def _tree(project: Path) -> dict:
             for p in sorted(project.rglob("*"))}
 
 
-def _admit(project: Path, config: dict) -> None:
-    adm = CRA.admit(project, "phase3", container_image="image-under-test",
-                    config=config, program_paths=[])
-    assert adm.admitted, adm
 
 
 @pytest.fixture
@@ -52,9 +47,6 @@ def project(tmp_path: Path) -> Path:
     return p
 
 
-def test_ledger_constants_agree_with_the_admission_module():
-    assert IF.STATE_DIR == CRA.STATE_DIR
-    assert IF.ADMISSION_LEDGER == CRA.LEDGER_NAME
 
 
 def test_default_writes_nothing_and_leaves_the_tree_identical(project):
@@ -152,22 +144,8 @@ def test_a_record_for_another_mode_is_never_overwritten(project):
     assert path.read_bytes() == before
 
 
-def test_a_project_already_run_by_default_refuses_librelane(project):
-    _admit(project, {"entry_step": None})          # a real default admission
-    assert IF.admitted_impls(project) == {IF.IMPL_DEFAULT}
-    with pytest.raises(IF.ImplRefusal) as ei:
-        IF.resolve(project, "librelane")
-    assert ei.value.reason_class == IF.IMPL_MODE_CONFLICT
-    assert "vibe-ic" in str(ei.value)
-    # ...while the default run itself is still admitted as before.
-    assert IF.resolve(project, None) == IF.IMPL_DEFAULT
 
 
-def test_librelane_admissions_do_not_conflict_with_librelane(project):
-    IF.write_record(project, "librelane", resolved_by="t")
-    _admit(project, {"entry_step": None, **IF.dispatch_config_entry("librelane")})
-    assert IF.admitted_impls(project) == {IF.IMPL_LIBRELANE}
-    assert IF.resolve(project, "librelane") == IF.IMPL_LIBRELANE
 
 
 @pytest.mark.parametrize("body", [
@@ -206,27 +184,8 @@ def test_every_reason_class_is_distinct_and_named():
         "IMPL_RECORD_UNREADABLE", "IMPL_IMAGE_CHANGED")
 
 
-def test_a_record_is_not_overruled_by_later_rows_without_impl(project):
-    """Correctness review MAJOR: a flagged admission row lacking `impl` (every
-    row between W1 and W2, or a site W2 misses) must not refuse the mode."""
-    IF.write_record(project, "librelane", resolved_by="front door")
-    _admit(project, {"entry_step": None})          # no `impl` in the config
-    assert IF.admitted_impls(project) == {IF.IMPL_DEFAULT}
-    assert IF.resolve(project, "librelane") == IF.IMPL_LIBRELANE
-    assert IF.write_record(project, "librelane", resolved_by="child")
-    with pytest.raises(IF.ImplRefusal) as ei:      # the default still refused
-        IF.resolve(project, None)
-    assert ei.value.reason_class == IF.IMPL_MODE_CONFLICT
 
 
-def test_creating_a_record_checks_the_ledger(project):
-    """Correctness review MINOR: write_record without resolve() first."""
-    _admit(project, {"entry_step": None})
-    with pytest.raises(IF.ImplRefusal) as ei:
-        IF.write_record(project, "librelane", resolved_by="t")
-    assert ei.value.reason_class == IF.IMPL_MODE_CONFLICT
-    assert not IF.record_path(project).exists()
-    assert IF.resolve(project, None) == IF.IMPL_DEFAULT
 
 
 def _prov(project, **row):

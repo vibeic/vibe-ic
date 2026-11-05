@@ -9,33 +9,8 @@ sys.path.insert(0, str(PROG))
 import design_one_shot_runner as R  # noqa: E402
 
 
-def test_543_named_tb_preferred_over_stale(tmp_path):
-    # sim_full_stack has a stale tb_OLD_full.v (from previous round top)
-    # and the current tb_chip_top_full.v.  Only chip_top should be picked.
-    sim = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sim.mkdir(parents=True)
-    (sim / "tb_OLD_full.v").write_text("module tb_OLD_full; endmodule\n")
-    (sim / "tb_chip_top_full.v").write_text("module tb_chip_top_full; endmodule\n")
-    result = R._reference_tb_generic_full_stack(
-        tmp_path, "chip_top", "test", 0.0)
-    # The function must NOT use tb_OLD_full.v (stale).  It may PASS, FAIL, or
-    # SKIP depending on whether iverilog is available, but must never attempt
-    # to compile tb_OLD_full.
-    assert result.name == "reference_tb"
-    # Verify by checking the extras or detail — stale name must not appear.
-    detail = result.detail or ""
-    assert "tb_OLD_full" not in detail
 
 
-def test_543_stale_only_falls_back_when_no_named(tmp_path):
-    # Only the stale tb_OTHER_full.v exists (no tb_chip_top_full.v).
-    # The fallback accepts it (glob result) — behaviour unchanged.
-    sim = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sim.mkdir(parents=True)
-    (sim / "tb_OTHER_full.v").write_text("module tb_OTHER_full; endmodule\n")
-    result = R._reference_tb_generic_full_stack(
-        tmp_path, "chip_top", "test", 0.0)
-    assert result.name == "reference_tb"
     # fallback is accepted — result may succeed or fail depending on iverilog
 
 

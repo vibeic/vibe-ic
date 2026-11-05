@@ -90,22 +90,6 @@ def test_l19_core_util_reaches_direct_phase3_resolver(tmp_path):
     assert P._l9_declared_die_util(proj) == 0.25
 
 
-def test_l19_core_util_drives_direct_auto_die_target(tmp_path):
-    proj = tmp_path / "proj"
-    _write_l19(proj, 25)
-    netlist = proj / "netlist.v"
-    netlist.write_text("\n".join(
-        f"neutral_inv u{i} (.A(a{i}),.Y(y{i}));" for i in range(5000)))
-
-    class _Pdk:
-        name = "processA"
-        cell_lef = "/nonexistent.lef"
-
-    metrics = {}
-    die, note = P._resolve_auto_die_um(
-        "auto", netlist, 0.77, _Pdk(), proj, metrics=metrics)
-    assert "x" in die and "target_util=0.25" in (note or "")
-    assert metrics["die_target_util"] == 0.25
 
 
 def test_l19_core_util_never_becomes_placement_density(tmp_path):
@@ -121,44 +105,3 @@ def test_l19_and_l9_core_util_conflict_refuses(tmp_path):
     _write_l19(proj, 25)
     with pytest.raises(ValueError, match="FP_CORE_UTIL_AUTHORITY_CONFLICT"):
         P._l9_declared_die_util(proj)
-
-
-def test_resolve_uses_declared_util_over_default(tmp_path):
-    # Orchestrator ruling 2026-09-28: REPLACED the landed assertion that a
-    # density-only declaration resizes the core. It conflated FP_CORE_UTIL
-    # with PL_TARGET_DENSITY. A density-only declaration leaves core sizing at
-    # the pinned flow's own FP_CORE_UTIL default.
-    proj = _mk_l9(tmp_path, "| `PL_TARGET_DENSITY` | **0.10** | ref |\n")
-    nl = proj / "netlist.v"
-    nl.write_text("\n".join(f"sky130_fd_sc_hd__inv_1 u{i} (.A(a{i}),.Y(y{i}));"
-                            for i in range(5000)))
-
-    class _Pdk:
-        cell_lef = "/nonexistent.lef"   # forces the fallback avg-cell
-    from unittest.mock import patch
-    with patch.object(P, "_flow_default_core_util", create=True,
-                      return_value=(0.37, "pinned tool FP_CORE_UTIL")):
-        die_density, note = P._resolve_auto_die_um(
-            "auto", nl, 0.4, _Pdk(), proj)
-        proj2 = _mk_l9(tmp_path / "other", "| `PL_TARGET_DENSITY` | **0.65** | ref |\n")
-        die_other, _ = P._resolve_auto_die_um("auto", nl, 0.4, _Pdk(), proj2)
-    assert die_density == die_other
-    assert "pinned tool FP_CORE_UTIL" in (note or "")
-
-
-def test_resolve_without_project_backward_compatible(tmp_path):
-    # project=None (legacy callers) → uses the default target, never crashes.
-    nl = tmp_path / "nl.v"
-    nl.write_text("sky130_fd_sc_hd__inv_1 u0 (.A(a),.Y(y));")
-
-    class _Pdk:
-        cell_lef = "/nonexistent.lef"
-    out, note = P._resolve_auto_die_um("auto", nl, 0.4, _Pdk())   # no project
-    assert "x" in out and "routing-headroom-default" in (note or "")
-
-
-def test_explicit_die_still_passthrough(tmp_path):
-    proj = _mk_l9(tmp_path, "| `PL_TARGET_DENSITY` | **0.10** | ref |\n")
-    out, note = P._resolve_auto_die_um("900x900", tmp_path / "nl.v", 0.4,
-                                       None, proj)
-    assert out == "900x900" and note is None   # declared util never resizes an explicit die

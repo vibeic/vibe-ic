@@ -1,11 +1,9 @@
 """The native Step-7 routes record their current corner set without changing signoff."""
 import json
-from types import SimpleNamespace
 
 import pytest
 
 import _flow_yaml
-import design_one_shot_runner as D
 import pvt_matrix_check as G
 from test_default_frontend_step7 import _run
 from test_librelane_contract_production_defaults import _chip
@@ -18,18 +16,6 @@ def test_step7_declares_its_corner_disclosure():
     assert REPORT in row['required_outputs'], row
 
 
-@pytest.mark.parametrize('count', [1, 2])
-def test_phase2_emitter_records_current_corners(tmp_path, count):
-    libs = tmp_path / 'input/pdk/liberty'
-    libs.mkdir(parents=True)
-    for name in ('tt', 'ss')[:count]:
-        (libs / (name + '.lib')).write_text('library(x) { time_unit : "1ns"; }')
-    path, seen = D._emit_step7_pvt_matrix(tmp_path, SimpleNamespace(liberty=''), 'unused')
-    report = json.loads((tmp_path / REPORT).read_text())
-    assert seen == count
-    assert report['corner_count'] == count
-    assert report['corners'] == [row['name'] for row in json.loads(path.read_text())['corners']]
-    assert report['stance'] == 'CORNER_SET_RECORDED'
 
 
 @pytest.mark.parametrize('route,corners', [

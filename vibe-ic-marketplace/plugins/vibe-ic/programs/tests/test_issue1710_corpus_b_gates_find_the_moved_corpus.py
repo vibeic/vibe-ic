@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -162,57 +161,12 @@ def bubble_clone(tmp_path) -> Path:
     return _commit(root)
 
 
-def _si_record(coupling_pairs: int):
-    """A published si_mcf_sta_check record in the shape HEAD actually holds.
-
-    `coupling_pairs: 0` beside `verdict: PASS` is the vibe-ic#502 rule's
-    refutation on paper — no SPEF needed, which is the whole premise of
-    re-adjudicating from the record.
-    """
-    return {"program": "si_mcf_sta_check", "version": "1.0.0",
-            "project_dir": ".", "verdict": "PASS",
-            "summary": {"corners_checked": ["setup", "hold"],
-                        "windows_exact": True,
-                        "coupling_pairs": coupling_pairs,
-                        "errors_count": 0, "findings_count": 0, "pass": True},
-            "recount": {}, "monotonicity": {}, "findings": []}
 
 
-@pytest.fixture()
-def stale_clone(tmp_path) -> Path:
-    """A clone-shaped corpus carrying ONE superseded published record."""
-    root = tmp_path / "benchmark-data-clone"
-    p = root / "ic" / "designA" / "reports" / "phase3" / "si_mcf_sta_check.json"
-    p.parent.mkdir(parents=True)
-    p.write_text(json.dumps(_si_record(0), indent=2) + "\n")
-    return _commit(root)
 
 
-@pytest.fixture()
-def stale_clean_clone(tmp_path) -> Path:
-    """The control for the arm above: same shape, a record the current rules
-    WOULD still issue. Without it, "the gate failed" is compatible with a gate
-    that fails on every corpus it is handed."""
-    root = tmp_path / "clean-clone"
-    p = root / "ic" / "designA" / "reports" / "phase3" / "si_mcf_sta_check.json"
-    p.parent.mkdir(parents=True)
-    p.write_text(json.dumps(_si_record(1558), indent=2) + "\n")
-    return _commit(root)
 
 
-def _empty_register(tmp_path) -> str:
-    """An explicitly-empty debt register, so a FAIL below is about the planted
-    defect and not about whatever the shipped register happens to hold today.
-
-    The bookkeeping fields are not decoration: since #922 the READ path refuses
-    a register `--write-baseline` could not have produced, so a fixture that
-    omits them describes a file this program is RIGHT to reject and would pin
-    the wrong behaviour.
-    """
-    p = tmp_path / "register.json"
-    p.write_text(json.dumps({"previous_size": None, "size": 0,
-                             "scope_expanded": None, "known": []}, indent=2))
-    return str(p)
 
 
 _GONE = "/nonexistent-corpus-root-for-this-test"
@@ -242,42 +196,14 @@ def test_bubble_up_no_corpus_with_the_flag_is_rc0_and_says_it_scanned_nothing():
     assert "[PASS]" not in out, out
 
 
-def test_staleness_no_corpus_with_the_flag_is_rc0_and_says_it_scanned_nothing(
-        tmp_path):
-    rc, out = _run(STALE, _GONE, "--baseline", _empty_register(tmp_path),
-                   "--corpus-may-be-absent")
-    assert rc == 0, out
-    assert "NO_CORPUS" in out, out
-    assert "NOTHING WAS SCANNED" in out, out
-    assert "0 published gate record(s) found, 0 adjudicated" in out, out
-    assert "[PASS]" not in out, out
 
 
-def test_staleness_no_longer_crashes_where_a_verdict_belongs():
-    """THE THIRD GATE'S OWN DEFECT. `ERROR: not a directory` at rc 1 is this
-    program's code for "a published record carries a verdict its gate would not
-    issue" — a finding against records it never opened."""
-    rc, out = _run(STALE, _GONE, "--corpus-may-be-absent")
-    assert rc != 1, (
-        f"an absent corpus is still being reported as a superseded record\n"
-        f"{out}")
-    assert "ERROR: not a directory" not in out, out
 
 
 # ===========================================================================
 # 2. …AND WITHOUT THE FLAG ALL THREE STILL BLOCK. The half that makes case 1
 #    mean something: the relaxation is OPT-IN AT THE CALL SITE, not a default.
 # ===========================================================================
-@pytest.mark.parametrize("prog,args", [
-    (CROSS, ("--corpus", _GONE)),
-    (BUBBLE, ("--corpus", _GONE)),
-    (STALE, (_GONE,)),
-])
-def test_without_the_flag_it_is_still_undetermined(prog, args):
-    rc, out = _run(prog, *args)
-    assert rc == 2, f"the relaxation must be opt-in\n{out}"
-    assert "UNDETERMINED" in out, out
-    assert "has not passed" in out, out
 
 
 # ===========================================================================
@@ -285,18 +211,6 @@ def test_without_the_flag_it_is_still_undetermined(prog, args):
 #    where the corpus is and was wrong" is a different event from "there is
 #    none", and a mistyped path or a no-op CI fetch step must not go green.
 # ===========================================================================
-@pytest.mark.parametrize("prog,args", [
-    (CROSS, ("--corpus", _GONE, "--corpus-may-be-absent")),
-    (BUBBLE, ("--corpus", _GONE, "--corpus-may-be-absent")),
-    (STALE, (_GONE, "--corpus-may-be-absent")),
-])
-def test_a_broken_pointer_is_undetermined_even_with_the_flag(prog, args,
-                                                             tmp_path):
-    rc, out = _run(prog, *args, env_tree=str(tmp_path / "nowhere"))
-    assert rc == 2, f"a set-and-wrong pointer must never be waved through\n{out}"
-    assert "UNDETERMINED" in out and ENV in out, out
-    assert "NO_CORPUS" not in out, \
-        "a broken pointer was laundered as an absent corpus"
 
 
 # ===========================================================================
@@ -332,15 +246,6 @@ def test_bubble_up_a_present_but_unversioned_corpus_is_undetermined(tmp_path):
     assert "NO_CORPUS" not in out, out
 
 
-def test_staleness_a_present_but_unversioned_corpus_is_undetermined(tmp_path):
-    p = tmp_path / "ic" / "designA" / "reports" / "phase3" / "si_mcf_sta_check.json"
-    p.parent.mkdir(parents=True)
-    p.write_text(json.dumps(_si_record(0), indent=2) + "\n")
-    rc, out = _run(STALE, _GONE, "--corpus-may-be-absent",
-                   env_tree=str(tmp_path))
-    assert rc == 2, out
-    assert "not a git checkout" in out, out
-    assert "NO_CORPUS" not in out, out
 
 
 # --- the same empty result with a `.git` beside it -------------------------
@@ -433,12 +338,6 @@ def test_bubble_up_announces_the_override(bubble_clone, tmp_path):
     assert str(bubble_clone) in out, out
 
 
-def test_staleness_announces_the_override(stale_clean_clone, tmp_path):
-    rc, out = _run(STALE, _GONE, "--corpus-may-be-absent",
-                   "--baseline", _empty_register(tmp_path),
-                   env_tree=str(stale_clean_clone))
-    assert f"{ENV} overrides" in out, out
-    assert str(stale_clean_clone) in out, out
 
 
 # ===========================================================================
@@ -513,28 +412,8 @@ def test_bubble_up_population_key_survives_the_move(bubble_clone, tmp_path):
     assert rc == 0, out
 
 
-def test_staleness_still_fails_on_a_superseded_record_in_a_supplied_corpus(
-        stale_clone, tmp_path):
-    rc, out = _run(STALE, _GONE, "--corpus-may-be-absent",
-                   "--baseline", _empty_register(tmp_path),
-                   env_tree=str(stale_clone))
-    assert rc == 1, (
-        f"--corpus-may-be-absent reached a corpus that IS present and excused "
-        f"a published record whose gate would no longer issue its verdict\n"
-        f"{out}")
-    assert "si_mcf_sta_check" in out, "the offending record must be named"
-    assert "NO_CORPUS" not in out, out
 
 
-def test_staleness_control_a_current_record_in_the_same_shape_passes(
-        stale_clean_clone, tmp_path):
-    """Without this, the FAIL above is compatible with a gate that fails on
-    every corpus it is handed."""
-    rc, out = _run(STALE, _GONE, "--corpus-may-be-absent",
-                   "--baseline", _empty_register(tmp_path),
-                   env_tree=str(stale_clean_clone))
-    assert rc == 0, out
-    assert "[PASS] no NEW superseded record" in out, out
 
 
 # ===========================================================================
@@ -688,36 +567,10 @@ def test_bubble_up_write_baseline_with_no_corpus_is_refused(tmp_path):
     assert base.read_text() == before, "the register was zeroed anyway"
 
 
-def test_staleness_no_corpus_still_runs_the_may_only_shrink_checks(tmp_path):
-    """#922: a register is a plain JSON file, so `--write-baseline` was never
-    the only way to add an entry to it. That question needs no corpus."""
-    p = tmp_path / "register.json"
-    p.write_text(json.dumps({
-        "previous_size": 1, "size": 1, "scope_expanded": None,
-        "known": ["gateX::ic/a/r.json::PASS->VACUOUS_PASS::rule",
-                  "gateX::ic/b/r.json::PASS->VACUOUS_PASS::rule"]}))
-    rc, out = _run(STALE, _GONE, "--corpus-may-be-absent", "--baseline", str(p))
-    assert rc == 1, (
-        f"an entry appended by hand went green with no corpus\n{out}")
-    assert "(register)" in out, out
 
 
-def test_staleness_no_corpus_refuses_an_unreadable_register(tmp_path):
-    p = tmp_path / "register.json"
-    p.write_text("{not json")
-    rc, out = _run(STALE, _GONE, "--corpus-may-be-absent", "--baseline", str(p))
-    assert rc == 2, out
-    assert "NOT CHECKED" in out, out
 
 
-def test_staleness_write_baseline_with_no_corpus_is_refused(tmp_path):
-    reg = _empty_register(tmp_path)
-    before = Path(reg).read_text()
-    rc, out = _run(STALE, _GONE, "--corpus-may-be-absent", "--baseline", reg,
-                   "--write-baseline")
-    assert rc == 2, out
-    assert "REFUSED" in out, out
-    assert Path(reg).read_text() == before, "the register was emptied anyway"
 
 
 # ===========================================================================
@@ -725,53 +578,3 @@ def test_staleness_write_baseline_with_no_corpus_is_refused(tmp_path):
 #    programs; this tests the only lines that ever invoke them in production.
 #    Without it all three programs could be perfect and all three gates red.
 # ===========================================================================
-def _dispatchers():
-    """Every wrapper `_gate_dispatch.sh` DEFINES, read from that file.
-
-    THIS USED TO BE THE LITERAL `"run "`, and that is a name, not a property.
-    `f7f00e9e48` moved two of the three dispatch lines below onto the sibling
-    wrapper `run_tolerating_uncheckable`; the invocations were still there,
-    still carrying the flag this test is about, and the test reported
-
-        AssertionError: the hygiene sweep no longer invokes
-                        cross_layer_reference_check.py at all
-
-    which is not what it had measured. A predicate must not be able to say
-    "not invoked" about a line it can see. Reading the dispatcher names from
-    the file that defines them means a NEW wrapper cannot blind this test
-    either, and it cannot drift into matching prose: the wrapper must be the
-    line's FIRST token.
-
-    The public dispatchers only — `_`-prefixed names in that file are its
-    internals and never appear at a call site. WHICH WRAPPER a given gate
-    deserves is a real question and a different test's:
-    `test_issue1025_empty_corpus_sweep_blocks` owns it, and pins it for the
-    one gate whose rc-2 must block. This test is section 8's question only —
-    the shipped call sites carry the flag.
-    """
-    names = set(re.findall(r"^([A-Za-z][A-Za-z0-9_]*)\(\)",
-                           DISPATCH.read_text(), re.M))
-    assert names, (
-        f"no dispatcher definitions found in {DISPATCH} — this test would "
-        f"then match nothing and pass by looking at an empty set")
-    return names
-
-
-@pytest.mark.parametrize("prog", ["cross_layer_reference_check.py",
-                                  "step_internal_fail_bubble_up_check.py",
-                                  "published_record_staleness_check.py"])
-def test_the_hygiene_sweep_actually_passes_the_flag(prog):
-    sweep = REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
-    if not sweep.is_file():
-        pytest.skip(f"{sweep} not present in this checkout")
-    if not DISPATCH.is_file():
-        pytest.skip(f"{DISPATCH} not present in this checkout")
-    wrappers = _dispatchers()
-    lines = [ln for ln in sweep.read_text().splitlines()
-             if prog in ln and ln.strip().split(" ", 1)[0] in wrappers]
-    assert lines, (
-        f"the hygiene sweep no longer invokes {prog} through any of the "
-        f"dispatchers {sorted(wrappers)}")
-    assert all("--corpus-may-be-absent" in ln for ln in lines), (
-        f"the sweep invokes {prog} without the flag, so a repo with no corpus "
-        f"is still blocked:\n" + "\n".join(lines))

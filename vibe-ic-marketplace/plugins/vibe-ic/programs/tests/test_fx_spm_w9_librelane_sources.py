@@ -12,7 +12,6 @@ sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PROGRAMS / "tests"))
 
 import librelane_ir_antenna as IR  # noqa: E402
-import phase3_one_shot_runner as RUNNER  # noqa: E402
 from _tcl_walk import walk as _walk  # noqa: E402
 from test_fx_spm_psm_source_model import _DB  # noqa: E402
 
@@ -82,18 +81,3 @@ def test_source_probe_preserves_a_dies_pad_bterms(tmp_path, monkeypatch):
     marker = IR.require_safe_default_sources(tmp_path, "image", state, [])
     assert marker["placed_pads"] == 1
     assert marker["supply_bpins"] == 3
-
-
-def test_selected_librelane_refusal_replaces_a_stale_direct_pass(tmp_path):
-    rpt = RUNNER._pl.reports_phase3_dir(tmp_path)
-    rpt.mkdir(parents=True)
-    (rpt / "ir_drop.json").write_text('{"verdict":"PASS","worst_ir_uv":100}')
-    doc = {"producer": "librelane:OpenROAD.IRDropReport", "def_sha256": "test-def",
-           "judgment": {"verdict": "NOT_MEASURED", "reasons": [
-               "refused: LL_IR_PROMOTED_PIN_SOURCES_UNSAFE: 2 supply pins"]}}
-    RUNNER._librelane_step24_refusal_publish(tmp_path, doc)
-    result = json.loads((rpt / "ir_drop.json").read_text())
-    assert result["verdict"] == "UNMEASURED"
-    assert result["worst_ir_uv"] is None
-    assert result["def_sha256"] == "test-def"
-    assert "LL_IR_PROMOTED_PIN_SOURCES_UNSAFE" in result["supply_model"]

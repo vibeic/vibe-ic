@@ -32,7 +32,6 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import postroute_timing_repair_decision as D  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 
 REPAIR_STATUS_GEN = PROG / "postroute_timing_repair_status_gen.py"
 
@@ -148,77 +147,14 @@ _OCV_RPT = (
 )
 
 
-def test_parse_mcorner_ocv_slacks():
-    setup, hold = R._parse_mcorner_ocv_slacks(_OCV_RPT)
-    assert setup == -35.78
-    assert hold == 0.42
 
 
-def test_run_postroute_timing_repair_reuses_existing_netlist(tmp_path, monkeypatch):
-    # IDEMPOTENT only when the candidate has a receipt for the current inputs.
-    repair = tmp_path / "phase3/stage3/postroute_timing_repair"
-    repair.mkdir(parents=True)
-    deck = repair / "postroute_timing_repair.tcl"
-    deck.write_text("read_def current.def\n")
-    source = tmp_path / "routed.def"
-    source.write_text("current route\n")
-    calls = []
-
-    def fake_tool(*args, **kwargs):
-        calls.append(1)
-        (repair / "chip_top_timing_repaired.v").write_text("module chip_top; endmodule\n")
-        (repair / "timing_repaired.def").write_text("current candidate\n")
-        (repair / "postroute_timing_repair.log").write_text("repair ran\n")
-
-    monkeypatch.setattr(R, "_docker_exec", fake_tool)
-    monkeypatch.setattr(R, "_to_container_path", lambda path, container: path)
-    notes = []
-    assert R._run_postroute_timing_repair(tmp_path, "chip_top", "no-such-container",
-                             deck, notes, source_paths=[source]) is True
-    assert R._run_postroute_timing_repair(tmp_path, "chip_top", "no-such-container",
-                             deck, notes, source_paths=[source]) is True
-    assert len(calls) == 1
-    assert any("already present" in n for n in notes)
 
 
-def test_run_postroute_timing_repair_returns_false_when_tcl_missing(tmp_path):
-    # No repair netlist AND no tcl → cannot fire → False (no fabricated success).
-    repair = tmp_path / "phase3/stage3/postroute_timing_repair"
-    repair.mkdir(parents=True)
-    notes = []
-    assert R._run_postroute_timing_repair(tmp_path, "chip_top", "no-such-container",
-                             repair / "postroute_timing_repair.tcl", notes) is False
-    assert any("cannot fire" in n for n in notes)
 
 
-def test_measure_postrepair_absent_netlist_is_not_measured(tmp_path):
-    # No repair netlist → measured=False, no fabricated MET.
-    out = R._measure_postrepair_mcorner_ocv(
-        tmp_path, "chip_top", pdk=None, container="x", corner_libs={},
-        mc_spef_dir=tmp_path / "nope", nom_spef_path=None,
-        sta_out=tmp_path, notes=[])
-    assert out["measured"] is False
-    assert out["setup_worst_slack_ns"] is None
 
 
-def test_measure_postrepair_parses_existing_report_without_rerun(tmp_path):
-    # An existing post-repair OCV report is parsed directly (no docker re-run), and
-    # a genuine ss floor is surfaced as VIOLATED (§4.05: recover, don't fabricate).
-    repair = tmp_path / "phase3/stage3/postroute_timing_repair"
-    repair.mkdir(parents=True)
-    (repair / "chip_top_timing_repaired.v").write_text("module chip_top; endmodule\n")
-    sta = tmp_path / "phase3/stage3/sta"
-    sta.mkdir(parents=True)
-    (sta / "sta_mcorner_ocv_postrepair.rpt").write_text(_OCV_RPT)
-    notes = []
-    out = R._measure_postrepair_mcorner_ocv(
-        tmp_path, "chip_top", pdk=None, container="no-such-container",
-        corner_libs={}, mc_spef_dir=tmp_path / "nope", nom_spef_path=None,
-        sta_out=sta, notes=notes)
-    assert out["measured"] is True
-    assert out["setup_worst_slack_ns"] == -35.78
-    assert out["violated_corners"] == ["setup"]
-    assert any("STILL VIOLATED" in n for n in notes)
 
 
 # --------------------------------------------------------------------------

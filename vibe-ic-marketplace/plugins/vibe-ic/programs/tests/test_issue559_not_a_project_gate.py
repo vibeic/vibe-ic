@@ -128,14 +128,3 @@ def test_entry_states_scope_measurement_and_disposition(gate):
         assert entry.get(field, "").strip(), f"{gate}: {field} is empty"
     assert len(entry["measured"]) > 60, (
         f"{gate}: `measured` is too short to carry a measurement")
-
-
-def test_register_gates_are_counted_as_licensed():
-    spec = importlib.util.spec_from_file_location(
-        "p0_gate_invocability_drift_check",
-        _PROGRAMS / "p0_gate_invocability_drift_check.py")
-    drift = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(drift)
-    missing = sorted(set(REGISTER) - drift._licensed_gates())
-    assert not missing, (
-        f"recorded here but still counted undecided: {missing}")

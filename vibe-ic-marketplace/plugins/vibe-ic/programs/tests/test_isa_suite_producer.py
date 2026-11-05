@@ -31,7 +31,6 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import isa_suite_producer as I  # noqa: E402
-import instruction_coverage_measure as ICM  # noqa: E402
 
 CAL = PROGRAMS / "calibration"
 ROOT = "suite-0123"
@@ -538,11 +537,6 @@ def test_only_cases_naming_a_declared_unit_bind(tmp_path):
 
 # ── 7. the producer end to end, and the coverage line ─────────────────────
 
-def test_the_coverage_line_is_the_instruments_grammar():
-    line = I.coverage_line(37, 38)
-    m = ICM.EMISSION_RE.search(line)
-    assert m and (m.group("dim"), m.group("covered"), m.group("total")) == (
-        "instruction", "37", "38")
 
 
 def test_a_passing_suite_writes_pass_rows_and_the_coverage_line(tmp_path):

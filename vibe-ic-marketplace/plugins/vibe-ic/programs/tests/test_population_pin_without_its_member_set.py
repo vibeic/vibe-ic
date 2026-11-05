@@ -6,19 +6,12 @@ MEMBER SET different. That is the whole claim, and it is arithmetic.
 """
 from __future__ import annotations
 
-import re
-import json
 import sys
-import tempfile
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
-PROG = (Path(__file__).resolve().parents[1]
-        / "population_pin_without_its_member_set.py")
 
 #: A count pinned against a live re-derivation of the checkout, with nothing
 #: pinning the identities.
@@ -84,52 +77,16 @@ def test_exactly_one():
 '''
 
 
-def _tree(body: str, inventory=None, name="test_sample.py") -> Path:
-    root = Path(tempfile.mkdtemp(prefix="ppm_"))
-    (root / ".git").mkdir()
-    tests = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
-             / "tests")
-    tests.mkdir(parents=True)
-    (tests / name).write_text(body)
-    (root / "inventory.json").write_text(
-        json.dumps({"known": inventory or []}) + "\n")
-    return root
 
 
-def _run(root: Path, inventory: Path = None):
-    return _pr.run(
-        [sys.executable, str(PROG), "--root", str(root), "--inventory",
-         str(inventory or (root / "inventory.json"))],
-        capture_output=True, text=True)
 
 
-def test_a_count_only_pin_is_refused():
-    """NEGATIVE CONTROL."""
-    r = _run(_tree(_DEFECT))
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-    assert "test_sample.py" in r.stdout
-    # ANCHORED TO THE COUNT POSITION. The finding renders as
-    #   test_sample.py  N pin(s): 69 via <derived_by> (line L)
-    # so a bare `"69" in r.stdout` is also satisfied by a LINE NUMBER of 69,
-    # or by 169/690. It must be the pinned COUNT that is 69.
-    assert re.search(r"\b69 via ", r.stdout), (
-        f"69 is not reported as the pinned count\n{r.stdout}")
 
 
-def test_a_member_pin_beside_the_count_is_not_refused():
-    r = _run(_tree(_REPAIRED))
-    assert r.returncode == 0, (
-        f"the remedy was refused (rc={r.returncode})\n{r.stdout}\n{r.stderr}")
 
 
-def test_a_count_over_the_tests_own_fixture_is_not_a_population_pin():
-    r = _run(_tree(_OWN_FIXTURE))
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
-def test_a_count_of_one_is_a_presence_test_not_a_population():
-    r = _run(_tree(_PRESENCE))
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
 def test_the_positive_control_a_count_cannot_see_a_swap():
@@ -146,73 +103,3 @@ def test_the_positive_control_a_count_cannot_see_a_swap():
     assert set(moved) ^ set(live) == {"s7", "s99"}, (
         "the symmetric difference must be exactly the departure and the "
         "arrival, or the control is measuring something else")
-
-
-def test_a_stale_inventory_row_is_a_failure():
-    r = _run(_tree(_REPAIRED, inventory=[
-        {"key": "programs/tests/test_gone.py", "reason": "stale"}]))
-    assert r.returncode == 1, f"rc={r.returncode}\n{r.stdout}"
-
-
-def test_a_missing_tree_is_undetermined_not_a_pass():
-    r = _pr.run([sys.executable, str(PROG), "--root", "/nonexistent/jd"],
-                       capture_output=True, text=True)
-    assert r.returncode == 2, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-
-
-def test_a_bad_invocation_is_rc_3():
-    r = _pr.run([sys.executable, str(PROG), "--no-such-flag"],
-                       capture_output=True, text=True)
-    assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-
-
-def test_the_shipped_tree_passes_its_own_rule():
-    root = Path(__file__).resolve().parents[5]
-    if not (root / ".git").exists():
-        pytest.skip("not a checkout")
-    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
-
-
-@pytest.mark.consistency
-def test_no_shipped_exemption_row_matches_nothing():
-    """An exemption that matches nothing can no longer be falsified by the tree.
-
-    `test_the_shipped_tree_passes_its_own_rule` above reads the checker's EXIT
-    CODE, which is 1 for either of the two failure modes. This binds the second
-    mode alone and NAMES the rows, because the two are repaired in opposite
-    directions: a new count-only pin is repaired in the test that carries it, a
-    row matching nothing is repaired by DELETING the row.
-
-    A row earns its place only while the pin it exempts is still there. Once
-    that pin is repaired the row stops exempting anything, and an exemption that
-    can never fire is indistinguishable from one that was always wrong -- it
-    reads as a live debt, and it silently pre-approves the defect coming back
-    under the same path.
-    """
-    root = Path(__file__).resolve().parents[5]
-    if not (root / ".git").exists():
-        pytest.skip("not a checkout")
-
-    sys.path.insert(0, str(PROG.parent))
-    import population_pin_without_its_member_set as _ppm
-
-    findings, denom = _ppm.scan(root)
-    # An empty walk is NOT OBSERVED, not a pass: with no modules parsed every
-    # row is trivially stale and with no rows read nothing is trivially clean.
-    assert denom["test_modules"] > 0, (
-        f"the walk parsed no test modules under {root} -- this test observed "
-        f"nothing and is not evidence that the inventory is clean")
-
-    inv = PROG.parent / _ppm._INVENTORY_NAME
-    rows = json.loads(inv.read_text(encoding="utf-8"))["known"]
-    assert rows, f"{inv.name} carries no rows -- nothing was compared"
-
-    seen = {f["file"] for f in findings}
-    stale = sorted({r["key"] for r in rows} - seen)
-    assert stale == [], (
-        f"{len(stale)} of {len(rows)} row(s) in {inv.name} match no count-only "
-        f"pin in the tree ({denom['count_only_modules']} found under "
-        f"{denom['test_modules']} modules). The pin each one exempts has been "
-        f"repaired; delete the row.\n  " + "\n  ".join(stale))

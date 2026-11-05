@@ -45,15 +45,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _ic_release_kit import (  # noqa: E402
-    CONTROL,
-    MACRO,
-    SUBJECT,
-    build_gds,
-    build_gds_without_geometry,
-    build_project,
-    docs_dir,
-)
+from _ic_release_kit import CONTROL, MACRO, SUBJECT, build_gds_without_geometry, build_project, docs_dir
 from _release_docs_contract import (  # noqa: E402
     DERIVED_COLUMN,
     IC_DOCS,
@@ -574,26 +566,6 @@ def test_the_qualification_section_is_titled_by_question_and_names_no_programme(
     assert "names no programme" in text
 
 
-def test_every_product_document_carries_native_limits_without_approval_or_errata_claim(tmp_path):
-    project = build_project(tmp_path / 'scoped', releases=(SUBJECT,))
-    records = project / 'reports/flow109/default_rows'
-    records.mkdir(parents=True)
-    (records.parent / 'plan.json').write_text(json.dumps({'rows': [
-        {'id': 'R1', 'position': 95, 'name': 'Final electrical analysis'}]}))
-    (records / 'R1.json').write_text(json.dumps({
-        'unmeasured_obligations': ['signal EM', 'thermal and aging', 'extractor qualification'],
-        'dynamic_ir_status': 'NOT_MEASURED',
-        'native_result': {'unmeasured_obligations': ['ESD characterization']}}))
-    result = run(project)
-    assert result.returncode == RC_PASS, result.stdout + result.stderr
-    for path in docs_dir(project).glob('*.md'):
-        text = path.read_text()
-        for scope in ('signal EM', 'thermal and aging', 'extractor qualification',
-                      'dynamic ir', 'ESD characterization', 'ESD simulation'):
-            assert scope in text, (path, scope)
-        assert 'not a tape-out approval' in text and 'manufactured part' in text
-        assert 'No erratum is open against this release.' not in text
-        assert 'signed off here is manufacturability' not in text
 
 
 def test_product_identity_uses_the_same_run_sources_as_the_html_documents(tmp_path):

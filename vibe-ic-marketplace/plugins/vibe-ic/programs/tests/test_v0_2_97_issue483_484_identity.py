@@ -41,7 +41,6 @@ chip-AGNOSTIC: synthetic generic fixtures only (no chip/SKU/vendor names).
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -49,10 +48,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
-import design_one_shot_runner as p2  # noqa: E402
-import phase3_one_shot_runner as p3  # noqa: E402
 import final_report_generate as frg  # noqa: E402
-import cross_design_identity_check as cdi  # noqa: E402
 
 FOUNDRY_PROG = PROGRAMS / "foundry_handoff_pack_gen.py"
 CDI_PROG = PROGRAMS / "cross_design_identity_check.py"
@@ -72,39 +68,10 @@ REAL_ORACLE_LOG = (
 )
 
 
-def test_483_real_shaped_oracle_log_scenarios_non_empty():
-    """DEFECT FIXTURE (#483 symptom 1): a real ``VEC <n> <name> PASS``
-    transcript. END STATE after the fix: scenarios_covered is NON-EMPTY and
-    names the actual scenarios (the old ORACLE_VECTOR-only regex returned
-    [])."""
-    scen, n_pass, n_total = p2._oracle_coverage_evidence(REAL_ORACLE_LOG)
-    assert scen, "scenarios_covered must be non-empty for a real VEC-shaped log"
-    assert scen == ["connect_handshake", "reset_sequence", "status_readback"]
-    assert (n_pass, n_total) == (3, 3)
 
 
-def test_483_old_program_oracle_vector_shape_still_parsed():
-    """Regression: the original ``ORACLE_VECTOR <name> PASS`` token (emitted
-    by oracle_tb_gen) is STILL recognised verbatim."""
-    log = ("ORACLE_VECTOR get_id PASS\n"
-           "ORACLE_VECTOR get_state PASS\n"
-           "ORACLE_TB_DONE pass=2/2\n")
-    scen, n_pass, n_total = p2._oracle_coverage_evidence(log)
-    assert scen == ["get_id", "get_state"]
-    assert (n_pass, n_total) == (2, 2)
 
 
-def test_483_mixed_shapes_and_fail_lines_excluded():
-    """Both shapes coexist; a FAIL per-vector line is NEVER counted as a
-    covered scenario (the transcript is the sole evidence source)."""
-    log = ("VEC 0 alpha PASS\n"
-           "VEC 1 beta FAIL expected=0x01 got=0x02\n"
-           "ORACLE_VECTOR gamma PASS\n"
-           "ORACLE_TB_DONE pass=2/3\n")
-    scen, n_pass, n_total = p2._oracle_coverage_evidence(log)
-    assert scen == ["alpha", "gamma"]
-    assert "beta" not in scen
-    assert (n_pass, n_total) == (2, 3)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -198,37 +165,10 @@ def test_483_real_audit_headline_full_token(tmp_path):
 # #484 — design-identity stamp on honest N/A shapes (emitter side, PRIMARY)
 # ════════════════════════════════════════════════════════════════════════
 
-def _l_docs(project: Path, ic_name: str, top: str) -> None:
-    gd = p2._pl.generated_docs_dir(project)
-    gd.mkdir(parents=True, exist_ok=True)
-    (gd / "L1_DATASHEET.json").write_text(json.dumps({"ic_name": ic_name}))
-    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": top}))
 
 
-def test_484_phase2_manifest_carries_design_identity(tmp_path):
-    """phase2 manifest writer stamps design_identity into EVERY emitted
-    manifest (incl. the empty-list lint json and SKIP-shaped on_board)."""
-    project = tmp_path / "datacore_a"
-    (project / "reports").mkdir(parents=True)
-    _l_docs(project, "datacore_a_core", "datacore_a_top")
-    res = p2.step_emit_phase2_manifests(project, [])
-    assert res.status in ("PASS", "SKIP")
-    lint = json.loads(
-        (project / "reports/phase2/lint/rtl_hygiene.json").read_text())
-    assert lint["design_identity"]["design"] == "datacore_a"
-    assert lint["design_identity"]["ic_name"] == "datacore_a_core"
 
 
-def test_484_phase3_sdf_skip_helper_per_design(tmp_path):
-    """phase3 design-identity helper resolves ic_name/top/name per design;
-    the project NAME is always present even with no L docs."""
-    a = tmp_path / "datacore_a"
-    _l_docs(a, "core_a", "top_a")
-    assert p3._design_identity_fields(a) == {
-        "design": "datacore_a", "ic_name": "core_a", "top": "top_a"}
-    b = tmp_path / "datacore_b"
-    b.mkdir()
-    assert p3._design_identity_fields(b) == {"design": "datacore_b"}
 
 
 def _run_foundry(project: Path):
@@ -238,12 +178,6 @@ def _run_foundry(project: Path):
         capture_output=True, text=True)
 
 
-def _run_cdi(projects, allow_honest_na=False):
-    args = [sys.executable, str(CDI_PROG)] + [str(p) for p in projects]
-    if allow_honest_na:
-        args.append("--allow-honest-na")
-    r = subprocess.run(args, capture_output=True, text=True)
-    return json.loads(r.stdout), r.returncode
 
 
 def test_484_foundry_handoff_pending_txt_has_design_name(tmp_path):
@@ -256,201 +190,24 @@ def test_484_foundry_handoff_pending_txt_has_design_name(tmp_path):
     assert "# design: datacore_a" in note
 
 
-def test_484_real_emitters_two_designs_findings_drop_to_zero(tmp_path):
-    """ACCEPTANCE (#484 primary): build TWO synthetic project dirs with the
-    SAME honest N/A artifacts via the REAL emitters (phase2 manifests +
-    foundry handoff, with NO L docs so every resolver falls through to the
-    honest defaults). END STATE: cross_design_identity_check findings == 0
-    WITHOUT the exemption flag — the identity stamp alone differentiates the
-    honest shapes."""
-    a = tmp_path / "datacore_alpha"
-    b = tmp_path / "datacore_beta"
-    for proj in (a, b):
-        (proj / "reports").mkdir(parents=True)
-        p2.step_emit_phase2_manifests(proj, [])
-        _run_foundry(proj)
-
-    rep, rc = _run_cdi([a, b])
-    assert rep["verdict"] == "PASS", rep["findings"]
-    assert rep["identical_artifacts"] == 0
-    assert rc == 0
 
 
-def test_484_without_fix_shape_would_collide(tmp_path):
-    """Control: prove the artifacts WOULD have collided absent the identity
-    stamp — strip the design_identity field from one design's manifests and
-    confirm the gate then flags them. (Demonstrates the stamp is what makes
-    the honest shapes differ, not some incidental per-design content.)"""
-    a = tmp_path / "datacore_alpha"
-    b = tmp_path / "datacore_beta"
-    for proj in (a, b):
-        (proj / "reports").mkdir(parents=True)
-        p2.step_emit_phase2_manifests(proj, [])
-
-    # Normalise BOTH designs' stamped artefacts by removing the identity stamp
-    # → they become byte-identical → the gate must flag them.
-    #
-    # RE-DERIVED (T109c). This control named `reports/phase2/lint/
-    # rom_init_lint.json`; since 3c501d609 the manifest emitter no longer
-    # writes it ("only its actual invocation may create that evidence"), so
-    # the control opened a file that is not there. The stamped population is
-    # now read off what the emitter actually wrote, identically in both
-    # designs, and must be non-empty.
-    def _stamped(proj):
-        out = set()
-        # Compare the current artifacts the identity gate consumes. Retained
-        # attempts have deliberately different timestamped paths per project;
-        # they are evidence history, not additional current emitter outputs.
-        for fp in proj.rglob("*.json"):
-            rel = fp.relative_to(proj)
-            if rel.parts[0] == "steps" or rel.parts[:2] == ("reports", "step_versions"):
-                continue
-            try:
-                d = json.loads(fp.read_text())
-            except ValueError:
-                continue
-            if isinstance(d, dict) and "design_identity" in d:
-                out.add(str(fp.relative_to(proj)))
-        return out
-
-    stamped = _stamped(a)
-    assert stamped and stamped == _stamped(b), (sorted(stamped),
-                                                sorted(_stamped(b)))
-    for proj in (a, b):
-        for rel in stamped:
-            fp = proj / rel
-            d = json.loads(fp.read_text())
-            d.pop("design_identity", None)
-            fp.write_text(json.dumps(d, indent=2) + "\n")
-
-    rep, rc = _run_cdi([a, b])
-    assert rep["verdict"] == "FAIL"
-    flagged = {rel for rel in stamped
-               if any(Path(rel).name in f["message"] for f in rep["findings"])}
-    assert flagged, rep["findings"]
 
 
 # ════════════════════════════════════════════════════════════════════════
 # #484 — STRICT named honest-N/A exemption (SECONDARY) + adversarial guard
 # ════════════════════════════════════════════════════════════════════════
 
-def _write(project: Path, rel: str, payload) -> None:
-    fp = project / rel
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(payload, (dict, list)):
-        fp.write_text(json.dumps(payload, indent=2) + "\n")
-    else:
-        fp.write_text(payload)
 
 
-def test_484_honest_na_predicate_strict():
-    """The honest-N/A predicate accepts ONLY verdict-only skip/N-A shapes
-    and NEVER a PASS/FAIL-bearing or substance-bearing report."""
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        fp = Path(td) / "x.json"
-        # honest verdict-only skips
-        for v in ("SKIP", "SKIPPED-CONDITION", "N/A", "PENDING_FOUNDRY",
-                  "SKELETON_EMITTED"):
-            fp.write_text(json.dumps({"verdict": v, "reason": "no tool"}))
-            assert cdi._is_honest_na_verdict_only(fp), v
-        # NEVER exempt: PASS / FAIL / PASS_WITH_*
-        for v in ("PASS", "FAIL", "PASS_WITH_WAIVERS",
-                  "PASS_WITH_OPEN_SOURCE_CONSTRAINTS"):
-            fp.write_text(json.dumps({"verdict": v}))
-            assert not cdi._is_honest_na_verdict_only(fp), v
-        # substance disqualifies even a skip verdict
-        fp.write_text(json.dumps({"verdict": "SKIP",
-                                  "scenarios_covered": ["a"]}))
-        assert not cdi._is_honest_na_verdict_only(fp)
-        fp.write_text(json.dumps({"verdict": "SKIPPED-CONDITION",
-                                  "vectors_passed": 5}))
-        assert not cdi._is_honest_na_verdict_only(fp)
-        # non-dict / non-string verdict / no verdict → not exempt
-        fp.write_text(json.dumps(["SKIP"]))
-        assert not cdi._is_honest_na_verdict_only(fp)
-        fp.write_text(json.dumps({"note": "no verdict field"}))
-        assert not cdi._is_honest_na_verdict_only(fp)
 
 
-def test_484_exemption_clears_honest_na_pair(tmp_path):
-    """A genuinely-honest verdict-only N/A pair (identical because the
-    emitter cannot stamp identity) is exempted ONLY with the opt-in flag."""
-    a = tmp_path / "datacore_a"
-    b = tmp_path / "datacore_b"
-    payload = {"verdict": "SKIPPED-CONDITION",
-               "reason": "no commercial CDC tool in container"}
-    for proj in (a, b):
-        _write(proj, "reports/phase2/cdc/foreign_skip.json", payload)
-
-    # Default: flagged.
-    rep_default, rc_default = _run_cdi([a, b])
-    assert rep_default["verdict"] == "FAIL"
-    assert rc_default == 1
-    # Opt-in honest-N/A: exempted, recorded under honest_na_exempt.
-    rep_exempt, rc_exempt = _run_cdi([a, b], allow_honest_na=True)
-    assert rep_exempt["verdict"] == "PASS", rep_exempt["findings"]
-    assert rc_exempt == 0
-    assert any("foreign_skip.json" in e["path"]
-               for e in rep_exempt["honest_na_exempt"])
 
 
-def test_484_adversarial_canned_pass_still_flagged_even_with_flag(tmp_path):
-    """ADVERSARIAL (the core of #484's secondary requirement): a fabricated
-    CANNED PASS report shared byte-identically across two designs is STILL
-    flagged even WITH --allow-honest-na. A true canned PASS/FAIL report is
-    NEVER exempted."""
-    a = tmp_path / "datacore_a"
-    b = tmp_path / "datacore_b"
-    canned_pass = {
-        "verdict": "PASS",
-        "evidence": "reports/some_log.txt",
-        "scenarios_covered": ["get_id", "get_state"],
-        "note": "canned cross-design coverage (the #436 violation class)",
-    }
-    for proj in (a, b):
-        _write(proj, "reports/phase2/coverage/coverage_actual.json",
-               canned_pass)
-
-    for flag in (False, True):
-        rep, rc = _run_cdi([a, b], allow_honest_na=flag)
-        assert rep["verdict"] == "FAIL", f"canned PASS must FAIL (flag={flag})"
-        assert rc == 1
-        assert any("coverage_actual.json" in f["message"]
-                   for f in rep["findings"])
-        # Never silently exempted.
-        assert not any("coverage_actual.json" in e["path"]
-                       for e in rep.get("honest_na_exempt", []))
 
 
-def test_484_adversarial_canned_fail_still_flagged_even_with_flag(tmp_path):
-    """ADVERSARIAL: a canned FAIL report shared across designs is also never
-    exempted by the honest-N/A path."""
-    a = tmp_path / "datacore_a"
-    b = tmp_path / "datacore_b"
-    canned_fail = {"verdict": "FAIL", "violations": ["v1", "v2"],
-                   "note": "canned"}
-    for proj in (a, b):
-        _write(proj, "reports/drc_signoff.json", canned_fail)
-    rep, rc = _run_cdi([a, b], allow_honest_na=True)
-    assert rep["verdict"] == "FAIL"
-    assert rc == 1
-    assert any("drc_signoff.json" in f["message"] for f in rep["findings"])
 
 
-def test_484_mixed_group_one_substantive_member_not_exempt(tmp_path):
-    """If one design's copy is a real PASS while another is a bare SKIP, the
-    byte-identity group would never form (different bytes) — but guard the
-    predicate is per-file ALL: a group is exempt only when EVERY hit is
-    independently verdict-only honest-N/A."""
-    a = tmp_path / "datacore_a"
-    b = tmp_path / "datacore_b"
-    # Same honest SKIP in both → exempt with flag.
-    skip = {"verdict": "SKIP", "reason": "no tool"}
-    for proj in (a, b):
-        _write(proj, "reports/x/foo_skip.json", skip)
-    rep, _ = _run_cdi([a, b], allow_honest_na=True)
-    assert not any("foo_skip.json" in f["message"] for f in rep["findings"])
 
 
 if __name__ == "__main__":

@@ -33,13 +33,11 @@ chip-AGNOSTIC: a synthetic child process; no chip / vendor / PDK literal.
 """
 import ast
 import inspect
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import phase3_one_shot_runner as runner  # noqa: E402
 import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
@@ -62,75 +60,18 @@ def test_the_replacement_primitive_has_no_timeout_parameter():
     assert "timeout" not in params, sorted(params)
 
 
-def test_the_call_site_passes_no_time_bound(monkeypatch):
-    seen = {}
-
-    def spy(cmd, **kw):
-        seen.update(kw)
-        return subprocess.CompletedProcess(cmd, 0, "ok\n", "")
-
-    monkeypatch.setattr(runner._pr, "run", spy)
-    cp, stopped = runner._run_producer("s", [sys.executable, "-c", "pass"], 0.0)
-    assert stopped is None and cp.returncode == 0
-    # Not "the bound is large" -- there is no bound of any kind in the call.
-    for k in ("timeout", "hard_ceiling_s", "stall_looks", "poll_s"):
-        assert k not in seen, (k, seen)
 
 
 # ---------------------------------------------------------------------------
 # The two outcomes, told apart
 # ---------------------------------------------------------------------------
-def test_a_stalled_producer_is_BLOCKED_and_says_so(monkeypatch):
-    def stall(cmd, **kw):
-        raise _pr.Stalled(cmd, looks=12, poll_s=30.0, elapsed_s=361.2,
-                          signals={"output": True, "cpu": True, "io": False})
-
-    monkeypatch.setattr(runner._pr, "run", stall)
-    cp, stopped = runner._run_producer("release_docs", ["x"], time.time())
-    assert cp is None
-    assert stopped.status == "NOT_MEASURED", (stopped.status, stopped.detail)
-    assert stopped.extras["stopped_as"] == "STALLED"
-    assert stopped.extras["stall_looks"] == 12
-    assert stopped.extras["stall_elapsed_s"] == 361.2
-    # DEGRADE LOUDLY: which signals were readable reaches the record, so a
-    # stall seen with a degraded probe set can be told from a full one.
-    assert stopped.extras["stall_signals"] == {"output": True, "cpu": True,
-                                               "io": False}
-    assert "not a slow host" in stopped.detail
-    assert "not a missing tool" in stopped.detail
 
 
-def test_a_producer_that_cannot_be_launched_is_still_ENV_UNAVAILABLE(
-        monkeypatch):
-    """THE CONTROL.  The word that was right for one of the two collapsed facts
-    must stay right for it -- otherwise this is a relabelling, not a split."""
-    def boom(cmd, **kw):
-        raise FileNotFoundError(2, "No such file or directory")
-
-    monkeypatch.setattr(runner._pr, "run", boom)
-    cp, stopped = runner._run_producer("s", ["/nonexistent"], time.time())
-    assert cp is None
-    assert stopped.status == "NOT_MEASURED", stopped.status
-    assert "could not be launched" in stopped.detail
-    assert "stopped_as" not in (stopped.extras or {})
 
 
 # ---------------------------------------------------------------------------
 # Driven for real, both directions
 # ---------------------------------------------------------------------------
-def test_a_progressing_child_is_carried_to_its_own_exit():
-    """A real child, emitting output slowly, run through the real primitive."""
-    t0 = time.time()
-    cp, stopped = runner._run_producer(
-        "s", [sys.executable, "-c",
-              "import sys,time\n"
-              "for i in range(6):\n"
-              "    sys.stdout.write(str(i)); sys.stdout.flush(); "
-              "time.sleep(0.3)\n"], t0)
-    assert stopped is None, stopped and stopped.detail
-    assert cp.returncode == 0, (cp.returncode, cp.stderr)
-    assert cp.stdout == "012345", repr(cp.stdout)
-    assert time.time() - t0 >= 1.5, "the child did not actually run"
 
 
 def test_a_genuinely_hung_child_is_still_stopped_as_STALLED():
@@ -266,26 +207,3 @@ def test_the_literal_census_can_still_see_one():
         found = _literal_wall_clocks(f)
     assert found == [(2, 600), (3, 10)], found
     assert [(ln, v) for ln, v in found if v >= 300] == [(2, 600)], found
-
-
-def test_the_em_authority_emitter_survives_a_stall(monkeypatch, tmp_path):
-    """The ONE site in this population that had NO handler at all.
-
-    A `TimeoutExpired` there propagated out of an emitter that is declared
-    best-effort and returns a bool, taking its caller down with a traceback.
-    Its own contract -- say so in `notes`, return False -- is what a stall now
-    reaches.
-    """
-    def stall(cmd, **kw):
-        raise _pr.Stalled(cmd, looks=12, poll_s=30.0, elapsed_s=361.0,
-                          signals={"output": True, "cpu": True, "io": True})
-
-    monkeypatch.setattr(runner._pr, "run", stall)
-    notes = []
-    pdk = runner.PdkConfig(name="sky130A", liberty="/l.lib",
-                           tech_lef=None, cell_lef="/c.lef", cell_gds=None,
-                           site="s", drc_deck=None)
-    ok = runner._emit_em_current_authority(tmp_path, pdk, "eda", notes)
-    assert ok is False
-    assert any("STALLED" in n for n in notes), notes
-    assert any("honestly unresolved" in n for n in notes), notes

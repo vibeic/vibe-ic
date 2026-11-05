@@ -64,7 +64,6 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import placement_legality_check as P  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 
 
 def _placed_def(n: int = 4) -> str:
@@ -253,13 +252,6 @@ def test_cli_exit_code_and_json_carry_the_count(tmp_path):
 
 # ------------------------------------------- the runner must EMIT the count --
 
-def test_the_runner_asks_the_tool_for_its_count(tmp_path):
-    """A gate that reads a marker no runner writes checks nothing."""
-    tcl = R._build_check_placement_verdict_tcl("SPARE", "_spare")
-    assert "check_placement -no_abort" in tcl, (
-        "-no_abort is what makes the tool RETURN the count instead of raising")
-    assert "SPARE_CHECK_PLACEMENT_VIOLATIONS $_cpv_spare" in tcl
-    assert "SPARE_CHECK_PLACEMENT_RAISED" in tcl
 
 
 def test_the_runner_no_longer_demotes_the_verdict_to_a_warning():

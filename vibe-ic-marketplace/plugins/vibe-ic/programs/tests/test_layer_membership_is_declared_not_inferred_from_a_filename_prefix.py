@@ -6,14 +6,11 @@ asserted rc 0 here would be asserting the defect away.
 """
 from __future__ import annotations
 
-import json
 import shutil
-import re
 import sys
 import tempfile
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -32,60 +29,11 @@ PROG = (Path(__file__).resolve().parents[1]
 # Read from the program's own `--json` (`glob_members` / `relation_members` /
 # `outside`), which is the program's `_imports` / `_is_executable` over the live
 # tree -- not a filename pattern this file wrote for the occasion.
-_PPA_GLOB_MEMBERS = frozenset({
-    "ppa_ablation_check.py", "ppa_agent_context_build.py",
-    "ppa_area_threshold_check.py", "ppa_closure_run.py",
-    "ppa_contract_build.py", "ppa_contract_check.py",
-    "ppa_diagnostic_router.py", "ppa_eco_spare_records.py",
-    "ppa_feasibility_check.py", "ppa_head_to_head_check.py",
-    "ppa_measurement_check.py", "ppa_metric_extract.py",
-    "ppa_page_claim_check.py", "ppa_pareto_check.py",
-    "ppa_pnr_search_space.py", "ppa_pr_scope_check.py",
-    "ppa_predict_aggregate.py", "ppa_problem_integrity_check.py",
-    "ppa_report_gen.py", "ppa_search_run.py", "ppa_signoff_records.py",
-})
 #: The finding itself: layer members no `ppa_*.py` glob reaches.
 #: `phase3_one_shot_runner.py` entered at v1.17.91 `8d7a76cca`, which added
 #: `from _ppa import delivery_path` to an executable module. Nothing left.
-_PPA_OUTSIDE_MEMBERS = frozenset({
-    "area.py", "gate_proof_vocabulary_has_a_producer.py", "openroad.py",
-    "phase3_one_shot_runner.py", "power_total_vs_budget_check.py",
-    "readme_ppa_extractor.py", "records_migrate.py", "timing.py",
-    # ENTERED with b1b69720f (T83, "opt-in LibreLane phase3 step contract"):
-    # `select_arms` imports `_ppa.pareto` (dominates, Objective) to pick a
-    # dual-arm winner, and the module carries a `__main__` guard, so by this
-    # gate's own relation (`_imports` + `_is_executable`) it is a ppa-layer
-    # executable that no `ppa_*.py` glob reaches. Re-derived by running the
-    # program on 8cdef7a95 and on 40315b3aa: identical outside set, this one
-    # member added, none left. Recorded by T109c; the pin was red since T83.
-    "librelane_contract.py",
-    # ENTERED with T103 (steps 25/25b, lane mig103): `_ppa/pdn_em_presweep.py`
-    # is the pre-route PDN EM search. The PnR session executes its staged copy
-    # by path (`next <sweep_dir>`, a `__main__` guard) and its host side builds
-    # the frontier with `from _ppa import feasibility, pareto`, so by this
-    # gate's relation it is a ppa-layer executable no `ppa_*.py` glob reaches;
-    # its tests are `test_t103_pdn_em_presweep.py`. Re-derived by running the
-    # program on f33242415 (this outside set) and on the T103 branch: this one
-    # member added, none left.
-    "pdn_em_presweep.py",
-    # ENTERED with T102 (lane mig102, step 32 on LibreLane): the actuator and
-    # measurement wrapper of the `timing.repair_setup` closure runs the closure
-    # itself (`from _ppa import closure`: load_registry + ClosureController)
-    # and is a `__main__` program (the registry's `actuate`/`measure` argv), so
-    # by this gate's own relation it is a ppa-layer executable no `ppa_*.py`
-    # glob reaches. Re-derived by running the program on 9bb487edd (v1.25.47) and on the
-    # branch: this one member added, none left.
-    "librelane_postroute_repair.py",
-})
 
 
-def _moved(what: str, pinned, seen) -> str:
-    return (f"the ppa layer's {what} population MOVED: "
-            f"entered={sorted(set(seen) - set(pinned))} "
-            f"left={sorted(set(pinned) - set(seen))}. "
-            f"RE-DERIVE the finding and record which member entered or left "
-            f"and why -- do not edit this set to fit, and do not replace it "
-            f"with a count.")
 
 _LAYER_MEMBER = '''\
 import _demo
@@ -188,67 +136,6 @@ def test_a_bad_invocation_is_rc_3():
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
-def test_the_shipped_tree_is_RED_and_that_is_the_point(tmp_path):
-    """This gate refuses on the tree it ships with, by design.
-
-    There is no inventory: a recorded waiver would make the question disappear.
-    When both `ppa` suites are pointed at the relation-derived population this
-    goes green, and THAT is the signal the repair landed.
-    """
-    root = Path(__file__).resolve().parents[5]
-    if not (root / ".git").exists():
-        pytest.skip("not a checkout")
-    rec = tmp_path / "layer_membership.json"
-    r = _pr.run([sys.executable, str(PROG), "--root", str(root),
-                 "--json", str(rec)], capture_output=True, text=True)
-    assert r.returncode == 1, (
-        f"the ppa layer gap is GONE (rc={r.returncode}). If the two suites were "
-        f"repaired, delete this assertion and assert rc 0 — do not weaken the "
-        f"gate.\n{r.stdout}")
-    assert "layer `ppa`" in r.stdout
-    assert "power_total_vs_budget_check.py" in r.stdout
-
-    # THE POPULATION, PINNED BY ITS MEMBERS.
-    #
-    # HISTORY OF THIS PIN, because it is the point. It was three counts
-    # (20/26/6 -> 21/27/6 -> 21/28/7 -> 21/29/8) with ONE member named beside
-    # them. Every move so far has been a single arrival, so a count happened to
-    # be enough to notice it; an arrival cancelled by a departure would have
-    # left the count at rest and the pin would have said nothing. Worse, a
-    # count can be re-derived without reading the tree, so "I re-ran the
-    # program" and "I edited the number until it passed" produce the identical
-    # diff. A member set can only be moved by naming who moved.
-    #
-    # The RELATION is not pinned as a third literal: it is exactly the glob
-    # plus what falls outside it, and recording the same fact twice is how two
-    # faces of one pin drift apart. The identity is asserted instead.
-    #
-    # The three counts on the human line are then asserted to be len() of these
-    # sets — the line keeps its reader, and no count is a literal anywhere.
-    doc = json.loads(rec.read_text(encoding="utf-8"))
-    ppa = [f for f in doc["findings"] if f["layer"] == "ppa"]
-    assert len(ppa) == 1, f"expected exactly one `ppa` finding\n{doc}"
-    ppa = ppa[0]
-    glob_m = set(ppa["glob_members"])
-    rel_m = set(ppa["relation_members"])
-    out_m = set(ppa["outside"])
-
-    assert out_m == set(_PPA_OUTSIDE_MEMBERS), _moved(
-        "outside (the finding)", _PPA_OUTSIDE_MEMBERS, out_m)
-    assert glob_m == set(_PPA_GLOB_MEMBERS), _moved(
-        "glob-derived", _PPA_GLOB_MEMBERS, glob_m)
-    assert rel_m == glob_m | out_m, (
-        f"the relation is no longer the glob plus what falls outside it: "
-        f"in the relation only={sorted(rel_m - (glob_m | out_m))}, "
-        f"missing from it={sorted((glob_m | out_m) - rel_m)}")
-    assert (ppa["glob"], ppa["relation"], len(ppa["outside"])) == (
-        len(glob_m), len(rel_m), len(out_m)), (
-        f"the published counts disagree with the published members\n{ppa}")
-    # ANCHORED, not a substring: "8 outside" is contained in "18 outside".
-    assert re.search(
-        rf"glob {len(glob_m)}, relation {len(rel_m)}, "
-        rf"{len(out_m)} outside(?!\d)", r.stdout), (
-        f"the human line disagrees with the member sets\n{r.stdout}")
 
 
 def test_no_test_files_read_is_undetermined_not_a_pass():

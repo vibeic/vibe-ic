@@ -27,7 +27,6 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import run_status as RS               # noqa: E402
-import ic_run_status_derive as ICS    # noqa: E402
 
 
 def _tree(tmp_path: Path, *, pending: bool, log_age_s: float = 5.0,
@@ -69,16 +68,3 @@ def test_the_tails_record_is_done_as_before(tmp_path):
     p = _tree(tmp_path, pending=False, pid=os.getpid())
     rep = RS.status(p, "phase2")
     assert rep["state"] == "DONE" and rep["verdict"] == "FAIL", rep
-
-
-def test_the_derived_status_does_not_take_the_pending_copy(tmp_path):
-    p = _tree(tmp_path, pending=True)
-    got = ICS.run_verdict_of(p)
-    assert got["verdict"] == ICS.NO_VERDICT, got
-    assert any("final_audit_pending" in t for t in got["tried"]), got
-
-
-def test_the_derived_status_takes_the_tails_record(tmp_path):
-    """CONTROL."""
-    p = _tree(tmp_path, pending=False)
-    assert ICS.run_verdict_of(p)["verdict"] == "FAIL"

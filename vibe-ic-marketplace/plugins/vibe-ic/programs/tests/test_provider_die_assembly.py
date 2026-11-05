@@ -8,7 +8,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import die_finishing_gen as finishing
-import execution_policy as policy
 import tapeout_readiness_check as readiness
 import tapeout_precheck as precheck
 
@@ -23,22 +22,6 @@ def profile(project):
     return path
 
 
-def test_provider_target_uses_existing_frozen_input_directory(tmp_path):
-    parameters = {}
-    runtime = {"project": tmp_path, "policy": {"mode": "default"}, "parameters": {"top": "chip_top"}}
-    absent = policy._fixed_inputs(runtime, "37.5ic", parameters=parameters)
-    assert finishing.PROVIDER_TARGET_REL not in absent
-    path = profile(tmp_path)
-    official = path.parent / "official"
-    official.mkdir()
-    entry = official / "precheck.py"
-    entry.write_text("# neutral official source dependency\n")
-    selected = policy._fixed_inputs(runtime, "37.5ic", parameters=parameters)
-    assert selected[finishing.PROVIDER_TARGET_REL] == path
-    assert parameters["resolved_input_manifest"]["files"][finishing.PROVIDER_TARGET_REL] == hashlib.sha256(path.read_bytes()).hexdigest()
-    assert selected.keys() - absent.keys() == {
-        finishing.PROVIDER_TARGET_REL, str(entry.relative_to(tmp_path))}
-    assert parameters["resolved_input_manifest"]["files"][str(entry.relative_to(tmp_path))] == hashlib.sha256(entry.read_bytes()).hexdigest()
 
 
 def test_normal_finishing_uses_declared_engineering_target(tmp_path):

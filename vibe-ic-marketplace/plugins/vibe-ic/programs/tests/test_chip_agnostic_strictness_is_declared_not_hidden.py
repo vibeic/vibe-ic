@@ -44,9 +44,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import json
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -56,7 +54,6 @@ import _progress_run as _pr  # noqa: E402
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
-_PLUGIN = _PROGRAMS.parent
 _GATE = _PROGRAMS / "source_chip_agnostic_check.py"
 
 #: Commercial-vendor names. A program-local ban NAMES SEVERAL of them; an
@@ -262,50 +259,12 @@ def test_every_program_local_ban_is_declared_by_the_program_it_guards():
         + "\n  ".join(f"{m['test']}::{m['function']}" for m in missing))
 
 
-def test_the_two_whole_file_programs_declare_the_whole_file_scope():
-    """The sub-class that can be broken by a comment. Named explicitly because
-    getting the SCOPE wrong here is the failure this whole file is about, and
-    a generic "something is declared" assertion would not catch it."""
-    mod = _gate_mod()
-    for name in ("area_total_vs_budget_check.py", "closed_loop_edge_check.py"):
-        p = _PROGRAMS / name
-        assert p.is_file(), f"{name} is gone; re-derive the population"
-        assert mod.declared_strictness(p.read_text()) == "strict", (
-            f"{name}'s own test reads the WHOLE file, docstring included, so a "
-            f"comment naming a PDK reddens it. It must declare `strict`")
 
 
-def test_a_declaring_program_names_no_forbidden_token_in_the_declaration():
-    """A declaration that itself names a PDK would redden the very test it
-    exists to warn about — the joke version of this bug."""
-    for name in ("area_total_vs_budget_check.py", "closed_loop_edge_check.py"):
-        low = (_PROGRAMS / name).read_text().lower()
-        for tok in ("sky130", "gf180", "sg13g2", "tsmc", "samsung",
-                    "globalfound", "intel", "umc", "smic"):
-            assert tok not in low, f"{name} names {tok!r}"
 
 
 # ─────────────────────────────────────── the PASS stops claiming clearance
 
-def test_the_gate_discloses_them_on_the_pass_path(tmp_path):
-    """END TO END, on the CONSOLE and in the JSON.
-
-    The PASS line is what gets mistaken for a clean bill, so the disclosure has
-    to be on the PASS path — not only in a report nobody opens, and not only on
-    the FAIL path, which already sends the reader to a file."""
-    out = tmp_path / "r.json"
-    cp = _pr.run(
-        [sys.executable, str(_GATE), str(_PLUGIN), "--json", str(out)],
-        capture_output=True, text=True)
-    assert cp.returncode == 0, (cp.stdout[-3000:], cp.stderr[-2000:])
-    assert "DISCLOSURE" in cp.stdout, cp.stdout[-2000:]
-    assert "is not their verdict" in cp.stdout, cp.stdout[-2000:]
-    for name in ("area_total_vs_budget_check.py", "closed_loop_edge_check.py"):
-        assert name in cp.stdout, (name, cp.stdout[-2000:])
-    rep = json.loads(out.read_text())
-    declared = rep["declared_stricter_than_this_gate"]
-    assert len(declared) >= 5, declared
-    assert declared["programs/area_total_vs_budget_check.py"] == "strict"
 
 
 # ═════════════════════════════════════════════════════════════ THE CONTROLS

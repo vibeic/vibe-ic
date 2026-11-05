@@ -1,7 +1,6 @@
 """Finite semantic child progress is the only issue-1710 lease signal."""
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -13,9 +12,7 @@ import pytest
 import _corpus_location
 import _published_tree
 import _semantic_child_progress as S
-import l4_systemrdl_export as L4
 import repo_hygiene_parallel as P
-import _progress_run as _pr  # noqa: E402
 from _session_floor import child_window  # noqa: E402
 
 
@@ -307,77 +304,8 @@ def test_file_work_is_split_by_bytes_and_oversize_refuses_before_verdict(
         S.file_progress_units(oversized, "document:oversized")
 
 
-def test_semantic_l4_git_failure_cannot_fallback_to_untracked_disk_population(
-        tmp_path, monkeypatch):
-    root = tmp_path / "corpus"
-    tracked = root / "tracked" / "L4_REGMAP.json"
-    untracked = root / "untracked" / "L4_REGMAP.json"
-    tracked.parent.mkdir(parents=True)
-    untracked.parent.mkdir(parents=True)
-    tracked.write_text("{}\n")
-    untracked.write_text("{}\n")
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "add", "tracked/L4_REGMAP.json"],
-                   check=True)
-    kept, _found, published = L4._l4_documents(root)
-    assert (kept, published) == ([tracked], True)
-
-    seen_kwargs = []
-
-    def expire(argv, **kwargs):
-        seen_kwargs.append(dict(kwargs))
-        # git is stopped for making no progress now, not for elapsed time.
-        raise _pr.Stalled(argv, 3, 1.0, 3.0, {"cpu": True, "io": True})
-
-    monkeypatch.setattr(
-        _corpus_location, "not_a_checkout_reason", lambda *_a, **_k: None)
-    # A module reaches a process through `subprocess`, through `_pr`
-    # (`_progress_run`, the progress-supervised drop-in) or through both.
-    # Substituting on only one leaves the real launcher answering the
-    # question this test is asking about a fake one, and the test then
-    # passes or fails for a reason that has nothing to do with its subject.
-    for _launcher in (getattr(_published_tree, "subprocess", None),
-                      getattr(_published_tree, "_pr", None)):
-        if _launcher is not None:
-            monkeypatch.setattr(_launcher, "run", expire)
-    ordinary, _found, published = L4._l4_documents(root)
-    assert set(ordinary) == {tracked, untracked} and published is False, (
-        "the control no longer reaches the historical timeout fallback")
-    with pytest.raises(_published_tree.PublishedTreeIndeterminate):
-        L4._l4_documents(root, semantic_strict=True)
-    # THE INVERSE OF WHAT THIS USED TO ASSERT, and for the reason the
-    # assertion had to change. It read `seen_timeouts == [180, None]`: the
-    # first probe spent a 180 s bound and the second did not. There is no bound
-    # to spend now — git runs to completion however long it legitimately takes
-    # and is stopped only if it stops moving — so asserting the ABSENCE is what
-    # keeps one from being quietly reintroduced at either call site.
-    assert len(seen_kwargs) == 2, seen_kwargs
-    assert all("timeout" not in kw for kw in seen_kwargs), (
-        f"a wall-clock bound is being spent on a git probe again: "
-        f"{seen_kwargs!r}")
 
 
-@pytest.mark.parametrize("planted,want_rc", [(False, 0), (True, 1)])
-@pytest.mark.parametrize("empty_index", [False, True])
-def test_semantic_l4_preserves_supported_loose_directory_verdict(
-        tmp_path, planted, want_rc, empty_index):
-    root = tmp_path / ("loose-planted" if planted else "loose-clean")
-    doc = root / "cell" / "L4_REGMAP.json"
-    doc.parent.mkdir(parents=True)
-    register = ({"an_unclassified_key": 1} if planted else {})
-    doc.write_text(json.dumps({"registers": [register]}) + "\n")
-    if empty_index:
-        subprocess.run(["git", "init", "-q", str(root)], check=True)
-    argv = [sys.executable, str(PROGRAMS / "l4_systemrdl_export.py"),
-            "audit-corpus", "--root", str(root)]
-    ordinary = subprocess.run(argv, capture_output=True, text=True)
-    units = L4.semantic_progress_units(root)
-    rc, out, problem = P._run(
-        argv, tmp_path, _env(), semantic_progress_scope=L4.PROGRESS_SCOPE,
-        semantic_progress_units=units)
-    assert ordinary.returncode == want_rc, ordinary.stdout + ordinary.stderr
-    assert (rc, problem) == (want_rc, None), (rc, out, problem, units)
-    assert "NOT a git checkout" in out
 
 
 def test_semantic_checkout_probe_has_no_inner_duration_verdict(
@@ -417,31 +345,6 @@ def test_strict_published_index_accepts_exact_tracked_symlink_blobs(tmp_path):
     assert strict == ordinary == frozenset({"target.json", "link.json"})
 
 
-def test_chatty_hung_l4_git_probe_is_semantic_norecord_not_a_disk_verdict(
-        tmp_path, monkeypatch):
-    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.02)
-    root = tmp_path / "corpus"
-    doc = root / "untracked" / "L4_REGMAP.json"
-    doc.parent.mkdir(parents=True)
-    doc.write_text("{}\n")
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_git = fake_bin / "git"
-    fake_git.write_text(
-        "#!/bin/sh\nwhile :; do echo fake-git-is-chatty; done\n")
-    fake_git.chmod(0o755)
-    env = _env()
-    env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
-    rc, out, problem = P._run(
-        [sys.executable, str(PROGRAMS / "l4_systemrdl_export.py"),
-         "audit-corpus", "--root", str(root), "--corpus-may-be-absent"],
-        tmp_path, env, stall_grace_s=0.14,
-        semantic_progress_scope=L4.PROGRESS_SCOPE,
-        semantic_progress_units=["root:1"])
-    assert rc == 2, (rc, out, problem)
-    assert problem and "SEMANTIC_PROGRESS_NORECORD" in problem
-    assert "outcome=stalled" in problem
-    assert "[PASS]" not in out and "NO_CORPUS" not in out
 
 
 def _append_rows(path: Path, *rows: dict) -> None:

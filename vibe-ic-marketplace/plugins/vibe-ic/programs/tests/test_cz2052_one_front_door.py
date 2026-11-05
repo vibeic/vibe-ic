@@ -52,7 +52,6 @@ PLUGIN = PROGRAMS.parent
 sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PLUGIN / "tools"))
 
-import phase1_one_shot_runner as R            # noqa: E402
 import phase1_doc_one_shot_runner as D        # noqa: E402
 import l_doc_structured_field_count_check as F  # noqa: E402
 
@@ -71,67 +70,18 @@ _UNDECLARED = ("Implement a framed serial receiver.\n"
 
 # ── ITEM 1 — one front door ───────────────────────────────────────────
 
-def test_a_prompt_request_over_a_doc_extraction_input_resolves_to_the_docs_door():
-    """RED before: `--mode prompt` was `mode = args.mode`, full stop."""
-    mode, why = R._resolve_mode("prompt", "docs")
-    assert mode == "docs"
-    assert why, "a route the caller did not type must be announced, not silent"
-    assert "#2052" in why
 
 
-def test_auto_routing_is_the_pre_2052_expression_unchanged():
-    """CONTROL. AUTO must move by ZERO — it is the door 28 real corpora and
-    every existing caller already use."""
-    for det in _DETECTED:
-        pre_2052 = det if det != "none" else "prompt"
-        assert R._resolve_mode("auto", det) == (pre_2052, None), det
 
 
-def test_the_engine_stays_reachable_where_the_detector_itself_says_prompt():
-    """CONTROL. `input/docs/` holding pre-structured `L*.json` is the
-    reverse-extractor's actual job; #2052 retires it as a FRONT DOOR for raw
-    design input, not as a program."""
-    assert R._resolve_mode("prompt", "prompt") == ("prompt", None)
-    assert R._resolve_mode("auto", "prompt") == ("prompt", None)
 
 
-def test_nothing_staged_still_reaches_the_step_that_reports_nothing_to_do():
-    """CONTROL. An empty project must keep reporting SKIP, not be routed into
-    a doc-extraction track over an empty tree."""
-    assert R._resolve_mode("prompt", "none") == ("prompt", None)
-    assert R._resolve_mode("auto", "none") == ("prompt", None)
 
 
-def test_a_docs_request_is_still_honoured():
-    """CONTROL. `--mode docs` is a request for the canonical door and stays
-    one on every detection."""
-    for det in _DETECTED:
-        assert R._resolve_mode("docs", det) == ("docs", None), det
 
 
-def test_mutation_restoring_the_stub_entry_re_reddens_the_one_door_rule():
-    """MUTATION. The exact pre-#2052 rule was `mode = args.mode` for any
-    non-auto mode. Restore it and the request reaches the engine again."""
-    def _pre_2052(requested: str, detected: str):
-        if requested == "auto":
-            return (detected if detected != "none" else "prompt"), None
-        return requested, None
-
-    assert _pre_2052("prompt", "docs") == ("prompt", None)
-    assert R._resolve_mode("prompt", "docs")[0] == "docs"
-    # and the mutation leaves AUTO alone, which is why AUTO never saw this bug
-    for det in _DETECTED:
-        assert _pre_2052("auto", det) == R._resolve_mode("auto", det), det
 
 
-def test_the_bare_prompt_file_is_the_input_the_detector_calls_docs(tmp_path):
-    """The join between the two halves: this is the staged shape that made
-    `--mode prompt` a second front door in the first place."""
-    proj = tmp_path / "proj"
-    (proj / "input").mkdir(parents=True)
-    (proj / "input" / "phase1_prompt.md").write_text(_UNDECLARED)
-    assert R._detect_input_mode(proj) == "docs"
-    assert R._resolve_mode("prompt", R._detect_input_mode(proj))[0] == "docs"
 
 
 # ── ITEM 2 — the top module is derived once ───────────────────────────

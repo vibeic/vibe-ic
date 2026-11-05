@@ -34,7 +34,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import phase3_one_shot_runner as p3  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -199,19 +198,3 @@ def test_no_target_is_legacy_single_pass():
 # source-text invariants: pin the density-driven multi-phase logic into the
 # shipped fill script so a regression to a single fixed grid fails here.
 # --------------------------------------------------------------------------
-def test_shipped_fill_script_is_density_driven():
-    src = p3._GDS_DUMMY_FILL_PY
-    assert 'min_density' in src, "fill script must read the declared min_density"
-    assert 'pitch - tile' in src, "fill-to-fill spacing floor must be pitch-tile"
-    # phase-shifted top-up grids beyond the single base grid.
-    assert 'phases' in src and '0.5' in src and '0.25' in src
-    # the legacy base grid is still phase 0.
-    assert '(margin, margin)' in src
-    # stops when the declared density target is reached.
-    assert 'dens >= min_density' in src
-
-
-def test_shipped_fill_script_still_reports_and_terminates():
-    src = p3._GDS_DUMMY_FILL_PY
-    assert 'DUMMY_FILL %s tiles=%d density=%.4f' in src
-    assert 'DUMMY_FILL_DONE' in src

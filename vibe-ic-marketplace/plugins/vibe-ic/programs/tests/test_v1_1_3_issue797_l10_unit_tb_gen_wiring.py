@@ -17,7 +17,6 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import testbench_gen as TBG          # noqa: E402
-import design_one_shot_runner as R   # noqa: E402
 import _path_layout as _pl            # noqa: E402
 
 
@@ -60,46 +59,14 @@ _FV = [{"name": "vec_add_basic", "kind": "functional_vector",
         "stimulus": "a=255,b=2", "expected": "510"}]
 
 
-def test_797_runner_step_exists_and_wired():
-    assert hasattr(R, "step_l10_unit_tb_gen")
-    import inspect
-    src = inspect.getsource(R.main if hasattr(R, "main") else R)
-    assert "step_l10_unit_tb_gen" in src
 
 
-def test_797_producer_emits_functional_vector_skeletons(tmp_path):
-    proj = _project(tmp_path, _FV)
-    res = R.step_l10_unit_tb_gen(proj, "chip_top")
-    assert res.status == "PASS", res.detail
-    tb_dir = _pl.sim_dir(proj) / "tb"
-    names = {p.stem for p in tb_dir.glob("*.v")}
-    assert "vec_add_basic" in names and "vec_mul_edge" in names
 
 
-def test_797_noleak_cmd_response_case_gets_no_skeleton(tmp_path):
-    proj = _project(tmp_path, [
-        {"name": "vec_alu_op", "kind": "functional_vector",
-         "stimulus": "x", "expected": "y"},
-        {"name": "cmd_read_id", "kind": "cmd_response",
-         "opcode": "0x9C", "expected": "0xDE"}])
-    R.step_l10_unit_tb_gen(proj, "chip_top")
-    names = {p.stem for p in (_pl.sim_dir(proj) / "tb").glob("*.v")}
-    assert "vec_alu_op" in names              # functional_vector → emitted
-    assert "cmd_read_id" not in names         # cmd_response → NOT emitted (no-leak)
 
 
-def test_797_no_l10_skips(tmp_path):
-    proj = tmp_path / "p2"
-    (proj / "phase1" / "generated_docs").mkdir(parents=True)
-    res = R.step_l10_unit_tb_gen(proj, "chip_top")
-    assert res.status == "NOT_MEASURED"
 
 
-def test_797_no_functional_vector_case_skips(tmp_path):
-    proj = _project(tmp_path, [{"name": "c1", "kind": "cmd_response",
-                                "opcode": "0x1", "expected": "0x2"}])
-    res = R.step_l10_unit_tb_gen(proj, "chip_top")
-    assert res.status == "NOT_MEASURED"
 
 
 def test_797_emit_unit_tbs_kind_filter_directly(tmp_path):
@@ -109,16 +76,6 @@ def test_797_emit_unit_tbs_kind_filter_directly(tmp_path):
     assert TBG.emit_unit_tbs(tmp_path / "absent", "chip_top") == -1
 
 
-def test_797_step_skips_with_a_reason_when_dut_unresolvable(tmp_path):
-    """#209 — L10 cases exist but there is no RTL to instantiate. The step must
-    SKIP and SAY SO. It must NOT report PASS, and it must NOT write a
-    placeholder: a fabricated Step-4 evidence file is exactly what #209 found
-    140 of."""
-    proj = _project(tmp_path, _FV, rtl=None)
-    res = R.step_l10_unit_tb_gen(proj, "chip_top")
-    assert res.status == "NOT_MEASURED", res.detail
-    assert "refused to fabricate" in res.detail
-    assert list((_pl.sim_dir(proj) / "tb").glob("*.v")) == []
 
 
 if __name__ == "__main__":

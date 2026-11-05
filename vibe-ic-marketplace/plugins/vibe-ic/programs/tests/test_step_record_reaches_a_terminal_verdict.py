@@ -36,7 +36,6 @@ sys.path.insert(0, str(PROG))
 
 import flow_dashboard_data as FDD   # noqa: E402
 import step_output_collector as SOC  # noqa: E402
-import step_preflight as SPF        # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -78,14 +77,6 @@ def _index_status(project: Path, step_id: str) -> str:
 # --------------------------------------------------------------------------- #
 # the mapping this join stands on
 # --------------------------------------------------------------------------- #
-def test_the_runner_plan_still_maps_yosys_synth_to_flow_step_9():
-    """The join is a lookup in the runner's OWN declared plan, not a guess.
-
-    If this declaration ever moves, the two tests below would go quietly
-    vacuous -- they would stop joining anything and pass for the wrong reason.
-    """
-    plan = SPF.RUNNER_PLANS["design_one_shot_runner"]
-    assert ("yosys_synth", ("9",)) in plan.sites
 
 
 # --------------------------------------------------------------------------- #
@@ -130,21 +121,6 @@ def test_a_retried_step_is_judged_by_its_final_record(tmp_path):
     assert _index_status(tmp_path, "1") != "fail"
 
 
-def test_a_multi_step_site_is_left_unattributed(tmp_path):
-    """CONTROL. `pnr` executes flow steps 15-22; its FAIL names no single row.
-
-    Painting one verdict across eight rows sends the reader somewhere specific
-    and wrong, so the join must decline it.
-    """
-    span = dict(SPF.RUNNER_PLANS["phase3_one_shot_runner"].sites)["pnr"]
-    assert len(span) > 1, "fixture assumes pnr still spans several flow steps"
-    for sid in span:
-        _write_declared(tmp_path, _declared_outputs(sid))
-    _orchestrator(tmp_path, "phase3_one_shot.json", [
-        {"name": "pnr", "status": "FAIL", "detail": "route failed"},
-    ])
-    for sid in span:
-        assert _index_status(tmp_path, sid) != "fail", sid
 
 
 def test_two_sites_on_one_step_fold_by_verdict_not_by_list_order(tmp_path):

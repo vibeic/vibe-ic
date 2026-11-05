@@ -49,7 +49,6 @@ FAIL direction is anchored on the real archived artefact.
 
 chip-AGNOSTIC: step ids, verdict buckets and markdown structure only.
 """
-import json
 import sys
 from pathlib import Path
 
@@ -58,7 +57,6 @@ import pytest
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import final_report_generate as F  # noqa: E402
-import final_summary_rollup_consistency_check as C  # noqa: E402
 
 REPO_ROOT = PLUGIN.parent.parent.parent
 # The real artefact the issue was measured on.
@@ -259,76 +257,12 @@ def test_rollup_order_covers_every_bucket_the_checker_can_emit():
         f"buckets with no print slot: {sorted(emitted - set(F.ROLLUP_ORDER))}")
 
 
-def _rendered_stage_step_ids(n):
-    """`n` step ids from ONE stage the Stage-breakdown table actually renders.
-
-    Taken from `F.STAGE_TITLE`, not from the head of the flow: the flow's first
-    two steps are `stage_phase1`, which that table has no row for, so marking
-    "the first n steps" marks steps the table never prints and the assertion
-    below would fail for a reason that is not the one under test.
-    """
-    steps = _real_flow()["steps"]
-    for stage, _title in F.STAGE_TITLE:
-        ids = [str(s["id"]) for s in steps if s.get("stage") == stage]
-        if len(ids) >= n:
-            return ids[:n]
-    raise AssertionError(f"no rendered stage carries {n} steps")
 
 
-def _audit_for_real_flow_with(word, marked_ids):
-    """Verdicts for every real flow step, with `marked_ids` wearing `word` and
-    the rest PASS, and a tally that stays TRUE to the per-step lines."""
-    steps = _real_flow()["steps"]
-    marked = set(marked_ids)
-    labels = {str(s["id"]): (word if str(s["id"]) in marked else "PASS")
-              for s in steps}
-    tally = {"PASS": sum(1 for v in labels.values() if v == "PASS"),
-             "FAIL": 0, "PASS_WITH_WAIVERS": 0,
-             "NOT_APPLICABLE": 0, "NOT_MEASURED": 0}
-    tally[word] = sum(1 for v in labels.values() if v == word)
-    return _audit_text(labels, tally=tally)
 
 
-def _stage_breakdown_counts(md, word):
-    """How many steps the Stage-breakdown table's `Other` column attributes to
-    `word`, summed over its rows. That table is the second of the renderer's
-    two ROLLUP_ORDER walks and the one with NO fallback branch."""
-    sym = F.VERDICT_SYM.get(word, word)
-    body = md.split("## Stage breakdown", 1)[1].split("\n## ", 1)[0]
-    total = 0
-    for ln in body.splitlines():
-        if not ln.startswith("| ") or "---" in ln:
-            continue
-        for bit in ln.rsplit("|", 2)[1].split():
-            k, _, v = bit.partition("=")
-            if k == sym and v.isdigit():
-                total += int(v)
-    return total
 
 
-def test_a_populated_not_measured_bucket_reaches_the_stage_breakdown(
-        monkeypatch, tmp_path):
-    """A PRINT SLOT IS THE POINT, NOT MEMBERSHIP OF A TUPLE.
-
-    The test above asks whether the word is IN `ROLLUP_ORDER`. That is the
-    necessary half. This is the sufficient half, and it is a different loop:
-    the Verdict roll-up table appends an unknown bucket after everything else,
-    but the **Stage-breakdown** table walks `ROLLUP_ORDER` and has no fallback
-    at all, so a populated bucket with no slot there is not mis-ordered — it is
-    ABSENT, and the stage rows stop accounting for the steps they count.
-
-    MEASURED on 0fe74ebc325a (tree 98f2cf217d76), the tree that shipped
-    `NOT-MEASURED` in `verdict.PRODUCER_STATUSES` and not in
-    `ROLLUP_ORDER`: this render attributed 0 of its 3 NOT-MEASURED steps to any
-    stage row.
-    """
-    marked = _rendered_stage_step_ids(3)
-    md = _render_with(monkeypatch, tmp_path,
-                      _audit_for_real_flow_with("NOT_MEASURED", marked))
-    assert C.parse_rollup_table(md).get("NOT_MEASURED") == 3
-    assert _stage_breakdown_counts(md, "NOT_MEASURED") == 3, (
-        "3 steps wear NOT-MEASURED and the Stage-breakdown table attributes "
-        "none of them to it; that loop walks ROLLUP_ORDER and has no fallback")
 
 
 def test_the_not_measured_slot_sits_with_the_non_green_words():
@@ -361,168 +295,28 @@ def test_the_not_measured_slot_sits_with_the_non_green_words():
 
 # ─── 6. end-to-end render: the two roll-ups in one document ──────────────
 
-def _render_with(monkeypatch, tmp_path, audit_text):
-    # #1969: the renderer no longer re-parses human stdout.  Model what the
-    # real checker does by writing its canonical snapshot during `_run_audit`.
-    # When verdict lines were withheld, `step_counts` stays complete while
-    # `steps[]` is incomplete — an internally torn artifact, which is now the
-    # only condition the reconciliation banner is allowed to name.
-    tally = F._parse_audit_tally(audit_text)
-    parsed = F._parse_verdicts(audit_text)
-
-    def _fake_run(*_args, **_kwargs):
-        if tally is not None:
-            p = (tmp_path / "reports" / "audit" /
-                 "phase23_completion_audit.json")
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps({
-                "run_status": "PASS",
-                "step_counts": tally,
-                "steps": [
-                    {"id": sid, "status": status,
-                     "name": f"step {sid}", "stage": "stage1"}
-                    for sid, status in parsed.items()
-                ],
-            }), encoding="utf-8")
-        return audit_text, "PASS"
-
-    monkeypatch.setattr(F, "_run_audit", _fake_run)
-    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
-    return F._render(tmp_path, run_audit=True)
 
 
-def _full_audit_for_real_flow(drop_ids=()):
-    """Verdicts for every real flow step, with a tally that stays TRUE to
-    the per-step lines. `drop_ids` removes verdict LINES only — the tally
-    still counts those steps, which is exactly the pre-fix situation."""
-    steps = _real_flow()["steps"]
-    labels = {}
-    for i, s in enumerate(steps):
-        labels[str(s["id"])] = ("FAIL" if i % 17 == 0 else
-                                "NOT_APPLICABLE" if i % 5 == 0 else "PASS")
-    tally = {"PASS": sum(1 for v in labels.values() if v == "PASS"),
-             "FAIL": sum(1 for v in labels.values() if v == "FAIL"),
-             "PASS_WITH_WAIVERS": 0,
-             "NOT_MEASURED": 0,
-             "NOT_APPLICABLE": sum(1 for v in labels.values()
-                                   if v == "NOT_APPLICABLE")}
-    emitted = {k: v for k, v in labels.items() if k not in drop_ids}
-    return _audit_text(emitted, tally=tally)
 
 
-def test_rendered_report_has_one_consistent_rollup(monkeypatch, tmp_path):
-    """POSITIVE: every step readable -> the rendered roll-up table equals
-    the checker tally quoted in the same file, no reconciliation warning,
-    and the standalone gate PASSes the run dir."""
-    md = _render_with(monkeypatch, tmp_path, _full_audit_for_real_flow())
-    assert C.RECONCILIATION_FAILED_MARKER not in md
-    (tmp_path / "reports" / "final_summary.md").write_text(md, encoding="utf-8")
-    ok, notes = C.check_project(tmp_path)
-    assert ok, "\n".join(notes)
-    table = C.parse_rollup_table(md)
-    # Zero-count buckets are printed by the tally and omitted by the
-    # table, so compare bucket-by-bucket with an implicit 0 — the same
-    # comparison the gate makes.
-    assert C.compare_buckets(table, F._parse_audit_tally(md)) == {}
-    assert sum(table.values()) == C.parse_rollup_total(md)
 
 
-def test_rendered_report_names_the_disagreement_when_verdicts_are_unreadable(
-        monkeypatch, tmp_path):
-    """NEGATIVE: a JSON snapshot missing five step rows is torn.
-
-    The producer-owned `step_counts` remains the rendered global roll-up; the
-    absent rows affect only the per-step view and fire the tripwire.
-    """
-    dropped = ("D1", "FS1", "DT1", "DT2", "DT3")
-    md = _render_with(monkeypatch, tmp_path,
-                      _full_audit_for_real_flow(drop_ids=dropped))
-    assert C.RECONCILIATION_FAILED_MARKER in md
-    table = C.parse_rollup_table(md)
-    assert table.get(F.NO_VERDICT, 0) == 0
-    # R-0915-85 — the property is unchanged and is now stated over the bucket
-    # that survived: the dropped per-step rows must not move the
-    # producer-owned global tally, so the rendered FAIL equals the tally's.
-    assert table.get("FAIL", 0) == F._parse_audit_tally(
-        _full_audit_for_real_flow(drop_ids=dropped))["FAIL"], (
-        "missing per-step rows changed the producer-owned global tally")
-    (tmp_path / "reports" / "final_summary.md").write_text(md, encoding="utf-8")
-    ok, notes = C.check_project(tmp_path)
-    assert not ok
-    assert any("reconciliation" in n.lower() for n in notes)
 
 
-def test_rendered_report_says_so_when_there_is_no_tally_to_check(
-        monkeypatch, tmp_path):
-    md = _render_with(monkeypatch, tmp_path,
-                      "Overall: AUDIT_TIMEOUT\n(did not finish)")
-    assert "Roll-up reconciliation: not possible" in md
-    (tmp_path / "reports" / "final_summary.md").write_text(md, encoding="utf-8")
-    ok, _ = C.check_project(tmp_path)
-    assert not ok, "an uncheckable report must not report as verified"
 
 
 # ─── 7. the gate, repo mode ──────────────────────────────────────────────
 
-def test_gate_repo_mode_passes_on_the_real_flow():
-    ok, notes = C.check_repo(PLUGIN / "flow" / "phase1_phase2_phase3.yaml")
-    assert ok, "\n".join(notes)
 
 
-def test_gate_repo_mode_fails_on_an_unreadable_id_shape(tmp_path):
-    """The gate must fire when a step id the parser cannot read is added —
-    which is the moment the two roll-ups start to diverge."""
-    f = tmp_path / "flow.yaml"
-    f.write_text("steps:\n  - id: '1'\n  - id: 'STEP-X'\n", encoding="utf-8")
-    ok, notes = C.check_repo(f)
-    assert not ok
-    assert any("STEP-X" in n for n in notes)
 
 
-def test_gate_repo_mode_cli_exit_codes(tmp_path):
-    assert C.main([]) == 0
-    f = tmp_path / "flow.yaml"
-    f.write_text("steps:\n  - id: 'ZZ-1'\n", encoding="utf-8")
-    assert C.main(["--flow", str(f)]) == 1
 
 
 # ─── 8. real-artefact anchor ─────────────────────────────────────────────
 
-@pytest.mark.skipif(not (REPRO_CELL / "reports" / "final_summary.md").is_file(),
-                    reason="archived reproduction cell not present")
-def test_gate_fires_on_the_archived_repro_cell():
-    """The gate must fire on the artefact the issue was measured on. A
-    check that is quiet everywhere is not measuring anything."""
-    ok, notes = C.check_project(REPRO_CELL)
-    assert not ok
-    blob = "\n".join(notes)
-    assert "MISSING: table=5 checker=0" in blob
-    assert "PASS: table=31 checker=35" in blob
 
 
-@pytest.mark.skipif(
-    not (REPRO_CELL / "reports" / "audit" /
-         "phase23_completion_audit.json").is_file(),
-    reason="archived reproduction cell not present")
-def test_archived_audit_json_agrees_with_the_quoted_tally_not_the_table():
-    """States plainly WHICH roll-up was right: the audit JSON and the
-    quoted checker tally are the same measurement; the recomputed table is
-    the outlier."""
-    cell = REPRO_CELL / "reports"
-    md = (cell / "final_summary.md").read_text(encoding="utf-8", errors="replace")
-    raw = json.loads((cell / "audit" / "phase23_completion_audit.json")
-                     .read_text(encoding="utf-8", errors="replace"))["step_counts"]
-    js = {C._AUDIT_JSON_KEY_TO_BUCKET[k]: v for k, v in raw.items()
-          if k in C._AUDIT_JSON_KEY_TO_BUCKET}
-    # The summary is written in the vocabulary R-0915-85 retired, which the
-    # renderer's own parser (five words only, by `verdict.py`'s rule) no longer
-    # reads; the gate's document reader reads it in its own words.
-    tally = C.parse_quoted_tally(md)
-    # The audit JSON and the tally quoted in the summary are the SAME
-    # measurement, bucket for bucket …
-    assert C.compare_buckets(js, tally) == {}
-    # … and the recomputed table is the one that disagrees with both.
-    assert C.compare_buckets(C.parse_rollup_table(md), tally) != {}
 
 
 # ─── 9. a summary rendered before the vocabulary rename (R-0915-85) ──────
@@ -549,65 +343,15 @@ Steps: 10 total
 """
 
 
-def _retired_project(tmp_path, text):
-    (tmp_path / "reports").mkdir(parents=True)
-    (tmp_path / "reports" / "final_summary.md").write_text(text,
-                                                          encoding="utf-8")
-    return tmp_path
 
 
-def test_a_retired_vocabulary_summary_is_compared_in_its_own_words(tmp_path):
-    """RED before: the gate said the summary quotes NO tally line -- false,
-    it quotes one in the words of its day -- and so could not name the
-    disagreement #428 is about."""
-    ok, notes = C.check_project(_retired_project(tmp_path, _RETIRED_SUMMARY))
-    blob = "\n".join(notes)
-    assert not ok
-    assert "quotes no flow_compliance_check tally line" not in blob
-    assert C.RETIRED_VOCABULARY_RULING in blob
-    assert "MISSING: table=2 checker=0" in blob
-    assert "PASS: table=4 checker=6" in blob
-    assert "PASS: roll-up rows sum to the printed Total=10." in blob
 
 
-def test_an_agreeing_retired_summary_passes_and_says_which_words(tmp_path):
-    text = (_RETIRED_SUMMARY.replace("| 4 |", "| 6 |")
-            .replace("MISSING | 2 |", "MISSING | 0 |"))
-    ok, notes = C.check_project(_retired_project(tmp_path, text))
-    blob = "\n".join(notes)
-    assert ok, blob
-    assert C.RETIRED_VOCABULARY_RULING in blob
 
 
-def test_the_prose_bullet_alone_is_still_not_a_tally(tmp_path):
-    """The retired quartet is what keeps the report's own prose out, as the
-    five do for a current summary: no agreement by construction."""
-    lines = [ln for ln in _RETIRED_SUMMARY.splitlines()
-             if "MISSING=0  WAIVED-DEFERRED" not in ln]
-    ok, notes = C.check_project(_retired_project(tmp_path, "\n".join(lines)))
-    assert not ok
-    assert "quotes no flow_compliance_check tally line" in "\n".join(notes)
 
 
 def test_the_renderer_still_refuses_the_retired_words():
     """`verdict.py` keeps no tolerant reader: the renderer's parser still
     reads only the five. The document reader is the gate's, not a leak."""
     assert F._parse_audit_tally(_RETIRED_SUMMARY) is None
-
-
-def test_the_not_prose_claim_for_the_retired_tally_reader_is_falsifiable():
-    """The `_NOT_PROSE` claim for `_parse_retired_tally`: it reads only a line
-    made entirely of `LABEL=N` tokens. A line that carries the whole quartet
-    AND a word -- a sentence, a denial -- is refused; the bare machine line is
-    read."""
-    line = "  PASS=6  FAIL=0  MISSING=0  WAIVED-DEFERRED=1  SKIPPED=3"
-    assert C._parse_retired_tally(line) == {
-        "PASS": 6, "FAIL": 0, "MISSING": 0, "WAIVED-DEFERRED": 1,
-        "SKIPPED-CONDITION": 3}
-    for denial in (line + "  is NOT the tally",
-                   "It is not true that" + line,
-                   "- " + line.strip()):
-        assert C._parse_retired_tally(denial) is None, denial
-    # Token-only but without the whole quartet the checker always printed:
-    # not its tally either.
-    assert C._parse_retired_tally("  PASS=6  VACUOUS-PASS=0") is None

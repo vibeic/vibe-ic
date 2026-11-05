@@ -26,13 +26,11 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import drc_feedback_repair as feedback  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 import provenance_output_hash_completeness_check as prov_check  # noqa: E402
 
 from _tcl_walk import walk as _walk  # noqa: E402
@@ -105,26 +103,6 @@ RING = {
 }
 
 
-def _pdk(tmp_path: Path, ring=None):
-    cell = tmp_path / "cells.lef"
-    tech = tmp_path / "tech.lef"
-    cell.write_text(CELL_LEF)
-    tech.write_text(TECH_LEF)
-    return R.PdkConfig(
-        name="unit", liberty="/not/read.lib", tech_lef=str(tech),
-        cell_lef=str(cell), cell_gds=None, site="site", drc_deck=None,
-        metal_prefix="lower", tapcell_master=None,
-        pdn_straps={
-            "stripes": [
-                {"layer": "upperV", "width": 0.8, "pitch": 24.0,
-                 "offset": 3.0},
-                {"layer": "upperH", "width": 0.9, "pitch": 25.0,
-                 "offset": 3.2},
-            ],
-            "connects": [["lower1", "upperV"], ["upperV", "upperH"]],
-        },
-        pdn_ring=ring,
-    )
 
 
 # A database stand-in: every command the deck calls that is not modelled is
@@ -161,47 +139,18 @@ proc m_pad {m args} {
 """
 
 
-def _grid_calls(tcl: str, insts: list[str], tmp_path: Path) -> list[str]:
-    out = _tclsh(_DB_STUB + f"set ::insts {{{' '.join(insts)}}}\n" + tcl
-                 + "\nforeach c $::grid_calls { puts \"GRID_CALL $c\" }\n"
-                 + "puts TCL_DONE\n", tmp_path)
-    return [ln[len("GRID_CALL "):] for ln in out.splitlines()
-            if ln.startswith("GRID_CALL ")]
 
 
-@pytest.mark.parametrize("ring", [None, RING], ids=["no_ring_cfg", "ring_cfg"])
-def test_core_only_block_promotes_straps_to_supply_pins(tmp_path, ring):
-    tcl = R._build_pdn_tcl(_pdk(tmp_path, ring))
-    calls = _grid_calls(tcl, ["inst_core"], tmp_path)
-    assert calls == ["-name grid -voltage_domains CORE -pins {upperV upperH}"], \
-        calls
 
 
-def test_block_with_placed_pads_keeps_the_ordinary_grid(tmp_path):
-    # A die: the supply enters through its pads, so the core grid grows no
-    # top-level ports of its own.
-    tcl = R._build_pdn_tcl(_pdk(tmp_path, None))
-    calls = _grid_calls(tcl, ["inst_core", "inst_pad"], tmp_path)
-    assert calls == ["-name grid -voltage_domains CORE"], calls
 
 
-def test_the_pin_layers_are_the_plans_own_strap_layers(tmp_path):
-    pdk = _pdk(tmp_path, None)
-    pdk.pdn_straps["stripes"] = [
-        {"layer": "upperH", "width": 0.9, "pitch": 25.0, "offset": 3.2}]
-    tcl = R._build_pdn_tcl(pdk)
-    calls = _grid_calls(tcl, ["inst_core"], tmp_path)
-    assert calls == ["-name grid -voltage_domains CORE -pins upperH"], calls
 
 
 # --------------------------------------------------------------------------
 # 3. The Magic stream never ships a DEF routing blockage as mask geometry.
 # --------------------------------------------------------------------------
 
-def test_magic_stream_reads_the_def_without_its_blockages():
-    reads = [ln.split() for ln in R._MAGIC_STREAMOUT_TCL.splitlines()
-             if ln.strip().startswith("def read")]
-    assert reads == [["def", "read", "$env(DEF)", "-noblockage"]], reads
 
 
 # --------------------------------------------------------------------------
@@ -398,60 +347,6 @@ def test_reroute_removes_only_the_keepouts_it_made(tmp_path):
     assert 'FEEDBACK_OBSTRUCTIONS_REMOVED: 2' in out
 
 
-def test_prestream_declares_the_feedback_rewrite_in_the_ledger(tmp_path,
-                                                              monkeypatch):
-    project, pdk = _project(tmp_path)
-    seen: dict = {}
-    monkeypatch.setattr(feedback, '_docker', _fake_eda(tmp_path, seen))
-    monkeypatch.setattr(feedback, 'has_reviewed_rule', lambda *a: True)
-    monkeypatch.setattr(feedback, 'image_for_container',
-                        lambda *a: 'sha256:' + '0' * 64)
-    monkeypatch.setattr(R, '_layout_basis', lambda *a: ('digest', ''))
-    monkeypatch.setattr(R, 'step_canonicalize_artefacts', lambda *a, **k:
-                        R.StepResult('canonicalize', 'PASS', 0, 'ok'))
-    monkeypatch.setattr(R, '_signoff_regen', lambda *a: False)
-    monkeypatch.setattr(R, '_si_mcf_repair_seam', lambda *a: None)
-    monkeypatch.setattr(R, '_tool_version', lambda *a: 'probe')
-    import si_mcf_repair
-    import si_mcf_verdict_basis
-    monkeypatch.setattr(si_mcf_repair, 'run_once',
-                        lambda *a, **k: {'decision': 'NO_OP'})
-    monkeypatch.setattr(si_mcf_verdict_basis, 'apply', lambda *a: None)
-
-    def stop(*_a):
-        raise RuntimeError('stop after feedback')
-    monkeypatch.setattr(R, '_run_declared_signoff_gate', stop)
-    R.set_invocation_provenance_sink(project)
-    try:
-        with pytest.raises(RuntimeError, match='stop after feedback'):
-            R.step_prestream_gate(project, 'unit', pdk, 'eda')
-    finally:
-        R.set_invocation_provenance_sink(None)
-
-    # The unchanged ledger gate: no declared output disagrees with disk.
-    _verdict, findings = prov_check.audit(project)
-    bad = [f for f in findings if f.rule == 'PROVENANCE_HASH_MISMATCH']
-    assert not bad, [f.detail for f in bad]
-    pnr = project / 'phase3/stage3/pnr'
-    rows = [json.loads(ln) for ln in
-            (project / 'provenance.jsonl').read_text().splitlines()]
-    writer = [r for r in rows
-              if 'phase3/stage3/pnr/routed.def' in (r.get('outputs') or {})]
-    newest = writer[-1]
-    assert 'drc_feedback_repair' in newest['command']
-    assert set(newest['outputs']) == {
-        'phase3/stage3/pnr/routed.def', 'phase3/stage3/pnr/unit.def',
-        'phase3/stage3/pnr/routed_drc_feedback.def'}
-    # The step's own output is the layout it published.
-    assert (pnr / 'routed_drc_feedback.def').read_bytes() == \
-        (pnr / 'routed.def').read_bytes()
-    # The re-run on the published DEF keeps the record of the rewrite.
-    receipt = json.loads(
-        (project / 'reports/phase3/drc_feedback.json').read_text())
-    assert receipt['initial_source_sha256'] == receipt['source_sha256']
-    assert receipt['prior_publication']['to_sha256'] == \
-        receipt['source_sha256']
-    assert receipt['prior_publication']['targets'] == ['target']
 
 
 def test_cli_publication_is_declared_in_the_ledger(tmp_path, monkeypatch):

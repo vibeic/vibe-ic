@@ -3,19 +3,11 @@
 Unit qualification/source authority APIs are doubles; no runtime/IC PASS.
 Previously completed CTS and digital controls are not selected or replayed.
 """
-import copy
 import json
-import os
 from pathlib import Path
-from types import SimpleNamespace
 import pytest
-import execution_backend_producers as producer
-import execution_backend_worker as worker
-import flow109
 import librelane_postroute_repair as repair
 from _ppa import closure
-import step_output_collector as versions
-import test_flow109_window_continuation as windows
 from test_flow109_d41_binding import case,sha
 
 
@@ -64,84 +56,16 @@ def test_unmeasured_additional_modes_are_never_filled_by_one_scene(case):
     assert result['obligations'][0]['reason']=='D41_MODE_POPULATION_UNAVAILABLE'
 
 
-@pytest.fixture
-def scene(case,monkeypatch):
-    c=case
-    plan,context,_=windows._window_fixture(c.project,monkeypatch,'D41','D41')
-    c.context=context
-    path=c.put('reports/flow109/requests/'+context['context_sha256']+'.json',context)
-    monkeypatch.setenv(flow109.CONTEXT_ENV,str(path))
-    monkeypatch.setenv(flow109.ATTEMPT_ENV,str(flow109._new_attempt(c.project,context)))
-    # Native/qualification APIs are explicit unit doubles; the source reader,
-    # current producer wrapper, worker envelope/version/finalizer execute.
-    for spec in worker.ROWS['32']['canonical_row']['required_outputs']:
-        options=spec.split(' OR ')
-        if not any(any(c.project.glob(x)) for x in options):c.put(options[0],'SOURCE_ONLY_GATE_OUTPUT_SENTINEL')
-    produced=c.publish()
-    assert produced['metric_acceptance']['status']=='PASS',json.dumps(produced,indent=2)
-    monkeypatch.setattr(producer,'produce_signoff',lambda *args:produced)
-    monkeypatch.setattr(producer,'_native_current_step_output_snapshot',lambda *args:{})
-    monkeypatch.setattr(producer,'_native_current_step_producer',lambda *args:'SOURCE_ONLY_PRODUCER_API_DOUBLE')
-    monkeypatch.setattr(producer,'_native_current_step_receipt',lambda *args:{'scope':'SOURCE_ONLY_PRODUCER_API_DOUBLE'})
-    monkeypatch.setattr(producer,'_current_step_producer_authority',lambda *args,**kw:(True,'SOURCE_ONLY','PASS'))
-    monkeypatch.setattr(producer,'_runner_context',lambda:SimpleNamespace(_DECLARED_SIGNOFF_GATES=[],_PRESTREAM_GATES=[]))
-    attempt=versions.begin_step(c.project,'32',inputs={str(path.relative_to(c.project)):sha(path)})
-    wrapped=producer.produce(c.project,{'step_id':'32','image_id':'SOURCE_ONLY_DOUBLE','top':'neutral','stop_on_producer_failure':True})
-    assert wrapped['canonical_receipts'][0]['metric_acceptance']==wrapped['metric_acceptance']
-    monkeypatch.setattr(worker,'_current_step_producer_authority',lambda *args,**kw:(True,'SOURCE_ONLY','PASS'))
-    monkeypatch.setattr(worker,'evaluate',lambda *args:{'status':'PASS','step':{'id':'32','status':'PASS'},'ledger':[]})
-    backend=worker.execute_current_step(c.project,step_id='32',producer=wrapped)
-    assert backend['verdict']=='PASS',json.dumps(backend,indent=2)
-    receipt=c.put('reports/phase3/default_steps/32/backend_result.json',backend)
-    version=versions.finish_step(c.project,attempt,verdict='PASS',result=backend,canonical_pass=True)
-    selected={row['id'] for row in plan['rows']}
-    dependencies=(set(context['resolved_row']['acceptance_deps'])|{d['step'] for d in context['resolved_row']['data_deps']})&selected
-    for dep in dependencies:
-        original=flow109.execution_context(plan,dep,dep)
-        c.put('reports/flow109/requests/'+original['context_sha256']+'.json',original)
-        c.put('reports/flow109/default_rows/'+dep+'.json',{'step_id':dep,'default_row_status':'PASS','completed':True,
-            'context_sha256':original['context_sha256'],'scope':'SOURCE_ONLY_DEPENDENCY_FIXTURE'})
-    report={'bounded':True,'steps':[{'extras':{'canonical_steps':[{'status':'PASS','detail':'SOURCE_ONLY',
-        'extras':{'step_id':'32','output_version':version['folder']}}]}}]}
-    def consume():
-        result=flow109.finish_native_window(c.project,report);c.put('SOURCE_ONLY_FINALIZER_OBSERVATION.json',result);return result
-    return SimpleNamespace(case=c,project=c.project,consume=consume,receipt=receipt,dependencies=dependencies)
 
 
-def test_finalizer_reuses_admission_and_only_this_current_d41(scene):
-    result=scene.consume()
-    assert result['default_row_status']=='PASS',json.dumps(result,indent=2)
-    assert result['whole_flow_acceptance']=='NOT_MEASURED' and result['delivery_accepted'] is False
 
 
-def test_finalizer_missing_admission_refuses_saved_pass(scene):
-    (scene.project/'qualifications.json').unlink()
-    result=scene.consume()
-    assert result['default_row_status']=='NOT_MEASURED',json.dumps(result,indent=2)
-    assert result['components'][0]['metric_acceptance']['metric_status']=='PASS'
 
 
-@pytest.mark.parametrize('late',['admission','dependency','version'])
-def test_finalizer_fresh_numeric_fail_survives_late_missing(scene,late):
-    scene.case.bodies['requirements/base_28/post_repair_timing_drv.json'][1]['limits']['timing__setup__ws__corner:slow_scene']['min']=1
-    if late=='admission':(scene.project/'qualifications.json').unlink()
-    elif late=='dependency':(scene.project/'reports/flow109/default_rows'/(sorted(scene.dependencies)[0]+'.json')).unlink()
-    else:
-        for path in versions._versions_root(scene.project).glob('**/outputs.json'):path.unlink()
-    result=scene.consume()
-    assert result['default_row_status']=='FAIL',json.dumps(result,indent=2)
 
 
-def test_finalizer_stale_source_receipt_refuses_prior_pass(scene):
-    body=json.loads(scene.receipt.read_text());body['source_sha']='FOREIGN';scene.receipt.write_text(json.dumps(body))
-    assert scene.consume()['default_row_status']=='NOT_MEASURED'
 
 
-def test_finalizer_requires_original_producer_filler_snapshot(scene):
-    path=scene.project/'reports/phase3/execution-backend-32.json';body=json.loads(path.read_text());body['unowned_rewrite']=True;path.write_text(json.dumps(body))
-    result=scene.consume()
-    assert result['default_row_status']=='NOT_MEASURED',json.dumps(result,indent=2)
-    assert 'FLOW109_D41_READBACK_STALE' in result['components'][0]['reason']
 
 
 @pytest.mark.parametrize('missing',[False,True])

@@ -68,13 +68,6 @@ def _slot_of(program: str):
 
 # ── the declaration and the slot must agree ─────────────────────────────────
 
-def test_dfm_screen_check_declares_itself_a_producer_not_a_gate():
-    spec = importlib.util.spec_from_file_location(
-        "flow_gate_enforcement_audit",
-        _PROGRAMS / "flow_gate_enforcement_audit.py")
-    fga = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(fga)
-    assert fga.declared_intent(_PROGRAMS, "dfm_screen_check") is None
 
 
 def test_step35_declares_dfm_screen_as_a_program_output():

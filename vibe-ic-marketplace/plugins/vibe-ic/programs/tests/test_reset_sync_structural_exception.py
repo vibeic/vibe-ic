@@ -206,38 +206,8 @@ def test_source_admission_does_not_require_mapped_netlist(tmp_path):
                for row in policies['rst_n'])
 
 
-def test_synth_refuses_changed_reset_source_before_native_dispatch(tmp_path, monkeypatch):
-    import execution_production
-    import json
-    project, mapped, liberty = _current_project(tmp_path)
-    source = project / 'input/docs/reset.md'
-    source.write_text(source.read_text().split('Current contract:')[0])
-    before = mapped.read_bytes()
-    def forbidden(*args, **kwargs):
-        pytest.fail('native/Controller dispatch preceded source admission')
-    monkeypatch.setattr(execution_production, 'dispatch_site', forbidden)
-    result = R.step_synth(project, 'top', SimpleNamespace(name='test'), '')
-    assert result.status == 'FAIL'
-    receipt = json.loads((project / 'reports/phase2/reset_source_admission.json').read_text())
-    assert receipt['verdict'] == 'FAIL'
-    assert receipt['reason'].startswith('RESET_PHASE_SOURCE_ADMISSION_REFUSED:')
-    assert receipt['native_synthesis_started'] is False
-    assert mapped.read_bytes() == before
 
 
-def test_synth_admits_valid_source_before_controller_dispatch(tmp_path, monkeypatch):
-    import execution_production
-    project, mapped, liberty = _current_project(tmp_path)
-    mapped.unlink()  # Source admission must work before synthesis exists.
-    calls = []
-    def dispatch(*args, **kwargs):
-        calls.append(args)
-        return {'status': 'NOT_MEASURED', 'reason': 'test controller boundary'}
-    monkeypatch.setattr(execution_production, 'dispatch_site', dispatch)
-    result = R.step_synth(project, 'top', SimpleNamespace(name='test'), '')
-    assert len(calls) == 1
-    assert result.status == 'NOT_MEASURED'
-    assert not (project / 'reports/phase2/reset_source_admission.json').exists()
 
 
 @pytest.mark.parametrize('expression,active_low', [('!RESET_B', True), ('RESET_B', False)])

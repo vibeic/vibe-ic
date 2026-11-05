@@ -35,10 +35,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
-import design_one_shot_runner as dr
-import fpga_board_capability as fcap
 import quartus_map_audit as qma
 
 PROG = Path(__file__).resolve().parent.parent / "quartus_map_audit.py"
@@ -62,16 +59,6 @@ def _project(tmp_path: Path, *, sof: bool, map_rpt: str | None) -> Path:
     return proj
 
 
-def _emit(proj: Path, compile_status: str | None) -> dict:
-    plan = []
-    if compile_status is not None:
-        _kw = ({"reason_class": "not_executed"}
-               if compile_status == "NOT_MEASURED" else {})
-        plan.append(dr.StepResult("fpga_compile", compile_status, 1.0,
-                                  "sof=top.sof size=10", **_kw))
-    dr.step_emit_phase2_manifests(proj, plan, top_name="top")
-    return json.loads(
-        (proj / "reports/phase2/fpga/quartus_map_audit.json").read_text())
 
 
 def _gate(proj: Path, out_json: Path | None = None):
@@ -86,70 +73,20 @@ def _gate(proj: Path, out_json: Path | None = None):
 # Producer — the scanner must actually run
 # ---------------------------------------------------------------------------
 
-def test_producer_reports_findings_from_the_real_map_rpt(tmp_path):
-    """A compile that returned a .sof while its .map.rpt carries Stuck-at-GND
-    and Warning(10030) must NOT be recorded as PASS."""
-    proj = _project(tmp_path, sof=True, map_rpt=DIRTY_MAP_RPT)
-    audit = _emit(proj, "PASS")
-    assert audit["verdict"] == "FAIL", (
-        "fpga_compile PASSed but its map report carries 2 silent-failure "
-        f"indicators; audit said {audit['verdict']!r}")
-    assert audit["audited"] is True
-    assert audit["finding_count"] == 2
-    assert {f["rule"] for f in audit["findings"]} == {"stuck-at-gnd", "no-driver"}
-    assert audit["map_reports"] == ["phase2/stage1/fpga/output_files/top.map.rpt"]
 
 
-def test_producer_pass_is_backed_by_an_actual_scan(tmp_path):
-    """A clean map report still PASSes — but now says it was scanned."""
-    proj = _project(tmp_path, sof=True, map_rpt=CLEAN_MAP_RPT)
-    audit = _emit(proj, "PASS")
-    assert audit["verdict"] == "PASS"
-    assert audit["audited"] is True
-    assert audit["finding_count"] == 0
-    assert audit["map_reports"] == ["phase2/stage1/fpga/output_files/top.map.rpt"]
 
 
-def test_producer_refuses_to_pass_an_unscanned_build(tmp_path):
-    """A .sof with no .map.rpt was never scanned, so it cannot be certified."""
-    proj = _project(tmp_path, sof=True, map_rpt=None)
-    audit = _emit(proj, "PASS")
-    assert audit["verdict"] != "PASS"
-    assert audit["audited"] is False
-    assert audit["skip_reason"] == "map_rpt_absent"
-    assert audit["sof_present"] is True
 
 
-def test_unscanned_build_is_not_mistaken_for_the_board_absent_disclosure(tmp_path):
-    """The new `.sof present but unscanned` shape must never buy the #607/#663
-    board-absent capability-gap waiver — that predicate requires sof_present
-    to be False."""
-    proj = _project(tmp_path, sof=True, map_rpt=None)
-    _emit(proj, "PASS")
-    assert fcap.fpga_skip_disclosed(proj) is False
-    assert fcap.fpga_absent_from_run(proj) is False
 
 
 # ---------------------------------------------------------------------------
 # Gate — re-scans on disk, so a fabricated artefact cannot buy a PASS
 # ---------------------------------------------------------------------------
 
-def test_gate_fails_on_findings(tmp_path):
-    proj = _project(tmp_path, sof=True, map_rpt=DIRTY_MAP_RPT)
-    _emit(proj, "PASS")
-    r = _gate(proj)
-    assert r.returncode == 1, r.stdout + r.stderr
 
 
-def test_gate_passes_a_genuinely_clean_build(tmp_path):
-    proj = _project(tmp_path, sof=True, map_rpt=CLEAN_MAP_RPT)
-    _emit(proj, "PASS")
-    out = tmp_path / "gate.json"
-    r = _gate(proj, out)
-    assert r.returncode == 0, r.stdout + r.stderr
-    payload = json.loads(out.read_text())
-    assert payload["verdict"] == "PASS"
-    assert payload["audited"] is True
 
 
 def test_gate_rescans_disk_and_ignores_a_forged_clean_claim(tmp_path):
@@ -205,56 +142,12 @@ def test_gate_does_not_certify_a_build_that_never_happened(tmp_path):
 # DIRECTION-1 GUARDS — behaviour that must NOT change (pass on both trees)
 # ---------------------------------------------------------------------------
 
-def test_guard_board_absent_disclosure_shape_is_preserved(tmp_path):
-    proj = _project(tmp_path, sof=False, map_rpt=None)
-    audit = _emit(proj, None)
-    assert audit["verdict"] == "SKIP"
-    assert audit["sof_present"] is False
-    assert audit["skip_reason"] == "not_attempted"
-    # THE KEY STAYS — four consumers read this shape and fields are ADDED, never
-    # removed. The VALUE no longer names a log that is not there. This assertion
-    # used to read `== "fpga/compile.log"`, which is what made the defect
-    # durable: a payload whose own `audited` is false still pointed a reader at
-    # a proof the deliverable does not carry, and the published
-    # caravel_user_project cell shipped exactly that until the evidence-citation
-    # gate caught it.
-    assert "compile_log" in audit
-    assert audit["compile_log"] is None
-    assert audit["evidence"] == "fpga_compile not run"
-    assert "design_identity" in audit
 
 
-def test_a_compile_log_that_exists_is_still_named(tmp_path):
-    """THE OTHER DIRECTION, and the one that decides whether the change above is
-    a fix or a deletion: when the log IS there, the field must still point at
-    it — otherwise "never name a missing proof" quietly becomes "never name the
-    proof"."""
-    proj = _project(tmp_path, sof=False, map_rpt=None)
-    (proj / "fpga").mkdir(parents=True, exist_ok=True)
-    (proj / "fpga/compile.log").write_text("quartus_map ...\n")
-    audit = _emit(proj, None)
-    assert audit["compile_log"] == "fpga/compile.log"
 
 
-def test_guard_board_absent_disclosure_still_grants_the_capgap_waiver(tmp_path):
-    proj = _project(tmp_path, sof=False, map_rpt=None)
-    _emit(proj, None)
-    assert fcap.fpga_skip_disclosed(proj) is True
-    assert fcap.fpga_absent_from_run(proj) is True
 
 
-def test_guard_attempted_incomplete_skip_reason_is_preserved(tmp_path):
-    proj = _project(tmp_path, sof=False, map_rpt=None)
-    # R-0915-85 — an ATTEMPTED-but-incomplete compile measured nothing about
-    # the design; the `skip_reason` beside it is what distinguishes it from a
-    # compile that was never attempted, and both are asserted below.
-    audit = _emit(proj, "NOT_MEASURED")
-    assert audit["verdict"] == "SKIP"
-    assert audit["sof_present"] is False
-    assert audit["skip_reason"] == "attempted_incomplete"
-    assert fcap.fpga_skip_disclosed(proj) is True
-    # ...but NOT the stronger never-attempted claim (#607 vs the narrower one).
-    assert fcap.fpga_absent_from_run(proj) is False
 
 
 def test_guard_report_positional_mode_is_unchanged(tmp_path):

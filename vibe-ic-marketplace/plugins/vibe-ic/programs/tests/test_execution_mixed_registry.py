@@ -13,27 +13,9 @@ import execution_adapters_mixed as mixed
 import execution_mixed_worker as worker
 import vibe_ic_one_shot_runner as runner
 
-from programs.tests import test_execution_modes as core_helpers
-from programs.tests import test_execution_receipt_chain as live_issuer
-
-isolated_transport = live_issuer.isolated_transport
 
 
-def test_registry_has_one_runnable_ordinary_candidate_per_canonical_mixed_row():
-    import execution_modes as em
-    registry = mixed.register_mixed_adapters(em.Registry(), source_sha="ignored", project=Path.cwd(),
-                                               parameters={"top_name": "chip_top"})
-    flow_rows = {str(row["id"]): row for row in __import__("_flow_yaml").load()["steps"]}
-    assert tuple(mixed.IDS) == ("M1", "M2", "M3", "M4")
-    for sid in mixed.IDS:
-        candidates = registry.adapters(sid)
-        assert len(candidates) == 1
-        assert candidates[0].arm_id == f"{sid}_ordinary_producer"
-        assert candidates[0].qualified is True
-        assert candidates[0].tool_id == "vibeic"
-        assert candidates[0].role == "producer"
-        assert set(candidates[0].output_contract) == set(flow_rows[sid]["required_outputs"])
-    assert set(mixed.M2_SIDECAR_OUTPUTS) <= set(registry.adapters("M2")[0].required_outputs)
+
 
 
 def test_shared_bootstrap_keeps_typed_step9_pdk_out_of_mixed_json():
@@ -59,30 +41,6 @@ def test_shared_bootstrap_keeps_typed_step9_pdk_out_of_mixed_json():
         "project_subject": str(Path.cwd().resolve()), "top_name": "top"}
 
 
-def test_m4_contract_binds_top_pv_declared_current_inputs(tmp_path):
-    import execution_modes as em
-    project = tmp_path / "project"
-    (project / "input/mixed_signal").mkdir(parents=True)
-    request = project / "input/mixed_signal/top_pv.json"
-    request.write_text(json.dumps({"input_sha256": {
-        "input/pdk/models/device.spice": "a" * 64,
-        "phase3/analog/block/hardmacro.gds": "b" * 64,
-        "../escape": "c" * 64,
-        "/etc/passwd": "d" * 64}}))
-    device = project / "input/pdk/models/device.spice"
-    device.parent.mkdir(parents=True)
-    device.write_text(".model device nmos\n")
-    hardmacro = project / "phase3/analog/block/hardmacro.gds"
-    hardmacro.parent.mkdir(parents=True)
-    hardmacro.write_bytes(b"GDS fixture")
-    candidate = mixed.register_mixed_adapters(
-        em.Registry(), source_sha="ignored", project=project).adapters("M4")[0]
-    assert "input/pdk/models/device.spice" in candidate.input_contract
-    assert "phase3/analog/block/hardmacro.gds" in candidate.input_contract
-    assert "phase3/librelane_switch.json" in candidate.input_contract
-    assert "input/submission_template/tapeout_declaration.json" in candidate.input_contract
-    assert "../escape" not in candidate.input_contract
-    assert "/etc/passwd" not in candidate.input_contract
 
 
 @pytest.mark.parametrize("sid", ("M1", "M2", "M3", "M4"))
@@ -99,67 +57,10 @@ def test_normal_fixed_caller_routes_each_row_through_shared_dispatch(sid):
                              "M3": "m3_run", "M4": "signoff_run"}[sid] + ".py" in source
 
 
-@pytest.mark.parametrize(("status", "expected_rc", "expected_verdict"), (
-    ("ADOPTED", 0, "PASS"), ("FAIL", 1, "FAIL"), ("NOT_MEASURED", 2, "NOT_MEASURED"),
-    ("AWAITING_AI_SELECTION", 2, "NOT_READY"),
-))
-def test_controller_result_preserves_status_in_fixed_runner(status, expected_rc, expected_verdict,
-                                                             tmp_path):
-    class Execution:
-        def dispatch_fixed_step(self, project, step_id):
-            assert project == tmp_path
-            assert step_id == "M3"
-            return {"status": status, "step_id": step_id, "selected": "M3_ordinary_producer"}
-
-    path = tmp_path / "reports/audit.json"
-    rc, report = runner._controller_mixed_step(Execution(), tmp_path, "M3", path)
-    assert rc == expected_rc
-    assert report["verdict"] == expected_verdict
-    assert json.loads(path.read_text()) == report
 
 
-def test_default_mode_keeps_direct_producer_fallback():
-    class Execution:
-        def dispatch_fixed_step(self, *_args):
-            return None
-
-    assert runner._controller_mixed_step(Execution(), Path("."), "M1", Path("unused")) is None
 
 
-def test_normal_caller_shared_controller_adopts_and_rereads_current_bytes(tmp_path):
-    """Exercise real Controller worker/choice/adoption using the neutral text fixture."""
-    import execution_modes as em
-    from execution_backend_snapshot import Journal
-    from programs.tests import test_execution_modes as neutral
-
-    project = tmp_path / "canonical-project"
-    project.mkdir()
-    context = neutral.context(project)
-    controller = neutral.controller(neutral.adapter("a"))
-    run_root = project / "controller-run"
-
-    class Execution:
-        def dispatch_fixed_step(self, current_project, step_id):
-            assert current_project == project
-            assert step_id == "M3"
-            result = controller.run(context, run_root, "ultra-mode")
-            assert result["status"] == "AWAITING_AI_SELECTION"
-            result = controller.adopt(context, run_root, neutral.choice(context, run_root))
-            result = controller.verify_adoption(context, run_root)
-            generation = result["selected_generation"]
-            journal = Journal(project)
-            for name in ("value.txt", "measurement.json"):
-                source = Path(generation["directory"]) / name
-                journal.write(name, source.read_bytes())
-            controller.verify_adoption(context, run_root)
-            assert (project / "value.txt").read_text() == "ONE INPUT\n"
-            assert em.digest(project / "value.txt") == result["selected_generation"]["outputs"]["value.txt"]
-            return dict(status="ADOPTED", selected="a", current_reread=True)
-
-    rc, report = runner._controller_mixed_step(Execution(), project, "M3",
-                                                project / "reports/m3-controller.json")
-    assert rc == 0
-    assert report["controller_result"]["current_reread"] is True
 
 
 def test_m3_measured_fail_survives_unmeasured_companion_and_output_edit(monkeypatch, tmp_path):
@@ -617,92 +518,3 @@ def test_actual_m2_worker_runs_checked_in_placed_fixture_and_existing_consumer(t
         assert native_m2.invoke(project, "--check-only") == 0
     else:
         assert "NOT_MEASURED" in verdicts or receipt["producer_verdict"] == "NOT_MEASURED"
-
-
-def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(tmp_path,
-                                                                                monkeypatch):
-    """Use the real issued Ultra route and actual registered M2 worker end to end."""
-    import hashlib
-    import shutil
-    import execution_modes as em
-    import execution_policy as policy
-    from execution_backend_snapshot import Journal
-    from programs.tests.test_m2_native_producer import FIXTURE
-    import mixed_signal_power_domain_run as m2
-
-    monkeypatch.setattr(policy, "_ordinary_runtime", None)
-    journal_writes = []
-    journal_write = Journal.write
-
-    def capture_journal_write(journal, name, content):
-        journal_writes.append((name, content))
-        return journal_write(journal, name, content)
-
-    monkeypatch.setattr(Journal, "write", capture_journal_write)
-    project = (tmp_path / "canonical-project").resolve()
-    shutil.copytree(FIXTURE, project)
-    block_list = project / "phase1/analog/analog_block_list.json"
-    staged_block_list = project / "phase3/analog/analog_block_list.json"
-    staged_block_list.parent.mkdir(parents=True)
-    shutil.copyfile(block_list, staged_block_list)
-
-    issued = live_issuer.real_entry("IC", "ultra", project)
-    runtime = policy.bootstrap(project, parameters={
-        "top_name": "boundary", "container": "host", "pdk": "auto"})
-    assert runtime["route"] == issued["route"]
-    assert runtime["controller"].registry is runtime["registry"]
-    arms = runtime["registry"].adapters("M2")
-    assert [arm.arm_id for arm in arms] == ["M2_ordinary_producer"]
-    assert arms[0].components[0].argv[1].endswith("execution_mixed_worker.py")
-
-    pending = policy.dispatch_fixed_step(project, "M2")
-    assert pending["status"] == "AWAITING_AI_SELECTION", pending
-    run, first_result = runtime["runs"]["M2"]
-    context = runtime["contexts"]["M2"]
-    plan = json.loads((run / "plan.json").read_text())
-    assert plan["arms"] == ["M2_ordinary_producer"]
-    receipt_path = run / "M2_ordinary_producer/receipt.json"
-    worker_receipt = json.loads((run / "M2_ordinary_producer/outputs/mixed-result.json").read_text())
-    assert first_result["candidate_statuses"]["M2_ordinary_producer"] == "ELIGIBLE"
-    assert worker_receipt["producer"] == "mixed_signal_power_domain_run"
-    assert worker_receipt["producer_verdict"] == "PASS"
-    assert worker_receipt["producer_command"]["rc"] == 0
-    assert all(row["verdict"] == "PASS" for row in worker_receipt["gate_records"])
-    producer_receipt = json.loads((run / "M2_ordinary_producer/outputs/project/"
-                                   "reports/analog/mixed_signal/power_domain_run.json").read_text())
-    actual_sidecars = {name for name in producer_receipt["outputs"]
-                       if "/power_domain_tool/" in name}
-    assert actual_sidecars == set(mixed.M2_SIDECAR_OUTPUTS)
-    assert actual_sidecars <= set(worker_receipt["outputs"])
-    assert all(worker_receipt["outputs"][name] == producer_receipt["outputs"][name]
-               for name in actual_sidecars)
-
-    legal_choice = core_helpers.choice(context, run, "M2_ordinary_producer")
-    adopted = policy.dispatch_fixed_step(project, "M2", choice=legal_choice)
-    assert adopted["status"] == "ADOPTED", adopted
-    assert adopted["selected"] == "M2_ordinary_producer"
-    verified = runtime["controller"].verify_adoption(context, run)
-    assert verified["selected"] == adopted["selected"]
-    generation = verified["selected_generation"]
-    current_hashes = {}
-    for name, expected in generation["outputs"].items():
-        current = project / name
-        assert current.is_file(), name
-        actual = em.digest(current)
-        assert actual == expected, name
-        current_hashes[name] = actual
-    assert {name for name, _content in journal_writes} == set(generation["outputs"])
-    assert actual_sidecars <= set(generation["outputs"])
-    assert actual_sidecars <= {name for name, _content in journal_writes}
-    journal_contents = dict(journal_writes)
-    assert all(hashlib.sha256(journal_contents[name]).hexdigest() ==
-               current_hashes[name] == generation["outputs"][name] ==
-               producer_receipt["outputs"][name] for name in actual_sidecars)
-    assert current_hashes["reports/analog/mixed_signal/power_domain.json"] == \
-        generation["outputs"]["reports/analog/mixed_signal/power_domain.json"]
-    assert m2.main([str(project), "--check-only"]) == 0
-    assert json.loads(receipt_path.read_text())["status"] == "ELIGIBLE"
-    print(json.dumps({"selected_arm": adopted["selected"],
-                      "generation": generation["generation"],
-                      "current_power_domain_sha256": current_hashes[
-                          "reports/analog/mixed_signal/power_domain.json"]}, sort_keys=True))

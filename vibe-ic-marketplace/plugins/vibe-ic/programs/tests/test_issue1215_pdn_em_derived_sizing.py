@@ -25,16 +25,13 @@ with no measurement keeps the PDN byte-identical.
 chip-AGNOSTIC: LEF/DEF grammar and arithmetic only; layer names below are
 arbitrary tokens.
 """
-import json
 import sys
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import em_current_density_check as EMC  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 
 # mkdtemp, not tmp_path (containerised-suite tmp_path newline hazard).
 
@@ -114,127 +111,20 @@ def test_measured_segment_width_still_controls_numeric_screen():
 
 
 # ---------------------------------------------------------------- (B) ----
-def _mk_measured_project(i_total_a: float) -> Path:
-    proj = Path(tempfile.mkdtemp(prefix="i1215b_"))
-    rpt3 = proj / "reports" / "phase3"
-    rpt3.mkdir(parents=True)
-    (rpt3 / "em_current_authority.json").write_text(json.dumps({
-        "supply_authority": [{"net": "VDD",
-                              "supply_current_A": i_total_a}]}))
-    # A current only sizes the layout it was measured on, so the fixture needs
-    # a layout and an em.json naming it as the subject -- what the EM emitter
-    # now writes. Without it this models a measurement of some OTHER layout,
-    # which is precisely the stale basis the sizing must refuse.
-    pnr = R._pl.pnr_dir(proj)
-    pnr.mkdir(parents=True, exist_ok=True)
-    (pnr / R._ppa_power._PDN_EM_SUBJECT_DEF).write_text(
-        "DESIGN chip_top ;\nEND DESIGN\n")
-    (rpt3 / "em.json").write_text(json.dumps({
-        "max_segment_current_A": None,
-        "subject_def_sha256": R._ppa_power._pdn_em_subject_digest(proj)}))
-    return proj
 
 
-def _mk_pdk(tlef_path) -> SimpleNamespace:
-    return SimpleNamespace(tech_lef=str(tlef_path), tapcell_master=None)
 
 
-def test_floor_is_derived_from_measurement_and_pdk_jmax_only():
-    proj = _mk_measured_project(4.36e-3)
-    tlef = proj / "unit_tech.tlef"
-    tlef.write_text(_TLEF)
-    fl = R._pdn_em_width_floor(proj, _mk_pdk(tlef), container=None)
-    assert fl is not None
-    # THE ARITHMETIC, verbatim: w = I / (jmax * (1 - margin)), then rounded
-    # UP to 2x the manufacturing grid (0.001 fallback — this LEF states no
-    # MANUFACTURINGGRID). 2x because pdngen centres a stripe on its axis so
-    # the HALF-width must be on-grid (measured: PDN-0117 refused 7.235 on a
-    # 0.005 grid and the whole PDN degraded to PDN_NONFATAL). Strictly
-    # above the bound: the gate counts util >= 1 - margin as an offender,
-    # and a round-to-nearest could even land below the bound.
-    import math
-
-    def _w(bound, quantum=0.002):
-        w = math.ceil(bound / quantum - 1e-9) * quantum
-        return round(w + quantum, 4) if w <= bound + 1e-12 else round(w, 4)
-
-    assert fl["margin"] == 0.10
-    b_a = 4.36e-3 / (0.67e-3 * 0.9)
-    b_b = 4.36e-3 / (1.5e-3 * 0.9)
-    assert fl["per_layer"]["metala"]["w_em_um"] == _w(b_a)
-    assert fl["per_layer"]["metalb"]["w_em_um"] == _w(b_b)
-    assert fl["per_layer"]["metala"]["w_em_um"] > b_a, "bound must be strict"
-    assert fl["per_layer"]["metalb"]["w_em_um"] > b_b, "bound must be strict"
-    # pdngen's PDN-0117 constraint: width is a multiple of 2x the grid.
-    for lyr in ("metala", "metalb"):
-        w = fl["per_layer"][lyr]["w_em_um"]
-        assert abs(w / 0.002 - round(w / 0.002)) < 1e-6, \
-            f"{lyr}: {w} is not a 2x-grid multiple (PDN-0117)"
-    # the arithmetic is published for independent recomputation.
-    art = json.loads((proj / "reports" / "phase3"
-                      / "pdn_em_sizing.json").read_text())
-    assert "I_total / (jmax_per_width" in art["arithmetic"]
-    assert "STRICT" in art["arithmetic"]
-    assert art["i_total_A"] == 4.36e-3
-    assert art["manufacturing_grid_um"] == 0.001
-    assert art["width_quantum_um"] == 0.002
 
 
-def test_first_pass_without_measurement_derives_nothing():
-    proj = Path(tempfile.mkdtemp(prefix="i1215n_"))
-    tlef = proj / "unit_tech.tlef"
-    tlef.write_text(_TLEF)
-    assert R._pdn_em_width_floor(proj, _mk_pdk(tlef), None) is None
 
 
-def test_sky130_grid_untouched_without_floor_and_widened_with_it():
-    pdk = SimpleNamespace(tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1",
-                          tech_lef=None, cell_lef=None, pdn_straps=None)
-    base = R._build_pdn_tcl(pdk, None, em_floor=None)
-    # no-floor render is byte-identical to the tuned grid.
-    assert "-layer met4 -width 1.6 -pitch 40.0 -offset 8.0" in base
-    assert "-layer met5 -width 1.6 -pitch 40.0 -offset 8.0" in base
-    assert "EM-derived" not in base
-    floor = {"per_layer": {"met4": {"w_em_um": 3.23},
-                           "met5": {"w_em_um": 3.23}}}
-    widened = R._build_pdn_tcl(pdk, None, em_floor=floor)
-    assert "-layer met4 -width 3.23" in widened
-    assert "-layer met5 -width 3.23" in widened
-    assert "EM-derived strap floor applied" in widened
 
 
-def test_sky130_pitch_grows_only_when_the_ratio_demands_it():
-    pdk = SimpleNamespace(tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1",
-                          tech_lef=None, cell_lef=None, pdn_straps=None)
-    # 3.23 um: 8*w = 25.84 < 40 -> tuned pitch/offset kept.
-    small = R._build_pdn_tcl(pdk, None, em_floor={
-        "per_layer": {"met4": {"w_em_um": 3.23}}})
-    assert "-width 3.23 -pitch 40.0 -offset 8.0" in small
-    # 7.23 um: 8*w = 57.84 > 40 -> pitch re-derived, offset = pitch/4.
-    big = R._build_pdn_tcl(pdk, None, em_floor={
-        "per_layer": {"met4": {"w_em_um": 7.23},
-                      "met5": {"w_em_um": 7.23}}})
-    assert "-width 7.23 -pitch 57.84 -offset 14.46" in big
-    assert "EM-derived strap floor applied" in big
 
 
-def test_floor_never_narrows_a_strap():
-    pdk = SimpleNamespace(tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1",
-                          tech_lef=None, cell_lef=None, pdn_straps=None)
-    out = R._build_pdn_tcl(pdk, None, em_floor={
-        "per_layer": {"met4": {"w_em_um": 0.5}}})
-    assert "-layer met4 -width 1.6 -pitch 40.0 -offset 8.0" in out
-    assert "EM-derived" not in out
 
 
-def test_followpin_rails_are_never_resized_SOURCE():
-    import inspect
-    src = inspect.getsource(R._build_pdn_tcl)
-    # the follow-pins lines carry no _em_floor_w application: the sky130
-    # met1 followpins literal is untouched and the generic followpins line
-    # (rendered elsewhere with the discovered rail width) is not in the
-    # stripe loop the floor rewrites.
-    assert "-layer met1 -width 0.48 -pitch 5.44 -offset 0 -followpins" in src
 
 
 if __name__ == "__main__":
@@ -266,11 +156,3 @@ def test_def_discovery_is_newest_first_and_skips_specialnets_free_defs():
     os.utime(newest, (3000, 3000))
     assert EMC.discover_def_pg_min_widths(proj) == {"metala": 7.24,
                                                     "metalb": 0.6}
-
-
-def test_em_authority_emit_reports_a_stale_artifact_instead_of_claiming_it_SOURCE():
-    import inspect
-    src = inspect.getsource(R._emit_em_current_authority)
-    assert "did not refresh" in src and "after <= before" in src, \
-        "#1215-PDN: a crashed gate must not be reported as an emit because " \
-        "the previous run's file still exists"

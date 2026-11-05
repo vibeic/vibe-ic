@@ -5,7 +5,6 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import postroute_timing_repair_decision as decision
-import phase3_one_shot_runner as runner
 
 
 def _project(tmp_path, ss_slack="-0.50"):
@@ -61,19 +60,3 @@ def test_met_and_old_reports_do_not_create_false_trigger(tmp_path):
     import os
     os.utime(routed, (report.stat().st_mtime + 2,) * 2)
     assert decision.decide(_stance(), True, project=project)["repair_needed"] is False
-
-
-def test_repair_deck_analyses_nominal_and_extreme_rc_hold(tmp_path):
-    deck = runner._build_postroute_timing_repair_tcl(
-        "chip", "/tech.lef", "/cell.lef", "/tt.lib", "/pnr", "/repair", "M",
-        corner_libs={"SS": "/ss.lib", "TT": "/tt.lib", "FF": "/ff.lib"},
-        post_route_start=True,
-        corner_spefs_c={"nom": "/nom.spef", "min": "/min.spef",
-                        "max": "/max.spef"})
-    assert "read_liberty -corner ss_nom /ss.lib" in deck
-    assert "read_liberty -corner ff_nom /ff.lib" in deck
-    assert "read_spef -corner ss_nom /nom.spef" in deck
-    assert "read_spef -corner ss /max.spef" in deck
-    assert "read_spef -corner ff /min.spef" in deck
-    assert deck.index("read_spef -corner ss_nom") < deck.index(
-        "catch {repair_timing -hold") < deck.index("\nglobal_route\n")

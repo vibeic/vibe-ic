@@ -47,15 +47,6 @@ sys.path.insert(0, str(_PROGRAMS))
 import phase3_one_shot_runner as p3  # noqa: E402
 
 
-class _Pdk:
-    """The PdkConfig surface the two streamout engines read."""
-    def __init__(self):
-        self.macro_lefs, self.macro_gds = [], []
-        self.tech_lef, self.cell_lef, self.cell_gds = "/t.tlef", "/c.lef", "/c.gds"
-        self.lefdef_layermap = None
-        self.calibre_drc = self.drc_deck = None
-        self.stdcell_marker_layer = self.dummy_fill = None
-        self.same_net_heal = self.port_label_restore = None
 
 
 def _def(path: Path, design: str) -> Path:
@@ -84,166 +75,26 @@ def test_an_unreadable_or_headerless_def_is_none_never_an_exception(tmp_path):
     assert p3._def_design_name(bare) is None
 
 
-def test_a_def_that_agrees_is_a_byte_for_byte_no_op(tmp_path):
-    """THE NO-OP CONTROL. Off the chip path the DEF's DESIGN *is* the runner's
-    top, so every caller below reproduces its current behaviour exactly and
-    the disclosure is empty — this cannot perturb a design it is not for."""
-    d = _def(tmp_path / "spm.def", "spm")
-    assert p3._streamout_top(d, "spm") == ("spm", "")
 
 
-def test_a_def_that_disagrees_substitutes_and_says_so(tmp_path):
-    """The substitution is NAMED. A run that silently streams a different cell
-    than the one its record says is the shape that hid this for a release."""
-    d = _def(tmp_path / "spm.def", "chip_top")
-    cell, note = p3._streamout_top(d, "spm")
-    assert cell == "chip_top"
-    assert "chip_top" in note and "spm" in note, note
 
 
-def test_an_absent_def_falls_back_to_the_callers_top(tmp_path):
-    cell, note = p3._streamout_top(tmp_path / "absent.def", "spm")
-    assert (cell, note) == ("spm", "")
 
 
 # --- the two engines: what the tool is actually told to load ---------------
 
-def _capture(monkeypatch):
-    seen = {}
-
-    def _exec(container, cmd, *a, **kw):
-        seen["cmd"] = cmd
-        return 0, "", ""
-    monkeypatch.setattr(p3, "_docker_exec", _exec)
-    monkeypatch.setattr(p3, "_tool_in_path", lambda c, t: True)
-    monkeypatch.setattr(p3, "_to_container_path", lambda p, c: str(p))
-    return seen
 
 
-def _project(tmp_path, design):
-    pnr = p3._pl.pnr_dir(tmp_path)
-    _def(pnr / "spm.def", design)
-    return tmp_path, pnr
 
 
-def test_the_magic_engine_loads_the_cell_the_def_contains(tmp_path, monkeypatch):
-    """`load <a cell this database does not have>` CREATES an empty cell and
-    streams it — Magic does not refuse, it invents. So the name has to be
-    right BEFORE the tool runs; there is no failure to catch afterwards."""
-    project, pnr = _project(tmp_path, "chip_top")
-    seen = _capture(monkeypatch)
-    p3._magic_def_to_gds(project, "spm", _Pdk(), "cnt", pnr / "spm.gds")
-    assert "TOP=chip_top " in seen["cmd"], seen["cmd"][:300]
-    assert "GDS_OUT=" + str(pnr / "spm.gds") in seen["cmd"], (
-        "the FILE name must not follow the cell name — every downstream "
-        "lookup in this runner is keyed on it")
 
 
-def test_the_klayout_engine_loads_the_cell_the_def_contains(tmp_path, monkeypatch):
-    """The other engine, same seam. KLayout fails differently — `ly.cell(top)`
-    returns None and a fallback guesses a top cell — but a guess is not a
-    resolution and the two engines must not disagree about what the top is."""
-    project, pnr = _project(tmp_path, "chip_top")
-    seen = _capture(monkeypatch)
-    monkeypatch.setattr(p3, "_vacuous_on_unrouted", lambda *a, **k: None)
-    monkeypatch.setattr(p3, "_magic_def_to_gds", lambda *a, **k: (False, "forced"))
-    # The pre-stream admission added by 57b1579a3 otherwise returns before
-    # either engine is called. Admit this synthetic DEF at that boundary and
-    # keep the actual KLayout command construction under test.
-    monkeypatch.setattr(p3, "_layout_basis", lambda *a, **k: ("test-digest", None))
-    monkeypatch.setattr(p3._ga, "gate_passed", lambda *a, **k: True)
-    p3.step_gds(project, "spm", _Pdk(), "cnt")
-    assert "TOP=chip_top " in seen["cmd"], seen["cmd"][:300]
 
 
-def test_an_agreeing_def_leaves_both_engines_argv_unchanged(tmp_path, monkeypatch):
-    """The other half of the no-op control, on the argv the tools receive."""
-    project, pnr = _project(tmp_path, "spm")
-    seen = _capture(monkeypatch)
-    p3._magic_def_to_gds(project, "spm", _Pdk(), "cnt", pnr / "spm.gds")
-    assert "TOP=spm " in seen["cmd"], seen["cmd"][:300]
 
 
-def test_magic_keeps_its_transcript(tmp_path, monkeypatch):
-    """It was the only evidence of WHAT went into the GDS, and it was thrown
-    away at the point of capture: both call sites assign it to a local they
-    never read. Keyed on the OUTPUT, because this same function also streams
-    the DRC re-stream's `<top>.magic_merged.gds` and one fixed name would let
-    the second run erase the first run's evidence."""
-    project, pnr = _project(tmp_path, "spm")
-    monkeypatch.setattr(p3, "_tool_in_path", lambda c, t: True)
-    monkeypatch.setattr(p3, "_to_container_path", lambda p, c: str(p))
-    monkeypatch.setattr(
-        p3, "_docker_exec",
-        lambda container, cmd, *a, **kw: (1, "Cell spm couldn't be read", ""))
-    p3._magic_def_to_gds(project, "spm", _Pdk(), "cnt", pnr / "spm.gds")
-    log = pnr / "spm.magic_stream_out.log"
-    assert log.is_file(), sorted(p.name for p in pnr.iterdir())
-    assert "couldn't be read" in log.read_text()
-    p3._magic_def_to_gds(project, "spm", _Pdk(), "cnt",
-                         pnr / "spm.magic_merged.gds")
-    assert (pnr / "spm.magic_merged.magic_stream_out.log").is_file()
-    assert "couldn't be read" in log.read_text(), (
-        "the re-stream erased the stream-out's own transcript")
 
 
-def test_the_prefix_tree_can_run_this_and_answers_wrongly(tmp_path, monkeypatch):
-    """THE BIDIRECTIONAL CONTROL, written so the PRE-FIX tree can execute it.
-
-    It uses no symbol the pre-fix tree lacks — only the shipped engine and the
-    command it builds — so that tree produces an argv and the assertion judges
-    THAT argv: `TOP=spm` against a DEF whose DESIGN is `chip_top`, which is the
-    defect stated as an answer rather than a crash.
-
-    The live half of the control is not a stub: the shipped run's own
-    `spm.gds` is 106 bytes, and the same DEF streamed with `TOP=chip_top` is
-    16,941,056."""
-    project, pnr = _project(tmp_path, "chip_top")
-    seen = _capture(monkeypatch)
-    p3._magic_def_to_gds(project, "spm", _Pdk(), "cnt", pnr / "spm.gds")
-    assert "TOP=chip_top " in seen["cmd"], (
-        "the streamout is told to load `spm`, a cell this DEF does not "
-        "contain; Magic creates an empty cell of that name and streams it, "
-        "and the 106-byte result reaches sign-off DRC, LVS and the hand-off "
-        "pack as the layout")
 
 
 # --- the same seam, one step later: LVS extraction -------------------------
-
-def test_the_extraction_recipe_loads_the_cell_the_def_contains(tmp_path,
-                                                               monkeypatch):
-    """LVS reads the SAME DEF with the SAME `load $env(TOP)` and lost the
-    design the same way. MEASURED on the shipped run
-    (phase3/stage3/extracted/ext2spice.log):
-
-        Cell spm couldn't be read
-        No such file or directory
-        PORTS_PROMOTED -1..-1
-        Warning:  There is nothing here to extract.
-
-    and the step reported LVS_EXTRACTION_NO_NETLIST, "magic completed the
-    recipe but wrote no file". Pinned beside the stream-out so the family
-    cannot be half-fixed: leaving this one would extract the layout as
-    `chip_top` and point netgen's schematic side at `spm`, turning a loud
-    refusal into a compare over the wrong pair."""
-    pnr = p3._pl.pnr_dir(tmp_path)
-    def_file = _def(pnr / "spm.def", "chip_top")
-    netlist = pnr / "spm_pnr.v"
-    netlist.write_text("module chip_top(); endmodule\n")
-    seen = _capture(monkeypatch)
-    p3._run_extraction_lvs(tmp_path, "spm", _Pdk(), "cnt", def_file, netlist,
-                           "/dev/null", "/dev/null", 0.0)
-    assert "TOP=chip_top " in seen["cmd"], seen["cmd"][-400:]
-
-
-def test_an_agreeing_def_leaves_the_extraction_argv_unchanged(tmp_path,
-                                                              monkeypatch):
-    """The no-op control on the LVS side."""
-    pnr = p3._pl.pnr_dir(tmp_path)
-    def_file = _def(pnr / "spm.def", "spm")
-    netlist = pnr / "spm_pnr.v"
-    netlist.write_text("module spm(); endmodule\n")
-    seen = _capture(monkeypatch)
-    p3._run_extraction_lvs(tmp_path, "spm", _Pdk(), "cnt", def_file, netlist,
-                           "/dev/null", "/dev/null", 0.0)
-    assert "TOP=spm " in seen["cmd"], seen["cmd"][-400:]

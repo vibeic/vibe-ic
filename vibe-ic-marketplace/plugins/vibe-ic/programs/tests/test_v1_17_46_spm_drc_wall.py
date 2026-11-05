@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import ast
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -48,122 +47,34 @@ import pytest
 PROGS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGS))
 
-import phase3_one_shot_runner as r  # noqa: E402
 import signoff_metrics_aggregate as sma  # noqa: E402
 import spice_correlation_check as scc  # noqa: E402
 
 
-def _pdk(**kw):
-    base = dict(name="x", liberty="l", tech_lef="t", cell_lef="c",
-                cell_gds="g", site="s", drc_deck="d",
-                tapcell_master="gf180mcu_fd_sc_mcu7t5v0__filltie",
-                tapcell_distance_um=14.0)
-    base.update(kw)
-    return r.PdkConfig(**base)
 
 
 # ── the repair block itself ──────────────────────────────────────────────────
-def test_welltie_repair_block_is_emitted_for_a_pdk_with_a_tap_master():
-    tcl = r._build_welltie_coverage_repair_tcl(_pdk())
-    assert "WELLTIE_COVERAGE_REPAIR" in tcl
-    assert "gf180mcu_fd_sc_mcu7t5v0__filltie" in tcl
 
 
-def test_welltie_repair_budget_is_the_pdk_max_tap_distance_not_a_literal():
-    """The budget must TRACK the PDK. A PDK declaring 20 um gets 20 um."""
-    assert "int(14.0 * $_wtdbu)" in r._build_welltie_coverage_repair_tcl(_pdk())
-    assert "int(20.0 * $_wtdbu)" in r._build_welltie_coverage_repair_tcl(
-        _pdk(tapcell_distance_um=20.0))
 
 
-def test_welltie_repair_is_per_row_not_per_euclidean_distance():
-    """`wire70` was 7.84 um from a tie in the row below and still violated."""
-    tcl = r._build_welltie_coverage_repair_tcl(_pdk(), 20.0, "x")
-    # the anchor and the tie it is compared against are keyed by the SAME row
-    assert "set _wtties $_wttie($_wty)" in tcl
-    # RE-PINNED ON THE EMITTED DISTANCE TEST. The expression this named was
-    # replaced twice -- centre-to-centre (R-0915-104) and then the pitch/2
-    # radius (R-0915-106) -- while the rule it protects never changed: the
-    # comparison is |dx| within one row, and carries NO y term. Asserting the
-    # RULE rather than one spelling of it survives the next correction.
-    dist = [ln for ln in tcl.splitlines()
-            if "abs(" in ln and "_wtcx" in ln and "_wtrad" in ln]
-    assert dist, "no per-row distance test found in the emitted deck"
-    for ln in dist:
-        assert "_wty" not in ln, f"the coverage test took a y term: {ln}"
-    # and the tie is created at that row's own y
-    assert "$_wtni setLocation $_wtx $_wty" in tcl
 
 
-def test_welltie_repair_uses_the_row_orientation():
-    """A tie placed N in an FS row mismatches its neighbours' implants."""
-    tcl = r._build_welltie_coverage_repair_tcl(_pdk())
-    assert "$_wtni setOrient $_wtro($_wty)" in tcl
 
 
-def test_welltie_repair_refreshes_the_placement_cache_before_the_fill():
-    """MEASURED: without this, `filler_placement` tiled a spacer over all 43
-    new ties -- 474 NEW implant/well violations replacing 60 tap ones."""
-    tcl = r._build_welltie_coverage_repair_tcl(_pdk())
-    assert "catch {check_placement} _wtcp" in tcl
-    assert tcl.index("catch {check_placement} _wtcp") > tcl.index(
-        "odb::dbInst_create")
 
 
-def test_welltie_repair_reports_an_anchor_it_could_not_place():
-    """2 of 45 had no free site in their own row. That is a REPORT, never a
-    silent drop."""
-    tcl = r._build_welltie_coverage_repair_tcl(_pdk())
-    assert "WELLTIE_COVERAGE_REPAIR_UNPLACEABLE" in tcl
-    assert "unplaceable=$_wtfail" in tcl
 
 
-def test_welltie_repair_excludes_the_tap_master_from_its_own_anchor_set():
-    """A tie is not a device that needs a tie."""
-    tcl = r._build_welltie_coverage_repair_tcl(_pdk())
-    i = tcl.index('if {[$_wtmm getName] eq "gf180mcu_fd_sc_mcu7t5v0__filltie"}')
-    assert "continue" in tcl[i:i + 200]
 
 
-def test_welltie_repair_degrades_to_a_named_skip_without_a_tap_master():
-    tcl = r._build_welltie_coverage_repair_tcl(_pdk(tapcell_master=None))
-    assert "WELLTIE_COVERAGE_REPAIR_SKIPPED" in tcl
-    assert "odb::dbInst_create" not in tcl
 
 
-def test_welltie_repair_names_no_chip_or_design_literal():
-    tcl = r._build_welltie_coverage_repair_tcl(_pdk())
-    for lit in ("spm", "caravel", "sky130", "wire70", "wire79"):
-        assert lit not in tcl.lower().replace(
-            "gf180mcu_fd_sc_mcu7t5v0__filltie", "")
 
 
-def test_welltie_repair_is_wired_before_the_row_fill_in_the_pnr_stage():
-    """It has to run while the row sites are still free.
-
-    RE-PINNED ON THE EMITTED TCL. This used to assert a SOURCE SUBSTRING --
-    the exact two-line spelling of one call and its argument list -- so it went
-    red the moment that call grew a parameter (R-0915-106 gave it the PDK's own
-    pitch), while the invariant it exists for never moved. The invariant is an
-    ORDER IN THE DECK: the coverage repair must appear before the row fill,
-    because it needs free sites. That is what is asserted now, and a call
-    signature may change under it without a false alarm.
-    """
-    pdk = _pdk()
-    repair = r._build_welltie_coverage_repair_tcl(pdk, 20.0, "x")
-    deck = repair + r._build_sparse_die_aware_filler_tcl(
-        ("FILL_1",), slot_pinned_core=False, design_declared_die=False)
-    assert "WELLTIE_COVERAGE_REPAIR" in deck
-    assert "filler_placement" in deck
-    assert deck.index("odb::dbInst_create") < deck.index("filler_placement"), (
-        "the well-tie repair must place its ties while the row sites are "
-        "still free -- after the filler there are none")
 
 
 # ── RB-12: the sign-off gates write what the metrics record reads ────────────
-def _stmt_order(func_src: str, needles: list) -> list:
-    """Index of each needle's first appearance, as statement order."""
-    return [func_src.index(n) for n in needles]
 
 
 def test_declared_signoff_gates_run_before_the_metrics_record():

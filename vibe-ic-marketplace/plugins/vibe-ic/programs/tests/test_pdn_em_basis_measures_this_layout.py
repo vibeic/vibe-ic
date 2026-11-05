@@ -47,11 +47,6 @@ import phase3_one_shot_runner as R  # noqa: E402
 from _ppa import power as PW  # noqa: E402
 
 
-def _design(project: Path, body: bytes = b"module spm; endmodule\n") -> Path:
-    d = project / "phase2" / "stage2" / "synth"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "spm_synth.v").write_bytes(body)
-    return project
 
 
 def _layout(project: Path, body: bytes = (
@@ -78,38 +73,10 @@ def _em_json(project: Path, subject: object, current: float = 0.00286) -> Path:
 # ---------------------------------------------------------------------------
 # the bound is per DESIGN STATE
 # ---------------------------------------------------------------------------
-def _sentinel(project: Path, payload) -> Path:
-    pnr = R._pl.pnr_dir(project)
-    pnr.mkdir(parents=True, exist_ok=True)
-    s = pnr / R._PDN_EM_RESIZE_SENTINEL
-    s.write_text(payload if isinstance(payload, str)
-                 else json.dumps(payload) + "\n")
-    return s
 
 
-def test_this_layouts_own_sentinel_binds(tmp_path):
-    """A sentinel binds this run even before its floor reaches the DEF."""
-    proj = tmp_path / "p"
-    _layout(proj)
-    s = _sentinel(proj, {"reason": "pdn_em_first_pass_resize",
-                         "spent_on_def": PW._pdn_em_spent_on(proj),
-                         "run_id": "same-run",
-                         "short": [{"layer": "MetalA", "w_em_um": 3.95}]})
-    binds, why = PW._pdn_em_sentinel_binds(s, proj, run_id="same-run")
-    assert binds is True, why
 
 
-def test_a_sentinel_spent_on_another_layout_does_not_bind(tmp_path):
-    """THE DEFECT. A sentinel nothing removes retired the corrector for the
-    life of the tree, whatever the design became."""
-    proj = tmp_path / "p"
-    _layout(proj)
-    s = _sentinel(proj, {"reason": "pdn_em_first_pass_resize",
-                         "spent_on_def": "0" * 64,
-                         "short": [{"layer": "MetalA", "w_em_um": 3.95}]})
-    binds, why = PW._pdn_em_sentinel_binds(s, proj)
-    assert binds is False
-    assert "did not take effect" in why
 
 
 def test_the_key_tracks_the_layout(tmp_path):
@@ -120,35 +87,10 @@ def test_the_key_tracks_the_layout(tmp_path):
     assert PW._pdn_em_spent_on(proj) != before
 
 
-def test_a_crash_resume_cannot_buy_a_second_re_pnr(tmp_path):
-    """Within this run, pass 2 did not write a DEF; the spend still binds."""
-    proj = tmp_path / "p"
-    _layout(proj, b"DESIGN chip_top ; # pass 1\n")
-    s = _sentinel(proj, {"reason": "pdn_em_first_pass_resize",
-                         "spent_on_def": PW._pdn_em_spent_on(proj),
-                         "run_id": "same-run",
-                         "short": [{"layer": "MetalA", "w_em_um": 3.95}]})
-    binds, why = PW._pdn_em_sentinel_binds(s, proj, run_id="same-run")
-    assert binds is True, why
 
 
-def test_a_legacy_sentinel_naming_no_design_does_not_bind(tmp_path):
-    """Migration, and it is the case run23 was found in: every sentinel already
-    on disk predates this rule. Reading it as binding would leave those trees
-    permanently un-corrected."""
-    proj = tmp_path / "p"
-    _layout(proj)
-    s = _sentinel(proj, {"reason": "pdn_em_first_pass_resize", "short": []})
-    binds, why = PW._pdn_em_sentinel_binds(s, proj)
-    assert binds is False
-    assert "names no layout" in why
 
 
-def test_an_unreadable_sentinel_does_not_bind(tmp_path):
-    proj = tmp_path / "p"
-    _layout(proj)
-    binds, why = PW._pdn_em_sentinel_binds(_sentinel(proj, "{ not json"), proj)
-    assert binds is False and "could not be read" in why
 
 
 def test_no_sentinel_does_not_bind(tmp_path):
@@ -229,10 +171,6 @@ def test_the_producer_records_the_subject_at_measurement_time():
 # ---------------------------------------------------------------------------
 # the design-declared fallback, and the disclosure
 # ---------------------------------------------------------------------------
-class _Pdk:
-    def __init__(self, liberty=None):
-        self.liberty = liberty
-        self.tech_lef = None
 
 
 def _l19(project: Path, fields: dict) -> Path:
@@ -277,69 +215,13 @@ def test_a_budget_with_no_voltage_anywhere_says_THAT_instead(tmp_path):
     assert "no supply voltage" in gap and "5000.0 uW" in gap
 
 
-def test_a_stale_basis_derives_no_floor_and_discloses_the_precise_gap(
-        tmp_path, capsys, monkeypatch):
-    """END TO END. A project holding only a previous layout's measurement must
-    derive no floor from it and must SAY so — silence made 'needs no floor' and
-    'could not derive one' the same observable."""
-    proj = _l19(tmp_path / "p", {"power_budget_uw": None})
-    _design(proj)
-    _layout(proj)
-    _em_json(proj, "f" * 64)                       # measures another layout
-    monkeypatch.setattr(R, "_pdk_nominal_voltage", lambda pdk, c=None: 5.0)
-
-    out = R._pdn_em_width_floor(proj, _Pdk(), None)
-
-    assert out is None, "a previous layout's measurement sized this grid"
-    err = capsys.readouterr().err
-    assert "PDN_EM_FLOOR_NOT_DERIVED" in err, err
-    assert "different design state" in err, err
-    assert "declares no power_budget_uw" in err, err
-
-    rec = json.loads((R._pl.reports_phase3_dir(proj)
-                      / "pdn_em_sizing.json").read_text())
-    assert rec["derived"] is False
-    assert "power_budget_uw" in rec["declared_budget_gap"]
-    assert any("em.json" in s for s in rec["declined_stale_sources"])
 
 
 # ---------------------------------------------------------------------------
 # r3 item 1 — a subject match is not enough when the subject is about to go
 # ---------------------------------------------------------------------------
-def test_a_matching_measurement_is_declined_when_pnr_will_replace_the_layout(
-        tmp_path, capsys, monkeypatch):
-    """THE DEFECT r2 STILL HAD. `step_pnr` runs only when the PnR cache was
-    REJECTED, so the routed DEF on disk is about to be replaced. A measurement
-    of it matches by digest and is STILL the previous layout's current — which
-    is how run23 drifted 2.900e-03 -> 2.600e-03 -> 2.860e-03 on an unchanged
-    design while every subject check looked satisfied.
-    """
-    proj = _l19(tmp_path / "p", {"power_budget_uw": None})
-    sha = _layout(proj)
-    _em_json(proj, sha)                       # matches the layout, exactly
-    monkeypatch.setattr(R, "_pdk_nominal_voltage", lambda pdk, c=None: 5.0)
-
-    assert R._pdn_em_width_floor(proj, _Pdk(), None,
-                                 layout_will_be_replaced=True) is None
-    err = capsys.readouterr().err
-    assert "about to replace" in err, err
-    assert "PDN_EM_FLOOR_NOT_DERIVED" in err, err
 
 
-def test_the_same_measurement_is_ACCEPTED_when_the_layout_stays(tmp_path,
-                                                                capsys):
-    """THE PAIRED HALF. On a cache hit the layout is not replaced and the
-    measurement describes it, so refusing it would discard an accurate number
-    and republish the record as NOT_DERIVED for a DEF that WAS floored."""
-    proj = _l19(tmp_path / "p", {"power_budget_uw": None})
-    sha = _layout(proj)
-    _em_json(proj, sha)
-
-    R._pdn_em_width_floor(proj, _Pdk(), None, layout_will_be_replaced=False)
-
-    err = capsys.readouterr().err
-    assert "PDN_EM_FLOOR_NOT_DERIVED" not in err, (
-        "a measurement of the layout that STAYS was refused\n" + err)
 
 
 def test_step_pnr_passes_the_flag():

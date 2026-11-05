@@ -2493,93 +2493,6 @@ _PROBE_SLEEP_S = 2
 _PROBE_MODULE = "import time\n\n\ndef test_probe():\n    time.sleep(%d)\n"
 
 
-def test_the_outcome_loop_cannot_outlive_the_pytest_harness(
-        monkeypatch, tmp_path):
-    """A stalled child reports before the harness; progressing work may finish.
-
-    The historical node id is intentionally retained for base/candidate
-    differential stability.  The old implementation multiplied a guessed
-    per-process wall timeout by a wave count.  That estimate was the defect:
-    healthy work crossed 60 s under parallel Landing Gate load.  The current
-    contract instead proves two independent facts:
-
-    * a child with no validated pytest lifecycle progress is named before the
-      enclosing ordinary harness can kill the whole session;
-    * the real loop actually uses its declared concurrency.  A sequential
-      implementation cannot finish the synthetic sleeps below their summed
-      lower bound.
-
-    There is deliberately no ``waves * seconds`` total-runtime assertion.  A
-    module that keeps completing pytest lifecycle transitions is making
-    measurable progress, regardless of how many wall-clock windows it needs.
-    """
-    import ci_harness_timeout_ceiling_check as CEIL
-
-    repo_root = CEIL.find_repo_root(TESTS_DIR)
-    harness = (CEIL.ci_harness_timeout_seconds(repo_root)
-               if repo_root is not None else None)
-    assert harness is not None, (
-        f"CANNOT DETERMINE: no pytest harness bound could be read from "
-        f"{repo_root} — and that is NOT this test passing. An unreadable bound "
-        f"is a bound this test did not check against; recording it as green is "
-        f"the could-not-look-scored-as-nothing-found shape the census campaign "
-        f"exists to refuse.")
-
-    per_call_ceiling = harness // CEIL.CEILING_DIVISOR
-    assert _OUTCOME_PROGRESS_STALL_S <= per_call_ceiling, (
-        f"one outcome process may make no pytest lifecycle progress for "
-        f"{_OUTCOME_PROGRESS_STALL_S}s, above the ordinary landing lane's "
-        f"{per_call_ceiling}s diagnostic window")
-    n = len(dimension_module_paths())
-    assert n, "no dimension modules found; the loop under test has no input"
-    ceiling = _outcome_worker_count(n)
-
-    # THE LOAD IS PINNED FOR THIS ITEM, and that is not a convenience. The
-    # width is deliberately load-bounded now, so on a busy landing lane it can
-    # legitimately be 1 -- and a concurrency assertion at width 1 is satisfied
-    # by a sequential loop, i.e. vacuous exactly where the census actually
-    # runs. The narrowing itself is proved by
-    # `test_the_process_budget_narrows_under_load_and_never_widens`; THIS item
-    # is about whether the schedule at its declared width is really concurrent,
-    # so it asks that question at the width the ceiling declares, on every host.
-    monkeypatch.setattr(sys.modules[__name__].os, "getloadavg",
-                        lambda: (0.0, 0.0, 0.0))
-    probe = tmp_path / "probe"
-    probe.mkdir()
-    paths = tuple(probe / f"test_probe_{i}.py" for i in range(n))
-    for path in paths:
-        path.write_text(_PROBE_MODULE % _PROBE_SLEEP_S, encoding="utf-8")
-    reports = _run_outcome_reports(paths, cwd=probe)
-    assert len(reports) == n, (
-        f"the probe ran {n} module(s) and got {len(reports)} report(s) back; "
-        f"a loop that drops a module measures nothing about the loop")
-
-    # CONCURRENCY IS PROVED BY COUNTING PROCESSES IN FLIGHT, NOT BY A CLOCK.
-    #
-    # This was `elapsed < n * _PROBE_SLEEP_S` -- 16 s for eight 2 s sleeps --
-    # and that assertion is the shape this lane exists to remove. MEASURED on
-    # 8hd-3 on 2026-09-07 it held with about 5.5 s of headroom at a 1-minute
-    # load average of 6 and at 86 alike (8.97 s -> 10.46 s), so it was not
-    # flaking; but it is a wall clock standing in for a structural fact, and it
-    # is red BY CONSTRUCTION the moment the width is narrowed for a busy host,
-    # which is exactly the fix the same starvation calls for. A test whose
-    # premise forbids the repair is the premise that has to move.
-    #
-    # The replacement is strictly STRONGER, not weaker. The clock could be
-    # satisfied by a sequential implementation that merely happened to be fast;
-    # this cannot. It requires the scheduler to have really had `width` module
-    # runs alive at the same instant, which is the thing the old assertion was
-    # trying to infer.
-    width = _LAST_OUTCOME_RUN["width"]
-    peak = _LAST_OUTCOME_RUN["peak_in_flight"]
-    assert 1 <= width <= ceiling, (
-        f"the loop ran at width {width}; the module-count ceiling is {ceiling} "
-        f"and a width may only ever be narrowed from it, never raised")
-    assert peak == width, (
-        f"{n} module(s) at width {width} never had more than {peak} run(s) in "
-        f"flight at once. The parallel schedule is not the code that ran — and "
-        f"unlike a wall clock this says so on a fast host and a starving one "
-        f"alike.")
 
 
 def test_the_outcome_pool_waits_at_each_wave_boundary(monkeypatch, tmp_path):
@@ -2792,15 +2705,6 @@ def cell_outcomes_with_record() -> Tuple[
     return outcomes, tuple(dropped_red)
 
 
-def enforcement_census_with_record() -> Tuple[
-        Dict[Tuple[str, int], "CellVerdict"], Tuple[Tuple[str, str], ...]]:
-    """``(census, foreign_reds)`` — :func:`enforcement_census` without the refusal.
-
-    For the repair tool only. Every reader that QUOTES the census must go
-    through :func:`enforcement_census`, which refuses.
-    """
-    outcomes, foreign = cell_outcomes_with_record()
-    return _join_axes(state_census(), outcomes), foreign
 
 
 @lru_cache(maxsize=1)

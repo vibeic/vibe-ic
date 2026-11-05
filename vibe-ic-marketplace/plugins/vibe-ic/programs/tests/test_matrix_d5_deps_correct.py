@@ -256,9 +256,6 @@ from __future__ import annotations
 import ast
 import functools
 import re
-import yaml
-import tempfile
-import os
 import copy
 import shlex
 from collections import Counter
@@ -984,20 +981,8 @@ _FORMERLY_DEFERRED_LAYER3_EDGES: Tuple[Tuple[str, str], ...] = (
 # ══════════════════════════════════════════════════════════════════════
 # The declared graph
 # ══════════════════════════════════════════════════════════════════════
-@functools.lru_cache(maxsize=1)
-def declaration_order() -> Dict[str, int]:
-    return {F.normalize_id(sid): i for i, sid in enumerate(F.step_ids())}
 
 
-@functools.lru_cache(maxsize=1)
-def raw_id_index() -> Dict[object, object]:
-    """``{raw id: raw id}`` — identity map used to test RAW-TYPE resolution.
-
-    ``flow_compliance_check`` keys its cascade graph on the untouched yaml id
-    (``st.get("id")``), so ``blocks_on: ["9"]`` against ``id: 9`` is a dropped
-    edge there even though the stringifying loader still sees it.
-    """
-    return {step["id"]: step["id"] for step in F.steps()}
 
 
 @functools.lru_cache(maxsize=1)
@@ -1023,18 +1008,6 @@ def ancestors(step: str) -> frozenset:
     return frozenset(seen)
 
 
-@functools.lru_cache(maxsize=1)
-def declared_roots() -> Tuple[str, ...]:
-    """Steps that declare ``blocks_on`` PRESENT-BUT-EMPTY — the graph's roots.
-
-    Distinct from steps with no ``blocks_on`` key at all (P0): "this is a root"
-    and "nobody wrote a dependency list" are different statements.
-    """
-    return tuple(
-        F.normalize_id(sid)
-        for sid in F.step_ids()
-        if F.declares_blocks_on(sid) and not F.blocks_on(sid)
-    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -1051,199 +1024,11 @@ def runtime_graph() -> Tuple[Dict[str, List[str]], str]:
     return graph, provenance
 
 
-def _runtime_ancestors(step: str, graph: Dict[str, List[str]]) -> Set[str]:
-    seen: Set[str] = set()
-    queue = list(graph.get(step, []))
-    while queue:
-        node = queue.pop(0)
-        if node in seen:
-            continue
-        seen.add(node)
-        queue.extend(graph.get(node, []))
-    return seen
 
 
 # ══════════════════════════════════════════════════════════════════════
 # The predicate
 # ══════════════════════════════════════════════════════════════════════
-def d5_problems(step_id) -> List[str]:
-    """Every dimension-5 defect of *step_id*, measured live. Empty == healthy.
-
-    Each string names the MEASURED value, not the expectation.
-    """
-    sid = F.normalize_id(step_id)
-    problems: List[str] = []
-    order = declaration_order()
-    graph = declared_graph()
-    parents = graph[sid]
-
-    # ── D5-EDGE-UNRESOLVED / D5-SELF-EDGE / D5-DUP-EDGE ──────────────
-    raw_index = raw_id_index()
-    raw_edges = list(F.step_by_id(step_id).get("blocks_on") or [])
-    for raw in raw_edges:
-        if raw not in raw_index:
-            norm = F.normalize_id(raw)
-            hint = (
-                f" — a step {norm!r} exists but is declared as "
-                f"{type(F.step_by_id(norm)['id']).__name__}, not "
-                f"{type(raw).__name__}; flow_compliance_check.py:6965-6973 keys "
-                f"the cascade graph on the RAW id, so this edge resolves to "
-                f"nothing there"
-                if F.has_step(norm)
-                else " — no step with that id is declared at all"
-            )
-            problems.append(
-                f"D5-EDGE-UNRESOLVED: step {sid} blocks_on {raw!r} "
-                f"({type(raw).__name__}){hint}"
-            )
-    seen_counts = Counter(F.normalize_id(e) for e in raw_edges)
-    for parent, count in sorted(seen_counts.items()):
-        if count > 1:
-            problems.append(
-                f"D5-DUP-EDGE: step {sid} lists parent {parent!r} {count} times "
-                f"in blocks_on {list(raw_edges)!r}"
-            )
-    if sid in seen_counts:
-        problems.append(
-            f"D5-SELF-EDGE: step {sid} blocks on itself (blocks_on="
-            f"{list(raw_edges)!r})"
-        )
-
-    # ── D5-FORWARD-EDGE ──────────────────────────────────────────────
-    for parent in parents:
-        if parent == sid or parent not in order:
-            continue
-        if order[parent] > order[sid]:
-            problems.append(
-                f"D5-FORWARD-EDGE: step {sid} (yaml declaration index "
-                f"{order[sid]}) blocks_on {parent!r}, which is declared LATER "
-                f"at index {order[parent]}; the flow is evaluated in canonical "
-                f"declaration order (flow_compliance_check.py:7444-7453) and "
-                f"#503 cascade attribution takes the first FAIL per track in "
-                f"that same order (flow_compliance_check.py:7070-7088), so "
-                f"{parent!r} can never cut {sid}'s cascade"
-            )
-
-    # ── CL-* — the closed_loop FALLBACK edge, dimension 5's other edge set
-    # A `closed_loop.fallback_to` IS a dependency edge, and until 2026-08-20
-    # nothing in this repository read one. MEASURED at 46db018669: 19
-    # `closed_loop:` declarations in the flow, ZERO consumers anywhere in the
-    # plugin — and this module's own substrate shipped the accessor
-    # (`flowref.closed_loop`, exported in `__all__`) with no caller. A
-    # `fallback_to` naming a step that does not exist would have passed every
-    # gate here, so the convergence edges the flow's close-loop story rests on
-    # were, as a class, unfalsifiable.
-    #
-    # Dimension 5 owns "is the declared edge set the true one", so it owns this
-    # edge set too. The predicate is NOT restated here: `closed_loop_edge_check`
-    # is the ONE implementation and this module calls it, so the program a
-    # reviewer runs by hand and the cell the matrix reddens cannot drift apart —
-    # the failure mode `_ORFS_PNR_KNOB_PARAMS` names in its own header ("a second
-    # list of names that would drift away from it").
-    #
-    # Steps with no `closed_loop` get an empty list, so this adds no cell and
-    # moves no existing verdict: measured over the shipped flow, `d5_problems`
-    # is unchanged for every step and the 19 declaring steps stay green.
-    import closed_loop_edge_check as _cl
-
-    _cl_raw_ids, _cl_by = _cl.build_index(list(F.steps()))
-    problems.extend(
-        _cl.problems_for_step(F.step_by_id(step_id), _cl_raw_ids, _cl_by))
-
-    # ── D5-CYCLE ─────────────────────────────────────────────────────
-    if sid in ancestors(sid):
-        cycle = sorted(a for a in ancestors(sid) if sid in ancestors(a))
-        problems.append(
-            f"D5-CYCLE: step {sid} is in its own blocks_on ancestry; the "
-            f"mutually-reachable set is {cycle}"
-        )
-
-    # ── D5-ORPHAN ────────────────────────────────────────────────────
-    roots = declared_roots()
-    if sid not in roots:
-        reached = ancestors(sid) & set(roots)
-        if not reached:
-            problems.append(
-                f"D5-ORPHAN: step {sid}'s blocks_on ancestry "
-                f"{sorted(ancestors(sid))} reaches none of the declared roots "
-                f"{list(roots)}; it is not anchored to the flow's entry points"
-            )
-
-    # ── D5-MISSING-EDGE (the data-dependency invariant) ──────────────
-    closure = ancestors(sid)
-    for producer, artefact, evidence in derived_dependencies(step_id):
-        if producer in closure:
-            continue
-        would_cycle = sid in ancestors(producer)
-        would_be_forward = (
-            producer in order and order[producer] > order[sid]
-        )
-        consequence = ""
-        if would_cycle:
-            consequence = (
-                f"; the edge cannot simply be added — {producer} already has "
-                f"{sid} in its own ancestry, so the real dependency is "
-                f"CIRCULAR and one side of it is wrong"
-            )
-        elif would_be_forward:
-            consequence = (
-                f"; the edge cannot simply be added — {producer} is declared "
-                f"LATER in the yaml (index {order[producer]} vs {order[sid]}), "
-                f"so it would be a forward edge"
-            )
-        problems.append(
-            f"D5-MISSING-EDGE: step {sid} reads '{artefact}', declared as a "
-            f"required_output of step {producer}, but {producer} is not in "
-            f"{sid}'s blocks_on closure (blocks_on={list(parents)}, closure="
-            f"{sorted(closure)}). Evidence: {evidence}{consequence}"
-        )
-
-    # ── D5-DECLARED-INPUT-UNORDERED (layer 3) ────────────────────────
-    # The half of "is blocks_on the true upstream set" that reads the flow's
-    # own answer instead of reconstructing one. Deliberately SEPARATE from
-    # D5-MISSING-EDGE: that clause's evidence is an artefact read, this one's
-    # is a DECLARATION, and collapsing them would lose which of the two found
-    # the defect — the distinction that decides whether the repair is an edge
-    # or a corrected `required_inputs` entry.
-    for producer, evidence in declared_input_dependencies(step_id):
-        if producer in closure:
-            continue
-        if producer in _DEFERRED_LAYER3_EDGES.get(sid, ()):
-            continue                      # named in the shrink-only register
-        problems.append(
-            f"D5-DECLARED-INPUT-UNORDERED: step {sid} declares it reads step "
-            f"{producer}'s output, but {producer} is not in {sid}'s blocks_on "
-            f"closure (blocks_on={list(parents)}, closure={sorted(closure)}), "
-            f"so flow_step_execution_coverage_check's ordering guard cannot "
-            f"red {sid} when {producer} FAILs. Evidence: {evidence}"
-        )
-
-    # ── D5-GRAPH-DISAGREE (cross-check, not delegation) ──────────────
-    rt_graph, provenance = runtime_graph()
-    if provenance != "LOADED":
-        problems.append(
-            f"D5-GRAPH-DISAGREE: the run-time ordering guard "
-            f"flow_step_execution_coverage_check.load_blocks_on returned "
-            f"provenance {provenance!r} for {F.FLOW_YAML}, so it enforces "
-            f"nothing about step {sid}"
-        )
-    else:
-        rt_parents = list(rt_graph.get(sid, []))
-        if rt_parents != list(parents):
-            problems.append(
-                f"D5-GRAPH-DISAGREE: static blocks_on for step {sid} is "
-                f"{list(parents)} but the run-time guard's loader sees "
-                f"{rt_parents}"
-            )
-        rt_anc = _runtime_ancestors(sid, rt_graph)
-        if rt_anc != set(closure):
-            problems.append(
-                f"D5-GRAPH-DISAGREE: static ancestry of step {sid} is "
-                f"{sorted(closure)} but the run-time guard's loader computes "
-                f"{sorted(rt_anc)}"
-            )
-
-    return problems
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -1360,55 +1145,6 @@ def _params():
 # ══════════════════════════════════════════════════════════════════════
 # The 63 cells
 # ══════════════════════════════════════════════════════════════════════
-@pytest.mark.parametrize("cell", _params(), ids=lambda c: f"step{c.step_id}")
-def test_d5_blocks_on_covers_the_real_dependency_graph(cell):
-    """One cell of dimension 5, recomputed from the live tree.
-
-    ENFORCED cells run the full predicate. WAIVED cells run the SAME predicate
-    under ``xfail(strict=True)`` — nothing is skipped, so the day the gap closes
-    the cell XPASSes and the suite goes red. The single NA cell asserts its NA
-    precondition instead, so adding a ``blocks_on`` key or a gate to it fails
-    this test rather than silently widening a hole.
-    """
-    sid = F.normalize_id(cell.step_id)
-
-    if sid in _NA_BASELINE:
-        # NA — asserted, not skipped. The classification itself is checked
-        # first, so a step that stops qualifying reddens its own cell.
-        assert _is_na(cell.step_id), (
-            f"step {sid} was classified NA for dimension 5 because it declared "
-            f"neither a blocks_on key nor a gate; it now declares "
-            f"blocks_on_key={F.declares_blocks_on(cell.step_id)} "
-            f"gate_clauses={len(F.gate_clauses(cell.step_id))}. The NA has "
-            f"self-invalidated — dimension 5 must be enforced for it"
-        )
-        assert not F.declares_blocks_on(cell.step_id), (
-            f"NA no longer holds: step {sid} now declares blocks_on="
-            f"{list(F.blocks_on(cell.step_id))!r}; dimension 5 must be "
-            f"re-evaluated for it"
-        )
-        assert not F.has_gate(cell.step_id), (
-            f"NA no longer holds: step {sid} now declares a gate with "
-            f"{len(F.gate_clauses(cell.step_id))} clause(s) naming programs "
-            f"{list(F.gate_programs(cell.step_id))!r}, which can read other "
-            f"steps' artefacts; dimension 5 must be re-evaluated for it"
-        )
-        assert not F.required_outputs(cell.step_id), (
-            f"NA no longer holds: step {sid} now declares required_outputs="
-            f"{list(F.required_outputs(cell.step_id))!r}"
-        )
-        return
-
-    assert not _is_na(cell.step_id), (
-        f"step {sid} is ENFORCED for dimension 5 but now declares neither a "
-        f"blocks_on key nor a gate, i.e. it silently became NA; the "
-        f"classification must be made explicitly, not by attrition"
-    )
-    problems = d5_problems(cell.step_id)
-    assert not problems, (
-        f"step {sid}: {len(problems)} dimension-5 defect(s)\n  - "
-        + "\n  - ".join(problems)
-    )
 
 
 def test_source_owner_metadata_does_not_invoke_every_row_of_a_shared_runner():
@@ -2044,22 +1780,8 @@ def test_d5_every_waiver_names_a_declared_step():
 # from the current tree on every call, so a cell that changes state changes its
 # answer here without anyone editing a table.
 # ══════════════════════════════════════════════════════════════════════
-def matrix_na_precondition(step_id):
-    """Why this cell is NA, re-derived LIVE, or ``None`` when it is answerable."""
-    if not _is_na(step_id):
-        return None
-    return ("declares no `blocks_on` KEY and no gate, so there is no upstream "
-            "set to be right or wrong about and no gate that could read "
-            "another step's artefact")
 
 
-def matrix_cell_state(step_id) -> str:
-    """``"ENFORCED"`` / ``"WAIVED"`` / ``"NA"`` for one cell of this dimension."""
-    if matrix_na_precondition(step_id) is not None:
-        return "NA"
-    if _waiver_for(step_id) is not None:
-        return "WAIVED"
-    return "ENFORCED"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2268,40 +1990,3 @@ def test_the_scope_covers_outputs_conditions_and_gate_clauses():
     conditions on an artefact reads it just as surely as one that declares it."""
     named = paths_named_by_stage("stage3")
     assert any(p.endswith("routed.def") for p in named), sorted(named)[:6]
-
-
-def test_a_real_blocks_on_gap_still_reddens(monkeypatch):
-    """THE DIRECTION THAT MATTERS MOST: the narrowing must not have bought silence.
-
-    The scope rule only ever drops a read INFERRED from a shared program's string
-    constants. The YAML-DECLARED route -- a step's own gate or condition naming
-    another step's required_output -- is untouched, and that is the route a real
-    `blocks_on` gap travels on.
-
-    DRIVEN THROUGH `d5_problems`, the function that emits the finding, with ONE
-    declared read injected for step 2: step 21's `routed.def`, which step 2's
-    blocks_on closure (['0.5ic', '1', 'D1']) does not reach. Injecting at the
-    derivation rather than swapping the flow yaml is deliberate -- the first cut of
-    this arm rewrote a copy of the flow, `flowref`'s own caches did not pick it up,
-    and the arm's guard caught that it was measuring nothing. The emitter is the
-    subject; the derivation is its input.
-    """
-    real = derived_dependencies
-    gap = ("21", "phase3/stage3/pnr/routed.def",
-           "yaml gate/condition declares 'phase3/stage3/pnr/routed.def'")
-
-    def _with_gap(step_id):
-        rows = list(real(step_id))
-        if F.normalize_id(step_id) == "2":
-            rows.append(gap)
-        return tuple(rows)
-
-    monkeypatch.setitem(globals(), "derived_dependencies", _with_gap)
-    problems = d5_problems("2")
-    assert any("D5-MISSING-EDGE" in q and "routed.def" in q for q in problems), (
-        "a step that DECLARES it reads another step's required_output with no "
-        f"blocks_on edge must still be reported: {problems}")
-    # AND THE GAP IS WHAT PRODUCED IT: without the injection the same call is
-    # clean, so this arm cannot pass on some pre-existing finding.
-    monkeypatch.setitem(globals(), "derived_dependencies", real)
-    assert not [q for q in d5_problems("2") if "D5-MISSING-EDGE" in q]

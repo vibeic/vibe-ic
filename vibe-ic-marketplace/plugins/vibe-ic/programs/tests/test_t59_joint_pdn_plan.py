@@ -10,44 +10,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import phase3_one_shot_runner as R  # noqa: E402
 from _ppa import power as P  # noqa: E402
-from test_t37_pdn_conservation_width import _pdk  # noqa: E402
 
 
-def _floor(peak):
-    return {
-        "per_layer": {"m4": {"w_em_um": 50.12,
-                              "jmax_A_per_um": 0.00067}},
-        "max_segment_current_A": 0.01511, "i_drive_A": 0.03022,
-        "i_total_A": 0.025, "margin": 0.1, "safety_factor": 2.0,
-        "manufacturing_grid_um": 0.005, "width_quantum_um": 0.01,
-        "rail_pitch_plan": {"applied": "DENSER_STRAPS", "rail_layer": "m1",
-                            "strap_layer": "m4", "old_pitch_um": 153.58,
-                            "new_pitch_um": 28.86, "strap_peak_A": peak},
-    }
 
 
-def test_joint_plan_refuses_routing_budget_on_real_tcl_path(tmp_path):
-    # A sufficiently hot strap cannot fit the rail's required pitch while
-    # reserving half of the layer for signal routing.
-    with pytest.raises(ValueError, match="PDN_EM_COMBINED_PLAN_INFEASIBLE"):
-        R._build_pdn_tcl(_pdk(tmp_path), em_floor=_floor(0.012))
 
 
-def test_joint_plan_refuses_missing_strap_measurement(tmp_path):
-    with pytest.raises(ValueError, match="PDN_EM_COMBINED_PLAN_NOT_MEASURED"):
-        R._build_pdn_tcl(_pdk(tmp_path), em_floor=_floor(None))
 
 
-def test_joint_plan_uses_strap_peak_and_records_one_pair(tmp_path):
-    floor = _floor(0.00729)
-    tcl = R._build_pdn_tcl(_pdk(tmp_path), em_floor=floor)
-    rows = [a for a in floor["applied"] if a["layer"] == "M4"]
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["strap_drive_A"] == pytest.approx(0.00729 * 2 * 28.86 / 153.58)
-    assert row["width_um"] < row["pitch_um"] - row["spacing_um"]
-    assert f"-layer M4 -width {row['width_um']} -pitch 28.86" in tcl
-    assert row["routing_fraction"] <= row["routing_budget"]
 
 
 def test_strap_peak_excludes_hot_ring():

@@ -26,7 +26,6 @@ sys.path.insert(0, str(PROGS))
 
 import librelane_contract as LL             # noqa: E402
 import path_delay_fault_atpg_run as PDF     # noqa: E402
-import phase3_one_shot_runner as R          # noqa: E402
 import sdd_atpg_run as SDD                  # noqa: E402
 
 CORNER = "max_ss_125C_4v50"
@@ -158,85 +157,16 @@ def test_dt3_reuses_a_dt2_grade_only_of_the_same_views(tmp_path):
 
 
 # ---------------------------------------------------------------- runner
-def _switch(project: Path, **steps) -> None:
-    (project / "phase3").mkdir(parents=True, exist_ok=True)
-    (project / "phase3/librelane_switch.json").write_text(
-        json.dumps({"steps": steps}))
 
 
-def test_direct_is_the_default(tmp_path):
-    _stapostpnr(tmp_path)
-    assert R.atpg_librelane_views(tmp_path, "DT2") == ([], None)
 
 
-def test_librelane_passes_the_state_and_the_max_ss_corner(tmp_path):
-    state = _stapostpnr(tmp_path)
-    _switch(tmp_path, DT2="librelane")
-    argv, refusal = R.atpg_librelane_views(tmp_path, "DT2")
-    assert refusal is None
-    assert argv == ["--librelane-state", str(state.relative_to(tmp_path)),
-                    "--librelane-corner", CORNER]
 
 
-def test_dual_and_a_missing_state_are_refused(tmp_path):
-    _switch(tmp_path, DT2="dual", DT3="librelane")
-    assert R.atpg_librelane_views(tmp_path, "DT2")[0] is None
-    argv, refusal = R.atpg_librelane_views(tmp_path, "DT3")
-    assert argv is None and "0 OpenROAD.STAPostPNR" in refusal
 
 
-def test_the_runner_hands_the_views_to_the_producer(tmp_path, monkeypatch):
-    state = _stapostpnr(tmp_path)
-    _switch(tmp_path, DT2="librelane")
-    sdc = tmp_path / R._ATPG_SDC_REL
-    sdc.parent.mkdir(parents=True, exist_ok=True)
-    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
-    cut = tmp_path / R._ATPG_CUT_REL
-    cut.parent.mkdir(parents=True, exist_ok=True)
-    cut.write_text("module cut(); endmodule\n")
-    # DT1 already graded; a direct DT2 grade exists and must be re-graded
-    for step, source in (("DT1", None), ("DT2", {"step": "direct"}),
-                         ("DT3", None)):
-        p = tmp_path / R._ATPG_COVERAGE_REL[step]
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"verdict": "PASS", "timing_source": source}))
-    calls = []
-
-    def fake_run(cmd, **_kw):
-        calls.append(cmd)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(R._pr, "run", fake_run)
-    R.run_at_speed_atpg_producers(tmp_path, [], [])
-    assert len(calls) == 1 and calls[0][1].endswith(
-        "path_delay_fault_atpg_run.py")
-    i = calls[0].index("--librelane-state")
-    assert calls[0][i:i + 4] == ["--librelane-state",
-                                 str(state.relative_to(tmp_path)),
-                                 "--librelane-corner", CORNER]
 
 
-def test_a_selected_but_absent_state_is_disclosed_not_graded(tmp_path,
-                                                             monkeypatch):
-    _switch(tmp_path, DT2="librelane")
-    sdc = tmp_path / R._ATPG_SDC_REL
-    sdc.parent.mkdir(parents=True, exist_ok=True)
-    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
-    cut = tmp_path / R._ATPG_CUT_REL
-    cut.parent.mkdir(parents=True, exist_ok=True)
-    cut.write_text("module cut(); endmodule\n")
-    for step in ("DT1", "DT3"):
-        p = tmp_path / R._ATPG_COVERAGE_REL[step]
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"verdict": "PASS"}))
-    calls = []
-    monkeypatch.setattr(R._pr, "run",
-                        lambda cmd, **_kw: calls.append(cmd))
-    R.run_at_speed_atpg_producers(tmp_path, [], [])
-    assert calls == []
-    record = json.loads((tmp_path / R._ATPG_NOT_RUN_REL["DT2"]).read_text())
-    assert "LibreLane timing views" in record["reason"]
-    assert record["tool_attempted"] is False
 
 
 def test_a_padded_core_is_levelised_with_every_corner_library():

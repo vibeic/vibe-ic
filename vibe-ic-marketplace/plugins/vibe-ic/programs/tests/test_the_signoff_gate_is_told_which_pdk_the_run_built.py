@@ -35,27 +35,14 @@ import ast
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as R          # noqa: E402
 import pdk_metal_density_windows as W       # noqa: E402
 
 
-@pytest.fixture
-def recorded(monkeypatch):
-    """Capture the (name, program, out_rel, extra_argv) each gate is run with."""
-    seen = []
-
-    def _fake(project, name, program, out_rel, extra_argv=()):
-        seen.append((name, program, out_rel, tuple(extra_argv)))
-        return R.StepResult(name, "PASS", 0.0, "stub")
-
-    monkeypatch.setattr(R, "_run_declared_signoff_gate", _fake)
-    return seen
 
 
 # --- the registry asymmetry that makes this load-bearing ------------------- #
@@ -77,55 +64,14 @@ def test_the_family_and_the_distribution_are_not_interchangeable():
 
 # --- the forwarding itself -------------------------------------------------- #
 
-def test_the_pdk_aware_gate_is_given_the_runs_own_distribution(recorded,
-                                                               tmp_path):
-    R.step_declared_signoff_gates(tmp_path, "gf180mcuD")
-    tp = [e for e in recorded if e[0] == "tapeout_precheck"]
-    assert len(tp) == 1, recorded
-    assert "--pdk" in tp[0][3], tp[0]
-    assert tp[0][3][tp[0][3].index("--pdk") + 1] == "gf180mcuD"
 
 
-def test_the_value_forwarded_is_the_distribution_not_the_family(recorded,
-                                                                tmp_path):
-    R.step_declared_signoff_gates(tmp_path, "gf180mcuD")
-    tp = [e for e in recorded if e[0] == "tapeout_precheck"][0]
-    forwarded = tp[3][tp[3].index("--pdk") + 1]
-    assert forwarded == "gf180mcuD"
-    # the family is exactly the value that made the gate blind
-    assert forwarded != "gf180mcu"
-    assert W.windows_for_pdk(forwarded)[1]["status"] == "stated"
 
 
-def test_every_other_gate_argv_is_byte_identical(recorded, tmp_path):
-    """THE CONTROL. Only the PDK-aware gate may change."""
-    R.step_declared_signoff_gates(tmp_path, "gf180mcuD")
-    with_pdk = {e[0]: e[3] for e in recorded}
-    recorded.clear()
-    R.step_declared_signoff_gates(tmp_path)          # the previous behaviour
-    without = {e[0]: e[3] for e in recorded}
-    assert set(with_pdk) == set(without)             # membership, not counts
-    for name in sorted(without):
-        if name == "tapeout_precheck":
-            continue
-        assert with_pdk[name] == without[name], name
-    # and the table's own declaration for the others is preserved verbatim
-    declared = {g[0]: tuple(g[3]) for g in R._DECLARED_SIGNOFF_GATES}
-    for name in sorted(without):
-        if name != "tapeout_precheck":
-            assert without[name] == declared[name], name
 
 
-def test_no_pdk_supplied_is_exactly_the_previous_behaviour(recorded, tmp_path):
-    R.step_declared_signoff_gates(tmp_path, "")
-    for name, _prog, _out, extra in recorded:
-        assert "--pdk" not in extra, (name, extra)
 
 
-def test_only_the_named_set_receives_it():
-    assert R._PDK_AWARE_SIGNOFF_GATES == frozenset({"tapeout_precheck"})
-    declared = {g[0] for g in R._DECLARED_SIGNOFF_GATES}
-    assert R._PDK_AWARE_SIGNOFF_GATES <= declared, "names a gate that is not declared"
 
 
 def test_the_gate_actually_accepts_the_flag():

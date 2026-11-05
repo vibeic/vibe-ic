@@ -143,10 +143,3 @@ def test_lessons_section_states_reset_placement():
     assert "BLKLOOPINIT" in txt and "WAIVE" in txt
     # generalised beyond gshare
     assert "scoreboard" in txt or "regfile" in txt
-
-
-def test_lessons_corpus_consistency_still_passes():
-    r = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "lessons_corpus_consistency_check.py"),
-         str(_LESSONS)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr

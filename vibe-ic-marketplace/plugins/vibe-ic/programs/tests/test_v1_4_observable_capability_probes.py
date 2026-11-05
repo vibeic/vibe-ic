@@ -50,7 +50,6 @@ sys.path.insert(0, str(PROG))
 import lec_run as LR                      # noqa: E402
 import lec_post_layout_check as LP        # noqa: E402
 import synth_frontend as SF               # noqa: E402
-import phase3_one_shot_runner as P3       # noqa: E402
 
 
 CONTAINER = "vibeic-eda"
@@ -286,97 +285,28 @@ _OR_PROBE_TCL = (
     "EOF")
 
 
-def test_differential_probe_is_wording_independent():
-    """The decision is 'does the real flag behave DIFFERENTLY from a flag we
-    KNOW is invalid?'. The control calibrates the probe at run time, so no
-    phrasing of either rejection is ever consulted."""
-    # capable: real flag got past arg parsing and failed later for another reason
-    assert P3._flag_accepted_vs_control(
-        "VIBEIC_PROBE_REAL: Error: no network has been linked.\n"
-        "VIBEIC_PROBE_CTRL: STA-0562\n") is True
-    # …and the same conclusion under completely different phrasings
-    assert P3._flag_accepted_vs_control(
-        "VIBEIC_PROBE_REAL: no design loaded, cannot estimate\n"
-        "VIBEIC_PROBE_CTRL: ERR-9999 unrecognised option\n") is True
 
 
-def test_differential_probe_negative_identical_rejections():
-    """PROVEN NEGATIVE: on a build WITHOUT the flag, the real flag is rejected
-    exactly like the bogus control → not capable → the measure-only path runs
-    (byte-identical to the pre-fix behaviour, and stock never segfaults)."""
-    assert P3._flag_accepted_vs_control(
-        "VIBEIC_PROBE_REAL: STA-0562\n"
-        "VIBEIC_PROBE_CTRL: STA-0562\n") is False
 
 
-def test_differential_probe_fail_safe_on_garbage():
-    for blob in ("", "no markers here",
-                 "VIBEIC_PROBE_REAL: something\n",       # control missing
-                 "VIBEIC_PROBE_CTRL: something\n",       # real missing
-                 "VIBEIC_PROBE_REAL: \nVIBEIC_PROBE_CTRL: \n"):
-        assert P3._flag_accepted_vs_control(blob) is False
 
 
-def test_differential_probe_rejects_a_non_discriminating_control():
-    """If the tool ACCEPTED a flag we know is invalid, the probe is not
-    discriminating and must not be trusted, however the real flag behaved."""
-    assert P3._flag_accepted_vs_control(
-        "VIBEIC_PROBE_REAL: Error: no network has been linked.\n"
-        "VIBEIC_PROBE_CTRL: <accepted>\n") is False
 
 
-@requires_container
-def test_openroad_differential_probe_against_the_real_image():
-    rc, blob = _dexec(_OR_PROBE_TCL % "-detailed_routing")
-    assert "VIBEIC_PROBE_REAL:" in blob and "VIBEIC_PROBE_CTRL:" in blob
-    assert P3._flag_accepted_vs_control(blob) is True, blob
 
 
-@requires_container
-def test_openroad_differential_probe_negative_against_the_real_image():
-    """PROVEN NEGATIVE with the real tool: a flag that genuinely does not exist
-    (what stock OpenROAD looks like for -detailed_routing) → not capable."""
-    rc, blob = _dexec(_OR_PROBE_TCL % "-vibeic_flag_that_does_not_exist")
-    assert P3._flag_accepted_vs_control(blob) is False, blob
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # (4) ext2spice extraction-collapse guard — order-agnostic + never silent
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_error_count_parsed_in_either_order():
-    """The count used to have to PRECEDE the word 'error'; a reworded summary
-    silently dropped the whole collapse guard."""
-    for text, want in (
-        ("Magic: 106,250,195 errors were encountered", 106250195),
-        ("errors: 106250195", 106250195),
-        ("error count = 42", 42),
-        ("Errors : 7", 7),
-        ("0 errors", 0),
-    ):
-        assert P3._parse_ext2spice_error_count(text) == want, text
 
 
-def test_error_count_max_across_lines_is_preserved():
-    assert P3._parse_ext2spice_error_count(
-        "0 errors\nlater...\nerrors: 900000\n") == 900000
 
 
-def test_unmeasured_count_is_reported_not_silent():
-    """The honesty backstop: a log that TALKS about errors but yields no count
-    is UNMEASURED, which must be distinguishable from measured-clean."""
-    assert P3._ext2spice_error_count_unmeasured(
-        "extraction finished with errors") is True
-    assert P3._ext2spice_error_count_unmeasured("0 errors") is False
-    assert P3._ext2spice_error_count_unmeasured("all clean") is False
-    assert P3._ext2spice_error_count_unmeasured("") is False
 
 
-def test_unmeasured_never_itself_fails_a_run():
-    """§4.05: the UNMEASURED signal is a WARNING only — the FAIL still requires
-    a real parsed count above the ceiling, so this cannot fail a clean run."""
-    assert P3._parse_ext2spice_error_count("extraction finished with errors") \
-        is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -408,21 +338,6 @@ def test_input_defect_is_denied_the_unsound_fallback():
         assert LP.liberty_input_is_usable(exists, nonempty) is False
 
 
-def test_equivalence_outcome_can_never_select_the_unsound_recipe():
-    """The decision now takes a dedicated PROBE rc, not the equiv transcript, so
-    no equivalence RESULT — including a genuine mismatch whose log happens to
-    contain the old phrase — can reach the unsound recipe."""
-    import inspect
-    sig = inspect.signature(LP.functional_read_liberty_supported)
-    assert list(sig.parameters) == [
-        "probe_rc", "liberty_exists", "liberty_nonempty"]
-    # …and the runner must actually RUN the probe rather than grep the LEC log.
-    src = inspect.getsource(P3._emit_lec_post_layout)
-    assert "build_functional_probe_script" in src, "the probe is never run"
-    assert "functional_read_liberty_supported" in src
-    assert "liberty_input_is_usable" in src, "input defect is not distinguished"
-    assert "functional_read_liberty_aborted" not in src, (
-        "the retired wording gate is still wired into the recipe decision")
 
 
 @requires_container

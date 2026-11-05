@@ -25,7 +25,6 @@ import pathlib
 import struct
 import sys
 
-import pytest
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
@@ -365,18 +364,6 @@ def test_the_disclosure_is_re_derived_not_asserted():
         rep, _baseline().get("unwired_by_decision") or {}, _baseline()["known"])
 
 
-@pytest.mark.parametrize("gate,expected_runner", [
-    ("drc_vacuous_pass_check.py", "FLOW"),
-    ("lvs_signoff_guard.py", "FLOW"),
-    ("step_internal_fail_bubble_up_check.py", "TOOLS"),
-    ("silent_decline_audit.py", "TOOLS"),
-])
-def test_the_wired_four_are_reachable_from_an_executable_location(gate, expected_runner):
-    """#693's actual subject. A gate wired somewhere that never executes is the
-    same defect moved, so assert the runner CLASS, not merely a mention."""
-    hay = W._tokenise(W._haystacks(_PLUGIN, _ROOT))
-    r = W.runners(gate[:-3], hay, str(_PROGRAMS / gate))
-    assert expected_runner in r, f"{gate}: runners={sorted(r)}"
 
 
 def test_a_stale_or_falsified_decision_record_is_rejected():

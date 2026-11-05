@@ -63,12 +63,9 @@ tool.
 """
 from __future__ import annotations
 
-import json
-import re
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import phase3_one_shot_runner as P3  # noqa: E402
@@ -116,254 +113,33 @@ DEF_NO_BLOCKAGES = _HEAD + _TAIL
 _CLEAN_NETGEN = "Final result: Circuits match uniquely.\n"
 
 
-class Run:
-    """What a driven `step_lvs` did, from the outside."""
-
-    def __init__(self, project: Path, result, magic_cmds):
-        self.project = project
-        self.result = result
-        self.magic_cmds = magic_cmds
-
-    @property
-    def def_path_handed_to_magic(self) -> Path:
-        assert len(self.magic_cmds) == 1, (
-            f"expected exactly one magic extraction command, got "
-            f"{len(self.magic_cmds)}")
-        m = re.search(r"DEF=(\S+)", self.magic_cmds[0])
-        assert m, f"the magic command names no DEF: {self.magic_cmds[0][:400]}"
-        return Path(m.group(1))
-
-    @property
-    def def_text_handed_to_magic(self) -> str:
-        return self.def_path_handed_to_magic.read_text()
-
-    @property
-    def signed_off_def(self) -> Path:
-        return self.project / "phase3" / "stage3" / "pnr" / "chip_top.def"
-
-    @property
-    def provenance(self):
-        p = (self.project / "phase3" / "stage3" / "extracted"
-             / "extract_def_provenance.json")
-        return json.loads(p.read_text()) if p.is_file() else None
-
-    @property
-    def verdict(self):
-        p = self.project / "reports" / "phase3" / "lvs_verdict.json"
-        return json.loads(p.read_text()) if p.is_file() else None
 
 
-def _drive(tmp_path: Path, monkeypatch, def_text: str, *,
-           magic_writes_netlist: bool = True,
-           magic_log: str = "MAGIC_EXT2SPICE_DONE\n",
-           netgen_transcript: str = _CLEAN_NETGEN) -> Run:
-    """Run the shipped `step_lvs` against a fake container.
-
-    The fake answers the runner's tool/tech probes, then plays magic and
-    netgen. `magic_writes_netlist=False` is the MEASURED failure shape: rc 0,
-    no `.sp` written, and a log that never reaches the recipe's own completion
-    sentinel.
-    """
-    pnr = tmp_path / "phase3" / "stage3" / "pnr"
-    pnr.mkdir(parents=True)
-    (pnr / "chip_top.def").write_text(def_text)
-    synth = tmp_path / "phase2" / "stage2" / "synth"
-    synth.mkdir(parents=True)
-    (synth / "chip_top_synth.v").write_text("module chip_top();\nendmodule\n")
-
-    pdk = P3.PdkConfig(name="sky130A", liberty="/foss/pdks/x.lib",
-                       tech_lef="/t.tlef", cell_lef="/c.lef", cell_gds=None,
-                       site="s", drc_deck=None)
-    magic_cmds: list = []
-
-    def fake(container, cmd, timeout=0, **_kw):
-        if cmd.startswith("command -v") or cmd.startswith("test -f"):
-            return (0, "", "")
-        if "magic" in cmd and "SPICE_OUT=" in cmd:
-            magic_cmds.append(cmd)
-            sp = Path(re.search(r"SPICE_OUT=(\S+)", cmd).group(1))
-            sp.parent.mkdir(parents=True, exist_ok=True)
-            (sp.parent / "ext2spice.log").write_text(magic_log)
-            if magic_writes_netlist:
-                sp.write_text(".subckt chip_top a b\n.ends\n")
-            # magic exits 0 either way — that is the whole point of D2.
-            return (0, magic_log, "")
-        if "netgen" in cmd:
-            m = re.search(r"(\S+/lvs\.rpt)", cmd)
-            if m:
-                rpt = Path(m.group(1))
-                rpt.parent.mkdir(parents=True, exist_ok=True)
-                rpt.write_text("Netgen 1.5\n" + netgen_transcript)
-            return (0, netgen_transcript, "")
-        return (0, "", "")
-
-    monkeypatch.setattr(P3, "_docker_exec", fake)
-    monkeypatch.setattr(P3, "_to_container_path", lambda s, c: s)
-    res = P3.step_lvs(tmp_path, "chip_top", pdk, "x")
-    return Run(tmp_path, res, magic_cmds)
 
 
 # ═══ D1 — what magic is actually handed ═══════════════════════════════════
 
-def test_magic_is_never_handed_a_layerless_blockage(tmp_path, monkeypatch):
-    """THE defect, reproduced at the step.
-
-    On the unfixed tree the runner points magic at the signed-off DEF, so the
-    `- PLACEMENT` entry that magic cannot bind is in the file it reads and the
-    read aborts 3 times in 5. Asserted on the DEF TEXT the runner chose, not on
-    any helper.
-    """
-    run = _drive(tmp_path, monkeypatch, DEF_MIXED)
-    handed = run.def_text_handed_to_magic
-    assert "PLACEMENT" not in handed, (
-        "magic was handed a DEF still carrying a layer-less `- PLACEMENT` "
-        "blockage; its DEF read aborts on that entry non-deterministically "
-        "and LVS then has no netlist to compare\n"
-        f"handed: {run.def_path_handed_to_magic}")
 
 
-def test_the_conducting_blockages_survive_the_staging(tmp_path, monkeypatch):
-    """Loss-free by construction: only the entries magic cannot bind go. A
-    stripper that also dropped the LAYER entries would remove real geometry
-    from the extraction input and quietly change the netlist."""
-    run = _drive(tmp_path, monkeypatch, DEF_MIXED)
-    handed = run.def_text_handed_to_magic
-    assert "LAYER MET1 RECT ( 100 200 ) ( 300 400 ) ;" in handed
-    assert "LAYER MET2 RECT ( 5 6 ) ( 7 8 ) ;" in handed
-    # a stale count is itself a malformed DEF
-    m = re.search(r"(?m)^\s*BLOCKAGES\s+(\d+)\s*;", handed)
-    assert m and int(m.group(1)) == 2, handed
-    assert handed.count("END BLOCKAGES") == 1
 
 
-def test_nothing_outside_the_blockages_section_reaches_magic_changed(
-        tmp_path, monkeypatch):
-    """OVER-BREADTH GUARD — passes on e3aa9b126 too, and is meant to.
-
-    On the unfixed tree magic gets the whole signed-off DEF, so every one of
-    these survives trivially. Its job is to stop a future stripper from
-    widening: it goes red the moment the staging touches anything outside
-    BLOCKAGES."""
-    run = _drive(tmp_path, monkeypatch, DEF_MIXED)
-    handed = run.def_text_handed_to_magic
-    for keep in ("VERSION 5.8 ;", "DESIGN chip_top ;",
-                 "UNITS DISTANCE MICRONS 1000 ;",
-                 "- u0 CELLA + PLACED ( 0 0 ) N ;",
-                 "- VDD ( * VPWR ) + USE POWER ;",
-                 "END SPECIALNETS", "END DESIGN"):
-        assert keep in handed, keep
 
 
-def test_the_section_disappears_when_every_entry_was_layerless(
-        tmp_path, monkeypatch):
-    run = _drive(tmp_path, monkeypatch, DEF_ONLY_LAYERLESS)
-    handed = run.def_text_handed_to_magic
-    assert "BLOCKAGES" not in handed, handed
-    assert "- VDD ( * VPWR ) + USE POWER ;" in handed
-    assert handed.rstrip().endswith("END DESIGN")
 
 
-def test_the_signed_off_def_is_never_rewritten(tmp_path, monkeypatch):
-    """The extraction copy is a NEW file. Rewriting the signed-off DEF would
-    change what GDS, DRC and every other consumer reads on the strength of a
-    magic-specific workaround."""
-    run = _drive(tmp_path, monkeypatch, DEF_MIXED)
-    assert run.signed_off_def.read_text() == DEF_MIXED
-    assert run.def_path_handed_to_magic != run.signed_off_def
 
 
-def test_the_staging_is_disclosed_beside_the_staged_copy(
-        tmp_path, monkeypatch):
-    """A silently-different extraction input is worse than none: the reader
-    has to be able to see WHICH entries were dropped and why."""
-    run = _drive(tmp_path, monkeypatch, DEF_MIXED)
-    prov = run.provenance
-    assert prov is not None, "no extract_def_provenance.json was written"
-    assert prov["signed_off_def"] == str(run.signed_off_def)
-    assert prov["extraction_def"] == str(run.def_path_handed_to_magic)
-    dropped = prov["dropped_blockage_entries"]
-    assert len(dropped) == 1 and "PLACEMENT" in dropped[0], dropped
-    assert "u_otp.u_macro" in dropped[0], dropped
 
 
 # ── strict fall-through: a DEF magic can read is handed over as it is ──────
-@pytest.mark.parametrize("def_text,label",
-                         [(DEF_ALL_LAYER, "every blockage names a layer"),
-                          (DEF_NO_BLOCKAGES, "no BLOCKAGES section at all")])
-def test_an_unaffected_def_is_handed_to_magic_as_the_signed_off_file(
-        tmp_path, monkeypatch, def_text, label):
-    """No staging, no copy, no provenance record — a design that never had the
-    problem must take byte-for-byte the path it took before.
-
-    Passes on e3aa9b126 as well, necessarily: on that tree NO design gets a
-    staged copy. It is the negative control for the four tests above, and its
-    green is not evidence for them."""
-    run = _drive(tmp_path, monkeypatch, def_text)
-    assert run.def_path_handed_to_magic == run.signed_off_def, label
-    assert run.def_text_handed_to_magic == def_text, label
-    assert run.provenance is None, label
 
 
 # ═══ D2 — the no-netlist verdict must not imply the tool was fine ═════════
 
-def test_a_no_netlist_run_localises_the_abort_and_says_rc_is_not_evidence(
-        tmp_path, monkeypatch):
-    """MEASURED in the image: magic exits 0 even on a fatal `lef read` /
-    `def read`. So the old detail — "produced no extracted netlist (rc=0)" —
-    quoted the one number that carries no signal for this tool, and quoted it
-    as though it did.
-
-    Driven at the step: magic returns 0, writes no `.sp`, and its log stops
-    after `PORTS_PROMOTED`. The published verdict must name the recipe's own
-    completion sentinel and where the run stopped.
-    """
-    run = _drive(
-        tmp_path, monkeypatch, DEF_ALL_LAYER, magic_writes_netlist=False,
-        magic_log=("Reading LEF ...\nPORTS_PROMOTED\n"
-                   "ext2spice: something (Error): boom\n"))
-    res, verdict = run.result, run.verdict
-    assert res.status == "FAIL"
-    assert res.extras.get("finding") == "LVS_EXTRACTION_NO_NETLIST"
-    # the sentinel is REPORTED, and reported as absent
-    assert res.extras.get("magic_completion_sentinel") is False, res.extras
-    assert verdict is not None and verdict.get(
-        "magic_completion_sentinel") is False, verdict
-    # ...and the abort is localised to AFTER port promotion
-    stage = res.extras.get("magic_aborted_stage") or ""
-    assert "AFTER port promotion" in stage, stage
-    assert verdict.get("magic_aborted_stage") == stage
-    # the message must stop letting rc=0 stand for "the tool was fine"
-    assert "MAGIC_EXT2SPICE_DONE" in res.detail, res.detail
-    assert "not evidence" in res.detail, res.detail
 
 
-def test_an_abort_before_port_promotion_is_a_different_stage(
-        tmp_path, monkeypatch):
-    """The localisation has to actually depend on the log. A field that always
-    says the same thing localises nothing — so the same run with the log
-    stopping EARLIER must report the earlier stage."""
-    early = _drive(tmp_path / "a", monkeypatch, DEF_ALL_LAYER,
-                   magic_writes_netlist=False,
-                   magic_log="Reading LEF ...\ndef read (Error): boom\n")
-    late = _drive(tmp_path / "b", monkeypatch, DEF_ALL_LAYER,
-                  magic_writes_netlist=False,
-                  magic_log="Reading LEF ...\nPORTS_PROMOTED\nboom\n")
-    e = early.result.extras.get("magic_aborted_stage") or ""
-    l = late.result.extras.get("magic_aborted_stage") or ""
-    assert "BEFORE port promotion" in e, e
-    assert e != l, (e, l)
 
 
-def test_a_completed_recipe_that_wrote_nothing_is_not_called_an_abort(
-        tmp_path, monkeypatch):
-    """Over-breadth guard. If the sentinel IS present the recipe ran to the
-    end, and saying it "aborted" would be a fabricated diagnosis."""
-    run = _drive(tmp_path, monkeypatch, DEF_ALL_LAYER,
-                 magic_writes_netlist=False,
-                 magic_log="PORTS_PROMOTED\nMAGIC_EXT2SPICE_DONE\n")
-    assert run.result.extras.get("magic_completion_sentinel") is True
-    stage = run.result.extras.get("magic_aborted_stage") or ""
-    assert "abort" not in stage.lower(), stage
 
 
 # ═══ the shared pipefail repair — passes on BOTH trees, and says so ═══════

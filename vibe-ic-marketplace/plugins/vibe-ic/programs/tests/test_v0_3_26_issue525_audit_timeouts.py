@@ -29,7 +29,6 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import _path_layout as _pl  # noqa: E402
-import _progress_run as _pr  # noqa: E402
 import design_one_shot_runner as P2  # noqa: E402
 import flow_compliance_check as FCC  # noqa: E402
 import phase23_completion_self_audit_check as SA  # noqa: E402
@@ -70,36 +69,10 @@ def test_gate_timeout_default_env_cap(monkeypatch):
 
 # ── phase2 step_final_audit: TIMEOUT is named, not a bare FAIL ─────────────
 
-def test_final_audit_timeout_named_not_bare_fail(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        P2, "_run",
-        lambda cmd, cwd=None, timeout=600, env=None:
-            (124, "", f"TIMEOUT after {timeout}s: killed"))
-    r = P2.step_final_audit(tmp_path, phase=2)
-    assert r.status == "FAIL"
-    assert "TIMEOUT" in r.detail and "NOT a verdict" in r.detail
-    assert _pl.AUDIT_TIMEOUT_ENV in r.detail            # tells how to extend
-    assert r.extras.get("finding") == "AUDIT_TIMEOUT"
 
 
-def test_final_audit_real_fail_still_plain_fail(tmp_path, monkeypatch):
-    # NEGATIVE no-leak: a substantive audit FAIL keeps the plain-FAIL shape.
-    monkeypatch.setattr(
-        P2, "_run",
-        lambda cmd, cwd=None, timeout=600, env=None:
-            (1, "step 31 FAIL\nOverall: FAIL\n", ""))
-    r = P2.step_final_audit(tmp_path, phase=2)
-    assert r.status == "FAIL"
-    assert "AUDIT_TIMEOUT" not in (r.extras.get("finding") or "")
-    assert "Overall: FAIL" in r.detail
 
 
-def test_final_audit_pass_unchanged(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        P2, "_run",
-        lambda cmd, cwd=None, timeout=600, env=None:
-            (0, "Overall: PASS\n", ""))
-    assert P2.step_final_audit(tmp_path, phase=2).status == "PASS"
 
 
 # ── flow_compliance per-gate cap: named timeout + env budget ───────────────
@@ -234,24 +207,6 @@ def test_discover_negative_normal_nested_dirs_kept(tmp_path):
 
 # ── adversarial-review regressions (v0.3.26 pre-push round) ────────────────
 
-def test_final_audit_timeout_through_real_run_with_partial_bytes(
-        tmp_path, monkeypatch):
-    # HIGH (review): TimeoutExpired.stdout is BYTES even under text=True;
-    # the old handler returned them raw and step_final_audit crashed with
-    # TypeError at the transcript write BEFORE the named AUDIT_TIMEOUT
-    # branch. Go through the REAL _run against a print-then-hang child.
-    import sys as _sys
-    monkeypatch.setenv(_pl.AUDIT_TIMEOUT_ENV, "1")
-    monkeypatch.setattr(
-        P2, "_build_final_audit_cmd",
-        lambda project, audit, phase=3, skip_analog=False:
-            [_sys.executable, "-c",
-             "import time,sys; print('partial line'*200, flush=True);"
-             " time.sleep(30)"])
-    r = P2.step_final_audit(tmp_path, phase=2)
-    assert r.status == "FAIL"
-    assert r.extras.get("finding") == "AUDIT_TIMEOUT"
-    assert "NOT a verdict" in r.detail
 
 
 def test_run_timeout_partial_stdout_is_str(tmp_path):

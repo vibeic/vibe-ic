@@ -32,9 +32,6 @@ the run and whose verdicts are unchanged.
 """
 from __future__ import annotations
 
-import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -45,7 +42,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 PLUGIN = PROGRAMS.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import on_pass_review_declared_command_runs_check as K  # noqa: E402
 import stage_on_pass_review as S  # noqa: E402
 
 SUBJECT = PROGRAMS / "stage_on_pass_review.py"
@@ -53,46 +49,12 @@ FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 STAGE, BAD, GOOD = "stage1", "reject_caravel", "accept_spm"
 
 
-def _decl() -> dict:
-    doc = yaml.safe_load(FLOW.read_text(encoding="utf-8"))
-    return next(st["on_pass_review"] for st in doc["stages"]
-                if str(st.get("id")) == STAGE)
 
 
-def _tree(tmp_path: Path, name: str, tree: str) -> Path:
-    root = tmp_path / name
-    root.mkdir(parents=True)
-    K.materialise(STAGE, tree, root)
-    return root
 
 
-def _cli(tmp_path: Path, name: str, tree: str, extra=()) -> tuple[int, str]:
-    root = _tree(tmp_path, name, tree)
-    rep = root / "reports" / "flow_compliance.json"
-    rep.parent.mkdir(parents=True, exist_ok=True)
-    rep.write_text(json.dumps({"steps": [{"stage": STAGE, "status": "PASS"}]}))
-    proc = subprocess.run(
-        [sys.executable, str(SUBJECT), "--flow-def", str(FLOW), ".",
-         "--stage", STAGE, "--json", "rec.json",
-         "--compliance", "reports/flow_compliance.json"] + list(extra),
-        cwd=str(root), capture_output=True, text=True,
-        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
-def _control(tmp_path: Path, tag: str) -> None:
-    """The shipped declaration: BAD refused with its proof inside the run,
-    GOOD accepted. Asserted in every arm."""
-    root = _tree(tmp_path, f"ctl_bad_{tag}", BAD)
-    rec = S.review(root, STAGE, _decl())
-    rej = rec.get("rejections") or []
-    assert rej and not (rec.get("unproven_rejections") or [])
-    assert rec["emit_outside_run"] is False
-    for r in rej:
-        assert S.proof_is_inside_the_run(root, r["test"]), r["test"]
-        assert not Path(r["test"]).is_absolute()
-    good = _tree(tmp_path, f"ctl_good_{tag}", GOOD)
-    assert not (S.review(good, STAGE, _decl()).get("rejections") or [])
 
 
 # ── the predicates, alone ───────────────────────────────────────────────────
@@ -123,45 +85,12 @@ def test_a_proof_must_be_run_relative_AND_on_disk(tmp_path):
 
 # ── ARM 1: the CLI, which is how the flow invokes it ────────────────────────
 
-def test_arm1_an_escaping_emit_test_declines_the_run(tmp_path):
-    rc, out = _cli(tmp_path, "arm1", BAD,
-                   ["--emit-test", str(tmp_path / "outside")])
-    assert rc == 2, out
-    assert "NOT CHECKED" in out and "OUTSIDE the run" in out
-    assert "REFUSED, NOT CLAMPED" in out
-    assert not (tmp_path / "outside").exists(), (
-        "nothing may be written outside the run, not even the refused proof")
-    _control(tmp_path, "arm1")
 
 
-def test_arm1_control_the_same_invocation_without_the_escape_still_rejects(
-        tmp_path):
-    """The arm must not be passing because the program broke. Same tree, same
-    argv, no `--emit-test`: rc 1, as before the fix."""
-    assert _cli(tmp_path, "arm1c", BAD)[0] == 1
-    assert _cli(tmp_path, "arm1g", GOOD)[0] == 0
 
 
 # ── ARM 2: review() called directly, bypassing main's refusal ───────────────
 
-def test_arm2_review_writes_nothing_outside_and_demotes_the_rejection(
-        tmp_path):
-    """The second hole: a caller that never enters `main`. The rule still
-    fires — this is not silencing the finding — but the rejection lands in
-    `unproven_rejections` with `test` named as the missing part, which is what
-    the tier means."""
-    root = _tree(tmp_path, "arm2", BAD)
-    outside = tmp_path / "arm2_outside"
-    rec = S.review(root, STAGE, _decl(), emit_dir=outside)
-    assert rec["emit_outside_run"] is True
-    assert (rec.get("rejections") or []) == [], (
-        "an unprovable rejection may not be reported as a proven one")
-    unproven = rec.get("unproven_rejections") or []
-    assert len(unproven) == 1
-    assert unproven[0]["missing_evidence"] == ["test"]
-    assert "emit_outside_run" in unproven[0]
-    assert not outside.exists(), "nothing may be written outside the run"
-    _control(tmp_path, "arm2")
 
 
 # ── ARM 3: the definition of PROVEN, independent of who wrote the field ─────

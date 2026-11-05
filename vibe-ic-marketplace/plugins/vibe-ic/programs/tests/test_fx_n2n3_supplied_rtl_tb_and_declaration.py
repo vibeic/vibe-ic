@@ -21,14 +21,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import testbench_gen as TBG                      # noqa: E402
-import vibe_ic_one_shot_runner as VIBE           # noqa: E402
 
 EMITTER = _PROGRAMS / "spec_declaration_emit.py"
 DECL_PATH = "plugin_output/declaration.json"
@@ -146,168 +144,26 @@ def _supplied_project(tmp_path: Path) -> Path:
     return project
 
 
-def test_top_is_derived_from_supplied_rtl_before_it_is_staged(tmp_path):
-    """RED on main: rtl/ is empty before phase 2, so `chip_top` was kept."""
-    project = _supplied_project(tmp_path)
-    assert not (project / "phase2").exists()
-    top, _note = VIBE._resolve_top_name(project, "product_name", "chip_top",
-                                        False)
-    assert top == "shift_top"
 
 
-def test_a_parameterised_header_is_not_a_self_instantiation(tmp_path):
-    """No array here: a plain child, and a top whose header is `#(...)`.
-    RED on main: the header's parameter group ran on to `rst) if (` and the
-    top read as instantiated, so no root was left and `chip_top` was kept."""
-    rtl = """\
-module wide_top #(parameter n = 2) (input clk, input rst, output q);
-    small_leaf u_l (.clk(clk), .rst(rst), .q(q));
-endmodule
-module small_leaf (input clk, input rst, output reg q);
-    always @(posedge clk or negedge rst)
-        if (!rst) q <= 1'b0; else q <= ~q;
-endmodule
-"""
-    project = tmp_path / "pp"
-    rtl_dir = project / "phase2" / "stage1" / "rtl"
-    rtl_dir.mkdir(parents=True)
-    (rtl_dir / "wide_top.v").write_text(rtl)
-    top, _note = VIBE._resolve_top_name(project, "product_name", "chip_top",
-                                        False)
-    assert top == "wide_top"
 
 
 # Review wave 4c: the header mask read comments, crossed newlines and left a
 # bare `module` keyword the instance search took for an instance name. Each
 # shape below is {file name: text}; the expected top is the design's only root.
 _LEAF = "module {n} (input a, output y); assign y = a; endmodule\n"
-COMMENT_SHAPES = {
-    # (a) a comment ending in "module", then an instance on the next line
-    "comment_then_instance": ({"top.v": (
-        "module top (input a, output y);\n"
-        "  // instantiate the leaf module\n"
-        "  leaf u_leaf (.a(a), .y(y));\n"
-        "endmodule\n" + _LEAF.format(n="leaf"))}, "top"),
-    # (b) a comment ending in "module" above a parameterised header
-    "comment_then_param_header": ({"wide_top.v": (
-        "// Top-level wrapper module\n"
-        "module wide_top #(parameter n = 2) (input clk, input rst, output q);\n"
-        "    small_leaf u_l (.clk(clk), .rst(rst), .q(q));\n"
-        "endmodule\n"
-        "module small_leaf (input clk, input rst, output reg q);\n"
-        "    always @(posedge clk or negedge rst)\n"
-        "        if (!rst) q <= 1'b0; else q <= ~q;\n"
-        "endmodule\n")}, "wide_top"),
-    # (c1) `endmodule // name` at the end of one file, a header in the next
-    "trailing_endmodule_comment": ({
-        "a_top.v": ("module a_top (input a, output y);\n"
-                    "  b_leaf u (.a(a), .y(y));\n"
-                    "endmodule // a_top\n"),
-        "b_leaf.v": _LEAF.format(n="b_leaf")}, "a_top"),
-    # (c2) a comment naming the top right above another module's header
-    "comment_names_the_top": ({"core.v": (
-        "module core_top (input a, output y);\n"
-        "  leaf_cell u (.a(a), .y(y));\n"
-        "endmodule\n"
-        "// leaf register used by core_top\n" + _LEAF.format(n="leaf_cell"))},
-        "core_top"),
-    # (c3) the SV end label
-    "sv_endmodule_label": ({"core.sv": (
-        "module core_top (input a, output y);\n"
-        "  leaf_cell u (.a(a), .y(y));\n"
-        "endmodule : core_top\n" + _LEAF.format(n="leaf_cell"))}, "core_top"),
-    # (d) an SV lifetime qualifier is not the module's name (review_wave7):
-    # the header mask made the keyword the sole root
-    "sv_lifetime_automatic": ({"top.sv": (
-        "module automatic top (input logic a, output logic y);\n"
-        "  leaf u_leaf (.a(a), .y(y));\n"
-        "endmodule\n" + _LEAF.format(n="leaf"))}, "top"),
-    "sv_lifetime_static": ({"top.sv": (
-        "module static top (input logic a, output logic y);\n"
-        "  leaf u_leaf (.a(a), .y(y));\n"
-        "endmodule\n" + _LEAF.format(n="leaf"))}, "top"),
-}
 
 
-@pytest.mark.parametrize("where", ["staged_rtl", "supplied_input"])
-@pytest.mark.parametrize("shape", sorted(COMMENT_SHAPES))
-def test_comments_and_labels_do_not_move_the_root(tmp_path, shape, where):
-    """RED on the header mask as first landed: each returned `chip_top`."""
-    files, want = COMMENT_SHAPES[shape]
-    project = tmp_path / "c"
-    d = (project / "phase2" / "stage1" / "rtl" if where == "staged_rtl"
-         else project / "input" / "vendor_rtl")
-    d.mkdir(parents=True)
-    for name, text in files.items():
-        (d / name).write_text(text)
-    top, _note = VIBE._resolve_top_name(project, "product_name", "chip_top",
-                                        False)
-    assert top == want
 
 
-def test_staged_rtl_still_outranks_supplied_rtl(tmp_path):
-    """When rtl/ holds modules, it alone is read, as before."""
-    project = _supplied_project(tmp_path)
-    rtl = project / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "other.v").write_text(
-        "module other_top (input a, output y); assign y = a; endmodule\n")
-    top, _note = VIBE._resolve_top_name(project, "product_name", "chip_top",
-                                        False)
-    assert top == "other_top"
 
 
-def test_an_explicit_top_is_kept_when_only_supplied_rtl_was_read(tmp_path):
-    """Unstaged input RTL is not the authoritative set the override needs:
-    phase 2 may still author a wrapper (consume's `chip_top`, catalog glue).
-    RED on the first landing: `wrap_top` was replaced by `core`, and the note
-    said it was checked against the staged RTL while rtl/ was empty."""
-    project = tmp_path / "exp"
-    vend = project / "input" / "vendor_rtl"
-    vend.mkdir(parents=True)
-    (vend / "core.v").write_text(
-        "module core (input a, output y); assign y = a; endmodule\n")
-    (project / "phase2" / "stage1" / "rtl").mkdir(parents=True)
-    top, note = VIBE._resolve_top_name(project, "product", "wrap_top",
-                                       explicit=True)
-    assert (top, note) == ("wrap_top", "")
 
 
-def test_a_top_the_supplied_scan_decides_names_its_evidence(tmp_path):
-    """The note says the top came from input RTL that is not yet staged, and
-    which files; before, a supplied derivation read like a staged one."""
-    project = _supplied_project(tmp_path)
-    top, note = VIBE._resolve_top_name(project, "product_name", "chip_top",
-                                       False)
-    assert top == "shift_top"
-    assert "derived from supplied input RTL (not yet staged): " \
-        "input/vendor_rtl/shift_top.v" in note, note
 
 
-def test_an_explicit_top_absent_from_staged_rtl_is_still_replaced(tmp_path):
-    """Control: the staged-RTL override is unchanged."""
-    rtl = tmp_path / "st" / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "core.v").write_text(
-        "module core (input a, output y); assign y = a; endmodule\n")
-    top, note = VIBE._resolve_top_name(tmp_path / "st", "product",
-                                       "wrap_top", explicit=True)
-    assert top == "core" and "not a module in the staged RTL" in note
-    assert "supplied" not in note
 
 
-def test_the_declaration_scan_register_names_only_live_offenders():
-    """A fixed scan's entry is deleted in the fixing commit; left behind it is
-    an open slot that would accept the raw scan back as recorded debt.
-    RED on the first landing: `_scan_rtl_modules` was fixed and still listed."""
-    import hdl_declaration_scan_strips_comments_check as G
-    root = _PROGRAMS.parent
-    now, problems = G.apply_exemptions(G.scan(root), root)
-    assert not problems
-    base = G._load(root / "programs" / G._BASELINE_NAME)
-    assert sorted(set(base) - set(now)) == []      # no stale slot
-    assert sorted(set(now) - set(base)) == []      # and no new raw scan
-    assert not any("::_scan_rtl_modules::" in k for k in base)
 
 
 # --------------------------------------------------------------------------

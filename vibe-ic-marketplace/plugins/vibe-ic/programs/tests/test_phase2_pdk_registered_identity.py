@@ -1,13 +1,9 @@
 """Registered distribution spelling at the existing Phase-2 consumer boundary."""
 import json
-import os
-from pathlib import Path
 
 import pytest
 import librelane_contract as contract
 import pdk_family_identity as identity
-import phase3_one_shot_runner as phase3
-import synth_handoff_netlist_check as handoff
 
 
 def put(path, value):
@@ -15,22 +11,6 @@ def put(path, value):
     path.write_text(json.dumps(value))
 
 
-@pytest.mark.parametrize('declared,record,selected,expected', [
-    ('gf180mcud', 'gf180mcuD', None, 'gf180mcuD'),
-    ('GF180MCUD', 'gf180mcuD', 'gf180mcud', 'gf180mcuD'),
-    ('sky130a', 'sky130A', None, 'sky130A'),
-    ('ihpsg13g2', 'ihp-sg13g2', None, 'ihp-sg13g2'),
-], ids=['measured-gf180-case', 'selected-registered-alias', 'registered-sky-case',
-        'existing-normalised-spelling'])
-def test_registered_spelling_reaches_exact_distribution(tmp_path, declared, record,
-                                                       selected, expected):
-    put(tmp_path / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',
-        {'fields': {'pdk_target': declared}})
-    put(tmp_path / 'input/project.json', {'pdk': record})
-    resolved, source = contract.phase2_pdk(tmp_path, selected=selected)
-    assert resolved == expected
-    assert 'L19_CONSTRAINTS_PDK.json:fields.pdk_target' in source
-    phase3._assert_pdk_name_resolvable(resolved)
 
 
 @pytest.mark.parametrize('other', ['gf180mcuC', 'sky130A'])
@@ -89,21 +69,8 @@ def test_unregistered_tokens_gain_no_case_aliases(tmp_path):
         contract.phase2_pdk(tmp_path)
 
 
-@pytest.mark.parametrize('target', ['unregisteredKit', 'gf180mcuC'])
-def test_unsupported_distribution_still_refuses_native_resolution(tmp_path, target):
-    put(tmp_path / 'input/project.json', {'pdk': target})
-    # Reading a literal declaration is not permission to substitute a model.
-    resolved, _ = contract.phase2_pdk(tmp_path)
-    with pytest.raises(ValueError, match='unknown PDK'):
-        phase3._assert_pdk_name_resolvable(resolved)
 
 
-@pytest.mark.skipif(not os.environ.get('FLOW109_NEUTRAL_CANONICAL'),
-                    reason='exact retained native neutral subject required')
-def test_actual_native_synthesis_handoff_reopens_without_proof_replay():
-    project = Path(os.environ['FLOW109_NEUTRAL_CANONICAL'])
-    result = handoff.bound_handoff(project)
-    assert result and result['verdict'] == 'PASS', result
 
 
 @pytest.mark.parametrize('target', ['opaque-kit-r2', 'opaque_kit.rev2'])

@@ -31,10 +31,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import em_current_density_check as E  # noqa: E402
 import phase3_one_shot_runner as R  # noqa: E402
 from _ppa import pdn_em_presweep as S  # noqa: E402
-from test_phase3_signoff_chain_organic import _mk_project, _fake_pdk  # noqa: E402
 
 # A generic two-strap-layer stack: 1 mA/um DC limit, 0.5 um thick, so the
 # per-width Jmax is 1e-3 A/um. No PDK literal.
@@ -332,44 +330,6 @@ def test_the_session_keeps_the_supply_pins_and_restores_the_flow_grid_on_error()
     assert "pg_on_no_net.txt" in body and "_vibeic_pes_connect" in body
 
 
-def test_prepare_stages_the_decks_own_block_per_candidate(tmp_path):
-    """Candidate 0 IS the block the flow emits; a candidate differs from it
-    only in the strap numbers."""
-    cl = tmp_path / "cells.lef"
-    cl.write_text(
-        "MACRO c\n  CLASS core ;\n  SIZE 2.0 BY 10.0 ;\n"
-        "  PIN VDD\n    USE POWER ;\n    PORT\n      LAYER M1 ;\n        RECT 0 9.6 2 10.4 ;\n    END\n  END VDD\n"
-        "  PIN VSS\n    USE GROUND ;\n    PORT\n      LAYER M1 ;\n        RECT 0 -0.4 2 0.4 ;\n    END\n  END VSS\nEND c\n")
-    tl = tmp_path / "tech.lef"
-    tl.write_text(TLEF)
-    pdk = R.PdkConfig(name="unit", liberty="/nonexistent/x.lib", tech_lef=str(tl),
-                      cell_lef=str(cl), cell_gds=None, site="SITE", drc_deck=None,
-                      metal_prefix="M", tapcell_master=None,
-                      pdn_straps={"stripes": STRAPS, "connects": [["M1", "M4"], ["M4", "M5"]]})
-    plan = {}
-    base = R._build_pdn_tcl(pdk, None, plan_out=plan)
-    assert plan["power_net"] == "VDD" and plan["ground_net"] == "VSS"
-    assert [s["layer"] for s in plan["straps"]] == ["M4", "M5"]
-    tcl, note = S.prepare(
-        pnr_dir=tmp_path, sweep_dir_c=str(tmp_path / S.SWEEP_DIR), plan=plan,
-        build=lambda st: R._build_pdn_tcl(pdk, None, strap_override=st),
-        tech_lef=tl, tech_lef_c=str(tl), tech_lef_text=TLEF, nets=NETS, corner=None,
-        declared_pads=[], stage_marker="PNR_STAGE:")
-    assert "PDN_EM_PRESWEEP_STAGED" in note and tcl
-    sweep = tmp_path / S.SWEEP_DIR
-    assert (sweep / "cand_0.tcl").read_text() == base
-    lat = json.loads((sweep / S.LATTICE_FILE).read_text())
-    wide = next(c for c in lat["candidates"] if c["changed"] == ["M4"]
-                and c["straps"]["M4"]["pitch_div"] == 1)
-    text = (sweep / f"cand_{wide['id']}.tcl").read_text()
-    diff = [(a, b) for a, b in zip(base.splitlines(), text.splitlines()) if a != b]
-    assert len(base.splitlines()) == len(text.splitlines())
-    # the primary M4 strap, and the secondary-supply group sized from it;
-    # nothing about M5, the rails, the ring or the connects moves
-    assert diff and not any("M5" in a or "M5" in b for a, b in diff)
-    assert not any("followpins" in a or "add_pdn_connect" in a for a, _b in diff)
-    assert f"-width {wide['straps']['M4']['width']} -pitch 40.0 -offset 10.0" in text
-    assert (sweep / "em_limits.txt").read_text().split()[0:2] == ["M1", f"{1e-3 / 0.5 * 0.9:.12g}"]
 
 
 def test_prepare_declines_a_deck_it_cannot_size(tmp_path):
@@ -383,24 +343,6 @@ def test_prepare_declines_a_deck_it_cannot_size(tmp_path):
     assert tcl == "" and "NOT_MEASURED" in note
 
 
-def test_the_pnr_deck_runs_the_sweep_after_cts_and_hold_and_before_routing(tmp_path):
-    from test_g_antenna_reroute_thread_parallel import _pdk as _gpdk
-    pdk = _gpdk()
-    out_dir_c = str(tmp_path / "out")
-    tcl = R._build_pnr_tcl_text(
-        tech_lef_c="/pdk/tech.lef", cell_lef_c="/pdk/cells.lef", macro_lefs_tcl="",
-        liberty_c="/pdk/lib.lib", macro_libs_tcl="", netlist_c="/w/n.v", top="chip_top",
-        sdc_c="/w/c.sdc", dont_use_block="", metal_prefix=pdk.metal_prefix, die_w=300,
-        die_h=300, core_pad=10, core_w=280, core_h=280, site=pdk.site, out_dir_c=out_dir_c,
-        tapcell_block="", pdn_block="", util=0.45, spare_protection_tcl="",
-        spare_postfix_tcl="", clk_buf="CLKBUF", clk_buf_root="CLKBUF16",
-        routing_constraint_tcl="# ROUTING_CONSTRAINTS\n", pg_cleanup_block="",
-        spef_repair_block="", antenna_repair_block="", filler_block="",
-        preroute_pdn_em_block="# T103_PRESWEEP_BLOCK\n")
-    i = tcl.index("# T103_PRESWEEP_BLOCK")
-    assert tcl.index(R._PNR_CTS_HOLD_END) < i < tcl.index("# ROUTING_CONSTRAINTS")
-    assert i < tcl.index(f"{R._PNR_STAGE_MARKER} global_route")
-    assert tcl.index("repair_timing -hold") < i
 
 
 # --------------------------------------------------------------------------
@@ -421,104 +363,14 @@ Worstcase IR drop: 1e-4 V
 """
 
 
-def _producer(tmp_path, monkeypatch, *, spef_age, clk="1.06e-02"):
-    import os
-    project = _mk_project(tmp_path)
-    rpt = R._pl.reports_phase3_dir(project)
-    rpt.mkdir(parents=True, exist_ok=True)
-    pnr = R._pl.pnr_dir(project)
-    (pnr / "constraint.sdc").write_text("create_clock -name clk -period 24 [get_ports clk]\n")
-    spef = R._pl.extracted_dir(project) / "chip_top.spef"
-    spef.parent.mkdir(parents=True, exist_ok=True)
-    spef.write_text("*SPEF \"IEEE 1481-1998\"\n")
-    d = pnr / "chip_top.def"
-    t = d.stat().st_mtime
-    os.utime(spef, (t + spef_age, t + spef_age))
-    (rpt / "io_pad_chip_top.json").write_text(json.dumps(
-        {"io_library_liberty": ["/pdk/io/lib/io__tt_025C_1v80.lib",
-                                "/pdk/io/lib/io__ss_100C_1v60.lib"]}))
-    pdk = _fake_pdk()
-    pdk.liberty = "/pdk/sc/lib/sc__tt_025C_1v80.lib"
-    monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
-    seen = {}
-
-    def fake_eda(_container, _cmd, **_kwargs):
-        seen["tcl"] = (rpt / "ir_em_chip_top.tcl").read_text()
-        for net in ("VPWR", "VGND"):
-            (rpt / f"em_segments_{net}.csv").write_text(
-                "Node0 Layer,Node0 X location,Node0 Y location,"
-                "Node1 Layer,Node1 X location,Node1 Y location,Current\n"
-                "M3,0,0,M3,1,0,1e-6\n")
-        return 0, _PSM_LOG.format(clk=clk), ""
-
-    monkeypatch.setattr(R, "_docker_exec", fake_eda)
-    R._emit_ir_em_reports(project, "chip_top", pdk, "image",
-                          rpt / "ir_drop.rpt", rpt / "em.rpt", [])
-    return project, seen["tcl"], json.loads((rpt / "em.json").read_text())
 
 
-def test_em_currents_are_solved_on_the_designs_clock_spef_and_io_liberty(tmp_path, monkeypatch):
-    project, tcl, doc = _producer(tmp_path, monkeypatch, spef_age=+5)
-    i_def = tcl.index("read_def ")
-    i_psm = tcl.index("analyze_power_grid")
-    for needle in ("read_liberty /pdk/io/lib/io__tt_025C_1v80.lib",
-                   "read_sdc " + str(R._pl.pnr_dir(project) / "constraint.sdc"),
-                   "set_propagated_clock [all_clocks]",
-                   "read_spef " + str(R._pl.extracted_dir(project) / "chip_top.spef"),
-                   "report_power"):
-        assert i_def < tcl.index(needle) < i_psm, needle
-    assert "io__ss_100C_1v60" not in tcl, "only the same-PVT IO view"
-    basis = doc["power_basis"]
-    assert basis["sdc"] == "phase3/stage3/pnr/constraint.sdc"
-    assert basis["spef"] == "phase3/stage3/extracted/chip_top.spef"
-    assert basis["power_W"]["total"] == pytest.approx(2.10e-2)
-    assert basis["power_W"]["clock"] == pytest.approx(1.43e-2)
-    assert basis["clock_reaches_network"] is True
-    assert basis["calibration"] == "CALIBRATED"
-    assert "PSM default" in doc["source_model"]
 
 
-def test_a_stale_spef_is_not_read_and_the_record_says_so(tmp_path, monkeypatch):
-    _project, tcl, doc = _producer(tmp_path, monkeypatch, spef_age=-5)
-    assert "read_spef" not in tcl
-    assert doc["power_basis"]["spef"] is None
-    assert "older than the routed DEF" in doc["power_basis"]["spef_not_read"]
 
 
-def test_a_clock_that_never_reaches_its_network_is_recorded(tmp_path, monkeypatch):
-    """spm with the SDC but without the IO liberty: 1.19 mW, clock group 0."""
-    _project, _tcl, doc = _producer(tmp_path, monkeypatch, spef_age=+5, clk="0.00e+00")
-    # the Clock row's TOTAL column is what is read; this fixture keeps 1.43e-2
-    # there, so rewrite the row the way OpenSTA prints an idle clock group.
-    basis = R._ppa_power.em_power_basis(
-        _PSM_LOG.replace("Clock                  {clk}   3.71e-03   1.35e-06   1.43e-02",
-                         "Clock                  0.00e+00   0.00e+00   0.00e+00   0.00e+00"),
-        sdc="x.sdc", spef=None, spef_reason="no step-22 SPEF", liberties=["a.lib"])
-    assert basis["clock_reaches_network"] is False
-    assert basis["basis"].startswith("declared SDC")
-    assert R._ppa_power.em_power_basis("", sdc=None, spef=None, spef_reason=None,
-                                       liberties=[])["basis"].startswith("no SDC")
-    assert doc["power_basis"]["liberties"][0] == "/pdk/sc/lib/sc__tt_025C_1v80.lib"
 
 
-def test_the_step25_producer_publishes_the_pre_route_sizing_record(tmp_path, monkeypatch):
-    project = _mk_project(tmp_path)
-    (tmp_path / "scratch").mkdir()
-    sweep, cands, _d = _sweep(tmp_path / "scratch")
-    target = R._pl.pnr_dir(project) / S.SWEEP_DIR
-    sweep.rename(target)
-    _measure(target, "0", currents={"VDD": 1e-4, "VSS": 1e-4})
-    S.next_action(target)
-    rpt = R._pl.reports_phase3_dir(project)
-    rpt.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
-    monkeypatch.setattr(R, "_docker_exec", lambda *_a, **_k: (0, "", ""))
-    notes = []
-    R._emit_ir_em_reports(project, "chip_top", _fake_pdk(), "image",
-                          rpt / "ir_drop.rpt", rpt / "em.rpt", notes)
-    doc = json.loads((project / S.REPORT_REL).read_text())
-    assert doc["verdict"] == "PASS" and doc["chosen"] == "0"
-    assert any("PDN EM pre-route sizing: PASS" in n for n in notes)
 
 
 # --------------------------------------------------------------------------

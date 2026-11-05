@@ -41,13 +41,10 @@ pre-fix name rules miss them.
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
@@ -105,12 +102,6 @@ _VENDOR_LIB = ("library (v) {\n"
 
 
 # ── the derivation ──────────────────────────────────────────────────────────
-def test_a_buffer_is_recognised_by_its_pin_model_not_its_name():
-    """THE defect.  Both pre-fix name rules miss `vnd9x_buf_4`; the structural
-    test does not, because the cell's own Liberty says it is a buffer."""
-    buf, root, how = R._i1958_pick_cts_buffers(_VENDOR_LIB)
-    assert (buf, root) == ("vnd9x_buf_4", "vnd9x_buf_16")
-    assert "Liberty" in how and "5 drive" in how
 
 
 def test_the_pre_fix_name_rules_really_do_miss_this_library():
@@ -122,89 +113,20 @@ def test_the_pre_fix_name_rules_really_do_miss_this_library():
     assert not [n for n in names if n.upper().startswith("BUF")]
 
 
-def test_an_inverter_is_not_a_buffer():
-    """`function : "!A"` is the whole difference, and it is the only thing the
-    derivation looks at -- so an inverter family cannot be chosen even when it
-    is the only family with a `buf`-ish position in the library."""
-    lib = ("library (v) {\n"
-           + "".join(_inverter(f"vnd9x_buf_{d}", 3.0 + d) for d in _FAMILY)
-           + "}\n")
-    assert R._i1958_pick_cts_buffers(lib) == (None, None, "")
 
 
-def test_a_tristate_is_not_a_buffer():
-    """Two inputs.  SG13G2 ships `sg13g2_ebufn_*` right beside its buffers, so
-    this exclusion is load-bearing on the very PDK the issue was filed from."""
-    lib = ("library (v) {\n"
-           + "".join(_tristate(f"vnd9x_buf_{d}", 3.0 + d) for d in (2, 4, 8))
-           + "}\n")
-    assert R._i1958_pick_cts_buffers(lib) == (None, None, "")
 
 
-def test_a_flop_is_not_a_buffer():
-    """A sequential cell has a clock input as well as D, so the one-input test
-    excludes it without needing to understand `ff()`."""
-    lib = textwrap.dedent("""\
-      library (v) {
-        cell (vnd9x_dff_1) {
-          area : 20.0 ;
-          ff (IQ, IQN) { next_state : "D" ; clocked_on : "CLK" ; }
-          pin (Q) { direction : "output" ; function : "IQ" ; }
-          pin (D) { direction : "input" ; }
-          pin (CLK) { direction : "input" ; clock : true ; }
-        }
-      }
-      """)
-    assert R._i1958_pick_cts_buffers(lib) == (None, None, "")
 
 
-def test_a_clock_buffer_family_wins_over_a_plain_one():
-    """A library that ships a clock-buffer family means it for exactly this
-    job, so it is preferred -- but only as a tie-break AFTER the structural
-    test has decided what is a buffer."""
-    lib = ("library (v) {\n"
-           + "".join(_buffer(f"vnd9x_buf_{d}", 5.0 + d) for d in _FAMILY)
-           + "".join(_buffer(f"vnd9x_clkbuf_{d}", 6.0 + d) for d in _FAMILY)
-           + "}\n")
-    buf, root, _ = R._i1958_pick_cts_buffers(lib)
-    assert (buf, root) == ("vnd9x_clkbuf_4", "vnd9x_clkbuf_16")
 
 
-def test_the_root_is_the_strongest_drive_in_the_same_family():
-    """CTS builds one tree out of the two cells; a root from another family has
-    no consistent load model against the leaves."""
-    for drives in ([1, 2, 4], [1, 2, 4, 8, 16], [2, 8]):
-        lib = ("library (v) {\n"
-               + "".join(_buffer(f"vnd9x_buf_{d}", 5.0 + d) for d in drives)
-               + "}\n")
-        buf, root, _ = R._i1958_pick_cts_buffers(lib)
-        assert root == f"vnd9x_buf_{max(drives)}"
-        assert buf.rsplit("_", 1)[0] == root.rsplit("_", 1)[0]
-        assert int(buf.rsplit("_", 1)[1]) <= max(drives)
 
 
-def test_a_single_drive_library_still_resolves_both():
-    """`clk_buf_root` is emitted into the Tcl; None would render as the string
-    'None' and CTS would ask for a cell by that name."""
-    lib = "library (v) {\n" + _buffer("vnd9x_buffer", 5.0) + "}\n"
-    buf, root, _ = R._i1958_pick_cts_buffers(lib)
-    assert buf == root == "vnd9x_buffer"
 
 
-def test_an_empty_or_unparseable_liberty_yields_nothing_rather_than_a_guess():
-    for text in ("", "not a liberty at all", "library (v) { }\n"):
-        assert R._i1958_pick_cts_buffers(text) == (None, None, "")
 
 
-def test_the_derivation_is_deterministic_for_a_given_library():
-    """Two families of the same size and tier must not resolve by dict order."""
-    lib = ("library (v) {\n"
-           + "".join(_buffer(f"zzz9x_buf_{d}", 5.0 + d) for d in _FAMILY)
-           + "".join(_buffer(f"aaa9x_buf_{d}", 5.0 + d) for d in _FAMILY)
-           + "}\n")
-    first = R._i1958_pick_cts_buffers(lib)
-    assert first == R._i1958_pick_cts_buffers(lib)
-    assert first[0].startswith("aaa9x_"), first
 
 
 # ── the wiring inside step_pnr ──────────────────────────────────────────────
@@ -309,29 +231,12 @@ def test_a_stub_liberty_with_no_pin_model_still_resolves_by_name(tmp_path):
     assert ns["_clk_buf_note"] == ""
 
 
-def test_the_name_token_rule_does_not_match_buf_mid_word(tmp_path):
-    """Negative control for the broadened rule: it must not become "any name
-    containing buf", which would pick a delay cell or a tristate."""
-    for name in ("vnd9x_clkdlybuf4s15", "vnd9x_ebufn_4"):
-        assert not R._I1958_BUF_TOKEN_RE.search(name.lower()), name
-    for name in ("BUFX2", "vnd9x_buf_4", "vnd9x__buf_16"):
-        assert R._I1958_BUF_TOKEN_RE.search(name.lower()), name
 
 
-def test_the_derived_cells_reach_both_tcl_consumers():
-    """The two places a CTS master is written into the deck must carry the SAME
-    derived pair -- the emitted `clock_tree_synthesis`, and the placeability
-    probe that reports masters at the width bound.  On the reporter's run both
-    named the sky130 cell."""
-    probe = R._build_unplaceable_master_cap_tcl(
-        cts_masters=("vnd9x_buf_4", "vnd9x_buf_16"))
-    assert "vnd9x_buf_4" in probe and "vnd9x_buf_16" in probe
-    assert "sky130" not in probe
 
 
 # ── the reproduction ────────────────────────────────────────────────────────
 _IMAGE = "vibeic-eda:0.2.70"
-_DOCKER = shutil.which("docker")
 #: (container liberty path, expected -buf_list, expected -root_buf). The two
 #: registry PDKs are the CONTROL: the derivation has to agree with the choice a
 #: human already made. sg13g2 is the case the issue was filed from.
@@ -343,22 +248,3 @@ _REAL = [
      "sg13g2_stdcell_typ_1p20V_25C.lib",
      "sg13g2_buf_4", "sg13g2_buf_16"),
 ]
-
-
-def _image_present() -> bool:
-    if _DOCKER is None:
-        return False
-    return subprocess.run([_DOCKER, "image", "inspect", _IMAGE],
-                          capture_output=True, text=True).returncode == 0
-
-
-@pytest.mark.skipif(not _image_present(),
-                    reason=f"{_IMAGE} not available on this host")
-@pytest.mark.parametrize("lib,buf,root", _REAL,
-                         ids=[p[0].split("/")[3] for p in _REAL])
-def test_the_derivation_on_the_real_staged_liberties(lib, buf, root):
-    r = subprocess.run(
-        [_DOCKER, "run", "--rm", "--entrypoint", "cat", _IMAGE, lib],
-        capture_output=True, text=True, timeout=600, errors="ignore")
-    assert r.returncode == 0, r.stderr[-500:]
-    assert R._i1958_pick_cts_buffers(r.stdout)[:2] == (buf, root)

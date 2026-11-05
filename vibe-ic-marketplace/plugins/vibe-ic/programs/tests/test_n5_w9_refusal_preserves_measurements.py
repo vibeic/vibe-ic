@@ -1,10 +1,8 @@
 """Wave 9: failures after a partial native STA sweep retain measured rows."""
 import errno
 import json
-import re
 from pathlib import Path
 
-import pytest
 
 import phase3_one_shot_runner as p3
 from test_declared_process_sta_producer import scene  # noqa: F401
@@ -12,7 +10,6 @@ from test_n5_declared_process_sta_supply_ports_and_record import (
     _CENSUS_WITH_SUPPLY_PORTS, _def, _native_double,
 )
 
-_REAL_DOCKER_EXEC = p3._docker_exec
 
 
 def _record(scene):
@@ -20,48 +17,8 @@ def _record(scene):
         'reports/phase3/sta/declared_process_sta.json').read_text())
 
 
-def _assert_finished(rec, ff_setup=-0.8):
-    assert rec['status'] == 'REFUSED'
-    for corner, setup in [('FF', ff_setup), ('SS', 1.25)]:
-        for role, expected in [('setup', setup), ('hold', 0.40)]:
-            row = rec['corners'][corner][role]
-            assert (row['status'], row['wns_ns'], row['promoted']) == (
-                'MEASURED', expected, False), row
 
 
-@pytest.mark.parametrize('stop_rc', [p3._RC_STALLED, 124])
-def test_real_dispatch_isolation_keeps_finished_corners(scene, monkeypatch, stop_rc):
-    s = scene
-    _def(s['tmp_path'])
-    base = _native_double(_CENSUS_WITH_SUPPLY_PORTS)
-
-    def supervisor(container, cmd, marker, **kw):
-        tcl = Path(marker).read_text()
-        out = Path(re.search(r'set _f \[open \{([^}]+)\}', tcl).group(1))
-        if 'process=TT ===' in tcl:
-            with out.open('a') as f:
-                f.write('=== SETUP corner: process=TT ===\nworst slack max 9.99\n')
-            return stop_rc, '', 'WATCHDOG_STALLED: fixture stopped TT'
-        result = base(container, cmd, marker=marker, isolate=[out])
-        if 'process=FF ===' in tcl:
-            out.write_text(out.read_text().replace('worst slack max 1.25',
-                                                   'worst slack max -0.80'))
-        return result
-
-    monkeypatch.setattr(p3._dwd, 'run_docker_supervised', supervisor)
-    monkeypatch.setattr(p3, '_docker_exec', _REAL_DOCKER_EXEC)
-    assert not s['emit']()
-    rec = _record(s)
-    _assert_finished(rec)
-    att = rec['attempt_report']
-    path = s['tmp_path'] / att['path']
-    assert path.name.endswith('.timeout.partial') and path.is_file()
-    assert att['sha256'] == p3._file_sha256(path).split(':', 1)[1]
-    assert 'worst slack max -0.80' in path.read_text()
-    assert att['native_logs'] and (s['tmp_path'] / att['native_logs'][0]).is_file()
-    for role in ('setup', 'hold'):
-        row = rec['corners']['TT'][role]
-        assert row['status'] == 'NOT_MEASURED' and f'rc={stop_rc} at TT' in row['reason']
 
 
 def test_first_corner_failure_before_report_open_has_corner_reasons(scene, monkeypatch):

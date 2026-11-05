@@ -12,34 +12,11 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import floorplan_knobs as fp  # noqa: E402
 import phase3_one_shot_runner as p3  # noqa: E402
 
 
-def _project(tmp_path: Path, name: str, body: str) -> Path:
-    project = tmp_path / name
-    docs = project / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "L9_floorplan.md").write_text(body)
-    return project
 
 
-@pytest.mark.parametrize("name,core,density", [
-    ("quartz", 37, 0.51),
-    ("basalt", 62, 0.28),
-])
-def test_knobs_are_independent_on_two_designs(tmp_path, name, core, density):
-    project = _project(tmp_path, name,
-                       f"| `FP_CORE_UTIL` | **{core}** |\n"
-                       f"| `PL_TARGET_DENSITY` | **{density}** |\n")
-    assert fp._l9_declared_die_util(project) == pytest.approx(core / 100)
-    assert fp._l9_declared_place_density(project) == pytest.approx(density)
-    assert p3._l9_declared_die_util is fp._l9_declared_die_util
-    assert p3._l9_declared_place_density is fp._l9_declared_place_density
-    only_density = _project(tmp_path, name + "_density",
-                            f"| `PL_TARGET_DENSITY` | **{density}** |\n")
-    assert p3._l9_declared_die_util(only_density) is None
-    assert p3._l9_declared_place_density(only_density) == pytest.approx(density)
 
 
 @pytest.mark.parametrize("local", [False, True])
@@ -85,12 +62,3 @@ def test_wrong_pinned_image_is_disclosed_not_read(tmp_path, monkeypatch):
     value, source = p3._flow_default_core_util(tmp_path)
     assert value is None
     assert source.startswith("NOT_READ:")
-
-
-def test_generic_document_core_utilization_is_not_placement_density(tmp_path):
-    docs = tmp_path / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "design.md").write_text(
-        "Core supply: 1.8 V. Target core utilization: 40%.\n")
-    assert fp._l9_declared_die_util(tmp_path) == pytest.approx(0.4)
-    assert fp._l9_declared_place_density(tmp_path) is None

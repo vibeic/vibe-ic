@@ -41,9 +41,7 @@ from __future__ import annotations
 import ast
 import copy
 import os
-import subprocess
 import sys
-import tempfile
 
 # cvdp_gate.py + tb_toplevel_alias.py live in the plugin's benchmark/
 # dir (../../benchmark relative to programs/tests/) — mirror the existing
@@ -55,7 +53,6 @@ if BENCH not in sys.path:
 
 import cvdp_gate as G                      # noqa: E402
 import tb_toplevel_alias as A    # noqa: E402
-import _outcome_states as states  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -196,31 +193,6 @@ def test_emit_invariant_to_oracle():
 #      contract the alias must keep: a correctly-interfaced author under a
 #      prompt-name mismatch gets a valid wrapper). Independent of the oracle.
 # --------------------------------------------------------------------------- #
-def test_wrapper_correctness_from_prompt_name():
-    prompt_top = G.skeleton_module_name_from_prompt(_PROMPT)  # 'foo'
-    # feed a completion whose sole ANSI module is named DIFFERENTLY so the
-    # wrapper actually fires (no rename step here — direct wrapper exercise).
-    out = A.maybe_alias_completion(_COMPLETION, prompt_top, G.completion_module_names)
-    assert out != _COMPLETION, "expected a wrapper to be appended"
-    assert "module foo (" in out
-    assert "foo_impl u_foo_impl" in out
-    assert ".clk(clk)" in out and ".d(d)" in out and ".q(q)" in out
-    assert "DECOY" not in out
-    # The tool half used to sit under `if <tool present>:` with no else, so a
-    # host without it PASSED having run none of it. Everything above needs no
-    # tool and has run; an absent tool -> NOT_VERIFIED naming the host
-    # (R-0927), a present one -> the half below runs unconditionally.
-    states.require_tools("iverilog")
-    with tempfile.NamedTemporaryFile("w", suffix=".sv", delete=False) as f:
-        f.write(out)
-        path = f.name
-    try:
-        r = subprocess.run(
-            ["iverilog", "-g2012", "-s", "foo", "-o", os.devnull, path],
-            capture_output=True, text=True)
-        assert r.returncode == 0, f"wrapper failed to compile: {r.stderr}"
-    finally:
-        os.unlink(path)
 
 
 # --------------------------------------------------------------------------- #

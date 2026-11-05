@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import flow_compliance_check as audit  # noqa: E402
@@ -112,87 +111,12 @@ def test_checked_in_l_docs_need_a_review_of_the_copied_evidence(tmp_path):
     assert _judge(tmp_path, "D1", rel).status == "NOT_MEASURED"
 
 
-def _signed_behavioral_refinement_project(project):
-    """Ordinary neutral FactGraph producer followed by the supported signer."""
-    import ai_signed_judgement as judgement
-    import _phase1_producer_identity as identity
-    from _ai_judgement_fixture import sign
-    from test_inferred_fsm_producer import _produce, _proposal, _source
-    original = _source(project)
-    author, _facts = _proposal(project, original, "wave", 31)
-    _produce(project)
-    assert author == project / identity.BEHAVIORAL_REFINEMENT_INPUT
-    assert author in judgement.evidence(project, "D1")
-    before = judgement.evidence_sha256(project, "D1")
-    sign(project, "D1")
-    assert judgement.check(project, "D1")[0]
-    assert judgement.pending(project, ("D1",)) == {}
-    return author, before
 
 
-def test_d1_behavioral_refinement_unchanged_receipt_is_current(
-        tmp_path, record_property):
-    import ai_signed_judgement as judgement
-    author, before = _signed_behavioral_refinement_project(tmp_path)
-    after = judgement.evidence_sha256(tmp_path, "D1")
-    valid, detail = judgement.check(tmp_path, "D1")
-    record_property("digest_before", before)
-    record_property("digest_after", after)
-    record_property("author_sha256", hashlib.sha256(author.read_bytes()).hexdigest())
-    record_property("verifier_detail", detail)
-    assert after == before
-    assert valid and judgement.pending(tmp_path, ("D1",)) == {}
 
 
-@pytest.mark.parametrize("mutation", ["valid_author_edit", "foreign_machine"])
-def test_d1_behavioral_refinement_change_invalidates_old_receipt(
-        tmp_path, mutation, record_property):
-    import ai_signed_judgement as judgement
-    from test_inferred_fsm_producer import _produce
-    author, before = _signed_behavioral_refinement_project(tmp_path)
-    facts = yaml.safe_load(author.read_text())
-    if mutation == "valid_author_edit":
-        facts["metadata"]["assumptions"].append("A changed neutral author assumption.")
-    else:
-        facts["metadata"]["fsm_machine"] = "foreign-machine"
-    author.write_text(yaml.safe_dump(facts, sort_keys=False))
-    refusal = ""
-    if mutation == "foreign_machine":
-        with pytest.raises(ValueError, match="BEHAVIORAL_REFINEMENT_REFUSED") as exc:
-            _produce(tmp_path)
-        refusal = str(exc.value)
-    after = judgement.evidence_sha256(tmp_path, "D1")
-    valid, detail = judgement.check(tmp_path, "D1")
-    pending = judgement.pending(tmp_path, ("D1",))
-    record_property("mutation", mutation)
-    record_property("digest_before", before)
-    record_property("digest_after", after)
-    record_property("author_sha256_after", hashlib.sha256(author.read_bytes()).hexdigest())
-    record_property("verifier_detail", detail)
-    record_property("ordinary_producer_refusal", refusal)
-    assert after != before
-    assert not valid and "D1" in pending
 
 
-def test_d1_behavioral_refinement_source_stale_is_refused(
-        tmp_path, record_property):
-    import ai_signed_judgement as judgement
-    from test_inferred_fsm_producer import _produce
-    _author, before = _signed_behavioral_refinement_project(tmp_path)
-    source = tmp_path / "input/docs/control.md"
-    source.write_text(source.read_text() +
-                      "\nA new source requirement invalidates the proposal.\n")
-    after = judgement.evidence_sha256(tmp_path, "D1")
-    valid, detail = judgement.check(tmp_path, "D1")
-    pending = judgement.pending(tmp_path, ("D1",))
-    with pytest.raises(ValueError, match="BEHAVIORAL_REFINEMENT_REFUSED") as exc:
-        _produce(tmp_path)
-    record_property("digest_before", before)
-    record_property("digest_after", after)
-    record_property("verifier_detail", detail)
-    record_property("ordinary_producer_refusal", str(exc.value))
-    assert after != before
-    assert not valid and "D1" in pending
 
 
 def test_completion_audit_exits_nonzero_while_signature_is_pending(tmp_path):

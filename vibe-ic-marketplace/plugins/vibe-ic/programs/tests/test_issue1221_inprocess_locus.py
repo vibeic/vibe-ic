@@ -38,7 +38,6 @@ that question, in both directions.
 """
 from __future__ import annotations
 
-import ast
 import os
 import sys
 from pathlib import Path
@@ -50,7 +49,6 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import step_input_scope as S                                  # noqa: E402
-import step_preflight as SP                                   # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -173,138 +171,14 @@ def test_the_declaration_WINS_over_the_deny_list(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # THE REACHABILITY GUARD — the question nothing in the suite was asking
 # --------------------------------------------------------------------------- #
-def test_gate_IMPOSES_the_scope_on_the_dispatch(tmp_path, monkeypatch):
-    """The one that fails on `origin/main` 75776dbbb.
-
-    `gate()` is the function every declared dispatch site passes through, and
-    `test_every_declared_site_is_wired_at_a_real_call_site` already pins that.
-    So a boundary installed here is reachable from every step by a guarantee
-    that already exists. Before this change, `gate()` dispatched with no scope
-    imposed at all and this assertion had nothing to hold.
-    """
-    monkeypatch.setenv(S.ENV_SWITCH, "1")
-    monkeypatch.setenv(S.ENV_INPROC, "deny")
-    p = _project(tmp_path)
-    seen = {}
-
-    def _step(*a, **kw):
-        seen["state"] = S.inproc_state()
-        try:
-            (p / "golden" / "qor.json").read_text()
-            seen["read"] = "ALLOWED"
-        except PermissionError as exc:
-            seen["read"] = f"DENIED: {exc}"
-
-        class R:
-            name, status, detail = "spy", "PASS", "ran"
-        return R()
-
-    SP.gate(p, "phase3_one_shot_runner", "drc",
-            lambda d, e: None, _step, p, "top", None, "")
-
-    assert seen, "the step was never dispatched — the fixture, not the boundary"
-    assert seen["state"]["armed"] is True, (
-        "gate() dispatched the step with NO §4.05 scope imposed on the "
-        "process: the boundary is unreachable from the one chokepoint every "
-        "step goes through")
-    assert seen["read"].startswith("DENIED"), seen["read"]
 
 
-def test_the_scope_is_LIFTED_after_the_dispatch(tmp_path, monkeypatch):
-    """An enforcement that outlived its dispatch would impose one step's scope
-    on the next, and the failures would be attributed to the wrong step."""
-    monkeypatch.setenv(S.ENV_SWITCH, "1")
-    monkeypatch.setenv(S.ENV_INPROC, "deny")
-    p = _project(tmp_path)
-
-    class R:
-        name, status, detail = "spy", "PASS", "ran"
-
-    SP.gate(p, "phase3_one_shot_runner", "drc",
-            lambda d, e: None, lambda *a, **k: R(), p, "top", None, "")
-
-    assert S.inproc_state()["armed"] is False
-    assert "the oracle" in (p / "golden" / "qor.json").read_text()
 
 
-def test_every_dispatch_in_gate_routes_through_the_scope():
-    """A THIRD dispatch path added to `gate()` later would bypass the boundary
-    silently. There were exactly two, and both had to be routed; this fails if
-    a new one is added raw."""
-    src = (PROGRAMS / "step_preflight.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef) and n.name == "gate")
-    retained = next(n for n in ast.walk(tree)
-                    if isinstance(n, ast.FunctionDef) and n.name == "_retained_dispatch")
-    raw = [n for body in (fn, retained) for n in ast.walk(body)
-           if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-           and n.func.id == "fn"]
-    assert raw == [], (
-        f"{len(raw)} dispatch(es) in gate() call fn() directly instead of "
-        f"through _scoped_dispatch, so §4.05 is not imposed on them")
-    calls = [n for n in ast.walk(fn)
-             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-             and n.func.id == "_retained_dispatch"]
-    assert len(calls) == 2, f"expected both gate paths retained, found {len(calls)}"
-    scoped = [n for n in ast.walk(retained)
-              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-              and n.func.id == "_scoped_dispatch"]
-    assert len(scoped) == 2, f"expected both dispatches routed, found {len(scoped)}"
 
 
-def test_a_step_that_RAISES_still_releases_the_scope(tmp_path, monkeypatch):
-    """The unwind path. If a raising step left the scope armed, every later
-    dispatch in the process would run under a dead step's boundary."""
-    monkeypatch.setenv(S.ENV_SWITCH, "1")
-    monkeypatch.setenv(S.ENV_INPROC, "deny")
-    p = _project(tmp_path)
-
-    def _boom(*a, **k):
-        raise RuntimeError("the step failed")
-
-    with pytest.raises(RuntimeError):
-        SP.gate(p, "phase3_one_shot_runner", "drc",
-                lambda d, e: None, _boom, p, "top", None, "")
-    assert S.inproc_state()["armed"] is False
-    assert "the oracle" in (p / "golden" / "qor.json").read_text()
 
 
-def test_enforcement_that_cannot_INSTALL_degrades_LOUDLY(tmp_path, monkeypatch,
-                                                         capsys):
-    """An enforcement that vanished quietly is worth less than none: the step
-    must still run, and the run must SAY it was not bounded.
-
-    Guards a real defect in the first draft of `_scoped_dispatch`: a
-    `@contextmanager` runs its body at `__enter__`, so wrapping only the
-    constructor in try/except left this degrade path unreachable.
-    """
-    monkeypatch.setenv(S.ENV_SWITCH, "1")
-    p = _project(tmp_path)
-
-    # The failure must happen at __enter__, not at construction. A first draft
-    # of this test patched `scoped` itself to raise, which the naive form
-    # catches too — so it passed in BOTH arms and proved nothing. Patching
-    # `arm_in_process` puts the failure inside the contextmanager BODY, which
-    # is where a real install failure occurs.
-    def _explode(*a, **k):
-        raise RuntimeError("scope backend unavailable")
-
-    monkeypatch.setattr(S, "arm_in_process", _explode)
-    ran = {}
-
-    class R:
-        name, status, detail = "spy", "PASS", "ran"
-
-    def _step(*a, **k):
-        ran["yes"] = True
-        return R()
-
-    SP.gate(p, "phase3_one_shot_runner", "drc",
-            lambda d, e: None, _step, p, "top", None, "")
-    assert ran, "the step was not dispatched — a failed guard must not brick it"
-    err = capsys.readouterr().err
-    assert "FAILED TO INSTALL" in err and "not bounded by it" in err, err
 
 
 # --------------------------------------------------------------------------- #

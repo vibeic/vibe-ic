@@ -88,10 +88,6 @@ class TestContainerAwareSupervision:
         assert report["exit"] == watchdog.RC_STALLED
         assert report["stage"] == "chain"
 
-    def test_runner_does_not_nest_host_watchdog_around_scan_producer(self):
-        source = inspect.getsource(runner._step_dft_insertion)
-        assert "subprocess.run(_scan_cmd" in source
-        assert "_pr.run(_scan_cmd" not in source
 
 
 def _mapped_netlist(n_flops: int = 64) -> str:

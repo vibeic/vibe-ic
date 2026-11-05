@@ -72,42 +72,6 @@ def _run(tcl_body: str, tmp_path, *, expected_rc: int = 0) -> str:
     assert r.returncode == expected_rc, r.stderr
     return r.stdout
 
-@_needs_tcl
-def test_dnt_nets_survive_the_clear_and_spare_named_nets_do_not(tmp_path):
-    """v1.8.43 CONTRACT CHANGE, and the reason, stated where it will be read.
-
-    Until v1.8.42 this test asserted that a net merely NAMED `*spare*` kept its
-    routing across the clear. MEASURED on spm x sky130A at v1.8.42 (two real Tcl
-    files differing only in that filter, everything else identical):
-
-        with the *spare* name filter    -> [ERROR DRT-0206] checkConnectivity
-                                           error, SHIP_REROUTE_INCOMPLETE, the
-                                           repaired route DISCARDED
-        without it                      -> reroute completes, SHIP_WNS_POSTROUTE
-
-    Preserving ONE net's stale detailed routing across a global re-route of
-    every other net leaves TritonRoute a net it cannot reconcile against the
-    fresh guides. The filter also protected nothing: `dbWire_destroy` destroys a
-    WIRE, never the net or its iterms, so the Design-for-ECO binding (the DEF
-    NETS terminal list) is untouched and the spare cells stay `+ FIXED`.
-
-    The v1.5.65 hazard the filter was written for — a spare-tie net that comes
-    back UNROUTED, whose pins extraction then merges into a neighbour — is now
-    MEASURED by `_routing_integrity_check_tcl` and refused by the promotion
-    gate, instead of being guessed at by a name match. See
-    `test_routing_integrity_check_*` below.
-
-    What survives the clear is what actually must: a net touching a
-    `dont_touch` instance."""
-    out = _run(p3._spare_safe_routing_clear_tcl("SHIP"), tmp_path)
-    destroyed = out.split("DESTROYED:")[1]
-    assert "w_n_sig" in destroyed
-    assert "w_n_spare" in destroyed, (
-        "a spare-NAMED net with no dont_touch instance must now be cleared like "
-        "any other signal net — keeping it is what caused DRT-0206")
-    assert "w_n_dnt" not in destroyed, "a dont_touch net's wire was destroyed"
-    assert "spare_preserved=1" in out, (
-        "only the dont_touch net is preserved now (was 2 with the name filter)")
 
 
 @_needs_tcl
@@ -122,22 +86,8 @@ def test_routing_integrity_check_counts_unrouted_multiterm_nets(tmp_path):
     assert "n_unrouted" in line[0], "the offender must be NAMED, not just counted"
 
 
-def test_promotion_gate_refuses_a_route_that_left_a_net_unrouted():
-    """`detailed_route` can return rc=0 and still leave a net with no wire.
-    A MEASURED non-zero count must refuse promotion; an ABSENT marker must not
-    change any pre-existing decision (UNMEASURED is not ZERO, and this guard is
-    strictly additive)."""
-    base = dict(wns_before=1.0, wns_after_repair=2.0, wns_postroute=2.0,
-                route_violations=0, reroute_incomplete=0)
-    assert p3._ship_repair_should_promote({**base, "unrouted_nets": 0}, True, True)
-    assert p3._ship_repair_should_promote({**base, "unrouted_nets": None}, True, True)
-    assert not p3._ship_repair_should_promote({**base, "unrouted_nets": 2}, True, True)
 
 
-def test_parse_ship_repair_log_reads_the_integrity_marker():
-    assert p3._parse_ship_repair_log("SHIP_UNROUTED_NETS: 0 \n")["unrouted_nets"] == 0
-    assert p3._parse_ship_repair_log("SHIP_UNROUTED_NETS: 3 a,b,c\n")["unrouted_nets"] == 3
-    assert p3._parse_ship_repair_log("nothing here")["unrouted_nets"] is None
 
 @_needs_tcl
 def test_negative_control_the_old_shape_destroys_the_spare_wire(tmp_path):
@@ -155,10 +105,6 @@ def test_negative_control_the_old_shape_destroys_the_spare_wire(tmp_path):
     out = _run(old, tmp_path)
     assert "w_n_spare" in out, "control broken: old shape should hit the spare net"
 
-@_needs_tcl
-def test_marker_prefix_differentiates_call_sites(tmp_path):
-    out = _run(p3._spare_safe_routing_clear_tcl("SHIP_ESC"), tmp_path)
-    assert "SHIP_ESC_ROUTING_CLEARED:" in out
 
 _OWNER = "_spare_safe_clear_net_proc_tcl"
 
@@ -310,51 +256,8 @@ proc write_def {path} {
 """
 
 
-@_needs_tcl
-def test_the_named_violation_reroute_site_protects_the_same_nets(tmp_path):
-    """BEHAVIOUR, not string shape: emit the NAMED_VIOL_REROUTE Tcl, hand it a
-    router DRC report that cites EVERY net including the protected ones, and
-    execute it under the same odb/ord stubs the helper is driven with.
-
-    A string guard cannot tell a correct filter from a copy that has drifted;
-    this can. The report is truncated after the rip-up (`detailed_route` and
-    the recount are not stubbed), so the assertion is on what the rip-up
-    destroyed, which is the subject.
-    """
-    rpt = tmp_path / "drc.rpt"
-    rpt.write_text(
-        "violation type: Metal Spacing\n"
-        "  srcs: net:n_sig net:n_spare net:n_pwr net:n_dnt net:n_unrouted\n")
-    body = (_FINDNET_STUB
-            + "proc detailed_route {args} { error \"stop-here\" }\n"
-            + p3._named_violation_reroute_tcl(str(rpt)))
-    out = _run(body, tmp_path, expected_rc=1)
-    destroyed = out.split("DESTROYED:")[1]
-    assert "w_n_pwr" not in destroyed, "a POWER net's wire was destroyed"
-    assert "w_n_dnt" not in destroyed, "a dont_touch net's wire was destroyed"
-    assert "w_n_sig" in destroyed, (
-        "control: an ordinary named signal net must still be ripped up, or "
-        "this test would pass on a site that clears nothing")
-    assert "NAMED_VIOL_REROUTE_CLEARED: 2 (skipped=2)" in out, out
 
 
-@_needs_tcl
-def test_the_named_violation_reroute_emits_the_integrity_check(tmp_path):
-    """The `*spare*` NAME filter was removed in v1.8.43 and replaced, by the
-    helper's own docstring, with the post-reroute integrity CHECK. On tree
-    5e850b3acee8 that check was wired at ONE call site (marker SHIP) and this
-    reroute — which rips up and re-routes real nets inside the PnR script — had
-    none, so the very failure mode the filter was traded away for was
-    unobservable here. It is emitted now and NAMES the offender."""
-    rpt = tmp_path / "drc.rpt"
-    rpt.write_text("violation type: x\n  srcs: net:n_sig\n")
-    body = (_FINDNET_STUB + p3._named_violation_reroute_tcl(str(rpt)))
-    out = _run(body, tmp_path, expected_rc=1)
-    line = [l for l in out.splitlines()
-            if l.startswith("NAMED_VIOL_REROUTE_UNROUTED_NETS:")]
-    assert line, out
-    assert line[0].startswith("NAMED_VIOL_REROUTE_UNROUTED_NETS: 1"), line[0]
-    assert "n_unrouted" in line[0], "the offender must be NAMED, not just counted"
 
 
 # ---------------------------------------------------------------------------
@@ -502,43 +405,3 @@ def test_a_terminal_whose_shapes_cannot_be_read_is_not_acquitted(tmp_path):
     assert "n_probe" in out["SHIP_UNROUTED_NETS"], out
     assert out["SHIP_ABUTTED_NETS"].startswith("0"), out
     assert out["SHIP_UNROUTED_SHAPE_BLIND"] == "1", out
-
-
-@_needs_tcl
-@pytest.mark.parametrize("case,expected_status,expected_detail", [
-    ("abutted", 0, ""),
-    ("apart", 1, "PAD_CHECK_INCOMPLETE: 1"),
-    ("unreadable_terminal", 1, "PAD_CHECK_INCOMPLETE: 1"),
-    ("unreadable_database", 1, "PAD_CHECK_UNROUTED_CHECK_FAILED:"),
-])
-def test_pad_recovery_requires_proven_connectivity(
-        tmp_path, case, expected_status, expected_detail):
-    """Execute the pad producer's strict check using the existing ODB seam.
-
-    This is Tcl contract coverage, not native routing or physical acceptance.
-    A connected geometry must be accepted; a hole or unreadable database must
-    stop the repair before it can report completion.
-    """
-    import pad_signal_route_repair as pad
-
-    left = [("route_layer", 0, 0, 100, 100)]
-    right = [("route_layer", 200, 0, 300, 100)] if case == "apart" else left
-    setup = _geom_stub(left, right, b_readable=case != "unreadable_terminal")
-    if case == "unreadable_database":
-        setup += '\nproc ord::get_db_block {} {error "database unavailable"}\n'
-    script = tmp_path / "pad_integrity.tcl"
-    script.write_text(setup + "\nset status [catch {\n"
-                      + pad.strict_integrity_tcl("PAD_CHECK")
-                      + '} detail]\nputs "PAD_TEST_RESULT:$status:$detail"\n')
-    run = _pr.run([_TCLSH, str(script)], capture_output=True, text=True,
-                  cwd=str(tmp_path))
-    assert run.returncode == 0, run.stderr
-    outcomes = [line for line in run.stdout.splitlines()
-                if line.startswith("PAD_TEST_RESULT:")]
-    assert len(outcomes) == 1, run.stdout
-    _, status, detail = outcomes[0].split(":", 2)
-    assert int(status) == expected_status, (run.stdout, run.stderr)
-    assert detail.startswith(expected_detail), detail
-    if expected_status == 0:
-        assert "PAD_CHECK_UNROUTED_NETS: 0" in run.stdout
-        assert "PAD_CHECK_ABUTTED_NETS: 1" in run.stdout

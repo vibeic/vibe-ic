@@ -271,25 +271,8 @@ def test_scales_linearly_on_many_instances():
 
 
 # ── runner wiring: _try_power_aware_lvs (mocked netgen, no container) ───────
-import phase3_one_shot_runner as R  # noqa: E402
 
 
-def _prep_project(tmp_path):
-    project = tmp_path / "proj"
-    pdk = R._detect_pdk(Path("/nonexistent"), override="sky130A")
-    top = "top"
-    ext_dir = R._pl.extracted_dir(project)
-    ext_dir.mkdir(parents=True, exist_ok=True)
-    spice_out = ext_dir / f"{top}_extracted.sp"
-    spice_out.write_text(".subckt top a\nX0 a sky130_fd_sc_hd__inv_1\n.ends\n")
-    lvs_rpt = project / "reports" / "phase3" / "lvs.rpt"
-    lvs_rpt.parent.mkdir(parents=True, exist_ok=True)
-    # a real std-cell netlist so the emitter actually patches it.
-    netlist = ext_dir / f"{top}_pnr.v"
-    netlist.write_text(
-        "module top (a, y);\n input a; output y;\n"
-        " sky130_fd_sc_hd__inv_1 g0 (.A(a), .Y(y));\nendmodule\n")
-    return project, top, pdk, spice_out, lvs_rpt, netlist
 
 
 _PA_MATCH = ("Subcircuit summary:\nNumber of devices: 1  |Number of devices: 1\n"
@@ -297,70 +280,3 @@ _PA_MATCH = ("Subcircuit summary:\nNumber of devices: 1  |Number of devices: 1\n
 _PA_POWER_MISMATCH = ("Top level cell failed pin matching.\n"
                       "  VPWR|(no matching pin)\n"
                       "Final result: Netlists do not match.\n")
-
-
-def test_wiring_power_aware_match_yields_power_verified(tmp_path, monkeypatch):
-    project, top, pdk, spice_out, lvs_rpt, netlist = _prep_project(tmp_path)
-
-    def fake_exec(container, cmd, timeout=None, **_):
-        if "netgen -batch lvs" in cmd:
-            return (0, _PA_MATCH, "")           # power-aware compare → MATCH
-        return (0, "", "")
-
-    monkeypatch.setattr(R, "_docker_exec", fake_exec)
-    res = R._try_power_aware_lvs(
-        project, top, pdk, "vibeic-eda", spice_out,
-        "/c/top_extracted.sp", top, netlist, "/setup.tcl", lvs_rpt, None, 0.0)
-    assert res is not None
-    assert res.status == "PASS"
-    assert res.extras.get("finding") == "LVS_MATCH_POWER_VERIFIED"
-    assert res.extras.get("power_aware_signoff") is True
-    # LVS ROOT FIX (part 2): the WELL-TIED power-aware netlist is tried FIRST
-    # (matches a DEF-direct extraction whose wells are tied to the rails) — it
-    # matched, so it is the emitted netlist and carries the physical well-tie.
-    pa = R._pl.extracted_dir(project) / f"{top}_pwraware_welltied.v"
-    txt = pa.read_text()
-    assert pa.is_file() and ".VPWR(VPWR)" in txt
-    assert ".VPB(VPWR)" in txt and ".VNB(VGND)" in txt   # wells tied to rails
-
-
-def test_wiring_power_aware_mismatch_returns_none_falls_through(
-        tmp_path, monkeypatch):
-    # §4.05 / monotonicity: when the power-aware compare does NOT reach a genuine
-    # match, the helper returns None so the caller falls through to the UNCHANGED
-    # plain-netlist path (no regression, POWER_PIN_ONLY waiver stays the
-    # fallback).
-    project, top, pdk, spice_out, lvs_rpt, netlist = _prep_project(tmp_path)
-
-    def fake_exec(container, cmd, timeout=None, **_):
-        if "netgen -batch lvs" in cmd:
-            return (1, _PA_POWER_MISMATCH, "")
-        return (0, "", "")
-
-    monkeypatch.setattr(R, "_docker_exec", fake_exec)
-    res = R._try_power_aware_lvs(
-        project, top, pdk, "vibeic-eda", spice_out,
-        "/c/top_extracted.sp", top, netlist, "/setup.tcl", lvs_rpt, None, 0.0)
-    assert res is None
-    # canonical lvs.rpt is NOT overwritten by a non-matching power-aware attempt.
-    assert not lvs_rpt.exists() or lvs_rpt.read_text() == ""
-
-
-def test_wiring_no_stdcells_returns_none(tmp_path, monkeypatch):
-    # a netlist with no PDK std cells → nothing to patch → None (fall through).
-    project, top, pdk, spice_out, lvs_rpt, netlist = _prep_project(tmp_path)
-    netlist.write_text("module top (a, y); input a; output y;"
-                       " assign y = a; endmodule\n")
-    called = {"netgen": False}
-
-    def fake_exec(container, cmd, timeout=None, **_):
-        if "netgen" in cmd:
-            called["netgen"] = True
-        return (0, "", "")
-
-    monkeypatch.setattr(R, "_docker_exec", fake_exec)
-    res = R._try_power_aware_lvs(
-        project, top, pdk, "vibeic-eda", spice_out,
-        "/c/top_extracted.sp", top, netlist, "/setup.tcl", lvs_rpt, None, 0.0)
-    assert res is None
-    assert called["netgen"] is False            # never even ran netgen

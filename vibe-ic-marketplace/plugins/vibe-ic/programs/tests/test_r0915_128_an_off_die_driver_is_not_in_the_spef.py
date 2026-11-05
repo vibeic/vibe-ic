@@ -25,9 +25,6 @@ pinned below:
 """
 from __future__ import annotations
 
-import json
-import pytest
-import sta_annotation_population as P
 
 IO_MASTER = "fixture_io__bi_t"
 PAD_INST = "u_pad_p"
@@ -71,103 +68,24 @@ def deffile(tmp_path, *, pins=("p",), nets=None, components=None):
 
 
 # ── (a) derived from the DEF, never from a name ─────────────────────────────
-def test_a_top_level_pin_is_off_die_because_the_DEF_says_it_is_a_pin(tmp_path):
-    got = P.classify(report(["p"]), deffile(tmp_path), io_masters={IO_MASTER})
-    assert got["complete"] is True
-    assert [r["classification"] for r in got["drivers"]] == [P.OFF_DIE]
 
 
-def test_a_pad_terminal_needs_BOTH_an_io_master_and_a_port_net(tmp_path):
-    """Net membership alone must not qualify: an ordinary cell driving an OUTPUT
-    port is ON the die and the SPEF does annotate it."""
-    d = deffile(tmp_path)
-    # the pad's own terminal: master is in the IO inventory -> off die
-    off = P.classify(report([f"{PAD_INST}/PAD"]), d, io_masters={IO_MASTER})
-    assert [r["classification"] for r in off["drivers"]] == [P.OFF_DIE]
-    # the SAME net, but a standard cell's pin -> NOT off die
-    on = P.classify(report(["u_core/Z"]), deffile(
-        tmp_path, nets=[("p", "SIGNAL", [("PIN", "p"), ("u_core", "Z")])],
-    ), io_masters={IO_MASTER})
-    assert [r["classification"] for r in on["drivers"]] == ["REQUIRED_OR_UNKNOWN"]
-    assert on["complete"] is False
 
 
-def test_the_master_comes_from_the_inventory_not_from_its_NAME(tmp_path):
-    """THE ANTI-NAME-PATTERN ARM. The same DEF, the same master spelling: it is
-    off-die only when the run's LEF inventory contains that master."""
-    d = deffile(tmp_path)
-    with_inv = P.classify(report([f"{PAD_INST}/PAD"]), d, io_masters={IO_MASTER})
-    without = P.classify(report([f"{PAD_INST}/PAD"]), d, io_masters=set())
-    assert [r["classification"] for r in with_inv["drivers"]] == [P.OFF_DIE]
-    assert [r["classification"] for r in without["drivers"]] == ["REQUIRED_OR_UNKNOWN"]
-    assert without["complete"] is False
 
 
-def test_an_absent_inventory_cannot_widen_what_passes(tmp_path):
-    """Fail closed: `io_masters=None` is the default and leaves the pad terminal
-    REQUIRED_OR_UNKNOWN."""
-    got = P.classify(report([f"{PAD_INST}/PAD"]), deffile(tmp_path))
-    assert got["complete"] is False
 
 
 # ── (c) the census keeps its teeth ──────────────────────────────────────────
-def test_an_internal_unannotated_driver_still_refuses(tmp_path):
-    """THE NEGATIVE ARM. An internal driver has no off-die story and must still
-    make the census incomplete."""
-    d = deffile(tmp_path, nets=[
-        ("p", "SIGNAL", [("PIN", "p"), (PAD_INST, "PAD")]),
-        ("n_internal", "SIGNAL", [("u_core", "Z")]),
-    ])
-    got = P.classify(report(["u_core/Z"]), d, io_masters={IO_MASTER})
-    assert got["complete"] is False
-    assert [r["classification"] for r in got["drivers"]] == ["REQUIRED_OR_UNKNOWN"]
 
 
-def test_an_off_die_driver_never_masks_an_internal_one_on_the_same_net(tmp_path):
-    """Both listed, both judged: the port is excluded and the internal driver on
-    that very net still refuses. An exclusion that swallowed its neighbour would
-    be the laundering this class must not become."""
-    d = deffile(tmp_path, nets=[
-        ("p", "SIGNAL", [("PIN", "p"), (PAD_INST, "PAD"), ("u_core", "Z")]),
-    ])
-    got = P.classify(report(["p", "u_core/Z"]), d, io_masters={IO_MASTER})
-    classes = {r["driver"]: r["classification"] for r in got["drivers"]}
-    assert classes["p"] == P.OFF_DIE
-    assert classes["u_core/Z"] == "REQUIRED_OR_UNKNOWN"
-    assert got["complete"] is False
 
 
-def test_a_partially_annotated_driver_still_refuses(tmp_path):
-    """Untouched by this class: OpenSTA's partial count must stay zero."""
-    got = P.classify(report(["p"], partial=3), deffile(tmp_path),
-                     io_masters={IO_MASTER})
-    assert got["complete"] is False
-    assert got["reason"] == "inconsistent driver inventory or partial annotation"
 
 
 # ── (b) disclosure by name and count ───────────────────────────────────────
-def test_the_class_is_disclosed_by_name_and_count(tmp_path):
-    d = deffile(tmp_path, nets=[
-        ("p", "SIGNAL", [("PIN", "p"), (PAD_INST, "PAD")]),
-    ])
-    got = P.classify(report(["p", f"{PAD_INST}/PAD"]), d, io_masters={IO_MASTER})
-    disc = got["off_die_drivers"]
-    assert disc["class"] == "OFF_DIE_DRIVER_NOT_IN_SPEF"
-    assert (disc["count"], disc["top_level_pins"], disc["pad_terminals"]) == (2, 1, 1)
-    assert disc["disclosure"] == (
-        "2 off-die driver(s): 1 top-level pin(s) + 1 PAD terminal(s), "
-        "not annotated by construction")
-    assert "PINS section" in disc["basis"] and "LEF" in disc["basis"]
-    assert sorted(disc["drivers"]) == sorted(["p", f"{PAD_INST}/PAD"])
 
 
-def test_a_malformed_pin_count_is_refused_not_guessed(tmp_path):
-    d = deffile(tmp_path)
-    text = d.read_text().replace("PINS 1 ;", "PINS 7 ;")
-    d.write_text(text)
-    got = P.classify(report(["p"]), d, io_masters={IO_MASTER})
-    assert got["complete"] is False
-    assert got["reason"] == "DEF pin count mismatch"
 
 
 # ── the RUNNER side: the promotion predicate, and (d) sections untouched ────

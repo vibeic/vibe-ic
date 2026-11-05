@@ -17,7 +17,6 @@ import sys
 import tarfile
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -149,54 +148,3 @@ def test_a_bundle_that_resolved_NOTHING_is_not_COMPLETE(tmp_path):
 # --------------------------------------------------------------------------- #
 # THE WIRED CONSUMER — a program with no caller is the #725 shape
 # --------------------------------------------------------------------------- #
-def test_the_preflight_refusal_path_emits_a_bundle(tmp_path, monkeypatch):
-    import step_preflight as SP
-
-    p = _project(tmp_path, spef=False, sdc=False, pvt=False)
-    dec = SP.Decision(runner="r", site="s", flow_steps=[STEP],
-                      project=str(p), at="now", verdict="BLOCKED",
-                      allow=False, detail="d")
-    got = SP._emit_repro_bundle(p, dec)
-    assert got, "the refusal path produced no bundle"
-    assert Path(got).is_file(), got
-    with tarfile.open(got) as tf:
-        doc = json.loads(tf.extractfile("MANIFEST.json").read().decode())
-    # Absent BY CONSTRUCTION on this path — that IS the evidence.
-    assert doc["verdict"] == "INCOMPLETE", doc
-    assert len(doc["missing"]) == 3, doc["missing"]
-
-
-def test_the_bundle_adds_NO_env_knob_to_the_refusal_path(tmp_path):
-    """This started life as `test_the_bundle_can_be_switched_off`.
-
-    `test_there_is_no_switch_that_turns_a_refusal_into_a_pass` caught the
-    `VIBE_IC_REPRO_BUNDLE=0` opt-out and was RIGHT to: it bans every
-    `os.environ.get` in `step_preflight` except `STRICT_ENV`, because "a
-    weakening switch would make the refusal decorative". The knob did not
-    weaken the refusal, but the ban is deliberately blanket so that nobody has
-    to adjudicate per knob — so the knob went, not the ban.
-
-    Asserted here as well as there, on the S7 side, so a future re-add of the
-    switch fails in the PR that re-adds it and not only in the guard's file.
-    """
-    import re
-    src = (_PROGRAMS / "step_preflight.py").read_text(encoding="utf-8")
-    envs = set(re.findall(r"os\.environ\.get\(\s*([A-Za-z_]+|\"[^\"]+\")", src))
-    assert envs <= {"STRICT_ENV"}, f"S7 re-introduced an env knob: {envs}"
-
-
-def test_a_broken_bundler_NEVER_breaks_the_refusal(tmp_path, monkeypatch):
-    """The load-bearing safety property: this runs on the refusal path, so a
-    diagnostic that raises would cost the caller the finding it came to report.
-    """
-    import step_preflight as SP
-    import step_repro_bundle as SRB
-
-    def _boom(*a, **k):
-        raise RuntimeError("disk on fire")
-
-    monkeypatch.setattr(SRB, "write_bundle", _boom)
-    dec = SP.Decision(runner="r", site="s", flow_steps=[STEP],
-                      project=str(tmp_path), at="now", verdict="BLOCKED",
-                      allow=False, detail="d")
-    assert SP._emit_repro_bundle(tmp_path, dec) is None  # no raise

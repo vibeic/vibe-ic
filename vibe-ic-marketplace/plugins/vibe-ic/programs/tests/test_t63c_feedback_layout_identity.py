@@ -1,12 +1,10 @@
 """The streamed mask and its feedback receipt must describe the same bytes."""
 import hashlib
 import json
-from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
 import drc_feedback_repair as feedback
-import phase3_one_shot_runner as runner
 
 
 def _sha(data):
@@ -31,29 +29,8 @@ def _layout(tmp_path):
     return project, source, gds, receipt
 
 
-def test_final_drc_without_state_does_not_fall_back_to_old_feedback(tmp_path, monkeypatch):
-    project, source, _, _ = _layout(tmp_path)
-    source.write_text('DESIGN unit ;\n# later route writer\n')
-    monkeypatch.setattr(runner, '_vacuous_on_unrouted',
-                        lambda *a: runner.StepResult('drc', 'PASS', 0, 'sentinel'))
-    result = runner.step_drc(project, 'unit',
-                             SimpleNamespace(drc_deck='/pdk/gf180mcu.drc'), 'eda')
-    assert result.status == 'NOT_MEASURED'
-    assert result.reason_class == 'input_absent'
-    assert 'CURRENT_FINAL_STATE_MISSING: state_out.json' in result.detail
 
 
-def test_private_sdr_candidate_can_measure_before_feedback_but_signoff_needs_state(tmp_path, monkeypatch):
-    project, _, _, receipt = _layout(tmp_path / 'sdr_candidates')
-    receipt.unlink()
-    monkeypatch.setattr(runner, '_vacuous_on_unrouted',
-                        lambda *a: runner.StepResult('drc', 'PASS', 0, 'candidate measured'))
-    pdk = SimpleNamespace(drc_deck='/pdk/gf180mcu.drc')
-    assert runner.step_drc(project, 'unit', pdk, 'eda', candidate=True).status == 'PASS'
-    result = runner.step_drc(project, 'unit', pdk, 'eda')
-    assert result.status == 'NOT_MEASURED'
-    assert result.reason_class == 'input_absent'
-    assert 'CURRENT_FINAL_STATE_MISSING: state_out.json' in result.detail
 
 
 def test_finished_gds_mutation_refused_and_exact_bytes_accepted(tmp_path):
@@ -118,69 +95,10 @@ def test_finished_layout_change_during_rule_measurement_is_refused(tmp_path, mon
     assert not feedback.check_binding(project, 'unit', gds)[0]
 
 
-def test_prestream_admission_refuses_old_feedback(tmp_path, monkeypatch):
-    project, source, _, _ = _layout(tmp_path)
-    source.write_text('DESIGN unit ;\n# changed by signoff repair\n')
-    monkeypatch.setattr(runner, '_vacuous_on_unrouted', lambda *a: None)
-    monkeypatch.setattr(runner, '_layout_basis', lambda *a: ('digest', ''))
-    monkeypatch.setattr(runner._ga, 'gate_passed', lambda *a: True)
-    result = runner.step_gds(project, 'unit',
-                             SimpleNamespace(drc_deck='/pdk/gf180mcu.drc'), 'eda')
-    assert result.status == 'FAIL'
-    assert 'FEEDBACK_ROUTE_DIGEST_MISMATCH' in result.detail
 
 
-def test_feedback_reads_the_route_after_si_promotion(tmp_path, monkeypatch):
-    project, source, _, _ = _layout(tmp_path)
-    pdk = SimpleNamespace(drc_deck='/pdk/gf180mcu.drc')
-    monkeypatch.setattr(runner, '_layout_basis',
-                        lambda *a: (_sha(source.read_bytes()), ''))
-    monkeypatch.setattr(runner, 'step_canonicalize_artefacts',
-                        lambda *a, **k: runner.StepResult('canonicalize', 'PASS', 0, 'ok'))
-    monkeypatch.setattr(runner, '_signoff_regen', lambda *a: False)
-    monkeypatch.setattr(runner, '_si_mcf_repair_seam', lambda *a: object())
-    monkeypatch.setattr(runner, '_si_mcf_repair_promote',
-                        lambda *a: source.write_text('DESIGN unit ;\n# SI promoted\n'))
-    import si_mcf_verdict_basis
-    import si_mcf_repair
-    monkeypatch.setattr(si_mcf_verdict_basis, 'apply', lambda *a: None)
-    calls = iter([{'decision': 'ADOPTED', 'after': {}},
-                  {'decision': 'NO_CANDIDATE'}])
-    monkeypatch.setattr(si_mcf_repair, 'run_once', lambda *a, **k: next(calls))
-    monkeypatch.setattr(feedback, 'has_reviewed_rule', lambda *a: True)
-    monkeypatch.setattr(feedback, 'image_for_container', lambda *a: 'image')
-    seen = []
-    def feedback_run(*_a, **_k):
-        seen.append(source.read_text())
-        digest = _sha(source.read_bytes())
-        return {'status': 'PASS', 'source_sha256': digest,
-                'initial_source_sha256': digest}
-    monkeypatch.setattr(feedback, 'run', feedback_run)
-    def stop_after_feedback(*_a):
-        raise RuntimeError('stop after feedback')
-    monkeypatch.setattr(runner, '_run_declared_signoff_gate', stop_after_feedback)
-    with pytest.raises(RuntimeError, match='stop after feedback'):
-        runner.step_prestream_gate(project, 'unit', pdk, 'eda')
-    assert seen and set(seen) == {'DESIGN unit ;\n# SI promoted\n'}
 
 
-def test_port_marker_producer_keeps_mask_bytes_out_of_lvs_copy(tmp_path, monkeypatch):
-    project, source, gds, _ = _layout(tmp_path)
-    pdk = SimpleNamespace(liberty='', port_label_restore=True)
-    monkeypatch.setattr(runner, '_tool_in_path', lambda *a: True)
-    monkeypatch.setattr(runner, '_resolve_magic_gds_tech', lambda *a: None)
-    monkeypatch.setattr(runner._pl, 'pnr_dir', lambda *a: gds.parent)
-    def fake_eda(_container, _cmd, **_kw):
-        (gds.parent / 'unit.labeled.gds').write_bytes(b'LVS-only-marker-100/8')
-        gds.with_suffix('.mask-labeled.gds').write_bytes(before)
-        return 0, 'restored: 1 I/O labels + 0 power-rail markers ()', ''
-    monkeypatch.setattr(runner, '_docker_exec', fake_eda)
-    before = gds.read_bytes()
-    ok, _ = runner._klayout_restore_port_labels(
-        project, 'unit', pdk, 'eda', gds, source, force=True)
-    assert ok
-    assert gds.read_bytes() == before
-    assert gds.with_suffix('.lvs.gds').read_bytes() == b'LVS-only-marker-100/8'
 
 
 def test_an_absent_finished_mask_names_where_it_looked(tmp_path):

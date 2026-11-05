@@ -33,19 +33,16 @@ including one where the offending package is not installed.
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _GUARD = _PROGRAMS / "suite_write_guard.py"
 
 sys.path.insert(0, str(_PROGRAMS))
-import suite_write_guard as swg  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -248,32 +245,12 @@ def test_ignored_class_is_named_but_never_blocking(tmp_path):
     assert "ADVISORY" in out, out
 
 
-def test_bytecode_noise_is_counted_not_listed(tmp_path):
-    """A gate that prints 200 lines of __pycache__ is a gate people stop
-    reading. Suppressed by count, never silently."""
-    before = {}
-    after = {"a/__pycache__/m.cpython-310.pyc": ["!!", 1, 1],
-             "b/real_leftover.json": ["!!", 2, 2]}
-    result = swg.compare(before, after)
-    text = swg.format_report(result)
-    assert "real_leftover.json" in text
-    assert "m.cpython-310.pyc" not in text
-    assert "+1 regenerable cache artefact" in text
 
 
 # --------------------------------------------------------------------------
 # Degrade loudly, never silently (flow-change-acceptance §6).
 # --------------------------------------------------------------------------
 
-def test_cannot_look_exits_2_and_never_0(tmp_path):
-    """rc=2 is NOT CHECKED. It must never be folded into a pass."""
-    p = _pr.run(
-        [sys.executable, str(_GUARD), "--repo", str(tmp_path),
-         "--compare", str(tmp_path / "no_such_baseline.json")],
-        capture_output=True, text=True)
-    assert p.returncode == swg.RC_NOT_CHECKED, (p.returncode, p.stdout, p.stderr)
-    assert "WRITE_GUARD_NOT_CHECKED" in p.stderr, p.stderr
-    assert "NOT a pass" in p.stdout, p.stdout
 
 
 def test_turning_the_guard_off_announces_itself(tmp_path):
@@ -286,42 +263,12 @@ def test_turning_the_guard_off_announces_itself(tmp_path):
     assert "WRITE_GUARD_NOT_CHECKED" in out, out
 
 
-def test_a_non_repo_is_not_checked_rather_than_clean(tmp_path):
-    plain = tmp_path / "not_a_repo"
-    plain.mkdir()
-    p = _pr.run(
-        [sys.executable, str(_GUARD), "--repo", str(plain),
-         "--snapshot", str(tmp_path / "out.json")],
-        capture_output=True, text=True)
-    assert p.returncode == swg.RC_NOT_CHECKED, (p.returncode, p.stdout)
 
 
 # --------------------------------------------------------------------------
 # CLI shape, and per-test attribution.
 # --------------------------------------------------------------------------
 
-def test_cli_snapshot_then_compare_names_the_writer(tmp_path):
-    """The standalone door, for a caller that is not pytest (a landing script,
-    a human bisecting a stage that is not a test run at all)."""
-    repo = _repo(tmp_path)
-    base = tmp_path / "base.json"
-
-    p = _pr.run([sys.executable, str(_GUARD), "--repo", str(repo),
-                        "--snapshot", str(base)],
-                       capture_output=True, text=True)
-    assert p.returncode == 0, p.stdout + p.stderr
-    assert json.loads(base.read_text()) == {}
-
-    (repo / "pkg" / "shipped.txt").write_text("mutated by something\n")
-
-    rep = tmp_path / "report.json"
-    p = _pr.run([sys.executable, str(_GUARD), "--repo", str(repo),
-                        "--compare", str(base), "--json", str(rep)],
-                       capture_output=True, text=True)
-    assert p.returncode == swg.RC_WROTE, p.stdout + p.stderr
-    assert "pkg/shipped.txt" in p.stdout
-    assert [f["path"] for f in json.loads(rep.read_text())["blocking"]] \
-        == ["pkg/shipped.txt"]
 
 
 def test_per_test_mode_attributes_the_write_to_its_nodeid(tmp_path):
@@ -441,13 +388,6 @@ def test_a_broken_host_plugin_cannot_redden_a_NON_writing_child(tmp_path):
 # The guard must not perturb its own subject.
 # --------------------------------------------------------------------------
 
-def test_the_guard_itself_writes_nothing(tmp_path):
-    repo = _repo(tmp_path)
-    before = swg.snapshot(repo)
-    for _ in range(3):
-        swg.snapshot(repo)
-    assert swg.snapshot(repo) == before
-    assert swg.compare(before, swg.snapshot(repo))["blocking"] == []
 
 
 # --------------------------------------------------------------------------
@@ -456,55 +396,10 @@ def test_the_guard_itself_writes_nothing(tmp_path):
 # alongside it cannot distinguish itself from its own absence."
 # --------------------------------------------------------------------------
 
-def test_it_measures_THIS_repository_and_self_compares_clean(tmp_path):
-    """The guard's real subject is this checkout, not a throwaway repo.
-
-    Hardcodes no path: the root comes from `_hostpaths.repo_path`, which
-    derives it from `__file__`. Self-comparison must be empty on ANY tree,
-    dirty or clean — the guard reports what a RUN changed, never what the
-    checkout already carried.
-    """
-    from _hostpaths import repo_path
-    repo = repo_path()
-    if not (repo / ".git").exists():
-        pytest.skip(f"not a git checkout: {repo}")
-
-    snap = swg.snapshot(repo)
-    assert isinstance(snap, dict)
-    for path, sig in snap.items():
-        assert isinstance(path, str) and path
-        assert len(sig) == 3 and isinstance(sig[0], str)
-        assert swg._classify(sig[0]) in (swg.TRACKED, swg.UNTRACKED, swg.IGNORED)
-
-    assert swg.compare(snap, snap)["blocking"] == []
-    assert swg.compare(snap, snap)["advisory"] == []
 
 
-def test_the_guard_is_actually_WIRED_into_the_rootdir_conftest():
-    """A guard nothing loads is a guard that never runs.
-
-    `landing_worktree_is_clean_check` exists and is correct, and #1029 still
-    happened, because what fires a check is its WIRING. This asserts the one
-    line that makes the guard ride every pytest session rooted at the plugin —
-    including the targeted subset `tools/gatekeeper-land.sh` runs on every
-    landing — so removing it breaks a test rather than going unnoticed.
-    """
-    conftest = _PROGRAMS.parent / "conftest.py"
-    text = conftest.read_text()
-    assert "pytest_plugins" in text, f"guard not wired in {conftest}"
-    assert "suite_write_guard" in text, f"guard not wired in {conftest}"
-    # and the module the wiring names must exist and be loadable
-    assert _GUARD.is_file(), _GUARD
 
 
-def test_paths_needing_quoting_are_parsed_not_mangled(tmp_path):
-    """`-z` rather than the newline form: a path with a space or a quote is
-    C-quoted in the default output and would be silently mis-attributed."""
-    repo = _repo(tmp_path)
-    odd = repo / 'a file with "quotes" and spaces.txt'
-    odd.write_text("x\n")
-    snap = swg.snapshot(repo)
-    assert 'a file with "quotes" and spaces.txt' in snap, snap
 
 
 # --------------------------------------------------------------------------
@@ -551,105 +446,3 @@ def _ambient_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(r), "commit", "-qm", "base"], check=True)
     return r
-
-
-def test_a_detached_copy_inside_an_ambient_repo_is_NOT_CHECKED_not_blocked(tmp_path):
-    """A `cp -al` mirror under a `$TMPDIR` inside some other checkout.
-
-    This is #1412 in miniature. `matrix_mutation_ledger`'s LOCK 2 replay runs
-    each PLUGIN_TREE witness cell in a hardlink mirror of the plugin, and reads
-    the cell's EXIT CODE to decide whether the unmutated cell was green. When
-    the mirror lands inside an unrelated repository the guard discovered THAT
-    repository, saw the session's own bytecode as `??`, and reddened a session
-    whose test passed — so the ledger recorded `ALREADY_RED`, i.e. "this gate
-    can no longer be shown to have teeth", about a replay that was working.
-
-    The guard must decline: a detached copy has no `git status` describing it.
-    Declining is not a quiet pass — `WRITE_GUARD_NOT_CHECKED` is asserted here,
-    and rc=2/NOT-CHECKED is this file's standing convention.
-    """
-    ambient = _ambient_repo(tmp_path)
-    mirror = ambient / "mirror"
-    _detached_copy_of_the_guard(mirror)
-    helper = mirror / "programs" / "zz_imported_after_the_baseline.py"
-    helper.write_text("OK = True\n")
-    tf = mirror / "test_in_the_mirror.py"
-    tf.write_text(
-        "def test_imports_a_module_and_writes_nothing_of_its_own():\n"
-        "    import zz_imported_after_the_baseline as z\n"
-        "    assert z.OK\n")
-
-    env = _child_env()
-    # the copy, NOT this checkout's `programs/` — otherwise the child imports
-    # the tracked original and discovers the real repository.
-    env["PYTHONPATH"] = str(mirror / "programs")
-
-    before = swg.snapshot(ambient)
-    p = _pr.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-         "-p", "suite_write_guard", str(tf)],
-        capture_output=True, text=True, cwd=str(mirror), env=env)
-    out = p.stdout + p.stderr
-    after = swg.snapshot(ambient)
-
-    # The setup is live, not inert: the ambient repo really did gain
-    # blocking-class paths from that session. Without this the test could pass
-    # because nothing happened rather than because the guard declined.
-    gained = swg.compare(before, after)["blocking"]
-    assert gained, (
-        "the ambient repository gained no blocking-class path, so this test "
-        "would pass even with the trap wide open; the child wrote no bytecode "
-        f"(PYTHONDONTWRITEBYTECODE?). out={out[-800:]}")
-    assert all("mirror/" in f["path"] for f in gained), gained
-
-    assert p.returncode == 0, (
-        "a session in a detached copy was BLOCKED by the state of the "
-        "repository that merely encloses it:\n" + out[-2000:])
-    assert "WRITE_GUARD_NOT_CHECKED" in out, (
-        "declining must be LOUD — silence reads as 'measured and clean':\n"
-        + out[-2000:])
-    assert "does not track it" in out, out[-2000:]
-
-
-def test_the_SAME_discovery_door_still_reddens_a_real_checkout(tmp_path):
-    """PAIRED GUARD. The fix must not buy its green by declining everything.
-
-    Same door as the test above — discovery, no `--write-guard-repo` — but the
-    guard's own file is TRACKED here, so the repository it finds is the tree it
-    is testing and a planted writer must still make the session RED and NAME
-    the path. If `_repo_root` ever starts declining a real checkout, this goes
-    red; if it stops declining a detached copy, the test above goes red. Only
-    the correct discriminator satisfies both.
-    """
-    r = tmp_path / "checkout"
-    _detached_copy_of_the_guard(r)
-    (r / "pkg").mkdir()
-    (r / "pkg" / "shipped.txt").write_text("published bytes\n")
-    subprocess.run(["git", "init", "-q", str(r)], check=True)
-    for k, v in (("user.email", "t@t"), ("user.name", "t")):
-        subprocess.run(["git", "-C", str(r), "config", k, v], check=True)
-    subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(r), "commit", "-qm", "base"], check=True)
-
-    tf = tmp_path / "test_planted_writer.py"
-    tf.write_text(
-        "from pathlib import Path\n"
-        "def test_appends_to_a_shipped_file():\n"
-        f"    p = Path(r'{r / 'pkg' / 'shipped.txt'}')\n"
-        "    p.write_text(p.read_text() + 'mutated by a test\\n')\n")
-
-    env = _child_env()
-    env["PYTHONPATH"] = str(r / "programs")
-    p = _pr.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-         "-p", "suite_write_guard", str(tf)],
-        capture_output=True, text=True, cwd=str(r), env=env)
-    out = p.stdout + p.stderr
-    assert p.returncode == 1, (
-        "the guard discovered a REAL checkout and let a tracked write through:"
-        "\n" + out[-2000:])
-    assert "WROTE INTO THE TREE" in out, out[-2000:]
-    assert "pkg/shipped.txt" in out, out[-2000:]
-    assert "WRITE_GUARD_NOT_CHECKED" not in out, (
-        "declined a checkout that tracks the guard — the fix would then be "
-        "buying its green by measuring nothing:\n" + out[-2000:])

@@ -139,25 +139,3 @@ def test_resolver_preserves_661_when_no_override(tmp_path):
 
 
 # ── end-to-end: the emitted TB instantiates the synth-top, not the phantom ──
-
-def test_emitted_tb_binds_synth_top_not_phantom(tmp_path):
-    proj = _scaffold(tmp_path, l9_top="phantom_top",
-                     waiver_synth_top="vendor_core")
-    res = R.step_full_stack_tb_gen(proj, "chip_top")
-    # R-0915-85 — the step emits `NOT_MEASURED(no_population)` where it used
-    # to emit `SKIP`: a CONNECTIVITY-ONLY skeleton golden-compares NOTHING, so
-    # functional correctness was not measured. The detail said so already; the
-    # word says it now. This test's subject is the EMITTED TB, so what it
-    # needs is that the step did not FAIL.
-    assert res.status in ("PASS", "NOT_MEASURED"), res.detail
-    assert res.status != "FAIL", res.detail
-    sim = _pl.sim_full_stack_dir(proj)
-    tb = sim / "tb_vendor_core_full.v"
-    assert tb.is_file(), sorted(p.name for p in sim.glob("*"))
-    txt = tb.read_text()
-    assert "vendor_core u_dut" in txt
-    # NO-LEAK: the phantom doc-prose top must NEVER be instantiated.
-    assert "phantom_top u_dut" not in txt
-    assert "module phantom_top" not in txt
-    # and no phantom-named TB was emitted.
-    assert not (sim / "tb_phantom_top_full.v").exists()

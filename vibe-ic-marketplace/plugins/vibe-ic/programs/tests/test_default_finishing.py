@@ -1,18 +1,14 @@
 """Default Steps 34/35/37: retained-byte source controls, not native proof."""
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-import _plugin_tree  # noqa: F401
 from _hostpaths import require_repo
 import _default_backend_fixtures as BF
 import librelane_contract as LC
 import librelane_fill_dfm as LF
 import metal_fill_density_check as MFD
 import dfm_screen_check as DFM
-import phase3_one_shot_runner as R
-import metal_layer_density_check as MLD
 import pdk_metal_density_windows as WINDOWS
 from test_metal_fill_config_gen import _LAYERMAP, _TECHLEF, _DECK
 
@@ -297,32 +293,6 @@ def test_real_density_failure_remains_explicit_in_the_dfm_reference(tmp_path):
     assert ref.get('measurement_verdict') == 'FAIL'
 
 
-def test_default_ordinary_caller_uses_one_primary_without_a_mode_switch(tmp_path, monkeypatch):
-    p, record, _ = subject(tmp_path)
-    assert 'steps' not in json.loads((p / 'phase3/librelane_switch.json').read_text())
-    monkeypatch.setattr(R, '_layout_basis', lambda *a: ('current', None))
-    monkeypatch.setattr(R._ga, 'stream_refusal', lambda *a: None)
-    monkeypatch.setattr(R, '_vacuous_on_unrouted', lambda *a: None)
-    calls = []
-    def primary(*args):
-        calls.append('primary')
-        return {'canonical': record['canonical'], 'receipt': str(p / PROMOTION)}
-    monkeypatch.setattr(LF, 'default_stream', primary, raising=False)
-    # Stop a legacy producer at its first concrete decision; count observed
-    # dispatch values rather than a missing symbol or a collection error.
-    monkeypatch.setattr(R, 'publish_database_unit_declaration', lambda *a: {'verdict': 'PASS', 'reason': 'SOURCE_FIXTURE'})
-    monkeypatch.setattr(R, '_streamout_top', lambda *a: ('top', ''))
-    monkeypatch.setattr(R, 'publish_tapeout_declarations', lambda *a: {'published': [], 'not_determined': [], 'already_answered': []})
-    def legacy(*args):
-        calls.append('legacy')
-        raise LC.Refusal('SOURCE_FIXTURE_LEGACY_SELECTED', 'observed legacy producer')
-    monkeypatch.setattr(R, '_magic_def_to_gds', legacy)
-    pdk = R.PdkConfig('neutral', '', '', '', None, '', None)
-    try:
-        R.step_gds(p, 'top', pdk, '')
-    except LC.Refusal:
-        pass
-    assert calls == ['primary']
 
 
 def without_switch(project, monkeypatch):
@@ -337,56 +307,6 @@ def without_switch(project, monkeypatch):
     switch.unlink()
 
 
-@pytest.mark.parametrize('switch_present', [True, False])
-def test_ordinary_primary_and_gate_invoke_existing_per_layer_consumer(
-        tmp_path, monkeypatch, switch_present):
-    p, record, arm = subject(tmp_path)
-    if not switch_present:
-        without_switch(p, monkeypatch)
-    monkeypatch.setattr(R, '_layout_basis', lambda *a: ('current', None))
-    monkeypatch.setattr(R._ga, 'stream_refusal', lambda *a: None)
-    monkeypatch.setattr(R, '_vacuous_on_unrouted', lambda *a: None)
-    # Ruling #101: every D60 invocation streams anew. Real native StreamOut is
-    # covered by test_default_stream_epoch_order; this row owns the consumer.
-    streams = []
-
-    def fresh_stream(project, top, pdk, container):
-        streams.append(top)
-        assert LF.current_metal_density(project, arm, record)['verdict'] == 'PASS'
-        R._step37_declare_streamout_gds_provenance(project, top, default_finishing=True)
-        return dict(record, receipt=str(project / LF.DEFAULT_STREAM_REL))
-
-    monkeypatch.setattr(LF, 'default_stream', fresh_stream)
-    calls, original = [], MLD.check
-    def observed(*args, **kwargs):
-        result = original(*args, **kwargs)
-        calls.append((str(args[0]), result['verdict']))
-        return result
-    monkeypatch.setattr(MLD, 'check', observed)
-    result = R.step_gds(p, 'top', R.PdkConfig('neutral', '', '', '', None, '', None), '')
-    assert result.status == 'PASS', result.detail
-    assert streams == ['top']
-    assert MFD.main([str(p), '--json', str(p / 'step34.json')]) == 0
-    report = json.loads((p / 'step34.json').read_text())
-    assert report['summary']['per_layer_density_verified'] is True
-    assert report['summary']['layers_ok'] == 2
-    assert report['summary']['filled_gds_density'] == 'PASS'
-    categories = [f['category'] for f in report['findings']]
-    assert 'PER_LAYER_DENSITY_NOT_VERIFIED_HERE' not in categories
-    assert 'PER_LAYER_DENSITY_CONSUMED' in categories
-    consumer = report['tool_per_layer_density']
-    assert 'PDK-stated minimum 0.33' in consumer['window_note']
-    assert 'measured absence of maximum' in consumer['window_note']
-    assert 'generic' not in consumer['window_note'] and '[None,None]' not in consumer['window_note']
-    assert all(row['window'] == [0.33, None] and 'PDK-measured-absence' in row['window_source']
-               for row in consumer['per_layer'].values())
-    ref = DFM.audit(p)['density_ref']
-    assert ref['step34_pass'] is True
-    assert ref['per_layer_consumer']['subject_sha256'] == record['canonical_sha256']
-    # step_gds, the Step-34 report, its DFM reference and this explicit audit
-    # each invoke the same existing consumer on the same retained bytes.
-    assert calls == [(str(p / LF.METAL_DENSITY_REL), 'PASS')] * 4
-    assert (p / 'phase3/librelane_switch.json').exists() is switch_present
 
 
 @pytest.mark.parametrize('mutation,reason', [

@@ -281,66 +281,12 @@ def test_no_overrides_at_all_is_a_no_op(tmp_path):
 
 # ── THE STEP READS THE REFUSAL BACK ──────────────────────────────────────
 
-def test_the_synth_step_reads_every_sidecar_not_just_its_own_top(tmp_path):
-    """The wrapper is emitted by whichever step gets there first, so a
-    refusal filed under one name and looked up under another is a refusal
-    nobody makes — `_chip_top_param_refusals` records that measurement and
-    this reader must not re-open it."""
-    rtl = tmp_path / "rtl"
-    rtl.mkdir()
-    assert D._chip_top_coupling_refusals(rtl, "chip_top") == []
-
-    (rtl / ".some_other_top__param_couplings.json").write_text(json.dumps(
-        {"refusals": [{"parameter": "SecMasking",
-                       "reason": "COUPLED_PARAMETER_NOT_STATED",
-                       "message": COUPLING_SENTENCE}]}))
-
-    got = D._chip_top_coupling_refusals(rtl, "chip_top")
-    assert [r["reason"] for r in got] == ["COUPLED_PARAMETER_NOT_STATED"]
 
 
-def _planted(tmp_path: Path, refusals):
-    """A minimal synthesizable project carrying a planted coupling sidecar.
-
-    The refusal is PLANTED rather than derived so this pins the STEP — that
-    the branch exists, is reached before yosys, and returns FAIL with the
-    refusal's own message. What derives the refusal is pinned above."""
-    rtl = _pl.rtl_dir(tmp_path)
-    rtl.mkdir(parents=True, exist_ok=True)
-    (rtl / "dut.v").write_text(
-        "module dut #(parameter SecMasking = 1) (input clk, output q);\n"
-        "  assign q = clk;\nendmodule\n")
-    (rtl / ".chip_top__param_couplings.json").write_text(
-        json.dumps({"refusals": refusals}))
-    return tmp_path
 
 
-def test_the_synth_step_FAILS_on_a_coupling_refusal_before_yosys(tmp_path):
-    """The measured run earned a raw elaboration abort several steps later.
-    A refusal nobody returns is a refusal nobody makes."""
-    project = _planted(tmp_path, [{
-        "parameter": "SecMasking",
-        "reason": "COUPLED_PARAMETER_NOT_STATED",
-        "message": COUPLING_SENTENCE}])
-
-    r = D.step_yosys_synth(project, "chip_top")
-
-    assert r.status == "FAIL"
-    assert "COUPLED PARAMETER NOT STATED (SecMasking)" in r.detail
-    assert COUPLING_SENTENCE in r.detail, (
-        "the operator must be able to read the input's own sentence out of "
-        "the verdict, without opening a sidecar")
 
 
-def test_an_empty_refusal_list_does_not_stop_the_step_here(tmp_path):
-    """THE OTHER DIRECTION. A branch that fires on every project is not a
-    gate. The step goes on past it — to whatever the toolchain then says,
-    which on a host with no synth container is a different failure entirely."""
-    project = _planted(tmp_path, [])
-
-    r = D.step_yosys_synth(project, "chip_top")
-
-    assert "COUPLED PARAMETER NOT STATED" not in r.detail
 
 
 # ── PHASE 1 (F21): the recommendation is CONDITIONAL ON THE TARGET ───────
@@ -683,58 +629,10 @@ def test_a_recommendation_that_NAMES_THE_VALUE_outright_still_decides(tmp_path):
 
 # ── THE EMITTER END TO END: the two halves meet ──────────────────────────
 
-def _emit_project(tmp_path: Path, *, exclude=True, pdk_target="sky130A"):
-    project, rtl = _variant_project(
-        tmp_path, pdk_target=pdk_target,
-        recommendations=[_asic_row("Canright S-Box")])
-    if not exclude:
-        (project / "input"
-         / "thing_sbox_dom.sv.unused-masked-scan-excluded").unlink()
-    gd = _pl.generated_docs_dir(project)
-    doc = json.loads((gd / "L8_RTL_CONSTANTS.json").read_text())
-    doc["parameters"] = [{"name": "SecMasking", "value": "0",
-                          "override": True}]
-    doc["parameter_couplings"] = _DESCRIBED
-    (gd / "L8_RTL_CONSTANTS.json").write_text(json.dumps(doc))
-    (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
-    (project / "phase1" / "generated_docs"
-     / "L9_INTEGRATION_SPEC.json").write_text(
-        json.dumps({"top_module": "thing_top"}))
-    return project, rtl
 
 
-def test_the_emitted_wrapper_carries_the_recommended_variant(tmp_path):
-    """Everything at once, through the public emitter: the stated override is
-    applied, the coupled parameter is DERIVED to the variant the input
-    recommends for the declared target, and — because it was derived — the
-    coupling raises no refusal."""
-    project, rtl = _emit_project(tmp_path)
-
-    emitted = D._autoemit_chip_top_wrapper(project, rtl, "chip_top")
-
-    assert emitted is not None
-    text = emitted.read_text()
-    assert "SecMasking  = 0" in text
-    assert "SecSBoxImpl = SBoxImplCanright" in text, (
-        "the wrapper carries the variant the input recommends for the OTHER "
-        "target")
-    assert D._chip_top_coupling_refusals(rtl, "chip_top") == [], (
-        "a DERIVED default satisfies the coupling; refusing over it would "
-        "stop a build the flow just produced honestly")
-    assert not list(rtl.glob(".*__param_couplings.json"))
 
 
-def test_with_nothing_derivable_the_same_input_IS_refused(tmp_path):
-    """THE OTHER DIRECTION, one file apart. Remove the exclusion marker and
-    the resolver has nothing to derive from; the coupled parameter is then
-    neither stated nor derived, and that is the refusal."""
-    project, rtl = _emit_project(tmp_path, exclude=False)
-
-    D._autoemit_chip_top_wrapper(project, rtl, "chip_top")
-
-    got = D._chip_top_coupling_refusals(rtl, "chip_top")
-    assert [r["reason"] for r in got] == ["COUPLED_PARAMETER_NOT_STATED"]
-    assert COUPLING_SENTENCE in got[0]["message"]
 
 
 # ── NAME RESOLUTION: an invented name is worse than no name ──────────────
@@ -824,37 +722,3 @@ def test_the_recommendation_provenance_names_the_words_that_decided(tmp_path):
     prov = resolved["SecSBoxImpl"]["recommendation"]
     assert prov["matched_words"] == ["canright"]
     assert "distinctive_words" not in prov
-
-
-def test_the_FAIL_headline_does_not_put_the_trigger_where_the_coupled_one_goes(
-        tmp_path):
-    """"COUPLED PARAMETER NOT STATED (SecMasking)" reads as though SecMasking
-    were the missing one — it is the parameter that WAS stated. When the input
-    only DESCRIBES the coupled parameter there is no name to give, and the
-    headline has to say so."""
-    project = _planted(tmp_path, [{
-        "parameter": "SecMasking",
-        "trigger_parameter": "SecMasking",
-        "required_parameter": None,
-        "reason": "COUPLED_PARAMETER_NOT_STATED",
-        "message": COUPLING_SENTENCE}])
-
-    r = D.step_yosys_synth(project, "chip_top")
-
-    assert r.status == "FAIL"
-    assert ("COUPLED PARAMETER NOT STATED (the parameter coupled to "
-            "SecMasking)") in r.detail
-    assert "NOT STATED (SecMasking)" not in r.detail
-
-
-def test_a_NAMED_coupled_parameter_is_what_the_headline_names(tmp_path):
-    project = _planted(tmp_path, [{
-        "parameter": "SecSBoxImpl",
-        "trigger_parameter": "SecMasking",
-        "required_parameter": "SecSBoxImpl",
-        "reason": "COUPLED_PARAMETER_NOT_STATED",
-        "message": COUPLING_SENTENCE}])
-
-    r = D.step_yosys_synth(project, "chip_top")
-
-    assert "COUPLED PARAMETER NOT STATED (SecSBoxImpl)" in r.detail

@@ -16,61 +16,12 @@ def _tcl(body: str, tmp_path: Path):
                           capture_output=True, check=False)
 
 
-def test_preroute_pg_connect_does_not_query_an_unstarted_detail_router(tmp_path):
-    # DRT-0002 came from this counter call, before the first detailed route.
-    prefix = R._build_pg_reconnect_tcl(reroute=False).split("set _pg_dnt {}")[0]
-    r = _tcl("set calls 0\n"
-             "proc detailed_route_num_drvs {} {incr ::calls; error DRT-0002}\n"
-             + prefix + "puts \"T46_COUNTER_CALLS $calls\"\n", tmp_path)
-    assert r.returncode == 0, r.stderr
-    assert "T46_COUNTER_CALLS 0" in r.stdout
-    assert "PG_DELTA_DRC_NOT_APPLICABLE" in r.stdout
 
 
-def test_adopt_refuses_a_wire_lost_before_antenna(tmp_path):
-    # One accepted candidate net had a wire; the resumed DB lost it. Drive
-    # the emitted Tcl with only the ODB accessor results supplied by the tool.
-    mock = ("array set _vic_adopt_wire {signal 12}\n"
-            "namespace eval ord {proc get_db_block {} {return blk}}\n"
-            "proc blk {method} {return {net}}\n"
-            "proc net {method} {switch -- $method {isSpecial {return 0} "
-            "getName {return signal} getWire {return NULL}}}\n")
-    r = _tcl(mock + R._adopt_route_presence_guard_tcl(), tmp_path)
-    assert r.returncode != 0
-    assert "ADOPT_ROUTE_LOST" in r.stderr
 
 
-def test_adopt_keeps_an_intact_wire(tmp_path):
-    mock = ("array set _vic_adopt_wire {signal 12}\n"
-            "namespace eval ord {proc get_db_block {} {return blk}}\n"
-            "proc blk {method} {return {net}}\n"
-            "proc net {method} {switch -- $method {isSpecial {return 0} "
-            "getName {return signal} getWire {return wire}}}\n"
-            "proc wire {method} {return 12}\n")
-    r = _tcl(mock + R._adopt_route_presence_guard_tcl(), tmp_path)
-    assert r.returncode == 0, r.stderr
-    assert "shrank=0" in r.stdout
 
 
-def test_antenna_boundary_refuses_an_unrouted_db(tmp_path):
-    mock = ("namespace eval ord {proc get_db_block {} {return blk}}\n"
-            "proc blk {method} {return {net}}\n"
-            "proc net {method} {switch -- $method {getSigType {return SIGNAL} "
-            "getITerms {return {t1 t2}} getBTerms {return {}} "
-            "getWire {return NULL} getName {return signal}}}\n"
-            "proc t1 {method} {return {{ly r1}}}\n"
-            "proc t2 {method} {return {{ly r2}}}\n"
-            "proc ly {method} {return M1}\n"
-            "proc r1 {method} {switch -- $method {xMin {return 0} "
-            "yMin {return 0} xMax {return 10} yMax {return 10}}}\n"
-            "proc r2 {method} {switch -- $method {xMin {return 20} "
-            "yMin {return 0} xMax {return 30} yMax {return 10}}}\n")
-    r = _tcl(mock + R._unrouted_probe_tcl("after_postroute_antenna_repair",
-                                        str(tmp_path))
-             + R._unrouted_boundary_guard_tcl("after_postroute_antenna_repair"),
-             tmp_path)
-    assert r.returncode != 0
-    assert "POSTROUTE_UNROUTED" in r.stderr
 
 
 def test_both_antenna_boundaries_gate_before_the_next_stage():

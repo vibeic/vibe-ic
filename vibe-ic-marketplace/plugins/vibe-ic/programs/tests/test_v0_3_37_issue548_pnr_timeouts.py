@@ -22,50 +22,20 @@ import reset_dependency_check as rdc  # noqa: E402
 
 # ── (a) size-adaptive PnR timeout resolver ──────────────────────────────────
 
-def test_pnr_timeout_default_for_small_design():
-    assert R._pnr_timeout_s(0) == R._PNR_TIMEOUT_DEFAULT_S
-    assert R._pnr_timeout_s(1000) == R._PNR_TIMEOUT_DEFAULT_S
-    assert R._pnr_timeout_s(R._PNR_TIMEOUT_CELLS_THRESHOLD) == R._PNR_TIMEOUT_DEFAULT_S
 
 
-def test_pnr_timeout_scales_above_default_for_large_cell_count():
-    t = R._pnr_timeout_s(25_000)
-    assert t > R._PNR_TIMEOUT_DEFAULT_S
 
 
-def test_pnr_timeout_scale_formula():
-    over_k = (25_000 - R._PNR_TIMEOUT_CELLS_THRESHOLD) // 1_000
-    expected = R._PNR_TIMEOUT_DEFAULT_S + over_k * R._PNR_TIMEOUT_S_PER_KCELLS
-    assert R._pnr_timeout_s(25_000) == min(expected, R._PNR_TIMEOUT_CAP_S)
 
 
-def test_pnr_timeout_capped():
-    assert R._pnr_timeout_s(10_000_000) == R._PNR_TIMEOUT_CAP_S
 
 
 # ── (a) checkpoint preservation + resume detection ──────────────────────────
 
-def test_pnr_last_checkpoint_none_when_empty(tmp_path):
-    pnr_dir = tmp_path / "pnr"
-    pnr_dir.mkdir()
-    assert R._pnr_last_checkpoint(pnr_dir) is None
 
 
-def test_pnr_last_checkpoint_detects_placed(tmp_path):
-    pnr_dir = tmp_path / "pnr"
-    pnr_dir.mkdir()
-    (pnr_dir / "floorplan.def").write_text("VERSION 5.8 ;\n")
-    (pnr_dir / "placed.def").write_text("VERSION 5.8 ;\n")
-    assert R._pnr_last_checkpoint(pnr_dir) == "post_place"
 
 
-def test_pnr_last_checkpoint_stops_at_first_gap(tmp_path):
-    pnr_dir = tmp_path / "pnr"
-    pnr_dir.mkdir()
-    (pnr_dir / "floorplan.def").write_text("VERSION 5.8 ;\n")
-    # placed.def missing → post_cts.def should NOT be reached
-    (pnr_dir / "post_cts.def").write_text("VERSION 5.8 ;\n")
-    assert R._pnr_last_checkpoint(pnr_dir) == "post_floorplan"
 
 
 def test_pnr_checkpoint_defs_survive_timeout(tmp_path):

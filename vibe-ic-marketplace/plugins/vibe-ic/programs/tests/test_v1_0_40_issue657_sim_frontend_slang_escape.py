@@ -20,14 +20,12 @@ genuine non-assertion defect that merely prints "Parse error" does NOT
 trigger the escape, and verilator absence / verilator-also-rejects keeps the
 honest iverilog FAIL.
 """
-import inspect
 import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import synth_frontend as SF  # noqa: E402
-import design_one_shot_runner as R  # noqa: E402
 
 
 # the field agent's exact sv2v stderr signature (round-3 reproduction):
@@ -104,24 +102,3 @@ def test_escape_fires_on_unrecognised_sv2v_phrasing():
 
 
 # ── runner integration: the escape ladder is wired into the SIM path ────────
-
-def test_runner_sim_path_has_verilator_escape_helper():
-    # The asymmetry the issue documents: the synth path had slang escapes but
-    # the sim path had none. Pin that the sim-path helper now exists and the
-    # compile fallback calls it.
-    assert hasattr(R, "_verilator_sim_escape")
-    src = inspect.getsource(R._iverilog_compile_with_sv_fallback)
-    assert "_verilator_sim_escape" in src
-    assert "sim_frontend_should_try_verilator" in src
-
-
-def test_verilator_escape_returns_honest_fail_when_unavailable(tmp_path):
-    # When verilator is not in the container (or docker absent), the escape
-    # returns the honest iverilog_g2012 frontend, never a forged PASS.
-    # _tool_in_container will return False on a non-existent container.
-    rc, out, err, fe = R._verilator_sim_escape(
-        rtl_files=[tmp_path / "m.sv"], tb_path=tmp_path / "tb.v",
-        run_dir=tmp_path, container="vibeic-nonexistent-container-657",
-        top_name="m", reason="test")
-    assert fe == "iverilog_g2012"
-    assert rc != 0

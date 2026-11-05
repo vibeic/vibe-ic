@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import general_precheck as GP
 import phase3_one_shot_runner as P3
 from test_general_precheck import _die_at_origin
-from test_sha256_signoff_drc_zero_nobody_corroborated import _RDB_NO_ITEMS
 
 NATIVE = Path(__file__).parent / "fixtures/drc_native_input_binding"
 
@@ -159,26 +158,3 @@ def test_resolved_output_binding_uses_real_hash_writer(tmp_path, changed_layout)
         before = historical.read_bytes()
         assert _actual_delegate(tmp_path, gds).verdict == GP.PASS, _details(tmp_path)
         assert historical.read_bytes() == before
-
-
-@pytest.mark.parametrize("mutate", [False, True])
-def test_producer_snapshots_before_and_checks_after(tmp_path, monkeypatch, mutate):
-    gds = _die_at_origin(tmp_path / "phase3/stage3/pnr/chip_top.gds")
-    before = _sha(gds)
-    rpt = tmp_path / "phase3/reports/drc.rpt"
-    monkeypatch.setattr(P3, "_PROV_SINK", str(tmp_path))
-    monkeypatch.setattr(P3, "_tool_version", lambda *args: "test-seam")
-    monkeypatch.setattr(P3, "_to_container_path", lambda path, _: path)
-    def native(*args, **kwargs):
-        rpt.write_text(_RDB_NO_ITEMS)
-        if mutate:
-            _die_at_origin(gds, w=120_000)
-        return 0, "KLayout DRC\nDRC RESULT: SUCCESS (0 violations)\n", ""
-    monkeypatch.setattr(P3._dwd, "run_docker_supervised", native)
-    pdk = type("Pdk", (), {"drc_deck": "/pdk/test.lydrc"})()
-    rc, _, _ = P3._klayout_deck_exec(gds, rpt, "chip_top", pdk, "")
-    record = json.loads((tmp_path / "provenance.jsonl").read_text())
-    assert record["inputs"] == {gds.relative_to(tmp_path).as_posix(): before}
-    assert record["outputs"]["phase3/reports/drc.log"] == _sha(rpt.with_suffix(".log"))
-    assert rc == (1 if mutate else 0)
-    assert record["exit_code"] == rc

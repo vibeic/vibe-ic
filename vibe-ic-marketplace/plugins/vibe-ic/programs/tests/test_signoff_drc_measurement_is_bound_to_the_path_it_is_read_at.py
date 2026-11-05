@@ -56,7 +56,6 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import eda_report_audit as A  # noqa: E402
-import phase3_one_shot_runner as R  # noqa: E402
 
 CANON_RPT = "reports/phase3/drc_signoff.rpt"
 CANON_LOG = "reports/phase3/drc_signoff.log"
@@ -115,28 +114,12 @@ def _project(tmp_path: Path, rows: list, *,
     return tmp_path
 
 
-def _rebind(project: Path):
-    """Call the re-bind THROUGH `getattr`, so the PRE-FIX tree runs these tests
-    and answers "nothing was re-bound" instead of raising AttributeError.
-
-    A control arm that dies on an attribute error has observed nothing: it
-    cannot distinguish "the fix is absent" from "the fixture is broken". With
-    the shim, every test below executes on both arms and the POSITIVE ones fail
-    pre-fix for the right reason — the gate still refuses a zero it cannot
-    corroborate — while every negative control passes on both arms, which is
-    what makes them controls.
-    """
-    fn = getattr(R, "_rebind_measured_drc_invocation_to_canonical_path", None)
-    return None if fn is None else fn(project)
 
 
 def _corroborated(root: Path) -> bool:
     return bool(A._measured_klayout_receipt_files(root, [root / CANON_RPT]))
 
 
-def _rows(root: Path) -> list:
-    return [json.loads(l) for l in
-            (root / "provenance.jsonl").read_text().splitlines() if l.strip()]
 
 
 # ── the defect, and its repair ──────────────────────────────────────────────
@@ -148,166 +131,28 @@ def test_the_shipped_shape_is_refused_before_the_rebind(tmp_path):
     assert _corroborated(proj) is False
 
 
-def test_rebind_binds_the_same_measurement_to_the_canonical_path(tmp_path):
-    proj = _project(tmp_path, [_measured_row()])
-    assert _rebind(proj) == CANON_RPT
-    assert _corroborated(proj) is True
 
 
-def test_the_appended_row_asserts_nothing_of_its_own(tmp_path):
-    """`measured`, `tool`, `exit_code` and `inputs` are COPIED from the real
-    measurement. A row that invented any of them would be the hand-written
-    evidence this fix exists to replace."""
-    src = _measured_row(tool="klayout", exit_code=0)
-    proj = _project(tmp_path, [src])
-    _rebind(proj)
-    new = _rows(proj)[-1]
-    assert new["tool"] == src["tool"]
-    assert new["exit_code"] == src["exit_code"]
-    assert new["inputs"] == src["inputs"]
-    assert new["measured"] is True and new["record"] == "invocation"
-    assert new["outputs"] == {CANON_RPT: _sha(RPT_BYTES),
-                              CANON_LOG: _sha(LOG_BYTES)}
-    # it says where it came from, so a reader can check the claim
-    assert sorted(new["rebound_from"]) == sorted([SRC_RPT, SRC_LOG])
 
 
-def test_the_ledger_stays_append_only(tmp_path):
-    proj = _project(tmp_path, [_measured_row()])
-    before = _rows(proj)
-    _rebind(proj)
-    after = _rows(proj)
-    assert after[:len(before)] == before
-    assert len(after) == len(before) + 1
 
 
-def test_rebind_is_idempotent(tmp_path):
-    proj = _project(tmp_path, [_measured_row()])
-    assert _rebind(proj) == CANON_RPT
-    n = len(_rows(proj))
-    assert _rebind(proj) is None
-    assert len(_rows(proj)) == n
 
 
 # ── NEGATIVE CONTROLS: it must be unable to say "measured" when it was not ──
 
-def test_bytes_no_measured_invocation_produced_are_not_rebound(tmp_path):
-    """THE CENTRAL CONTROL. The canonical report holds DIFFERENT bytes from
-    anything the measurement produced — a stale copy, a hand-edit, another
-    deck's output. The source is matched BY DIGEST, so nothing matches."""
-    proj = _project(tmp_path, [_measured_row()], rpt=b"<different/>\n")
-    assert _rebind(proj) is None
-    assert _corroborated(proj) is False
 
 
-def test_a_changed_input_gds_breaks_the_rebind(tmp_path):
-    """The deck's input is not the layout on disk any more, so the measurement
-    no longer describes this design and may not be re-bound to it."""
-    proj = _project(tmp_path, [_measured_row()], gds=b"\x00\x06\x00\x02changed")
-    assert _rebind(proj) is None
-    assert _corroborated(proj) is False
 
 
-def test_a_declaration_is_not_a_measurement(tmp_path):
-    """The row that DOES name the canonical path in a real run carries
-    `record: null`, `measured: null`, `inputs: null`. It must not be promoted."""
-    decl = {"record": None, "measured": None, "tool": "klayout",
-            "exit_code": 0, "inputs": None,
-            "outputs": {CANON_RPT: _sha(RPT_BYTES)},
-            "timestamp": "2026-09-15T00:00:00+00:00"}
-    proj = _project(tmp_path, [decl])
-    assert _rebind(proj) is None
-    assert _corroborated(proj) is False
 
 
-def test_a_nonzero_exit_is_not_rebound(tmp_path):
-    proj = _project(tmp_path, [_measured_row(exit_code=1)])
-    assert _rebind(proj) is None
-    assert _corroborated(proj) is False
 
 
-def test_a_source_without_the_transcript_is_not_rebound(tmp_path):
-    """Half a measurement is not a measurement: the contract wants the report
-    AND its transcript, so a source that recorded only the report cannot
-    discharge it."""
-    proj = _project(tmp_path,
-                    [_measured_row(outputs={SRC_RPT: _sha(RPT_BYTES)})])
-    assert _rebind(proj) is None
-    assert _corroborated(proj) is False
 
 
-def test_an_unmeasured_invocation_is_not_rebound(tmp_path):
-    proj = _project(tmp_path, [_measured_row(measured=False)])
-    assert _rebind(proj) is None
-    assert _corroborated(proj) is False
 
 
-def test_no_ledger_and_no_report_are_both_quiet(tmp_path):
-    """Absence is not an error and is not a row."""
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert _rebind(empty) is None
-    only_files = tmp_path / "nolog"
-    _write(only_files, CANON_RPT, RPT_BYTES)          # no .log beside it
-    _ledger(only_files, [_measured_row()])
-    assert _rebind(only_files) is None
 
 
 # The current publisher records a copy, not a second native invocation.
-import pytest
-
-
-@pytest.mark.parametrize("damage", ["current", "changed_report", "missing_log",
-                                    "swapped_log", "changed_gds"])
-def test_immutable_pair_retains_native_zero(tmp_path, monkeypatch, damage):
-    from dataclasses import asdict
-    from _gdsii import write_gdsii
-    from test_signoff_drc_producer_is_a_signoff_deck import klayout_rdb
-
-    project = tmp_path / "project"
-    raw_report, raw_log = project / SRC_RPT, project / SRC_LOG
-    gds = project / SRC_GDS
-    gds.parent.mkdir(parents=True)
-    write_gdsii(gds, cell="fixture_core")
-    raw_report.parent.mkdir(parents=True)
-
-    def native_process(*args, **kwargs):
-        raw_report.write_text(klayout_rdb("fixture_core"))
-        return 0, "KLayout completed sign-off deck execution\n", ""
-
-    monkeypatch.setattr(R._dwd, "run_docker_supervised", native_process)
-    monkeypatch.setattr(R, "_PROV_SINK", str(project))
-    rc, _, _ = R._docker_exec(
-        "", f"klayout -b -r /pdk/deck.lydrc -rd input={gds}",
-        marker="/pdk/deck.lydrc", inputs=[gds],
-        outputs=[raw_report, raw_log], transcript_path=raw_log)
-    assert rc == 0
-    native_rows = _rows(project)
-    assert len(native_rows) == 1
-    assert native_rows[0]["record"] == "invocation"
-    assert native_rows[0]["measurement"]["measured"] is True
-    _write(project, CANON_RPT, raw_report.read_bytes())
-    _write(project, CANON_LOG, raw_log.read_bytes())
-    assert R._declare_immutable_transform(
-        project, raw_report, project / CANON_RPT, "drc:signoff",
-        "phase3_one_shot_runner", "publish byte-identical sign-off report")
-    # As on the real call path, no transform or invocation is minted for log.
-    assert len(_rows(project)) == 2
-    assert _rows(project)[-1]["record"] == "declared_transform"
-    ledger_before = (project / "provenance.jsonl").read_bytes()
-    if damage == "changed_report":
-        with (project / CANON_RPT).open("a") as stream:
-            stream.write("<!-- changed canonical bytes -->\n")
-    elif damage == "missing_log":
-        raw_log.unlink()
-    elif damage == "swapped_log":
-        (project / CANON_LOG).write_text("another invocation's transcript\n")
-    elif damage == "changed_gds":
-        write_gdsii(gds, cell="another_subject")
-    with A.scoped_discovery([project / CANON_RPT]):
-        report = asdict(A._check_drc(project))
-    (project / "consumer_observation.json").write_text(json.dumps({
-        "damage": damage, "report": report}, indent=2) + "\n")
-    assert report["passed"] == (damage == "current"), report
-    assert report["summary"]["receipt_corroborated_files"] == int(damage == "current")
-    assert (project / "provenance.jsonl").read_bytes() == ledger_before

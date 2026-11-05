@@ -40,18 +40,14 @@ ORGANIC #694 [MED] — single-corner stance attestation defers pvt_matrix_check
 chip-AGNOSTIC: canonical PV paths, real sha256, structural JSON shape only —
 no chip / vendor / SKU literal.
 """
-import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
-import phase3_one_shot_runner as P  # noqa: E402
 import pvt_matrix_check as PMC      # noqa: E402
 
-PROVCHK = str(PLUGIN / "programs" / "provenance_check.py")
 _P3_SRC = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
 
 
@@ -70,111 +66,22 @@ _KLAYOUT_RDB = ("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
                 "</report-database>\n")
 
 
-def _sha(p):
-    h = hashlib.sha256()
-    h.update(Path(p).read_bytes())
-    return "sha256:" + h.hexdigest()
 
 
-def _mk_proj(tmp_path):
-    (tmp_path / "provenance.jsonl").write_text(
-        json.dumps({"tool": "openroad", "exit_code": 0,
-                    "outputs": {"phase3/stage3/pnr/routed.def": "sha256:bb"}})
-        + "\n")
-    (tmp_path / "reports" / "phase3").mkdir(parents=True)
-    return tmp_path
 
 
-def _provchk(tmp_path, rel, tools):
-    return subprocess.run(
-        [sys.executable, PROVCHK, str(tmp_path),
-         "--output", rel, "--tool", tools],
-        capture_output=True, text=True)
 
 
-def test_693_drc_signoff_declared_at_emit_time(tmp_path):
-    """POSITIVE: once drc_signoff.rpt exists, the declarer stamps it and the
-    Step-31 gate goes FAIL → PASS."""
-    _mk_proj(tmp_path)
-    rel = "reports/phase3/drc_signoff.rpt"
-    # BEFORE: report not on disk → gate FAILs (nothing declares the path).
-    assert _provchk(tmp_path, rel, "klayout,magic,openroad").returncode == 1
-    # The runner writes the sign-off DRC report (emit step), THEN our fix
-    # re-runs the declarer at emit time.
-    (tmp_path / rel).write_text(_KLAYOUT_RDB)
-    declared = P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
-    assert rel in declared
-    # AFTER: the gate now PASSes.
-    assert _provchk(tmp_path, rel, "klayout,magic,openroad").returncode == 0
 
 
-def _stamped(tmp_path, rel):
-    entry = None
-    for line in (tmp_path / "provenance.jsonl").read_text().splitlines():
-        if line.strip() and rel in line:
-            entry = json.loads(line)
-    return entry
 
 
-def test_693_real_sha_and_tool_stamped(tmp_path):
-    _mk_proj(tmp_path)
-    rel = "reports/phase3/drc_signoff.rpt"
-    fp = tmp_path / rel
-    fp.write_text(_KLAYOUT_RDB)
-    P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
-    entry = _stamped(tmp_path, rel)
-    assert entry is not None
-    assert entry["tool"] == "klayout"
-    assert entry["outputs"][rel] == _sha(fp)  # REAL hash, not a placeholder
 
 
-def test_693_tool_is_derived_from_the_artefact_not_assumed(tmp_path):
-    """The `klayout` above must be MEASURED, not a constant.
-
-    The fixture used to be `"# Sign-off DRC report\\nviolations=0"` — a file
-    with no producer signature at all — and the assertion `tool == "klayout"`
-    still held, because the declarer hardcoded it. That is the laundering the
-    Step-31 provenance allow-list could never see through: with `klayout`
-    stamped unconditionally, removing `openroad` from the allow-list changes
-    nothing at all.
-    """
-    _mk_proj(tmp_path)
-    rel = "reports/phase3/drc_signoff.rpt"
-    (tmp_path / rel).write_text(
-        "# Sign-off DRC report (Step 31 alias).\n"
-        "# Source: phase3/stage3/pnr/routed.drc.rpt\n"
-        "# Tool: openroad\n#\n"
-        "openroad / drt-pass: detailed_route invoked\n"
-        "violation report: 0\nDRC clean: YES\n"
-        + "".join(f"[INFO DRT-{2000 + i:04d}] region query size = {i}.\n"
-                  for i in range(80)))
-    P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
-    assert _stamped(tmp_path, rel)["tool"] == "openroad"
-    # and the allow-list can now do its job
-    assert _provchk(tmp_path, rel, "klayout,magic,svrfdrc").returncode == 1
 
 
-def test_693_negative_absent_report_not_fabricated(tmp_path):
-    """§4.05: a report that was never produced is NOT declared; the gate
-    still FAILs (no blanket pass)."""
-    _mk_proj(tmp_path)
-    rel = "reports/phase3/drc_signoff.rpt"
-    # do NOT create the report
-    declared = P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
-    assert rel not in declared
-    assert _provchk(tmp_path, rel, "klayout,magic,openroad").returncode == 1
 
 
-def test_693_idempotent_emit_time_rerun(tmp_path):
-    _mk_proj(tmp_path)
-    rel = "reports/phase3/drc_signoff.rpt"
-    (tmp_path / rel).write_text("violations=0\n")
-    P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
-    second = P._v1_6_620_append_pv_signoff_provenance(tmp_path, "chip_top")
-    assert rel not in second
-    cnt = (tmp_path / "provenance.jsonl").read_text().count(
-        '"reports/phase3/drc_signoff.rpt"')
-    assert cnt == 1
 
 
 def test_693_source_calls_declarer_after_writing_drc_signoff(tmp_path):

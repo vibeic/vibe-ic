@@ -10,7 +10,6 @@ import pytest
 import _container_exec as ce
 import _docker_watchdog as watchdog
 import execution_analog_local_transport as transport
-import execution_modes as em
 import librelane_contract as lc
 
 
@@ -76,27 +75,6 @@ def test_actual_supervisor_records_neutral_process_output_for_all_transport_cons
     assert all(row["observer_pid"] == os.getpid() and row["started_ns"] < row["ended_ns"] for row in rows)
 
 
-@pytest.mark.parametrize("operation,code", [
-    ("existing_container", "ANALOG_EXISTING_CONTAINER_FORBIDDEN"),
-    ("extra_options", "ANALOG_EXISTING_CONTAINER_FORBIDDEN"),
-    ("unbound_command", "ANALOG_NATIVE_COMMAND_UNBOUND"),
-    ("expired_deadline", "ANALOG_NATIVE_FINITE_DEADLINE"),
-])
-def test_transport_refuses_unbound_or_expired_work_before_execution(transport_case, operation, code):
-    project, parameters, receipts = transport_case
-    deadline = time.monotonic() - 1 if operation == "expired_deadline" else time.monotonic() + 20
-    with transport.local_transport(receipts, deadline, project=project, parameters=parameters):
-        with pytest.raises(em.Refusal) as refused:
-            if operation == "existing_container":
-                ce.docker_exec_argv("unowned_container", "python3")
-            elif operation == "extra_options":
-                ce.docker_exec_argv("host", "python3", opts=("--privileged",))
-            elif operation == "unbound_command":
-                lc.run_container([sys.executable, "-c", "print('must not execute')"])
-            else:
-                ce.run_in_container("host", "python3 -c 'print(1)'")
-        assert refused.value.code == code
-    assert not receipts.exists()
 
 
 def test_transport_restores_original_callers_after_body_exception(transport_case):

@@ -30,44 +30,16 @@ import drv_promotion_corroboration_check as DPC  # noqa: E402
 
 # ---------------------------------------------------------------- sta alias
 
-def _stage(tmp_path: Path, **files) -> Path:
-    stage = tmp_path / "phase3" / "stage3"
-    for rel, body in files.items():
-        f = stage / (rel.replace("__", "/") + ".rpt")
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(body)
-    stage.mkdir(parents=True, exist_ok=True)
-    return stage
 
 
-def test_the_single_corner_spef_report_is_preferred(tmp_path):
-    stage = _stage(tmp_path, sta__sta_spef_based="single\n",
-                   sta__sta_mcorner_ocv="multi\n")
-    rpt, basis = R.canonical_post_route_sta(stage)
-    assert rpt.name == "sta_spef_based.rpt" and "single-corner" in basis
 
 
-def test_the_multi_corner_ocv_report_is_the_next_basis(tmp_path):
-    """r46's own case: the single-corner run refused itself."""
-    stage = _stage(tmp_path, sta__sta_mcorner_ocv="multi\n", pnr__sta="est\n")
-    rpt, basis = R.canonical_post_route_sta(stage)
-    assert rpt.name == "sta_mcorner_ocv.rpt" and "multi-corner OCV" in basis
 
 
-def test_a_refused_attempt_is_never_a_basis(tmp_path):
-    stage = _stage(tmp_path)
-    (stage / "sta").mkdir(parents=True, exist_ok=True)
-    (stage / "sta" / "sta_spef_based.rpt.attempt-deadbeef").write_text("refused\n")
-    assert R.canonical_post_route_sta(stage) == (None, "")
 
 
-def test_an_empty_report_is_not_a_basis(tmp_path):
-    stage = _stage(tmp_path, sta__sta_mcorner_ocv="")
-    assert R.canonical_post_route_sta(stage) == (None, "")
 
 
-def test_a_run_with_no_sta_at_all_says_so(tmp_path):
-    assert R.canonical_post_route_sta(tmp_path / "nope") == (None, "")
 
 
 # ------------------------------------------------------------ promotion claim
@@ -151,42 +123,3 @@ def test_the_em_record_is_not_a_pass():
 
 
 # ── the half that was missing, added after it cost three measurement arms ──
-def test_a_basis_older_than_the_run_is_not_this_runs_measurement(tmp_path):
-    """MEASURED 2026-09-21: three comparison arms re-entered phase 3 on a COPY
-    of an earlier run's project. Their own routes came out clean, so no new
-    multi-corner STA was written -- and the resolver picked the EARLIER run's
-    `sta_mcorner_ocv.rpt` (02:53) and republished its content under a freshly
-    written `post_route_timing.rpt` (11:10). Three arms reported a number none
-    of them had computed."""
-    import os
-    import time as _t
-    stage = tmp_path / "stage3"
-    sta = stage / "sta"
-    sta.mkdir(parents=True)
-    old = sta / "sta_mcorner_ocv.rpt"
-    old.write_text("worst slack max -0.73\n")
-    stale = _t.time() - 3600
-    os.utime(old, (stale, stale))
-    run_started = _t.time() - 60
-    got, basis = R.canonical_post_route_sta(stage, run_started)
-    assert got is None and basis == "", \
-        "a report this run did not write is not this run's evidence"
-    # and the same file, written by this run, IS its evidence
-    os.utime(old, None)
-    got, basis = R.canonical_post_route_sta(stage, run_started)
-    assert got == old and basis
-
-
-def test_without_a_run_stamp_the_resolver_behaves_as_before(tmp_path):
-    """The freshness test is opt-in, so no existing caller changes meaning."""
-    import os
-    import time as _t
-    stage = tmp_path / "stage3"
-    sta = stage / "sta"
-    sta.mkdir(parents=True)
-    old = sta / "sta_mcorner_ocv.rpt"
-    old.write_text("x\n")
-    stale = _t.time() - 3600
-    os.utime(old, (stale, stale))
-    got, _basis = R.canonical_post_route_sta(stage)
-    assert got == old

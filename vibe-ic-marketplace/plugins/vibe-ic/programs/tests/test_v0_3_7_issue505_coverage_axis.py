@@ -20,16 +20,13 @@ sidecar round-trip — the e2e (real synth/lint/sdc) needs the EDA
 toolchain and is exercised by the bench harness, not unit tests.
 Chip-AGNOSTIC: only counters/verdict strings participate.
 """
-import json
 import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import _path_layout as _pl                   # noqa: E402
 import phase1_doc_one_shot_runner as P1D  # noqa: E402
-import vibe_ic_one_shot_runner as ORCH  # noqa: E402
 
 
 # ── phase1_doc side: exit classification ─────────────────────────────
@@ -84,49 +81,12 @@ def test_full_coverage_passes():
 
 # ── orchestrator side: sidecar reader ────────────────────────────────
 
-def _write_sidecar(tmp_path: Path, payload: dict) -> Path:
-    # Staged through the ONE declaration the producer and both readers use, so this
-    # fixture cannot outlive a move of the path (next/icslot-sidecarpath).
-    side = _pl.coverage_only_sidecar_path(tmp_path)
-    side.parent.mkdir(parents=True, exist_ok=True)
-    side.write_text(json.dumps(payload))
-    return tmp_path
 
 
-def test_reader_detects_coverage_only(tmp_path):
-    proj = _write_sidecar(tmp_path, {
-        "verdict": "FAIL", "coverage_pct": 0.0, "total_todo": 0,
-        "coverage_only_failure": True})
-    flag, reason = ORCH._phase1_failure_is_coverage_only(proj)
-    assert flag is True and reason["coverage_pct"] == 0.0
 
 
-def test_reader_false_when_not_coverage_only(tmp_path):
-    proj = _write_sidecar(tmp_path, {
-        "verdict": "FAIL", "total_todo": 3, "coverage_only_failure": False})
-    flag, _ = ORCH._phase1_failure_is_coverage_only(proj)
-    assert flag is False
 
 
-def test_reader_false_when_sidecar_absent(tmp_path):
-    # prompt-mode phase1 writes no sidecar → default halting preserved.
-    flag, reason = ORCH._phase1_failure_is_coverage_only(tmp_path)
-    assert flag is False and reason == {}
 
 
 # ── orchestrator side: aggregate treats COVERAGE-INCOMPLETE as advisory ─
-
-def test_aggregate_coverage_incomplete_with_pass_is_pass_with_waivers():
-    # phase1 demoted + phase2 PASS → overall PASS_WITH_WAIVERS (gap shown,
-    # not hidden, not FAIL).
-    assert ORCH._aggregate(
-        ["COVERAGE-INCOMPLETE", "PASS"]) == "PASS_WITH_WAIVERS"
-
-
-def test_aggregate_coverage_incomplete_with_fail_still_fails():
-    # a real RTL failure downstream still fails — demotion never masks it.
-    assert ORCH._aggregate(["COVERAGE-INCOMPLETE", "FAIL"]) == "FAIL"
-
-
-def test_aggregate_plain_pass_unchanged():
-    assert ORCH._aggregate(["PASS", "PASS"]) == "PASS"

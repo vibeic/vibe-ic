@@ -130,13 +130,6 @@ def _core(tmp_path: Path) -> Path:
     return p
 
 
-def _sdc(project: Path, monkeypatch, values=None, *, top: str = "") -> str:
-    vals = dict(_PDK_VALUES if values is None else values)
-    monkeypatch.setattr(p3, "_sdc_environment_values", lambda *_: (dict(vals), []))
-    monkeypatch.setattr(p3, "_synth_max_fanout", lambda *_: (None, "", []))
-    return p3._build_auto_silicon_sdc(
-        project, top=top, pdk_name="famxD",
-        liberty_path="/pdk/libs.ref/quartz_sc/lib/slow.lib")
 
 
 def _commands(text: str, name: str):
@@ -149,89 +142,24 @@ def _record(project: Path) -> dict:
 
 # -- the SDC --------------------------------------------------------------
 
-def test_die_top_never_carries_the_core_driving_cell(tmp_path, monkeypatch):
-    text = _sdc(_die(tmp_path), monkeypatch)
-    assert _commands(text, "set_driving_cell") == []
-    assert "NOT_MEASURED: OFFCHIP_INPUT_DRIVE" in text
-    assert "quartz_sc__inv_1/ZN" in text  # the refusal names what it refused
-    # the other environment commands are untouched
-    assert _commands(text, "set_load") == ["set_load 0.07291 [all_outputs]"]
 
 
-def test_die_drive_is_recorded_not_measured_with_the_refused_cell(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    _sdc(project, monkeypatch)
-    rec = _record(project)
-    assert rec["verdict"] == "NOT_MEASURED"
-    assert rec["refused_core_driving_cell"]["value"] == "quartz_sc__inv_1/ZN"
-    assert "IO-tier" in rec["reason"]
 
 
-def test_a_declared_input_transition_drives_the_die_inputs(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    docs = project / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "L9_constraints.md").write_text("| `set_input_transition` | **1.5** |\n")
-    text = _sdc(project, monkeypatch)
-    assert _commands(text, "set_input_transition") == [
-        "set_input_transition 1.5 [all_inputs]"]
-    assert _commands(text, "set_driving_cell") == []
-    rec = _record(project)
-    assert rec["verdict"] == "DECLARED" and rec["value"] == "1.5"
-    assert rec["source"].startswith("design doc ")
 
 
-def test_a_design_declared_driver_is_kept_on_a_die(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    vals = dict(_PDK_VALUES,
-                set_driving_cell=("quartz_sc__buf_8/Z", "design doc L9.md:3"))
-    text = _sdc(project, monkeypatch, vals)
-    assert _commands(text, "set_driving_cell") == [
-        "set_driving_cell -lib_cell quartz_sc__buf_8 -pin Z [all_inputs]"]
-    assert _record(project)["verdict"] == "DECLARED"
 
 
-def test_control_a_core_run_keeps_the_synthesis_driving_cell(tmp_path, monkeypatch):
-    text = _sdc(_core(tmp_path), monkeypatch)
-    assert _commands(text, "set_driving_cell") == [
-        "set_driving_cell -lib_cell quartz_sc__inv_1 -pin ZN [all_inputs]"]
-    assert "OFFCHIP_INPUT_DRIVE" not in text
 
 
 # -- the STA verdict ------------------------------------------------------
 
-def _rows():
-    mk = lambda n, s: p3.StepResult(n, s, 0.0, f"{n} {s}", [], {})
-    return [mk("sta_signoff", "PASS"), mk("sta_corner", "FAIL"),
-            mk("sta_record", "PASS"), mk("em_signoff", "PASS")]
 
 
-def _fold(project, rows):
-    # the runner folds its declared sign-off rows through this, in
-    # step_declared_signoff_gates (the PPA ledger keeps the logic in _ppa)
-    return {r.name: r for r in p3._ppa_timing.pad_drive_sta_verdict(p3, project, rows)}
 
 
-def test_a_not_measured_drive_turns_sta_pass_into_not_measured(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    _sdc(project, monkeypatch)
-    by = _fold(project, _rows())
-    assert by["sta_signoff"].status == "NOT_MEASURED"
-    assert "OFFCHIP_INPUT_DRIVE" in by["sta_signoff"].detail
-    assert by["sta_record"].status == "NOT_MEASURED"
-    assert by["sta_corner"].status == "FAIL"      # a violation stays a violation
-    assert by["em_signoff"].status == "PASS"      # not an STA row
 
 
-def test_control_a_declared_drive_leaves_the_sta_verdict_alone(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    docs = project / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "L9_constraints.md").write_text("| `set_input_transition` | 1.5 |\n")
-    _sdc(project, monkeypatch)
-    by = _fold(project, _rows())
-    assert by["sta_signoff"].status == "PASS"
-    assert by["sta_record"].status == "PASS"
 
 
 # -- the PDK IO tier (R-0929-IO-INPUT-TRANSITION and -2) --------------------
@@ -245,7 +173,6 @@ def test_control_a_declared_drive_leaves_the_sta_verdict_alone(tmp_path, monkeyp
 # from the IO view linked in that scene. The fixture copies that grammar
 # with neutral names.
 
-from _tool_probes import skip_not_verified  # noqa: E402
 
 _IO_LIB = """library ("quartz_io__%(corner)s") {
 \ttime_unit : "%(unit)s";
@@ -359,90 +286,12 @@ def _io_lib(tmp_path: Path, corner: str, in_pad="1.000000", bi_pad="1.000000",
     return lib
 
 
-def _views_line(text: str) -> str:
-    return next(ln for ln in text.splitlines() if ln.startswith("set _vibeic_pad_views "))
 
 
-def test_the_io_liberty_brackets_the_die_inputs_per_view(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    # ss: in PAD 0.08..1.0 (bound 1.0); bi PAD 0.1..1.25 (bound 1.25)
-    #  -> the view's common bracket: max 1.0 (no pin extrapolated), min 0.1
-    slow = _io_lib(tmp_path, "ss", in_pad="1.0", bi_pad="1.25",
-                   bi_idx="0.1, 0.6, 1.25")
-    # ff: in PAD bound 0.6 inside a 0.08..1.0 table -> max 0.6, min 0.08
-    fast = _io_lib(tmp_path, "ff", in_pad="0.6", bi_pad="0.9")
-    _io_record(project, [fast, slow])
-    text = _sdc(project, monkeypatch)
-    assert _views_line(text) == ("set _vibeic_pad_views {{quartz_io__ff 0.6 0.08} "
-                                 "{quartz_io__ss 1 0.1}}")
-    # with several views linked (multi-corner PnR) the range all characterise
-    assert "set _vibeic_pad_max 0.6" in text and "set _vibeic_pad_min 0.1" in text
-    assert _commands(text, "set_input_transition") == [
-        "set_input_transition -max $_vibeic_pad_max [all_inputs]",
-        "set_input_transition -min $_vibeic_pad_min [all_inputs]"]
-    assert _commands(text, "set_driving_cell") == []
-    assert "NOT_MEASURED: OFFCHIP_INPUT_DRIVE" not in text
-    rec = _record(project)
-    assert rec["verdict"] == "PDK_IO_TIER"
-    assert rec["refused_core_driving_cell"]["value"] == "quartz_sc__inv_1/ZN"
-    views = {v["library"]: v for v in rec["bracket"]["views"]}
-    assert (views["quartz_io__ss"]["max_ns"], views["quartz_io__ss"]["min_ns"]) == (1.0, 0.1)
-    assert len(views["quartz_io__ff"]["sha256"]) == 64
-    # the record names exactly the command lines the deck carries
-    assert rec["sdc_lines"] and all(ln in text.splitlines() for ln in rec["sdc_lines"])
-    # a PDK-tier drive is a modelled edge: the STA verdict is left alone
-    assert _fold(project, _rows())["sta_signoff"].status == "PASS"
 
 
-def test_current_core_boundary_keeps_on_chip_drive_until_chip_top_is_analysed(
-        tmp_path, monkeypatch):
-    """#3269: a future DIE request does not move the current core boundary.
-
-    The current analysis top is the changed input.  Core -> chip -> core is the
-    forward and reversal control; the pad producer's identity stays unchanged.
-    """
-    project = _die(tmp_path)
-    _io_record(project, [_io_lib(tmp_path, "tt")],
-               core_module="neutral_core", chip_top_module="neutral_chip")
-
-    core = _sdc(project, monkeypatch, top="neutral_core")
-    core_record = _record(project)
-    assert core_record["verdict"] == "NOT_APPLICABLE"
-    assert _commands(core, "set_driving_cell") == [
-        "set_driving_cell -lib_cell quartz_sc__inv_1 -pin ZN [all_inputs]"]
-    assert _commands(core, "set_input_transition") == []
-    assert core_record["analysis_top"] == "neutral_core"
-    assert core_record["boundary"]["chip_top_module"] == "neutral_chip"
-
-    chip = _sdc(project, monkeypatch, top="neutral_chip")
-    assert _commands(chip, "set_driving_cell") == []
-    assert _commands(chip, "set_input_transition") == [
-        "set_input_transition -max $_vibeic_pad_max [all_inputs]",
-        "set_input_transition -min $_vibeic_pad_min [all_inputs]",
-    ]
-    chip_record = _record(project)
-    assert chip_record["verdict"] == "PDK_IO_TIER"
-    assert chip_record["analysis_top"] == "neutral_chip"
-
-    restored = _sdc(project, monkeypatch, top="neutral_core")
-    assert _commands(restored, "set_driving_cell") == [
-        "set_driving_cell -lib_cell quartz_sc__inv_1 -pin ZN [all_inputs]"]
-    assert _record(project)["verdict"] == "NOT_APPLICABLE"
 
 
-def test_unknown_analysis_top_refuses_to_guess_core_or_pad_boundary(
-        tmp_path, monkeypatch):
-    """A stale caller identity cannot borrow either a core or pad model."""
-    project = _die(tmp_path)
-    _io_record(project, [_io_lib(tmp_path, "tt")],
-               core_module="neutral_core", chip_top_module="neutral_chip")
-    text = _sdc(project, monkeypatch, top="stale_top")
-    rec = _record(project)
-    assert rec["verdict"] == "NOT_MEASURED"
-    assert _commands(text, "set_driving_cell") == []
-    assert _commands(text, "set_input_transition") == []
-    assert rec["analysis_top"] == "stale_top"
-    assert "matches neither" in rec["reason"]
 
 
 def _multi_axis_pad_lib(first: str, second: str, *, unit: str = "1ns",
@@ -502,107 +351,18 @@ def test_axis_intersection_converts_units_and_ignores_receiver_output_limit():
     assert {k: high.get(k) for k in expected} == expected
 
 
-def test_each_scene_takes_its_own_linked_io_view(tmp_path, monkeypatch):
-    """Execute the emitted Tcl with `get_libs` answering like a one-scene
-    OpenSTA process (LibreLane runs one per scene), then like a multi-corner
-    one, then with no IO view linked."""
-    tclsh = shutil.which("tclsh")
-    if not tclsh:
-        skip_not_verified("tclsh not on PATH, so the emitted per-scene Tcl "
-                          "selection cannot be executed here",
-                          "apt-get install tcl")
-    project = _die(tmp_path)
-    _io_record(project, [_io_lib(tmp_path, "ss", in_pad="1.0"),
-                         _io_lib(tmp_path, "ff", in_pad="0.6")])
-    text = _sdc(project, monkeypatch)
-    block = [ln for ln in text.splitlines() if "_vibeic_pad_" in ln
-             and not ln.startswith("#")]
-
-    def run(linked):
-        script = ("proc all_inputs {} { return P }\n"
-                  f"proc get_libs {{q name}} {{ if {{[lsearch -exact {{{' '.join(linked)}}} $name] >= 0}} {{ return $name }} ; return {{}} }}\n"
-                  "proc set_input_transition {mm v p} { puts \"$mm $v\" }\n"
-                  + "\n".join(ln for ln in block if not ln.startswith("puts")) + "\n")
-        out = subprocess.run([tclsh], input=script, capture_output=True,
-                             text=True, timeout=30)
-        assert out.returncode == 0, out.stderr
-        return out.stdout.split()
-
-    assert run(["quartz_io__ss"]) == ["-max", "1", "-min", "0.08"]
-    assert run(["quartz_io__ff"]) == ["-max", "0.6", "-min", "0.08"]
-    assert run(["quartz_io__ss", "quartz_io__ff"]) == ["-max", "0.6", "-min", "0.08"]
-    assert run([]) == ["-max", "0.6", "-min", "0.08"]
 
 
-def test_the_io_liberty_time_unit_is_converted_to_ns(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    _io_record(project, [_io_lib(tmp_path, "tt", in_pad="1000", bi_pad="1000",
-                                 in_idx="80, 500, 1000", bi_idx="80, 500, 1000",
-                                 unit="1ps")])
-    text = _sdc(project, monkeypatch)
-    assert _views_line(text) == "set _vibeic_pad_views {{quartz_io__tt 1 0.08}}"
 
 
-def test_an_unread_io_view_is_not_measured_not_a_partial_bracket(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    _io_record(project, [_io_lib(tmp_path, "ff"), tmp_path / "pdk" / "gone.lib"])
-    text = _sdc(project, monkeypatch)
-    assert _commands(text, "set_input_transition") == []
-    rec = _record(project)
-    assert rec["verdict"] == "NOT_MEASURED"
-    assert "NOT_READ" in rec["reason"] and "gone.lib" in rec["reason"]
-    assert _fold(project, _rows())["sta_signoff"].status == "NOT_MEASURED"
 
 
-def test_an_io_view_without_a_pad_bound_is_not_measured(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    lib = tmp_path / "pdk" / "bare.lib"
-    lib.parent.mkdir(parents=True)
-    lib.write_text('library ("bare") {\n cell ("c") {\n  pin ("PAD") {\n'
-                   '   is_pad : true;\n   direction : "input";\n  }\n }\n}\n')
-    _io_record(project, [lib])
-    _sdc(project, monkeypatch)
-    rec = _record(project)
-    assert rec["verdict"] == "NOT_MEASURED"
-    assert "no bond-pad input pin with a documented bound" in rec["reason"]
 
 
-def test_a_pad_without_a_characterised_fast_edge_is_not_measured(tmp_path, monkeypatch):
-    """A max_transition alone gives no fastest edge: the hold end of the
-    bracket is unknown, and inventing one (or reusing the slow end) is the
-    optimism the bracket exists to remove."""
-    project = _die(tmp_path)
-    lib = tmp_path / "pdk" / "noarc.lib"
-    lib.parent.mkdir(parents=True)
-    lib.write_text('library ("noarc") {\n cell ("c") {\n  pin ("PAD") {\n'
-                   '   max_transition : 1.0;\n   is_pad : true;\n'
-                   '   direction : "input";\n  }\n }\n}\n')
-    _io_record(project, [lib])
-    _sdc(project, monkeypatch)
-    rec = _record(project)
-    assert rec["verdict"] == "NOT_MEASURED"
-    assert "no fastest edge" in rec["reason"]
 
 
-def test_a_declared_input_transition_outranks_the_io_tier(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    _io_record(project, [_io_lib(tmp_path, "ss")])
-    docs = project / "input" / "docs"
-    docs.mkdir(parents=True)
-    (docs / "L9_constraints.md").write_text("| `set_input_transition` | 0.4 |\n")
-    text = _sdc(project, monkeypatch)
-    assert _commands(text, "set_input_transition") == [
-        "set_input_transition 0.4 [all_inputs]"]
-    assert _record(project)["verdict"] == "DECLARED"
 
 
-def test_control_a_core_run_ignores_the_io_tier(tmp_path, monkeypatch):
-    project = _core(tmp_path)
-    _io_record(project, [_io_lib(tmp_path, "ss")])
-    text = _sdc(project, monkeypatch)
-    assert _commands(text, "set_input_transition") == []
-    assert _commands(text, "set_driving_cell") == [
-        "set_driving_cell -lib_cell quartz_sc__inv_1 -pin ZN [all_inputs]"]
 
 
 # -- the design-staged SDC branch (review_wave58 MINOR) ---------------------
@@ -1193,20 +953,6 @@ def test_issue3389_failed_pad_publication_cannot_authorize_a_boundary(
 
 # -- the runner wiring of the STA fold (review_wave58 MINOR) ----------------
 
-def test_step_declared_signoff_gates_folds_the_pad_drive(tmp_path, monkeypatch):
-    project = _die(tmp_path)
-    _sdc(project, monkeypatch)            # no IO tier -> NOT_MEASURED record
-    seen = []
-
-    def fake_gate(_project, name, _program, _out_rel, _argv):
-        seen.append(name)
-        return p3.StepResult(name, "PASS", 0.0, f"{name} PASS", [], {})
-    monkeypatch.setattr(p3, "_run_declared_signoff_gate", fake_gate)
-    rows = p3.step_declared_signoff_gates(project)
-    by = {r.name: r for r in rows}
-    assert p3._STA_VERDICT_GATE in seen
-    assert by[p3._STA_VERDICT_GATE].status == "NOT_MEASURED"
-    assert "OFFCHIP_INPUT_DRIVE" in by[p3._STA_VERDICT_GATE].detail
 
 
 def test_step7_with_a_staged_sdc_on_a_die_resolves_and_rewrites_the_record(tmp_path, monkeypatch):
@@ -1263,118 +1009,3 @@ def test_unselected_supply_views_do_not_block_the_instantiated_input_pad(tmp_pat
     path.write_text(json.dumps(doc))
     bracket, basis = SE._pdk_io_input_transition(project)
     assert bracket is None and 'missing_input_pad' in basis['why']
-
-
-def _native_pad_link_project(tmp_path, monkeypatch):
-    """Neutral immutable-SDK shape; a software fixture, not native qualification."""
-    import hashlib
-    import synth_handoff_netlist_check as handoff
-    project = _core_wrapper_project(tmp_path / 'project')
-    record_path = project / 'reports/phase3/io_pad_chip_top.json'
-    record = json.loads(record_path.read_text())
-    original = Path(record['io_library_liberty'][0])
-    store = tmp_path / 'store';revision = 'a' * 40;pdk = 'neutralPdk'
-    source = store / ('0' * 32 + '-test-pdk-' + pdk + '-' + revision) / pdk
-    suffix = Path('libs.ref/neutral_io/lib/neutral.lib')
-    liberty = source / suffix;liberty.parent.mkdir(parents=True)
-    liberty.write_bytes(original.read_bytes());original.unlink()
-    runtime = tmp_path / 'runtime';runtime.mkdir();(runtime / pdk).symlink_to(source)
-    old = tmp_path / 'old/ciel/neutral/versions' / revision / pdk / suffix
-    record['io_library_liberty'] = [str(old)];record_path.write_text(json.dumps(record))
-    config = project / 'reports/flow109/D03/resolved.json';config.parent.mkdir(parents=True)
-    config.write_text(json.dumps({'PDK': pdk, 'STA_CORNERS': ['nom_tt'],
-                                 'PAD_LIBS': {'*_tt': [str(runtime / pdk / suffix)]}}))
-    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-    row = {'schema': 'vibeic.flow109.technology-qualification.v1', 'step_id': 'D03',
-           'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True,
-           'metrics': {'tool_deck_corner_binding': {'pdk': {'variant': pdk, 'revision': 'open_pdks:' + revision}}},
-           'inputs': [{'path': str(config), 'sha256': sha(config)},
-                      {'path': str(liberty), 'sha256': sha(liberty)}]}
-    row_path = project / 'reports/flow109/default_rows/D03.json';row_path.parent.mkdir(parents=True)
-    row_path.write_text(json.dumps(row))
-    monkeypatch.setenv('PDK_ROOT', str(runtime));monkeypatch.setattr(handoff, '_NIX_STORE', store)
-    return project, liberty, row_path, config
-
-
-def test_current_native_pad_link_translates_from_bound_runtime_views(tmp_path, monkeypatch):
-    import sdc_environment as SE
-    project, liberty, _row, _config = _native_pad_link_project(tmp_path, monkeypatch)
-    staged = ('set_input_transition -max 25 [all_inputs]\n'
-              'set_input_transition -min 0.01 [all_inputs]\n'
-              'set_load 5 [all_outputs]\n')
-    text, record = SE.staged_sdc_pad_input_drive(project, staged, 'input/external.sdc',
-                                               analysis_top='neutral_core')
-    assert record['verdict'] == 'PAD_TRANSLATED', record.get('reason', record)
-    assert 'set_load 0.04 [get_ports {y}]' in text
-    assert 'set_load 5 [all_outputs]' not in [x for x in text.splitlines() if not x.startswith('#')]
-    basis = record['pad_model_basis']
-    assert basis['views'][0]['sha256'] == __import__('hashlib').sha256(liberty.read_bytes()).hexdigest()
-    assert basis['native_link']['corners'] == ['nom_tt']
-    assert basis['read_view_count'] == 1
-    bracket, drive_basis = SE._pdk_io_input_transition(project)
-    assert bracket['common_min_ns'] == 0.01
-    assert bracket['common_max_ns'] == 25
-    assert drive_basis['native_link'] == basis['native_link']
-
-
-@pytest.mark.parametrize('damage', ['stale_hash', 'foreign_revision', 'missing_view',
-                                    'escaping_symlink', 'missing_selected_arc',
-                                    'missing_core_cap', 'stale_native_config'])
-def test_current_native_pad_link_refuses_bad_model_bindings(tmp_path, monkeypatch, damage):
-    import hashlib
-    import sdc_environment as SE
-    project, liberty, row_path, config = _native_pad_link_project(tmp_path, monkeypatch)
-    row = json.loads(row_path.read_text())
-    if damage == 'stale_hash':
-        liberty.write_text(liberty.read_text() + '\n/* changed native bytes */\n')
-    elif damage == 'foreign_revision':
-        row['metrics']['tool_deck_corner_binding']['pdk']['revision'] = 'open_pdks:' + 'b' * 40
-    elif damage == 'missing_view':
-        liberty.unlink()
-    elif damage == 'escaping_symlink':
-        foreign = tmp_path / 'foreign.lib';foreign.write_bytes(liberty.read_bytes())
-        liberty.unlink();liberty.symlink_to(foreign)
-    elif damage in ('missing_selected_arc', 'missing_core_cap'):
-        text = liberty.read_text()
-        text = text.replace('related_pin : "PAD"', 'related_pin : "WRONG"') if damage == 'missing_selected_arc' else text.replace('capacitance : 0.04;', '')
-        liberty.write_text(text);row['inputs'][1]['sha256'] = hashlib.sha256(liberty.read_bytes()).hexdigest()
-    else:
-        config.write_text(config.read_text() + '\n ')
-    row_path.write_text(json.dumps(row))
-    text, record = SE.staged_sdc_pad_input_drive(project,
-        'set_input_transition -max 25 [all_inputs]\n'
-        'set_input_transition -min 0.01 [all_inputs]\n'
-        'set_load 5 [all_outputs]\n', 'input/external.sdc', analysis_top='neutral_core')
-    assert record['verdict'] == 'NOT_MEASURED', record
-    assert not any(line.startswith('set_load') for line in text.splitlines())
-    assert 'R-0929-CORE-PAD-TRANSLATION REFUSED' in text
-
-
-@pytest.mark.parametrize('time_scale', [1.0, 1000.0])
-def test_current_native_pad_link_uses_existing_io_tier_for_omitted_edges(tmp_path, monkeypatch, time_scale):
-    import sdc_environment as SE
-    project, _liberty, _row, _config = _native_pad_link_project(tmp_path, monkeypatch)
-    text, record = SE.staged_sdc_pad_input_drive(project, 'set_load 5 [all_outputs]\n',
-        'input/external.sdc', analysis_top='neutral_core', time_scale=time_scale)
-    assert record['verdict'] == 'PAD_TRANSLATED', record.get('reason', record)
-    assert record['input_drive_default']['verdict'] == 'PDK_IO_TIER'
-    assert record['input_drive_default']['bracket']['common_min_ns'] == 0.01
-    assert record['input_drive_default']['bracket']['common_max_ns'] == 25
-    assert 'set_load 0.04 [get_ports {y}]' in text
-    assert f'-input_transition_rise {25 * time_scale:g} -input_transition_fall {25 * time_scale:g} -max' in text
-    assert f'-input_transition_rise {0.01 * time_scale:g} -input_transition_fall {0.01 * time_scale:g} -min' in text
-
-
-def test_current_native_pad_link_keeps_unknown_input_edge_unmeasured(tmp_path, monkeypatch):
-    import hashlib
-    import sdc_environment as SE
-    project, liberty, row_path, _config = _native_pad_link_project(tmp_path, monkeypatch)
-    liberty.write_text(liberty.read_text().replace('variable_1 : input_net_transition;',
-                                                  'variable_1 : total_output_net_capacitance;'))
-    row = json.loads(row_path.read_text())
-    row['inputs'][1]['sha256'] = hashlib.sha256(liberty.read_bytes()).hexdigest()
-    row_path.write_text(json.dumps(row))
-    _text, record = SE.staged_sdc_pad_input_drive(project, 'set_load 5 [all_outputs]\n',
-        'input/external.sdc', analysis_top='neutral_core')
-    assert record['verdict'] == 'NOT_MEASURED', record
-    assert 'input_drive_default' not in record

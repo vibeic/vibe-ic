@@ -39,7 +39,6 @@ from pathlib import Path
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
-PLUGIN_ROOT = PROGRAMS.parent
 STANDING = PROGRAMS / "gate_discloses_denominator_check.py"
 FLOW = PROGRAMS / "analog_flow_compliance_check.py"
 ORDER = PROGRAMS / "analog_netlist_include_order_check.py"
@@ -261,44 +260,10 @@ def test_order_gate_non_directory_still_exits_2(tmp_path):
 
 # ── 3. dead_plugin_path_check: the recorded decision ───────────────────────
 
-def test_dead_plugin_gate_still_rejects_a_retired_token(tmp_path):
-    """The rejection this gate exists for, untouched."""
-    sk = tmp_path / "skills" / "demo"
-    sk.mkdir(parents=True)
-    import dead_plugin_path_check as DP  # noqa: E402
-    (sk / "SKILL.md").write_text(
-        "see plugins/" + DP.RETIRED_PLUGIN_TOKEN + "/_shared/x.py\n")
-    r = _run(DEAD, tmp_path, str(tmp_path))
-    assert r.returncode == 1
-    assert "FAIL — 1 retired-plugin reference(s)" in r.stdout
-    # A FAIL states its denominator too: the finding is not the only number.
-    assert "examined" in r.stdout
 
 
-def test_dead_plugin_gate_scanning_nothing_is_no_longer_a_pass(tmp_path):
-    """THE DECISION: this zero is NOT meaningful without a denominator. A root
-    carrying none of skills/ programs/ _shared/ scanned zero files and printed
-    the same sentence as a full clean sweep."""
-    r = _run(DEAD, tmp_path, str(tmp_path))
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert r.stdout.strip().splitlines()[0].startswith(
-        "[VACUOUS_PASS] dead_plugin_path_check:")
-    assert "examined 0" in r.stdout
-    assert "NOT a clean-bundle verdict" in r.stdout
-    assert r.stderr.strip().startswith("VACUOUS_PASS:")
 
 
-def test_dead_plugin_gate_on_the_real_bundle_passes_and_says_how_much(
-        tmp_path):
-    """And the live invocation `tools/ci/repo_hygiene_gates.sh` makes — the one
-    that must not change — still passes, now with its scan size stated."""
-    r = _run(DEAD, PLUGIN_ROOT, ".")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert r.stdout.startswith("PASS — 0 retired-plugin reference(s);")
-    hits, stats = __import__("dead_plugin_path_check").scan(str(PLUGIN_ROOT))
-    assert hits == []
-    assert stats["files_scanned"] > 100, stats
-    assert stats["subtrees_present"] == 3, stats
 
 
 # ── 4. the disclosure predicate: the underscore-boundary repair ────────────

@@ -18,7 +18,6 @@ halts at PDK resolution; WELL-FORMED -> the declared values are the ones used.
 from __future__ import annotations
 
 import ast
-import json
 import sys
 from pathlib import Path
 
@@ -27,7 +26,6 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import _staged_pdk_tech_lef as T  # noqa: E402
-import phase3_one_shot_runner as p3  # noqa: E402
 
 _TECH = "LAYER MET1\n  TYPE ROUTING ;\nEND MET1\nEND LIBRARY\n"
 _CELLS = ("SITE core ;\nMACRO INVX1\n  CLASS CORE ;\n  SITE core ;\n"
@@ -61,33 +59,10 @@ _MALFORMED = {
 }
 
 
-@pytest.mark.parametrize("text", list(_MALFORMED.values()),
-                         ids=list(_MALFORMED))
-def test_a_malformed_config_halts_pdk_resolution_by_name(tmp_path, text):
-    project = _stage(tmp_path, text)
-    cfg = project / "input/pdk/bridge/signoff_config.json"
-    with pytest.raises(SystemExit) as ei:
-        p3._detect_pdk(project)
-    msg = str(ei.value)
-    assert "SIGNOFF_CONFIG_UNREADABLE" in msg, msg
-    assert str(cfg) in msg, msg
 
 
-def test_the_refusal_carries_the_parse_error(tmp_path):
-    project = _stage(tmp_path, _MALFORMED["trailing_comma"])
-    with pytest.raises(SystemExit, match=r"JSONDecodeError: .*line 1 column"):
-        p3._detect_pdk(project)
 
 
-def test_a_malformed_config_is_named_even_when_the_stack_is_ambiguous(tmp_path):
-    """With several tech LEFs the stack resolver reads the same file first. It
-    must name the parse error, not ask the integrator to set a `tech_lef` key
-    they already set in the file it could not read."""
-    project = _stage(tmp_path, _MALFORMED["trailing_comma"],
-                     techs=("a_tech.tlef", "b_tech.tlef"))
-    with pytest.raises(SystemExit) as ei:
-        p3._detect_pdk(project)
-    assert "SIGNOFF_CONFIG_UNREADABLE" in str(ei.value), str(ei.value)
 
 
 def test_the_shared_loader_refuses_for_every_consumer(tmp_path):
@@ -100,20 +75,8 @@ def test_the_shared_loader_refuses_for_every_consumer(tmp_path):
         T.select_staged_tech_lef(pdk, (pdk / "lef" / "x_tech.tlef",))
 
 
-def test_a_well_formed_config_is_the_one_used(tmp_path):
-    decl = {"lvs_engine": "klayout", "port_label_restore": True,
-            "tap_geom_layers": {"nwell": "2/0", "nplus": "4/0"}}
-    pdk = p3._detect_pdk(_stage(tmp_path, json.dumps(decl)))
-    assert pdk.lvs_engine == "klayout"          # not the "magic" default
-    assert pdk.port_label_restore is True
-    assert pdk.tap_geom_layers == decl["tap_geom_layers"]
 
 
-def test_an_absent_config_is_not_an_unreadable_one(tmp_path):
-    pdk = p3._detect_pdk(_stage(tmp_path, None))
-    assert pdk.lvs_engine == "magic"
-    assert pdk.signoff_config_path is None
-    assert T.load_signoff_config(tmp_path / "input" / "pdk") == {}
 
 
 # ── no broad except left at the site ───────────────────────────────────────

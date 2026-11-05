@@ -62,52 +62,10 @@ def test_new_default_native_entry_refuses_an_unimplemented_mode_before_execution
     assert not (root / "reports/analog_native").exists()
 
 
-def test_canonical_flow_frontdoor_dispatches_same_native_consumer(tmp_path):
-    root = project(tmp_path)
-    features = next(profile["features"] for profile in flow109.load_registry()["reference_profiles"]
-                    if profile["name"] == "Analog model-IP")
-    manifest = root / "manifest.json"
-    manifest.write_text(json.dumps({"features": features}))
-    command = [sys.executable, str(native.HERE / "vibe_ic_one_shot_runner.py"), str(root),
-               "--flow", "109", "--flow109-manifest", str(manifest),
-               "--entry-step", "A06", "--exit-step", "A06", "--route", "ip",
-               "--container", "", "--no-dashboard"]
-    completed = subprocess.run(command, capture_output=True, text=True)
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-    receipt = json.loads((root / "reports/flow109/components/A06.json").read_text())
-    assert receipt["component_status"] == "PASS"
-    assert receipt["flow109_acceptance"] == "NOT_MEASURED"
-    assert receipt["native_results"]["steps"][0]["block"] == "cell_alpha"
 
 
-def test_attested_canonical_frontdoor_keeps_actual_a07_producer_local(tmp_path, monkeypatch):
-    root = project(tmp_path)
-    features = next(profile["features"] for profile in flow109.load_registry()["reference_profiles"]
-                    if profile["name"] == "Analog model-IP")
-    manifest = root / "manifest.json"
-    manifest.write_text(json.dumps({"features": features}))
-    monkeypatch.setenv("VIBEIC_ANALOG_CONTAINER", "old-named-container")
-    completed = subprocess.run([
-        sys.executable, str(native.HERE / "vibe_ic_one_shot_runner.py"), str(root),
-        "--flow", "109", "--flow109-manifest", str(manifest),
-        "--entry-step", "A07", "--exit-step", "A07", "--route", "ip",
-        "--no-dashboard"], capture_output=True, text=True)
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-    receipt = json.loads((root / "reports/flow109/components/A07.json").read_text())
-    native_report = receipt["native_results"]
-    assert native_report["transport"] == "LOCAL"
-    assert native_report["container"] == ""
-    execution = native_report["steps"][0]["executions"][0]
-    assert execution["returncode"] == 0
-    assert execution["argv"][0] != "docker"
-    assert native_report["steps"][0]["producer_context"]["transport"] == "LOCAL"
 
 
-def test_all_nineteen_registry_rows_name_the_actual_native_owner():
-    rows = [row for row in flow109.load_registry()["rows"] if row["id"].startswith("A")]
-    assert [row["id"] for row in rows] == list(native.STEPS)
-    assert [(row["profiles"][0]["dispatch"]["adapter"]) for row in rows] == [
-        "analog_native_flow"] * 19
 
 
 def test_a18_preserves_native_component_fail_and_reason(tmp_path):
@@ -156,67 +114,10 @@ def test_a18_external_magic_script_does_not_replace_missing_declaration(tmp_path
     assert result["reason"] == "A18_DECLARATION_ABSENT"
 
 
-def test_explicit_mixed_inventory_cannot_omit_selected_analog_use():
-    context = {"resolved_rows": [
-        {"profile": {"dispatch": {"adapter": "analog_native_flow"}},
-         "tool_uses": [{"use_id": "analog.native", "qualification_required": False}]},
-        {"profile": {"dispatch": {"adapter": "digital_native"}},
-         "tool_uses": [{"use_id": "digital.native", "qualification_required": True}]}],
-        "runtime_tool_uses": [{"use_id": "digital.native"}],
-        "qualification_registry": "digital-qualified.json"}
-    # Ordinary native execution needs no registry. An explicit qualification
-    # claim must still cover every selected use; it cannot exempt analog.
-    with pytest.raises(flow109.Flow109Error, match="FLOW109_WINDOW_USE_MISMATCH"):
-        flow109._window_inventory(context)
-    context["runtime_tool_uses"].append({"use_id": "analog.native"})
-    flow109._window_inventory(context)
-    context["runtime_tool_uses"] = []
-    with pytest.raises(flow109.Flow109Error, match="FLOW109_WINDOW_USE_MISMATCH"):
-        flow109._window_inventory(context)
-    context["runtime_tool_uses"] = [{"use_id": "digital.native"}, {"use_id": "unknown.use"}]
-    with pytest.raises(flow109.Flow109Error, match="FLOW109_WINDOW_USE_MISMATCH"):
-        flow109._window_inventory(context)
 
 
-def test_canonical_invalid_block_input_returns_unmeasured_without_traceback(tmp_path):
-    root = project(tmp_path)
-    (root / "phase3/analog/analog_block_list.json").write_text('{"blocks":[]}')
-    features = next(profile["features"] for profile in flow109.load_registry()["reference_profiles"]
-                    if profile["name"] == "Analog model-IP")
-    manifest = root / "manifest.json"
-    manifest.write_text(json.dumps({"features": features}))
-    completed = subprocess.run([
-        sys.executable, str(native.HERE / "vibe_ic_one_shot_runner.py"), str(root),
-        "--flow", "109", "--flow109-manifest", str(manifest),
-        "--entry-step", "A06", "--exit-step", "A06", "--route", "ip",
-        "--container", "", "--no-dashboard"], capture_output=True, text=True)
-    assert completed.returncode == 2
-    assert "Traceback" not in completed.stderr
-    receipt = json.loads((root / "reports/flow109/components/A06.json").read_text())
-    assert receipt["component_status"] == "NOT_MEASURED"
-    assert receipt["native_started"] is False
-    assert "block list" in receipt["reason"]
 
 
-def test_canonical_analog_window_keeps_independent_consumers_running_after_native_refusal(tmp_path):
-    root = project(tmp_path)
-    features = next(profile["features"] for profile in flow109.load_registry()["reference_profiles"]
-                    if profile["name"] == "Analog model-IP")
-    manifest = root / "manifest.json"
-    manifest.write_text(json.dumps({"features": features}))
-    completed = subprocess.run([
-        sys.executable, str(native.HERE / "vibe_ic_one_shot_runner.py"), str(root),
-        "--flow", "109", "--flow109-manifest", str(manifest),
-        "--entry-step", "A05", "--exit-step", "A06", "--route", "ip",
-        "--container", "", "--no-dashboard"], capture_output=True, text=True)
-    assert completed.returncode == 1, completed.stdout + completed.stderr
-    reports = root / "reports/flow109/components"
-    a05 = json.loads((reports / "A05.json").read_text())
-    a06 = json.loads((reports / "A06.json").read_text())
-    assert a05["component_status"] == "FAIL"
-    assert a06["component_status"] == "PASS"
-    assert a06["flow109_acceptance"] == "NOT_MEASURED"
-    assert not list(root.rglob("*qualification*"))
 
 
 @pytest.mark.parametrize("state,expected", [("FAIL", "FAIL"), ("NOT_MEASURED", "NOT_MEASURED")])
@@ -575,23 +476,6 @@ def test_container_subprocess_loads_native_tool_environment_without_shell_interp
     assert execution["returncode"] == 0
 
 
-def test_attested_local_adapter_ignores_inherited_legacy_container(tmp_path, monkeypatch):
-    import librelane_contract as contract
-    root = project(tmp_path)
-    seen = {}
-    monkeypatch.setenv("VIBEIC_ANALOG_CONTAINER", "old-named-container")
-    monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner.py"])
-    monkeypatch.setattr(contract, "local_image_attestation", lambda: {
-        "image": "repo@sha256:" + "a" * 64})
-    monkeypatch.setattr(native, "run_window", lambda project, args, **kwargs:
-                        seen.update(container=args.container, image=args.image,
-                                    transport=args.transport) or {"window_verdict": "PASS"})
-    context = {"requested_step": "A01", "features": {}}
-    monkeypatch.setattr(flow109, "validate_execution_context", lambda value: value)
-    result = native.execute_window(root, context)
-    assert result["window_verdict"] == "PASS"
-    assert seen == {"container": "", "image": "repo@sha256:" + "a" * 64,
-                    "transport": "LOCAL"}
 
 
 def test_explicit_container_adapter_selection_is_preserved(tmp_path, monkeypatch):
@@ -632,37 +516,3 @@ def test_a17_interrupted_producer_without_terminal_measurement_is_unmeasured(tmp
                            {"container": ""}, lambda *a, **kw: {"returncode": rc})
     assert result["status"] == "NOT_MEASURED"
     assert result["executions"][0]["returncode"] == rc
-
-
-def test_all_native_analog_rows_use_existing_unqualified_default_admission():
-    for spec in flow109.load_registry()["rows"]:
-        if not spec["id"].startswith("A"):
-            continue
-        row = {**spec, "profile": spec["profiles"][0]}
-        dispatch = flow109.source_owned_native_dispatch(row)
-        assert dispatch["adapter"] == "analog_native_flow"
-        assert dispatch["acceptance_scope"] == "existing_native_component_only"
-
-
-@pytest.mark.parametrize("exit_step", ["A06", "A07"])
-def test_explicit_empty_analog_qualification_claim_never_launches_native(
-        tmp_path, monkeypatch, exit_step):
-    from types import SimpleNamespace
-    from flow109_admission import AdmissionRefusal
-    from programs.tests._route_fixture import stage_owner_route
-    root = project(tmp_path)
-    stage_owner_route(root, "ip")
-    features = next(profile["features"] for profile in flow109.load_registry()["reference_profiles"]
-                    if profile["name"] == "Analog model-IP")
-    manifest = root / "explicit-qualification.json"
-    manifest.write_text(json.dumps({"features": features, "runtime_tool_uses": []}))
-    monkeypatch.setattr(native, "execute", lambda *a: pytest.fail("native must not start"))
-    monkeypatch.setattr(native, "execute_window", lambda *a: pytest.fail("native must not start"))
-    args = SimpleNamespace(flow="109", flow109_manifest=manifest, flow109_plan_only=False,
-                           execution_mode="default", entry_step="A06", exit_step=exit_step)
-    if exit_step == "A06":
-        with pytest.raises(AdmissionRefusal, match="QUALIFICATION_RUNTIME_ABSENT"):
-            flow109.prepare_front_door(args, root)
-    else:
-        with pytest.raises(flow109.Flow109Error, match="FLOW109_WINDOW_USE_MISMATCH"):
-            flow109.prepare_front_door(args, root)

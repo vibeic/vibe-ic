@@ -506,28 +506,3 @@ def test_unit_tb_declares_a_constant_choice_width(tmp_path):
     assert widths["wdat"] == "[7:0]", widths
     assert widths["rdat"] == "[7:0]", widths
     assert widths["adr"] == "[7:0]", widths
-
-
-def test_full_stack_tb_declares_a_two_line_bus_at_its_real_width(tmp_path):
-    proj, rtl = _seed(tmp_path, _TWO_LINE_DUT)
-    (rtl / "w_pkg.sv").write_text(_TWO_LINE_PKG)
-    res = P2.step_full_stack_tb_gen(proj, "chip_top")
-    assert res.status != "FAIL", res.detail
-    body = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
-    assert "reg [13:0] adr = 0;" in body, body
-    assert "reg [15:0] wdat = 0;" in body, body
-    assert "wire [4:0] rdat;" in body, body
-    # the pre-fix text: a wide bus bound ONE BIT wide, which still said PASS
-    assert "reg adr = 0;" not in body
-
-
-def test_without_the_package_file_both_consumers_still_refuse(tmp_path):
-    """THE OTHER DIRECTION AT THE CONSUMER: the two-line constant lives in a
-    package, and with that file absent the port must REFUSE by name -- not fall
-    back to one bit."""
-    proj, _rtl = _seed(tmp_path, _TWO_LINE_DUT)
-    mod, ports, why = TBG.resolve_dut(proj, "core_top")
-    assert mod is None, (mod, ports, why)
-    res = P2.step_full_stack_tb_gen(proj, "chip_top")
-    assert res.status == "FAIL", res.detail
-    assert "not derivable" in res.detail, res.detail

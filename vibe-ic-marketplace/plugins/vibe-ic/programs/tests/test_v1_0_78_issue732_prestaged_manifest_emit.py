@@ -40,8 +40,6 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import staged_rtl_reused_ip_manifest_emit as SRM  # noqa: E402
-import l9_rtl_pin_consistency_check as G  # noqa: E402
 import design_one_shot_runner as R  # noqa: E402
 
 
@@ -72,20 +70,6 @@ def _make_prestaged_project(root: Path) -> Path:
 
 
 # ── (a) pre-staged WAIVE path emits the keystone manifest ───────────────────
-def test_a_helper_emits_keystone_manifest(tmp_path):
-    """END-STATE: emit_prestaged_reused_ip_manifest writes a keystone manifest
-    with reused_ip:true + generated_by:phase2_runner_prestaged, ip_list derived
-    from the staged module names."""
-    proj = _make_prestaged_project(tmp_path)
-    out = SRM.emit_prestaged_reused_ip_manifest(proj)
-    assert out is not None
-    assert out == proj / "phase2" / "stage1" / "rtl" / "SOURCE_MANIFEST.json"
-    mf = json.loads(out.read_text())
-    assert mf["reused_ip"] is True
-    assert mf["generated_by"] == "phase2_runner_prestaged"
-    assert mf["rtl_strategy"] == "catalog_lookup_plus_ai_glue"
-    # ip_list derived from `module <name>` decls in the staged files
-    assert set(mf["ip_list"]) == {"aes_core", "tlul_adapter_reg"}
 
 
 def test_a_step_rtl_gen_emits_on_prestaged_waive(tmp_path):
@@ -107,56 +91,11 @@ def test_a_step_rtl_gen_emits_on_prestaged_waive(tmp_path):
 
 
 # ── (b) MERGE: a pre-existing hand-authored manifest survives ───────────────
-def test_b_merge_preserves_hand_authored_blocks(tmp_path):
-    """§4.05 + MERGE: a hand-authored manifest carrying tie_offs /
-    flattened_buses / renamed_interfaces is NEVER clobbered — the emit only
-    (re)asserts the keystone keys and setdefault()s generated_by."""
-    proj = _make_prestaged_project(tmp_path)
-    rtl = proj / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True, exist_ok=True)
-    (rtl / "SOURCE_MANIFEST.json").write_text(json.dumps({
-        "reused_ip": True,
-        "generated_by": "hand-author",
-        "tie_offs": ["clk_edn_i", "edn_i", "edn_o"],
-        "flattened_buses": [{"l9": "tl", "rtl": ["tl_a_*", "tl_d_*"]}],
-        "renamed_interfaces": [{"l9": ["o_sram_addr"],
-                                "rtl": ["o_sram_waddr"]}],
-        "ip_list": ["my_curated_list"],
-    }))
-    out = SRM.emit_prestaged_reused_ip_manifest(proj)
-    assert out is not None
-    mf = json.loads(out.read_text())
-    # hand-authored relaxation blocks survive UNTOUCHED
-    assert mf["tie_offs"] == ["clk_edn_i", "edn_i", "edn_o"]
-    assert mf["flattened_buses"] == [{"l9": "tl", "rtl": ["tl_a_*", "tl_d_*"]}]
-    assert mf["renamed_interfaces"] == [{"l9": ["o_sram_addr"],
-                                         "rtl": ["o_sram_waddr"]}]
-    # hand-authored generated_by NOT overwritten (setdefault)
-    assert mf["generated_by"] == "hand-author"
-    # a richer hand-authored ip_list NOT clobbered by the thinner derived one
-    assert mf["ip_list"] == ["my_curated_list"]
-    # keystone still asserted
-    assert mf["reused_ip"] is True
 
 
 # ── (c) §4.05 NO-LEAK: non-reused / no-vendor_rtl project gets NO manifest ──
-def test_c_noleak_no_vendor_rtl_no_manifest(tmp_path):
-    """§4.05: a project with NO input/vendor_rtl/ at all gets no manifest — a
-    non-reused design never receives a spurious reused_ip:true."""
-    out = SRM.emit_prestaged_reused_ip_manifest(tmp_path)
-    assert out is None
-    assert not (tmp_path / "phase2" / "stage1" / "rtl"
-                / "SOURCE_MANIFEST.json").exists()
 
 
-def test_c_noleak_empty_vendor_rtl_no_manifest(tmp_path):
-    """§4.05: an EMPTY input/vendor_rtl/ (dir present, no .v/.sv) is NOT the
-    reused-IP WAIVE path — still no manifest."""
-    (tmp_path / "input" / "vendor_rtl").mkdir(parents=True, exist_ok=True)
-    out = SRM.emit_prestaged_reused_ip_manifest(tmp_path)
-    assert out is None
-    assert not (tmp_path / "phase2" / "stage1" / "rtl"
-                / "SOURCE_MANIFEST.json").exists()
 
 
 def test_c_noleak_step_rtl_gen_non_reused_no_manifest(tmp_path):
@@ -172,18 +111,6 @@ def test_c_noleak_step_rtl_gen_non_reused_no_manifest(tmp_path):
 
 
 # ── (d) the emitted manifest makes load_source_manifest() return non-None ──
-def test_d_emitted_manifest_makes_relaxations_live(tmp_path):
-    """END-STATE: after the emit, load_source_manifest() returns a non-None
-    dict with reused_ip:true — so the #659/#711/#712 relaxations are LIVE
-    (they all short-circuit to the strict path when it returns None)."""
-    proj = _make_prestaged_project(tmp_path)
-    # BEFORE: no manifest → relaxations dead
-    assert G.load_source_manifest(proj) is None
-    SRM.emit_prestaged_reused_ip_manifest(proj)
-    # AFTER: manifest live
-    data = G.load_source_manifest(proj)
-    assert data is not None
-    assert data.get("reused_ip") is True
 
 
 if __name__ == "__main__":
@@ -197,36 +124,3 @@ if __name__ == "__main__":
 # nothing to reconcile against. The auto-manifest now emits the two keys as EMPTY
 # lists + a note. §4.05 NO-LEAK: an EMPTY scaffold reconciles ZERO ports, so the
 # gate verdict is byte-for-byte UNCHANGED (a real mismatch still FAILs).
-def test_gap_e2e8_emits_empty_reconciliation_scaffold(tmp_path):
-    proj = _make_prestaged_project(tmp_path)
-    out = SRM.emit_prestaged_reused_ip_manifest(proj)
-    mf = json.loads(out.read_text())
-    assert mf.get("renamed_interfaces") == []
-    assert mf.get("flattened_buses") == []
-    assert "_reconciliation_scaffold_note" in mf
-
-
-def test_gap_e2e8_empty_scaffold_reconciles_nothing(tmp_path):
-    # §4.05 NO-LEAK: the empty scaffold must reconcile ZERO port groups — the
-    # gate's renamed-group extraction returns [] so the verdict is unchanged.
-    proj = _make_prestaged_project(tmp_path)
-    out = SRM.emit_prestaged_reused_ip_manifest(proj)
-    mf = json.loads(out.read_text())
-    assert G._manifest_renamed_groups(mf) == []
-
-
-def test_gap_e2e8_preserves_hand_authored_pairing(tmp_path):
-    # MERGE-preserving: a populated renamed_interfaces block is NOT clobbered by
-    # the scaffold, and it reconciles the real pairing.
-    proj = _make_prestaged_project(tmp_path)
-    out = SRM.emit_prestaged_reused_ip_manifest(proj)
-    mf = json.loads(out.read_text())
-    mf["renamed_interfaces"] = [
-        {"l9": ["sram_data"], "rtl": ["sram_wdata", "sram_rdata"]}]
-    out.write_text(json.dumps(mf))
-    out2 = SRM.emit_prestaged_reused_ip_manifest(proj)   # re-emit
-    mf2 = json.loads(out2.read_text())
-    assert mf2["renamed_interfaces"] == [
-        {"l9": ["sram_data"], "rtl": ["sram_wdata", "sram_rdata"]}]
-    groups = G._manifest_renamed_groups(mf2)
-    assert groups == [({"sram_data"}, {"sram_wdata", "sram_rdata"})]

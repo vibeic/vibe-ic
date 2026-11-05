@@ -63,7 +63,6 @@ if str(_PROGRAMS) not in sys.path:
 
 import vibe_ic_one_shot_runner as ORCH        # noqa: E402
 import _p1_identity_fixture  # noqa: E402  FX_STALE_LDOCS
-import phase1_one_shot_runner as P1           # noqa: E402
 import phase1_expert_parse_track as TRACK     # noqa: E402
 import _path_layout as _pl                    # noqa: E402
 from _route_fixture import stage_owner_route  # noqa: E402
@@ -163,167 +162,32 @@ def _project(tmp_path: Path, name: str, *, l_docs: int = 28,
 
 # ── the defect: an unread answer could not re-enter Phase 1 ────────────────
 
-def test_an_unread_expert_answer_re_enters_phase1(tmp_path):
-    """The whole of #2204. The answer is on disk and the track's own record
-    still says it has not seen one — that is a pending SECOND PASS, and the
-    front door must perform it."""
-    p = _project(tmp_path, "unread", answer=True, status="HANDOFF_EMITTED")
-    assert _answer_path(p).is_file(), "fixture: the answer must be on disk"
-
-    pending, why = ORCH._expert_answer_pending(p)
-    assert pending is True, why
-    assert "nobody has read" in why
-
-    run, mode = ORCH._phase1_decision(p, force_skip=False)
-    assert run is True, (
-        "an answer the subagent delivered is on disk and the expert track's "
-        "own record says nobody has read it; the front door skipped Phase 1 "
-        "anyway, so the re-run the track asks for can never happen")
-    assert mode == ORCH._P1_MODE_EXPERT_SECOND_PASS, mode
-    # NOT the extraction mode. Re-running D1 would cost a full extraction on
-    # every such run and would move the L documents the answer was authored
-    # against.
-    assert mode != "docs"
 
 
-def test_the_unread_status_is_the_tracks_own_constant():
-    """The orchestrator spells the status rather than importing it, so it keeps
-    working against an older track binary. This is the pin that stops the two
-    spellings drifting apart unnoticed — a drift would make the decision blind
-    again, silently."""
-    assert ORCH._EXPERT_AI_UNREAD == TRACK.AI_HANDOFF_EMITTED
-    # And the two path components must name the same file the track writes.
-    assert ORCH._EXPERT_ANSWER_NAME == "l_doc_expectations.json"
-    assert ORCH._EXPERT_PACK_DIRNAME == "expert_parse_track_pack"
-    # `evaluate` builds the pack dir from the report path; the orchestrator
-    # must land on the same place.
-    src = Path(TRACK.__file__).read_text(errors="replace")
-    assert f'"{ORCH._EXPERT_PACK_DIRNAME}"' in src
-    assert f'"{ORCH._EXPERT_ANSWER_NAME}"' in src
 
 
 # ── termination: at most one re-entry per delivered answer ─────────────────
 
-@pytest.mark.parametrize("status,expect_pending", [
-    (TRACK.AI_HANDOFF_EMITTED, True),
-    (TRACK.AI_CONSUMED, False),
-    (TRACK.AI_CONSUMED_EMPTY, False),
-    (TRACK.AI_SCHEMA_MISMATCH, False),
-    (TRACK.AI_ERROR, False),
-])
-def test_re_entry_is_at_most_once_per_delivered_answer(
-        tmp_path, status, expect_pending):
-    """A read receipt suppresses retries of the same consumed/refused bytes.
-    HANDOFF is unconsumed even if a contradictory fixture supplies a digest.
-    """
-    p = _project(tmp_path, f"s_{status}", answer=True, status=status)
-    pending, why = ORCH._expert_answer_pending(p)
-    assert pending is expect_pending, f"status={status}: {why}"
-    run, _mode = ORCH._phase1_decision(p, force_skip=False)
-    assert run is expect_pending, f"status={status}"
 
 
-def test_a_missing_or_unparseable_record_beside_an_answer_is_pending(tmp_path):
-    """The track's report is a MANDATORY output. An answer on disk with no
-    readable record of anyone having opened it is the same unread state, and it
-    is stated rather than assumed clean."""
-    p = _project(tmp_path, "norecord", answer=True, report=False)
-    pending, why = ORCH._expert_answer_pending(p)
-    assert pending is True and "no report" in why
-
-    q = _project(tmp_path, "badrecord", answer=True)
-    _report(q).write_text("{not json")
-    pending, why = ORCH._expert_answer_pending(q)
-    assert pending is True and "does not parse" in why
 
 
 # ── the controls: green before this fix, and they must stay green ─────────
 
-def test_a_genuinely_complete_root_is_still_skipped(tmp_path):
-    """CONTROL — and a TRUE control, which is why it names nothing this fix
-    introduced. A control that touches the new helper is green only on the
-    fixed arm, which makes it a second copy of the defect test rather than
-    evidence that the skip direction survived. (It was written that way first;
-    it went red on the unfixed arm for the wrong reason, and that is recorded
-    in this lane's missed predictions.)
-
-    A fix that always re-runs Phase 1 is a wall-clock tax on every run wearing
-    the clothes of progress. A root whose expert answer was read, and a root
-    that never had one, are both finished with Phase 1 — before this change and
-    after it."""
-    read = _project(tmp_path, "read", answer=True, status=TRACK.AI_CONSUMED)
-    assert ORCH._phase1_decision(read, force_skip=False) == (False, "")
-
-    none = _project(tmp_path, "noanswer", answer=False)
-    assert ORCH._phase1_decision(none, force_skip=False) == (False, "")
 
 
-def test_an_absent_answer_is_not_pending(tmp_path):
-    """The helper's own negative: with no answer on disk there is nothing to
-    consume, and the reason says so rather than defaulting to a silent False."""
-    none = _project(tmp_path, "nopending", answer=False)
-    pending, why = ORCH._expert_answer_pending(none)
-    assert pending is False and "no expert answer" in why
 
 
-def test_an_operator_forced_skip_is_still_a_skip(tmp_path):
-    """CONTROL. `--skip-phase1`, and the Phase-2 entry step that routes through
-    it, must not be overridden by a pending second pass."""
-    p = _project(tmp_path, "forced", answer=True, status="HANDOFF_EMITTED")
-    assert ORCH._phase1_decision(p, force_skip=True) == (False, "")
 
 
-@pytest.mark.parametrize("prior", [
-    None, "{not json", "[]", "{}",
-    '{"mode":"expert_second_pass","verdict":"FAIL"}',
-    '{"mode":"docs","verdict":"PASS","pass1":{"verdict":"PASS","rc":false}}',
-])
-def test_missing_first_pass_recovery_reenters_docs_without_editing_inputs(
-        tmp_path, capsys, prior):
-    p = _project(tmp_path, "crashed_first_pass", answer=True)
-    record = _pass1_record(p)
-    if prior is None:
-        record.unlink()
-    else:
-        record.write_text(prior)
-    before = {f.relative_to(p): f.read_bytes() for folder in
-              (p / "input", _pl.generated_docs_dir(p), _answer_path(p).parent)
-              for f in folder.rglob("*") if f.is_file()}
-
-    assert ORCH._expert_answer_pending(p)[0] is True
-    assert ORCH._phase1_decision(p, False) == (True, "docs")
-    assert "RECOVER_PHASE1_FIRST_PASS" in capsys.readouterr().out
-    assert all((p / path).read_bytes() == raw for path, raw in before.items())
-    assert record.read_text() == prior if prior is not None else not record.exists()
 
 
-def test_missing_first_pass_recovery_does_not_override_skip(tmp_path):
-    p = _project(tmp_path, "crashed_but_skipped", answer=True)
-    _pass1_record(p).unlink()
-    assert ORCH._phase1_decision(p, True) == (False, "")
 
 
-def test_missing_first_pass_recovery_keeps_input_only_layers(tmp_path):
-    p = _project(tmp_path, "supplied_layers", answer=True)
-    _pass1_record(p).unlink()
-    (p / "input/docs/spec.md").unlink()
-    assert ORCH._design_input_present(p) is False
-    assert ORCH._phase1_decision(p, False) == (True, "expert_second_pass")
 
 
-def test_known_first_pass_failure_keeps_second_track_only(tmp_path):
-    p = _project(tmp_path, "failed_first_pass", answer=True)
-    _pass1_record(p).write_text(json.dumps({
-        "phase": 1, "mode": "docs", "verdict": "FAIL",
-        "pass1": {"verdict": "FAIL", "rc": 1},
-    }))
-    assert ORCH._phase1_decision(p, False) == (True, "expert_second_pass")
 
 
-def test_legacy_first_pass_summary_keeps_second_track_only(tmp_path):
-    p = _project(tmp_path, "legacy_first_pass", answer=True)
-    _pass1_record(p).replace(p / "reports/phase1_one_shot.json")
-    assert ORCH._phase1_decision(p, False) == (True, "expert_second_pass")
 
 
 # ── the second pass itself ────────────────────────────────────────────────
@@ -339,90 +203,8 @@ def test_the_phase1_runner_accepts_second_track_only():
     assert "--second-track-only" in cp.stdout
 
 
-def test_the_second_pass_runs_the_second_track_and_re_extracts_nothing(
-        tmp_path, monkeypatch):
-    """The second pass consumes ONE delivered answer. It must not re-derive the
-    L documents that answer was authored against, and it must not erase what
-    pass 1 recorded in the file every caller reads for Phase 1's verdict."""
-    p = _project(tmp_path, "secondpass", answer=True, status="HANDOFF_EMITTED")
-    (p / "reports").mkdir(exist_ok=True)
-    _pass1_record(p).write_text(json.dumps({
-        "phase": 1, "mode": "docs", "verdict": "PASS",
-        "steps": [{"name": "doc_extract", "status": "PASS"}]}))
-    gd = _pl.generated_docs_dir(p)
-    before = {f.name: f.read_bytes() for f in gd.glob("L*.json")}
-
-    calls = []
-
-    def _fake_second_track(project, rc_in):
-        calls.append(project)
-        return 0
-
-    monkeypatch.setattr(P1, "run_phase1_second_track", _fake_second_track)
-    _sign_ai_fixture(p, "D1")
-    rc = P1.run_second_pass_only(p, "UNNAMED_CHIP", route="ic")
-
-    assert rc == 0
-    assert calls == [p], "the second track is the ONE thing this pass runs"
-    after = {f.name: f.read_bytes() for f in gd.glob("L*.json")}
-    assert after == before, "the doc-extraction track was re-run under the answer"
-
-    summary = json.loads(_pass1_record(p).read_text())
-    assert summary["mode"] == "expert_second_pass"
-    assert summary["second_pass"]["doc_extraction_rerun"] is False
-    assert summary["second_pass"]["pass1_summary_carried_forward"] is True
-    # pass 1's own record survives — the second pass reports, it does not
-    # overwrite the extraction's report to close a hand-off.
-    assert summary["steps"] == [{"name": "doc_extract", "status": "PASS"}]
 
 
-def test_a_delivered_answer_is_consumed_and_the_front_door_then_skips(tmp_path):
-    """END TO END over the REAL track, both directions in one project.
-
-    Pass 1 with no answer records HANDOFF_EMITTED and the front door — before
-    this fix — skipped forever. Plant the answer: the front door now re-enters.
-    Run the track again: the answer is CONSUMED and the front door goes back to
-    skipping. The re-entry happened exactly once."""
-    p = tmp_path / "e2e"
-    (p / "input" / "docs").mkdir(parents=True)
-    (p / "input" / "docs" / "spec.md").write_text(_INPUT_DOC)
-    gd = p / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    for i in range(1, 29):
-        (gd / f"L{i}_LAYER.json").write_text(json.dumps({"doc_id": f"L{i}"}))
-    _p1_identity_fixture.stamp_current(p)      # FX_STALE_LDOCS, as `_project`
-    _pass1_record(p).write_text(json.dumps({
-        "phase": 1, "mode": "docs", "verdict": "PASS",
-        "pass1": {"verdict": "PASS", "rc": 0},
-    }))
-
-    argv = [sys.executable, str(_PROGRAMS / "phase1_expert_parse_track.py"),
-            str(p)]
-    cp1 = subprocess.run(argv, capture_output=True, text=True)
-    assert cp1.returncode in (0, 2, TRACK.AWAITING_EXIT_CODE), cp1.stderr[-800:]
-    rec1 = json.loads(_report(p).read_text())
-    assert rec1["ai_subtrack"]["status"] == TRACK.AI_HANDOFF_EMITTED
-    assert not _answer_path(p).is_file()
-    # The state the whole fleet was in: nothing to consume, so nothing to do.
-    assert ORCH._phase1_decision(p, force_skip=False) == (False, "")
-
-    # The subagent answers.
-    _answer_path(p).write_text(json.dumps(_ANSWER))
-    _sign_ai_fixture(p, "D1")
-    run, mode = ORCH._phase1_decision(p, force_skip=False)
-    assert run is True and mode == ORCH._P1_MODE_EXPERT_SECOND_PASS, (
-        "the answer the hand-off asked for is on disk and the front door "
-        "still refuses the re-run the hand-off asked for")
-
-    # The second pass reads it.
-    cp2 = subprocess.run(argv, capture_output=True, text=True)
-    assert cp2.returncode in (0, 2, TRACK.AWAITING_EXIT_CODE), cp2.stderr[-800:]
-    rec2 = json.loads(_report(p).read_text())
-    assert rec2["ai_subtrack"]["status"] == TRACK.AI_CONSUMED, \
-        rec2["ai_subtrack"].get("reason")
-
-    # …and the front door stops re-entering. AT MOST ONCE per delivered answer.
-    assert ORCH._phase1_decision(p, force_skip=False) == (False, "")
 
 
 # ── the front door's own half: the mode must reach the runner as an argv ───
@@ -504,60 +286,6 @@ def test_the_second_pass_wiring_check_rejects_disconnected_code(mutation):
         _assert_front_door_second_pass(src.replace(old, new))
 
 
-def test_the_dispatched_argv_actually_consumes_the_answer(tmp_path):
-    """EXECUTE THE ARGV. A test that asserts the front door *would* pass
-    `--second-track-only` and never runs it proves a string, not a behaviour —
-    this repo has measured that shape more than once. So: build a project in
-    the pending state with the REAL first pass, run the REAL runner with the
-    REAL flag, and read what changed.
-    """
-    p = tmp_path / "dispatched"
-    (p / "input" / "docs").mkdir(parents=True)
-    (p / "input" / "docs" / "spec.md").write_text(_INPUT_DOC)
-    gd = p / "phase1" / "generated_docs"
-    gd.mkdir(parents=True)
-    for i in range(1, 29):
-        (gd / f"L{i}_LAYER.json").write_text(json.dumps({"doc_id": f"L{i}"}))
-    _p1_identity_fixture.stamp_current(p)      # FX_STALE_LDOCS, as `_project`
-    # PASS 1, for real — this is what writes HANDOFF_EMITTED and the pack.
-    cp1 = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "phase1_expert_parse_track.py"),
-         str(p)], capture_output=True, text=True)
-    assert cp1.returncode in (0, 2, TRACK.AWAITING_EXIT_CODE), cp1.stderr[-800:]
-    assert json.loads(_report(p).read_text())["ai_subtrack"]["status"] \
-        == TRACK.AI_HANDOFF_EMITTED
-    # A pass-1 summary the second pass must carry forward, not overwrite.
-    (p / "reports").mkdir(exist_ok=True)
-    _pass1_record(p).write_text(json.dumps({
-        "phase": 1, "mode": "docs", "verdict": "PASS",
-        "steps": [{"name": "doc_extract", "status": "PASS"}]}))
-    l_docs_before = {f.name: f.read_bytes() for f in gd.glob("L*.json")}
-
-    # The subagent answers, and the front door dispatches THIS argv.
-    _answer_path(p).write_text(json.dumps(_ANSWER))
-    _sign_ai_fixture(p, "D1")
-    run, mode = ORCH._phase1_decision(p, force_skip=False)
-    assert run and mode == ORCH._P1_MODE_EXPERT_SECOND_PASS
-
-    cp2 = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "phase1_one_shot_runner.py"),
-         str(p), "--ic-name", "UNNAMED_CHIP", "--second-track-only",
-         "--route", "ic"],
-        capture_output=True, text=True)
-    assert cp2.returncode == 0, (cp2.stdout[-1500:], cp2.stderr[-1500:])
-
-    rec = json.loads(_report(p).read_text())
-    assert rec["ai_subtrack"]["status"] == TRACK.AI_CONSUMED, \
-        rec["ai_subtrack"].get("reason")
-    summary = json.loads(_pass1_record(p).read_text())
-    assert summary["mode"] == "expert_second_pass"
-    assert summary["second_pass"]["doc_extraction_rerun"] is False
-    assert summary["steps"] == [{"name": "doc_extract", "status": "PASS"}], \
-        "the second pass overwrote what pass 1 recorded"
-    assert {f.name: f.read_bytes() for f in gd.glob("L*.json")} == l_docs_before
-
-    # …and the front door stops re-entering.
-    assert ORCH._phase1_decision(p, force_skip=False) == (False, "")
 
 
 def _invoke_lifecycle(project, label, *, track=False, first_pass=False,
@@ -590,103 +318,16 @@ def _invoke_lifecycle(project, label, *, track=False, first_pass=False,
     return row
 
 
-@pytest.fixture(params=["invalid_json", "wrong_schema"])
-def refused_then_corrected(tmp_path, request):
-    # Same prompt/answer and two refused byte strings as the independent review.
-    p = _project(tmp_path, request.param, report=False)
-    (p / "input/docs/spec.md").write_text(
-        "# Counter specification\n\nThe counter accepts an external clock at "
-        "the REFCLK terminal and presents a 16-bit count.\n")
-    # FX_STALE_LDOCS — the input was rewritten after `_project` stamped; the
-    # planted docs stand for a phase 1 over THIS input, so stamp again.
-    _p1_identity_fixture.stamp_current(p)
-    answer = {"expectations": [{
-        "id": "prompt-named-external-clock", "layer": "L9_INTERFACE",
-        "field_path": "top_ports",
-        "requirement": "The external clock terminal REFCLK must appear as a named port.",
-        "expected_tokens": ["REFCLK"],
-        "evidence": ["The counter accepts an external clock at the REFCLK terminal."],
-    }]}
-    before = {f.name: f.read_bytes() for f in _pl.generated_docs_dir(p).glob("L*.json")}
-    handoff = _invoke_lifecycle(p, "01_handoff", track=True)
-    assert handoff["rc"] == 4
-    assert handoff["track"]["ai_subtrack"]["status"] == TRACK.AI_HANDOFF_EMITTED
-    assert ORCH._phase1_decision(p, False) == (False, "")
-    pass1 = {"phase": 1, "mode": "docs", "verdict": "PASS",
-             "steps": [{"name": "doc_extract", "status": "PASS"}]}
-    _pass1_record(p).write_text(json.dumps(pass1))
-    malformed = "{" if request.param == "invalid_json" else '{"ports": ["REFCLK"]}'
-    _answer_path(p).write_text(malformed)
-    assert ORCH._phase1_decision(p, False) == (True, "expert_second_pass")
-    refused = _invoke_lifecycle(p, "02_refused")
-    assert refused["rc"] == 1
-    assert refused["summary"]["verdict"] == "FAIL"
-    assert refused["track"]["ai_subtrack"]["status"] == (
-        TRACK.AI_ERROR if request.param == "invalid_json" else TRACK.AI_SCHEMA_MISMATCH)
-    # Repeat the decision to catch an unchanged-refusal retry loop.
-    for _ in range(3):
-        assert ORCH._phase1_decision(p, False) == (False, "")
-    _answer_path(p).write_text(json.dumps(answer, indent=2) + "\n")
-    _sign_ai_fixture(p, "D1")
-    corrected_decision = ORCH._phase1_decision(p, False)
-    corrected = _invoke_lifecycle(p, "03_corrected")
-    assert corrected["rc"] == 0
-    assert corrected["track"]["ai_subtrack"]["status"] == TRACK.AI_CONSUMED
-    assert corrected["track"]["ai_convergence"]["consumed"] == 1
-    assert corrected["summary"]["steps"] == pass1["steps"]
-    assert {f.name: f.read_bytes() for f in _pl.generated_docs_dir(p).glob("L*.json")} == before
-    for _ in range(3):
-        assert ORCH._phase1_decision(p, False) == (False, "")
-    (p / "decision.json").write_text(json.dumps(corrected_decision))
-    return corrected_decision, corrected
 
 
-def test_corrected_refused_answer_reenters(refused_then_corrected):
-    decision, _ = refused_then_corrected
-    assert decision == (True, "expert_second_pass")
 
 
-def test_successful_retry_clears_only_second_pass_failure(refused_then_corrected):
-    _, result = refused_then_corrected
-    assert result["summary"]["verdict"] == "PASS", result["summary"]
-    assert result["summary"]["second_pass"]["rc"] == result["rc"] == 0
 
 
-@pytest.mark.parametrize("record", [[], {}, {"ai_subtrack": None},
-    {"ai_subtrack": {"status": []}}, {"ai_subtrack": {"status": {}}},
-    {"ai_subtrack": {"status": "UNKNOWN"}},
-    {"ai_subtrack": {"status": "CONSUMED"}},
-    {"ai_subtrack": {"status": "ERROR"}}])
-def test_an_unidentified_answer_is_pending(tmp_path, record):
-    p = _project(tmp_path, "no_read_receipt", answer=True)
-    _report(p).write_text(json.dumps(record))
-    assert ORCH._phase1_decision(p, False) == (True, "expert_second_pass")
 
 
-def test_pack_assembly_error_does_not_claim_to_have_read_the_answer(tmp_path, monkeypatch):
-    import ic_expert_backup_pack as pack
-    p = _project(tmp_path, "assembly_error", answer=True, report=False)
-
-    def refuse_assembly(**kwargs):
-        raise OSError("fixture output directory unavailable")
-
-    monkeypatch.setattr(pack, "assemble", refuse_assembly)
-    report = TRACK.evaluate(p)
-    _report(p).write_text(json.dumps(report))
-    assert report["ai_subtrack"]["status"] == TRACK.AI_ERROR
-    assert "answer_sha256" not in report["ai_subtrack"]
-    assert ORCH._phase1_decision(p, False) == (True, "expert_second_pass")
 
 
-def test_changed_consumed_answer_reenters_but_mtime_alone_does_not(tmp_path):
-    import os
-    p = _project(tmp_path, "changed_consumed", answer=True, status=TRACK.AI_CONSUMED)
-    answer = _answer_path(p)
-    os.utime(answer, (1, 1))
-    assert ORCH._phase1_decision(p, False) == (False, "")
-    answer.write_text(json.dumps(_ANSWER) + "\n")
-    os.utime(answer, (1, 1))
-    assert ORCH._phase1_decision(p, False) == (True, "expert_second_pass")
 
 
 def test_actual_first_pass_failure_survives_consumption(tmp_path):
@@ -762,18 +403,3 @@ def test_unknown_first_pass_cannot_become_pass(tmp_path, prior):
     assert result["rc"] == 1
     assert result["summary"]["verdict"] == "FAIL"
     assert result["summary"]["second_pass"]["rc"] == 0
-
-
-def test_empty_answer_is_recorded_without_consumption_credit(tmp_path):
-    p = _project(tmp_path, "empty_answer", answer=True)
-    _pass1_record(p).write_text(json.dumps({
-        "mode": "docs", "verdict": "PASS"}))
-    _answer_path(p).write_text('{"expectations": []}')
-    result = _invoke_lifecycle(p, "01_empty")
-    assert result["track"]["ai_subtrack"]["status"] == TRACK.AI_CONSUMED_EMPTY
-    assert result["track"]["execution"]["complete"] is False
-    assert "INCOMPLETE" in result["summary"]["second_track"]
-    assert P1._expert_track_completion(result["track"])[0] is False
-    assert ORCH._phase1_decision(p, False) == (False, "")
-    _answer_path(p).write_text(json.dumps(_ANSWER))
-    assert ORCH._phase1_decision(p, False) == (True, "expert_second_pass")

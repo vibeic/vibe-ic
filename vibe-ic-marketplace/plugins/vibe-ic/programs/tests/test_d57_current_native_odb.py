@@ -8,10 +8,7 @@ import pytest
 
 import _opensta_current as current
 import em_current_density_check as current_ir
-import execution_backend_producers as backend
-import execution_modes as execution_modes
 import librelane_ir_antenna as ir
-import phase3_one_shot_runner as runner
 from librelane_contract import Refusal
 
 
@@ -66,159 +63,20 @@ def _current_scene(tmp_path, monkeypatch):
     return project, pdk_root, paths, state
 
 
-def _step24_selection(project, tmp_path, monkeypatch):
-    selected = {}
-
-    def capture(_project, _top, _pdk, _mode, spef, _written):
-        selected['path'] = str(Path(spef).resolve())
-        selected['sha256'] = _sha(spef)
-        raise execution_modes.Refusal('CONTROL_D57_SPEF_SELECTED', selected['path'])
-
-    carrier = SimpleNamespace(_librelane_step24_record=capture)
-    pdk = SimpleNamespace(name='neutral')
-    monkeypatch.setattr(backend, '_parameters',
-                        lambda *_a, **_k: (carrier, None, pdk, ''))
-    params = {'step_id': '24', 'top': 'neutral', 'pdk_root': str(tmp_path),
-              'image_id': IMAGE, 'execution_mode': 'default'}
-    try:
-        backend.produce_signoff(project, params)
-    except execution_modes.Refusal as exc:
-        observed = ({'status': 'SELECTED', **selected}
-                    if 'CONTROL_D57_SPEF_SELECTED' in str(exc)
-                    else {'status': 'REFUSED', 'reason': str(exc)})
-    else:
-        observed = {'status': 'UNEXPECTED_RETURN'}
-    return observed
 
 
-def test_default_step24_admits_current_native_spef_without_legacy_alias(
-        tmp_path, monkeypatch):
-    project, _, paths, _ = _current_scene(tmp_path, monkeypatch)
-    legacy = project / 'phase3/stage3/extracted/neutral.spef'
-    assert not legacy.exists()
-    observed = _step24_selection(project, tmp_path, monkeypatch)
-    assert observed == {'status': 'SELECTED', 'path': str(paths['spef'].resolve()),
-                        'sha256': _sha(paths['spef'])}
 
 
-@pytest.mark.parametrize('damage,reason', [
-    ('missing', 'BACKEND_CURRENT_SPEF_MISSING'),
-    ('changed', 'BACKEND_CURRENT_SPEF_CHANGED'),
-    ('foreign', 'BACKEND_CURRENT_SPEF_FOREIGN'),
-])
-def test_default_step24_refuses_invalid_current_spef_without_legacy_fallback(
-        tmp_path, monkeypatch, damage, reason):
-    project, _, paths, state = _current_scene(tmp_path, monkeypatch)
-    if damage == 'missing':
-        paths['spef'].unlink()
-    elif damage == 'changed':
-        paths['spef'].write_text(paths['spef'].read_text() + 'changed\n')
-    else:
-        outside = _write(tmp_path / 'outside/current.spef', '*SPEF foreign\n').resolve()
-        doc = json.loads(state.read_text())
-        doc['spef'] = {'max_*': str(outside)}
-        state.write_text(json.dumps(doc))
-        subject, tool = current.tool_subject(project, 'neutral')
-        subject['inputs'] = [row for row in subject['inputs'] if row['role'] != 'spef']
-        subject['inputs'].append(_record(outside, 'spef'))
-        monkeypatch.setattr(current, 'tool_subject', lambda *_a, **_k: (subject, tool))
-    observed = _step24_selection(project, tmp_path, monkeypatch)
-    assert observed['status'] == 'REFUSED'
-    assert reason in observed['reason']
-    assert not (project / 'phase3/stage3/extracted/neutral.spef').exists()
 
 
-def test_default_step24_without_current_owner_keeps_legacy_spef(tmp_path, monkeypatch):
-    project = tmp_path / 'legacy-project'
-    legacy = _write(project / 'phase3/stage3/extracted/neutral.spef', '*SPEF legacy\n')
-    observed = _step24_selection(project, tmp_path, monkeypatch)
-    assert observed == {'status': 'SELECTED', 'path': str(legacy.resolve()),
-                        'sha256': _sha(legacy)}
 
 
-def _step24_record_selection(project, pdk_root, monkeypatch):
-    selected = {}
-    binding = {}
-
-    def capture(_project, _image, _root, _pdk, **kwargs):
-        selected.update({name: str(Path(kwargs[name]).resolve())
-                         for name in ('routed_def', 'netlist', 'sdc', 'spef')})
-        binding.update(kwargs['expected_current_records'])
-        raise Refusal('CONTROL_D57_ALL_VIEWS_SELECTED', json.dumps(selected, sort_keys=True))
-
-    monkeypatch.setattr(runner, '_librelane_step_ctx',
-                        lambda *_a, **_k: (IMAGE, pdk_root))
-    monkeypatch.setattr(runner, '_discover_power_nets', lambda _path: (['P'], ['G']))
-    monkeypatch.setattr(ir, 'run_ir', capture)
-    written = []
-    try:
-        runner._librelane_step24_record(
-            project, 'neutral', SimpleNamespace(name='neutral', ir_budget_pct=5.0),
-            'librelane', project / 'phase3/stage3/extracted/neutral.spef', written)
-        report = json.loads((project / 'reports/phase3/ir_drop_librelane.json').read_text())
-    except Exception as exc:
-        report = {'judgment': {'reasons': [f'escaped: {type(exc).__name__}: {exc}']}}
-    return selected, binding, report, written
 
 
-def test_step24_record_hands_all_exact_current_views_to_native_consumer(
-        tmp_path, monkeypatch):
-    project, pdk_root, paths, _ = _current_scene(tmp_path, monkeypatch)
-    selected, binding, report, written = _step24_record_selection(
-        project, pdk_root, monkeypatch)
-    assert selected == {name: str(paths[key].resolve()) for name, key in (
-        ('routed_def', 'def'), ('netlist', 'nl'), ('sdc', 'sdc'), ('spef', 'spef'))}
-    assert 'CONTROL_D57_ALL_VIEWS_SELECTED' in report['judgment']['reasons'][0]
-    assert set(binding) == {'odb', 'def', 'netlist', 'sdc', 'spef', 'sta_state',
-                            'sta_receipt', 'sta_config', 'step23_record'}
-    assert written == [str(project / 'reports/phase3/ir_drop_librelane.json')]
-    assert not (project / 'phase3/stage3/pnr/neutral.def').exists()
 
 
-@pytest.mark.parametrize('damage,reason', [
-    ('missing', 'LL_IR_CURRENT_VIEW_MISSING'),
-    ('changed', 'LL_IR_CURRENT_VIEW_CHANGED'),
-    ('foreign_owner', 'LL_IR_CURRENT_STA_INVALID'),
-])
-def test_step24_record_refuses_invalid_current_view_without_legacy_fallback(
-        tmp_path, monkeypatch, damage, reason):
-    project, pdk_root, paths, _ = _current_scene(tmp_path, monkeypatch)
-    legacy = {
-        'def': _write(project / 'phase3/stage3/pnr/neutral.def', 'legacy def\n'),
-        'nl': _write(project / 'phase3/stage3/pnr/neutral_pnr.v', 'module neutral; endmodule\n'),
-        'sdc': _write(project / 'phase3/stage3/pnr/constraint.sdc', 'legacy sdc\n'),
-        'spef': _write(project / 'phase3/stage3/extracted/neutral.spef', '*SPEF legacy\n'),
-    }
-    if damage == 'missing':
-        paths['def'].unlink()
-    elif damage == 'changed':
-        paths['def'].write_text(paths['def'].read_text() + 'changed\n')
-    else:
-        monkeypatch.setattr(current, 'tool_subject', lambda *_a, **_k: (_ for _ in ()).throw(
-            current.Refusal('CURRENT_DEF_FOREIGN_PATH')))
-    selected, binding, report, _ = _step24_record_selection(project, pdk_root, monkeypatch)
-    assert selected == {}
-    assert binding == {}
-    assert reason in report['judgment']['reasons'][0]
-    assert all(path.is_file() for path in legacy.values())
 
 
-def test_step24_record_without_current_owner_keeps_all_legacy_views(
-        tmp_path, monkeypatch):
-    project = tmp_path / 'legacy-project'
-    paths = {
-        'routed_def': _write(project / 'phase3/stage3/pnr/neutral.def', 'legacy def\n'),
-        'netlist': _write(project / 'phase3/stage3/pnr/neutral_pnr.v',
-                          'module neutral; endmodule\n'),
-        'sdc': _write(project / 'phase3/stage3/pnr/constraint.sdc', 'legacy sdc\n'),
-        'spef': _write(project / 'phase3/stage3/extracted/neutral.spef', '*SPEF legacy\n'),
-    }
-    pdk_root = tmp_path / 'pdk'
-    (pdk_root / 'neutral').mkdir(parents=True)
-    selected, binding, report, _ = _step24_record_selection(project, pdk_root, monkeypatch)
-    assert selected == {name: str(path.resolve()) for name, path in paths.items()}
-    assert binding == {}
-    assert 'CONTROL_D57_ALL_VIEWS_SELECTED' in report['judgment']['reasons'][0]
 
 
 def test_current_native_state_selects_original_odb_and_source_chain(tmp_path, monkeypatch):

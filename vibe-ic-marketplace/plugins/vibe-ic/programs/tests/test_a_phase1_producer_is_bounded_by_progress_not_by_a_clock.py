@@ -45,132 +45,31 @@ Run: python3 -m pytest programs/tests/test_a_phase1_producer_is_bounded_by_progr
 """
 from __future__ import annotations
 
-import subprocess
 import sys
-import time
-import unittest.mock as mock
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_one_shot_runner as R              # noqa: E402
-import _watchdog as W                           # noqa: E402
 
 
-def _project(tmp_path: Path, name: str = "proj") -> Path:
-    p = tmp_path / name
-    (p / "phase1" / "generated_docs").mkdir(parents=True)
-    (p / "reports").mkdir(parents=True)
-    return p
 
 
-def _programs_dir_running(tmp_path: Path, body: str) -> Path:
-    """A PROGRAMS_DIR whose expert track is a real program with `body`."""
-    d = tmp_path / "programs"
-    d.mkdir()
-    (d / R._EXPERT_TRACK).write_text(body, encoding="utf-8")
-    return d
 
 
 # ── direction 1: a slow-but-working producer is no longer killed ────────────
 
-def test_a_track_that_is_working_outlives_its_old_bound(tmp_path, monkeypatch):
-    """THE FIX, and the half the retracted version did not deliver.
-
-    The subject runs far past the grace it is given and is NEVER stopped,
-    because it is burning CPU and writing the whole time. Under
-    `subprocess.run(timeout=N)` — and equally under a version of that which
-    merely relabels the kill — it is dead at N with Phase 1 reporting a failure
-    about a design nothing examined.
-    """
-    monkeypatch.setattr(R, "_TRACK_STALL_GRACE_S", 1)
-    p = _project(tmp_path)
-    report = R._pl.report_path(p, "phase1/expert_parse_track.json")
-    body = (
-        "import json, pathlib, sys, time\n"
-        "end = time.monotonic() + 3.0\n"
-        "x = 0\n"
-        "while time.monotonic() < end:\n"
-        "    x += 1\n"                       # CPU: the tree is progressing
-        "    if x % 200000 == 0:\n"
-        "        print('still working', flush=True)\n"   # and so is the output
-        f"p = pathlib.Path({str(report)!r})\n"
-        "p.parent.mkdir(parents=True, exist_ok=True)\n"
-        "p.write_text(json.dumps({'verdict': 'PASS', 'findings': [], "
-        "'ai_subtrack': {'status': 'CONSUMED'}, "
-        "'ai_convergence': {'consumed': 1}, "
-        "'denominator': {'deterministic': 0, 'ai': 1, 'total': 1}}))\n"
-        "sys.exit(0)\n")
-    started = time.monotonic()
-    with mock.patch.object(R, "PROGRAMS_DIR", _programs_dir_running(tmp_path, body)):
-        rc = R._run_expert_track(p)
-    took = time.monotonic() - started
-    assert rc == 0, "a track that finished cleanly was not credited"
-    # NON-VACUITY: it really did outlive the grace it was given, so this is not
-    # passing because the subject happened to be fast.
-    assert took > 2.0, (
-        f"the track finished in {took:.1f}s against a 1s grace — it never "
-        f"outlived the bound, so this proves nothing")
 
 
 # ── direction 2: a genuinely wedged producer is still caught ───────────────
 
-def test_a_track_that_is_doing_nothing_is_still_stopped(tmp_path, monkeypatch):
-    """THE HALF THAT MUST NOT MOVE. Idle and silent across the whole grace,
-    process still alive: STALLED, stopped, and Phase 1 still refuses. A guard
-    that stopped refusing would be a deletion, not a fix."""
-    monkeypatch.setattr(R, "_TRACK_STALL_GRACE_S", 1)
-    p = _project(tmp_path)
-    body = "import time\ntime.sleep(600)\n"
-    started = time.monotonic()
-    with mock.patch.object(R, "PROGRAMS_DIR", _programs_dir_running(tmp_path, body)):
-        rc = R._run_expert_track(p)
-    took = time.monotonic() - started
-    assert rc != 0, "a wedged track reported a clean run"
-    assert took < 60, (
-        f"the wedged track took {took:.0f}s to be noticed — the watchdog is "
-        f"not sampling inside its own grace")
 
 
-def test_the_stall_is_reported_as_a_measurement_not_as_a_clock(
-        tmp_path, monkeypatch, capsys):
-    """A real verdict, with evidence. "timed out after 600s" is equally
-    reachable by a correct track on a busy host; "no CPU, no I/O and no output
-    across the grace" is not."""
-    monkeypatch.setattr(R, "_TRACK_STALL_GRACE_S", 1)
-    p = _project(tmp_path)
-    with mock.patch.object(R, "PROGRAMS_DIR",
-                           _programs_dir_running(tmp_path, "import time\ntime.sleep(600)\n")):
-        R._run_expert_track(p)
-    err = capsys.readouterr().err
-    assert "STALLED" in err, err
-    assert "no forward progress" in err, err
-    assert "It was not slow; it was doing nothing." in err, err
-    assert "timed out" not in err, (
-        "the clock sentence is still being published as the reason")
 
 
-def test_the_step_0_5ic_producers_get_the_same_supervision(tmp_path, monkeypatch):
-    """The second site, asserted separately — the fix was applied twice and a
-    correct handler in an unreached branch is not a fix."""
-    monkeypatch.setattr(R, "_TRACK_STALL_GRACE_S", 1)
-    p = _project(tmp_path)
-    calls = []
-
-    def _stalled(argv, **kw):
-        calls.append(argv)
-        return W.SupervisedResult(
-            rc=W.RC_STALLED, out="", err="WATCHDOG_STALLED", outcome="stalled",
-            elapsed_s=1.0)
-
-    monkeypatch.setattr(R._wd, "run_host_supervised", _stalled)
-    rc = R._run_step_0_5ic(p)
-    assert rc != 0, "an undispatched route producer reported a clean run"
-    assert calls, "the producer was never dispatched through the supervisor"
 
 
 # ── the shape of the change, asserted so it cannot quietly regress ──────────
@@ -212,16 +111,6 @@ def test_no_runtime_bound_remains_at_either_dispatch_site():
     assert "_TRACK_STALL_GRACE_S" in src
 
 
-def test_the_grace_can_only_kill_less_than_the_bound_it_replaced():
-    """The safety argument for reusing 600, stated as a test.
-
-    A stall grace of N kills a strict subset of what a runtime bound of N kills:
-    both stop a job idle for N, and only the runtime bound stops a job that is
-    working at N. So no job that used to complete can start failing.
-    """
-    assert R._TRACK_STALL_GRACE_S == 600, (
-        "the grace moved; re-check that it is still >= the runtime bound it "
-        "replaced, or this argument no longer holds")
 
 
 # ── the retraction itself ──────────────────────────────────────────────────

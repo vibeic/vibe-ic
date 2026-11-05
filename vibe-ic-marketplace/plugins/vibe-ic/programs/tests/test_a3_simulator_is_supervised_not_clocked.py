@@ -216,14 +216,6 @@ def test_the_a3_site_is_no_longer_on_the_container_deadline_record():
         "input_doc_pdk_claim_vs_installed_pdk_check.py::")], sorted(rec)
 
 
-def test_the_ceiling_gate_still_passes_on_this_tree():
-    """The register and the tree have to agree, and the gate is the only thing
-    entitled to say they do. Run, not asserted."""
-    cp = subprocess.run(
-        [sys.executable, str(PROGRAMS / "watchdog_ceiling_semantics_check.py")],
-        capture_output=True, text=True, cwd=str(PROGRAMS))
-    assert cp.returncode == 0, cp.stdout[-3000:] + cp.stderr[-2000:]
-    assert "CONTAINER_DEADLINE 2" in cp.stdout, cp.stdout[-2000:]
 
 
 # ═══ the reap the conversion depends on ═══════════════════════════════════

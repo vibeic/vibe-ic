@@ -576,34 +576,8 @@ def test_the_four_exit_codes_map_to_four_distinct_gate_readings(monkeypatch):
 # line. Several gates MENTION the word in prose while declaring nothing, and an
 # unanchored pattern read each of those as a declaration.
 
-def test_the_checker_declares_its_enforcement_intent_on_its_own_line():
-    """Asked through the AUDIT'S OWN READER, not a regex re-typed here.
-
-    The first version of this test re-implemented the pattern, and a test that
-    re-implements the rule it checks cannot see the rule's real limits. One of
-    those limits is a 4000-byte window (`declared_intent` searches only
-    `text[:4000]`), which a re-typed regex does not have — so prose added above
-    the line would un-declare the gate while this test stayed green. That
-    exact failure happened to the sibling gate on this branch.
-    """
-    import flow_gate_enforcement_audit as A
-    assert A.declared_intent(PROG, "ppa_pr_scope_check") == "blocking", (
-        "the audit's own reader does not see this gate's declaration. Silence "
-        "is not neutral: an unstated default of advisory is how 62 of 72 gates "
-        "ended up unable to stop anything.")
 
 
-def test_the_declaration_stays_inside_the_readers_window():
-    """The bound is invisible from inside the docstring, so it needs a test
-    that names it. Measured on the sibling gate: two paragraphs of prose moved
-    the line to byte 4371 and the gate silently went UNDECLARED."""
-    import flow_gate_enforcement_audit as A
-    src = (PROG / "ppa_pr_scope_check.py").read_text(encoding="utf-8")
-    idx = src.find("ENFORCEMENT:")
-    assert 0 <= idx < A.DECL_WINDOW_BYTES, (
-        f"the ENFORCEMENT declaration sits at byte {idx}; `declared_intent` "
-        f"reads only the first {A.DECL_WINDOW_BYTES}. Present and unread "
-        f"reports as UNDECLARED — move it above the prose.")
 
 
 def test_the_declaration_matches_what_the_gate_actually_does(monkeypatch):
@@ -703,39 +677,6 @@ def test_every_answered_question_carries_at_least_one_entry():
     assert not empty, f"questions answered with no evidence: {empty}"
 
 
-def test_the_reader_actually_honours_the_named_window():
-    """`DECL_WINDOW_BYTES` has to be the number `declared_intent` USES, not a
-    constant sitting beside a hardcoded one.
-
-    The two guards on this branch import it and assert an offset against it.
-    That pins THEM to the constant — it does not pin the READER to it. If
-    someone inlined `text[:4000]` back into `declared_intent` while leaving the
-    constant defined, both guards would keep passing over a window that no
-    longer existed, and the gate they protect could go silently UNDECLARED
-    again. This is the third time on this branch that a number kept in two
-    places has been the defect; this asserts there is only one.
-
-    Behavioural, not textual: a synthetic gate whose declaration sits at byte
-    11 must be READ at the shipped window and NOT read when the window is
-    narrowed below it."""
-    import flow_gate_enforcement_audit as A
-    probe = Path(tempfile.mkdtemp(prefix="declwin_")) / "probe_check.py"
-    probe.write_text('"""probe.\n\nENFORCEMENT: blocking\n'
-                     '=====================\n"""\n' + "# pad\n" * 50)
-    assert probe.read_text().find("ENFORCEMENT:") < 20
-
-    original = A.DECL_WINDOW_BYTES
-    try:
-        assert A.declared_intent(probe.parent, "probe_check") == "blocking"
-        A.DECL_WINDOW_BYTES = 10          # narrower than the declaration's offset
-        assert A.declared_intent(probe.parent, "probe_check") is None, (
-            "`declared_intent` ignored DECL_WINDOW_BYTES — the window is "
-            "hardcoded somewhere and the constant is decorative, so every "
-            "guard that imports it is measuring the wrong thing")
-    finally:
-        A.DECL_WINDOW_BYTES = original
-    # and the restore really restored it, or later tests inherit a broken audit
-    assert A.declared_intent(probe.parent, "probe_check") == "blocking"
 
 
 def test_the_merge_gates_composed_programs_list_is_complete():

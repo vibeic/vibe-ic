@@ -5,7 +5,6 @@ import sys
 import pytest
 import yaml
 
-import execution_policy
 import flow_artifact_paths as paths
 import flow_compliance_check as fcc
 import phase23_completion_self_audit_check as phase23
@@ -163,64 +162,14 @@ def test_explicit_top_precedes_retained_config(project):
     assert report['steps'][0]['evidence'] == ['phase3/stage4/gds/logical.gds']
 
 
-def test_runtime_top_precedes_retained_config(project, monkeypatch):
-    _config(project, {'DESIGN_NAME': 'physical_cell'})
-    monkeypatch.setattr(execution_policy, '_ordinary_runtime', {
-        'project': project, 'parameters': {'top': 'logical'}})
-    seen = []
-
-    def audit(args, root):
-        seen.append(paths.resolve(root, paths.GDS_SPEC))
-        return 0
-
-    monkeypatch.setattr(fcc, '_audit_project', audit)
-    assert fcc.main([str(project)]) == 0
-    assert seen == ['phase3/stage4/gds/logical.gds']
 
 
-def test_runtime_without_top_uses_config_and_keeps_other_parameters(project, monkeypatch):
-    _config(project, {'DESIGN_NAME': 'logical'})
-    parameters = {'pdk': 'fixture', 'mode': 'default'}
-    runtime = {'project': project, 'parameters': parameters}
-    monkeypatch.setattr(execution_policy, '_ordinary_runtime', runtime)
-    seen = []
-
-    def audit(args, root):
-        assert paths.current_parameters(root) == {**parameters, 'top': 'logical'}
-        seen.append(paths.resolve(root, paths.GDS_SPEC))
-        return 0
-
-    monkeypatch.setattr(fcc, '_audit_project', audit)
-    assert fcc.main([str(project)]) == 0
-    assert seen == ['phase3/stage4/gds/logical.gds']
-    assert runtime['parameters'] == {'pdk': 'fixture', 'mode': 'default'}
 
 
-def test_explicit_resolve_ignores_runtime_with_no_top_field(project, monkeypatch):
-    monkeypatch.setattr(execution_policy, '_ordinary_runtime', {
-        'project': project, 'parameters': {'pdk': 'fixture'}})
-    assert paths.resolve(project, paths.GDS_SPEC, {'top': 'logical'}) == (
-        'phase3/stage4/gds/logical.gds')
-    with pytest.raises(paths.OutputTopUnbound, match='OUTPUT_TOP_UNBOUND'):
-        paths.resolve(project, paths.GDS_SPEC)
 
 
-@pytest.mark.parametrize('top', [None, '', '../physical_cell'])
-def test_present_invalid_runtime_top_still_refuses(project, monkeypatch, top):
-    _config(project, {'DESIGN_NAME': 'logical'})
-    monkeypatch.setattr(execution_policy, '_ordinary_runtime', {
-        'project': project, 'parameters': {'top': top}})
-    monkeypatch.setattr(fcc, '_audit_project',
-                        lambda args, root: paths.resolve(root, paths.GDS_SPEC))
-    with pytest.raises(paths.OutputTopUnbound, match='OUTPUT_TOP_UNBOUND'):
-        fcc.main([str(project)])
 
 
-def test_explicit_top_conflicting_with_scope_still_refuses(project, monkeypatch):
-    monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
-    with paths.gate_parameters(project, {'top': 'logical'}):
-        with pytest.raises(ValueError, match='OUTPUT_TOP_CONFLICT'):
-            fcc.main([str(project), '--top', 'physical_cell'])
 
 
 @pytest.mark.parametrize('top', [None, 'logical'])

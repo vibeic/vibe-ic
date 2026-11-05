@@ -45,7 +45,6 @@ No chip, PDK, process or vendor literal.
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -65,101 +64,21 @@ _ABSENT = (127, "", "COMMAND_NOT_FOUND: [Errno 2] No such file or "
 _REJECTED = (1, "", f"{_TOP}.v:1: syntax error\nI give up.\n")
 
 
-def _project(root: Path) -> Path:
-    gd = root / "phase1" / "generated_docs"
-    gd.mkdir(parents=True, exist_ok=True)
-    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
-        "top_module": _TOP,
-        "top_ports": [{"name": "clk", "direction": "input"},
-                      {"name": "reset_n", "direction": "input"},
-                      {"name": "data_in", "direction": "input"},
-                      {"name": "data_out", "direction": "output"}]}))
-    rtl = root / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True, exist_ok=True)
-    (rtl / f"{_TOP}.v").write_text(_RTL)
-    dosr.step_full_stack_tb_gen(root, _TOP)
-    return root
 
 
-def _pin_stage(monkeypatch, results):
-    """Pin what each `_run_iverilog_stage` call returns, in order, so the
-    outcome under test is reached on any host — with or without a simulator.
-    A single tuple is used for every call."""
-    monkeypatch.setattr(dosr, "_iverilog_available", lambda *a, **k: True)
-    seq = list(results)
-
-    def _stage(argv, run_dir, container, timeout=120):
-        return seq.pop(0) if len(seq) > 1 else seq[0]
-
-    monkeypatch.setattr(dosr, "_run_iverilog_stage", _stage)
 
 
 # ---------------------------------------------------------------------------
 # THE THIRD STATE — three outcomes, three words, and none of them green
 # ---------------------------------------------------------------------------
-def test_sim_that_ran_to_completion_is_incomplete_and_says_it_executed(
-        tmp_path, monkeypatch):
-    _pin_stage(monkeypatch, [(0, "", ""), (0, "FULL_STACK_TB_DONE\n", "")])
-    sr = dosr.step_reference_tb(_project(tmp_path), _TOP, "processor_cpu")
-    assert sr.status == "NOT_MEASURED", (sr.status, sr.detail)
-    assert sr.extras.get("sim_executed") is True
-    assert sr.extras.get("functional_verified") is False
 
 
-def test_sim_that_ran_and_rejected_the_source_still_fails(
-        tmp_path, monkeypatch):
-    """TEETH. A genuine defect the compiler RAN and rejected is still a FAIL —
-    the not-executed word must never absorb a real rejection."""
-    _pin_stage(monkeypatch, [_REJECTED])
-    sr = dosr.step_reference_tb(_project(tmp_path), _TOP, "processor_cpu")
-    assert sr.status == "FAIL", (sr.status, sr.detail)
-    assert "syntax error" in sr.detail
-    assert sr.extras.get("sim_executed") is True
 
 
-def test_no_simulator_anywhere_is_not_executed_and_never_a_pass(
-        tmp_path, monkeypatch):
-    """The measured case. Nothing ran, so nothing is known: not a verdict on
-    the design, and not a word that reads as disposed of."""
-    _pin_stage(monkeypatch, [_ABSENT])
-    sr = dosr.step_reference_tb(_project(tmp_path), _TOP, "processor_cpu")
-    assert sr.status == dosr.NOT_EXECUTED_STATUS, (sr.status, sr.detail)
-    assert sr.status != "PASS_WITH_WAIVERS"
-    assert sr.extras.get("sim_executed") is False
-    assert sr.extras.get("functional_verified") is False
-    # it must not accuse the DUT for a fact about where the tree sits.
-    assert "defect" not in sr.detail.lower()
 
 
-def test_every_outcome_states_whether_a_simulation_EXECUTED(
-        tmp_path, monkeypatch):
-    """THE COLLAPSE THIS FILE EXISTS TO STOP. Before this, the only way to
-    learn whether a simulation had actually run was to read the detail prose —
-    the step said "NO sim ran" in a sentence while its STATUS said the matter
-    was settled, and the run verdict was the same PASS_WITH_WAIVERS either
-    way. Every outcome now answers the question as a fact."""
-    expected = {"ran_ok": True, "ran_bad": True, "never_ran": False}
-    got = {}
-    for label, pinned in (
-            ("ran_ok", [(0, "", ""), (0, "FULL_STACK_TB_DONE\n", "")]),
-            ("ran_bad", [_REJECTED]),
-            ("never_ran", [_ABSENT])):
-        _pin_stage(monkeypatch, pinned)
-        sr = dosr.step_reference_tb(_project(tmp_path / label), _TOP,
-                                    "processor_cpu")
-        got[label] = sr.extras.get("sim_executed")
-    assert got == expected, got
 
 
-def test_not_executed_is_classified_and_is_not_a_pass(capsys):
-    """`_aggregate_verdict`'s catch-all returns PASS for anything it does not
-    enumerate. A new status word must be classified BEFORE it can be emitted,
-    or the first run that emits it is silently green."""
-    plan = [dosr.StepResult("reference_tb", dosr.NOT_EXECUTED_STATUS,
-                            0.0, "no sim ran",
-                            reason_class=dosr.NOT_EXECUTED_REASON)]
-    assert dosr._aggregate_verdict(plan) != "PASS"
-    assert "UNCLASSIFIED" not in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

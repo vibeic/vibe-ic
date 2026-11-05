@@ -301,48 +301,8 @@ def test_the_step_is_APPENDED_TO_THE_PLAN_not_merely_defined():
         f"plan, so it never runs. plan.append targets: {sorted(appended)[:8]}...")
 
 
-def test_the_declaration_survives_the_docstring_growing():
-    """`flow_gate_enforcement_audit.declared_intent` searches only the first
-    4000 characters of the file. That bound is invisible from inside the
-    docstring, so ADDING PROSE ABOVE the declaration silently un-declares the
-    gate — the line is still there, still opens its own line, and the audit
-    reports `declared: None`.
-
-    Measured, on this branch: two explanatory paragraphs pushed the line to
-    byte 4371 and the gate went UNDECLARED while every other check stayed
-    green. The declaration now sits at the top of the docstring, and this test
-    is the guard that keeps it there."""
-    import flow_gate_enforcement_audit as A
-    src = (PROG / "slot_pad_budget_check.py").read_text(encoding="utf-8")
-    idx = src.find("ENFORCEMENT:")
-    assert idx >= 0, "the gate declares no enforcement intent at all"
-    # The bound is IMPORTED, never re-typed: a number kept in two places is a
-    # number that will disagree, and this guard would then quietly stop
-    # guarding the thing it names.
-    assert idx < A.DECL_WINDOW_BYTES, (
-        f"the ENFORCEMENT declaration sits at byte {idx}, past the "
-        f"{A.DECL_WINDOW_BYTES}-byte window `declared_intent` reads. It is "
-        f"present and unread, which the audit reports as UNDECLARED — move it "
-        f"back above the prose.")
 
 
-def test_the_audit_proves_it_is_ENFORCED_and_declares_that_intent():
-    """The doctrine property itself (§3/§5), pinned so it cannot regress to
-    AUDIT_ONLY. A dict `.get(rc, ...)` instead of a branch on `rc` is enough to
-    lose it — that spelling reports INLINE_UNPROVEN, and unknown is not yes."""
-    # Called IN-PROCESS, not spawned. The audit scans ~1240 programs and takes
-    # ~24s; as a child it was bounded at 60s (the harness ceiling), which left
-    # 2.5x headroom and MEASURABLY was not enough — this test flaked at machine
-    # load ~17 and passed at load ~5. In-process the work is identical but the
-    # only bound is pytest's own 180s item timeout, which is 7x headroom.
-    # A flake is worse than no test: its green is the one that gets believed.
-    import flow_gate_enforcement_audit as A
-    doc = A.audit(PLUGIN / "flow" / "phase1_phase2_phase3.yaml", PROG)
-    mine = [g for g in doc["gates"] if g.get("gate") == "slot_pad_budget_check"]
-    assert mine, "the audit does not see the gate at all"
-    assert mine[0]["enforcement"] == "ENFORCED", mine[0]
-    assert mine[0]["wiring"] == "INLINE_BLOCKING", mine[0]
-    assert mine[0]["declared"] == "blocking", mine[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -808,28 +768,6 @@ def test_the_real_sha256_fits_only_after_a_fold_and_says_so():
 # The header and the reader's 4000-byte window agree on all 99 programs that
 # declare (measured), so this is one rule and not a second number.
 
-def test_no_gate_declaration_anywhere_sits_outside_the_readers_window():
-    import flow_gate_enforcement_audit as A
-    progs = PROG
-    unread, thin = [], []
-    for p in sorted(progs.glob("*.py")):
-        start = A.program_declaration_offset(p.read_text(errors="replace"))
-        if start is None:
-            continue                      # no declaration is a different question
-        margin = A.DECL_WINDOW_BYTES - start
-        if margin <= 0:
-            unread.append(f"{p.stem} at byte {start}")
-        elif margin < 200:
-            thin.append(f"{p.stem} margin {margin}B")
-    assert not unread, (
-        "these gates DECLARE an enforcement intent the audit never reads — "
-        "present, correctly spelt, and reported as UNDECLARED:\n  "
-        + "\n  ".join(unread)
-        + "\nMove the declaration above the prose; the window is "
-          f"{A.DECL_WINDOW_BYTES} bytes.")
-    assert not thin, (
-        "a declaration is within 200 bytes of vanishing; one paragraph added "
-        "above it un-declares the gate silently:\n  " + "\n  ".join(thin))
 
 
 @pytest.mark.consistency

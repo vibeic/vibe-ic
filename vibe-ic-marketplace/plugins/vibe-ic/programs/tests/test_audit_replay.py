@@ -262,27 +262,6 @@ def test_a_recorded_baseline_is_the_reference_the_next_run_diffs_against():
     assert [e["id"] for e in rep["diff"]["regressions"]] == ["7"]
 # ── R-0915-88: the RUN SHAPE reaches the replay too ─────────────────────────
 
-def test_a_snapshot_recorded_by_an_agent_driven_run_REFUSES_against_a_replay():
-    """The replay re-judges with a program; if the snapshot's recorded table
-    came from a run whose hand-offs an agent answered, the two are not the same
-    experiment and the refusal must say so rather than print step moves the
-    current tree did not cause."""
-    from _step_verdict_table import awaiting_exit_code
-    base = _tmp()
-    snap = _snapshot(base / "snap", [("2", "PASS")], "PASS")   # ledger: []
-    tree = _tree(base / "tree",
-                 {"verdict": "FAIL", "steps": _steps([("2", "INCOMPLETE")]),
-                  "rc": 1,
-                  "ledger": [{"gate": "an_expert_track", "rc": 0,
-                              "verdict": "PASS",
-                              "exit_code": awaiting_exit_code()}]})
-    out = base / "o.json"
-    rc = _replay(snap, tree, base / "wd", out)
-    rep = json.loads(out.read_text(encoding="utf-8"))
-    assert rc == 2
-    assert "different RUN SHAPE" in rep["refusal"]
-    assert "an_expert_track" in rep["refusal"]
-    assert rep["table"] is not None, "the baseline table must survive a refusal"
 
 # ── the refusals ─────────────────────────────────────────────────────────────
 

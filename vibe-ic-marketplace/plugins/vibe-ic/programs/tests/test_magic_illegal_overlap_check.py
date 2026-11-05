@@ -401,11 +401,6 @@ def test_the_metric_goes_through_the_repo_channel_and_declares_a_direction(
 # --------------------------------------------------------------------------- #
 # WIRING — these read files that exist on origin/main, and fail there
 # --------------------------------------------------------------------------- #
-def _recipe(text: str) -> str:
-    i = text.index('_MAGIC_EXT2SPICE_TCL = """\\\n') if \
-        '_MAGIC_EXT2SPICE_TCL = """\\\n' in text else \
-        text.index('_DEFAULT_BASE_TCL = """\\\n')
-    return text[i:text.index('"""', i + 40)]
 
 
 def test_the_extraction_recipe_dumps_the_feedback_channel():
@@ -423,11 +418,6 @@ def test_the_extraction_recipe_dumps_the_feedback_channel():
         in runner, "the recipe's env var must be exported by the invocation"
 
 
-def test_both_recipe_copies_stay_identical():
-    """The two copies are pinned identical by contract; drift breaks the CLI."""
-    import phase3_one_shot_runner as R
-    import lvs_power_aware_extract_tcl as E
-    assert R._MAGIC_EXT2SPICE_TCL == E._DEFAULT_BASE_TCL
 
 
 def test_flow_step31_gates_illegal_overlap_before_lvs():

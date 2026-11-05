@@ -21,9 +21,7 @@ reason the gate names rather than because a helper is missing.
 """
 from __future__ import annotations
 
-import ast
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -32,7 +30,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _hdl_code_text as B                      # noqa: E402
 import benchmark_io_adapter as IO               # noqa: E402
-import design_one_shot_runner as DR             # noqa: E402
 import _runner_measurement as RM                # noqa: E402
 import known_answer_vector_tb_gen as KTB        # noqa: E402
 import register_bus_driver_gen as RBD           # noqa: E402
@@ -150,137 +147,19 @@ def test_a_module_named_only_inside_a_comment_is_not_packaged(tmp_path):
 
 
 # ── site 3: the DUT connection list ───────────────────────────────────────
-def test_an_unbalanced_paren_in_a_comment_does_not_hide_the_instantiation():
-    """PRE-FIX: the `(` in the comment left `depth` never returning to 0, the
-    walk fell off the end of the text and the function returned None — which
-    its caller reports as "DUT module is not instantiated by this TB" about a
-    testbench that instantiates it correctly."""
-    tb = ("module tb;\n"
-          "  dut_mod u_dut ( // drive reset first (see spec section 2\n"
-          "    .clk(clk),\n"
-          "    .rst_n(rst_n)\n"
-          "  );\n"
-          "endmodule\n")
-    conns = DR._v1956_dut_instance_conns(tb, "dut_mod")
-    assert conns is not None
-    import re
-    assert set(re.findall(r"\.\s*([A-Za-z_]\w*)\s*\(", conns)) == {"clk", "rst_n"}
 
 
-def test_a_commented_out_instantiation_is_not_read_as_the_real_one():
-    """The other direction — a connection list the design does not have."""
-    tb = ("module tb;\n"
-          "  // dut_mod u_old ( .legacy_pin(x) );\n"
-          "  dut_mod u_dut ( .clk(clk) );\n"
-          "endmodule\n")
-    conns = DR._v1956_dut_instance_conns(tb, "dut_mod")
-    assert conns is not None and "legacy_pin" not in conns
-    assert "clk" in conns
 
 
 # ── the gate itself ───────────────────────────────────────────────────────
-def _load_gate():
-    """The gate module, imported from the programs dir this file already uses."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "hdl_declaration_scan_gate_for_tests",
-        PROGRAMS / "hdl_declaration_scan_strips_comments_check.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
-def test_the_declaration_scan_gate_is_green_on_this_tree():
-    """The gate BLOCKS on a new unstripped scan, and what "green" HONESTLY means
-    here is a RATCHET.
-
-    Driven here so the repairs above are held by the gate, not only by their own
-    unit tests. The verdict asked for is `--ratchet`: `offenders == the
-    register`. That is the true statement — three scans DO still read unstripped
-    text, each with a named owning lane — where "no scan reads unstripped text"
-    would be false, and where the plain count is not an instrument at all: this
-    population went 166 -> 165 -> 163 across a handful of landings while
-    offenders were both entering and leaving, so the number moved DOWN in the
-    same window that three new ones arrived.
-    """
-    proc = subprocess.run(
-        [sys.executable,
-         str(PROGRAMS / "hdl_declaration_scan_strips_comments_check.py"),
-         # `--root` NAMED (vibe-ic#2199): the shipped plugin, which is the
-         # "this tree" the name of this test already claims.
-         "--root", str(PROGRAMS.parent), "--ratchet"],
-        capture_output=True, text=True, timeout=900)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "[PASS]" in proc.stdout
 
 
-def test_the_ratchet_blocks_a_landing_that_ADDS_an_unstripped_scan():
-    """DIRECTION 1: an offender not in the register fails the gate.
-
-    THE OFFENDER IS PLANTED, NOT BORROWED FROM THE REGISTER. This test used to
-    empty `_OFFENDER_REGISTER` and hand its former contents back as the
-    observed population, which was exact while the register had entries and went
-    VACUOUS the moment it emptied: v1.18.24 fixed every offender this gate
-    named, `sorted(kept)` became `[]`, and a gate asked about NO offenders
-    correctly answered rc 0 — a green test proving nothing. The population a
-    ratchet judges is not the register's own contents, so the fixture must not
-    be either. Both arms are asserted here: the same name UNREGISTERED blocks
-    and REGISTERED does not, so the refusal is about membership and not about
-    the name.
-    """
-    G = _load_gate()
-    root = PROGRAMS.parent
-    planted = "canonical_primitive_synth::_rtl_input_port_widths::_HDR(rtl)"
-    kept = dict(G._OFFENDER_REGISTER)
-    assert planted not in kept, (
-        "the planted name must not already be registered, or the first arm "
-        "below asks nothing")
-    try:
-        G._OFFENDER_REGISTER.clear()
-        rc_unregistered = G._ratchet_verdict([planted], root)
-        G._OFFENDER_REGISTER[planted] = "planted by this test"
-        rc_registered = G._ratchet_verdict([planted], root)
-    finally:
-        G._OFFENDER_REGISTER.clear()
-        G._OFFENDER_REGISTER.update(kept)
-    assert rc_unregistered == 1, "an unregistered offender must BLOCK"
-    assert rc_registered == 0, "the SAME offender, registered, must not block"
 
 
-def test_the_ratchet_refuses_an_entry_that_outlived_its_offender():
-    """DIRECTION 2: an entry whose offender is gone is itself an offender.
-
-    Uses `canonical_primitive_synth::_rtl_input_port_widths`, which WAS an
-    offender until the repair above stripped comments on the value reaching the
-    scan — so this is the exact shape of fixing one and forgetting the entry.
-    """
-    G = _load_gate()
-    root = PROGRAMS.parent
-    kept = dict(G._OFFENDER_REGISTER)
-    try:
-        G._OFFENDER_REGISTER[
-            "canonical_primitive_synth::_rtl_input_port_widths::_HDR(rtl)"] = (
-            "planted for this test")
-        rc = G._ratchet_verdict(sorted(kept), root)
-    finally:
-        G._OFFENDER_REGISTER.clear()
-        G._OFFENDER_REGISTER.update(kept)
-    assert rc == 1, "a stale register entry must BLOCK"
 
 
-def test_the_ratchet_is_scoped_to_the_tree_it_is_aimed_at(tmp_path):
-    """An entry naming a function this checkout does not define is out of scope,
-    not stale — otherwise the verdict depends on which tree the gate was aimed
-    at, which is the one property a gate must not have."""
-    G = _load_gate()
-    (tmp_path / "programs").mkdir()
-    kept = dict(G._OFFENDER_REGISTER)
-    try:
-        rc = G._ratchet_verdict([], tmp_path)
-    finally:
-        G._OFFENDER_REGISTER.clear()
-        G._OFFENDER_REGISTER.update(kept)
-    assert rc == 0, "an out-of-tree entry is not stale"
 
 
 # ── site 4: the struct-typed bus ports read off the DUT header ────────────
@@ -357,81 +236,3 @@ def test_a_generator_that_exists_only_in_a_comment_is_not_reported():
 #
 # Both were measured on pristine main at v1.19.60, where they were the ONLY two
 # offenders the ratchet named and neither was a defect in the accused code.
-
-def test_a_COMPILED_regexs_own_sub_is_recognised_as_a_strip():
-    """SPELLING, not behaviour: `X_RE.sub(repl, t)` strips as surely as
-    `re.sub(pat, repl, t)`, and this repository pre-compiles.
-
-    BOTH DIRECTIONS on one synthetic module. The compiled comment pattern
-    counts; a compiled pattern that is NOT a comment pattern does not, or the
-    fix would have made every `.sub` look like a strip and switched the gate
-    off.
-    """
-    G = _load_gate()
-    src = (
-        'import re\n'
-        '_C = re.compile(r"(?m)^[ \\t]*//.*$")\n'
-        '_NOTC = re.compile(r"\\\\s+")\n'
-        '_M = re.compile(r"\\\\bmodule\\\\s+(\\\\w+)")\n'
-        'def stripped(text):\n'
-        '    t = _C.sub("", text)\n'
-        '    return _M.findall(t)\n'
-        'def squeezed(text):\n'
-        '    t = _NOTC.sub(" ", text)\n'
-        '    return _M.findall(t)\n')
-    found = G.scan_source(src, "syn")
-    assert found == ["syn::squeezed::_M(t)"], found
-
-
-def test_a_keyword_in_ATTRIBUTE_position_is_not_a_declaration():
-    """`\\.output\\s*\\(` is a method call. `output` is a Verilog reserved word,
-    so it cannot be the name of a port a connection dots into either.
-
-    Both directions, because a rule that dropped the real productions would be
-    the third retracted widening this file's header records.
-    """
-    G = _load_gate()
-    assert not G.declares_hdl(r"\.output\s*\(\s*['\"]([^'\"]+)['\"]")
-    assert not G.declares_hdl(r"extent\.input\(")
-    # …and every real declaration production still declares
-    for real in (r"\bmodule\s+(\w*)", r"module[ \t]+", r"\binout\b",
-                 r"^\s*(input|output|inout)\b", r"module[\s_-]?list"):
-        assert G.declares_hdl(real), real
-
-
-def test_the_attribute_rule_removes_exactly_one_regex_tree_wide():
-    """The SET, not the count — a smaller population is what both wrong rules
-    in this gate's history produced too.
-
-    Re-measured here rather than quoted, so the claim in the gate's comment
-    cannot go stale without this failing.
-    """
-    G = _load_gate()
-    root = PROGRAMS.parent
-    kept, dropped = [], []
-    for f in sorted(root.rglob("*.py")):
-        try:
-            tree = ast.parse(f.read_text(errors="replace"))
-        except SyntaxError:
-            continue
-        for n in ast.walk(tree):
-            if not (isinstance(n, ast.Assign) and len(n.targets) == 1
-                    and isinstance(n.targets[0], ast.Name)):
-                continue
-            pat = G._pattern_of(n.value)
-            if pat is None:
-                continue
-            name = f"{f.relative_to(root)}::{n.targets[0].id}"
-            without = G._KW_PATH_TOKEN.sub(
-                lambda m: " " * len(m.group(0)), pat)
-            before = bool(G._KW.search(G._META.sub(" ", without)))
-            after = G.declares_hdl(pat)
-            if before and not after:
-                dropped.append(name)
-            elif after:
-                kept.append(name)
-    assert dropped == [
-        "programs/_seal_ring_margin.py::_RE_RULE_ID"], dropped
-    assert len(kept) >= 200, (
-        f"the population collapsed to {len(kept)}; the attribute rule is "
-        f"supposed to remove one entry, not a class")

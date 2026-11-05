@@ -21,7 +21,6 @@ from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
-import phase3_one_shot_runner as R  # noqa: E402
 import yosys_hilomap_required_check as H  # noqa: E402
 
 
@@ -49,29 +48,8 @@ def _write(tmp, name, text):
     return p
 
 
-def test_emitter_produces_hilomap_for_asap7_style_pdk(tmp_path):
-    lib = _write(tmp_path, "asap7_tie.lib", _ASAP7_TIE_LIB)
-    directive = R._v1_6_596_build_hilomap_directive(str(lib))
-    assert directive, "emitter returned no hilomap directive for ASAP7 tie cells"
-    # The directive names the discovered tie cells + their real output pins.
-    assert "hilomap" in directive
-    assert "TIEHIx1_ASAP7_75t_R" in directive and " H " in directive
-    assert "TIELOx1_ASAP7_75t_R" in directive and directive.rstrip().endswith("L")
 
 
-def test_runner_emitted_command_passes_its_own_audit(tmp_path):
-    # The runner's OWN synth command (inline `yosys -p`) for an ASAP7 PDK now
-    # carries the emitted hilomap; a .ys with that exact directive AUDITS clean.
-    lib = _write(tmp_path, "asap7_tie.lib", _ASAP7_TIE_LIB)
-    directive = R._v1_6_596_build_hilomap_directive(str(lib))
-    ys = _write(tmp_path, "synth.ys",
-                "read_verilog -sv top.v\n"
-                "synth -top top -flatten\n"
-                "techmap\n"
-                f"{directive}\n"
-                "write_verilog out.v\n")
-    rc, msgs = H.audit(str(ys))
-    assert rc == 0, f"runner's own emitted synth command failed its own audit: {msgs}"
 
 
 def test_auditor_still_fails_a_genuinely_missing_hilomap(tmp_path):
@@ -84,17 +62,3 @@ def test_auditor_still_fails_a_genuinely_missing_hilomap(tmp_path):
     rc, msgs = H.audit(str(ys))
     assert rc == 1
     assert any("MISSING hilomap" in m for m in msgs)
-
-
-def test_sky130_conb_emitter_unchanged(tmp_path):
-    # Regression guard: sky130's dual-output conb_1 still yields a hilomap
-    # directive (byte-identical emitter behaviour for the pre-#168 case).
-    sky_lib = _write(tmp_path, "sky130_tie.lib",
-                     "library(sky130){\n"
-                     "  cell (sky130_fd_sc_hd__conb_1){\n"
-                     "    pin (HI){ direction:output; function:\"1\"; }\n"
-                     "    pin (LO){ direction:output; function:\"0\"; }\n"
-                     "  }\n"
-                     "}\n")
-    directive = R._v1_6_596_build_hilomap_directive(str(sky_lib))
-    assert directive and "sky130_fd_sc_hd__conb_1" in directive

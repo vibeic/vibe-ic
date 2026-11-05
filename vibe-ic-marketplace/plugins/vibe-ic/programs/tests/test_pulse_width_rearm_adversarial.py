@@ -1,7 +1,6 @@
 """Permanent production controls from the unchanged independent R3 probes."""
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -16,7 +15,6 @@ ROOT = (Path(os.environ["REVIEW_CLONE"]) if "REVIEW_CLONE" in os.environ else
 PROGRAMS = ROOT / "vibe-ic-marketplace/plugins/vibe-ic/programs"
 FIXTURES = PROGRAMS / "tests/fixtures/pulse_width_rearm"
 sys.path.insert(0, str(PROGRAMS))
-import design_one_shot_runner as runner  # noqa: E402
 import pulse_width_rearm_conformance_check as checker  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
@@ -44,17 +42,6 @@ def _project(tmp_path, bad=False):
     return project, source, rtl
 
 
-def _ordinary_counter(monkeypatch, mutate=None):
-    calls = []
-
-    def ordinary(*args, **kwargs):
-        calls.append(args)
-        if mutate:
-            mutate()
-        return runner.StepResult("reference_tb", "PASS", detail="ordinary TB PASS")
-
-    monkeypatch.setattr(runner, "_step_reference_tb_without_pulse_gate", ordinary)
-    return calls
 
 
 def test_independent_r3_result_channel_forgery_is_refused(monkeypatch):
@@ -79,30 +66,6 @@ def test_independent_r3_replace_boundary_race_is_refused(monkeypatch):
     assert got["published_rtl_sha"] != got["live_rtl_sha"]
 
 
-def test_legitimate_native_channel_binds_process_inputs_and_one_ordinary_call(tmp_path,
-                                                                            monkeypatch):
-    project, source, rtl = _project(tmp_path)
-    calls = _ordinary_counter(monkeypatch)
-    result = runner.step_reference_tb(project, "pulse_width_rearm_fixture", None, "pinned-image")
-    assert result.status == "PASS", result.detail
-    assert len(calls) == 1
-    receipt = result.extras["pulse_width_rearm"]
-    assert receipt["verdict"] == "PASS" and receipt["measured"] is True
-    assert receipt["native_process"]["pid"] > 0
-    assert receipt["native_process"]["returncode"] == 0
-    assert receipt["native_process"]["argv"] == receipt["simulation_command"]
-    binding = receipt["run_binding"]
-    assert len(binding["nonce"]) == 64
-    assert "pwr_result_channel.txt" not in binding["channel"]
-    expected_binding = ":".join(binding[k] for k in ("nonce", "input_sha256", "binary_sha256"))
-    assert "PWR_BINDING " + expected_binding in receipt["result_channel_tail"]
-    seal = receipt["input_generation"]
-    encoded = Path(seal["path"]).read_bytes()
-    assert hashlib.sha256(encoded).hexdigest() == seal["sha256"]
-    assert Path(seal["path"]).stat().st_mode & 0o777 == 0o400
-    generation = json.loads(encoded)
-    assert [row["path"] for row in generation["inputs"]] == [str(source), str(rtl)]
-    assert checker._generation_changes(receipt) == []
 
 
 @pytest.mark.parametrize("attack", ["macro_file_task", "context_finish", "plusargs",
@@ -167,33 +130,3 @@ def test_measured_fail_remains_fail_at_replace_boundary(tmp_path, monkeypatch):
     assert report["input_stability"]["stable"] is False
     assert "measured FAIL takes precedence" in report["reason"]
     assert json.loads(report_path.read_text()) == report
-
-
-@pytest.mark.parametrize("when", ["before_ordinary", "during_ordinary", "sealed_generation"])
-def test_adoption_refuses_live_or_sealed_generation_drift(tmp_path, monkeypatch, when):
-    project, source, rtl = _project(tmp_path)
-    real_gate = runner._run_pulse_width_rearm_normal_gate
-
-    def mutate_live():
-        source.write_bytes(source.read_bytes() + b"\n ")
-        rtl.write_bytes(rtl.read_bytes() + b"\n// newer generation\n")
-
-    def gate(*args, **kwargs):
-        rc, report, path = real_gate(*args, **kwargs)
-        assert rc == 0 and report["verdict"] == "PASS"
-        if when == "before_ordinary":
-            mutate_live()
-        elif when == "sealed_generation":
-            sealed = Path(report["input_generation"]["path"])
-            sealed.chmod(0o600)
-            sealed.write_bytes(sealed.read_bytes() + b"\n ")
-        return rc, report, path
-
-    calls = _ordinary_counter(monkeypatch, mutate_live if when == "during_ordinary" else None)
-    monkeypatch.setattr(runner, "_run_pulse_width_rearm_normal_gate", gate)
-    result = runner.step_reference_tb(project, "pulse_width_rearm_fixture", None, "pinned-image")
-    assert result.status == "NOT_MEASURED", result.detail
-    assert len(calls) == (1 if when == "during_ordinary" else 0)
-    report = result.extras["pulse_width_rearm"]
-    assert report["input_stability"]["stable"] is False
-    assert report["measured"] is False

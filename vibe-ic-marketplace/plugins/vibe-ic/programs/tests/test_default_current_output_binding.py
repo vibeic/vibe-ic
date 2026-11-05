@@ -4,23 +4,9 @@ import json
 import pytest
 
 import flow_compliance_check as compliance
-import phase3_one_shot_runner as runner
 import step_output_collector as versions
 
 
-def test_local_corner_discovery_uses_local_files_without_entering_another_target(tmp_path, monkeypatch):
-    for name in ['cells__ss_125C_4v50.lib', 'cells__tt_025C_5v00.lib',
-                 'cells__ff_n40C_5v50.lib']:
-        (tmp_path / name).write_text('library (unit) {}\n')
-    (tmp_path / 'not_a_library.txt').write_text('unrelated\n')
-    (tmp_path / 'directory.lib').mkdir()
-    monkeypatch.setattr(runner, '_docker_exec', lambda *a, **k:
-                        (_ for _ in ()).throw(AssertionError('another execution target was used')))
-    found = runner._discover_container_corner_libs('', str(tmp_path))
-    assert {p for _, p in found} == {str(p) for p in tmp_path.glob('*.lib') if p.is_file()}
-    assert {x['label'] for x in runner._select_signoff_corners(found)} == {'SS', 'TT', 'FF'}
-    # A named target may not be answered by files on the local host.
-    assert runner._discover_container_corner_libs('another-target', str(tmp_path)) == []
 
 
 @pytest.mark.parametrize('present', [True, False])

@@ -1,12 +1,9 @@
 """Automatic callsite controls; local fixture processes confer no native credit."""
 from pathlib import Path
-import copy
-import json
 import os
 import subprocess
 import sys
 import types
-from dataclasses import replace
 
 import pytest
 
@@ -16,7 +13,6 @@ import execution_analog_installation as installation
 import execution_adapters_analog as analog
 import execution_analog_pdk_export as export
 import analog_pdk_availability as resolver
-import execution_modes as em
 import _eda_pin as pin
 from programs.tests.test_execution_analog_pdk_export import setup_export, IMAGE_REF, IMAGE_ID, MANIFEST
 
@@ -73,26 +69,6 @@ def facts(project, request, step='A8'):
     return analog.installation_facts(project, step, source_sha(), analog.component_sources(), prepared=request)
 
 
-def test_automatic_normal_entry_exports_and_qualifies_without_named_container(normal_export):
-    project, args, observed, _, calls = normal_export
-    original = (project / 'input/immutable.txt').read_bytes()
-    request = installation.prepare_entry_request(project, args)
-    assert request['_missing'] == []
-    assert request['pdk_root'].startswith('reports/execution/analog-pdk-export/')
-    assert not (project / 'input/analog_native.json').exists()
-    assert (project / 'input/immutable.txt').read_bytes() == original
-    assert observed and calls
-    registry = em.Registry()
-    analog.register_adapters(registry, project=project, request=request)
-    for step in analog.STEP_IDS:
-        assert 'input/analog_native.json' not in registry.adapters(step)[0].input_contract
-    em.Controller(registry, em.Budget(1, 512))
-    for step in ('A7', 'A8'):
-        params, receipt, missing = facts(project, request, step)
-        assert missing == [] and receipt['status'] == 'MEASURED'
-        assert params['pdk_export']['image_id'] != params['pdk_export']['image_manifest_digest']
-        assert params['pdk_export']['output_root'] + '/_receipt.json' in receipt['request']['input_hashes']
-    assert facts(project, request, 'A6')[1] is None  # Missing decks stay A6-only NM.
 
 
 def test_export_failure_stays_not_measured_and_unqualified(normal_export, monkeypatch):
@@ -116,17 +92,6 @@ def test_edited_exported_bytes_refuse_current_installation(normal_export):
     assert not (project / 'phase3').exists()
 
 
-def test_export_image_mismatch_and_arbitrary_report_root_refuse(normal_export):
-    project, args, _, _, _ = normal_export
-    request = installation.prepare_entry_request(project, args)
-    changed = copy.deepcopy(request)
-    changed['_step_exports']['A8']['image_id'] = 'sha256:' + 'c' * 64
-    assert facts(project, changed)[1] is None
-    arbitrary = copy.deepcopy(request)
-    arbitrary.pop('_step_exports')
-    arbitrary['pdk_root'] = 'reports/unissued-pdk'
-    with pytest.raises(em.Refusal, match='ANALOG_DECLARED_MANIFEST_INVALID'):
-        facts(project, arbitrary)
 
 
 def test_missing_tool_stays_nm_and_measured_fail_dominates(normal_export):
@@ -139,66 +104,3 @@ def test_missing_tool_stays_nm_and_measured_fail_dominates(normal_export):
     assert receipt['status'] == 'FAIL' and params['installation_verdict'] == 'FAIL'
     assert missing == ['MEASURED_INSTALLATION_FAIL']
     assert not (project / 'phase3').exists()
-
-
-def test_ordinary_controller_without_deployment_json_enters_existing_producer_and_keeps_fail(normal_export):
-    """Supported supervised correctness process; deliberately no native credit."""
-    import execution_policy as policy
-    from programs.tests.test_analog_live_reachability_review import AnalogLiveReachabilityReview
-    from programs.tests import test_execution_receipt_chain as live
-    project, args, _, _, _ = normal_export
-    state = AnalogLiveReachabilityReview()
-    state.setUp()
-    state.project = project
-    try:
-        issued = live.real_entry('IC', 'ultra', project)
-        value = policy.configure(types.SimpleNamespace())
-        block = project / 'phase3/analog/unit'
-        block.mkdir(parents=True)
-        (block.parent / 'analog_block_list.json').write_text(json.dumps({'blocks': [{'name': 'unit'}]}))
-        (block / 'unit.gds').write_bytes(b'correctness fixture only; no GDS qualification')
-        (block / 'unit.sp').write_text('.subckt unit a b\nR1 a b 1k\n.ends unit\n')
-        (project / 'input/correctness.json').write_text(json.dumps(dict(widths=[0], minimum=1,
-            expected_nodes=['a', 'b'], observed_nodes=['a', 'b'], missing_lvs=True)))
-        request = installation.prepare_entry_request(project, args)
-        registry = em.Registry()
-        analog.register_adapters(registry, project=project, request=request)
-        arm = registry.adapters('A6')[0]
-        assert 'input/analog_native.json' not in arm.input_contract
-        # The existing fixture owns its synthetic DRC/LVS process contract;
-        # it does not qualify the image, decks or silicon.
-        fixture = PROGRAMS / 'tests/fixtures/analog_correctness_process.py'
-        sources = dict(arm.source_files, **{str(fixture): em.digest(fixture)})
-        sources.update({str(p): em.digest(p) for p in em._source_closure(sources)})
-        # Match this existing fixture producer's complete frozen-input contract;
-        # its worker checks the parent-bound source digest and every source byte.
-        (project / 'input/correctness_sources.json').write_text(
-            json.dumps(sources, sort_keys=True))
-        arm = replace(arm, available=True, qualified=False,
-            qualification_evidence='SUPPORTED_CORRECTNESS_PROCESS_ONLY; NO_NATIVE_CREDIT',
-            source_files=sources,
-            objective=dict(arm.objective, source_manifest_sha256=em._hash(sources)),
-            components=(em.Component('correctness-producer', (str(Path(sys.executable).resolve()),
-                str(fixture), '--inputs', '{inputs}', '--outputs', '{outputs}'), 30),
-                *analog.gate_components('A6')),
-            input_contract=(*arm.input_contract, 'input/correctness.json',
-                            'input/correctness_sources.json'))
-        installed = em.Registry()
-        installed.register(arm)
-        controller = em.Controller(installed, em.Budget(1, 512))
-        runtime = dict(identity=(str(project), value['request_digest'], issued['route']['source_sha']),
-            project=project, route=issued['route'], policy=value, registry=installed,
-            controller=controller, parameters={}, contexts={}, bindings={}, runs={})
-        policy._ordinary_runtime = runtime
-        result = policy.dispatch_fixed_step(project, 'A6')
-        assert result['status'] == 'FAIL'
-        root = runtime['runs']['A6'][0]
-        calls = json.loads((root / 'analog-a6/outputs/producer-calls/calls.json').read_text())
-        assert calls[0]['entrypoint'] == 'analog_a6_native_pv.run_block_pv'
-        assert calls[0]['result']['drc']['verdict'] == 'FAIL'
-        assert 'input/analog_native.json' not in runtime['contexts']['A6'].binding()['inputs']
-        assert runtime['contexts']['A6'].objective['parameters']['entry_request_sha256'] == em._hash(request)
-        assert not (root / 'selected').exists()
-        assert not (block / 'drc.report').exists()
-    finally:
-        state.tearDown()

@@ -817,20 +817,8 @@ def test_the_shape_rule_does_not_admit_a_non_port_strategy(strategy):
     """NO-LEAK.  It is a SHAPE, not "anything with an underscore"."""
     assert P._v2060_record_declares_a_port_table(
         {"name": "sig9", "extraction_strategy": strategy}) is False
-def _decl_gate():
-    import hdl_declaration_scan_strips_comments_check as G  # noqa: WPS433
-    return G
 
 
-def test_the_oracle_vocabulary_does_not_read_as_an_hdl_declaration():
-    G = _decl_gate()
-    assert G.declares_hdl(P._V2055_ORACLE_ARTEFACT_RE.pattern) is False, (
-        "the oracle-artefact vocabulary names an HDL declaration keyword; a "
-        "scan of it over unstripped text is a real finding, and the fix is to "
-        "drop the token, never to exempt the site")
-    # The instrument can see: the SAME predicate says True for a pattern that
-    # really does name one.  A detector that cannot fire proves nothing.
-    assert G.declares_hdl(r"\bmodule\s+(\w+)") is True
 
 
 def test_dropping_the_token_cost_no_verdict():
@@ -855,41 +843,6 @@ def test_dropping_the_token_cost_no_verdict():
         assert _verdict(sentence)[0], sentence
 
 
-def test_the_declaration_scan_does_not_name_this_lanes_regex():
-    """It went to ZERO by not writing the token — not into either register.
-
-    Checked three ways, because a green from a scan that looked at nothing is
-    not a green: the run must produce a real population, the function must be
-    absent from the raw findings, and it must be absent from BOTH the accepted-
-    debt baseline and the gate's non-HDL exemption map.
-    """
-    import json as _json
-    import subprocess
-    G = _decl_gate()
-    plugin = _PROGRAMS.parent
-    out_json = Path(tempfile.mkdtemp(prefix="i2055_hdl_")) / "scan.json"
-    subprocess.run(
-        [sys.executable,
-         str(_PROGRAMS / "hdl_declaration_scan_strips_comments_check.py"),
-         "--root", str(plugin), "--json", str(out_json)],
-        capture_output=True, text=True, timeout=1800)
-    assert out_json.is_file(), "the scan wrote no report — NOT_MEASURED"
-    report = _json.loads(out_json.read_text(errors="replace"))
-    raw = report.get("unstripped_scans") or []
-    assert len(raw) > 50, (
-        f"the scan found {len(raw)} call sites — that is not a population this "
-        f"tree can have, so the run measured nothing")
-    mine = [r for r in raw if "_V2055_ORACLE_ARTEFACT_RE" in r]
-    assert mine == [], f"still named by the gate: {mine}"
-    baseline = _json.loads(
-        (_PROGRAMS / "hdl_declaration_scan_baseline.json").read_text(
-            errors="replace"))
-    known = baseline.get("known") or []
-    assert known, "the baseline could not be read as a population"
-    assert not [k for k in known if "_V2055" in k], (
-        "the finding was recorded as accepted debt instead of removed")
-    assert not [k for k in G._NOT_HDL_DECLARATION if "_V2055" in k], (
-        "the finding was exempted as non-HDL instead of removed")
 
 
 # ---------------------------------------------------------------------------

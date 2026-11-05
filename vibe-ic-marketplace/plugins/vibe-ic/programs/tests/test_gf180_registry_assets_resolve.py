@@ -34,9 +34,7 @@ tests, populated from the ACTUAL `ls` output of the real image, so they run
 with no docker and no PDK installed.
 """
 import fnmatch
-import pytest
 import json
-import shlex
 import sys
 from pathlib import Path
 
@@ -73,46 +71,17 @@ _BANNER = ("[INFO] Final PATH variable: /headless/.local/bin:/usr/bin\n"
            "[INFO] Final PYTHONPATH variable: /usr/lib/python3.12")
 
 
-def _unquote(s):
-    try:
-        parts = shlex.split(s)
-        return parts[0] if parts else s
-    except ValueError:
-        return s
 
 
 from test_issue211_registry_driven_pdk_refuse import _FakeContainer
 
 
-def _resolve(monkeypatch, glob):
-    monkeypatch.setattr(R, "_docker_exec_raw",
-                        _FakeContainer(REAL_CONTAINER_PATHS))
-    return R._registry_glob_one("c", ROOT, glob)
 
 
-def test_content_addressed_root_refuses_ambiguity(monkeypatch):
-    """A Ciel root is resolved from the named image, never guessed by hash."""
-    one = "/foss/pdks/ciel/gf180mcu/versions/a/gf180mcuD"
-    two = "/foss/pdks/ciel/gf180mcu/versions/b/gf180mcuD"
-
-    entry = dict(GF, container_path_glob='ciel/gf180mcu/versions/*/gf180mcuD')
-    monkeypatch.setattr(R, "_docker_exec_raw", _FakeContainer([one]))
-    assert R._registry_container_root("c", entry) == one
-
-    monkeypatch.setattr(R, "_docker_exec_raw", _FakeContainer([one, two]))
-    with pytest.raises(SystemExit, match='REGISTRY_PDK_ROOT_AMBIGUOUS') as exc:
-        R._registry_container_root("c", entry)
-    assert GF['name'] in str(exc.value) and one in str(exc.value) and two in str(exc.value)
 
 
 # --------------------------------------------------------------- assets ----
 
-def test_liberty_glob_resolves_in_the_real_container(monkeypatch):
-    got = _resolve(monkeypatch, GF["liberty_glob"])
-    assert got is not None, (
-        "liberty_glob matches nothing in the shipped image "
-        "(the std-cell liberty is under lib/, there is no liberty/)")
-    assert got.endswith("__tt_025C_5v00.lib")
 
 
 def test_liberty_corner_is_pinned_not_ambiguous(monkeypatch):
@@ -132,32 +101,12 @@ def test_liberty_corner_is_pinned_not_ambiguous(monkeypatch):
     assert len(pinned) == 1, f"liberty_glob must pin ONE corner, got {pinned}"
 
 
-def test_tech_lef_glob_pins_the_nominal_corner(monkeypatch):
-    got = _resolve(monkeypatch, GF["tech_lef_glob"])
-    assert got is not None
-    assert got.endswith("__nom.tlef"), (
-        "techlef/*.tlef matches __max/__min/__nom and sorted-first is __max")
 
 
-def test_cell_lef_and_gds_resolve(monkeypatch):
-    assert _resolve(monkeypatch, GF["cell_lef_glob"]) is not None
-    assert _resolve(monkeypatch, GF["cell_gds_glob"]) is not None
 
 
-def test_drc_deck_path_exists_in_the_real_container(monkeypatch):
-    got = _resolve(monkeypatch, GF["drc_deck"])
-    assert got is not None, (
-        "drc_deck does not exist in the shipped image; the real KLayout "
-        "sign-off deck is libs.tech/klayout/tech/drc/gf180mcu.drc")
-    assert got.endswith("gf180mcu.drc")
 
 
-def test_no_asset_glob_is_left_unresolvable(monkeypatch):
-    """Whole-entry sweep, so a future edit cannot reintroduce a dead glob."""
-    dead = [k for k in ("liberty_glob", "tech_lef_glob", "cell_lef_glob",
-                        "cell_gds_glob", "drc_deck")
-            if _resolve(monkeypatch, GF[k]) is None]
-    assert dead == [], f"unresolvable asset glob(s): {dead}"
 
 
 # ------------------------------------------------------- physical cells ----

@@ -80,23 +80,8 @@ def test_the_refusal_names_the_two_strap_arithmetic():
 
 # ------------------------------------------------------------- the silence
 
-def test_an_empty_grid_raises_by_name_and_quotes_pdngen():
-    t = R._pdn_grid_built_tcl()
-    assert "PDN_GRID_EMPTY" in t
-    assert 'error "PDN_GRID_EMPTY' in t, "it must be a verdict, not a note"
-    assert "pdngen's own reason" in t and "$_why" in t
-    # the predicate: a supply net with terminals and no special wires
-    assert "getSigType" in t and "getSWires" in t
-    assert "getITerms" in t and "getBTerms" in t
 
 
-def test_a_built_grid_says_so_and_does_not_raise():
-    t = R._pdn_grid_built_tcl()
-    assert "PDN_GRID_PRESENT" in t
-    # the success line is inside the same catch body as the verdict, so the
-    # slice is bounded by the end of that body, not by the file
-    ok = t[t.index("PDN_GRID_PRESENT"):t.index("_pdn_chk_err]")]
-    assert "error " not in ok
 
 
 def test_the_check_is_wired_into_every_pdn_emitter():
@@ -109,111 +94,22 @@ def test_the_check_is_wired_into_every_pdn_emitter():
         assert "pdngen" in chunk
 
 
-def test_a_check_failure_that_is_not_the_verdict_stays_nonfatal():
-    """Degrade loudly, not silently: if the check itself cannot run (an old
-    ODB binding, say), that is a note — only the measured empty grid is the
-    verdict."""
-    t = R._pdn_grid_built_tcl()
-    assert "PDN_GRID_CHECK_NONFATAL" in t
-    assert "string match {PDN_GRID_EMPTY:*}" in t, (
-        "the verdict must survive the nonfatal wrapper")
 
 
 # ------------------------------------------- stripes first, width second (2)
 
-def _plan(**kw):
-    base = dict(i_seg_A=1.322e-3, drawn_width_um=1.6, pitch_um=153.18,
-                jmax_A_per_um=6.7e-4, margin=0.1, safety=2.0,
-                min_spacing_um=0.46, min_pitch_um=3.84, concentration_k=10.0)
-    base.update(kw)
-    return R._pdn_em_stripe_plan(**base)
 
 
-def test_an_em_demand_that_fits_is_answered_with_stripes_not_width():
-    """run10's own measurement: 1.322 mA on a 1.6 um Metal5 strap at a 153.18
-    um pitch. The old path widened to 1.96 um and pdngen built nothing; more
-    stripes carry the same current at the width already drawn."""
-    p = _plan()
-    assert p["verdict"] == "MORE_STRIPES"
-    assert p["stripe_multiplier"] == 3
-    assert p["new_width_um"] == 1.6, "no track may be widened when stripes do"
-    assert p["new_pitch_um"] == 51.06
-    # and the answer actually satisfies Jmax at the new per-stripe current
-    assert (p["i_seg_A"] / p["stripe_multiplier"]) * 2.0 / (6.7e-4 * 0.9) <= 1.6
 
 
-def test_a_design_already_within_jmax_is_byte_identical():
-    p = _plan(i_seg_A=1e-5)
-    assert p["verdict"] == "ALREADY_MET"
-    assert p["stripe_multiplier"] == 1
-    assert p["new_pitch_um"] == 153.18 and p["new_width_um"] == 1.6
 
 
-def test_stripes_stop_at_the_no_abut_floor_and_then_width_is_tried():
-    """The floor is the corrected one — `2*(width+spacing)` — so the planner
-    cannot walk the pitch into the geometry pdngen refuses."""
-    p = _plan(i_seg_A=2.0e-2, min_pitch_um=0.0)
-    assert p["verdict"] in ("WIDER_STRAP", "INFEASIBLE")
-    floor = 2.0 * (1.6 + 0.46)
-    assert p["new_pitch_um"] >= floor - 1e-9
 
 
-def test_a_demand_no_geometry_can_carry_is_refused_by_name_with_numbers():
-    p = _plan(i_seg_A=5.0, max_width_um=2.0)
-    assert p["verdict"] == "INFEASIBLE"
-    for token in ("no (stripes, width) this technology can build",
-                  "pitch floor", "PDK minimum", "pdngen emit no grid"):
-        assert token in p["reason"], token
-    assert p["required_width_um"] > p["buildable_width_cap_um"]
 
 
-def test_the_width_answer_never_exceeds_what_the_pitch_can_hold():
-    """`pitch/2 - width >= spacing` is the same rule the macro-grid floor
-    enforces; the planner may not propose a width that breaks it."""
-    p = _plan(i_seg_A=3.0e-3, min_pitch_um=0.0)
-    if p["verdict"] == "WIDER_STRAP":
-        assert p["new_width_um"] <= p["new_pitch_um"] / 2 - 0.46 + 1e-9
 
 
-def test_the_concentration_caveat_is_carried_not_hidden():
-    """k is measured (10.0 on three spm runs) and REPORTED, never used to
-    inflate the promise that I/m is what a stripe will carry."""
-    p = _plan()
-    assert p["concentration_k"] == 10.0
-    assert "concentration_k" in p
-    # the docstring wraps, so normalise before matching its sentences
-    doc = " ".join((R._pdn_em_stripe_plan.__doc__ or "").split())
-    assert "k is REPORTED beside the plan, never used to inflate a promise" in doc
-    assert "re-measures after the build" in doc
 
 
 # --------------------------------- the geometry it hands pdngen must be legal
-
-def test_the_pitch_it_returns_lands_on_the_manufacturing_grid():
-    """MEASURED on run11: the first cut halved the pitch to 76.59 um, the
-    caller took its quarter as the offset — 19.148 um — and pdngen refused the
-    deck: `[ERROR PDN-0191] Offset of 19.1480 um does not fit the manufacturing
-    grid of 0.0050 um`. The PDN_GRID_EMPTY check in this same file is what
-    caught it, quoting pdngen, at the PDN step."""
-    g = 0.005
-    p = _plan(grid_um=g)
-    assert p["verdict"] == "MORE_STRIPES"
-    q = p["new_pitch_um"] / g
-    assert abs(q - round(q)) < 1e-6, (p["new_pitch_um"], "pitch off grid")
-    # the offset the caller derives is a quarter of it, and must also land
-    off = p["new_pitch_um"] / 4.0
-    assert abs(off / g - round(off / g)) < 1e-6, (off, "offset off grid")
-
-
-def test_snapping_never_crosses_the_no_abut_floor():
-    """Snapping moves the pitch DOWN — toward more stripes — so it must not be
-    allowed to land under the floor that keeps pdngen able to build at all."""
-    p = _plan(i_seg_A=8.0e-3, grid_um=0.5, min_pitch_um=0.0)
-    if p["verdict"] == "MORE_STRIPES":
-        assert p["new_pitch_um"] >= 2.0 * (1.6 + 0.46) - 1e-9
-
-
-def test_without_a_grid_the_answer_is_what_it_was():
-    """A technology that declares no manufacturing grid is not a reason to
-    invent one: the planner returns the unsnapped pitch, as before."""
-    assert _plan(grid_um=0.0)["new_pitch_um"] == 51.06

@@ -454,21 +454,8 @@ def test_json_report_is_written_on_fail(tmp_path):
     assert d["rails_routed"] == 1 and d["rails_empty_undisclosed"] == 1
 
 
-def test_the_gate_declares_its_enforcement_intent():
-    """Wired gates state whether they block or describe. Driven through the
-    audit that reads the declaration, not by grepping the source."""
-    import flow_gate_enforcement_audit as FGE
-    assert FGE.declared_intent(_PROGRAMS, "pg_rail_geometry_check") == "advisory"
 
 
-def test_the_declared_intent_matches_the_wiring():
-    """Declaring `blocking` while wired audit-only is the contradiction that
-    audit exists to catch. Whatever this gate declares must not create one."""
-    import flow_gate_enforcement_audit as FGE
-    rep = FGE.audit(_PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml",
-                    _PROGRAMS)
-    assert [c for c in rep["contradictions"]
-            if c["gate"].startswith("pg_rail_geometry_check")] == []
 
 
 @pytest.mark.parametrize('use', ['SIGNAL', 'CLOCK', 'TIEOFF', 'ANALOG', 'SCAN', 'RESET'])

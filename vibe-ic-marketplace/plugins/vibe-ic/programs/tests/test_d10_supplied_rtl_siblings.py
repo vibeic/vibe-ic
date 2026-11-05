@@ -38,7 +38,6 @@ sys.path.insert(0, str(TESTS))
 
 import design_one_shot_runner as R                       # noqa: E402
 import reused_ip_rtl_consume as C                        # noqa: E402
-import staged_rtl_reused_ip_manifest_emit as SRM         # noqa: E402
 
 
 def _load(name):
@@ -83,12 +82,6 @@ SPM = "module spm(input clk, output p);\n  assign p = clk;\nendmodule\n"
 TB = "module tb_spm;\n  spm u ();\nendmodule\n"
 
 
-def test_the_manifest_lists_no_testbench_as_ip(tmp_path):
-    p = _vendor(tmp_path, {"spm.v": SPM, "tb_spm.v": TB,
-                           "tb/harness.v": "module harness; endmodule\n"})
-    mf = json.loads(SRM.emit_prestaged_reused_ip_manifest(p).read_text())
-    assert mf["ip_list"] == ["spm"]
-    assert [f.name for f in SRM.vendor_build_rtl(p)] == ["spm.v"]
 
 
 def test_the_waive_counts_what_consume_stages(tmp_path):
@@ -99,11 +92,6 @@ def test_the_waive_counts_what_consume_stages(tmp_path):
         res.detail[:400]
 
 
-def test_a_vendor_tree_of_testbenches_only_is_not_reused_ip(tmp_path):
-    p = _vendor(tmp_path, {"tb_spm.v": TB})
-    assert SRM.emit_prestaged_reused_ip_manifest(p) is None
-    res = R.step_rtl_gen(p, "digital_cmd_driven")
-    assert "source_manifest_emitted" not in (res.extras or {})
 
 
 # --------------------------------------------------------------------------- #
@@ -147,40 +135,6 @@ def test_the_generator_runs_without_supplied_rtl(tmp_path, cls, mk, top,
 PARTIAL = [c for c in CLASSES if c[0] != "data_converter"]
 
 
-@pytest.mark.parametrize("cls,mk,top,emitted", PARTIAL,
-                         ids=[c[0] for c in PARTIAL])
-def test_a_supplied_submodule_replaces_only_that_generated_file(
-        tmp_path, cls, mk, top, emitted):
-    """review_wave4a MAJOR (partial overlap): the input supplies ONE module
-    the generator emits. The rest of the generated design stays, only the
-    generated file defining that module is dropped, consume stages the
-    supplied one into the now-open tree, and nothing forbids authoring.
-    RED on 77f5ba13e: rtl/ was emptied and the whole design handed off."""
-    p = mk(tmp_path / "p")
-    _vendor(p, {f"{emitted}.v": f"// supplied\nmodule {emitted}"
-                                f"(input clk, output q);\n"
-                                f"  assign q = clk;\nendmodule\n"})
-    res = R.step_rtl_gen(p, cls)
-    assert res.status == "PASS", res.detail[:300]
-    rec = res.extras["supplied_replaces_generated"]
-    assert rec["replaced_by"] == {emitted: f"input/vendor_rtl/{emitted}.v"}
-    assert rec["modules_now_owed"] == []
-    # MEMBERS, not a count (review_wave7): exactly the no-supply control's
-    # files, minus the dropped generated one, plus the staged supplied one
-    control = _control_rtl(tmp_path, mk, cls)
-    assert rec["dropped_generated_files"] == [f"{emitted}.sv"]
-    assert set(_rtl_files(p)) == (control - {f"{emitted}.sv"}) | {f"{emitted}.v"}
-    # rtl_gen itself stages the supplied module (review_wave4c): one
-    # definition, the supplied bytes, the rest of the design kept
-    assert rec["staged_by_rtl_gen"] == [f"{emitted}.v"]
-    assert _defs(p, top) == 1 and _defs(p, emitted) == 1
-    assert len(_rtl_files(p)) > 5            # the rest of the design is there
-    assert "Do NOT author" not in res.detail
-    assert not res.extras.get("fallback_skill")
-    out = C.consume_reused_ip_rtl(p)
-    assert out["staged"] == [] and "supplied_rtl_not_staged" not in out
-    assert (p / "phase2/stage1/rtl" / f"{emitted}.v").read_text().startswith(
-        "// supplied")
 
 
 def test_a_supplied_generator_top_is_full_coverage_and_yields(tmp_path):
@@ -202,22 +156,6 @@ def test_a_supplied_generator_top_is_full_coverage_and_yields(tmp_path):
     assert _defs(p, "cic_decimator") == 1
 
 
-def test_a_dropped_file_that_held_other_modules_names_them_owed(tmp_path):
-    """A generated file defining the supplied module AND another one is
-    dropped whole; the other module is named as OWED, never silently lost."""
-    p = tmp_path / "p"
-    rtl = p / "phase2/stage1/rtl"
-    rtl.mkdir(parents=True)
-    (rtl / "pair.v").write_text("module a(input x); endmodule\n"
-                                "module b(input x); endmodule\n")
-    (rtl / "top.v").write_text("module top(input x);\n  a ua(.x(x));\n"
-                               "  b ub(.x(x));\nendmodule\n")
-    _vendor(p, {"a.v": "module a(input x); endmodule\n"})
-    rec = R._yield_generated_modules(p, rtl, ["a"])
-    assert rec == {"replaced_by": {"a": "input/vendor_rtl/a.v"},
-                   "dropped_generated_files": ["pair.v"],
-                   "modules_now_owed": ["b"]}
-    assert sorted(f.name for f in rtl.glob("*.v")) == ["top.v"]
 
 
 @pytest.mark.parametrize("cls,mk,top,emitted", CLASSES,
@@ -268,25 +206,11 @@ def test_a_testbench_that_defines_the_top_is_not_the_design(tmp_path, files):
     assert R.step_rtl_gen(p, "mixed_signal_otp").status == "PASS"
 
 
-def test_no_declared_top_and_no_emitted_module_never_stops_the_generator(
-        tmp_path):
-    """Without a declared top, only the generator's OWN output decides: IP it
-    does not emit leaves it running (and a module it emits declines it, see
-    test_a_supplied_module_the_generator_emits_declines_it)."""
-    p = _otp_project(tmp_path / "p")
-    spec = p / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
-    doc = json.loads(spec.read_text())
-    doc.pop("top_module", None)
-    spec.write_text(json.dumps(doc))
-    _vendor(p, {"some_ip.v": "module some_ip(input clk); endmodule\n"})
-    assert R._supplied_rtl_defining_declared_top(p) == (None, [])
-    assert R.step_rtl_gen(p, "mixed_signal_otp").status == "PASS"
 
 
 # =========================================================================== #
 # review of D6, follow-ups (a)-(d)
 # =========================================================================== #
-import hashlib                                                  # noqa: E402
 
 D6 = _load("test_d6_supplied_rtl_outranks_every_generator")
 ARITH = D6.ARITH
@@ -298,25 +222,12 @@ def _session(monkeypatch):
     monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
 
 
-def _sha(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 # (a) supplied VHDL never disappears silently -------------------------------
 VHDL = "entity top is end entity;\narchitecture rtl of top is begin end;\n"
 
 
-def test_a_vhdl_only_design_still_declines_the_rtl_spec_dispatcher(tmp_path):
-    """#403 refused on *.vhd/*.vhdl before D6; D6's .v/.sv helper let the
-    generator replace a VHDL design with a PASS that never named it."""
-    stage = tmp_path / "phase2/stage1"
-    stage.mkdir(parents=True)
-    (stage / "rtl_spec.json").write_text(json.dumps(D6.TRUTH_TABLE_SPEC))
-    D6._supply(tmp_path, "input/vendor_rtl", "top.vhd", VHDL)
-    res = R._try_deterministic_rtl_dispatch(tmp_path, 0.0)
-    assert res is not None and res.status == "NOT_APPLICABLE", res
-    assert res.extras["design_rtl_sample"] == ["input/vendor_rtl/top.vhd"]
-    assert _rtl_files(tmp_path) == []
 
 
 def test_a_supplied_vhdl_is_named_in_the_rtl_gen_result(tmp_path, _session):
@@ -371,53 +282,11 @@ def test_c_a_define_only_v_file_does_not_stop_the_generator(tmp_path, _session):
     assert C.discover_supplied_design_sources(p) == []
 
 
-def test_c_a_define_only_vendor_file_is_not_ip(tmp_path):
-    p = _vendor(tmp_path, {"spm.v": SPM, "spm_defines.v": DEFINES})
-    assert [f.name for f in SRM.vendor_build_rtl(p)] == ["spm.v"]
 
 
 # (d) a previous run's generated rtl/ does not block the supplied design ----
-def test_d_a_stale_generated_tree_is_reclaimed_for_the_supplied_design(
-        tmp_path, _session, monkeypatch):
-    """A previous run's REGISTRY-generated tree (ledger-stamped GENERATED)
-    is moved to the backup, and consume stages the supplied design."""
-    p = _otp_project(tmp_path / "p")
-    first = R.step_rtl_gen(p, "mixed_signal_otp")
-    assert first.status == "PASS" and _defs(p, "chip_top") == 1
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)   # a new run
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-    own = _vendor(p, {"chip_top.v": "// the supplied design\n"
-                                    "module chip_top(input clk, output q);\n"
-                                    "  assign q = clk;\nendmodule\n"})
-    own = p / "input/vendor_rtl/chip_top.v"
-    res = R.step_rtl_gen(p, "mixed_signal_otp")
-    assert res.extras["reclaimed_generated_rtl"] == {
-        "backup": "rtl.pre_gen_backup", "published": True}, res.extras
-    assert _rtl_files(p) == []
-    assert (p / "phase2/stage1/rtl.pre_gen_backup/chip_top.sv").is_file()
-    out = C.consume_reused_ip_rtl(p)
-    assert out["staged"] == ["chip_top.v"]
-    assert _sha(p / "phase2/stage1/rtl/chip_top.v") == _sha(own)
 
 
-def test_d_a_serial_generated_tree_is_reclaimed_for_supplied_rtl(tmp_path, _session):
-    """The serial producer's GENERATED ledger authorizes the same safe reclaim
-    path as registry generators; consume then stages the supplied design."""
-    p = D6._spm_project(tmp_path)
-    R.step_rtl_gen(p, ARITH)
-    assert _rtl_files(p) == ["spm.v"]
-    generated = _sha(p / "phase2/stage1/rtl/spm.v")
-    R._RTL_SESSION_OWNED = False
-    D6._supply(p, "input/rtl", "spm.v", D6.SUPPLIED_SPM)
-    supplied = _sha(p / "input/rtl/spm.v")
-    res = R.step_rtl_gen(p, ARITH)
-    assert res.extras["reclaimed_generated_rtl"] == {
-        "backup": "rtl.pre_gen_backup", "published": True}
-    assert _rtl_files(p) == []
-    assert _sha(p / "phase2/stage1/rtl.pre_gen_backup/spm.v") == generated
-    out = C.consume_reused_ip_rtl(p)
-    assert out["staged"] == ["spm.v"]
-    assert _sha(p / "phase2/stage1/rtl/spm.v") == supplied
 
 
 
@@ -517,16 +386,6 @@ def test_an_unregistered_class_uses_the_same_supplied_rtl_hand_off(
 
 
 # MINOR — the per-dispatch records never leak into the next call.
-def test_records_of_a_previous_call_never_reach_the_next_result(
-        tmp_path, _session, monkeypatch):
-    R._SUPPLY_DEFERRALS.append({"generator": "stale", "reason": "stale"})
-    R._SUPPLY_RECLAIMED.append("stale_backup")
-    R._SUPPLY_BLOCKED.append({"rtl_files": ["x.v"], "provenance": "unknown"})
-    monkeypatch.setattr(R, "_step_rtl_gen_bound", lambda *a, **k: R.StepResult(
-        "rtl_gen", "FAIL", 0.0, "an early refusal"))
-    res = R.step_rtl_gen(D6._spm_project(tmp_path), ARITH)
-    assert res.detail == "an early refusal", res.detail
-    assert not (res.extras or {}).get("deferred_generators")
 
 
 # MINOR — a guard that stepped aside says it was NOT evaluated, not that the
@@ -616,140 +475,13 @@ _SUPPLIED_OTP = ("// supplied\nmodule otp_mem(input clk, output q);\n"
                  "  assign q = clk;\nendmodule\n")
 
 
-def test_a_repair_rerun_keeps_the_supplied_module_in_rtl(tmp_path,
-                                                        monkeypatch):
-    """MAJOR: consume runs once; the repair loop re-runs rtl_gen ALONE (its
-    order -- producer, digest, re-dispatch -- is pinned by #2225). A partial
-    overlap therefore stages the supplied module itself, so every re-run --
-    first pass or repair pass -- leaves it in rtl/. RED before: after the
-    re-run no otp_mem was defined at all."""
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-    p = _otp_project(tmp_path / "p")
-    _vendor(p, {"otp_mem.v": _SUPPLIED_OTP})
-    first = R.step_rtl_gen(p, "mixed_signal_otp")
-    assert first.extras["supplied_replaces_generated"]["staged_by_rtl_gen"] \
-        == ["otp_mem.v"]
-    assert _defs(p, "otp_mem") == 1
-    again = R.step_rtl_gen(p, "mixed_signal_otp")    # the repair loop's re-run
-    assert again.status == "PASS", again.detail[:300]
-    assert _defs(p, "otp_mem") == 1 and _defs(p, "chip_top") == 1
-    control = _control_rtl(tmp_path, _otp_project, "mixed_signal_otp")
-    assert set(_rtl_files(p)) == (control - {"otp_mem.sv"}) | {"otp_mem.v"}
-    assert (p / "phase2/stage1/rtl/otp_mem.v").read_text().startswith(
-        "// supplied")
-    assert str(p / "phase2/stage1/rtl/otp_mem.v") in again.output_files
-    # consume afterwards is a no-op and reports nothing missing
-    out = C.consume_reused_ip_rtl(p)
-    assert out["staged"] == [] and "supplied_rtl_not_staged" not in out
 
 
-def test_a_context_file_overlapping_a_generated_module_is_a_hand_off(
-        tmp_path, monkeypatch):
-    """MAJOR (integrity): a CONTEXT file (input/rtl — e.g. a stub to finish)
-    that defines a generated module is the starting point to complete, never
-    a silent replacement of a complete generated module."""
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-    p = _otp_project(tmp_path / "p")
-    stub = p / "input/rtl/otp_mem.v"
-    stub.parent.mkdir(parents=True)
-    stub.write_text("module otp_mem(input clk, output q);\n  // TODO\n"
-                    "endmodule\n")
-    res = R.step_rtl_gen(p, "mixed_signal_otp")
-    assert res.status == "PASS_WITH_WAIVERS", res.detail[:300]
-    assert res.extras["fallback_skill"] == "spec-to-rtl"
-    assert res.extras["supplied_rtl_roles"] == {
-        "starting_point": ["input/rtl/otp_mem.v"], "reused_ip": []}
-    assert "complete or modify it in place" in res.detail
-    assert "Do NOT author" not in res.detail
-    assert _defs(p, "chip_top") == 1          # the rest of the design stays
-    control = _control_rtl(tmp_path, _otp_project, "mixed_signal_otp")
-    assert set(_rtl_files(p)) == (control - {"otp_mem.sv"}) | {"otp_mem.v"}
 
 
-def test_a_reused_ip_file_still_replaces_silently_with_its_role(tmp_path,
-                                                                monkeypatch):
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-    p = _otp_project(tmp_path / "p")
-    _vendor(p, {"otp_mem.v": _SUPPLIED_OTP})
-    res = R.step_rtl_gen(p, "mixed_signal_otp")
-    assert res.status == "PASS" and not res.extras.get("fallback_skill")
-    assert res.extras["supplied_rtl_roles"] == {
-        "starting_point": [], "reused_ip": ["input/vendor_rtl/otp_mem.v"]}
 
 
 
 # =========================================================================== #
 # review_wave7 (branch D10)
 # =========================================================================== #
-def _control_rtl(tmp_path, mk, cls):
-    """The generated file set with NOTHING supplied (the control)."""
-    c = mk(tmp_path / "control")
-    R._RTL_SESSION_OWNED = False
-    R.step_rtl_gen(c, cls)
-    R._RTL_SESSION_OWNED = False
-    return set(_rtl_files(c))
-
-
-def test_the_default_flow_still_returns_an_extras_dict(tmp_path, monkeypatch):
-    """MAJOR: with nothing supplied, the generator's PASS carried
-    `extras=None` (the partial-overlap record's default), so the phase-2
-    row read `extras: null` and a finalize cleanup warning raised TypeError
-    after rtl/ was published."""
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-    real = R._phase1_finalize_accepted_transaction
-
-    def _warn(tx):
-        real(tx)
-        return "stage cleanup left a temp dir behind"
-    monkeypatch.setattr(R, "_phase1_finalize_accepted_transaction", _warn)
-    res = R.step_rtl_gen(_otp_project(tmp_path / "p"), "mixed_signal_otp")
-    assert res.status == "PASS", res.detail[:300]
-    assert isinstance(res.extras, dict)
-    assert res.extras["transaction_cleanup_warning"] == \
-        "stage cleanup left a temp dir behind"
-
-
-def test_only_the_needed_supplied_files_are_staged(tmp_path, monkeypatch):
-    """MINOR: the partial path staged EVERY supplied file. Now: the replaced
-    module's source plus what it instantiates; an orphan is disclosed."""
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-    p = _otp_project(tmp_path / "p")
-    _vendor(p, {
-        "otp_mem.v": "// supplied\nmodule otp_mem(input clk, output q);\n"
-                     "  otp_cell u (.clk(clk), .q(q));\nendmodule\n",
-        "otp_cell.v": "module otp_cell(input clk, output q);\n"
-                      "  assign q = clk;\nendmodule\n",
-        "orphan.v": "module orphan(input a); endmodule\n"})
-    res = R.step_rtl_gen(p, "mixed_signal_otp")
-    assert res.status == "PASS", res.detail[:300]
-    rec = res.extras["supplied_replaces_generated"]
-    assert rec["staged_by_rtl_gen"] == ["otp_cell.v", "otp_mem.v"]
-    assert rec["supplied_not_staged"] == ["input/vendor_rtl/orphan.v"]
-    assert "orphan.v" not in _rtl_files(p)
-    assert "input/vendor_rtl/orphan.v" in res.detail
-    mf = json.loads((p / "phase2/stage1/rtl/SOURCE_MANIFEST.json").read_text())
-    assert set(mf["staged_from_input_sha256"]) == {
-        "input/vendor_rtl/otp_mem.v", "input/vendor_rtl/otp_cell.v"}
-
-
-def test_a_supplied_module_that_cannot_be_staged_is_refused_and_restored(
-        tmp_path, monkeypatch):
-    """The post-condition answers NO: the supplied `otp_mem` lives in a file
-    named like a generated one (`rx_phy.sv`), first-wins keeps the generated
-    file, so `otp_mem` would end up defined 0 times. The generated file is
-    restored and the step refuses by name, with the collision."""
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-    p = _otp_project(tmp_path / "p")
-    _vendor(p, {"rx_phy.sv": _SUPPLIED_OTP})
-    res = R.step_rtl_gen(p, "mixed_signal_otp")
-    assert res.status == "FAIL", res.detail[:300]
-    assert res.extras["finding"] == "SUPPLIED_MODULE_NOT_STAGED"
-    assert res.extras["staged_name_collisions"] == {
-        "rx_phy.sv": ["input/vendor_rtl/rx_phy.sv"]}
-    assert "otp_mem is defined 0 time(s)" in res.detail

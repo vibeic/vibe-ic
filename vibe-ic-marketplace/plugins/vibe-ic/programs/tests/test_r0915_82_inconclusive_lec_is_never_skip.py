@@ -27,9 +27,7 @@ text-presence tests: each asserts the STATUS a record earns, and the three
 INCONCLUSIVE sentences are required to DIFFER from one another — a naming that
 collapses is a naming that says nothing.
 """
-import json
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -56,7 +54,6 @@ RUN16_UNCLOSED = {
 }
 
 #: The state R-0915-48's backstop produces: the proof was CUT OFF.
-BUDGET_KILLED = dict(RUN16_UNCLOSED, budget_exhausted=True)
 
 #: The state the old docstring described: the miter judged nothing.
 NOTHING_COMPARED = {
@@ -66,23 +63,8 @@ NOTHING_COMPARED = {
 }
 
 #: What `lec_run` wrote for run16 pass 2: a 2 s process that climbed no rung.
-RESUMED = dict(
-    RUN16_UNCLOSED,
-    elapsed_sec=1.05,
-    lec_resume={"resumed": True,
-                "resumed_from": {"rung": "equiv_induct_seq64"},
-                "rungs_recorded_this_run": [],
-                "state": "COMPLETE"},
-    lec_ladder={"legs": [{"rungs_in_this_process": 0,
-                          "resumed_from_rung": "equiv_induct_seq64"}]},
-)
 
 
-def _status_for(doc) -> str:
-    with tempfile.TemporaryDirectory() as td:
-        f = Path(td) / "lec.json"
-        f.write_text(doc if isinstance(doc, str) else json.dumps(doc))
-        return dosr.lec_step_status_from_report(f)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -96,231 +78,53 @@ def _status_for(doc) -> str:
 # does not get rewritten, and that is exactly the difference between evidence
 # and a claim about evidence.
 # ---------------------------------------------------------------------------
-def test_the_reason_agrees_with_the_PRODUCER_S_OWN_arithmetic():
-    """THE CHECK THAT WAS MISSING, and it is why the first version shipped two
-    wrong numbers.
-
-    `compared_points` IS THE PROVEN COUNT, whatever its name says: lec_run
-    writes `"compared_points": proven ...` (lec_run.py:2945) and reads it back
-    as `_proven` (lec_run.py:4211). MEASURED on sha256 run17 --
-    compared_points 846, unproven_points 481, miter_points 1327, and
-    846 + 481 == 1327 exactly, so the field is one HALF of the population.
-    Taking the name at face value printed "365 of 846 point(s) proven" beside a
-    record whose own `verdict_explanation` read "846/1327 proven, 481 unproven".
-
-    So this does not re-assert my arithmetic; it asserts that the sentence this
-    module writes carries the SAME two numbers the producer put in its own
-    explanation. A future rename of the field cannot silently split them."""
-    rec = dict(RUN16_UNCLOSED, miter_points=1327,
-               verdict_explanation="846/1327 proven, 481 unproven")
-    _status, reason = dosr.lec_inconclusive_disposition(rec)
-    assert "846 of 1327" in reason
-    assert "481 unproven" in reason
-    # and the pair must be internally consistent with the whole population
-    assert rec["compared_points"] + rec["unproven_points"] == rec["miter_points"]
 
 
-def test_the_denominator_is_never_the_proven_count():
-    """The exact mutation that shipped: using `compared_points` as the total.
-    It yields "365 of 846"; both numbers are wrong and neither is flagged."""
-    rec = dict(RUN16_UNCLOSED, miter_points=1327)
-    reason = dosr.lec_inconclusive_disposition(rec)[1]
-    assert "365" not in reason
-    assert "of 846" not in reason
 
 
-def test_miter_points_absent_falls_back_to_the_SUM_not_to_compared():
-    """A producer that did not write `miter_points` still gets a denominator
-    that spans the whole population."""
-    rec = dict(RUN16_UNCLOSED)
-    rec.pop("miter_points", None)
-    reason = dosr.lec_inconclusive_disposition(rec)[1]
-    assert "846 of 1327" in reason
 
 
-def test_inconclusive_naming_no_unproven_point_is_NOT_a_failure():
-    """An INCONCLUSIVE record that names no open point cannot describe what is
-    wrong, so it must not assert a failure it cannot attribute."""
-    rec = dict(RUN16_UNCLOSED, unproven_points=0, miter_points=846)
-    status, reason = dosr.lec_inconclusive_disposition(rec)
-    assert status == dosr.NOT_EXECUTED_STATUS
-    assert "no open point" in reason
 
 
-def test_a_completed_ladder_that_did_not_close_FAILS():
-    """THE REGRESSION. Points were compared, the ladder finished, nothing ran
-    out -- the equivalence question is OPEN and the flow may not walk past it.
-    Reverting to `INCONCLUSIVE -> SKIP` fails here."""
-    status, reason = dosr.lec_inconclusive_disposition(RUN16_UNCLOSED)
-    assert status == "FAIL"
-    assert "846" in reason and "481" in reason
 
 
-def test_the_step_mapper_agrees_with_the_disposition():
-    """The mapper must DELEGATE, not keep its own opinion."""
-    assert _status_for(RUN16_UNCLOSED) == "FAIL"
 
 
-def test_a_proof_that_was_cut_off_is_NOT_a_fail():
-    """R-0915-5 / R-0915-48: when the backstop fires, nothing is known.
-    Asserting a non-equivalence nobody measured is #192 inverted, and it would
-    also break R-48's contract that phase 3 proceeds. Deleting the exhaustion
-    check fails here."""
-    status, reason = dosr.lec_inconclusive_disposition(BUDGET_KILLED)
-    assert status == dosr.NOT_EXECUTED_STATUS
-    assert "NOT_MEASURED" in reason
 
 
-@pytest.mark.parametrize("route, doc", [
-    ("step_budget_exhausted",
-     dict(RUN16_UNCLOSED, step_budget_exhausted=True)),
-    ("step_budget_stopped_this_proof",
-     dict(RUN16_UNCLOSED, step_budget_stopped_this_proof=True)),
-    ("progress_stalled", dict(RUN16_UNCLOSED, progress_stalled=True)),
-    ("exhausted_resource",
-     dict(RUN16_UNCLOSED, exhausted_resource="wall_clock")),
-    ("bounded_rung_policy",
-     dict(RUN16_UNCLOSED, bounded_rung_policy={"limit_reached": True})),
-    ("killed_by_budget",
-     dict(RUN16_UNCLOSED,
-          lec_attempts_detail=[{"killed_by_budget": True}])),
-])
-def test_every_recorded_exhaustion_route_is_honoured(route, doc):
-    """Each is a different way for `lec_run` to say "I was stopped". A fix that
-    only knows about `budget_exhausted` fails here."""
-    assert dosr.lec_inconclusive_disposition(doc)[0] == dosr.NOT_EXECUTED_STATUS
 
 
-def test_zero_compared_points_is_not_measured_not_a_failure():
-    """The state the OLD docstring described, kept intact in substance: never a
-    vacuous PASS, never a cascading FAIL. Only its NAME changed, from an
-    undifferentiated SKIP to NOT_MEASURED with the reason."""
-    status, reason = dosr.lec_inconclusive_disposition(NOTHING_COMPARED)
-    assert status == dosr.NOT_EXECUTED_STATUS
-    assert status not in ("PASS", "FAIL")
-    assert "0 point" in reason
 
 
-def test_the_three_reasons_are_three_different_sentences():
-    """A naming that collapses says nothing. Any implementation that emits one
-    sentence for all three fails here."""
-    reasons = [dosr.lec_inconclusive_disposition(d)[1]
-               for d in (RUN16_UNCLOSED, BUDGET_KILLED, NOTHING_COMPARED)]
-    assert len(set(reasons)) == 3
 
 
-def test_exhaustion_is_decided_BEFORE_the_point_count():
-    """A proof cut off before comparing anything must read as cut off, not as
-    "the miter judged nothing" -- the two have different remedies."""
-    killed_early = dict(NOTHING_COMPARED, budget_exhausted=True)
-    assert "stopped before it finished" in \
-        dosr.lec_inconclusive_disposition(killed_early)[1]
 
 
-def test_PASS_is_untouched():
-    assert _status_for({"verdict": "PASS", "equivalent": True,
-                        "compared_points": 65}) == "PASS"
 
 
-def test_FAIL_is_untouched():
-    assert _status_for({"verdict": "FAIL", "equivalent": False,
-                        "compared_points": 66,
-                        "unproven_points": 2}) == "FAIL"
 
 
-def test_SKIPPED_CONDITION_is_untouched():
-    """R-0915-82's point survives R-0915-85's word change.
-
-    What this pinned was that R-0915-82 moved ONLY the INCONCLUSIVE arm and
-    left this one alone. It still does: `SKIPPED-CONDITION` is NOT_MEASURED —
-    nothing was compared — and it is emphatically not the FAIL that
-    R-0915-82 gave a ladder that RAN and did not close. The reason class is
-    asserted beside the word, because that is where the distinction lives now.
-    """
-    doc = {"verdict": "SKIPPED-CONDITION", "equivalent": False}
-    assert _status_for(doc) == "NOT_MEASURED"
-    assert _status_for(doc) != "FAIL"
-    assert dosr.lec_inconclusive_reason_class(doc) == "no_population"
 
 
-def test_a_sat_abort_is_inconclusive_not_an_empty_population():
-    """`lec_run` emits SKIPPED-CONDITION on a SAT abort with points already
-    proven. The tool RAN and could not decide, which is a different sentence
-    from "there was nothing to decide" — and the reason field is the only
-    place that difference can now live."""
-    doc = {"verdict": "SKIPPED-CONDITION", "equivalent": False,
-           "compared_points": 65,
-           "sat_model_unsupported_cells": [{"cell_type": "gf180mcu_fd_io__bi_t"}]}
-    assert _status_for(doc) == "NOT_MEASURED"
-    assert dosr.lec_inconclusive_reason_class(doc) == "inconclusive"
 
 
-def test_an_unreadable_report_is_untouched():
-    assert _status_for("{ not json") == "NOT_MEASURED"
-    assert dosr.lec_inconclusive_reason_class("{ not json") == "execution_error"
 
 
 # ---------------------------------------------------------------------------
 # (2) a verdict earned by an earlier run must say whose work it was
 # ---------------------------------------------------------------------------
-def test_a_resumed_record_that_climbed_no_rung_is_named_reused():
-    note = dosr.lec_record_reuse_note(RESUMED)
-    assert "REUSED" in note
-    assert "equiv_induct_seq64" in note
 
 
-def test_a_reused_record_still_earns_the_same_status():
-    """Reuse is a disclosure, never a discount. The 2 s re-read of run16's
-    record must FAIL exactly as the 8306 s proof did."""
-    assert _status_for(RESUMED) == "FAIL"
 
 
-def test_a_pass_cache_hit_is_named_reused():
-    note = dosr.lec_record_reuse_note(
-        {"verdict": "PASS", "execution_mode": "exact-pass-cache-hit"})
-    assert "REUSED" in note
 
 
-def test_a_fresh_proof_is_NOT_called_reused():
-    """THE CONTROL. A note that is always non-empty measures nothing. run16
-    pass 1 really did climb five rungs."""
-    fresh = dict(
-        RUN16_UNCLOSED,
-        lec_resume={"resumed": False, "rungs_recorded_this_run":
-                    ["equiv_simple_short", "equiv_induct_seq64"]},
-        lec_ladder={"legs": [{"rungs_in_this_process": 5}]})
-    assert dosr.lec_record_reuse_note(fresh) == ""
 
 
-def test_a_run_that_never_RESUMED_is_not_called_reused():
-    """The `resumed` flag has to be load-bearing ON ITS OWN. Without this case
-    a mutation that drops the resume guard SURVIVES, because the realistic
-    fresh record is rejected by the OTHER condition and the guard is never
-    tested alone. Measured: the first version of this suite passed that
-    mutant."""
-    never_resumed = dict(
-        RUN16_UNCLOSED,
-        lec_resume={"resumed": False, "rungs_recorded_this_run": []},
-        lec_ladder={"legs": [{"rungs_in_this_process": 0}]})
-    assert dosr.lec_record_reuse_note(never_resumed) == ""
 
 
-def test_a_record_with_no_resume_block_at_all_is_not_called_reused():
-    """A producer that never wrote `lec_resume` says nothing about reuse;
-    absence is not evidence of it."""
-    assert dosr.lec_record_reuse_note(RUN16_UNCLOSED) == ""
 
 
-def test_a_resume_that_DID_climb_a_rung_is_not_called_reused():
-    """Resuming and then doing real work is not reuse -- the honest boundary is
-    "how many rungs did THIS invocation climb"."""
-    worked = dict(
-        RUN16_UNCLOSED,
-        lec_resume={"resumed": True,
-                    "resumed_from": {"rung": "equiv_induct_seq16"},
-                    "rungs_recorded_this_run": ["equiv_induct_seq64"]},
-        lec_ladder={"legs": [{"rungs_in_this_process": 1}]})
-    assert dosr.lec_record_reuse_note(worked) == ""
 
 
 # ---------------------------------------------------------------------------

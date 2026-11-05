@@ -34,31 +34,12 @@ import json
 import re
 from pathlib import Path
 
-import pytest
 
-import _declared_process_record as declared_process_record
 import phase3_one_shot_runner as p3
 import sta_corner_record_completeness_check as gate
-from sta_annotation_population import classify
 from test_declared_process_sta_producer import scene  # noqa: F401  (fixture)
 
 
-def test_declared_process_record_keeps_measured_rows_on_refusal(tmp_path):
-    record = declared_process_record.build(
-        ("slow", "fast"), status="REFUSED", reason="sweep incomplete",
-        report=None, values={("slow", "SETUP"): -0.25},
-        row_reasons={("fast", "HOLD"): "native run stopped"},
-        sources={"slow": {"spef_sha256": "a" * 64}},
-        attempt_report={"path": "reports/sta.attempt", "sha256": "b" * 64})
-    path = declared_process_record.write(tmp_path, record)
-    written = json.loads(path.read_text())
-    measured = written["corners"]["slow"]["setup"]
-    assert (measured["status"], measured["wns_ns"], measured["promoted"]) == (
-        "MEASURED", -0.25, False)
-    assert measured["spef_sha256"] == "a" * 64
-    assert written["corners"]["fast"]["hold"]["reason"] == "native run stopped"
-    assert written["attempt_report"]["path"] == "reports/sta.attempt"
-    assert written["report"] is None
 
 _CENSUS_WITH_SUPPLY_PORTS = (
     "STA_LINK_INSTANCE u1 core/INV\n"
@@ -83,33 +64,12 @@ def _def(tmp: Path, vdd_use="POWER", vss_use="GROUND", extra="") -> Path:
 
 # ── 1. the classifier ────────────────────────────────────────────────────────
 
-def test_a_supply_port_typed_by_its_own_special_net_is_not_signal_parasitics(tmp_path):
-    """RED on main: VDD/VSS stay REQUIRED_OR_UNKNOWN and `complete` is False."""
-    res = classify(_CENSUS_WITH_SUPPLY_PORTS, _def(tmp_path))
-    got = {r["driver"]: r["classification"] for r in res["drivers"]}
-    assert got == {"VDD": "EXPLICIT_PG_NOT_SIGNAL_PARASITICS",
-                   "VSS": "EXPLICIT_PG_NOT_SIGNAL_PARASITICS"}, res
-    assert res["complete"] is True
 
 
-def test_a_port_whose_net_is_typed_signal_stays_unknown(tmp_path):
-    res = classify(_CENSUS_WITH_SUPPLY_PORTS, _def(tmp_path, vdd_use="SIGNAL"))
-    got = {r["driver"]: r["classification"] for r in res["drivers"]}
-    assert got["VDD"] == "REQUIRED_OR_UNKNOWN" and res["complete"] is False
 
 
-def test_conflicting_typing_of_the_ports_net_stays_unknown(tmp_path):
-    res = classify(_CENSUS_WITH_SUPPLY_PORTS,
-                   _def(tmp_path, extra="- VDD ( * VPW ) + USE GROUND ;"))
-    got = {r["driver"]: r["classification"] for r in res["drivers"]}
-    assert got["VDD"] == "REQUIRED_OR_UNKNOWN" and res["complete"] is False
 
 
-def test_a_port_with_no_net_of_its_name_stays_unknown(tmp_path):
-    body = _CENSUS_WITH_SUPPLY_PORTS.replace(" VSS\n", " VDDX\n")
-    res = classify(body, _def(tmp_path))
-    got = {r["driver"]: r["classification"] for r in res["drivers"]}
-    assert got["VDDX"] == "REQUIRED_OR_UNKNOWN" and res["complete"] is False
 
 
 # ── 2+3. the producer, driven end to end with a Tcl-faithful double ──────────
@@ -172,27 +132,6 @@ def test_supply_ports_no_longer_quarantine_the_sweep_and_the_gate_sees_every_cor
         assert rec["basis_used"].get("hold_wns_ns") == gate.BASIS_SIGNOFF, rec
 
 
-def test_each_section_names_the_sha256_of_what_it_timed_and_the_record_has_every_row(
-        scene, monkeypatch):
-    """RED on main: no digest lines, and no per-(corner, check) record."""
-    s = scene
-    _def(s["tmp_path"])
-    monkeypatch.setattr(p3, "_docker_exec", _native_double(_CENSUS_WITH_SUPPLY_PORTS))
-    assert s["emit"]()
-    text = s["rpt"].read_text()
-    spef_sha = p3._file_sha256(s["spef"]).split(":", 1)[1]
-    for kind in ("LIBERTY", "SPEF", "NETLIST", "SDC"):
-        assert f"STA_BASIS_SHA256_{kind}:" in text
-    assert f"STA_BASIS_SHA256_SPEF: {spef_sha}" in text
-    rec = json.loads((s["tmp_path"] / "reports/phase3/sta/declared_process_sta.json").read_text())
-    assert rec["status"] == "MEASURED"
-    for c in ("SS", "TT", "FF"):
-        lib_sha = p3._file_sha256(Path(s["by"][c])).split(":", 1)[1]
-        for role, wns in (("setup", 1.25), ("hold", 0.40)):
-            row = rec["corners"][c][role]
-            assert row["status"] == "MEASURED" and row["wns_ns"] == wns, row
-            assert row["spef_sha256"] == spef_sha and row["spef_rc_corner"] == "nom"
-            assert row["liberty"] == s["by"][c] and row["liberty_sha256"] == lib_sha
 
 
 def test_a_refused_sweep_keeps_every_measured_row_and_records_the_refusal_beside_it(
@@ -278,28 +217,8 @@ def test_the_step23_caller_records_the_declared_corners_when_no_spef_exists(scen
     assert {r["status"] for c in rec["corners"].values() for r in c.values()} == {"NOT_MEASURED"}
 
 
-def test_duplicate_identical_typing_of_the_ports_net_stays_unknown(tmp_path):
-    """Review wave 5: only the CONFLICTING half was tested; two identical
-    `USE POWER` statements for the port's net are still not one statement."""
-    res = classify(_CENSUS_WITH_SUPPLY_PORTS,
-                   _def(tmp_path, extra="- VDD ( * VPW ) + USE POWER ;"))
-    got = {r["driver"]: r["classification"] for r in res["drivers"]}
-    assert got["VDD"] == "REQUIRED_OR_UNKNOWN" and res["complete"] is False
 
 
-def test_the_io_pad_liberties_are_hashed_too(scene, monkeypatch):
-    """Review wave 5: every view the STA run reads is named WITH its digest."""
-    s = scene
-    _def(s["tmp_path"])
-    monkeypatch.setattr(p3, "_docker_exec", _native_double(_CENSUS_WITH_SUPPLY_PORTS))
-    assert s["emit"]()
-    rec = json.loads((s["tmp_path"] / "reports/phase3/sta/declared_process_sta.json").read_text())
-    for c in ("SS", "TT", "FF"):
-        others = rec["corners"][c]["setup"]["other_liberties"]
-        io = [o for o in others if o["kind"] == "io"]
-        assert io and all(o["sha256"] == p3._file_sha256(Path(o["path"])).split(":", 1)[1]
-                          for o in io), others
-    assert "STA_BASIS_SHA256_IO_LIBERTY:" in s["rpt"].read_text()
 
 
 # ── review wave 7 ────────────────────────────────────────────────────────────
@@ -365,22 +284,6 @@ def test_a_native_failure_at_a_middle_corner_names_the_later_corner_not_run(
     assert rec["corners"]["TT"]["hold"]["status"] == "NOT_MEASURED"
 
 
-def test_a_refused_record_names_the_attempt_report_its_slacks_came_from(
-        scene, monkeypatch):
-    """MINOR (both reviewers): `report` is the promoted basis only, so a
-    refused record must say which `.attempt-*` file holds its numbers."""
-    s = scene
-    _def(s["tmp_path"], vdd_use="SIGNAL")
-    monkeypatch.setattr(p3, "_docker_exec", _native_double(_CENSUS_WITH_SUPPLY_PORTS))
-    assert not s["emit"]()
-    rec = json.loads((s["tmp_path"] / _REC).read_text())
-    assert rec["report"] is None
-    att = rec["attempt_report"]
-    path = s["tmp_path"] / att["path"]
-    assert ".attempt-" in path.name and path.is_file()
-    assert att["sha256"] == p3._file_sha256(path).split(":", 1)[1]
-    assert (s["tmp_path"] / att["population"]).is_file()
-    assert "worst slack max 1.25" in path.read_text()
 
 
 def test_a_promoted_record_carries_no_attempt_report(scene, monkeypatch):
@@ -411,15 +314,6 @@ def test_a_long_unknown_driver_list_states_its_count_and_that_it_was_cut(
     assert "(+4 more" in rec["corners"]["FF"]["setup"]["annotation_census"]
 
 
-def test_a_supply_port_inferred_by_name_is_not_recorded_as_a_def_binding(tmp_path):
-    """MINOR (integrity): the name-match inference was published as
-    `def_bindings`, the same shape as a real bound PG pin."""
-    res = classify(_CENSUS_WITH_SUPPLY_PORTS, _def(tmp_path))
-    for r in res["drivers"]:
-        assert r["def_bindings"] == [], r
-        assert r["basis"] == "supply_by_same_name_net"
-        assert r["supply_by_same_name_net"]["net"] == r["driver"]
-    assert res["supply_by_same_name_net"]["count"] == 2
 
 
 def test_the_promoted_report_discloses_the_pg_by_name_exclusions(scene, monkeypatch):

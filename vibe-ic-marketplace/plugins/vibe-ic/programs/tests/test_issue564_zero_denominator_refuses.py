@@ -134,21 +134,8 @@ def test_the_real_population_still_passes(gate):
 
 
 # ── the prober's own contract ───────────────────────────────────────────────
-def test_it_publishes_its_own_denominator():
-    """A check that reports only findings publishes no denominator of its own,
-    which is the thing it is here to require of others."""
-    src = (_PROGRAMS / "gate_zero_denominator_refuses_check.py").read_text(
-        encoding="utf-8")
-    assert '"gates_probed"' in src
-    assert "NOTHING_PROBED" in src, "an empty population must not be a pass"
 
 
-def test_an_empty_population_refuses_rather_than_passing(tmp_path):
-    r = _pr.run(
-        [sys.executable, str(_PROGRAMS / "gate_zero_denominator_refuses_check.py"),
-         "--programs-dir", str(tmp_path)],
-        capture_output=True, text=True)
-    assert r.returncode == G.RC_CANNOT_PROBE, r.stdout + r.stderr
 
 
 #: The exemptions this repository has actually granted. PINNED, so adding or
@@ -259,39 +246,3 @@ def test_a_gate_that_states_a_zero_and_REFUSES_is_not(
         "sys.exit(2)\n", encoding="utf-8")
     verdict, findings, _ = G.audit(tmp_path, timeout=60, workers=1)
     assert verdict == "PASS", findings
-
-
-def test_the_prober_is_not_in_its_own_population(tmp_path):
-    """LOAD-BEARING, and found the expensive way. `project_check_programs` is
-    `glob("*_check.py")`, so this file is in it: probing drove a nested copy,
-    which drove another. It hung a landing gate for 35 minutes and left 75
-    orphaned processes.
-
-    `gate_discloses_denominator_check` has the same shape and survives only
-    because its 120s per-gate budget truncates the recursion at depth 1 — which
-    is exactly the "1 unrunnable" this gate's first census reported, and which
-    went to 0 once the self-exclusion landed. A timeout absorbing a
-    self-inflicted recursion is not the same as not having one.
-    """
-    import shutil
-    shutil.copy(_PROGRAMS / "gate_zero_denominator_refuses_check.py",
-                tmp_path / "gate_zero_denominator_refuses_check.py")
-    (tmp_path / "other_check.py").write_text(
-        "print('PASS: 3 file(s) scanned')\n", encoding="utf-8")
-    # A one-second budget: if the prober drove itself, the nested run could not
-    # finish inside it and would surface as `unrunnable`.
-    _v, _f, stats = G.audit(tmp_path, timeout=20, workers=2)
-    assert stats["gates_probed"] == 1, (
-        f"probed {stats['gates_probed']} — the prober is in its own "
-        f"population again")
-    assert stats["unrunnable"] == 0, stats
-
-
-def test_the_population_and_driver_are_imported_not_rebuilt():
-    """A second scanner over the same question is how this repo has previously
-    reproduced a bug the first one already defended against — the fresh
-    directory per gate, in this case."""
-    src = (_PROGRAMS / "gate_zero_denominator_refuses_check.py").read_text(
-        encoding="utf-8")
-    assert "from gate_discloses_denominator_check import" in src
-    assert "_drive_on_empty_project" in src

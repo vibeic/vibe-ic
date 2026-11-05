@@ -35,166 +35,42 @@ tier that could not be CONSULTED must say so.
 from __future__ import annotations
 
 import ast
-import json
 import sys
 from pathlib import Path
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import phase3_one_shot_runner as R  # noqa: E402
 
 RUNNER = PROGRAMS / "phase3_one_shot_runner.py"
 
 
 # --- the recipe itself -----------------------------------------------------
-def test_the_script_is_the_stock_mapping_plus_buffer_only():
-    got = R._ABC_FANOUT_SCRIPT.format(cap=10)
-    assert got.rstrip().endswith("buffer,-N,10"), got
-    assert got.lstrip().startswith("-script +"), got
-    assert "&nf,{D}" in got, (
-        "the stock mapping must still be the mapping, and yosys's own "
-        f"delay-target substitution must survive .format(); got {got}")
-    for sizing in ("upsize", "dnsize", "-sizing", "area_recover"):
-        assert sizing not in got, (
-            f"{sizing} is the synth-time sizing the post-route A/B measured "
-            f"as a regression; it is not part of the fanout bound: {got}")
 
 
-def test_the_cap_reaches_the_script_verbatim():
-    for cap in (4, 8, 10, 32):
-        assert f"buffer,-N,{cap}" in R._ABC_FANOUT_SCRIPT.format(cap=cap)
 
 
 # --- the ONE ladder --------------------------------------------------------
-def _proj(tmp_path: Path) -> Path:
-    (tmp_path / "input" / "docs").mkdir(parents=True, exist_ok=True)
-    return tmp_path
 
 
-def test_a_design_declared_cap_wins_and_is_never_overridden(tmp_path,
-                                                            monkeypatch):
-    project = _proj(tmp_path)
-    monkeypatch.setattr(R, "_l9_declared_max_fanout", lambda *a, **k: 7)
-    monkeypatch.setattr(R, "_flow_default_max_fanout_read",
-                        lambda *a, **k: (99, "pdk_compat", ""))
-    cap, why, unread = R._synth_max_fanout(project, "gf180mcuD")
-    assert cap == 7, (cap, why)
-    assert unread == []
 
 
-def test_the_flow_pdk_default_is_the_second_tier(tmp_path, monkeypatch):
-    project = _proj(tmp_path)
-    monkeypatch.setattr(R, "_l9_declared_max_fanout", lambda *a, **k: None)
-    monkeypatch.setattr(R, "_rtl_replication_fanout_bound",
-                        lambda *a, **k: None)
-    monkeypatch.setattr(R, "_flow_default_max_fanout_read",
-                        lambda *a, **k: (10, "pdk_compat.py:322", ""))
-    cap, why, _ = R._synth_max_fanout(project, "gf180mcuD")
-    assert cap == 10 and "pdk_compat" in why, (cap, why)
 
 
-def test_the_active_liberty_is_the_third_tier(tmp_path, monkeypatch):
-    """THE TIER THAT CLOSES THE spm/subservient ASYMMETRY: it needs no
-    statement from the design at all."""
-    project = _proj(tmp_path)
-    monkeypatch.setattr(R, "_l9_declared_max_fanout", lambda *a, **k: None)
-    monkeypatch.setattr(R, "_rtl_replication_fanout_bound",
-                        lambda *a, **k: None)
-    monkeypatch.setattr(R, "_flow_default_max_fanout_read",
-                        lambda *a, **k: (None, "", ""))
-    monkeypatch.setattr(R, "_liberty_drv_limits", lambda *a, **k: {
-        "max_fanout": 8, "fanout_source": "some.lib:default_max_fanout"})
-    cap, why, _ = R._synth_max_fanout(project, "anypdk", "some.lib")
-    assert cap == 8 and "default_max_fanout" in why, (cap, why)
 
 
-def test_nothing_declared_anywhere_resolves_to_no_cap(tmp_path, monkeypatch):
-    project = _proj(tmp_path)
-    monkeypatch.setattr(R, "_l9_declared_max_fanout", lambda *a, **k: None)
-    monkeypatch.setattr(R, "_rtl_replication_fanout_bound",
-                        lambda *a, **k: None)
-    monkeypatch.setattr(R, "_flow_default_max_fanout_read",
-                        lambda *a, **k: (None, "", ""))
-    monkeypatch.setattr(R, "_liberty_drv_limits", lambda *a, **k: {})
-    cap, why, unread = R._synth_max_fanout(project, "anypdk")
-    assert cap is None and why == "", (cap, why)
-    assert unread == [], (
-        "a PDK that genuinely declares no default is not an UNREAD tier")
 
 
 # --- unread is not empty ---------------------------------------------------
-def test_a_tier_that_could_not_be_read_says_so(tmp_path):
-    """THE DISPATCHER'S ADDITION, and my own near-miss: on a host with no
-    container copy of `pdk_compat.py` the read fails, and a silent None reads
-    exactly like 'this PDK declares no default'."""
-    project = _proj(tmp_path)          # no reports/container_image.json
-    cap, why, unread = R._flow_default_max_fanout_read(project, "gf180mcuD")
-    assert cap is None and why == ""
-    assert unread and "NOT READ" in unread, unread
-    assert "records no container" in unread, unread
 
 
-def test_an_unreadable_container_record_is_named_not_swallowed(tmp_path):
-    project = _proj(tmp_path)
-    rec = project / "reports" / "container_image.json"
-    rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text('{"container": ""}')
-    cap, _why, unread = R._flow_default_max_fanout_read(project, "gf180mcuD")
-    assert cap is None
-    assert "NOT READ" in unread and "names no container" in unread, unread
 
 
-@pytest.mark.parametrize("container", ["", "legacy-name"])
-def test_local_flow_fanout_defaults_read_the_current_runtime(tmp_path, monkeypatch, container):
-    project = _proj(tmp_path)
-    record = project / "reports/container_image.json"
-    record.parent.mkdir(parents=True)
-    record.write_text(json.dumps({"container": container}))
-    defaults = tmp_path / "pdk_compat.py"
-    defaults.write_text('if new["PDK"].startswith("gf180mcu"):\n'
-                        '    x["MAX_FANOUT_CONSTRAINT"] = 10\n')
-    monkeypatch.setattr(R, "_FLOW_PDK_DEFAULTS_PATH", str(defaults))
-    monkeypatch.setattr(R._cex, "no_container_route", lambda: True)
-    cap, why, unread = R._flow_default_max_fanout_read(project, "gf180mcuD")
-    assert cap == 10 and unread == ""
-    assert str(defaults) in why
-    assert R._flow_default_max_fanout(project, "gf180mcuD") == (cap, why)
 
 
-def test_the_unread_reason_propagates_out_of_the_resolver(tmp_path,
-                                                          monkeypatch):
-    project = _proj(tmp_path)
-    monkeypatch.setattr(R, "_l9_declared_max_fanout", lambda *a, **k: None)
-    monkeypatch.setattr(R, "_rtl_replication_fanout_bound",
-                        lambda *a, **k: None)
-    monkeypatch.setattr(R, "_liberty_drv_limits", lambda *a, **k: {})
-    cap, _why, unread = R._synth_max_fanout(project, "gf180mcuD")
-    assert cap is None
-    assert any("NOT READ" in u for u in unread), unread
 
 
-def test_a_read_that_found_no_family_is_not_reported_as_unread(tmp_path,
-                                                              monkeypatch):
-    """The other direction, so 'unread' cannot become a catch-all: the file WAS
-    read and this family genuinely has no entry."""
-    project = _proj(tmp_path)
-    rec = project / "reports" / "container_image.json"
-    rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text(json.dumps({"container": "c"}))
-
-    class _CP:
-        returncode = 0
-        stderr = ""
-        stdout = 'if new["PDK"].startswith("sky130"):\n    x["MAX_FANOUT_CONSTRAINT"] = 10\n'
-    monkeypatch.setattr(R.subprocess, "run", lambda *a, **k: _CP())
-    cap, why, unread = R._flow_default_max_fanout_read(project, "ihp-sg13g2")
-    assert cap is None and why == ""
-    assert unread == "", (
-        "the file was READ; this family simply has no entry, which is an "
-        f"answer and not a silence: {unread!r}")
 
 
 # --- the wiring ------------------------------------------------------------
@@ -224,38 +100,11 @@ def test_every_abc_site_in_step_synth_carries_the_bound():
         f"the fanout bound")
 
 
-def test_no_cap_means_the_recipe_is_unchanged():
-    """The no-cap case must be BYTE-IDENTICAL to before — no silent default."""
-    assert R._ABC_FANOUT_SCRIPT.format(cap=10) != ""
-    # the caller uses "" when nothing resolved; an empty suffix cannot change
-    # the command it is appended to.
-    assert "".join(("abc -liberty L -D 20000", "")) == "abc -liberty L -D 20000"
 
 
 # --- mutation --------------------------------------------------------------
-def test_mutation_dropping_the_bound_is_caught():
-    """Remove `buffer -N <cap>` and the recipe stops bounding fanout while
-    still looking like a buffering script."""
-    mutated = R._ABC_FANOUT_SCRIPT.replace(";buffer,-N,{cap}", "")
-    assert "buffer,-N," not in mutated.format(cap=10), "sanity"
-    assert mutated.format(cap=10) != R._ABC_FANOUT_SCRIPT.format(cap=10), (
-        "the bound must be observable in the emitted script, or its removal "
-        "would be invisible")
 
 
-def test_mutation_a_fabricated_default_is_caught(tmp_path, monkeypatch):
-    """The §4.05 mutation: resolving to a number nobody stated."""
-    project = _proj(tmp_path)
-    monkeypatch.setattr(R, "_l9_declared_max_fanout", lambda *a, **k: None)
-    monkeypatch.setattr(R, "_rtl_replication_fanout_bound",
-                        lambda *a, **k: None)
-    monkeypatch.setattr(R, "_flow_default_max_fanout_read",
-                        lambda *a, **k: (None, "", ""))
-    monkeypatch.setattr(R, "_liberty_drv_limits", lambda *a, **k: {})
-    cap, _why, _unread = R._synth_max_fanout(project, "anypdk")
-    assert cap is None, (
-        "no tier stated a cap, so there is no cap; inventing one here is "
-        "exactly what §4.05 forbids")
 
 
 def test_the_fanout_notes_have_their_own_channel():

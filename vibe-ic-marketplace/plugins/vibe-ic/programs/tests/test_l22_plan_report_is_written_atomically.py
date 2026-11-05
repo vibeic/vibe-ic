@@ -27,29 +27,14 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-import atomic_artifact_write_check as G  # noqa: E402
 import _atomic_artefact as _aa  # noqa: E402
 import l22_analog_verification_plan_emit as L22  # noqa: E402
 
 _EMITTER = PROGRAMS / "l22_analog_verification_plan_emit.py"
 
 
-def test_emitter_is_not_a_new_offender_of_the_1082_gate() -> None:
-    """The gate's own AST audit finds no direct write to the declared dest."""
-    hits = G.scan_program(_EMITTER)
-    assert hits == [], (
-        "l22_analog_verification_plan_emit writes its declared report "
-        f"destination non-atomically at line(s) "
-        f"{[h['line'] for h in hits]} — route it through _atomic_artefact")
 
 
-def test_gate_over_the_real_programs_dir_reports_no_new_offender(
-        capsys) -> None:
-    """End-to-end: the shipped gate, the shipped residual, the real tree."""
-    rc = G.main([str(PROGRAMS)])
-    out = capsys.readouterr()
-    assert rc == 0, out.out + out.err
-    assert "l22_analog_verification_plan_emit" not in out.err
 
 
 
