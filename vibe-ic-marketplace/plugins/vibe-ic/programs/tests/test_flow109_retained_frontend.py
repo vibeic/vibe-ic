@@ -257,6 +257,35 @@ def test_native_gate_does_not_replace_its_canonical_handoff_owner(tmp_path, monk
     assert not (tmp_path / f'reports/flow109/default_rows/{step}.json').exists()
 
 
+@pytest.mark.parametrize('damage', ['current', 'foreign_scope', 'native_fail', 'not_executed'])
+def test_relocated_simulation_reuses_only_the_same_measured_rtl(tmp_path, damage):
+    args, rtl = case(tmp_path, 'D13')
+    original = Path('/retained/source')
+    name = rtl.relative_to(tmp_path)
+    recorded = original / name
+    simulation = tmp_path / 'reports/phase2/sim/l10_execution.json'
+    coverage = tmp_path / 'reports/phase2/coverage/coverage_verilator.json'
+    native = json.loads(simulation.read_text())
+    measured = native['cases'][0]
+    data = json.loads(coverage.read_text())
+    data['scope_files'] = [str(recorded)]
+    if damage == 'foreign_scope':
+        data['scope_files'] = [str(original / 'phase2/stage1/rtl/other.v')]
+    elif damage == 'native_fail':
+        measured['verdict'] = 'FAIL'
+    elif damage == 'not_executed':
+        measured['sim_executed'] = False
+    put(simulation, native)
+    put(coverage, data)
+    before = simulation.read_bytes(), coverage.read_bytes()
+    expected = 'PASS' if damage == 'current' else 'FAIL' if damage == 'native_fail' else 'NOT_MEASURED'
+    assert flow109.prepare_front_door(args, tmp_path) == {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[expected]
+    result = json.loads((tmp_path / 'reports/flow109/default_rows/D13.json').read_text())
+    assert result['default_row_status'] == expected
+    assert result['native_started'] is False
+    assert before == (simulation.read_bytes(), coverage.read_bytes())
+
+
 @pytest.mark.parametrize('status', ['PASS', 'FAIL'])
 def test_explicit_current_row_rerun_reaches_owner(tmp_path, status):
     args, _ = case(tmp_path, 'D13')
