@@ -269,3 +269,41 @@ def test_from_does_not_restore_an_invalidated_later_state(tmp_path, monkeypatch)
     execute(tmp_path, rows, from_name="first", to_name="first")
     execute(tmp_path, rows, from_name="last")
     assert restored == ["first"]
+
+
+@pytest.mark.parametrize("declared,status", [(False, "PASS"), (True, "FAIL")])
+def test_coverage_observes_numbers_and_enforces_declared_targets(tmp_path, declared, status):
+    table = engine.read_json(engine.TABLE)
+    row = next(row for row in table["steps"] if row["name"] == "functional_simulation_and_coverage")
+    numbers = {"assertion_failures": 0, "coverage_line_pct": 75,
+               "coverage_toggle_pct": 65, "coverage_branch_pct": 80}
+    if declared:
+        docs = tmp_path / "phase1/generated_docs"
+        docs.mkdir(parents=True)
+        (docs / "L7.json").write_text(json.dumps({
+            "coverage_targets": {"coverage_line_pct": {"min": 90}}}))
+    features = engine.design_features(tmp_path, {"delivery_target": "rtl"}, table)
+    native = engine.ToolResult(True, 0, numbers)
+    observations, declared_checks = engine.report_observations(
+        row, tmp_path, native, {}, features, tmp_path)
+    measurements = engine.measure([*row["checks"], *declared_checks], numbers,
+                                  {}, features, tmp_path)
+    assert engine.evaluate(native, measurements) == status
+    coverage = next(item for item in observations if item["metric"] == "coverage_targets")
+    assert coverage["values"] == {key: value for key, value in numbers.items() if key.startswith("coverage_")}
+    assert [(item["metric"], item["limit"]) for item in row["checks"]
+            if item["metric"].startswith("coverage_")] == [
+                ("coverage_line_pct", 70), ("coverage_toggle_pct", 60), ("coverage_branch_pct", 70)]
+
+
+@pytest.mark.parametrize("filters", [None, [], [""]])
+def test_empty_corner_filter_keeps_native_numbers_and_original_limit(filters):
+    check = {"metric": "slew__corner:*", "operator": "<=", "limit": 0,
+             "corner_config": "CORNERS"}
+    metrics = {"slew__corner:nom_ss": 0, "slew__corner:max_ss": 1}
+    observed = engine.measure([check], metrics, {"CORNERS": filters}, {"always": True})
+    assert [(item["metric"], item["status"]) for item in observed] == [
+        ("slew__corner:nom_ss", "PASS"), ("slew__corner:max_ss", "FAIL")]
+    assert engine.evaluate(engine.ToolResult(True, 0), observed) == "FAIL"
+    selected = engine.measure([check], metrics, {"CORNERS": ["nom_*"]}, {"always": True})
+    assert [item["metric"] for item in selected] == ["slew__corner:nom_ss"]
