@@ -11,6 +11,10 @@ import tempfile
 import time
 
 
+def _word(path):
+    return '"' + str(path).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 class Commands:
     def __init__(self, directory):
         self.directory = directory
@@ -75,7 +79,6 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     script = directory / "elaborate.ys"
     if tool.get("adapter") == "implemented_cdc":
         import fnmatch
-        from flow109_netlist_cdc import _word
         netlist = state.get("nl") if state is not None else None
         libraries = config.get("CELL_LIBS") or config.get("LIB") or {}
         liberty = [Path(p) for pattern, paths in libraries.items()
@@ -260,7 +263,6 @@ def simulation(project, directory, tool, commands):
 
 def formal(project, directory, tool, commands):
     from formal_property_run import _ensure_expert_observers_bound, _model_texts
-    from flow109_netlist_cdc import _word
     from formal_harness_gen import _resolve_top
 
     authored = {}

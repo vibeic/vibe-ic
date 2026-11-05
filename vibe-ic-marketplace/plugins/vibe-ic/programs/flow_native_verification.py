@@ -77,7 +77,7 @@ def reset_script(script, boundary):
 
 
 def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
-    from flow109_netlist_cdc import _word
+    from flow_native_adapters import _word
 
     core = directory / "core"
     core.mkdir()
