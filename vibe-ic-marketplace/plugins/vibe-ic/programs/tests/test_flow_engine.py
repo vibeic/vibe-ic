@@ -79,14 +79,44 @@ def test_manufacturability_reads_final_native_result_before_aggregation(
     assert (tmp_path / "calls").read_text() == "1"
 
 
-def test_from_preserves_earlier_folder_and_clears_later_results(tmp_path):
+@pytest.mark.parametrize("bounded", [False, True])
+def test_from_preserves_results_outside_explicit_window(tmp_path, bounded):
     rows = [command_row(name) for name in ("first", "middle", "last")]
     execute(tmp_path, rows)
     prior = (tmp_path / "steps/first/result.json").read_bytes()
-    execute(tmp_path, rows, from_name="middle", to_name="middle")
+    later = tmp_path / "steps/last/result.json"
+    saved = later.read_bytes()
+    state = later.with_name("state_out.json")
+    state.write_text("original native state\n")
+    rows[-1] = command_row("last", value=1)
+    execute(tmp_path, rows, from_name="middle", to_name="middle" if bounded else None)
     assert (tmp_path / "steps/first/result.json").read_bytes() == prior
-    assert not (tmp_path / "steps/last/result.json").exists()
+    if bounded:
+        assert later.read_bytes() == saved
+        assert state.read_text() == "original native state\n"
+    else:
+        assert json.loads(later.read_text())["status"] == "FAIL"
+        assert not state.exists()
     assert json.loads((tmp_path / "steps/middle/result.json").read_text())["status"] == "PASS"
+
+
+def test_bounded_replay_recomputes_later_aggregates_without_rerunning_tools(tmp_path):
+    aggregate = {"name": "summary", "title": "summary", "when": "always", "legacy_id": {},
+                 "tool": {"kind": "aggregate"}, "checks": [
+                     {"metric": "non_passing_steps", "operator": "==", "limit": 0}]}
+    rows = [command_row("first"), command_row("middle", value=1), command_row("physical"),
+            aggregate, {**aggregate, "name": "final_summary", "title": "final_summary"}]
+    execute(tmp_path, rows)
+    physical = tmp_path / "steps/physical/result.json"
+    saved = physical.read_bytes()
+    rows[1] = command_row("middle")
+    report = execute(tmp_path, rows, from_name="middle", to_name="middle")
+    assert physical.read_bytes() == saved
+    assert report["selected"] == report["run"] == report["pass"] == 1
+    for name in ("summary", "final_summary"):
+        result = json.loads((tmp_path / "steps" / name / "result.json").read_text())
+        assert result["status"] == "PASS"
+        assert result["native_metrics"]["non_passing_steps"] == 0
 
 
 def test_added_table_entry_runs_without_runner_change(tmp_path):
@@ -386,7 +416,8 @@ def test_from_does_not_restore_an_invalidated_later_state(tmp_path, monkeypatch)
         + rows[0]["tool"]["command"][2])
     execute(tmp_path, rows)
     (tmp_path / "steps/middle/state_out.json").write_text("{}")
-    execute(tmp_path, rows, from_name="first", to_name="first")
+    execute(tmp_path, rows, from_name="first")
+    assert not (tmp_path / "steps/middle/state_out.json").exists()
     execute(tmp_path, rows, from_name="last")
     assert restored == ["first"]
 
