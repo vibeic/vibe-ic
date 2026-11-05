@@ -73,7 +73,8 @@ def test_custom_pdn_script_keeps_its_control(tmp_path):
     (.001793, 2.68, 1.6, 7.34, 7.),
     (.006871, 10.26, 4.59, 11.13, 8.495),
 ])
-def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertical, horizontal, voffset, hoffset):
+@pytest.mark.parametrize("default_supplies", [False, True])
+def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertical, horizontal, voffset, hoffset, default_supplies):
     pytest.importorskip("odb")
     native = config()
     library, tech = tmp_path / "corner.lib", tmp_path / "technology.lef"
@@ -90,6 +91,8 @@ def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertica
     power = tmp_path / "steps/pre_layout_timing/result.json"
     power.parent.mkdir(parents=True)
     power.write_text(json.dumps({"native_metrics": {"power__total__corner:nom_corner": current * 5}}))
+    if default_supplies:
+        native.update(VDD_NETS=None, GND_NETS=None, VDD_PIN="supply", GND_PIN="ground", PDN_CFG=None)
     values = current_settings(tmp_path, native)
     assert values["PDN_VWIDTH"] == vertical
     assert values["PDN_CORE_RING_VWIDTH"] == vertical

@@ -133,6 +133,10 @@ def current_settings(project, config, parallel_length_um=0):
     power = project / "steps/pre_layout_timing/result.json"
     if not power.is_file():
         return {}
+    config = dict(config)
+    for supply in ("VDD", "GND"):
+        if config.get(f"{supply}_NETS") is None:
+            config[f"{supply}_NETS"] = [config[f"{supply}_PIN"]]
     current, samples = estimated_current(config, json.loads(power.read_text()).get("native_metrics", {}))
     lefs = matching(config["TECH_LEFS"], config["DEFAULT_CORNER"])
     if len(lefs) != 1:
