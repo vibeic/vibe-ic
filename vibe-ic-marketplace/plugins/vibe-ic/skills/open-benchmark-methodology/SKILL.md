@@ -677,7 +677,7 @@ remain refusals. Profile selection does not approve a route or qualify tools.
 
 The confirmed task-nature receipt still controls the native entry and evidence
 exit. The bridge translates that window through current registry owner mappings
-to stable Flow109 IDs; supplied RTL resumes at validation and cannot expand a
+to stable flow IDs; supplied RTL resumes at validation and cannot expand a
 lint task into physical design. Structured completion retains its normal D1
 prerequisite and semantic admission before the RTL-owner window. Existing AI
 routing, candidate review, challenge and official-score requirements are

@@ -19,6 +19,125 @@ def test_native_pathlike_config_values_are_single_paths():
     assert chip._paths({"nominal": NativePath()}) == [Path("/native/technology.lef")]
 
 
+@pytest.fixture
+def receiver_ring(tmp_path, monkeypatch):
+    rails = {"CORE": ("POWER", 1.8), "RETURN": ("GROUND", 0),
+             "QUIET": ("POWER", 1.8), "IO": ("POWER", 3.3)}
+    feeds = {f"neutral__{rail.lower()}_feed": (f"BOND_{rail}", rail)
+             for rail in ("CORE", "RETURN", "IO")}
+    receiver, bridge = "neutral__receiver", "neutral__quiet_bridge"
+    classes = {master: "PAD POWER" for master in feeds}
+    classes.update({receiver: "PAD INPUT", bridge: "PAD AREAIO"})
+    roles = {master: {rail: ("INOUT", use) for rail, (use, _) in rails.items()}
+             for master in classes}
+    for master, (bond, rail) in feeds.items():
+        roles[master][bond] = ("INOUT", rails[rail][0])
+    roles[receiver]["BOND"] = ("INPUT", "SIGNAL")
+    lines = ["library (neutral) {"]
+    lines += [f' voltage_map ("{rail}", {volts});'
+              for rail, (_, volts) in rails.items()]
+    for master, (bond, _) in feeds.items():
+        lines.append(f" cell ({master}) {{")
+        for rail, (use, _) in rails.items():
+            lines += [f"  pg_pin ({rail}) {{",
+                      f"   pg_type : primary_{use.lower()};",
+                      f"   voltage_name : {rail};", "  }"]
+        lines += [f"  pin ({bond}) {{", "   direction : inout;",
+                  "   is_pad : true;", "  }", " }"]
+    lines += [f" cell ({receiver}) {{"]
+    for pin, attrs in {
+        "BOND": {"direction": "inout", "is_pad": "true",
+                 "function": "DRIVER", "three_state": "OE"},
+        "DRIVER": {"direction": "input", "related_power_pin": "CORE",
+                   "related_ground_pin": "RETURN"},
+        "DISABLE": {"direction": "input"}, "OE": {"direction": "input"},
+        "IN_CORE": {"direction": "output", "function": "BOND & !DISABLE",
+                    "related_power_pin": "QUIET"},
+        "IN_IO": {"direction": "output", "function": "BOND & !DISABLE",
+                  "related_power_pin": "IO"},
+    }.items():
+        lines += [f"  pin ({pin}) {{"]
+        lines += [f'   {key} : "{value}";' for key, value in attrs.items()]
+        lines.append("  }")
+    lines += [" }", "}"]
+    liberty = _write(tmp_path / "pads.lib", "\n".join(lines))
+    core = _write(tmp_path / "core.lib", "library (core) {\n nom_voltage : 1.8;\n}\n")
+    spice = _write(tmp_path / "pads.spice", "\n".join(
+        f".subckt {master} {bond} {' '.join(rails)}\nR0 {bond} {rail} 1\n.ends"
+        for master, (bond, rail) in feeds.items()))
+    model = (f"module {bridge}(QUIET, CORE);\ninout QUIET, CORE;\n"
+             "assign QUIET = CORE;\nendmodule\n")
+    library = {"classes": classes, "sizes": {master: (10, 20) for master in classes},
+               "roles": roles, "prefix": "neutral__", "sources": {},
+               "terminals": {receiver: "BOND", **{master: bond
+                             for master, (bond, _) in feeds.items()}},
+               "libs": [liberty], "root": str(tmp_path), "pdk": "neutral",
+               "verilog": [model], "conflicts": {},
+               "cells": chip.pads.parse_liberty_pad_cells(liberty.read_text())}
+    native = {"VDD_PIN": "VDD", "GND_PIN": "VSS", "LIB": {"*": [str(core)]}}
+    ports = [{"name": "din", "direction": "input", "width": 1, "indexed": False}]
+    monkeypatch.setattr(chip.pads, "discover_io_netlists", lambda *args: [spice])
+    monkeypatch.setattr(chip, "_side_ports", lambda *args: (
+        {"N": ["din"], "E": [], "S": [], "W": []}, None, []))
+    return tmp_path, native, ports, library
+
+
+def test_ring_connects_the_receiver_supply_through_a_passive_library_connector(receiver_ring):
+    try:
+        chosen, _, _, _, _, _ = chip._ring(*receiver_ring)
+        signal = next(entry for entry in chosen.values() if entry["port"] == "din")
+        observed = (signal["core_pin"], signal["power_connections"]["QUIET"],
+                    sorted(entry["master"] for entry in chosen.values()
+                           if entry.get("is_ring_connector")))
+    except (ValueError, chip.electrical.Refusal) as exc:
+        observed = (str(exc), None, [])
+    assert observed == ("IN_CORE", "VDD", ["neutral__quiet_bridge"])
+
+
+def test_unavailable_passive_connector_keeps_the_receiver_refusal(receiver_ring):
+    receiver_ring[-1]["verilog"] = []
+    with pytest.raises(ValueError, match="0 output pin.*core face"):
+        chip._ring(*receiver_ring)
+
+
+def test_incompatible_connector_supply_voltages_are_refused(receiver_ring):
+    liberty = receiver_ring[-1]["libs"][0]
+    liberty.write_text(liberty.read_text().replace('voltage_map ("QUIET", 1.8)',
+                                                 'voltage_map ("QUIET", 2.0)'))
+    with pytest.raises(chip.electrical.Refusal, match="compatible supply rails"):
+        chip._ring(*receiver_ring)
+
+
+def test_unpowered_synthesis_preserves_the_physical_ring_connector(tmp_path):
+    import shutil
+    import subprocess
+
+    yosys = shutil.which("yosys")
+    if yosys is None:
+        pytest.skip("native Yosys is required to measure generated connector retention")
+    master, instance = "neutral_bridge", "u_connector"
+    chosen = {instance: {"master": master, "is_ring_connector": True,
+                         "supply_connections": {"CORE": "power", "QUIET": "power"}}}
+    native = {"SYNTH_TIEHI_CELL": "neutral_hi/Y", "SYNTH_TIELO_CELL": "neutral_lo/Y"}
+    library = {"verilog": [], "pg_pins": {master: {"CORE", "QUIET"}}}
+    wrapper = chip._wrapper("neutral_core", "neutral_chip", [], chosen,
+                            {"N": [instance]}, ["power"], native, library)
+    (tmp_path / "models.v").write_text("""(* blackbox *) module neutral_bridge (
+`ifdef USE_POWER_PINS
+    inout CORE, QUIET
+`endif
+); endmodule
+""")
+    (tmp_path / "design.v").write_text(wrapper + "module neutral_core; endmodule\n")
+    run = subprocess.run([yosys, "-Q", "-T", "-p",
+        "read_verilog -lib models.v; read_verilog design.v; "
+        "synth -top neutral_chip; write_json synthesized.json"],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    cells = json.loads((tmp_path / "synthesized.json").read_text())["modules"]["neutral_chip"]["cells"]
+    assert {name: cell["type"] for name, cell in cells.items()} == {instance: master}
+
+
 def _write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)

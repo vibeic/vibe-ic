@@ -677,7 +677,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         write_json(directory / "result.json", result)
         results[row["name"]] = result
         results = {name: read_json(step_root / name / "result.json") for name in results}
-        print(f"Step {positions[row['name']]} {row['title']}: {result['status']}", flush=True)
+        print(f"第 {positions[row['name']]} 步 {row['title']}: {result['status']}", flush=True)
         summary = {"route": route, "selected": len(selected), "run": len(results),
                    "pass": sum(item["status"] == "PASS" for item in results.values()),
                    "fail": sum(item["status"] == "FAIL" for item in results.values()),

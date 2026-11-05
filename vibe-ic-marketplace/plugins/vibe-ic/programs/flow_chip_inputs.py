@@ -172,14 +172,26 @@ def _ring(project: Path, native: dict, ports: list[dict], library: dict):
     power = str((native.get("VDD_NETS") or [_required(native, "VDD_PIN")])[0])
     ground = str((native.get("GND_NETS") or [_required(native, "GND_PIN")])[0])
     core_libs = _paths(_required(native, "LIB"))
-    pair, plan, _ = electrical.resolve_supply_pad_pair(
-        library["classes"], library["sizes"], library["roles"], library["prefix"],
-        power, ground, library["sources"], library["terminals"],
-        liberty_texts=lambda: [path.read_text() for path in library["libs"]],
-        netlist_texts=lambda: [path.read_text() for path in pads.discover_io_netlists(
-            library["root"], library["pdk"])],
-        core_liberty_text=lambda: core_libs[0].read_text(),
-        verilog_texts=library["verilog"])
+    def resolve(connectors=()):
+        return electrical.resolve_supply_pad_pair(
+            library["classes"], library["sizes"], library["roles"], library["prefix"],
+            power, ground, library["sources"], library["terminals"],
+            liberty_texts=lambda: [path.read_text() for path in library["libs"]],
+            netlist_texts=lambda: [path.read_text() for path in pads.discover_io_netlists(
+                library["root"], library["pdk"])],
+            core_liberty_text=lambda: core_libs[0].read_text(),
+            ring_implementation={"connector_masters": list(connectors)},
+            verilog_texts=library["verilog"])
+
+    pair, plan, _ = resolve()
+    unbound = set(plan.get("ring_rails_without_bond", []))
+    connectors = {master for text in library["verilog"]
+                  for master, bridges in pads.parse_verilog_rail_bridges(text).items()
+                  if library["classes"].get(master, "").upper() in ("PAD AREAIO", "PAD SPACER")
+                  and (not library["prefix"] or master.startswith(library["prefix"]))
+                  and any(a in unbound or b in unbound for a, b in bridges)}
+    if connectors:
+        pair, plan, _ = resolve(sorted(connectors))
     supply = pair + list(plan.get("supplemental_supply_pads") or []) + list(plan.get("ring_connectors") or [])
     electrical.connect_bonded_ring_rails(supply, plan, library["roles"], power, ground,
                                         signal_pads=list(chosen.values()))
@@ -365,6 +377,8 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
             regular = electrical._named_connections(instance, entry["master"],
                 [(pin, net) for pin, net in pairs.items() if pin not in pg], buses)
             power = [f".{pin}({_identifier(net)})" for pin, net in pairs.items() if pin in pg]
+            if entry.get("is_ring_connector"):
+                lines.append("    (* keep = 1 *)")
             lines.extend([f"    {entry['master']} {instance} (", "        " + ", ".join(regular)])
             if power:
                 lines.extend(["`ifdef USE_POWER_PINS", ("        , " if regular else "        ") + ", ".join(power), "`endif"])

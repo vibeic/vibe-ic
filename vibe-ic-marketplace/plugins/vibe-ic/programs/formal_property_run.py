@@ -2324,19 +2324,22 @@ def _ensure_expert_fragment_staged(sby_path: Path, formal_dir: Path) -> bool:
     return True
 
 
-def _ensure_expert_observers_bound(sby_path: Path, formal_dir: Path) -> bool:
+def _ensure_expert_observers_bound(sby_path: Path, formal_dir: Path,
+                                  *, harness_text: Optional[str] = None) -> bool:
     """Bind observers newly declared by an expert fragment in a reused task.
 
     A fragment may add ``@observe`` declarations after the original ``.sby``
     was emitted.  Staging that fragment alone is insufficient: the old task
     has no ``connect -set`` commands, so the pre-proof refusal correctly sees
-    undriven observer wires.  Add only absent bindings immediately before the
-    existing ``prep -top``. Compatible legacy bindings are upgraded to -nomap
+    undriven observer wires. Native model text binds before optimization;
+    legacy tasks retain their insertion before ``prep -top``.
+    Compatible legacy bindings are upgraded to -nomap
     so reused tasks preserve the same alias drivers as freshly emitted tasks.
     A pre-existing incompatible binding is deliberately
     left for ``observer_binding_mismatches`` to refuse rather than overwritten.
     """
-    observers = parse_observers(_harness_texts(sby_path, formal_dir, None))
+    observers = parse_observers(harness_text if harness_text is not None else
+                               _harness_texts(sby_path, formal_dir, None))
     if not observers:
         return False
     try:
@@ -2394,10 +2397,15 @@ def _ensure_expert_observers_bound(sby_path: Path, formal_dir: Path) -> bool:
         lines += [f"select -assert-any {top_match.group(1)}/w:{rhs}",
                   f"connect -nomap -set {lhs} {rhs}"]
     prep_at = top_match.start()
+    flatten = re.search(r"(?m)^[ \t]*flatten[ \t]*\n", script)
+    if harness_text is not None and flatten is not None:
+        prep_at = flatten.end()
     revised = script[:prep_at] + "\n".join(lines) + "\n" + script[prep_at:]
     try:
         sby_path.write_text(head + marker + revised + files_marker + tail)
     except OSError:
+        if harness_text is not None:
+            raise
         return False
     return True
 

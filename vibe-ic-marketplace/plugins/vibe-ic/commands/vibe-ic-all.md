@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-all
-description: Enter a bounded current Flow109 window through the sole public vibe_ic_one_shot_runner entry in Default mode. AI-monitored + close-loop.
+description: Enter a bounded current flow window through the sole public vibe_ic_one_shot_runner entry in Default mode. AI-monitored + close-loop.
 argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id> [--top-name <top>] [--pdk <pdk>]
 ---
 **First: IC path or IP path?** Read [IC Expert § 0.0](../agents/ic-expert-agent.md) before Phase 1. Use the prompt's route or ask the operator if unclear; record the owner answer in `input/step_0_5ic_answers.json`. Pass `--route ic` or `--route ip` when stating it on this command.
@@ -10,7 +10,7 @@ argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
-# /vibe-ic-all — the public Flow109 entry
+# /vibe-ic-all — the public flow entry
 
 Main execution (**program-driven**):
 
@@ -19,12 +19,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS \
   --flow 109 --execution-mode default
 ```
 
-`$ARGUMENTS` must contain the explicit manifest and inclusive Flow109 stable-ID
+`$ARGUMENTS` must contain the explicit manifest and inclusive flow stable-ID
 window. The public runner resolves those IDs from `flow/flow109.json`, records
 the request, and dispatches only its registered Default owner. It does not
 silently select a former flow or translate a former numeric entry.
 
-| Current responsibility | Flow109 ID | Position |
+| Current responsibility | flow ID | Position |
 |---|---:|---:|
 | RTL authoring | D09 | 17 |
 | RTL validation and lint | D11 | 19 |
@@ -54,11 +54,11 @@ population and explicit feature review in the existing source. Update
 Approval requires a named approver and the current source hash in
 `approval.source_reference`. Programs only publish `PENDING` candidates and
 never write approvals. Run the printed `--second-track-only` continuation,
-then rerun the same public Flow109 request. Later rows stay unexecuted until
+then rerun the same public flow request. Later rows stay unexecuted until
 their required authority and current evidence pass the existing consumers.
 
 Do not express scope with phase skip aliases. Select the exact current rows with
-`--entry-step <ID> --exit-step <ID>` and retain the resulting Flow109 request,
+`--entry-step <ID> --exit-step <ID>` and retain the resulting flow request,
 attempt, component and consumer receipts.
 
 After the run completes, the AI must:

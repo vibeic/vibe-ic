@@ -57,7 +57,7 @@ def setup(tmp_path, monkeypatch):
             calls.append((self.config, self.state, toolbox, step_dir, Path.cwd()))
             self.run(self.state, **kwargs)
 
-    monkeypatch.setattr(ir, "IRDropReport", Native)
+    monkeypatch.setattr(ir.IRDropCorners, "report_class", Native)
     step = object.__new__(ir.IRDropCorners)
     step.config = Config(STA_CORNERS=["min_ss", "max_ss", "max_tt", "max_ff", "nom_tt"],
                          DEFAULT_CORNER="nom_tt", LIB={"max_ss": "slow.lib", "max_tt": "typical.lib",
