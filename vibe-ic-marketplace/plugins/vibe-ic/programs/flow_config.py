@@ -144,8 +144,6 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
         config.update(PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
-    if "MAX_FANOUT_CONSTRAINT" in config:
-        config["CTS_SINK_CLUSTERING_SIZE"] = config["MAX_FANOUT_CONSTRAINT"]
     return config
 
 

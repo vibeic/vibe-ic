@@ -56,7 +56,7 @@ def test_declaration_values_keep_native_units_and_pdk_scope(project):
     assert config["FP_CORE_UTIL"] == 20
     assert config["PL_TARGET_DENSITY_PCT"] == 25
     assert config["MAX_FANOUT_CONSTRAINT"] == 8
-    assert config["CTS_SINK_CLUSTERING_SIZE"] == 8
+    assert "CTS_SINK_CLUSTERING_SIZE" not in config
 
 
 def test_conflicting_limits_are_not_silently_selected(project):
