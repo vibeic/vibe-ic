@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
+import selectors
 import shutil
 import subprocess
 import tempfile
@@ -17,15 +19,32 @@ class Commands:
 
     def run(self, argv, cwd=None):
         started = time.perf_counter()
+        argv = list(map(str, argv))
+        log = self.directory / f"command_{len(self.records) + 1}.log"
         try:
-            completed = subprocess.run([str(a) for a in argv], cwd=cwd or self.directory,
-                                       capture_output=True, text=True)
+            with log.open("wb") as output:
+                with subprocess.Popen(argv, cwd=cwd or self.directory, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True) as process, selectors.DefaultSelector() as selector:
+                    captured = {process.stdout: bytearray(), process.stderr: bytearray()}
+                    for pipe in captured:
+                        selector.register(pipe, selectors.EVENT_READ)
+                    while selector.get_map():
+                        for key, _ in selector.select():
+                            chunk = os.read(key.fd, 65536)
+                            if not chunk:
+                                selector.unregister(key.fileobj)
+                                continue
+                            captured[key.fileobj].extend(chunk)
+                            output.write(chunk)
+                            output.flush()
+                    streams = [data.decode(pipe.encoding).replace("\r\n", "\n").replace("\r", "\n")
+                               for pipe, data in captured.items()]
+                    completed = subprocess.CompletedProcess(argv, process.wait(), *streams)
         except FileNotFoundError:
+            log.unlink(missing_ok=True)
             return None
         self.seconds += time.perf_counter() - started
-        log = self.directory / f"command_{len(self.records) + 1}.log"
-        log.write_text(completed.stdout + completed.stderr)
-        self.records.append({"command": list(map(str, argv)), "exit_code": completed.returncode,
+        self.records.append({"command": argv, "exit_code": completed.returncode,
                              "log": str(log)})
         return completed
 
