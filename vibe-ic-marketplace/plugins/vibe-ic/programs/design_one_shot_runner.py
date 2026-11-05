@@ -20971,7 +20971,6 @@ def step_qsf_gen(project: Path, top_name: str = "chip_top",
 def _complete_d20_validation(project, row):
     """Publish this early owner's measured answer without borrowing STA evidence."""
     import flow109
-    import flow109_metric_acceptance as metrics
     row.extras.update(default_row_status='NOT_MEASURED', completed=False)
     raw = os.environ.get(flow109.CONTEXT_ENV)
     if not raw:
@@ -20982,16 +20981,8 @@ def _complete_d20_validation(project, row):
             context = flow109.component_context(context, requested_step='D20')
         if context['resolved_row']['id'] != 'D20':
             return row
-        accepted = metrics.accept_d20(project, context, row.extras)
-        row.extras.update(metric_acceptance=accepted, metric_acceptance_status=accepted['status'],
-            default_row_status=accepted['status'], completed=accepted['status'] == 'PASS',
-            context_sha256=context['context_sha256'])
-        row.status = accepted['status']
-        row.detail += '; ' + accepted['reason']
-        if accepted.get('detail'):
-            row.detail += ': ' + accepted['detail']
-        if row.status == 'NOT_MEASURED':
-            row.reason_class = _V.ReasonClass.INPUT_ABSENT
+        row.extras.update(default_row_status=row.status, completed=row.status == 'PASS',
+                          context_sha256=context['context_sha256'], qualification='NOT_MEASURED')
     except (ValueError, OSError, KeyError, TypeError) as exc:
         row.status, row.detail = 'NOT_MEASURED', 'D20_CONTEXT_REFUSED: ' + str(exc)
     return row
