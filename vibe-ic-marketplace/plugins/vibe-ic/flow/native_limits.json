@@ -2202,8 +2202,8 @@
       },
       {
         "old_name": "vacuous_required_proofs",
-        "class": "T",
-        "reason": "SymbiYosys prove and antecedent reachability cover tasks; wire the report/input adapter without population emitters or requirement traces."
+        "class": "X",
+        "reason": "Native SymbiYosys cover tasks enforce zero unreached targets for existing covers and conditional assertion enables. When the native model contains neither, no cover count is invented and this absent observation does not block a proof."
       },
       {
         "old_name": "proof_partition_coverage",
