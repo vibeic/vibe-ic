@@ -190,6 +190,28 @@ def test_sim_attribution_uses_the_selected_engine_verdict(
     assert phase["required_site_results"] == fpa.phase3_verifying({"steps": steps}, None)["required_site_results"]
 
 
+@pytest.mark.parametrize("before,after,expected", [
+    ("PASS", "FAIL", "ELIGIBLE"), ("PASS", None, "ELIGIBLE"),
+    ("FAIL", "PASS", "INELIGIBLE"), (None, "PASS", "NOT_MEASURED")])
+@pytest.mark.parametrize("owner_status", [None, "PASS"])
+def test_native_sim_consumers_share_the_live_verdict(
+        tmp_path, monkeypatch, before, after, expected, owner_status):
+    import benchmark_dispatch as bd
+    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", "native")
+    steps = [_step("rtl_gen", "PASS"), _step("rtl_validate", "PASS")]
+    if owner_status:
+        steps.append(_step("sim", owner_status))
+    p = _project(tmp_path, steps, prompt=_PROMPT)
+    report = p / "reports/flow_engine.json"
+    name = "functional_simulation_and_coverage"
+    report.write_text(json.dumps({"steps": [_step(name, before)] if before else []}))
+    snapshot = {"exit": "4", "phases": fpa.attribute(p)}
+    assert bd._required_gate_ledger(snapshot)["eligibility"] == expected
+    assert bd._gate_evidence_freshness_reasons(p, snapshot) == []
+    report.write_text(json.dumps({"steps": [_step(name, after)] if after else []}))
+    assert bd._gate_evidence_freshness_reasons(p, snapshot)
+
+
 # ── FLOW-BACK TEST ───────────────────────────────────────────────────────────
 def test_flow_back_a_plain_design_gets_all_four_phases(tmp_path):
     """The decisive one: a user's project, no harness, all four attributed."""
