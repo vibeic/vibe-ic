@@ -521,7 +521,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_netlist_cdc` | any | — | D45 adopted-netlist CDC/RDC adapter over the existing native consumers. |
 | `flow109_package_electrical` | any | — | D67: BLOCKING checks of owner-provided, bounded passive package RLC models. |
 | `flow109_package_plan` | any | — | D06 Default adapter for the existing pad/package-interface producers. |
-| `flow109_package_ready` | any | — | D75 consumes the run's pad, package, CVC and test interface results. |
+| `flow109_package_ready` | any | — | Measure pad-side and bond-terminal geometry from native physical views. |
 | `flow109_route_check` | any | — | D42 Default routed-candidate checks on the adopted D41 database. |
 | `flow109_scan_physical` | any | — | D36 BLOCKING native leaf for the existing Phase-3 physical owner. |
 | `flow109_system_security` | any | — | D16/D17/D73 readers for existing full-stack and formal producers. |
@@ -2042,7 +2042,7 @@ _(no programs in this group)_
 - `flow109_netlist_cdc` — D45 adopted-netlist CDC/RDC adapter over the existing native consumers.
 - `flow109_package_electrical` — D67: BLOCKING checks of owner-provided, bounded passive package RLC models.
 - `flow109_package_plan` — D06 Default adapter for the existing pad/package-interface producers.
-- `flow109_package_ready` — D75 consumes the run's pad, package, CVC and test interface results.
+- `flow109_package_ready` — Measure pad-side and bond-terminal geometry from native physical views.
 - `flow109_route_check` — D42 Default routed-candidate checks on the adopted D41 database.
 - `flow109_scan_physical` — D36 BLOCKING native leaf for the existing Phase-3 physical owner.
 - `flow109_system_security` — D16/D17/D73 readers for existing full-stack and formal producers.

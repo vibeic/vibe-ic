@@ -1290,9 +1290,8 @@
       "timing_group": "other"
     },
     "package_and_test_readiness": {
-      "program": null,
-      "function": null,
-      "gap": "Native pad, bond geometry and test-readiness consumers are not adapted to current LibreLane State; selected readiness is NOT_MEASURED."
+      "adapter": "package_readiness",
+      "parallel": true
     },
     "tapeout_precheck": {
       "adapter": "tapeout_precheck",
