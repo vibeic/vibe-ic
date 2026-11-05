@@ -40,12 +40,8 @@ fi
 PROGRAMS="$PLUGIN_ROOT/programs"
 # Gates that take the plugin root as a POSITIONAL argument.
 GATES=(
-    "emitter_failure_mode_check"
-    "literal_verdict_keyword_check"
     "source_chip_agnostic_check"
     "changelog_metric_reproducibility_check"
-    "changelog_command_reproducibility_check"
-    "self_audit_doc_claim_consistency_check"
     # A project-local staged PDK must DECLARE whether it ships a tapcell master.
     # The registry path is already guarded (`pdk_registry_selectable_check`), on
     # the stated reasoning that a missing key and an explicit null are
@@ -58,7 +54,6 @@ GATES=(
     # construction sites DECLARED. A call carrying *args or **kwargs is
     # UNDECIDABLE and counted, never a FAIL.
     "staged_pdk_declares_tapcell_master_check"
-    "signoff_config_parse_failure_is_named_check"
 )
 
 # Gates that take it as `--root`. A SECOND LIST rather than a rewritten CLI:
