@@ -1249,8 +1249,7 @@
         "lib": ".lib",
         "gds": ".gds",
         "nl": ".v"
-      },
-      "timing_group": "librelane"
+      }
     },
     "design_release": {
       "kind": "snapshot",
@@ -1261,8 +1260,7 @@
         "gds": ".gds",
         "nl": ".v"
       },
-      "metric": "release_required_items",
-      "timing_group": "librelane"
+      "metric": "release_required_items"
     },
     "signoff_aggregation": {
       "kind": "aggregate"
@@ -1286,8 +1284,7 @@
     },
     "functional_activity_and_external_loads": {
       "adapter": "functional_activity",
-      "parallel": true,
-      "timing_group": "other"
+      "parallel": true
     },
     "package_and_test_readiness": {
       "adapter": "package_readiness",
@@ -4055,7 +4052,6 @@
       "adapter": "eqy",
       "program": "flow_native_verification.py",
       "metric": "unproved_equivalence",
-      "timing_group": "other",
       "parallel": true
     },
     "final_adopted_netlist_equivalence": {
@@ -4063,15 +4059,13 @@
       "adapter": "eqy",
       "program": "flow_native_verification.py",
       "metric": "final_lec_unproved",
-      "timing_group": "other",
       "parallel": true
     },
     "finishing_geometry_fidelity": {
       "kind": "adapter",
       "adapter": "xor",
       "program": "flow_native_verification.py",
-      "metric": "unexplained_stream_xor",
-      "timing_group": "librelane"
+      "metric": "unexplained_stream_xor"
     },
     "pre_layout_timing": {
       "kind": "librelane",

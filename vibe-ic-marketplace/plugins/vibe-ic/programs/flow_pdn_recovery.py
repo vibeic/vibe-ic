@@ -28,44 +28,6 @@ class RecoveryPlan:
     evidence: tuple[dict, ...]
 
 
-def recorded_common_start(project: Path):
-    report = project / "reports/flow_engine.json"
-    summary = json.loads(report.read_text()) if report.is_file() else {}
-    rows = [json.loads(path.read_text()) for path in (project / "steps").glob("*/result.json")]
-    rows.extend(summary.get("steps", []))
-    starts = [row["native_common_started_at"] for row in [summary, *rows]
-              if row.get("native_common_started_at") is not None]
-    if not starts:
-        starts = [row["started_at"] for row in rows if row.get("timing_group") == "librelane"
-                  and row.get("tool_ran") and row.get("tool_kind") != "native_report"
-                  and row.get("started_at") is not None]
-    return min(starts) if starts else None
-
-
-def record_common_completion(report):
-    """Recover a replay's missing clock end from completed common tool rows."""
-    start = report.get("native_common_started_at")
-    if start is None or report.get("native_common_completed_at") is not None:
-        return False
-    names = set(report.get("common_step_names", []))
-    rows = {row["name"]: row for row in report.get("steps", [])
-            if row.get("timing_group") == "librelane"}
-    if not names or not names <= rows.keys():
-        return False
-    tools = [rows[name] for name in names if rows[name].get("tool_kind") != "native_report"]
-    for row in tools:
-        native = row.get("native_steps", [])
-        disabled = bool(native) and all(item.get("native_config_disabled") for item in native)
-        if (not row.get("timing_complete", True) or row.get("completed_at") is None
-                or not row.get("tool_ran") and not disabled):
-            return False
-    ends = [row["completed_at"] for row in tools if row.get("tool_ran")]
-    if not ends or max(ends) < start:
-        return False
-    report["native_common_completed_at"] = max(ends)
-    return True
-
-
 def printed_bound(value: str, upper: bool) -> Decimal:
     number = Decimal(value)
     half_unit = Decimal(5).scaleb(number.as_tuple().exponent - 1)
@@ -198,7 +160,7 @@ def _plan_recovery(project: Path, route: dict, summary: dict) -> RecoveryPlan | 
                 and not _derived_aggregate_failure(row)]
     if (len(blockers) != 1 or blockers[0]["name"] != "candidate_electromigration"
             or blockers[0]["status"] != "FAIL" or not blockers[0].get("tool_ran")
-            or summary.get("pending_steps") or not summary.get("completed_at")
+            or summary.get("pending_steps")
             or "die_floorplan_and_macros" not in summary.get("selected_names", [])):
         return None
     metrics = blockers[0].get("native_metrics", {})
@@ -273,20 +235,14 @@ def finish_replay(project: Path, first: dict, final: dict, archive: Path,
     old_rows = {row["name"]: row for row in first["steps"]}
     for row in final["steps"]:
         old = old_rows.get(row["name"], {})
-        for key in ("tool_seconds", "program_seconds", "wall_seconds", "queue_seconds"):
+        for key in ("tool_seconds", "program_seconds", "wall_seconds"):
             row[key] = row.get(key, 0) + old.get(key, 0)
         row["ai_seconds"] = (row.get("ai_seconds", 0) + old.get("ai_seconds", 0)
             if row.get("ai_seconds") is not None and old.get("ai_seconds") is not None else None)
-        for key in ("started_at", "native_common_started_at"):
-            starts = [item[key] for item in (row, old) if item.get(key) is not None]
-            if starts:
-                row[key] = min(starts)
         flow_engine.write_json(project / "steps" / row["name"] / "result.json", row)
-    for key in ("selected", "selected_names", "not_selected", "timing_scope", "common_step_names", "started_at"):
+    for key in ("selected", "selected_names", "not_selected"):
         if key in first:
             final[key] = first[key]
-    if first.get("native_common_started_at") is not None:
-        final["native_common_started_at"] = first["native_common_started_at"]
     overhead = extra_program_seconds + time.perf_counter() - started
     floorplan = project / "steps/die_floorplan_and_macros/result.json"
     row = json.loads(floorplan.read_text())

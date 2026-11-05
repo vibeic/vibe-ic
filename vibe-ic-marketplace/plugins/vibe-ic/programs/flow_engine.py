@@ -297,15 +297,12 @@ class NativeChain:
         self.pdk = pdk
         self.owner = self.state = self.toolbox = None
         self.config: dict = {}
-        self.common_started: float | None = None
         self.preparation_runs: list[dict] = []
         self.preparation_accounted = 0
         self.initialization_error: Exception | None = None
 
     def observe_preparation(self, run):
         self.preparation_runs.append(run)
-        if run["name"] == "Yosys.Synthesis" and run["ran"] and self.common_started is None:
-            self.common_started = time.perf_counter() - run["tool_seconds"]
 
     def initialize(self):
         if self.initialization_error is not None:
@@ -410,8 +407,6 @@ class NativeChain:
                 continue
             destination = directory / name.lower().replace(".", "_")
             started = time.perf_counter()
-            if name in {"Yosys.Synthesis", "Pyosys.Synthesis"} and self.common_started is None:
-                self.common_started = started
             code, ran, detail = 0, True, ""
             status = "PASS"
             try:
@@ -666,13 +661,13 @@ def evaluate(tool: ToolResult, measurements: list) -> str:
     return "PASS"
 
 
-def finish_step(project, row, tool, native, config, features, *, elapsed, started_at,
+def finish_step(project, row, tool, native, config, features, *, elapsed,
                 saved=None, retained=False, extra_tool_seconds=0.0, preparation=None,
-                previous=None, execution=None):
+                previous=None):
     finishing = time.perf_counter()
     directory = project / "steps" / row["name"]
     kind = tool["kind"]
-    saved, previous, execution = saved or {}, previous or {}, execution or {}
+    saved, previous = saved or {}, previous or {}
     preparation = preparation or ToolResult()
     if preparation.native_steps:
         native.ran = native.ran or preparation.ran
@@ -723,19 +718,9 @@ def finish_step(project, row, tool, native, config, features, *, elapsed, starte
               "ai_seconds": saved.get("ai_seconds") if retained else None,
               "ai_review": saved.get("ai_review", "PENDING") if retained else "PENDING",
               "wall_seconds": (saved["wall_seconds"] if retained else 0) + elapsed,
-              "started_at": saved.get("started_at", started_at) if retained else execution.get("started_at", started_at),
-              "completed_at": saved.get("completed_at", time.time()) if retained else execution.get("completed_at", time.time()),
               "tool_kind": kind, "retained": retained}
-    complete_timing = execution.get("timing_complete", True)
-    result.update(timing_group=tool.get("timing_group", previous.get("timing_group", "other")
-                  if kind == "native_report" else "librelane" if kind == "librelane" else "other"),
-                  timing_complete=complete_timing, queue_seconds=execution.get("queue_seconds", 0))
-    if not complete_timing:
-        result.update(program_seconds=0.0, unclassified_seconds=max(0, elapsed - native.tool_seconds),
-                      tool_timing="NOT_MEASURED")
-    for key in ("ai_finding", "reviewed_at"):
-        if retained and key in saved:
-            result[key] = saved[key]
+    if retained and "ai_finding" in saved:
+        result["ai_finding"] = saved["ai_finding"]
     if not native.ran:
         result.update(ai_seconds=0.0, ai_review="NO_NATIVE_RESULT")
     elif kind == "native_report":
@@ -758,7 +743,6 @@ def keep_author_failure(directory: Path) -> None:
 def run(project: Path | str, *, table: dict | None = None, route: dict | None = None,
         from_name: str | None = None, to_name: str | None = None,
         pdk: str | None = None) -> dict:
-    invocation_started_at = time.time()
     project = Path(project).resolve()
     table = table or read_json(TABLE)
     route = route or select_route(project)
@@ -817,13 +801,10 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         and positions[row["name"]] > positions[to_name]
         and choose_tool(row["tool"], features)["kind"] == "aggregate"
         and (step_root / row["name"] / "result.json").is_file()]
-    common_names = {name for name, tool in tools.items()
-                    if tool.get("timing_group", "librelane" if tool["kind"] == "librelane" else "other") == "librelane"}
     jobs = AdapterJobs(project, route)
     pending, deferred, summary = {}, [], {}
-    common_started_at = common_completed_at = None
 
-    def write_summary(completed=False):
+    def write_summary():
         nonlocal summary
         rows = [read_json(step_root / name / "result.json") for name in sorted(results, key=positions.get)]
         summary = {"route": route, "features": features, "feature_sources": feature_sources,
@@ -835,32 +816,18 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                    "run": len(rows), "steps": rows,
                    **{key: sum(item["status"] == value for item in rows)
                       for key, value in (("pass", "PASS"), ("fail", "FAIL"), ("not_measured", "NOT_MEASURED"))},
-                   "started_at": invocation_started_at, "updated_at": time.time(),
-                   "completed_at": time.time() if completed else None,
-                   "native_common_started_at": common_started_at,
-                   "native_common_completed_at": common_completed_at,
-                   "common_step_names": sorted(common_names, key=positions.get),
-                   "common_tools_complete": common_names <= set(results),
-                   "timing_scope": "selected_subwindow" if from_name or to_name else "full_router_window",
                    "pending_steps": [row["name"] for row in selected if row["name"] not in results],
                    "background_pending": jobs.pending}
         summary.update(timing_summary(summary))
         write_json(project / "reports/flow_engine.json", summary)
         return summary
 
-    def publish(context, native, execution=None):
-        nonlocal common_started_at, common_completed_at
+    def publish(context, native):
         row, tool = context["row"], context["tool"]
         result = finish_step(project, row, tool, native, context["config"], features,
-            elapsed=context["elapsed"], started_at=context["started_at"], saved=context["saved"],
+            elapsed=context["elapsed"], saved=context["saved"],
             retained=context["retained"], extra_tool_seconds=context["extra_tool_seconds"],
-            preparation=context["preparation"], previous=context.get("previous"), execution=execution)
-        if chain.common_started is not None and common_started_at is None:
-            common_started_at = time.time() - (time.perf_counter() - chain.common_started)
-        if result["timing_group"] == "librelane" and tool["kind"] != "native_report" and common_started_at is not None:
-            common_completed_at = time.time()
-            result.update(native_common_started_at=common_started_at,
-                          native_common_completed_at=common_completed_at)
+            preparation=context["preparation"], previous=context.get("previous"))
         write_json(step_root / row["name"] / "result.json", result)
         if row["name"] in selected_names:
             results[row["name"]] = result
@@ -887,7 +854,6 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             for context in ready:
                 deferred.remove(context)
                 beginning = time.perf_counter()
-                context["started_at"] = time.time()
                 row, tool = context["row"], context["tool"]
                 if tool["kind"] == "native_report":
                     context["previous"] = previous_result(tool)
@@ -907,7 +873,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         context = pending.pop(packet["name"])
         context["config"] = packet["config"]
         context["elapsed"] += packet["wall_seconds"]
-        publish(context, ToolResult(**packet["native"]), packet)
+        publish(context, ToolResult(**packet["native"]))
 
     completed = False
     try:
@@ -915,7 +881,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             for packet in jobs.collect():
                 completed_job(packet)
             ready_reports()
-            beginning, row_started_at = time.perf_counter(), time.time()
+            beginning = time.perf_counter()
             preparation = ToolResult()
             if restore_directory is not None:
                 if chain.prepare() is None:
@@ -973,7 +939,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                 directory.mkdir(exist_ok=True)
             context = {"row": row, "tool": tool, "saved": saved, "retained": retained,
                        "extra_tool_seconds": extra_tool_seconds, "preparation": preparation,
-                       "started_at": row_started_at, "config": chain.config,
+                       "config": chain.config,
                        "elapsed": time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]}
             if not retained and kind in {"aggregate", "native_report"}:
                 if kind == "aggregate" or tool["from"] in selected_names and tool["from"] not in results:
@@ -1018,7 +984,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             ready_reports()
         ready_reports()
         completed = True
-        return write_summary(completed=True)
+        return write_summary()
     finally:
         jobs.close(cancel=not completed)
 
@@ -1031,10 +997,9 @@ def record_review(project: Path, name: str, seconds: float, finding: str | None 
     result = read_json(path)
     if not result:
         raise FileNotFoundError(path)
-    result.setdefault("completed_at", path.stat().st_mtime)
     result.update(ai_seconds=(result.get("ai_seconds") or 0) + seconds,
                   ai_review="FINDING" if finding else "REVIEWED",
-                  ai_finding=finding, reviewed_at=time.time())
+                  ai_finding=finding)
     write_json(path, result)
 
 
@@ -1044,14 +1009,9 @@ def refresh_report(project: Path) -> dict:
     names = report.get("selected_names", [row["name"] for row in report["steps"]])
     rows = [read_json(project / "steps" / name / "result.json") for name in names]
     rows = [row for row in rows if row]
-    report.update(steps=rows, run=len(rows), updated_at=time.time(),
+    report.update(steps=rows, run=len(rows),
                   **{key: sum(row["status"] == value for row in rows)
                      for key, value in (("pass", "PASS"), ("fail", "FAIL"), ("not_measured", "NOT_MEASURED"))})
-    legacy_completed_at = report.pop("common_budget_completed_at", None)
-    if report.get("common_completed_at") is None and legacy_completed_at is not None:
-        report["common_completed_at"] = legacy_completed_at
-    for key in ("budget_seconds", "runtime_status"):
-        report.pop(key, None)
     report.update(timing_summary(report))
     report["slowest_steps"] = [row["name"] for row in sorted(rows, key=lambda row: row.get("tool_seconds", 0), reverse=True)[:5]]
     write_json(path, report)

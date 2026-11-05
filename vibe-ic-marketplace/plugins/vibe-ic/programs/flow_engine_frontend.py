@@ -410,31 +410,16 @@ def run_public(args):
     if getattr(args, "pdk", "auto") != "auto":
         forwarded["pdk"] = args.pdk
     from flow_pdn_current import needs_estimate
-    from flow_pdn_recovery import recorded_common_start
     previous_report = project / "reports/flow_engine.json"
     previous_report = json.loads(previous_report.read_text()) if previous_report.is_file() else {}
-    original_common_start = recorded_common_start(project)
-    original_common = (time.perf_counter() - (time.time() - original_common_start)
-                       if original_common_start is not None else None)
     if (route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}
             and needs_estimate(route, forwarded.get("from_name"), json.loads(flow_engine.TABLE.read_text()))):
         estimate = flow_engine.run(project, route=route, to_name="pre_layout_timing", **forwarded)
-        starts = [row["native_common_started_at"] for row in [estimate, *estimate.get("steps", [])]
-                  if row.get("native_common_started_at") is not None]
-        if original_common_start is not None:
-            starts.append(original_common_start)
-        if starts:
-            original_common_start = min(starts)
-            original_common = time.perf_counter() - (time.time() - original_common_start)
-        elif original_common is None and estimate.get("common_wall_seconds") is not None:
-            original_common = time.perf_counter() - estimate["common_wall_seconds"]
         if forwarded.get("from_name"):
             forwarded["from_name"] = "die_floorplan_and_macros"
     summary = flow_engine.run(project, route=route, **forwarded)
-    from flow_pdn_recovery import plan_recovery, apply_plan, finish_replay, record_common_completion
+    from flow_pdn_recovery import plan_recovery, apply_plan, finish_replay
     recovery_started = time.perf_counter()
-    if original_common_start is not None:
-        summary["native_common_started_at"] = original_common_start
     recovery = plan_recovery(project, route, summary)
     if recovery is not None:
         first = summary
@@ -448,16 +433,6 @@ def run_public(args):
             and previous_report.get("pdn_recovery")):
         archive = Path(previous_report["pdn_recovery"]["first_attempt"])
         summary = finish_replay(project, previous_report, summary, archive)
-    if original_common is not None:
-        summary["common_wall_seconds"] = time.perf_counter() - original_common
-        if original_common_start is not None:
-            summary["native_common_started_at"] = original_common_start
-    completed_common = record_common_completion(summary)
-    if completed_common:
-        from flow_engine_timing import timing_summary
-        summary.update(timing_summary(summary))
-    if original_common is not None or completed_common:
-        flow_engine.write_json(project / "reports/flow_engine.json", summary)
     return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
 
 
