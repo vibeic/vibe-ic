@@ -2014,7 +2014,7 @@ def phase2_pdk(project: Path, *, selected: str | None = None) -> tuple[str, str]
             if not _PDK_NAME.fullmatch(alternate):
                 raise Refusal('LL_PHASE2_PDK_INVALID', 'alternate PDK must name an exact distribution')
             tokens.add(alternate.lower())
-        if not p3._declares_resolved_pdk(selected, tokens):
+        if selected != pdk and not p3._declares_resolved_pdk(selected, tokens):
             raise Refusal('LL_PHASE2_PDK_CONFLICT',
                           'selected PDK is not a declared target or revision')
         pdk, source = selected, f'run selection {selected}; declared by {source}'
