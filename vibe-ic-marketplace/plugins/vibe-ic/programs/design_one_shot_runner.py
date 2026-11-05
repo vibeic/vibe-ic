@@ -8645,6 +8645,20 @@ def step_rtl_gen(project: Path, ic_class: str,
     committed = False
     try:
         binding = _Phase1ProjectBinding.open(project)
+        supplied_top, supplied_files = _supplied_rtl_defining_declared_top(project)
+        if supplied_files:
+            config = _lookup_class(ic_class) or {}
+            _reclaim_stale_generated_rtl(project)
+            _defer_to_supplied('rtl_gen', project,
+                              _FORCE_RTL_REGEN if force_regen is None else force_regen)
+            extra = {'declared_top': supplied_top,
+                     'design_rtl_sample': [str(f.relative_to(project)) for f in sorted(supplied_files)[:5]]}
+            if config.get('rtl_gen'):
+                extra['declined_generator'] = config['rtl_gen']
+            result = _rtl_gen_supplied_design_handoff(project, t0, ic_class, config,
+                _design_supplied_build_rtl(project), extra=extra)
+            _record_supply(result, project, True)
+            return result
         if not prior_owned and not (_FORCE_RTL_REGEN if force_regen is None else force_regen):
             current = _try_serial_current_source(binding, ic_class, t0)
             if current is not None:
