@@ -628,6 +628,12 @@ def test_d20_metrics_actual_normal_refusals(d20_metric_case, damage):
                 if damage == 'unsupported_exception' else
                 'set_false_path -from [get_clocks clk] -to [get_clocks foreign]\n')
     result = owner._complete_step8_early_preflight(project)
+    if damage == 'missing_qualification':
+        assert result['verdict'] == 'PASS', result
+        import os, flow109
+        recorded = json.loads((Path(os.environ[flow109.ATTEMPT_ENV]) / 'result.json').read_text())
+        assert recorded['components'][0]['metric_acceptance']['qualification'] == 'NOT_MEASURED'
+        return
     expected = 'FAIL' if damage in ('invalid_exception', 'cdc_mismatch', 'required_exception_missing',
                                    'stale_sdc_reference', 'stale_rtl_reference', 'stale_l9_reference', 'added_header') else 'NOT_MEASURED'
     assert result['verdict'] == expected, result
@@ -1952,11 +1958,12 @@ def test_d20_model_scope_actual_consumer(d20_metric_case, tmp_path, monkeypatch,
         lines.insert(node.end_lineno, '    pass  # changed source-identity control\n')
         path.write_text(''.join(lines))
     observed = metrics.accept_d20(project, context, row.extras)
-    unchanged = change in ('unrelated_a3', 'unrelated_phase1', 'other_row')
+    unchanged = change in ('unrelated_a3', 'unrelated_phase1', 'other_row', 'missing_model_key', 'tampered_model')
     assert observed['status'] == ('PASS' if unchanged else 'NOT_MEASURED'), observed
-    if unchanged:
+    if change in ('missing_model_key', 'tampered_model'):
+        assert observed['admission']['reason'] == 'D20_MODEL_QUALIFICATION_STALE', observed
+        assert observed['qualification'] == 'NOT_MEASURED'
+    elif unchanged:
         assert metrics.d20_model_sources() == before
-    elif change in ('missing_model_key', 'tampered_model'):
-        assert observed['reason'] == 'D20_MODEL_QUALIFICATION_STALE', observed
     elif change != 'missing_source':
         assert observed['reason'] == 'D20_INPUT_OR_METHOD_STALE', observed
