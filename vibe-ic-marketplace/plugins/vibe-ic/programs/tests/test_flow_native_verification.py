@@ -617,35 +617,51 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
 
 
 
-@pytest.mark.parametrize("change", ["none", "core", "signal", "rail", "missing_pad", "no_power_view", "rail_logic"])
+@pytest.mark.parametrize("change", ["none", "core", "signal", "rail", "missing_pad", "no_power_view", "rail_logic",
+                                    "rail_state", "paired_rail_state"])
 def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, change):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
     models, gold, gate, power, liberty, lef = [tmp_path / name for name in
         ("pads.v", "gold.v", "gate.v", "power.v", "cells.lib", "pads.lef")]
-    models.write_text("(* blackbox *) module INPAD(input PAD,output Y,inout VP,VN); endmodule\n"
+    models.write_text("(* blackbox *) module INPAD(input PAD,PD,PU,output Y,inout VP,VN); endmodule\n"
         "(* blackbox *) module OUTPAD(input A,output PAD,inout VP,VN); endmodule\n"
         "(* blackbox *) module SUPPLY(inout VP,VN); endmodule\n")
-    liberty.write_text("library(neutral) {}\n")
-    lef.write_text("\n".join(f"MACRO {master}\n CLASS PAD INOUT ;\n"
+    liberty.write_text('library(neutral) {\ncell(TIELOW) {pin(Y) {direction: output; function: "0";}}\n'
+        'cell(TIEHIGH) {pin(Y) {direction: output; function: "1";}}\n'
+        'cell(BUF) {pin(A) {direction: input;} pin(Y) {direction: output; function: "A";}}\n}\n')
+    lef.write_text("\n".join(f"MACRO {master}\n CLASS {'PAD INOUT' if master in {'INPAD', 'OUTPAD', 'SUPPLY'} else 'CORE'} ;\n"
         " PIN VP\n  DIRECTION INOUT ;\n  USE POWER ;\n END VP\n"
         " PIN VN\n  DIRECTION INOUT ;\n  USE GROUND ;\n END VN\n"
-        f"END {master}\n" for master in ("INPAD", "OUTPAD", "SUPPLY")))
-    gold.write_text("module unit(input a,b,output y,inout supply_high,supply_low); wire internal;\n"
-        "INPAD pi(.PAD(a),.Y(internal),.VP(supply_high),.VN(supply_low));\n"
-        + ("OUTPAD po(.A(internal & supply_high)," if change == "rail_logic" else "OUTPAD po(.A(internal),")
+        f"END {master}\n" for master in ("INPAD", "OUTPAD", "SUPPLY", "TIELOW", "TIEHIGH", "BUF")))
+    gold.write_text("module unit(input a,b,output y,inout supply_high,supply_low); wire internal,core_out,high,low;\n"
+        "TIELOW t0(.Y(low));\nTIEHIGH t1(.Y(high));\nBUF core_gate(.A(internal),.Y(core_out));\n"
+        "INPAD pi(.PAD(a),.PD(low),.PU(high),.Y(internal),.VP(supply_high),.VN(supply_low));\n"
+        + ("OUTPAD po(.A(core_out & supply_high)," if change == "rail_logic" else "OUTPAD po(.A(core_out),")
         + ".PAD(y),.VP(supply_high),.VN(supply_low));\n"
         "SUPPLY pv(.VP(supply_high),.VN(supply_low)); endmodule\n")
     operation = "~internal" if change == "core" else "internal"
-    gate.write_text("module unit(input a,b,output y); wire internal;\n"
-        f"INPAD pi(.PAD(a),.Y(internal)); OUTPAD po(.A({operation}),.PAD(y));\n"
+    gate.write_text("module unit(input a,b,output y); wire internal,core_out,high,low;\n"
+        f"TIELOW t0(.Y(low));\nTIEHIGH t1(.Y(high));\nBUF core_gate(.A({operation}),.Y(core_out));\n"
+        "INPAD pi(.PAD(a),.PD(low),.PU(high),.Y(internal)); OUTPAD po(.A(core_out),.PAD(y));\n"
         "SUPPLY pv(); endmodule\n")
     high, low = ("supply_low", "supply_high") if change == "rail" else ("supply_high", "supply_low")
-    power.write_text("module unit(input a,b,output y,inout supply_high,supply_low); wire internal;\n"
-        f"INPAD pi(.PAD({'b' if change == 'signal' else 'a'}),.Y(internal),.VP({high}),.VN({low}));\n"
-        f"OUTPAD po(.A({operation}),.PAD(y),.VP(supply_high),.VN(supply_low));\n"
+    power.write_text("module unit(input a,b,output y,inout supply_high,supply_low); wire internal,core_out,high,low;\n"
+        "TIELOW t0(.Y(low),.VP(supply_high),.VN(supply_low));\n"
+        "TIEHIGH t1(.Y(high),.VP(supply_high),.VN(supply_low));\n"
+        f"BUF core_gate(.A({operation}),.Y(core_out),.VP(supply_high),.VN(supply_low));\n"
+        f"INPAD pi(.PAD({'b' if change == 'signal' else 'a'}),.PD(low),.PU(high),.Y(internal),.VP({high}),.VN({low}));\n"
+        "OUTPAD po(.A(core_out),.PAD(y),.VP(supply_high),.VN(supply_low));\n"
         + ("" if change == "missing_pad" else "SUPPLY pv(.VP(supply_high),.VN(supply_low)); ")
         + "endmodule\n")
+    if change in {"rail_state", "paired_rail_state"}:
+        for path in (gold, gate, power):
+            expression = "internal & supply_high" if path == gold or (
+                path == power and change == "paired_rail_state") else "internal"
+            path.write_text(path.read_text().replace("input a,b,", "input a,b,c,")
+                .replace("wire internal,core_out,high,low;", "wire internal,core_out,high,low;\n"
+                         f"reg sampled; always @(posedge c) sampled <= {expression};\n")
+                .replace("BUF core_gate(.A(internal)", "BUF core_gate(.A(sampled)"))
     state = {"nl": str(gate)}
     if change != "no_power_view":
         state["pnl"] = str(power)
@@ -654,10 +670,12 @@ def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, chang
               "PAD_VERILOG_MODELS": [str(models)], "PAD_LEFS": [str(lef)]}
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state=state, config=config)
     rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
-    assert rows.get("Yosys.Wrapper") == ("PASS" if change in {"none", "core", "rail_logic"} else "FAIL"), result
+    assert rows.get("Yosys.Wrapper") == ("PASS" if change in {"none", "rail_state", "paired_rail_state"} else "FAIL"), result
     if change in {"none", "core", "no_power_view"}:
         assert rows.get("Yosys.EQY.Core") == ("FAIL" if change == "core" else "PASS"), result
-    assert (result["metrics"].get("unproved_equivalence") == 0) is (change == "none"), result
+    assert (result["metrics"].get("unproved_equivalence") == 0) is (change in {"none", "paired_rail_state"}), result
+    if change in {"rail_state", "paired_rail_state"}:
+        assert (rows.get("Yosys.EQY.Core") == "PASS") is (change == "paired_rail_state"), result
     if change == "none":
         for side in ("gold", "gate"):
             ports = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]["ports"]
