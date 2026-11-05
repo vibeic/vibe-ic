@@ -32,7 +32,7 @@ FIVE PROVEN-FAITHFUL SUB-SHAPES (each §4.05 host-verified to 0 mismatches, else
       letter means a literal constant). Exactly one column VARIES (the selector); the
       output is a port-passthrough or a literal per selector value. Emits the case().
   (d) negedge-FF + transparent-latch split — two 1-bit outputs read from a clock+input
-      waveform: one updates only on the FALLING clock edge (a negedge FF, q<=a), the
+      waveform: one updates only on the FALLING clock edge from the input or retained peer; the
       other is transparent while the clock is HIGH and holds while LOW (a level latch,
       always @(*) if(clock) p=a). Emits both storage elements.
   (e) submodule composition — a top stated as a structural net of two sub-block kinds:
@@ -539,7 +539,7 @@ def _synth_negedge_ff_latch(prompt: str, top: str) -> Optional[str]:
     # a declared port.
     if len(in_cols) != 1 or len(out_cols) != 2:
         return None
-    if any(ports[c][1] != 1 for c in (in_cols + out_cols)):
+    if any(ports[c][1] != 1 for c in ([clk] + in_cols + out_cols)):
         return None
     if (len(in_cols) + len(out_cols) + 1) != len(body) or any(p not in body for p in ports):
         return None
@@ -551,23 +551,19 @@ def _synth_negedge_ff_latch(prompt: str, top: str) -> Optional[str]:
             return None
         return int(cell)
 
-    # Classify each output as a negedge FF (q<=a sampled at the falling clock edge)
-    # OR a transparent latch (p == a while clock HIGH; holds while LOW).
-    ff_out = latch_out = None
-    for o in out_cols:
-        is_latch = _matches_transparent_latch(rows, idx, clk, a, o, _b)
-        is_ff = _matches_negedge_ff(rows, idx, clk, a, o, _b)
-        if is_latch and not is_ff:
-            if latch_out is not None:
-                return None
-            latch_out = o
-        elif is_ff and not is_latch:
-            if ff_out is not None:
-                return None
-            ff_out = o
-        else:
-            return None  # ambiguous / neither -> SKIP
-    if ff_out is None or latch_out is None:
+    if (any(_b(v) is None for _, vals in rows for v in (vals[idx[clk]], vals[idx[a]]))
+            or any(not _BINX_RE.fullmatch(v) for _, vals in rows for v in vals)
+            or any(t <= prev for (prev, _), (t, _) in zip(rows, rows[1:]))):
+        return None
+    latches = [o for o in out_cols if _matches_transparent_latch(rows, idx, clk, a, o, _b)]
+    if len(latches) != 1:
+        return None
+    latch_out = latches[0]
+    ff_out = next(o for o in out_cols if o != latch_out)
+    # Qualify emitted connections, including simultaneous input/clock changes.
+    sources = [s for s in (a, latch_out) if _matches_negedge_ff(
+        rows, idx, clk, a, ff_out, _b, peer=s if s != a else None)]
+    if not sources:
         return None
 
     decl = []
@@ -579,71 +575,53 @@ def _synth_negedge_ff_latch(prompt: str, top: str) -> Optional[str]:
             decl.append(f"    {d:<6} {orig}")
     clko, ao = ports[clk][2], ports[a][2]
     qo, po = ports[ff_out][2], ports[latch_out][2]
+    source = ports[sources[0]][2]  # prefer direct input when both fit the complete trace
     lines = [f"module {top} (", ",\n".join(decl), ");", "",
              f"  always @(negedge {clko})",
-             f"    {qo} <= {ao};", "",
+             f"    {qo} <= {source};", "",
              "  always_latch",
              f"    if ({clko})",
              f"      {po} = {ao};",
              "endmodule"]
+    for o in out_cols:
+        if _b(rows[0][1][idx[o]]) is not None:
+            lines.insert(-1, f"  initial {ports[o][2]} = 1'b{rows[0][1][idx[o]]};")
     return "\n".join(lines) + "\n"
 
 
 def _matches_transparent_latch(rows, idx, clk, a, o, _b) -> bool:
-    """A transparent latch: while clk HIGH, out follows a (out==a EVERY high row);
-    while clk LOW, out HOLDS its last value. Verify against every non-x row."""
-    high_rows = 0
+    """Carry storage through unspecified observations; check every defined value."""
+    value = _b(rows[0][1][idx[o]])
+    high_rows = holds = 0
     for _t, vals in rows:
-        cv, av, ov = _b(vals[idx[clk]]), _b(vals[idx[a]]), _b(vals[idx[o]])
-        if cv == 1 and av is not None and ov is not None:
-            if ov != av:
-                return False
+        if _b(vals[idx[clk]]) == 1:
+            value = _b(vals[idx[a]])
             high_rows += 1
-    if high_rows < 2:
-        return False
-    # hold check: every clk-LOW row's out must equal the out of the previous row.
-    holds = 0
-    for i in range(1, len(rows)):
-        cv = _b(rows[i][1][idx[clk]])
-        ov = _b(rows[i][1][idx[o]])
-        ovp = _b(rows[i - 1][1][idx[o]])
-        if cv == 0 and ov is not None and ovp is not None:
-            if ov != ovp:
-                return False
-            holds += 1
-    return holds >= 1
+        else:
+            holds += value is not None
+        observed = _b(vals[idx[o]])
+        if observed is not None and observed != value:
+            return False
+    return high_rows >= 2 and holds >= 1
 
 
-def _matches_negedge_ff(rows, idx, clk, a, o, _b) -> bool:
-    """A negedge FF: out updates ONLY on a falling clock edge, taking the value of a
-    sampled just before the edge; it HOLDS across every non-falling step. Verify out
-    is constant within each clk-high..next-falling region and equals the pre-edge a."""
+def _matches_negedge_ff(rows, idx, clk, a, o, _b, peer=None) -> bool:
+    """Replay a direct-input or high-latch-fed FF, never invent pre-edge data."""
+    value = _b(rows[0][1][idx[o]])
+    held = _b(rows[0][1][idx[peer]]) if peer else None
     falls = 0
-    for i in range(1, len(rows)):
-        cv = _b(rows[i][1][idx[clk]])
-        cvp = _b(rows[i - 1][1][idx[clk]])
-        if cvp == 1 and cv == 0:  # falling edge
-            av = _b(rows[i - 1][1][idx[a]])
-            ov = _b(rows[i][1][idx[o]])
-            if av is not None and ov is not None:
-                if ov != av:
-                    return False
-                falls += 1
-    if falls < 1:
-        return False
-    # hold check: across any step that is NOT a falling edge, out must not change
-    # (unless still resolving from x). A negedge FF must NOT follow clk-high a.
-    for i in range(1, len(rows)):
-        cv = _b(rows[i][1][idx[clk]])
-        cvp = _b(rows[i - 1][1][idx[clk]])
-        falling = (cvp == 1 and cv == 0)
-        if falling:
-            continue
-        ov = _b(rows[i][1][idx[o]])
-        ovp = _b(rows[i - 1][1][idx[o]])
-        if ov is not None and ovp is not None and ov != ovp:
-            return False  # changed on a non-falling step -> not a pure negedge FF
-    return True
+    for i, (_t, vals) in enumerate(rows):
+        cv = _b(vals[idx[clk]])
+        if cv == 1:
+            held = _b(vals[idx[a]])
+        # The initial x-to-low drive also triggers a native Verilog negedge.
+        if cv == 0 and (i == 0 or _b(rows[i - 1][1][idx[clk]]) == 1):
+            value = held if peer else _b(vals[idx[a]])
+            falls += i > 0
+        observed = _b(vals[idx[o]])
+        if observed is not None and observed != value:
+            return False
+    return falls >= 1
 
 
 # --------------------------------------------------------------------------- #

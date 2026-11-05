@@ -1,0 +1,8 @@
+[{
+  "step": "phase2.latch_intent", "design": "generic storage connections", "bucket": "A",
+  "rule_name": "qualify_waveform_storage_source",
+  "docstring": "Qualify direct-input and retained-peer connections against every defined waveform observation, including coincident edges and storage across unspecified output rows.",
+  "expected_signal": "AUTO-FIX",
+  "fix_action": "Use the existing related `sequential_waveform_synth.py` producer; select a matching connection or SKIP. Preserve specified initial values only when the native emitted model can reproduce them.",
+  "generality": "Neutral Icarus controls cover both sources, exchanged output columns, wrong connections and unsupported traces through the ordinary registry. This is local generator proof, not whole-product or benchmark acceptance."
+}]
