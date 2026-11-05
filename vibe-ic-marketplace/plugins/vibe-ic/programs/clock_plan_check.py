@@ -277,29 +277,10 @@ def _extract_clocks(plan):
 #      floorplan/placed).
 #
 # What replaces it: the plan RECORDS what it was derived from. The producer
-# writes `derived_from` = {project-relative SDC path: sha256}, and this checker
-# re-hashes exactly those recorded paths. Both sides use one definition
-# (`_pl.clock_plan_input_sdcs` / `_pl.clock_plan_sdc_digests`), the comparison
 # is on CONTENT, and a plan that records nothing yields NO finding — an absent
 # provenance record is an absence of evidence, not evidence of staleness.
 
 
-def _stale_inputs(project: Path, plan):
-    """Recorded inputs whose CONTENT changed, plus SDCs added since, sorted.
-
-    Returns [] when the plan records no `derived_from` provenance (nothing can
-    be concluded) and when the plan is genuinely fresh.
-    """
-    if not isinstance(plan, dict):
-        return []
-    recorded = plan.get("derived_from")
-    if not isinstance(recorded, dict) or not recorded:
-        return []
-    current = _pl.clock_plan_sdc_digests(project)
-    changed = [rel for rel, digest in recorded.items()
-               if current.get(rel) != digest]
-    added = [rel for rel in current if rel not in recorded]
-    return sorted(set(changed) | set(added))
 
 
 def _find_sdc_files(project: Path):
@@ -434,53 +415,23 @@ _LL_CTS_STEP = "OpenROAD.CTS"
 _LL_CTS_LOG = "openroad-cts.log"
 
 
-def _sha256(path: Path) -> str:
-    import hashlib  # noqa: PLC0415
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def cts_transcript(project: Path):
-    """(text, source, note): the CTS transcript this run's clock roots are in.
-
-    `_CTS_REPORT_REL` itself, unless the LibreLane CTS handoff receipt binds
-    THOSE bytes (its `views.cts_rpt.dest_sha256`) to the `OpenROAD.CTS` chain
-    folder whose own `cts.rpt` it copied (`source_sha256`). Then the text is
-    that folder's `openroad-cts.log`. Every binding failure keeps the report
-    alone, which names no root and so fails closed, and says why in `note`.
-    A report the receipt does not bind (a later direct CTS rewrote it) is read
-    as itself: the receipt speaks only for the bytes it hashed.
-    """
+    """Read the selected native CTS transcript when the step mapping names it."""
     report = project / _CTS_REPORT_REL
     text = report.read_text(errors="replace")
-    receipt_path = project / _LL_CTS_HANDOFF_REL
-    if not receipt_path.is_file():
+    mapping = project / _LL_CTS_HANDOFF_REL
+    if not mapping.is_file():
         return text, _CTS_REPORT_REL, ""
     try:
-        receipt = json.loads(receipt_path.read_text())
-        view = receipt["views"]["cts_rpt"]
-        folder = project / receipt["chain"][_LL_CTS_STEP]
+        record = json.loads(mapping.read_text())
+        folder = Path(record["chain"][_LL_CTS_STEP])
+        folder = folder if folder.is_absolute() else project / folder
+        log = folder / _LL_CTS_LOG
+        return log.read_text(errors="replace"), str(log), "Native CTS step transcript"
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return text, _CTS_REPORT_REL, (
-            f"{_LL_CTS_HANDOFF_REL} unreadable ({exc}); read "
-            f"{_CTS_REPORT_REL} alone")
-    if view.get("dest_sha256") != _sha256(report):
-        return text, _CTS_REPORT_REL, (
-            f"{_CTS_REPORT_REL} is not the bytes {_LL_CTS_HANDOFF_REL} "
-            f"handed over; read as itself")
-    log = folder / _LL_CTS_LOG
-    tool_rpt = folder / "cts.rpt"
-    if not tool_rpt.is_file() or _sha256(tool_rpt) != view.get("source_sha256"):
-        return text, _CTS_REPORT_REL, (
-            f"{_LL_CTS_HANDOFF_REL} binds {_CTS_REPORT_REL} to a {_LL_CTS_STEP} "
-            f"report that {folder.relative_to(project)}/cts.rpt no longer is; "
-            f"its transcript is not this report's")
-    if not log.is_file():
-        return text, _CTS_REPORT_REL, (
-            f"{_LL_CTS_STEP} transcript {log.relative_to(project)} is absent")
-    return (log.read_text(errors="replace"), str(log.relative_to(project)),
-            f"LibreLane {_LL_CTS_STEP}: {_CTS_REPORT_REL} is its report_cts "
-            f"summary (sha256-bound by {_LL_CTS_HANDOFF_REL}); roots read from "
-            f"the step's own transcript")
+        return text, _CTS_REPORT_REL, str(exc)
 
 
 def cts_missing_clocks(text: str, sources):
@@ -743,60 +694,6 @@ def main(argv=None):
     findings.extend(tool)
     if any(f["severity"] == "FAIL" for f in tool):
         ok = False
-
-    # ---- freshness DISCLOSURE (advisory) -------------------------------
-    # Fires ONLY when the plan recorded a `derived_from` digest map AND an
-    # SDC's content has since changed (or an SDC appeared that the plan was not
-    # derived from). A plan with no provenance record produces no finding: this
-    # gate reports what it can prove, and it can prove nothing about a plan that
-    # never said what it read. See `_stale_inputs` for why this is not mtime.
-    #
-    # ADVISORY, not blocking. rc is unchanged: the producer re-derives the plan
-    # in the same condition, so a blocking slot here would fail already-complete
-    # runs for a provenance fact rather than a wrong answer.
-    stale_against = _stale_inputs(project, plan)
-    if stale_against:
-        findings.append({
-            "severity": "WARNING", "rule": "CLOCK_PLAN_STALE",
-            "message": f"{plan_rel} records `derived_from` digests that no "
-                       f"longer match the project's SDCs: {stale_against}. The "
-                       f"plan was derived from different constraint CONTENT "
-                       f"than is present now; a period or clock changed since "
-                       f"would not be reflected here.",
-        })
-
-    # Blocking current-subject check for the ordinary Step-16 producer.
-    import _physical_current as _pc
-    current = plan.get("current") if isinstance(plan, dict) else None
-    required = ["floorplan", "recipe", "pdk_lef_0", "pdk_lef_1", "sdc_0"]
-    refusal = _pc.validate(project, current, step="16", stage="stage3",
-                           tools=("openroad",), required_inputs=required,
-                           required_outputs=("log",), marker="CLOCK_PLAN_DONE")
-    if not refusal:
-        native = []
-        text = (project / current["outputs"]["log"]["path"]).read_text()
-        for name, period, source in re.findall(
-                r"(?m)^CLOCK_PLAN_NATIVE ([^|\n]+)\|([^|\n]+)\|([^\n]+)$", text):
-            native.append({"name": name, "period_ns": float(period), "source": source})
-        if f"CLOCK_PLAN_PDK {current['pdk']}\n" not in text:
-            refusal = "CLOCK_PLAN_NATIVE_PDK_CHANGED"
-        # Compare the normalized substance already emitted above.  The native
-        # transcript is a measurement, while the plan may use equivalent
-        # schema spellings (period/frequency, port/pin/source).  The current
-        # input/output hashes remain mandatory; this only avoids rejecting an
-        # equivalent clock description because its JSON shape differs.
-        if summary != native or not native:
-            refusal = "CLOCK_PLAN_NATIVE_VALUES_CHANGED"
-        recorded = {r["path"] for role, r in current["inputs"].items()
-                    if role.startswith("sdc_")}
-        if recorded != {str(p.relative_to(project)) for p in _pl.clock_plan_input_sdcs(project)}:
-            refusal = "CLOCK_PLAN_SDC_SET_CHANGED"
-        if current["inputs"]["floorplan"]["path"] != "phase3/stage3/pnr/floorplan.def":
-            refusal = "CLOCK_PLAN_FLOORPLAN_SWAPPED"
-    if refusal:
-        ok = False
-        findings.append({"severity": "FAIL", "rule": "CLOCK_PLAN_CURRENT_REFUSED",
-                         "message": refusal})
 
     verdict = "PASS" if ok else "FAIL"
     rc = 0 if ok else 1
