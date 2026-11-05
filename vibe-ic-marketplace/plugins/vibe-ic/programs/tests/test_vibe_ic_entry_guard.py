@@ -753,6 +753,11 @@ def test_score_uses_native_acceptance_before_remaining_score_gates(tmp_path, mon
     monkeypatch.setattr(dispatch.subprocess, "call", refuse)
     with pytest.raises(SystemExit):
         dispatch.cmd_score("verilogeval-v2", str(run_dir), str(dataset))
+    assert observed[0] == "accepted"
+    if engine == "native":
+        assert observed[1] == "benchmark_clean_room_check.py"
+    else:
+        assert observed[1] == "vibe_ic_entry_guard.py"
     assert observed == ["accepted", expected]
 
 
