@@ -479,6 +479,13 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
         if not matches:
             matches = {check["metric"]: None}
         for name, value in matches.items():
+            points = metrics.get(name.removesuffix("_pct") + "_points")
+            if (re.fullmatch(r"coverage_(line|toggle|branch)_pct", name)
+                    and type(points) is int and points == 0):
+                observed.append({**check, "metric": name, "value": None, "limit": limit,
+                    "status": "NOT_APPLICABLE", "points": points,
+                    "reason": "Owner ruling: a measured category with zero coverage points has no percentage floor."})
+                continue
             status = "NOT_MEASURED"
             compare = COMPARE.get(check.get("operator"))
             if check.get("operator") == "covers_all":
