@@ -115,12 +115,7 @@ def test_ic_stream_out_does_not_require_a_macro_lef():
     from librelane.flows.chip import Chip
     from librelane.flows.classic import Classic
     from librelane.steps import Step
-    from flow_steps_generate import generate
-
-    root = engine.TABLE.parent.parent
-    table, _, _ = generate(
-        json.loads((root / "flow/flow109.json").read_text()),
-        json.loads((root / "flow/native_limits.json").read_text()))
+    table = engine.read_json(engine.TABLE)
     features = {"ic": True, "analog_physical": False,
                 "digital_physical": True, "assembly_only": False}
     available = {"gds", "def", "odb", "mag_gds", "klayout_gds"}

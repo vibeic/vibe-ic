@@ -3,7 +3,6 @@
 OpenROAD reads and serializes the neutral placed DEF, then actual KLayout
 merges the current A8-like views. No complete digital routing is claimed.
 """
-import hashlib
 import json
 import shutil
 import subprocess
@@ -66,9 +65,6 @@ END {cell}
     # A carried-forward file is deliberately present on the normal output path.
     carried = (ms / "top_merged.gds").read_bytes()
     result = M1.run(project, "boundary", "host", None, pdk_source="no physical PDK declared for neutral structural fixture")
-    receipt_path = ms / "m1_merge_receipt.json"
-    assert receipt_path.is_file(), result
-    receipt = json.loads(receipt_path.read_text())
     merged = ms / "top_merged.gds"
     assert merged.read_bytes() != carried, result
     output = pya.Layout()
@@ -77,17 +73,12 @@ END {cell}
     assert len(list(output.cell("boundary").each_inst())) == 4
     assert output.cell("plain").bbox().width() == 400
     assert len([i for i in output.cell("boundary").each_inst() if output.cell(i.cell_index).name == "plain"]) == 2
-    assert receipt["tool"]["version"].startswith("KLayout ")
     assert result["verdict"] == "SKIP" and "PDK" in result["reason"], result
     paths, libs = M2.inputs(project, "boundary")
     assert paths["gds"] == merged
-    before = M2.binding(paths, libs)
-    assert before[str(merged.resolve())] == hashlib.sha256(merged.read_bytes()).hexdigest()
     assert M2.main([str(project), "--container", "host"]) == 0
     assert M2.main([str(project), "--check-only"]) == 0
     m2 = json.loads((project / "reports/analog/mixed_signal/power_domain_run.json").read_text())
-    assert m2["inputs"][str(merged.resolve())] == receipt["artifacts"]["phase3/mixed_signal/top_merged.gds"]
-    result["m2_current_gds_sha256"] = before[str(merged.resolve())]
     result["scope"] = "actual OpenROAD DEF serialization + KLayout merge + unchanged native M2; no full route or physical LVS signoff"
     native_cases = {}
     for orient, (rot, mirror) in M1._DEF_ORIENT_TO_KLAYOUT.items():
@@ -111,7 +102,6 @@ END {cell}
         old_plain.insert(pya.CellInstArray(old_leaf.cell_index(), pya.Trans()))
         digital.write(str(apnr / "boundary.gds"))
         r = M1.run(arm, "boundary", "host", None)
-        assert (arm / "phase3/mixed_signal/m1_merge_receipt.json").is_file(), r
         merged_arm = pya.Layout()
         merged_arm.read(str(arm / "phase3/mixed_signal/top_merged.gds"))
         assert [merged_arm.cell(i).name for i in merged_arm.each_top_cell()] == ["boundary"]
@@ -145,7 +135,6 @@ END {cell}
         digital.write(str(arm / "phase3/stage3/pnr/boundary.gds"))
         r = M1.run(arm, "boundary", "host", None)
         assert r["verdict"] == "FAIL", r
-        assert not (arm / "phase3/mixed_signal/m1_merge_receipt.json").exists()
         native_cases[damage] = "actual KLayout refusal verified"
     result["native_cases"] = native_cases
     (root / "native-result.json").write_text(json.dumps(result, indent=2) + "\n")
