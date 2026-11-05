@@ -635,8 +635,6 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
-        "program": "ip_integration_check.py",
-        "function": "audit",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
