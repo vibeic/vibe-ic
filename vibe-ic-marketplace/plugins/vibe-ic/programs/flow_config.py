@@ -163,7 +163,7 @@ def declared_power_checks(project: Path, *, config: dict | None = None, metrics:
             if stated and (actual not in stated if key != "CLOCK_PERIOD" else any(Decimal(value) != Decimal(actual or 'NaN') for value in stated)):
                 mismatches.append(key)
         corners = set(re.findall(r"\b(tt|ff|ss)\b", context, re.I))
-        if corners and not all(any(re.search(rf"\b{corner}\b|_{corner}_", actual, re.I) for actual in actual_corners) for corner in corners):
+        if corners and not all(any(re.search(rf"(?:^|_){corner}(?:_|$)", actual, re.I) for actual in actual_corners) for corner in corners):
             mismatches.append("corner")
         metric = "power__total__corner:" + ("*" + next(iter(corners)).lower() + "*" if len(corners) == 1 else "*")
         check = {"metric": metric, "operator": "within_declared_bounds", "limit": limits, "unit": "W", "source": source, "scope": "Native estimated total current netlist power including die pads and native activity assumptions."}
