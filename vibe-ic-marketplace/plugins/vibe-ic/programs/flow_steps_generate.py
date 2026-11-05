@@ -136,7 +136,13 @@ def classify_checks(table, native):
             if category == "N":
                 if not names:
                     raise ValueError(f"Native metric missing for {row['name']}.{check['metric']}")
-                retained.extend({**check, "metric": name} for name in names)
+                item = dict(check)
+                if check["operator"] == "covers_all":
+                    if not fact.get("native_population"):
+                        raise ValueError(f"Native population report missing for {row['name']}.{check['metric']}")
+                    item["required_from"] = {"kind": "native_tool_population",
+                                             "tool": fact["native_population"]}
+                retained.extend({**item, "metric": name} for name in names)
             elif category == "T":
                 retained.append({**check, "tool_gap": fact["reason"]})
                 if check["operator"] == "covers_all":
@@ -204,12 +210,20 @@ def main():
             write_tsv(args.reports / "REAL_WORK.tsv", work, ["step", "old_name", "tool_and_work"])
             requests = [r for r in classifications if r["class"] in {"R", "P"}]
             fields = ["step", "old_name", "class", "new_native_name_or_reason"]
-            (args.reports / "DECISION-REQUEST.md").write_text(
-                "# Ruling 207 R/P classification for owner review\n\n"
-                "Provisional R/P classifications across every table row. Numeric signoff limits remain unchanged. "
-                "R observations do not block without a declared bound. P entries are removed paper obligations. "
-                "N/X/D/T work continues.\n\n```tsv\n" + "\t".join(fields) + "\n"
-                + "".join("\t".join(r[k] for k in fields) + "\n" for r in requests) + "```\n")
+            decision = native.get("classification_decision")
+            if decision:
+                (args.reports / "DECISION-REQUEST.md").write_text(
+                    f"# Ruling {decision['ruling']} classification decisions\n\n"
+                    + decision["resolved"] + "\n\n"
+                    + "\n\n".join(decision["conditions"]) + "\n\n"
+                    + "\n\n".join("UNRESOLVED: " + item for item in decision["unresolved"]) + "\n")
+            else:
+                (args.reports / "DECISION-REQUEST.md").write_text(
+                    "# Ruling 207 R/P classification for owner review\n\n"
+                    "Provisional R/P classifications across every table row. Numeric signoff limits remain unchanged. "
+                    "R observations do not block without a declared bound. P entries are removed paper obligations. "
+                    "N/X/D/T work continues.\n\n```tsv\n" + "\t".join(fields) + "\n"
+                    + "".join("\t".join(r[k] for k in fields) + "\n" for r in requests) + "```\n")
         else:
             write_tsv(args.reports / "DROPPED.tsv", dropped, ["step", "metric", "operator", "reason"])
         write_tsv(args.reports / "UNMEASURED_METRICS.tsv", unmeasured,

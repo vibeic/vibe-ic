@@ -834,6 +834,21 @@
             "line": 2768
           },
           "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+        },
+        {
+          "metric": "coverage_targets",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4288
+          },
+          "limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "coverage_targets"
+          },
+          "tool_gap": "Ruling 208 has not accepted the duplicate classification. Verify actual old-step callers and published SPM coverage limits; enforce stricter declared targets. Existing numeric checks are unchanged pending that verification."
         }
       ],
       "legacy_id": {
@@ -4657,21 +4672,41 @@
     {
       "name": "analog_block_signoff",
       "title": "Analog block signoff",
-      "when": "False",
+      "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "analog_flow_compliance_check.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "program": "analog_real_corner_sweep.py",
+        "function": "run_block",
+        "native_report": "phase3/analog/*/corner_results.json#/spec_results",
+        "gap": "Direct L-document spec to SPICE-number comparator is not wired. Missing declared numbers must be NOT_MEASURED."
       },
-      "checks": [],
+      "checks": [
+        {
+          "metric": "spec_results",
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "has_analog",
+          "source": {
+            "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+            "line": 54,
+            "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+          },
+          "limit_from": {
+            "kind": "declared_analog_specs",
+            "paths": [
+              "phase1/generated_docs/L5_ADI_SPEC.json#/analog_blocks"
+            ]
+          },
+          "missing_number_status": "NOT_MEASURED",
+          "tool_gap": "Read every analog spec declared in L documents and compare its bound/unit with native ngspice/Xyce corner_results.json spec_results measurements. Any declared spec without a SPICE number is NOT_MEASURED. Reuse analog_real_corner_sweep.run_block; no new emitter."
+        }
+      ],
       "legacy_id": {
         "registry": "A19",
         "native": [
           "A8"
         ]
-      },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      }
     },
     {
       "name": "mixed_signal_signoff",
@@ -4831,40 +4866,56 @@
     {
       "name": "signoff_aggregation",
       "title": "Signoff aggregation",
-      "when": "False",
+      "when": "always",
       "tool": {
-        "kind": "adapter",
-        "program": "signoff_metrics_aggregate.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "aggregate"
       },
-      "checks": [],
+      "checks": [
+        {
+          "metric": "non_passing_steps",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+            "line": 54,
+            "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+          }
+        }
+      ],
       "legacy_id": {
         "registry": "D77",
         "native": [
           "37.4"
         ]
-      },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      }
     },
     {
       "name": "compliance_and_final_adoption",
       "title": "Compliance and final adoption",
-      "when": "False",
+      "when": "always",
       "tool": {
-        "kind": "adapter",
-        "program": "execution_release_worker.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "aggregate"
       },
-      "checks": [],
+      "checks": [
+        {
+          "metric": "non_passing_steps",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+            "line": 54,
+            "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+          }
+        }
+      ],
       "legacy_id": {
         "registry": "D78",
         "native": [
           "36"
         ]
-      },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      }
     },
     {
       "name": "ip_release_views_and_documentation",
@@ -4880,7 +4931,22 @@
           "nl": ".v"
         }
       },
-      "checks": [],
+      "checks": [
+        {
+          "metric": "ip_endpoint_views",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "ip",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 18720
+          },
+          "required_from": {
+            "kind": "native_tool_population",
+            "tool": "LibreLane State snapshot required views and exported views"
+          }
+        }
+      ],
       "legacy_id": {
         "registry": "D79",
         "native": [
@@ -4925,12 +4991,32 @@
       "title": "Design release",
       "when": "always",
       "tool": {
-        "kind": "adapter",
-        "program": "foundry_handoff_pack_gen.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "snapshot",
+        "destination": "phase3/stage5/release",
+        "formats": {
+          "lef": ".lef",
+          "lib": ".lib",
+          "gds": ".gds",
+          "nl": ".v"
+        },
+        "metric": "release_required_items"
       },
-      "checks": [],
+      "checks": [
+        {
+          "metric": "release_required_items",
+          "operator": "covers_all",
+          "limit": null,
+          "when": "always",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 19013
+          },
+          "required_from": {
+            "kind": "native_tool_population",
+            "tool": "LibreLane State snapshot required views and exported views"
+          }
+        }
+      ],
       "legacy_id": {
         "registry": "D81",
         "native": [

@@ -970,6 +970,52 @@
           "line": 199
         }
       }
+    ],
+    "signoff_aggregation": [
+      {
+        "metric": "non_passing_steps",
+        "operator": "==",
+        "limit": 0,
+        "unit": "count",
+        "source": {
+          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+          "line": 54,
+          "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+        }
+      }
+    ],
+    "compliance_and_final_adoption": [
+      {
+        "metric": "non_passing_steps",
+        "operator": "==",
+        "limit": 0,
+        "unit": "count",
+        "source": {
+          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+          "line": 54,
+          "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+        }
+      }
+    ],
+    "analog_block_signoff": [
+      {
+        "metric": "spec_results",
+        "operator": "within_declared_bounds",
+        "limit": null,
+        "when": "has_analog",
+        "source": {
+          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+          "line": 54,
+          "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+        },
+        "limit_from": {
+          "kind": "declared_analog_specs",
+          "paths": [
+            "phase1/generated_docs/L5_ADI_SPEC.json#/analog_blocks"
+          ]
+        },
+        "missing_number_status": "NOT_MEASURED"
+      }
     ]
   },
   "adapters": {
@@ -1013,6 +1059,29 @@
         "gds": ".gds",
         "nl": ".v"
       }
+    },
+    "design_release": {
+      "kind": "snapshot",
+      "destination": "phase3/stage5/release",
+      "formats": {
+        "lef": ".lef",
+        "lib": ".lib",
+        "gds": ".gds",
+        "nl": ".v"
+      },
+      "metric": "release_required_items"
+    },
+    "signoff_aggregation": {
+      "kind": "aggregate"
+    },
+    "compliance_and_final_adoption": {
+      "kind": "aggregate"
+    },
+    "analog_block_signoff": {
+      "program": "analog_real_corner_sweep.py",
+      "function": "run_block",
+      "native_report": "phase3/analog/*/corner_results.json#/spec_results",
+      "gap": "Direct L-document spec to SPICE-number comparator is not wired. Missing declared numbers must be NOT_MEASURED."
     }
   },
   "deleted_metrics": {
@@ -1920,8 +1989,8 @@
       },
       {
         "old_name": "coverage_targets",
-        "class": "D",
-        "reason": "Existing line 70%, toggle 60%, branch 70% native coverage checks; declared targets are read by the adapter."
+        "class": "T",
+        "reason": "Ruling 208 has not accepted the duplicate classification. Verify actual old-step callers and published SPM coverage limits; enforce stricter declared targets. Existing numeric checks are unchanged pending that verification."
       }
     ],
     "formal_verification": [
@@ -2888,7 +2957,7 @@
       {
         "old_name": "fill_density_rules",
         "class": "D",
-        "reason": "Native klayout__density_error__count retains PDK density limits."
+        "reason": "Ruling 208 conditional D. klayout__density_error__count retains PDK limits and must measure the same final GDS passed to final_physical_verification. No density limit change."
       },
       {
         "old_name": "fill_keepout_violations",
@@ -2965,7 +3034,7 @@
       {
         "old_name": "final_density_targets",
         "class": "D",
-        "reason": "Native klayout__density_error__count at metal_density_fill retains the PDK limits."
+        "reason": "Ruling 208 conditional D. klayout__density_error__count retains PDK limits and must measure the same final GDS passed to final_physical_verification. No density limit change."
       }
     ],
     "final_perc_esd_and_latch_up": [
@@ -3158,6 +3227,11 @@
     ],
     "analog_block_signoff": [
       {
+        "old_name": "spec_results",
+        "class": "T",
+        "reason": "Read every analog spec declared in L documents and compare its bound/unit with native ngspice/Xyce corner_results.json spec_results measurements. Any declared spec without a SPICE number is NOT_MEASURED. Reuse analog_real_corner_sweep.run_block; no new emitter."
+      },
+      {
         "old_name": "analog_endpoint_evidence",
         "class": "P",
         "reason": "Endpoint evidence aggregation is paper. Native analog PV and post-layout performance remain."
@@ -3233,13 +3307,35 @@
         "reason": "Native fault-injection simulation and diagnostic coverage report; wire the report/input adapter without population emitters or requirement traces."
       }
     ],
-    "signoff_aggregation": [],
-    "compliance_and_final_adoption": [],
+    "signoff_aggregation": [
+      {
+        "old_name": "non_passing_steps",
+        "class": "N",
+        "native_metrics": [
+          "non_passing_steps"
+        ],
+        "reason": "Ruling 208 generic count of earlier Router-selected steps whose result is not PASS."
+      }
+    ],
+    "compliance_and_final_adoption": [
+      {
+        "old_name": "non_passing_steps",
+        "class": "N",
+        "native_metrics": [
+          "non_passing_steps"
+        ],
+        "reason": "Ruling 208 generic count of earlier Router-selected steps whose result is not PASS."
+      }
+    ],
     "ip_release_views_and_documentation": [
       {
         "old_name": "ip_endpoint_views",
-        "class": "P",
-        "reason": "Release checklist is paper. Native snapshot requires the endpoint output views."
+        "class": "N",
+        "reason": "Ruling 208 reverses P. Native snapshot reports both required and exported views; missing required views are a real defect.",
+        "native_metrics": [
+          "ip_endpoint_views"
+        ],
+        "native_population": "LibreLane State snapshot required views and exported views"
       },
       {
         "old_name": "ip_integration_limits_documented",
@@ -3263,12 +3359,16 @@
     "design_release": [
       {
         "old_name": "release_required_items",
-        "class": "P",
-        "reason": "Release item checklist is paper. Native signoff results and handoff outputs remain."
+        "class": "N",
+        "reason": "Ruling 208 reverses P. Native snapshot reports both required and exported views; missing required views are a real defect.",
+        "native_metrics": [
+          "release_required_items"
+        ],
+        "native_population": "LibreLane State snapshot required views and exported views"
       }
     ]
   },
-  "classification_ruling": 207,
+  "classification_ruling": 208,
   "row_applicability": {
     "package_load_and_test_interface_feasibility": {
       "when": "package_interface and package_declared",
@@ -3302,21 +3402,21 @@
       "when": "False",
       "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
-    "analog_block_signoff": {
-      "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
-    },
     "mixed_signal_signoff": {
       "when": "False",
       "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
-    },
-    "signoff_aggregation": {
-      "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
-    },
-    "compliance_and_final_adoption": {
-      "when": "False",
-      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     }
+  },
+  "classification_decision": {
+    "ruling": 208,
+    "resolved": "All 13 R lines and P lines accepted subject to the explicit conditions. ip_endpoint_views and release_required_items reversed to N.",
+    "conditions": [
+      "Analog signoff reads every declared L-document spec and its SPICE number directly. A missing number is NOT_MEASURED; comparator remains T until wired.",
+      "R native numbers remain visible in results; declared bounds are compared when present.",
+      "Density D applies only when the native density metric measures the same final GDS as final physical verification."
+    ],
+    "unresolved": [
+      "Coverage only. Determine the old step caller limits and the published SPM thresholds, then apply the stricter declared target. The previous coverage_targets D is suspended as T; no numeric limit is changed by this delta."
+    ]
   }
 }
