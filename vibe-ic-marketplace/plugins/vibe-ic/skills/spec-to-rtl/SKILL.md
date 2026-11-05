@@ -237,27 +237,14 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    a genuine floor. The structural extraction + routing is deterministic;
    deciding whether a prose sentence is a distinct *testable* requirement (so
    you can author its stimulus) is your LLM judgment.
-7. **Tell the orchestrator you're done, then stop**. Public D09 position 17
-   completes its author-self-validation component only from the same invocation's
-   authored RTL, D11 position 19 validation/lint, D12 position 20 CDC/RDC, and
-   D13 position 21 reference-testbench receipts, with the exact child invocation
-   and report publication bound to the public Flow109 entry.
-
-   Until that public path produces a current completed component `PASS`, preserve
-   the authored RTL and handoff as **unconsumed**. Missing, stale, foreign, or
-   changed evidence must refuse or remain `NOT_MEASURED`; a bound failing check
-   remains `FAIL`, according to the accepted consumer contract. Component
-   completion grants no D11 position 19, D12 position 20, or D13 position 21 row
-   credit, metrics, delivery acceptance, downstream acceptance, or whole-flow
-   acceptance.
-
-   The only permitted continuation contract is the sole public
-   `vibe_ic_one_shot_runner.py` entry with the original project and route, exact
-   validated `--flow109-manifest`, `--flow 109`, the selected current D09
-   position 17 stable-ID window, and `--execution-mode default`. The public
-   resolver must accept that window before work begins. Never call
-   `design_one_shot_runner.py` directly as a public substitute, never invoke a
-   native helper directly, and never pass a Flow109 D-id to a native helper.
+7. Return the authored RTL and handoff to the public
+   `vibe_ic_one_shot_runner.py` entry using the original project, route, and
+   Router-selected evidence window. The native runner executes the applicable
+   validation, CDC, simulation, and formal tools. Read each native result
+   against its original limit. Missing measurements remain `NOT_MEASURED`, and
+   tool failures remain `FAIL`. Authoring alone does not establish downstream
+   or whole-chip acceptance. For benchmarks, independent blind AI review and
+   official scoring remain required.
 
 ## What this skill IS NOT
 
@@ -660,7 +647,7 @@ without a stated range needs no invented limit. The deterministic
 
 ### How this finding REACHES you (#2081, second half)
 
-Until v1.19.x nothing routed a Phase-3 timing verdict here. The current Flow109
+Until v1.19.x nothing routed a Phase-3 timing verdict here. The native step table
 responsibility map is: candidate timing closure at D49 position 71; post-route
 timing repair at D41 position 63; pre-layout timing at D26 position 38; and
 mode/constraint planning at D19 position 31. A user/operator selects the stable

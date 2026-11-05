@@ -1,81 +1,21 @@
 ---
 name: vibe-ic-all
-description: Enter a bounded current Flow109 window through the sole public vibe_ic_one_shot_runner entry in Default mode. AI-monitored + close-loop.
-argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id> [--top-name <top>] [--pdk <pdk>]
+description: Run all selected steps through the Router-selected native step table and review every tool result.
+argument-hint: <project-dir> [--route ic|ip] [--entry-step <id> --exit-step <id>] [--pdk <pdk>]
 ---
-**First: IC path or IP path?** Read [IC Expert § 0.0](../agents/ic-expert-agent.md) before Phase 1. Use the prompt's route or ask the operator if unclear; record the owner answer in `input/step_0_5ic_answers.json`. Pass `--route ic` or `--route ip` when stating it on this command.
 
-> **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-all <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id>`.
-> The AI must NOT guess the path; a concrete project path is required before continuing.
+# /vibe-ic-all
 
-
-# /vibe-ic-all — the public Flow109 entry
-
-Main execution (**program-driven**):
+Read `CHARTER.md` and `agents/ic-expert-agent.md` before running. Design documents are the input. For physical delivery, use the owner's stated IC or IP route. For bounded RTL work, `task_nature_route` determines the entry and evidence exit without a packaging question.
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS \
-  --flow 109 --execution-mode default
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS
 ```
 
-`$ARGUMENTS` must contain the explicit manifest and inclusive Flow109 stable-ID
-window. The public runner resolves those IDs from `flow/flow109.json`, records
-the request, and dispatches only its registered Default owner. It does not
-silently select a former flow or translate a former numeric entry.
+The public entry always runs `flow_engine.py` with `flow/steps.json`. The Router controls the inclusive entry and exit window. An explicit window requires both `--entry-step` and `--exit-step`. Use `--from <step-name>` and `--to <step-name>` only to narrow that window. The phase entry programs use this same engine.
 
-| Current responsibility | Flow109 ID | Position |
-|---|---:|---:|
-| RTL authoring | D09 | 17 |
-| RTL validation and lint | D11 | 19 |
-| Functional simulation and coverage | D13 | 21 |
-| Synthesis | D22 | 34 |
-| DFT architecture and insertion | D23 | 35 |
-| Netlist handoff | D30 | 42 |
-| Path-delay ATPG | D50 | 72 |
+After each tool finishes, read its native report and `<project>/steps/<step-name>/result.json`. Confirm the tool ran on the intended design, read its native measurement, and compare it with the original spec or PDK limit. Review missing measurements and physical plausibility. Keep `PASS`, `FAIL`, and `NOT_MEASURED` distinct. A selected window does not establish whole-chip signoff.
 
-D50 currently has no registered dispatch. Requesting it must refuse before
-native work; it is not an invitation to invoke another path-ATPG command.
+If the Program requests `spec-to-rtl`, complete the declared AI handoff from the visible documents, then rerun this public entry. For lint, synthesis, timing, DRC, LVS, IR-drop, analog, or FPGA problems, use the corresponding expert skill and fix the design, local tool fork, or plugin. Keep numeric limits unchanged.
 
-**Halt rule:** the first selected row that is FAIL or NOT_MEASURED stops later
-rows in that request. A row not executed after the stop must remain explicitly
-not executed; it is not skipped-PASS.
-
-When Phase 1 publishes `PENDING` requirement authorities, it stops with
-`D0102_REQUIREMENTS_OWNER_REVIEW_REQUIRED` through the existing IC-expert
-handoff, using exit 4. This wait earns no metric or row acceptance.
-Follow the printed next action. Invoke the Phase-1 IC Expert on the existing
-`expert_parse_track_pack/ic_expert_agent_handoff.json`, review the complete
-`input/docs/**` census and `input/owner_request.md`, and complete the requirement
-population and explicit feature review in the existing source. Update
-`requirements/base_01/requirements_trace.json` and
-`requirements/base_02/endpoint_delivery_items.json` with the review.
-`requirements_owner` is the owner or a delegate, including the IC Expert.
-Approval requires a named approver and the current source hash in
-`approval.source_reference`. Programs only publish `PENDING` candidates and
-never write approvals. Run the printed `--second-track-only` continuation,
-then rerun the same public Flow109 request. Later rows stay unexecuted until
-their required authority and current evidence pass the existing consumers.
-
-Do not express scope with phase skip aliases. Select the exact current rows with
-`--entry-step <ID> --exit-step <ID>` and retain the resulting Flow109 request,
-attempt, component and consumer receipts.
-
-After the run completes, the AI must:
-
-1. Read the immutable request and attempt under
-   `<project>/reports/flow109/` and each selected component result.
-2. Confirm the saved request binds the exact registry/planner, manifest,
-   stable-ID window, route and Default execution.
-3. Preserve `PASS`, `FAIL`, `NOT_MEASURED` and not-executed states per row.
-4. A component or window PASS does not mean the whole flow is complete.
-
-**Purpose:** one command reaches the unique current public entry. A bounded
-window establishes only its measured rows; it does not self-assert full-flow or
-silicon-ready acceptance.
-
----
-
-## ⚠ Anti-fabrication 5 hard rules (v1.6.30, span Phase 1→2→Analog→3)
-
-Any violation ⇒ verdict-FAIL: (1) no symlinks under `phase3/stage4/**` / `phase3/mixed_signal/**` / `phase2/stage1/fpga/**` / `analog/hardmacro/**` (exceptions via `.canonical_symlink_allowlist`); (2) every `provenance.jsonl` entry must carry `outputs: sha256:<64hex>`; (3) `reports/` root may only contain `final_summary.md` + `chip_specific_summary.md`; (4) any sub-gate FAIL inside a step / phase ⇒ verdict FAIL; (5) `final_summary.md` must include the SHA256 table of every canonical artefact across the flow (L1-L27 / SOF / GDS / netlist / LEF / Liberty / each sign-off report). Full version: `commands/_anti_fabrication_rules.md`.
+Report the step name and its 1-based canonical YAML position. Historical execution IDs remain internal. Save run results outside the plugin repository.

@@ -1,6 +1,6 @@
 ---
 name: benchmark-verify
-description: "Normalized, MANDATORY end-to-end verification for any benchmark IC after it has been driven from Design Documents → generated RTL → silicon through the Flow109 public entry. Produces ONE BENCHMARK_VERIFICATION_REPORT.md per IC covering all six pillars with hard gates: (1) Functional Verification Coverage == 100% (closed-loop until met), (2) current Flow109 row/output comparison vs the open-source reference (every selected applicable row PASS), (3) Code Coverage line >= 90%, (4) FPGA digital verification (test patterns on-board/BFM), (5) Analog closed-loop verification (or N/A for pure-digital), (6) Design-for-ECO readiness — spare-cell coverage PASS + spare preservation intact (or N/A if the IC has no place-and-route). Use when: 'verify the benchmark', 'benchmark verification report', 'is this IC production-ready', 'cross-check vs open source', after a /vibe-ic-all invocation whose saved argv proves --flow 109, an explicit manifest/window and --execution-mode default, or for any IC in benchmark_clean/."
+description: "Normalized, MANDATORY end-to-end verification for any benchmark IC after it has been driven from Design Documents → generated RTL → silicon through the native table public entry. Produces ONE BENCHMARK_VERIFICATION_REPORT.md per IC covering all six pillars with hard gates: (1) Functional Verification Coverage == 100% (closed-loop until met), (2) native step/output comparison vs the open-source reference (every selected applicable row PASS), (3) Code Coverage line >= 90%, (4) FPGA digital verification (test patterns on-board/BFM), (5) Analog closed-loop verification (or N/A for pure-digital), (6) Design-for-ECO readiness — spare-cell coverage PASS + spare preservation intact (or N/A if the IC has no place-and-route). Use when: 'verify the benchmark', 'benchmark verification report', 'is this IC production-ready', 'cross-check vs open source', after a /vibe-ic-all invocation whose saved argv uses the public runner with a Router-selected window, or for any IC in benchmark_clean/."
 ---
 
 # Benchmark Verify — normalized doc→production-ready verification
@@ -81,14 +81,12 @@ confirm it PASSES against the generated RTL.
 > contradictions (FLOOR per #697; 0/8 on the hardest CVDP ambiguity residual). It is a COMPLEMENT to
 > #697 + #699, run BEFORE the scorer on fresh runs.
 
-### Pillar 2 — selected Flow109 row outputs vs open-source reference  ▸ gate: **every applicable selected row PASS**
-Read the exact run's Flow109 plan/request and enumerate its selected applicable
-rows by stable ID. Record each row's current 1-based `position` from the exact
-`flow/flow109.json` used by that run, but never use position as entry, exit, or
-acceptance authority. Compare OUR output for every selected applicable row
-against the reference's corresponding output. There is no fixed required row
-count: unselected and inapplicable rows are disclosed separately and cannot be
-counted as PASS. Comparison is **row-appropriate, not byte-identical**.
+### Pillar 2 — selected native step outputs vs open-source reference  ▸ gate: **every applicable selected row PASS**
+Read `flow/steps.json` and the exact run's selected `steps/<step-name>/result.json`
+results. Compare every selected applicable native tool output with the reference's
+corresponding output. Report the step's canonical YAML position and name.
+Unselected and inapplicable steps do not count as PASS. Compare engineering
+meaning rather than requiring identical bytes.
 
 *The step→class→comparison-method dispatch table and the legal verdict-token enum
 (MATCH / EQUIVALENT / IN-RANGE / BOTH-CLEAN / DIFFERENT-BUT-OK / N/A / GAP / NO-TOOL / FAIL) and
@@ -104,8 +102,8 @@ independently clean), **layout-endpoint** (GDS — both DRC/LVS/STA-clean + func
 *layout-endpoint* step, deciding that a different micro-architecture (our carry-save vs the ref's
 array) is a *benign* divergence rather than a failure is design judgment, not a fixed compare.
 
-Produce one `cross_check/flow109/<stable-id>.md` per selected applicable row
-(stable ID, current position, what ran, OUR result, REF result, and verdict
+Produce one `cross_check/steps/<step-name>.md` per selected applicable row
+(step name, canonical position, what ran, OUR result, REF result, and verdict
 token from the enum above).
 **Close runnable GAPs** (e.g. run SPEF/IR/EM/antenna/power if the flow skipped them). Genuine
 NO-TOOL items (e.g. open-source full-chip fast-SPICE) are recorded honestly — and noted if the
@@ -154,7 +152,7 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
 1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
 2. **Pillar 2:** dispatch comparisons only for the stable IDs selected by the
    exact Flow109 plan/request, keeping tool runs bounded. Write
-   `cross_check/flow109/<stable-id>.md` with the current registry position as
+   `cross_check/steps/<step-name>.md` with the current registry position as
    display metadata. Run REAL tools in `vibeic-eda`; close gaps.
 3. **Pillar 1:** build `reports/functional_coverage.json` from the L-doc requirements; close-loop to 100%.
 4. **Pillar 3:** author tests, measure coverage → `reports/code_coverage.json`; close-loop to >= 90%.

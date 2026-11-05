@@ -19,11 +19,10 @@ For every problem, general Program code in `task_nature_route` makes an
 input-only advisory proposal from the visible prompt and supplied-RTL state.
 `--solve` then stops with `needs_ai_routing.jsonl`; a named AI actor must confirm
 or override that proposal before any design runner starts. `--resume` validates
-all hash-bound AI decisions. A whole-IC dispatch is current only when its saved
-runner argv enters `vibe_ic_one_shot_runner.py` with `--flow 109`, an explicit
-`--flow109-manifest`, a stable-ID `--entry-step`/`--exit-step` window, and
-`--execution-mode default`. If the dispatcher cannot express that exact public
-entry, it must refuse; it may not fall back to a former route. Benchmark name,
+all hash-bound AI decisions. The saved runner argv enters
+`vibe_ic_one_shot_runner.py` with the Router-selected `--entry-step` and
+`--exit-step` window. That public entry always uses `flow_engine.py` and
+`flow/steps.json`. Benchmark name,
 problem id, and dataset metadata never select a route. The proposal's
 `needs_ai_parse` value is advisory and never bypasses this mandatory AI handoff.
 
