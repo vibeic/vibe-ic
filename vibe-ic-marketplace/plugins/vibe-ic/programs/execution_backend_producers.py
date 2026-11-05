@@ -16,21 +16,6 @@ from librelane_contract import Refusal
 PNR = 'phase3/stage3/pnr/'
 RPT = 'reports/phase3/'
 
-NATIVE_TOOLS = {
-    'spare_cells_and_eco_preparation': {
-        'steps': ['VibeIC.SpareCells'], 'imports': ['flow_spare_cells']},
-    'candidate_signal_integrity': {
-        'steps': ['VibeIC.SignalIntegrity'], 'imports': ['flow_ic_checks']},
-    'post_layout_spice_correlation': {
-        'steps': ['VibeIC.SpiceCorrelation'], 'imports': ['flow_ic_checks']},
-    'candidate_electromigration': {
-        'steps': ['VibeIC.EMCorners'], 'imports': ['flow_em_corners']},
-    'candidate_reliability_and_esd': {
-        'steps': ['Magic.StreamOut', 'Magic.SpiceExtraction', 'Checker.IllegalOverlap',
-                  'VibeIC.ElectricalRules'], 'imports': ['flow_ic_checks']},
-    'final_perc_esd_and_latch_up': {
-        'steps': ['VibeIC.ElectricalRules'], 'imports': ['flow_ic_checks']},
-}
 NATIVE_STEP_NAMES = {
     '18': 'spare_cells_and_eco_preparation',
     '27': 'candidate_signal_integrity',
@@ -381,6 +366,18 @@ def _d39_capture_repair_history(project, folder, initial, config):
     return {'path': str(output.relative_to(project))}
 
 
+def _native_tool(name):
+    from flow_engine import TABLE, read_json
+    row = next(row for row in read_json(TABLE)['steps'] if row['name'] == name)
+    tool = row['tool']
+    candidates = ([profile['tool'] for profile in tool['profiles']
+                   if profile['tool']['kind'] == 'librelane']
+                  if tool['kind'] == 'profiles' else [tool] if tool['kind'] == 'librelane' else [])
+    if len(candidates) != 1:
+        raise ValueError(f'{name}: expected one native tool in the canonical step table')
+    return candidates[0]
+
+
 def produce(project, params):
     """Execute the selected native backend tool in the general runner's chain."""
     from dataclasses import asdict
@@ -390,7 +387,7 @@ def produce(project, params):
     project = Path(project).resolve()
     name = str(params.get('name') or params.get('step_id') or '')
     name = NATIVE_STEP_NAMES.get(name, name)
-    tool = NATIVE_TOOLS[name]
+    tool = _native_tool(name)
     chain = params.get('native_chain')
     if chain is None:
         chain = NativeChain(project, params.get('route') or select_route(project), pdk=params.get('pdk_name'))
