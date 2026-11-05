@@ -2,20 +2,93 @@
 from __future__ import annotations
 
 import json
+import pytest
+from pathlib import Path
 
+import flow109_package_plan as d06
 from programs.tests._hostpaths import require_repo
 
 
+def _write(path: Path, value) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value) if isinstance(value, dict) else value)
+    return path
 
 
+def _context():
+    return {"requested_step": "D06", "native_step_id": "flow109.D06",
+            "resolved_row": {"id": "D06"}, "context_sha256": "b" * 64,
+            "resolved_features": {"requires_dft": False, "requires_scan": False,
+                                  "package_interface": True,
+                                  "package_model_required": True}}
 
 
+def _producer(monkeypatch, verdict: str, rc: int):
+    def run(argv):
+        report = Path(argv[argv.index("--json") + 1])
+        out = Path(argv[argv.index("--out") + 1])
+        _write(report, {"program": "pad_assignment_gen", "verdict": verdict,
+                        "reason": "controlled owner result"})
+        if rc == 0:
+            _write(out, {"PAD_SOUTH": ["u_pad_a"]})
+        return rc
+    monkeypatch.setattr(d06.pad_assignment_gen, "main", run)
+    monkeypatch.setattr(d06, "_current_pdk", lambda project, **kwargs: "neutral_pdk")
 
 
+def _early_docs(project: Path, *, dft=False):
+    case = {"name": "functional", "kind": "functional_vector",
+            "stimulus": "drive input", "expected": "observe output",
+            "evidence": "input/docs/L7.md (table)"}
+    _write(project / d06.L7_REPORT, {"schema_version": 2, "doc_class": "test_debug",
+           "test_scenarios": [case], "source_documents": ["input/docs/L7.md"]})
+    _write(project / d06.L10_REPORT, {"schema_version": 2, "test_cases": [case],
+           "source_documents": ["input/docs/L7.md"]})
+    _write(project / d06.L8_REPORT, {"clock_and_reset_waveform": {
+        "clocks": [{"name": "clk"}], "resets": [{"name": "rst"}]}})
+    chain = ({"name": "chain0", "scan_in": "sin", "scan_out": "sout",
+              "scan_enable": "scan_en"} if dft else None)
+    _write(project / d06.L20_REPORT, {"doc_id": "L20", "fields": {
+        "dft_present": dft, "scan_chains": [chain] if chain else [],
+        "bist_mbist": [], "jtag_tap": None, "test_compression": None}})
 
 
+def _io(project: Path):
+    return _write(project / d06.IO_REPORT, {
+        "program": "io_pad_chip_top_gen", "verdict": "WROTE",
+        "pad_instances": {
+            "u_clk": {"port": "clk", "direction": "input"},
+            "u_rst": {"port": "rst", "direction": "input"},
+            "u_stim": {"port": "stim", "direction": "input"},
+            "u_obs": {"port": "obs", "direction": "output"}},
+        "scan_interface": {"selected_scan_netlist": False,
+                           "selection": "current pre-DFT netlist"}})
 
 
+def _bare_die_load(project: Path):
+    import hashlib
+    _write(project / d06.TAPEOUT_DECLARATION, {
+        "schema": "vibe-ic/tapeout_declaration/1",
+        "answers": {"deliverable": "DIE"},
+        "answer_provenance": {"deliverable": {
+            "answered_by": "owner", "citation": "operator --route ic"}}})
+    _write(project / "phase1/generated_docs/L1_DATASHEET.json", {
+        "no_package_in_input": True, "package_info": None})
+    sdc = _write(project / "phase3/stage3/pnr/constraint.sdc",
+                 "set_output_delay 2 -clock clk [all_outputs]\n"
+                 "set_load 0.07 [all_outputs]\n")
+    netlist = _write(project / "phase3/librelane/current/chip_top.nl.v",
+                     "module chip_top (clk, rst, stim, obs);\n"
+                     " input clk, rst, stim; output obs;\nendmodule\n")
+    state = _write(project / "phase3/librelane/current/state_out.json", {
+        "sdc": "/project/" + str(sdc.relative_to(project)),
+        "nl": "/project/" + str(netlist.relative_to(project))})
+    _write(state.parent / "config.json", {"DESIGN_NAME": "chip_top", "PDK": "neutral_pdk"})
+    digest = hashlib.sha256(state.read_bytes()).hexdigest()
+    _write(project / d06.CURRENT_REPAIR, {"verdict": "PASS", "final": {
+        "sta_state": "/project/" + str(state.relative_to(project)),
+        "sta_state_sha256": digest}})
+    return state
 
 
 def test_checked_in_registry_routes_d06_to_real_pad_producer():
@@ -26,3 +99,653 @@ def test_checked_in_registry_routes_d06_to_real_pad_producer():
     assert dispatch["adapter"] == "flow109_package_plan"
     assert dispatch["producer"] == "pad_assignment_gen.py:main"
     assert row["metric_acceptance_status"] == "IMPLEMENTED_BARE_DIE_NATIVE"
+
+
+def test_functional_unscanned_route_uses_l7_l10_and_native_pad_map(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    _bare_die_load(project)
+    result = d06.execute(project, _context())
+    assert result["native_started"] is True
+    assert result["checks"][0]["status"] == "PASS"
+    assert result["checks"][1]["pad_instances"] == 4
+    assert result["checks"][2]["detail"]["mode"] == "functional_unscanned"
+    assert {row["path"] for row in result["inputs"]} >= {
+        str(d06.L7_REPORT), str(d06.L8_REPORT), str(d06.L10_REPORT), str(d06.L20_REPORT)}
+    assert result["checks"][3]["check"] == "bare_die_external_load_interface"
+    assert result["checks"][3]["detail"]["output_ports"] == ["obs"]
+    assert result["checks"][3]["detail"]["capacitance_library_units"] == 0.07
+    assert result["checks"][3]["profile_package_model_required"] is True
+    assert result["checks"][3]["profile_flag_is_owner_scope_authority"] is False
+    assert result["component_status"] == "PASS"
+    assert result["reason"] == "D06_BARE_DIE_NATIVE_METRICS_PASS"
+    assert result["flow109_acceptance"] == "PASS"
+    assert result["completed"] is True
+    assert set(result["metrics"]) == {"pad_bump_interface_constraints",
+        "package_escape_feasibility", "test_access_plan"}
+    assert result["metrics"]["package_escape_feasibility"]["physical_package_model_consumed"] is False
+    assert result["delivery_accepted"] is False
+
+
+@pytest.mark.parametrize("writes_report", [True, False])
+def test_missing_io_report_runs_existing_wrapper_producer(tmp_path, monkeypatch, writes_report):
+    import design_one_shot_runner as design
+    import phase3_one_shot_runner as backend
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _bare_die_load(project)
+    selected = object()
+    calls = []
+    monkeypatch.setattr(design, "_phase2_pdk_config", lambda p, name: selected)
+    def run(p, *, pdk):
+        calls.append((p, pdk))
+        assert (p / "phase3/stage3/pnr/pad_assignment.json").is_file()
+        if writes_report:
+            _io(p)
+        return backend.StepResult("io_pad_chip_top_gen", "PASS", detail="controlled wrapper result")
+    monkeypatch.setattr(backend, "step_io_pad_chip_top_gen", run)
+    result = d06.execute(project, _context())
+    assert calls == [(project, selected)]
+    assert result["component_status"] == ("PASS" if writes_report else "NOT_MEASURED")
+    if not writes_report:
+        assert result["reason"] == "D06_EVIDENCE_ABSENT_OR_INVALID"
+
+
+@pytest.mark.parametrize("status", ["FAIL", "NOT_MEASURED"])
+def test_wrapper_producer_refusal_preserves_native_status(tmp_path, monkeypatch, status):
+    import design_one_shot_runner as design
+    import phase3_one_shot_runner as backend
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _bare_die_load(project)
+    monkeypatch.setattr(design, "_phase2_pdk_config", lambda p, name: object())
+    def run(p, *, pdk):
+        _io(p)
+        return backend.StepResult("io_pad_chip_top_gen", status, detail="controlled native refusal",
+            reason_class=backend._V.ReasonClass.NOT_EXECUTED.value if status == "NOT_MEASURED" else "")
+    monkeypatch.setattr(backend, "step_io_pad_chip_top_gen", run)
+    result = d06.execute(project, _context())
+    assert result["component_status"] == status
+    assert result["reason"] == "D06_PAD_PIN_PRODUCER_REFUSED"
+    assert "controlled native refusal" in result["detail"]
+
+
+def test_profile_package_flag_cannot_replace_owner_delivery_scope(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    result = d06.execute(project, _context())
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D06_DELIVERY_SCOPE_OWNER_FACT_MISSING"
+
+
+def test_stale_current_sta_state_refuses_load_interface(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    state = _bare_die_load(project)
+    _write(state, {"changed": True})
+    result = d06.execute(project, _context())
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D06_CURRENT_STA_AUTHORITY_STALE"
+
+
+def test_current_output_without_io_pad_refuses_load_coverage(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    state = _bare_die_load(project)
+    netlist = project / json.loads(state.read_text())["nl"].removeprefix("/project/")
+    _write(netlist, "module chip_top (clk, rst, stim, obs, missing);\n"
+                    " input clk, rst, stim; output obs, missing;\nendmodule\n")
+    result = d06.execute(project, _context())
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D06_OUTPUT_LOAD_PAD_COVERAGE_MISMATCH"
+
+
+def test_missing_formal_load_refuses_bare_die_interface(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    state = _bare_die_load(project)
+    sdc = project / json.loads(state.read_text())["sdc"].removeprefix("/project/")
+    _write(sdc, "set_output_delay 2 -clock clk [all_outputs]\n")
+    result = d06.execute(project, _context())
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D06_BARE_DIE_LOAD_INTERFACE_UNRESOLVED"
+
+
+def test_unknown_dft_intent_refuses_before_functional_access(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    context = _context()
+    del context["resolved_features"]
+    result = d06.execute(project, context)
+    assert result["reason"] == "D06_DFT_INTENT_UNKNOWN"
+    assert len(result["checks"]) == 2
+
+
+def test_wrong_l7_source_refuses(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    l7 = json.loads((project / d06.L7_REPORT).read_text())
+    l7["test_scenarios"][0]["evidence"] = "input/docs/other.md (table)"
+    _write(project / d06.L7_REPORT, l7)
+    result = d06.execute(project, _context())
+    assert result["reason"] == "D06_EVIDENCE_WRONG_SOURCE"
+
+
+def test_hash_record_is_for_exact_consumed_l10_bytes(tmp_path):
+    project = tmp_path / "project"
+    _early_docs(project)
+    _, binding = d06._bound_json(project, d06.L10_REPORT)
+    import hashlib
+    assert binding["sha256"] == hashlib.sha256(
+        (project / d06.L10_REPORT).read_bytes()).hexdigest()
+    _write(project / d06.L10_REPORT, {"schema_version": 2, "test_cases": []})
+    _, changed = d06._bound_json(project, d06.L10_REPORT)
+    assert changed["sha256"] != binding["sha256"]
+
+
+def test_l20_contradiction_refuses(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project, dft=True)
+    _io(project)
+    result = d06.execute(project, _context())
+    assert result["reason"] == "D06_DFT_INTENT_CONTRADICTION"
+
+
+def test_selected_dft_requires_complete_l20_architecture(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project, dft=True)
+    _io(project)
+    l20 = json.loads((project / d06.L20_REPORT).read_text())
+    del l20["fields"]["scan_chains"][0]["scan_enable"]
+    _write(project / d06.L20_REPORT, l20)
+    context = _context()
+    context["resolved_features"] = {"requires_dft": True, "requires_scan": True}
+    result = d06.execute(project, context)
+    assert result["reason"] == "D06_SELECTED_DFT_ARCHITECTURE_MISSING"
+
+
+def test_current_pdk_uses_hash_bound_adopted_sta_state(tmp_path):
+    state = _write(tmp_path / "phase3/librelane/candidate/sta/state_out.json", {})
+    _write(state.parent / "config.json", {"PDK": "neutral_pdk"})
+    import hashlib
+    digest = hashlib.sha256(state.read_bytes()).hexdigest()
+    report = {"verdict": "PASS", "final": {
+        "sta_state": "/project/phase3/librelane/candidate/sta/state_out.json",
+        "sta_state_sha256": digest}}
+    _write(tmp_path / "reports/phase3/librelane_postroute_repair.json", report)
+    assert d06._current_pdk(tmp_path) == "neutral_pdk"
+    _write(state, {"changed": True})
+    try:
+        d06._current_pdk(tmp_path)
+    except d06.D06Refusal as exc:
+        assert exc.code == "D06_CURRENT_PDK_AUTHORITY_UNRESOLVED"
+    else:
+        raise AssertionError("stale current PDK state was accepted")
+
+
+def test_pad_assignment_refusal_remains_fail(tmp_path, monkeypatch):
+    _producer(monkeypatch, "REFUSE", 1)
+    project = tmp_path / "project"
+    project.mkdir()
+    result = d06.execute(project, _context())
+    assert result["component_status"] == "FAIL"
+    assert result["reason"] == "D06_PAD_ASSIGNMENT_PRODUCER_REFUSED"
+
+
+def test_pad_assignment_not_asked_remains_not_measured(tmp_path, monkeypatch):
+    _producer(monkeypatch, "NOT_ASKED", 2)
+    project = tmp_path / "project"
+    project.mkdir()
+    result = d06.execute(project, _context())
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D06_PAD_ASSIGNMENT_OWNER_FACT_MISSING"
+
+
+
+def test_selected_dft_cannot_inherit_functional_metric_completion(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project, dft=True)
+    _io(project)
+    _bare_die_load(project)
+    context = _context()
+    context["resolved_features"].update(requires_dft=True, requires_scan=True)
+    result = d06.execute(project, context)
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D06_TEST_ACCESS_METRIC_SCOPE_UNRESOLVED"
+    assert not result.get("completed")
+
+
+def test_changed_readset_cannot_complete_metrics(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    _bare_die_load(project)
+    original = d06._current_bare_die_load
+    def changed(*args):
+        answer = original(*args)
+        (project / d06.L10_REPORT).write_text("{}")
+        return answer
+    monkeypatch.setattr(d06, "_current_bare_die_load", changed)
+    result = d06.execute(project, _context())
+    assert result["reason"] == "D06_EVIDENCE_CHANGED_DURING_CONSUMPTION"
+    assert not result.get("completed")
+
+
+def test_unbound_io_test_access_cannot_complete_metrics(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    path = _io(project)
+    io = json.loads(path.read_text())
+    io["test_access"] = {"mode": "functional_unscanned", "functional_cases": 1}
+    _write(path, io)
+    _bare_die_load(project)
+    result = d06.execute(project, _context())
+    assert result["reason"] == "D06_TEST_ACCESS_METRIC_SCOPE_UNRESOLVED"
+    assert not result.get("completed")
+
+
+def test_declared_physical_package_cannot_inherit_bare_die_metrics(tmp_path, monkeypatch):
+    _producer(monkeypatch, "WROTE", 0)
+    project = tmp_path / "project"
+    _early_docs(project)
+    _io(project)
+    _bare_die_load(project)
+    _write(project / "phase1/generated_docs/L1_DATASHEET.json", {
+        "no_package_in_input": False, "package_info": {"kind": "declared package"}})
+    result = d06.execute(project, _context())
+    assert result["reason"] == "D06_PHYSICAL_PACKAGE_SCOPE_UNRESOLVED"
+    assert not result.get("completed")
+
+
+def _early_d03_binding(project):
+    """SOFTWARE-only neutral publication; actual producer coverage is separate."""
+    producer = Path(d06.__file__).with_name('flow109_technology_qualification.py')
+    config = _write(project / 'phase3/librelane/config.json', {'PDK': 'neutral_pdk'})
+    resolved = _write(project / 'reports/flow109/D03/resolved.json', {'PDK': 'neutral_pdk'})
+    rtl = _write(project / 'neutral.v', 'module neutral; endmodule\n')
+    import hashlib
+    body = {'schema': 'vibeic.flow109.technology-qualification.v1',
+            'program': 'flow109_technology_qualification', 'step_id': 'D03',
+            'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True,
+            'inputs': [{'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                       for p in (producer, config, resolved, rtl)]}
+    return _write(project / 'reports/flow109/default_rows/D03.json', body), rtl
+
+
+def test_current_pdk_uses_early_d03_without_later_sta_or_ir(tmp_path):
+    _early_d03_binding(tmp_path)
+    inputs = []
+    assert d06._current_pdk(tmp_path, evidence=inputs) == 'neutral_pdk'
+    assert any(x['path'] == 'reports/flow109/default_rows/D03.json' for x in inputs)
+    assert any(x['path'].endswith('/neutral.v') for x in inputs)
+
+
+def test_early_d03_cannot_hide_conflicting_later_pdk(tmp_path):
+    _early_d03_binding(tmp_path)
+    _bare_die_load(tmp_path)
+    config = tmp_path / 'phase3/librelane/current/config.json'
+    _write(config, {'PDK': 'other_pdk'})
+    with pytest.raises(d06.D06Refusal, match='D06_CURRENT_PDK_AUTHORITY_UNRESOLVED'):
+        d06._current_pdk(tmp_path)
+
+
+@pytest.mark.parametrize('damage', ['stale_rtl', 'missing_rtl', 'failed_row',
+                                    'missing_producer', 'missing_config_binding',
+                                    'stale_resolved', 'empty_inputs', 'malformed_input'])
+def test_early_d03_rejects_unbound_or_stale_authority(tmp_path, damage):
+    receipt, rtl = _early_d03_binding(tmp_path)
+    body = json.loads(receipt.read_text())
+    if damage == 'stale_rtl':
+        rtl.write_text('changed\n')
+    elif damage == 'missing_rtl':
+        rtl.unlink()
+    elif damage == 'failed_row':
+        body['component_status'] = 'FAIL'
+    elif damage == 'missing_producer':
+        body['inputs'] = body['inputs'][1:]
+    elif damage == 'missing_config_binding':
+        body['inputs'].pop(1)
+    elif damage == 'stale_resolved':
+        _write(tmp_path / 'reports/flow109/D03/resolved.json', {'PDK': 'other_pdk'})
+    elif damage == 'empty_inputs':
+        body['inputs'] = []
+    else:
+        body['inputs'] = ['bad']
+    _write(receipt, body)
+    with pytest.raises(d06.D06Refusal, match='D06_CURRENT_D03_AUTHORITY_(INVALID|STALE)'):
+        d06._current_pdk(tmp_path)
+
+
+def test_early_d03_entry_reaches_pad_producer_and_keeps_its_refusal(tmp_path, monkeypatch):
+    _early_d03_binding(tmp_path)
+    called = []
+    def producer(argv):
+        called.append(argv)
+        report = Path(argv[argv.index('--json') + 1])
+        _write(report, {'verdict': 'NOT_ASKED', 'reason': 'neutral owner pad intent absent'})
+        return 2
+    monkeypatch.setattr(d06.pad_assignment_gen, 'main', producer)
+    result = d06.execute(tmp_path, _context())
+    assert called and result['native_started']
+    assert result['reason'] == 'D06_PAD_ASSIGNMENT_OWNER_FACT_MISSING'
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+def _named_l7_plan(project):
+    _early_docs(project)
+    _io(project)
+    _write(project / 'input/docs/L7.md', '- **Reference method**: documented input/output comparison\n')
+    path = project / d06.L7_REPORT
+    body = json.loads(path.read_text())
+    named = {'name': 'Reference method', 'kind': 'named_scenario',
+             'stimulus': 'documented input/output comparison',
+             'expected': 'documented DV scenario reproduced',
+             'evidence': 'L7.md', 'extraction_strategy': 'named_scenario_list'}
+    body['test_scenarios'].append(named)
+    _write(path, body)
+    return named
+
+
+def test_l7_named_prose_is_retained_without_fabricating_l10_case(tmp_path):
+    named = _named_l7_plan(tmp_path)
+    io = json.loads((tmp_path / d06.IO_REPORT).read_text())
+    result, evidence = d06._early_test_access(tmp_path, _context(), io)
+    assert result['functional_cases'] == 1
+    assert result['additional_named_verification_scenarios'] == [named]
+    assert any(item['path'] == 'input/docs/L7.md' for item in evidence)
+    assert len(json.loads((tmp_path / d06.L10_REPORT).read_text())['test_cases']) == 1
+
+
+@pytest.mark.parametrize('damage', ['missing_case', 'changed_expected', 'duplicate_case',
+                                    'unknown_extra_kind', 'wrong_named_strategy',
+                                    'wrong_named_source', 'missing_named_source',
+                                    'empty_named_stimulus', 'ambiguous_named_source'])
+def test_l7_additional_prose_does_not_hide_missing_or_unbound_cases(tmp_path, damage):
+    _named_l7_plan(tmp_path)
+    l7 = json.loads((tmp_path / d06.L7_REPORT).read_text())
+    l10 = json.loads((tmp_path / d06.L10_REPORT).read_text())
+    if damage == 'missing_case':
+        l10['test_cases'] = []
+    elif damage == 'changed_expected':
+        l10['test_cases'][0]['expected'] = 'different outcome'
+    elif damage == 'duplicate_case':
+        l10['test_cases'].append(dict(l10['test_cases'][0]))
+    elif damage == 'unknown_extra_kind':
+        l7['test_scenarios'][-1]['kind'] = 'undeclared_role'
+    elif damage == 'wrong_named_strategy':
+        l7['test_scenarios'][-1]['extraction_strategy'] = 'invented'
+    elif damage == 'wrong_named_source':
+        l7['test_scenarios'][-1]['evidence'] = 'unrelated.md'
+    elif damage == 'missing_named_source':
+        (tmp_path / 'input/docs/L7.md').unlink()
+    elif damage == 'empty_named_stimulus':
+        l7['test_scenarios'][-1]['stimulus'] = ''
+    else:
+        l7['source_documents'].append('input/other/L7.md')
+        l10['source_documents'].append('input/other/L7.md')
+    _write(tmp_path / d06.L7_REPORT, l7)
+    _write(tmp_path / d06.L10_REPORT, l10)
+    io = json.loads((tmp_path / d06.IO_REPORT).read_text())
+    with pytest.raises(d06.D06Refusal):
+        d06._early_test_access(tmp_path, _context(), io)
+
+
+def _native_signoff_fixture(project):
+    """SOFTWARE-only native-publication shape, not tool qualification evidence."""
+    import hashlib
+    state = _bare_die_load(project)
+    (project / d06.CURRENT_REPAIR).unlink()
+    config = json.loads((state.parent / 'config.json').read_text())
+    config.update(DESIGN_DIR=str(project), meta={'step': 'OpenROAD.STAPostPNR'})
+    _write(state.parent / 'config.json', config)
+    values = json.loads(state.read_text())
+    values = {k: str(project / Path(v).relative_to('/project')) for k, v in values.items()}
+    _write(state, values)
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    receipt = {'input': {'step': 'OpenROAD.STAPostPNR',
+                        'state_files': {v: sha(Path(v)) for v in values.values()}},
+               'sha256': {'state_out.json': sha(state), 'config.json': sha(state.parent / 'config.json')}}
+    _write(state.parent / 'vibeic_receipt.json', receipt)
+    report = _write(project / 'reports/phase3/sta_postpnr_signoff.json', {
+        'mode': 'librelane', 'judgment': {'verdict': 'PASS'},
+        'sta_state': str(state), 'sta_state_sha256': sha(state)})
+    return state, report
+
+
+def test_bare_die_load_uses_bound_native_sta_without_repair(tmp_path, monkeypatch):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    _native_signoff_fixture(tmp_path)
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] == 'PASS', result
+    assert result['metrics']['package_escape_feasibility']['capacitance_library_units'] == 0.07
+    assert any(row['path'] == 'reports/phase3/sta_postpnr_signoff.json' for row in result['inputs'])
+    assert not (tmp_path / d06.CURRENT_REPAIR).exists()
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('damage', ['failed_signoff', 'missing_state', 'stale_state',
+                                    'wrong_producer', 'changed_config', 'changed_sdc',
+                                    'changed_netlist', 'missing_input_binding',
+                                    'missing_receipt', 'outside_owner', 'invalid_repair'])
+def test_native_sta_fallback_refuses_stale_or_foreign_load(tmp_path, monkeypatch, damage):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    state, report = _native_signoff_fixture(tmp_path)
+    receipt_path = state.parent / 'vibeic_receipt.json'
+    body = json.loads(receipt_path.read_text())
+    if damage == 'failed_signoff':
+        row = json.loads(report.read_text());row['judgment']['verdict'] = 'FAIL';_write(report, row)
+    elif damage == 'missing_state':
+        state.unlink()
+    elif damage == 'stale_state':
+        _write(state, {'changed': True})
+    elif damage == 'wrong_producer':
+        body['input']['step'] = 'Other.Step';_write(receipt_path, body)
+    elif damage == 'changed_config':
+        _write(state.parent / 'config.json', {'PDK': 'other_pdk'})
+    elif damage == 'changed_sdc':
+        Path(json.loads(state.read_text())['sdc']).write_text('set_load 99 [all_outputs]\n')
+    elif damage == 'changed_netlist':
+        Path(json.loads(state.read_text())['nl']).write_text('module other; endmodule\n')
+    elif damage == 'missing_input_binding':
+        body['input']['state_files'] = {};_write(receipt_path, body)
+    elif damage == 'missing_receipt':
+        receipt_path.unlink()
+    elif damage == 'outside_owner':
+        import hashlib
+        values = json.loads(state.read_text());values['nl'] = str(tmp_path.parent / 'foreign.v')
+        _write(state, values)
+        digest = hashlib.sha256(state.read_bytes()).hexdigest();body['sha256']['state_out.json'] = digest
+        _write(receipt_path, body);row = json.loads(report.read_text());row['sta_state_sha256'] = digest;_write(report, row)
+    else:
+        _write(tmp_path / d06.CURRENT_REPAIR, {'verdict': 'FAIL'})
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] != 'PASS', result
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('shape', ['dangling_symlink', 'directory'])
+def test_existing_invalid_repair_shape_cannot_be_treated_as_absent(tmp_path, monkeypatch, shape):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    _native_signoff_fixture(tmp_path)
+    repair = tmp_path / d06.CURRENT_REPAIR
+    if shape == 'directory':
+        repair.mkdir()
+    else:
+        repair.symlink_to(tmp_path / 'missing-repair.json')
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] == 'NOT_MEASURED', result
+    assert result['reason'] in {'D06_EVIDENCE_WRONG_SOURCE', 'D06_EVIDENCE_ABSENT_OR_INVALID'}
+
+
+def _native_handoff_fixture(project, *, load=True):
+    """Neutral software publication shape; no native qualification is asserted."""
+    import hashlib
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    ref = lambda p: {'path': str(p.relative_to(project)), 'sha256': sha(p)}
+    state, old = _native_signoff_fixture(project)
+    # Leave an inherited stale post-route reference; it is not the current bundle.
+    old.unlink()
+    config = state.parent / 'config.json'
+    body = json.loads(config.read_text());body['meta']['step'] = 'OpenROAD.STAPrePNR'
+    _write(config, body)
+    values = json.loads(state.read_text())
+    if not load:
+        Path(values['sdc']).write_text('set_output_delay 2 -clock clk [all_outputs]\n# set_load refused\n')
+    fp = {'step': 'OpenROAD.STAPrePNR', 'state_files': {values['nl']: sha(Path(values['nl']))},
+          'config_files': {values['sdc']: sha(Path(values['sdc']))}}
+    for name, value in [('input_fingerprint.json', fp), ('pdk_root.json', {'revision': 'neutral'}),
+                        ('invocation.log', 'actual reference invocation\n')]:
+        _write(state.parent / name, value)
+    names = ['config.json', 'state_out.json', 'input_fingerprint.json', 'pdk_root.json', 'invocation.log', 'chip_top.nl.v']
+    receipt = _write(state.parent / 'vibeic_receipt.json', {
+        'input': fp, 'sha256': {name: sha(state.parent / name) for name in names}})
+    netlist, sdc = Path(values['nl']), Path(values['sdc'])
+    delivered = _write(project / 'reports/handoff/delivered.v', netlist.read_text())
+    handoff = _write(project / 'steps/handoff/outputs.json', {'status': 'PASS', 'canonical_pass': True})
+    timing = {'status': 'MEASURED', 'value': [{'mode': 'functional', 'corner': 'neutral', 'sdc': ref(sdc)}],
+              'consumed_inputs': {str(sdc): sha(sdc), str(netlist): sha(netlist)},
+              'native_records': {'config.json': ref(config), 'state_out.json': ref(state)},
+              'native_receipt': ref(receipt)}
+    delivery = _write(project / 'reports/handoff/delivery.json', {
+        'schema': 'vibeic.flow109.d30-delivery.v1', 'step_id': 'D30', 'context_sha256': 'c' * 64,
+        'handoff_record': ref(handoff), 'source_netlist': ref(netlist),
+        'delivered_netlist': ref(delivered), 'consumed_timing': timing})
+    _write(project / 'reports/flow109/default_rows/D30.json', {
+        'step_id': 'D30', 'default_row_status': 'PASS', 'completed': True, 'context_sha256': 'c' * 64,
+        'metric_acceptance': {'status': 'PASS', 'obligations': [{'status': 'PASS'}]},
+        'd30_delivery_receipt': ref(delivery)})
+    return state, delivery
+
+
+def test_bare_die_load_consumes_current_handoff_before_inherited_sta(tmp_path, monkeypatch):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    state, _ = _native_handoff_fixture(tmp_path)
+    _write(tmp_path / 'reports/phase3/sta_postpnr_signoff.json', {'judgment': {'verdict': 'FAIL'}})
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] == 'PASS', (result.get('reason'), result.get('detail'))
+    measured = result['metrics']['package_escape_feasibility']
+    assert measured['sta_state']['sha256'] == d06._sha(state)
+    assert measured['capacitance_library_units'] == 0.07
+    assert measured['physical_package_model_consumed'] is False
+    assert any(item['path'] == 'reports/flow109/default_rows/D30.json' for item in result['inputs'])
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('damage', ['changed_sdc', 'changed_netlist', 'changed_native_log',
+                                    'wrong_native_step', 'failed_handoff', 'foreign_source',
+                                    'missing_external_load'])
+def test_current_handoff_load_refuses_changed_or_unmeasured_inputs(tmp_path, monkeypatch, damage):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    state, delivery_path = _native_handoff_fixture(tmp_path, load=damage != 'missing_external_load')
+    delivery = json.loads(delivery_path.read_text())
+    values = json.loads(state.read_text())
+    if damage == 'changed_sdc':
+        Path(values['sdc']).write_text('set_load 99 [all_outputs]\n')
+    elif damage == 'changed_netlist':
+        Path(values['nl']).write_text('module foreign; endmodule\n')
+    elif damage == 'changed_native_log':
+        (state.parent / 'invocation.log').write_text('changed invocation\n')
+    elif damage == 'wrong_native_step':
+        path = state.parent / 'vibeic_receipt.json';body = json.loads(path.read_text())
+        body['input']['step'] = 'Other.Step';_write(path, body)
+        delivery['consumed_timing']['native_receipt']['sha256'] = d06._sha(path)
+    elif damage == 'failed_handoff':
+        path = tmp_path / 'steps/handoff/outputs.json';_write(path, {'status': 'FAIL', 'canonical_pass': False})
+        delivery['handoff_record']['sha256'] = d06._sha(path)
+    elif damage == 'foreign_source':
+        path = _write(tmp_path.parent / 'foreign.v', Path(values['nl']).read_text())
+        delivery['source_netlist'] = {'path': str(path), 'sha256': d06._sha(path)}
+    _write(delivery_path, delivery)
+    row = tmp_path / 'reports/flow109/default_rows/D30.json';body = json.loads(row.read_text())
+    body['d30_delivery_receipt']['sha256'] = d06._sha(delivery_path);_write(row, body)
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] != 'PASS', result
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+    if damage == 'missing_external_load':
+        assert result['reason'] == 'D06_BARE_DIE_LOAD_INTERFACE_UNRESOLVED', result
+
+
+def test_selected_load_scenario_uses_own_native_and_never_old_handoff(tmp_path, monkeypatch):
+    """Software wiring control; native execution is measured on the actual subject."""
+    import librelane_prelayout as checks
+    from _ppa import timing
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    state, old_delivery = _native_handoff_fixture(tmp_path, load=False)
+    old_row = tmp_path / 'reports/flow109/default_rows/D30.json'
+    old_bytes = {p: p.read_bytes() for p in (old_delivery, old_row)}
+    values = json.loads(state.read_text())
+    sdc = tmp_path / 'reports/scenarios/new/neutral.sdc'
+    _write(sdc, 'set_output_delay 2 -clock clk [all_outputs]\nset_load 0.04 [get_ports {obs}]\n')
+    mapped = _write(tmp_path / 'phase2/stage2/synth/chip_top_synth.v', Path(values['nl']).read_text())
+    values['nl'] = str(mapped); values.pop('sdc', None); _write(state, values)
+    config = state.parent / 'config.json'
+    cfg = json.loads(config.read_text()); cfg['PNR_SDC_FILE'] = str(sdc); _write(config, cfg)
+    input_config = state.parent / 'input.config.json'
+    raw = dict(cfg, meta={**cfg['meta'], 'flow': None, 'version': 1})
+    _write(input_config, raw)
+    fp = {'step': 'OpenROAD.STAPrePNR', 'config': d06._sha(input_config),
+          'state_files': {str(mapped): d06._sha(mapped)},
+          'config_files': {str(sdc): d06._sha(sdc)}}
+    _write(state.parent / 'input_fingerprint.json', fp)
+    receipt = state.parent / 'vibeic_receipt.json'
+    body = json.loads(receipt.read_text());body['input'] = fp
+    for name in body['sha256']:
+        body['sha256'][name] = d06._sha(state.parent / name)
+    _write(receipt, body)
+    inputs = {'@liberty': str(tmp_path / 'neutral.lib')}
+    monkeypatch.setattr(timing, 'asic_sdc_input_digest', lambda *args: ('f' * 64, inputs))
+    monkeypatch.setattr(checks, 'judge_sdc', lambda *args: {'verdict': 'PASS'})
+    monkeypatch.setattr(checks, 'judge_slack', lambda *args: {'verdict': 'PASS'})
+    rec = _write(sdc.parent / 'asic_sdc.json', {
+        'schema': 'vibe-ic/step7-asic-sdc/1', 'step': 7, 'top': 'chip_top', 'pdk': 'neutral_pdk',
+        'path': str(sdc.relative_to(tmp_path)), 'sha256': d06._sha(sdc),
+        'input_digest': 'f' * 64, 'inputs': inputs})
+    _write(tmp_path / 'phase3/librelane_switch.json', {'package_load_scenario': {
+        'sdc_record': str(rec.relative_to(tmp_path)), 'native_state': str(state.relative_to(tmp_path)),
+        'native_config': str(input_config.relative_to(tmp_path))}})
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] == 'PASS', (result.get('reason'), result.get('detail'))
+    measured = result['metrics']['package_escape_feasibility']
+    assert measured['capacitance_library_units'] == 0.04
+    assert measured['load_selector'] == 'explicit_output_ports'
+    assert not any(row['path'].endswith('/D30.json') for row in result['inputs'])
+    assert all(p.read_bytes() == data for p, data in old_bytes.items())
+    # A selected changed native log is rejected, never replaced by old D30.
+    (state.parent / 'invocation.log').write_text('changed native log\n')
+    refused = d06.execute(tmp_path, _context())
+    assert refused['reason'] == 'D06_LOAD_SCENARIO_STALE_OR_UNMEASURED'
+    assert refused['component_status'] == 'NOT_MEASURED'

@@ -26,6 +26,46 @@ def _put(project, rel, value):
     return {"path": rel, "sha256": _sha(path)}
 
 
+@pytest.mark.parametrize('native_status,expected',
+                         [('PASS', 'PASS'), ('FAIL', 'FAIL'), ('INCOMPLETE', 'NOT_MEASURED')])
+def test_native_references_survive_dispatch_publication(tmp_path, monkeypatch, native_status, expected):
+    import flow109
+    import flow109_final_perc as perc
+    from _atomic_artefact import write_json
+    netlist = tmp_path / 'final.v'
+    netlist.write_text('module selected_chip; endmodule\n')
+    state = {'nl': str(netlist), 'spice': str(tmp_path / 'final.spice')}
+    folder = tmp_path / 'native'
+    _put(tmp_path, 'native/config.json', {'DESIGN_NAME': 'selected_chip', 'PDK': 'test-kit',
+        'STD_CELL_LIBRARY': 'test-cells'})
+    _put(tmp_path, 'native/state_out.json', state)
+    _put(tmp_path, 'reports/phase3/librelane_pv_lvs.json',
+         {'metrics': {'magic__illegal_overlap__count': {'folder': str(folder)}}})
+    report = _put(tmp_path, 'reports/phase3/cvc_native/report.rpt', 'synthetic native report\n')
+    monkeypatch.setattr(perc.librelane_postroute, 'stapostpnr_state', lambda _: (folder, state))
+    monkeypatch.setattr(perc.librelane_contract, 'resolve_image', lambda _: TEST_IMAGE)
+    monkeypatch.setattr(perc.librelane_contract, 'resolve_pdk_root', lambda *a, **kw: tmp_path)
+    monkeypatch.setattr(perc.phase3_runner, '_native_cvc_category',
+        lambda *a, **kw: {'result': native_status, 'category': 'Native CVC electrical rules',
+                         'evidence': report})
+    context = {'context_sha256': 'synthetic-context', 'resolved_row': {'id': 'D66'}}
+    result = perc.execute(tmp_path, context)
+    answer = flow109._selected_step_result(tmp_path, context, result, perc)
+    write_json(tmp_path / 'reports/flow109/components/D66.json', answer)
+    assert answer['default_row_status'] == expected
+    def references(value):
+        if isinstance(value, dict):
+            if 'path' in value and 'sha256' in value:
+                yield value
+            for child in value.values():
+                yield from references(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from references(child)
+    bound = list(references(answer))
+    assert bound
+    for ref in bound:
+        assert _sha(tmp_path / ref['path']) == ref['sha256'], ref['path']
 
 
 def _summary(*, automated_fail=False, omit_manual=None):
@@ -243,26 +283,165 @@ def _case(project, monkeypatch, *, producer="PASS", gate="PASS",
     return perc, context, subjects, calls, d65_outputs
 
 
+def test_registry_uses_only_the_D66_existing_owner_adapter():
+    import flow109
+
+    registry = json.loads(REGISTRY.read_text())
+    row = next(row for row in registry["rows"] if row["id"] == "D66")
+    profile = row["profiles"][0]
+    dispatch = profile["dispatch"]
+    assert dispatch["adapter"] == "flow109_final_perc"
+    assert dispatch["native_step_id"] == "flow109.D66"
+    assert dispatch["acceptance_scope"] == "existing_native_component_only"
+    assert dispatch["flow109_metrics_status"] == "UNIMPLEMENTED_MANUAL_REVIEW_PENDING"
+    assert dispatch["producer"] == "execution_backend_producers.py:produce"
+    assert dispatch["consumer"] == "execution_backend_gates.py:evaluate/perc_signoff_check.py"
+    assert profile["execution_status"] == "SOURCE_ADAPTER_IMPLEMENTED_COMPONENT_ONLY"
+    features = next(item["features"] for item in registry["reference_profiles"]
+                    if item["name"] == "Small digital IC without DFT")
+    resolved = flow109.resolve_step(flow109.resolve_plan(features), "D66")
+    assert flow109.source_owned_native_dispatch(resolved) == dispatch
 
 
+def test_d66_binds_job_image_to_resolved_and_inspected_runtime(tmp_path, monkeypatch):
+    perc, context, _subjects, calls, _outputs = _case(tmp_path, monkeypatch)
+    result = perc.execute(tmp_path, context)
+    assert calls and calls[0]["image_id"] == TEST_IMAGE
+    assert result["runtime_image"] == {
+        "declared_reference": TEST_IMAGE,
+        "resolved_reference": TEST_IMAGE,
+        "digest": "sha256:" + "1" * 64,
+        "inspected_digests": ["sha256:" + "1" * 64],
+    }
 
 
+@pytest.mark.parametrize("mode,declared,reason", [
+    ("valid", OTHER_IMAGE, "D66_RUNTIME_IMAGE_MISMATCH"),
+    ("missing", TEST_IMAGE, "D66_RUNTIME_IMAGE_AUTHORITY_ABSENT"),
+    ("uninspectable", TEST_IMAGE, "D66_RUNTIME_IMAGE_UNINSPECTABLE"),
+    ("changed", TEST_IMAGE, "D66_RUNTIME_IMAGE_MISMATCH"),
+])
+def test_d66_runtime_identity_refuses_before_native(
+        tmp_path, monkeypatch, mode, declared, reason):
+    perc, context, _subjects, calls, _outputs = _case(
+        tmp_path, monkeypatch, declared_image=declared, runtime_authority=mode)
+    result = perc.execute(tmp_path, context)
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == reason
+    assert result["native_started"] is False and calls == []
 
 
+def test_automated_pass_binds_final_subjects_but_preserves_manual_and_unsupported(tmp_path,
+                                                                                 monkeypatch):
+    perc, context, subjects, calls, _d65_outputs = _case(tmp_path, monkeypatch)
+    result = perc.execute(tmp_path, context)
+    assert result["native_started"] is True
+    assert result["automated_component_status"] == "PASS"
+    assert result["component_status"] == result["flow109_acceptance"] == "NOT_MEASURED"
+    assert result["whole_ic_acceptance"] == "NOT_MEASURED"
+    assert result["reason"] == "D66_MANUAL_REVIEW_PENDING"
+    assert result["d65_evidence_kind"] == "window_component"
+    assert set(result["manual_review_pending"]) == perc.REQUIRED_MANUAL
+    assert result["unsupported_capabilities"]
+    assert result["commercial_perc_qualification"] == "NOT_CLAIMED"
+    declared = calls[0]["resolved_input_manifest"]["files"]
+    for ref in subjects.values():
+        assert ref["path"] in declared and declared[ref["path"]] == ref["sha256"]
+    current = perc.validate_final_perc(tmp_path, result["receipt"])
+    assert current["component_status"] == current["whole_ic_acceptance"] == "NOT_MEASURED"
 
 
+def test_existing_canonical_step31_receipt_binds_current_inputs_without_wrapper(tmp_path,
+                                                                                monkeypatch):
+    perc, context, subjects, calls, d65_outputs = _case(
+        tmp_path, monkeypatch, d65_kind="canonical")
+    result = perc.execute(tmp_path, context)
+    assert result["native_started"] is True
+    assert result["d65_evidence_kind"] == "canonical_step31"
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D66_MANUAL_REVIEW_PENDING"
+    declared = calls[0]["resolved_input_manifest"]["files"]
+    assert declared["phase3/stage3/pnr/routed.def"] == subjects["geometry_def"]["sha256"]
+    assert all(declared[path] == digest for path, digest in d65_outputs.items())
+    current = perc.validate_final_perc(tmp_path, result["receipt"])
+    assert current["d65_evidence_kind"] == "canonical_step31"
+    assert current["flow109_acceptance"] == current["whole_ic_acceptance"] == "NOT_MEASURED"
 
 
+@pytest.mark.parametrize("damage,reason,status", [
+    ("wrong_step", "D66_D65_CANONICAL_WRONG_STEP", "NOT_MEASURED"),
+    ("fail", "D66_D65_CANONICAL_FAILED", "FAIL"),
+    ("missing_input_binding", "D66_D65_CANONICAL_FINAL_DEF_MISMATCH", "NOT_MEASURED"),
+    ("project_glob", "D66_D65_CANONICAL_OUTPUT_BINDING_INVALID", "NOT_MEASURED"),
+    ("consumer_disallowed", "D66_D65_CANONICAL_PRODUCER_BINDING_INVALID", "NOT_MEASURED"),
+    ("bare_pass", "D66_D65_CANONICAL_NOT_ACCEPTED", "NOT_MEASURED"),
+])
+def test_canonical_step31_value_negatives_refuse_before_step28(
+        tmp_path, monkeypatch, damage, reason, status):
+    perc, context, _subjects, calls, _outputs = _case(
+        tmp_path, monkeypatch, d65_kind="canonical", d65_damage=damage)
+    result = perc.execute(tmp_path, context)
+    assert result["component_status"] == status, result
+    assert result["reason"] == reason
+    assert result["native_started"] is False and calls == []
+    assert result["flow109_acceptance"] == result["whole_ic_acceptance"] == "NOT_MEASURED"
 
 
+@pytest.mark.parametrize("change", ["missing", "changed"])
+def test_canonical_step31_live_output_must_match_receipt(tmp_path, monkeypatch, change):
+    perc, context, _subjects, calls, outputs = _case(
+        tmp_path, monkeypatch, d65_kind="canonical")
+    path = tmp_path / next(iter(outputs))
+    if change == "missing":
+        path.unlink()
+    else:
+        path.write_text("stale")
+    result = perc.execute(tmp_path, context)
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] in {"D66_REQUIRED_INPUT_ABSENT", "D66_REQUIRED_INPUT_CHANGED"}
+    assert result["native_started"] is False and calls == []
 
 
+@pytest.mark.parametrize("producer,gate,automated_fail", [
+    ("FAIL", "PASS", False), ("PASS", "FAIL", False), ("PASS", "PASS", True)])
+def test_existing_owner_or_value_failure_has_precedence(tmp_path, monkeypatch,
+                                                        producer, gate, automated_fail):
+    perc, context, _subjects, _calls, _d65_outputs = _case(
+        tmp_path, monkeypatch, producer=producer, gate=gate,
+        automated_fail=automated_fail)
+    result = perc.execute(tmp_path, context)
+    assert result["component_status"] == "FAIL", result
+    assert result["automated_component_status"] == "FAIL"
+    assert result["reason"] == "D66_AUTOMATED_PERC_FAILED"
+    assert result["flow109_acceptance"] == result["whole_ic_acceptance"] == "NOT_MEASURED"
 
 
+def test_missing_final_subject_refuses_before_existing_owner(tmp_path, monkeypatch):
+    perc, context, subjects, calls, _d65_outputs = _case(tmp_path, monkeypatch)
+    (tmp_path / subjects["geometry_gds"]["path"]).unlink()
+    result = perc.execute(tmp_path, context)
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["native_started"] is False and calls == []
+    assert result["reason"] == "D66_REQUIRED_INPUT_ABSENT"
 
 
+@pytest.mark.parametrize("changed", ["geometry_gds", "adopted_netlist"])
+def test_current_final_geometry_or_netlist_change_invalidates_reuse(tmp_path, monkeypatch, changed):
+    perc, context, subjects, _calls, _d65_outputs = _case(tmp_path, monkeypatch)
+    result = perc.execute(tmp_path, context)
+    path = tmp_path / subjects[changed]["path"]
+    path.write_bytes(path.read_bytes() + b"changed")
+    with pytest.raises(Exception, match="D66_REQUIRED_INPUT_CHANGED"):
+        perc.validate_final_perc(tmp_path, result["receipt"])
 
 
+def test_missing_required_manual_disclosure_cannot_become_pass(tmp_path, monkeypatch):
+    perc, context, _subjects, _calls, _d65_outputs = _case(
+        tmp_path, monkeypatch, omit_manual="io_supply_pad_sufficiency")
+    result = perc.execute(tmp_path, context)
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D66_REQUIRED_REVIEW_CATEGORY_ABSENT"
+    assert result["flow109_acceptance"] == result["whole_ic_acceptance"] == "NOT_MEASURED"
 
 
 def test_native_cvc_report_is_graded_from_contents_not_process_rc():
@@ -336,10 +515,46 @@ def test_native_cvc_producer_publishes_bound_report_and_receipt(
     assert receipt["inputs"]["adopted_netlist"]["sha256"] == _sha(adopted)
 
 
+def test_d66_refuses_when_existing_owner_did_not_publish_native_cvc(tmp_path, monkeypatch):
+    perc, context, _subjects, calls, _d65_outputs = _case(
+        tmp_path, monkeypatch, native_cvc=False)
+    result = perc.execute(tmp_path, context)
+    assert calls
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == "D66_NATIVE_CVC_EVIDENCE_ABSENT"
 
 
+@pytest.mark.parametrize("damage,reason", [
+    ("forged", "D66_NATIVE_CVC_PRODUCER_INVALID"),
+    ("failed_launch", "D66_NATIVE_CVC_PRODUCER_INVALID"),
+    ("forged_input", "D66_NATIVE_CVC_EVIDENCE_MISMATCH"),
+    ("mismatched", "D66_NATIVE_CVC_EVIDENCE_MISMATCH"),
+    ("wrong_image", "D66_NATIVE_CVC_PRODUCER_INVALID"),
+])
+def test_d66_refuses_forged_or_mismatched_native_cvc(
+        tmp_path, monkeypatch, damage, reason):
+    perc, context, _subjects, _calls, _outputs = _case(
+        tmp_path, monkeypatch, cvc_damage=damage)
+    result = perc.execute(tmp_path, context)
+    assert result["component_status"] == "NOT_MEASURED"
+    assert result["reason"] == reason
 
 
+@pytest.mark.parametrize("native_fail,expected_rc,expected_status", [
+    (False, 0, "NOT_MEASURED"),
+    (True, 1, "FAIL"),
+])
+def test_native_cvc_reaches_actual_perc_consumer(
+        tmp_path, monkeypatch, native_fail, expected_rc, expected_status):
+    perc, context, _subjects, _calls, _outputs = _case(
+        tmp_path, monkeypatch, native_cvc_fail=native_fail, real_consumer=True)
+    result = perc.execute(tmp_path, context)
+    assert result["consumer_result"]["audit"]["rc"] == expected_rc
+    assert result["component_status"] == expected_status
+    if native_fail:
+        assert result["reason"] == "D66_AUTOMATED_PERC_FAILED"
+        assert result["consumer_result"]["audit"]["automated_failed"] == [
+            "Native CVC electrical rules"]
 
 
 @pytest.mark.parametrize(('native_status', 'count', 'expected'),
