@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
+import selectors
 import shutil
 import subprocess
 import tempfile
@@ -17,15 +19,32 @@ class Commands:
 
     def run(self, argv, cwd=None):
         started = time.perf_counter()
+        argv = list(map(str, argv))
+        log = self.directory / f"command_{len(self.records) + 1}.log"
         try:
-            completed = subprocess.run([str(a) for a in argv], cwd=cwd or self.directory,
-                                       capture_output=True, text=True)
+            with log.open("wb") as output:
+                with subprocess.Popen(argv, cwd=cwd or self.directory, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True) as process, selectors.DefaultSelector() as selector:
+                    captured = {process.stdout: bytearray(), process.stderr: bytearray()}
+                    for pipe in captured:
+                        selector.register(pipe, selectors.EVENT_READ)
+                    while selector.get_map():
+                        for key, _ in selector.select():
+                            chunk = os.read(key.fd, 65536)
+                            if not chunk:
+                                selector.unregister(key.fileobj)
+                                continue
+                            captured[key.fileobj].extend(chunk)
+                            output.write(chunk)
+                            output.flush()
+                    streams = [data.decode(pipe.encoding).replace("\r\n", "\n").replace("\r", "\n")
+                               for pipe, data in captured.items()]
+                    completed = subprocess.CompletedProcess(argv, process.wait(), *streams)
         except FileNotFoundError:
+            log.unlink(missing_ok=True)
             return None
         self.seconds += time.perf_counter() - started
-        log = self.directory / f"command_{len(self.records) + 1}.log"
-        log.write_text(completed.stdout + completed.stderr)
-        self.records.append({"command": list(map(str, argv)), "exit_code": completed.returncode,
+        self.records.append({"command": argv, "exit_code": completed.returncode,
                              "log": str(log)})
         return completed
 
@@ -241,7 +260,11 @@ def simulation(project, directory, tool, commands):
 
 def formal(project, directory, tool, commands):
     from formal_property_run import _ensure_expert_observers_bound, _model_texts
+    from flow109_netlist_cdc import _word
+    from formal_harness_gen import _resolve_top
 
+    authored = {}
+    declared_top = _resolve_top([], tool.get("top"), project)
     configured = tool.get("properties", [])
     paths = [Path(p) if Path(p).is_absolute() else project / p for p in configured]
     if not paths:
@@ -263,7 +286,66 @@ def formal(project, directory, tool, commands):
             paths = [path]
     if not paths or any(not path.is_file() for path in paths):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
-    statuses, covers, reports, required, observed, native_steps = [], [], [], [], [], []
+    statuses, covers, reports, required, observed, native_steps, scope, proof_scopes = [], [], [], [], [], [], [], []
+
+    def cover_model(output, key, options):
+        model, cells = output / "model/design.il", output / "model/cover_inputs.json"
+        if not model.is_file():
+            native_steps.append({"name": key + ".Cover.Input", "ran": False,
+                "exit_code": None, "status": "NOT_MEASURED", "detail": "The native formal model is absent."})
+            return None
+        compiled = commands.run(["yosys", "-Q", "-T", "-p",
+            f"read_rtlil {_word(model)}; write_json {_word(cells)}"])
+        reports.append(cells)
+        if compiled is None or compiled.returncode or not cells.is_file():
+            native_steps.append({"name": key + ".Cover.Input", "ran": compiled is not None,
+                "exit_code": compiled.returncode if compiled is not None else None, "status": "NOT_MEASURED"})
+            return None
+        conditional, assertions, explicit, subjects = [], 0, 0, set()
+        modules = json.loads(cells.read_text())["modules"]
+        for module, body in modules.items():
+            for name, cell in body.get("cells", {}).items():
+                if cell["type"] == "$scopeinfo" and "." not in name:
+                    subject = cell.get("attributes", {}).get("module")
+                    if subject:
+                        subjects.add(subject)
+                kind = (cell.get("parameters", {}).get("FLAVOR") if cell["type"] == "$check"
+                        else cell["type"].removeprefix("$"))
+                if kind == "assert":
+                    assertions += 1
+                    if cell["connections"].get("EN") != ["1"]:
+                        conditional.append(module + "/" + name)
+                elif kind == "cover":
+                    explicit += 1
+        proof_scopes.append({"task": key, "harness_modules": sorted(modules), "subjects": sorted(subjects),
+            "proves_declared_top": (authored.get("proves_declared_top") is True if authored else
+                                    bool(declared_top and declared_top in subjects))})
+        scope.append(f"{key}: {assertions} native assertions, {len(conditional)} conditional enables, {explicit} existing covers.")
+        if not conditional and not explicit:
+            return assertions
+        selected, deck = output / "cover_inputs.txt", output / "cover.sby"
+        selected.write_text("\n".join(conditional) + "\n")
+        native_options = re.sub(r"(?m)^mode[ \t]+\S+[ \t]*$", "mode cover", options)
+        native_options = re.sub(r"(?m)^aigsmt[ \t]+[^\n]*\n?", "", native_options)
+        deck.write_text("[options]\n" + native_options + "\n[engines]\nsmtbmc yices\n"
+            "[script]\nread_rtlil design.il\n"
+            + ("select -read cover_inputs.txt\nchformal -assert -coverenable\nselect *\n" if conditional else "")
+            + "[files]\ndesign.il " + str(model) + "\ncover_inputs.txt " + str(selected) + "\n")
+        destination = output / "cover"
+        result = commands.run(["sby", "-f", "-d", destination, deck], cwd=output)
+        status_file = destination / "status"
+        words = status_file.read_text().split() if status_file.is_file() else []
+        status = words[0] if words else ""
+        covers.append(status)
+        required.append(key + ":cover")
+        if status in {"PASS", "FAIL"}:
+            observed.append(key + ":cover")
+        native_steps.append({"name": key + ".Cover", "ran": result is not None,
+            "exit_code": result.returncode if result is not None else None,
+            "status": status if status in {"PASS", "FAIL"} else "NOT_MEASURED"})
+        reports.extend([cells, selected, deck, *sorted(destination.rglob("status"))])
+        return assertions
+
     for index, source in enumerate(paths):
         _ensure_expert_observers_bound(source, source.parent,
                                       harness_text=_model_texts(source, source.parent, None))
@@ -286,16 +368,28 @@ def formal(project, directory, tool, commands):
             config = output / "config.sby"
             word = (output / "status").read_text().strip().split() if (output / "status").is_file() else []
             status = word[0] if word else ""
+            mode = ""
             if config.is_file():
-                if re.search(r"^mode\s+prove\s*$", config.read_text(), re.M):
-                    statuses.append(status)
-                if re.search(r"^mode\s+cover\s*$", config.read_text(), re.M):
+                body = config.read_text()
+                mode_match = re.search(r"^mode\s+(\S+)\s*$", body, re.M)
+                mode = mode_match[1] if mode_match else ""
+                if mode == "cover":
                     covers.append(status)
+            row = {"name": f"SymbiYosys.{task}", "ran": True,
+                   "exit_code": completed.returncode,
+                   "status": status if status in {"PASS", "FAIL"} else "NOT_MEASURED"}
+            native_steps.append(row)
+            if mode in {"prove", "bmc"}:
+                options = re.search(r"(?ms)^\[options\]\s*\n(.*?)(?=^\[|\Z)", body)
+                assertions = cover_model(output, key, options[1] if options else "mode cover\n")
+                if status == "PASS" and assertions is None:
+                    status = "NOT_MEASURED"
+                    row["status"] = status
+                    row["detail"] = "The native formal model's cover targets could not be read."
+                if mode == "prove":
+                    statuses.append(status)
             if status in {"PASS", "FAIL"}:
                 observed.append(key)
-            native_steps.append({"name": f"SymbiYosys.{task}", "ran": True,
-                                 "exit_code": completed.returncode,
-                                 "status": status if status in {"PASS", "FAIL"} else "NOT_MEASURED"})
             reports.extend(native)
     metrics = {}
     if statuses and all(word in {"PASS", "FAIL"} for word in statuses):
@@ -304,8 +398,18 @@ def formal(project, directory, tool, commands):
         metrics["vacuous_required_proofs"] = sum(word == "FAIL" for word in covers)
     if required and all(row["status"] in {"PASS", "FAIL"} for row in native_steps):
         metrics["proof_partition_coverage"] = {"required": required, "observed": observed}
-    result = commands.result(metrics, reports,
-        "Native property proofs only. Antecedent reachability is measured only when its cover tasks exist.")
+    cover_detail = ("Native SBY cover tasks use existing covers and conditional assertion enables." if covers else
+        "No native cover targets were present; no vacuity count is reported."
+        if scope and not any(row["name"].endswith(".Cover.Input") for row in native_steps) else
+        "Native cover target scope is unmeasured.")
+    proves_top = bool(proof_scopes) and all(row["proves_declared_top"] for row in proof_scopes)
+    scope_report = directory / "formal_scope.json"
+    scope_report.write_text(json.dumps({"declared_top": declared_top, "proves_declared_top": proves_top,
+        "tasks": proof_scopes, "authoring": {key: authored[key] for key in (
+            "top", "declared_top", "descended_to_leaf", "proves_declared_top", "selection") if key in authored},
+        "scope": "Properties of the actual harness subjects only; top-level function uses simulation, ISA suites and GLS."}, indent=2) + "\n")
+    result = commands.result(metrics, [*reports, scope_report], " ".join([*scope, cover_detail,
+        f"proves_declared_top={str(proves_top).lower()}; scope is the actual harness subjects in {scope_report}."]))
     result["native_steps"] = native_steps
     return result
 

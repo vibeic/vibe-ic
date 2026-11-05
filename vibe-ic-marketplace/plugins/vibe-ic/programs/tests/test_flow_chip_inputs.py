@@ -408,7 +408,10 @@ def test_pad_edges_follow_the_native_linked_corner(inputs, tmp_path, linked, max
     native["PAD_LIBS"] = {"*": paths}
     result = chip.prepare(project, config)
     script = tmp_path / "read.sdc.tcl"
-    script.write_text('''proc get_ports args {return PORTS}
+    script.write_text('''namespace eval sta {proc top_instance {} {return INSTANCE}}
+proc INSTANCE method {return CELL}
+proc CELL {method name} {return PORT}
+proc get_ports args {return PORTS}
 proc get_clocks args {return CLOCKS}
 proc create_clock args {}
 proc set_units args {}
@@ -456,7 +459,8 @@ def test_ring_layers_equal_to_mesh_layers_use_native_connection_once(inputs):
     ("lower_contact", "outer_vertical", "outer_horizontal", "ring_vertical"),
 ])
 @pytest.mark.parametrize("existing", [False, True])
-def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical, horizontal, ring, existing):
+@pytest.mark.parametrize("owned", [False, True])
+def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical, horizontal, ring, existing, owned):
     project, config, native, _, _ = inputs
     native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=True,
                   PDN_VERTICAL_LAYER=vertical, PDN_HORIZONTAL_LAYER=horizontal,
@@ -478,10 +482,16 @@ def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical
     reverse = f"add_pdn_connect -grid stdcell_grid -layers {{{target} {access}}}"
     if existing:
         original += reverse + "\n"
-    pdn = _write(project / "input/pdn.tcl", original)
+    pdn = _write(project / ("work/flow/pdn_cfg.tcl" if owned else "input/pdn.tcl"), original)
     config["PDN_CFG"] = native["PDN_CFG"] = str(pdn)
     result = chip.prepare(project, config)
     generated = Path(result["PDN_CFG"]).read_text()
+    if owned:
+        assert "--config [file join $::env(STEP_DIR) config.json]" in generated
+        assert "pdn__requested_width__um__variable:" in generated
+        selected = project / "work/flow/chip/pdn_cfg.tcl"
+        assert "source " + str(selected) in generated
+        generated = selected.read_text()
     command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {target}}}"
     assert generated.count(command) + generated.count(reverse) == 1
     assert "signal_access" not in generated
@@ -561,6 +571,43 @@ def test_multiple_clock_delays_are_additive(inputs):
     assert "set_output_delay 4.8 -clock core_clock_1 -add_delay" in text
 
 
+@pytest.mark.parametrize("existing_sdc", [False, True])
+@pytest.mark.parametrize("clock", ["clk", "-quiet", "wild*", "wild?"])
+def test_native_sta_constrains_literal_bus_ports(inputs, tmp_path, existing_sdc, clock):
+    import shutil
+    import subprocess
+
+    sta = shutil.which("sta")
+    if not sta:
+        pytest.skip("Native OpenSTA is required")
+    project, config, _, ports, _ = inputs
+    config["CLOCK_PORT"] = clock
+    ports = [{**ports[0], "name": clock}, *ports[1:-1],
+             {**ports[-1], "width": 2, "msb": 1, "indexed": True}]
+    netlist = _write(tmp_path / "ports.v", "module ports(clk,\\-quiet ,\\wild* ,\\wild? ,wild_one,wild_two,reset,data,result,spare_data);\n"
+        "input clk,\\-quiet ,\\wild* ,\\wild? ,wild_one,wild_two,reset; input [5:2] data,spare_data; output [1:0] result;\n"
+        "assign result = data[3:2]; endmodule\n")
+    if existing_sdc:
+        import re
+
+        config["PNR_SDC_FILE"] = str(_write(tmp_path / "original.sdc",
+            "create_clock -name core_clock_0 -period 24 [get_ports -regexp {^" + re.escape(clock) + "$}]\n"
+            "set_input_delay 4.8 -clock core_clock_0 [all_inputs -no_clocks]\n"
+            "set_output_delay 4.8 -clock core_clock_0 [all_outputs]\n"))
+    sdc = chip._sdc(project, config, ports)
+    queries = [line[line.index("[get_ports"):] for line in sdc.splitlines()
+               if "[get_ports" in line]
+    script = _write(tmp_path / "ports.tcl", f"read_verilog {{{netlist}}}\nlink_design ports\n"
+        + "\n".join(f'foreach port {query} {{puts "COLLECTED=[get_full_name $port]"}}'
+                    for query in queries) + "\nexit\n")
+    result = subprocess.run([sta, "-exit", str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    selected = {line.removeprefix("COLLECTED=") for line in result.stdout.splitlines()
+                if line.startswith("COLLECTED=")}
+    assert selected == {clock, "reset", "data[5]", "data[4]", "data[3]", "data[2]",
+                        "result[1]", "result[0]"}, result.stdout + result.stderr
+
+
 def test_impossible_declared_geometry_is_refused(inputs):
     project, config, native, _, _ = inputs
     native["DIE_AREA"] = [0, 0, 50, 50]
@@ -596,7 +643,7 @@ set_false_path -from [all_inputs -no_clocks] -to [all_outputs]
     assert "create_clock -period 99 [get_ports clk]" in sdc
     assert "set_input_delay 99 -clock clk" in sdc
     assert "set_clock_uncertainty 0.25" in sdc
-    assert "set_false_path -from [get_ports -regexp" in sdc
+    assert "set_false_path -from [get_ports [list" in sdc
     assert "all_inputs" not in sdc and "all_outputs" not in sdc
 
 
