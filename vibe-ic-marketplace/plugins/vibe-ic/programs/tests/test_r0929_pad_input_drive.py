@@ -245,7 +245,7 @@ def test_control_a_declared_drive_leaves_the_sta_verdict_alone(tmp_path, monkeyp
 # from the IO view linked in that scene. The fixture copies that grammar
 # with neutral names.
 
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 _IO_LIB = """library ("quartz_io__%(corner)s") {
 \ttime_unit : "%(unit)s";

@@ -36,7 +36,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import librelane_fill_dfm as fill                              # noqa: E402
 from librelane_contract import Refusal                         # noqa: E402
-import not_verified_tier as _nv                                # noqa: E402
+import _tool_probes as _nv                                # noqa: E402
 import _outcome_states as states                               # noqa: E402
 
 PDK = 'processA'

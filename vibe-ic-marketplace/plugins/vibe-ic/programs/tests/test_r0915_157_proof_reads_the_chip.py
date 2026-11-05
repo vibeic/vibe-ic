@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import formal_harness_gen as fhg  # noqa: E402
 import formal_property_run as fpr  # noqa: E402
 import formal_proof_evidence_check as gate  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 L8P = "L8.clock_and_reset_waveform."
 SYNC_ZERO = [{"name": "rst", "polarity": "active_high", "sync": "synchronous",

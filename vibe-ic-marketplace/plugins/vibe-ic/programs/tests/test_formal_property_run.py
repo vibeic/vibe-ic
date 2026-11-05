@@ -771,7 +771,7 @@ endmodule
 
 
 def _alias_native(project, shape="packed", mutation=None, reused=False):
-    from not_verified_tier import skip_not_verified
+    from _tool_probes import skip_not_verified
     import formal_proof_evidence_check as consumer
     missing = [name for name in ("yosys", "sby") if shutil.which(name) is None]
     if missing:
@@ -891,7 +891,7 @@ def test_registered_alias_binding_parser_checks_exact_target_and_multiplicity(co
 
 
 def test_registered_alias_native_invariant_connect_preserves_packed_drivers(tmp_path):
-    from not_verified_tier import skip_not_verified
+    from _tool_probes import skip_not_verified
     if any(shutil.which(name) is None for name in ("yosys", "sby")):
         skip_not_verified("native invariant alias control needs yosys/sby",
                           "Run test_formal_property_run.py in the pinned EDA image")

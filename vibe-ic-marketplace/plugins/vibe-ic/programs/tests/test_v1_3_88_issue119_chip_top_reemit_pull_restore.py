@@ -28,7 +28,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
-from not_verified_tier import not_verified_reason  # noqa: E402
+from _tool_probes import not_verified_reason  # noqa: E402
 
 
 import design_one_shot_runner as R          # noqa: E402

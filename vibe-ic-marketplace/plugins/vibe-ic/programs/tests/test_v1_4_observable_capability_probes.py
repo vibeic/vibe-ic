@@ -62,7 +62,7 @@ CONTAINER = "vibeic-eda"
 # available" on a host where `docker exec vibeic-eda true` returned 0 — the
 # container was up the whole time, and the run was green either way. `probe`
 # routes a lost race to NOT_VERIFIED/PROBE UNANSWERED instead of to a claim.
-from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
+from _tool_probes import (PROBE_PRESENT, probe,  # noqa: E402
                                probe_skip_reason)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

@@ -14,7 +14,7 @@ import pytest
 
 import _pad_ring as pads
 import test_pad_ring as ring
-from not_verified_tier import not_verified_reason
+from _tool_probes import not_verified_reason
 
 
 FIXTURE = Path(__file__).parent / "fixtures/pad_corner_gap_site_snap"

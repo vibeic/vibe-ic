@@ -67,7 +67,7 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 PROGRAMS = TESTS_DIR.parent
 sys.path.insert(0, str(PROGRAMS))
-import not_verified_tier as NV  # noqa: E402
+import _tool_probes as NV  # noqa: E402
 import _progress_run as PR  # noqa: E402
 import _watchdog  # noqa: E402
 
@@ -259,7 +259,7 @@ _CHILD = textwrap.dedent(
     sys.path.insert(0, {programs!r})
     import pytest
     import not_verified_tier
-    from not_verified_tier import PROBE_PRESENT, probe, probe_skip_reason
+    from _tool_probes import PROBE_PRESENT, probe, probe_skip_reason
 
     # THE CADENCE, NOT THE PREDICATE. The supervisor still ends this probe on
     # the same finding — output, CPU and block I/O all motionless for N

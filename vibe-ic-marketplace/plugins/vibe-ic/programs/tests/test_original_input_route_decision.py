@@ -267,16 +267,11 @@ def test_debug_formal_join_outside_rtl_owners_keeps_normal_admission():
 
 def test_debug_lint_frontdoor_produces_bound_docs_from_unchanged_source(tmp_path):
     import benchmark_dispatch as dispatch
-    import flow109
     (tmp_path / "input/rtl").mkdir(parents=True)
     prompt = tmp_path / "input/phase1_prompt.md"
     prompt.write_text(PROMPT)
     rtl = tmp_path / "input/rtl/unit.v"
     rtl.write_text("module Unit(input a, input b, output y); assign y=a^b; endmodule\n")
-    profile = next(row for row in flow109.load_registry()["reference_profiles"]
-                   if row["name"] == "RTL-only")
-    (tmp_path / "input/flow109-manifest.json").write_text(
-        json.dumps({"features": profile["features"]}))
     before = {path: path.read_bytes() for path in (prompt, rtl)}
     result = dispatch._ensure_phase1_frontdoor(
         Path(dispatch.__file__).with_name("vibe_ic_one_shot_runner.py"), tmp_path,

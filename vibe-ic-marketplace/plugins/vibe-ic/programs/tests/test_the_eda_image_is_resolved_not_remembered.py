@@ -79,7 +79,7 @@ def _state_the_pin(monkeypatch):
     they do not inherit that host fact: inside the image there is no docker,
     and each of them raised ImageNotResolvable before reaching its assertion."""
     state_the_image(monkeypatch)
-import not_verified_tier as NV  # noqa: E402
+import _tool_probes as NV  # noqa: E402
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

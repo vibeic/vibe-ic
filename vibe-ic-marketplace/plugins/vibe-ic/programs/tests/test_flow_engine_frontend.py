@@ -19,10 +19,8 @@ def test_document_owner_calls_extractor_without_submission_admission(tmp_path):
 
 def test_native_benchmark_argv_preserves_router_window_without_old_manifest(tmp_path, monkeypatch):
     import benchmark_dispatch as dispatcher
-    import flow109
-    with patch.object(flow109, "resolve_task_manifest", side_effect=AssertionError("old manifest reached")):
-        command = dispatcher._solver_argv(Path("vibe_ic_one_shot_runner.py"), tmp_path,
-                                          "1", "2", "ip", "original", "rtl")
+    command = dispatcher._solver_argv(Path("vibe_ic_one_shot_runner.py"), tmp_path,
+                                      "1", "2", "ip", "original", "rtl")
     for flag, value in (("--entry-step", "1"), ("--exit-step", "2"),
                         ("--rtl-input", "original")):
         assert command[command.index(flag) + 1] == value

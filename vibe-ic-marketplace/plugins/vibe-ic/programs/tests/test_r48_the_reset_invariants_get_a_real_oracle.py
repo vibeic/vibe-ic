@@ -262,7 +262,7 @@ def _retention_consumer(project):
 
 
 def _retention_native(project, good=True, mutation=None, diagnostic=True):
- from not_verified_tier import skip_not_verified
+ from _tool_probes import skip_not_verified
  if any(shutil.which(tool) is None for tool in ("iverilog", "vvp", "verilator")):
   skip_not_verified("native reset retention needs Icarus and Verilator", "Run this module in the pinned EDA image")
  rtl = prepare(project, good)
@@ -695,7 +695,7 @@ def _3135_cpu_rtl(damage=None):
 
 
 def _3135_native(project,damage=None,no_store=False):
- from not_verified_tier import skip_not_verified
+ from _tool_probes import skip_not_verified
  import cpu_datapath_program as cpu
  if any(shutil.which(t) is None for t in ('iverilog','vvp')):
   skip_not_verified('native CPU retention requires four-state Icarus','Use the pinned component image')

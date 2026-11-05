@@ -15,7 +15,7 @@ from pathlib import Path
 import benchmark_dispatch as dispatch
 import emit_attestation
 import flow_phase_attribution as fpa
-from not_verified_tier import skip_not_verified
+from _tool_probes import skip_not_verified
 
 
 def _require_standalone_compiler() -> None:

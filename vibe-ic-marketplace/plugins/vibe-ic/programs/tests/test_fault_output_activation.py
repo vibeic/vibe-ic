@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 import fault_output_activation as activation
-from not_verified_tier import skip_not_verified
+from _tool_probes import skip_not_verified
 
 
 def metadata():

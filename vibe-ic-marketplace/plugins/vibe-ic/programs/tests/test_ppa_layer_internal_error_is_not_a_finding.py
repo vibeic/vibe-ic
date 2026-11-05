@@ -56,7 +56,7 @@ sys.path.insert(0, str(_TESTS))
 
 from _ppa_jsonschema import HAVE_DRAFT_2020_12, REASON  # noqa: E402
 sys.path.insert(0, str(_PROGRAMS))
-from not_verified_tier import not_verified_reason  # noqa: E402
+from _tool_probes import not_verified_reason  # noqa: E402
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

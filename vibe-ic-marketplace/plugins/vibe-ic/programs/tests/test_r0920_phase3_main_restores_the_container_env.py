@@ -32,7 +32,7 @@ import pytest
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 import phase3_one_shot_runner as R  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 _ENV = "EDA_CONTAINER"
 

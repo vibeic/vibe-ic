@@ -171,7 +171,7 @@ def _run_image():
 # inspect` reads local metadata and answers in milliseconds on an idle box; on
 # a loaded one it loses the race, and the old shape then published "container
 # not available" about an image whose presence it never established.
-from not_verified_tier import (PROBE_ABSENT, PROBE_PRESENT, probe,  # noqa: E402
+from _tool_probes import (PROBE_ABSENT, PROBE_PRESENT, probe,  # noqa: E402
                                probe_skip_reason)
 import _eda_pin  # noqa: E402
 

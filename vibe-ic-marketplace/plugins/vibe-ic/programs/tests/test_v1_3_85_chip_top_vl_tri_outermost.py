@@ -28,7 +28,7 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from not_verified_tier import not_verified_reason  # noqa: E402
+from _tool_probes import not_verified_reason  # noqa: E402
 
 import _progress_run as _pr  # noqa: E402
 import _outcome_states as states  # noqa: E402

@@ -32,7 +32,7 @@ import re
 
 import pytest
 
-from not_verified_tier import (PROBE_ABSENT, PROBE_PRESENT, probe,
+from _tool_probes import (PROBE_ABSENT, PROBE_PRESENT, probe,
                                probe_skip_reason)
 import analog_a3_netlist_emit as A3_PRODUCER   # the ONE container default
 import _container_exec as _ce                  # the ONE guarded docker-exec argv

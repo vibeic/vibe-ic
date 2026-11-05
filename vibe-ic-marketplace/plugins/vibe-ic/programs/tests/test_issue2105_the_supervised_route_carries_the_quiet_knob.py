@@ -44,7 +44,7 @@ if str(PROGRAMS) not in sys.path:
 
 import _eda_pin as PIN            # noqa: E402 — the ONE pin resolver
 import phase3_one_shot_runner as R  # noqa: E402
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 #: The tool's own output. The denominator: "no banner" means nothing at all
 #: unless the tool actually ran and we can see that it did.

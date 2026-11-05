@@ -55,7 +55,7 @@ import pytest
 # vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
 # one passed. Declared through `not_verified_tier` so the run's roll-up
 # cannot count them under `passed`; see that module's docstring.
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

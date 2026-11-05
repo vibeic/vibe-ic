@@ -47,7 +47,7 @@ import analog_corner_admission as aca            # noqa: E402
 # HAPPEN, not that one passed. Declared through `not_verified_tier` so the
 # run's roll-up cannot count this site under `passed`, and so the reader is
 # told which command would make it answerable.
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 DOCKER_REMEDY = "install docker, or run this suite on a host that has the daemon"
 

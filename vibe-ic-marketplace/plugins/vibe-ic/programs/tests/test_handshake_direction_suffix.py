@@ -16,7 +16,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import canonical_primitive_synth as synth
 from _hostpaths import require_repo
-from not_verified_tier import skip_not_verified
+from _tool_probes import skip_not_verified
 
 
 def description(valid="valid", ready="ready"):

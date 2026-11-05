@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import not_verified_tier as NV  # noqa: E402
+import _tool_probes as NV  # noqa: E402
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 

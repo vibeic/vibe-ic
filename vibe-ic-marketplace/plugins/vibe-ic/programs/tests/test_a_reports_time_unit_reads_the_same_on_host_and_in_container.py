@@ -243,7 +243,7 @@ import subprocess as _sp  # noqa: E402
 
 import pytest  # noqa: E402
 
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 
 # WHICH SKIPS HERE ARE NOT-VERIFIED, AND WHICH ONE IS NOT (vibe-ic#1128)
 # ======================================================================

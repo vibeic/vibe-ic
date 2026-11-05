@@ -54,7 +54,7 @@ from pathlib import Path
 import pytest
 
 import _plugin_tree  # noqa: F401  — puts programs/ on sys.path
-from not_verified_tier import skip_not_verified  # noqa: E402
+from _tool_probes import skip_not_verified  # noqa: E402
 import pdk_analog_characterize as char
 import pdk_analog_device_params as params
 
