@@ -279,7 +279,11 @@ def _d26_timing_modes_binding(project: Path, d26: Mapping, intent: Mapping,
                               top: str, *, report: Mapping | None = None,
                               report_ref: Mapping | None = None,
                               adopted: Mapping | None = None) -> dict:
-    """Reopen the exact released D26 timing_modes_receipt and fail closed."""
+    """Consume native functional timing or the released scan timing modes."""
+    if not intent['requires_scan'] and 'timing_modes_receipt' not in d26:
+        import design_one_shot_runner as design
+        return {'functional_baseline': design._current_phase2_consumer(project, '10', 0) or {},
+                'modes_measured': ['functional_baseline']}
     reference = d26.get("timing_modes_receipt")
     if (not isinstance(reference, Mapping)
             or set(reference) != {"path", "sha256"}
