@@ -334,6 +334,9 @@ class NativeChain:
                 span = (max(float(extent[2]) - float(extent[0]), float(extent[3]) - float(extent[1]))
                         if extent else None)
                 settings = current_settings(self.project, self.config, parallel_length_um=span)
+                if self.route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"}:
+                    from flow_chip_inputs import sized_floorplan
+                    settings.update(sized_floorplan(self.project, self.config, settings))
                 self.owner.config = self.owner.config.copy(**_native_pdn_numbers(settings))
                 self.config = self.owner.config.to_raw_dict()
         except Exception as exc:
@@ -371,7 +374,6 @@ class NativeChain:
         from librelane.steps import Step, StepError, StepException
         for module in tool.get("imports", []):
             importlib.import_module(module)
-        producer_unavailable = False
         for name in tool.get("steps", []):
             step_class = Step.factory.get(name)
             if step_class is None:
@@ -394,25 +396,9 @@ class NativeChain:
 
             step = ObservedStep(self.owner.config, self.state)
             metric_name = getattr(step, "metric_name", None)
-            if (metric_name and producer_unavailable and not any(
-                    key == metric_name or key.startswith(metric_name + "__corner:") for key in result.metrics)):
-                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
-                                            "status": "NOT_MEASURED", "missing_inputs": [metric_name]})
-                continue
             if metric_name:
                 result.metrics.update({key: value for key, value in self.state.metrics.items()
                                        if key == metric_name or key.startswith(metric_name + "__corner:")})
-            missing = [item.id for item in step.inputs
-                       if not item.optional and self.state.get_by_df(item) is None]
-            if missing:
-                producer_unavailable = True
-                result.detail += f" {name} missing input: {missing}."
-                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
-                                            "missing_inputs": missing})
-                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs
-                                                                    if item not in step.inputs},
-                                              metrics=self.state.metrics)
-                continue
             destination = directory / name.lower().replace(".", "_")
             started = time.perf_counter()
             code, ran, detail = 0, True, ""
@@ -425,16 +411,15 @@ class NativeChain:
                     self.state = step.start(toolbox=self.toolbox, step_dir=str(destination))
                 finally:
                     os.chdir(working_directory)
+            except (StepException, FileNotFoundError) as exc:
+                code, ran, detail = None, False, str(exc)
+                status = "NOT_MEASURED"
             except StepError as exc:
                 underlying = getattr(exc, "underlying_error", None)
                 code = getattr(underlying, "returncode", 1) or 1
                 detail = str(exc)
                 status = "NOT_MEASURED" if "NOT_MEASURED" in detail else "FAIL"
-            except (StepException, FileNotFoundError) as exc:
-                code, ran, detail = None, False, str(exc)
-                status = "NOT_MEASURED"
             if code or not ran:
-                producer_unavailable = True
                 self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs
                                                                     if item not in step.inputs},
                                               metrics=self.state.metrics)
@@ -874,7 +859,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         beginning = time.perf_counter()
         preparation = ToolResult()
         if restore_directory is not None:
-            if chain.prepare() is None:
+            if chain.prepare(**({"floorplan": True} if
+                    first > positions.get("die_floorplan_and_macros", first) else {})) is None:
                 chain.restore(restore_directory)
             preparation = chain.preparation_result()
             restore_directory = None
