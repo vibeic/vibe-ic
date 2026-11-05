@@ -376,6 +376,64 @@ def layout_step(directory, tool, commands, state, config, step_class, metric, ov
     return result
 
 
+def gls_signal_netlist(directory, netlist, text, used, closure, config, commands):
+    import sdf_gate_sim as native
+    from _pad_ring import parse_lef_pin_roles
+    from _specrtl_common import parse_rtl_ports
+    from flow_chip_inputs import _paths
+    from flow109_netlist_cdc import _word
+
+    roles, connections, candidates = {}, {}, {}
+    for key in ("PAD_LEFS", "CELL_LEFS", "EXTRA_LEFS"):
+        for path in _paths(config.get(key)):
+            if path.is_file():
+                roles.update(parse_lef_pin_roles(path.read_text()))
+    for instance in native._INSTANCE_STMT_RE.finditer(text):
+        connections.setdefault(instance[1], set()).update(
+            pin for pin, _ in native._CONN_RE.findall(instance[3]))
+    for path in closure["files"]:
+        for module in native._MODULE_BODY_RE.finditer(native.strip_comments(Path(path).read_text())):
+            name = module[2]
+            if module[1] != "module" or name not in used or name not in roles:
+                continue
+            _, ports = parse_rtl_ports(module[0], name)
+            names = {port.name for port in ports}
+            if (ports and connections.get(name, set()) - names
+                    and all(port.direction == "inout" and roles[name].get(port.name, ("", ""))[1]
+                            in {"POWER", "GROUND"} for port in ports)):
+                candidates[name] = module[0]
+    if not candidates:
+        return Path(netlist), [], []
+    models, graph = directory / "passive_models.v", directory / "passive_models.json"
+    models.write_text("\n".join(candidates.values()) + "\n")
+    script = directory / "passive_models.ys"
+    script.write_text(f"read_verilog -sv {_word(models)}\nproc\nwrite_json {_word(graph)}\n")
+    checked = commands.run(["yosys", "-s", script])
+    reports = [models, script, graph]
+    if checked is None or checked.returncode or not graph.is_file():
+        return Path(netlist), [], reports
+    removed = []
+    for name, module in json.loads(graph.read_text())["modules"].items():
+        ports = module.get("ports", {})
+        if (ports and not module.get("cells") and not module.get("memories")
+                and not any("init" in wire.get("attributes", {}) for wire in module.get("netnames", {}).values())
+                and all(port["direction"] == "inout" and roles[name].get(pin, ("", ""))[1]
+                        in {"POWER", "GROUND"} and all(type(bit) is int for bit in port["bits"])
+                        for pin, port in ports.items())):
+            removed.append(name)
+    if not removed:
+        return Path(netlist), [], reports
+    signal, projection = directory / "signal_netlist.v", directory / "signal_netlist.ys"
+    projection.write_text(f"read_verilog -sv -icells {_word(netlist)}\n"
+        + "\n".join("delete t:" + name for name in sorted(removed))
+        + f"\nwrite_verilog -noattr {_word(signal)}\n")
+    projected = commands.run(["yosys", "-s", projection])
+    reports.extend([projection, signal])
+    if projected is None or projected.returncode or not signal.is_file():
+        return Path(netlist), [], reports
+    return signal, sorted(removed), reports
+
+
 def gls(project, directory, tool, commands, *, state, config):
     import sdf_gate_sim as native
     from _sim_results_bridge import parse_junit
@@ -423,15 +481,21 @@ def gls(project, directory, tool, commands, *, state, config):
         return commands.result(detail="GLS needs the configured PDK's functional and timing cell models.")
     used = native.netlist_used_cells(text)
     closure = native.verilog_model_closure(declared, used)
+    signal_netlist, physical, projection_reports = gls_signal_netlist(
+        directory, netlist, text, used, closure, config, commands)
+    signal_text = signal_netlist.read_text()
+    if physical:
+        used = native.netlist_used_cells(signal_text)
+        closure = native.verilog_model_closure(declared, used)
     model_text = "\n".join(Path(path).read_text() for path in closure["files"])
-    stubs = native.missing_empty_cell_stubs(text, used, model_text)
+    stubs = native.missing_empty_cell_stubs(signal_text, used, model_text)
     unresolved = sorted(set(closure["unresolved"]) - set(stubs))
     if unresolved or closure["clashes"]:
         return commands.result(detail=f"GLS cell models incomplete: unresolved={unresolved}, "
             f"clashes={closure['clashes']}.")
     stub_file = directory / "physical_cells.v"
     stub_file.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
-    rows, reports = [], [stub_file]
+    rows, reports = [], [stub_file, *projection_reports]
     for corner, sdf in sdfs.items():
         for bench in benches:
             work = directory / ("corner_" + str(len(rows) + 1))
@@ -439,7 +503,7 @@ def gls(project, directory, tool, commands, *, state, config):
             row = {"corner": corner, "testbench": str(bench), "status": "NOT_MEASURED",
                    "ran": False, "exit_code": None}
             clock_unmeasured = False
-            models = [str(netlist), *closure["files"], str(stub_file)]
+            models = [str(signal_netlist), *closure["files"], str(stub_file)]
             flags = shlex.split(native._IVERILOG_FLAGS)
             for parent in dict.fromkeys([str(bench.parent), *(str(Path(p).parent) for p in models)]):
                 flags.extend(["-I", parent])
@@ -621,6 +685,7 @@ def gls(project, directory, tool, commands, *, state, config):
             rows.append(row)
     summary = directory / "gls.json"
     summary.write_text(json.dumps({"runs": rows, "cell_models": closure,
+        "physical_only_types_omitted": physical,
         "selected_corners": selected, "unmeasured_corners": unmeasured,
         "corner_selection": "explicit tool selection" if requested is not None else "direct owner single-SDF default"},
         indent=2) + "\n")
@@ -633,6 +698,7 @@ def gls(project, directory, tool, commands, *, state, config):
                                      tool.get("metric", "gls_failures")}, failures))
     result = commands.result(metrics, [*reports, summary],
         f"Selected GLS corners: {selected}; other native SDF corners unmeasured: {unmeasured}. "
+        f"Signal simulation omits physical-only cell types: {physical}. "
         "The full existing suite is replayed; no timing annotation means NOT_MEASURED.")
     result["native_steps"] = [{"name": "Icarus.GLS", **row} for row in rows]
     return result

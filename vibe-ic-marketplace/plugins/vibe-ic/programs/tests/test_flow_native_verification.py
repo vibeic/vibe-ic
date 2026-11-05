@@ -611,6 +611,54 @@ def test_gls_accepts_native_physical_cell_models(tmp_path, connected):
     assert result["native_steps"][0]["status"] == "PASS", result
 
 
+@pytest.mark.parametrize("kind,different,expected", [
+    ("passive", False, "PASS"), ("passive", True, "FAIL"),
+    ("logic", False, "FAIL"), ("state", False, "FAIL"),
+    ("signal", False, "FAIL"), ("constant", False, "FAIL"),
+    ("init", False, "FAIL"), ("io", False, "FAIL"),
+])
+def test_gls_omits_only_passive_supply_connectors(tmp_path, kind, different, expected):
+    if not all(shutil.which(name) for name in ("yosys", "iverilog", "vvp")):
+        pytest.skip("Native Yosys and Icarus are required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different)
+    model = Path(config["CELL_VERILOG_MODELS"][0])
+    behavior = {
+        "passive": "assign p1=p0; assign g1=g0;",
+        "signal": "assign p1=p0; assign g1=g0;",
+        "logic": "assign p1=~p0; assign g1=g0;",
+        "state": "reg q; always @(posedge p0) q<=p1; assign g1=q;",
+        "constant": "assign p1=1'b1; assign g1=g0;",
+        "init": "reg q=1'b0; assign p1=q; assign g1=g0;",
+        "io": "assign p1=p0; assign g1=g0;",
+    }[kind]
+    ports = "input p0,output p1,inout g0,g1" if kind == "io" else "inout p0,p1,g0,g1"
+    model.write_text(model.read_text() +
+        f"module connector({ports});\n" + behavior + "\nendmodule\n")
+    lef = project / "physical.lef"
+    lef.write_text("MACRO connector\n" + "".join(
+        f" PIN {pin}\n  DIRECTION INOUT ;\n  USE {use} ;\n END {pin}\n"
+        for pin, use in (("p0", "POWER"), ("p1", "SIGNAL" if kind == "signal" else "POWER"),
+                         ("g0", "GROUND"), ("g1", "GROUND"))) + "END connector\n")
+    config["PAD_LEFS"] = [str(lef)]
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("endmodule", "wire v0,v1,g0,g1,aux0,aux1;\n"
+        "connector rail(.p0(v0),.p1(v1),.g0(g0),.g1(g1),.aux0(aux0),.aux1(aux1));\nendmodule"))
+    original = netlist.read_bytes()
+    original_sdf = Path(state["sdf"]["typical"]).read_bytes()
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == expected, result
+    assert netlist.read_bytes() == original
+    assert Path(state["sdf"]["typical"]).read_bytes() == original_sdf
+    if kind == "passive":
+        summary = json.loads((directory / "gls.json").read_text())
+        assert summary["physical_only_types_omitted"] == ["connector"]
+        assert result["metrics"]["sdf_delays_applied"] > 0
+        assert result["metrics"]["sdf_annotation_errors"] == 0
+        assert bool(result["metrics"]["gls_failures"]) == different
+
+
 def test_gls_uses_the_native_sdc_clock(tmp_path):
     if not shutil.which("iverilog") or not shutil.which("vvp"):
         pytest.skip("Native Icarus is required")
