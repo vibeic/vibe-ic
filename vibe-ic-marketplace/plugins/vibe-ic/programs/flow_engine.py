@@ -237,7 +237,7 @@ class NativeChain:
         path = directory / "state_out.json"
         if path.is_file():
             restored = State.load(read_json(path))
-            self.state = State(restored, metrics={**dict(self.state.metrics), **dict(restored.metrics)})
+            self.state = restored
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
         try:
@@ -430,8 +430,8 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
             limit = document_value(project, check["limit_from"])
         matches = {name: value for name, value in metrics.items()
                    if fnmatch.fnmatchcase(name, check["metric"])}
-        if check.get("corner_config") and config.get(check["corner_config"]) is not None:
-            corners = config[check["corner_config"]]
+        corners = [corner for corner in config.get(check.get("corner_config"), []) or [] if corner]
+        if corners:
             matches = {key: value for key, value in matches.items()
                        if any(fnmatch.fnmatchcase(key.split("__corner:")[-1], corner)
                               for corner in corners)}

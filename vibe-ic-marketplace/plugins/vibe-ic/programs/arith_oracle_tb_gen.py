@@ -1221,7 +1221,11 @@ def select_operand_pairs(spec: dict, profile: str = "mixed",
 
 def emit_serial_oracle_module(module_name: str, spec: dict,
                               pairs: "List[Tuple[int, int]] | None" = None,
-                              abort_before_each: bool = False
+                              abort_before_each: bool = False, *,
+                              dut_module: Optional[str] = None,
+                              clock_period_ns: float = 10,
+                              sample_offset_ns: float = 1,
+                              inout_ports: Optional[set[str]] = None
                               ) -> str:
     """Emit ONE self-checking SERIAL-PARALLEL oracle Verilog module.
 
@@ -1260,7 +1264,7 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     if abort_before_each and not spec.get("rst"):
         raise ValueError("abort_before_each needs a reset port to assert "
                          "mid-computation; this spec has none")
-    top = spec["top"]
+    top = dut_module or spec["top"]
     op = spec["operator"]
     n = spec["width"]
     signed = bool(spec.get("signed", True))
@@ -1269,6 +1273,8 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     ral = bool(spec.get("reset_active_low"))
     par_lhs = bool(spec.get("parallel_is_lhs", True))
     ports = spec["ports"]
+    pad_nets = {p["name"]: "_pad_" + p["name"] for p in ports
+                if p["dir"] == "input" and p["name"] in (inout_ports or set())}
     if pairs is None:
         pairs = select_operand_pairs(spec, "mixed")
     if not pairs:
@@ -1303,10 +1309,12 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
             pw = p.get("numeric_width")
             rng = f" [{pw - 1}:0]" if isinstance(pw, int) and pw > 1 else ""
         L.append(f"  {decl}{rng} {nm};")
-    conns = ", ".join(f".{p['name']}({p['name']})" for p in ports)
+        if nm in pad_nets:
+            L.append(f"  wire{rng} {pad_nets[nm]}; assign {pad_nets[nm]} = {nm};")
+    conns = ", ".join(f".{p['name']}({pad_nets.get(p['name'], p['name'])})" for p in ports)
     L.append(f"  {top} dut ({conns});")
     L.append(f"  initial {clk} = 1'b0;")
-    L.append(f"  always #5 {clk} = ~{clk};")
+    L.append(f"  always #{clock_period_ns / 2:.12g} {clk} = ~{clk};")
     L.append(f"  localparam integer NV = {len(pairs)};")
     L.append("  reg [N-1:0] _av [0:NV-1];")
     L.append("  reg [N-1:0] _bv [0:NV-1];")
@@ -1323,6 +1331,13 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     # discarding it (see ORACLE_TB_FRAMING below).
     L.append("  integer _bio, _boo, _boff;")
     assert_v, deassert_v = ("0", "1") if ral else ("1", "0")
+    delayed = sample_offset_ns >= clock_period_ns / 2
+    if delayed:
+        L.extend(["  integer pending_observers=0;",
+                  "  task automatic observe(input integer inorder, v, k); begin",
+                  f"    #{sample_offset_ns:.12g};",
+                  f"    if(inorder==0) _capL[v][k]={sout}; else _capM[v][k]={sout};",
+                  "    pending_observers=pending_observers-1;", "  end endtask"])
 
     # ── drive+capture one pass at a given serial-input bit-order ──────────────
     L.append("  task _drive_capture(input integer inorder); begin")
@@ -1352,10 +1367,15 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     L.append("                                  : ((_bv[_vi] >> (N-1-_k)) & 1'b1);")
     L.append(f"        else {sin} = 1'b0;")
     L.append(f"        @(posedge {clk});")
-    L.append(f"        #1; _word[_k] = {sout};  // sample after this edge settles")
+    if delayed:
+        L.extend(["        pending_observers=pending_observers+1;",
+                  "        fork observe(inorder,_vi,_k); join_none"])
+    else:
+        L.append(f"        #{sample_offset_ns:.12g}; _word[_k] = {sout};  // sample after this edge settles")
     L.append(f"        @(negedge {clk});")
     L.append("      end")
-    L.append("      if (inorder == 0) _capL[_vi] = _word; else _capM[_vi] = _word;")
+    if not delayed:
+        L.append("      if (inorder == 0) _capL[_vi] = _word; else _capM[_vi] = _word;")
     L.append("    end")
     L.append("  end endtask")
 
@@ -1370,6 +1390,8 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
                  f"_gv[{i}] = {n}'d{golden};  // {par}={a} {op} {sin}={b}")
     L.append("    _drive_capture(0);   // serial input LSB-first")
     L.append("    _drive_capture(1);   // serial input MSB-first")
+    if delayed:
+        L.append("    wait(pending_observers==0);")
     if len(pairs) > _CAL_VECTORS:
         _emit_calibrated_framing_scoring(L, len(pairs))
         L.append("    $finish;")
@@ -1998,7 +2020,8 @@ def mapped_reset_state_targets(plan: dict, netlist_text: str, core_instance: str
 
 
 def emit_arithmetic_scenario_module(module_name: str, plan: dict, *,
-                                    dut_module: Optional[str] = None) -> str:
+                                    dut_module: Optional[str] = None,
+                                    inout_ports: Optional[set[str]] = None) -> str:
     """One fixed declared window; independent golden for every scenario bit."""
     spec = plan['spec']; framing = plan['framing']; n = spec['width']
     par, sin, sout, clk, rst = (spec[k] for k in
@@ -2021,14 +2044,19 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict, *,
                else [ARITHMETIC_SCENARIO_HEADER + encoded_plan])
     lines = ['`timescale 1ns/1ps', *headers,
              f'module {module_name};', f'localparam integer N={n}, NV={len(pairs)}, L={latency};']
+    pad_nets = {p['name']: '_pad_' + p['name'] for p in spec['ports']
+                if p['dir'] == 'input' and p['name'] in (inout_ports or set())}
     for p in spec['ports']:
         width = n if p['name'] == par else int(p.get('numeric_width') or 1)
         lines.append(f"{'reg' if p['dir'] == 'input' else 'wire'} "
                      f"{'['+str(width-1)+':0] ' if width > 1 else ''}{p['name']};")
+        if p['name'] in pad_nets:
+            lines.append(f"wire {'['+str(width-1)+':0] ' if width > 1 else ''}{pad_nets[p['name']]}; "
+                         f"assign {pad_nets[p['name']]} = {p['name']};")
     # A gate-level adapter may retain the logical module as a temporary
     # placeholder for its declared pad-port binder. The observation/header
     # still identifies the physical surface whose schedule was validated.
-    lines += [f"{dut_module or observation['top']} dut (" + ', '.join(f".{p['name']}({p['name']})" for p in spec['ports']) + ');',
+    lines += [f"{dut_module or observation['top']} dut (" + ', '.join(f".{p['name']}({pad_nets.get(p['name'],p['name'])})" for p in spec['ports']) + ');',
               f'initial {clk}=0; always #{half} {clk}=~{clk};',
               'reg [N-1:0] av[0:NV-1], bv[0:NV-1], gv[0:NV-1];',
               'integer errors=0, comparisons=0, transactions=0, held_edges=0;',
