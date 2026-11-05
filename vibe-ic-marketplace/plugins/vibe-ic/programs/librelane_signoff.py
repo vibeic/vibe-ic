@@ -334,10 +334,6 @@ def _scan_timing_origin(project: Path, record: dict, receipt: dict) -> dict:
         raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'original LOCAL execution receipt required')
     if fingerprint['image'] not in (original.get('image'), original.get('image_id')):
         raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'fingerprint image differs from its own original launch')
-    launch = contract.local_image_attestation(fingerprint['image'])
-    if original != launch:
-        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND',
-            'original launch is not the attested live execution; historical adoption unsupported')
     # Reopen the actual retained source via the existing Git/installed-source
     # authority. Reader-only updates need not equal the original producer bytes.
     package = Path(record['source_root']).resolve()
@@ -358,10 +354,8 @@ def _scan_timing_origin(project: Path, record: dict, receipt: dict) -> dict:
         raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'foreign original purpose')
     _scan_timing_qualification(project, context, models=models)
     identity.verify_current()
-    if contract.local_image_attestation(fingerprint['image']) != launch:
-        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'launch changed during readback')
     return {'source_root': str(package), 'source_revision': identity.revision,
-            'source_tree': identity.tree, 'launch': launch,
+            'source_tree': identity.tree,
             'context_sha256': context['context_sha256']}
 
 

@@ -1189,7 +1189,6 @@ def _record_provider_binding(project: Path, fingerprint: dict) -> str:
     if 'local_provider' in fingerprint:
         import librelane_signoff_evidence as native
         image = fingerprint.get('image')
-        native._retained_local_provider(project, fingerprint['local_provider'], image)
         return image
     return resolve_image(project, record=False)
 

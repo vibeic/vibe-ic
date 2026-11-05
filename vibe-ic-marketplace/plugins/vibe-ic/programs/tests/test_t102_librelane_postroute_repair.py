@@ -708,7 +708,6 @@ def test_resume_drv_keeps_the_ledger_and_records_only_the_new_controller(
                                          'postroute_repair.tcl': 'current'}})
     monkeypatch.setattr(prr, '_stamp_verdict',
                         lambda report: report.update(verdict='PASS', code=None))
-    monkeypatch.setattr(prr, '_step32_drv_signoff', lambda *_a: None)
     monkeypatch.setattr(prr, '_publish_declared_repair', lambda *_a: None)
     report = prr.resume_drv(project)
     assert report['resume']['candidate_ledger_start'] == 1
@@ -765,7 +764,6 @@ def test_resume_drv_skips_measured_global_noops_and_binds_targeted_frontdoor(
                                 'postroute_repair.tcl': 'current'},
                         })
     monkeypatch.setattr(prr, '_stamp_verdict', lambda *_a: None)
-    monkeypatch.setattr(prr, '_step32_drv_signoff', lambda *_a: None)
     monkeypatch.setattr(prr, '_publish_declared_repair', lambda *_a: None)
     prr.resume_drv(project)
     assert seen['plan'] == ({'targeted_cap_buffer': True},)

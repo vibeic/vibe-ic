@@ -168,30 +168,8 @@ def verify(container: str, require_image: Optional[str] = None) -> Dict[str, obj
     rec = inspect_container(container)
 
     if rec["status"] == "docker_absent":
-        # The canonical runner may already be inside the pinned image. Reuse
-        # the same host-CID proof as LibreLane and native installation admission;
-        # an image string in the environment is never execution evidence.
-        try:
-            from librelane_contract import local_image_attestation
-            identity = local_image_attestation(require_image)
-        except Exception as exc:
-            rec["verdict"] = "SKIP"
-            rec["reason"] = (
-                "docker binary not on PATH — image identity unverifiable: "
-                f"{type(exc).__name__}: {exc}")
-            return rec
-        rec.update(status="ok", execution_route="local",
-                   requested_container=container, container=identity["cid"],
-                   image_ref=identity["image"], image_id=identity["image_id"],
-                   image_repo_digests=identity["repo_digests"], running=True,
-                   attestation_path=identity["attestation_path"],
-                   attestation_sha256=identity["attestation_sha256"],
-                   matched_by="host_cid_attestation", verdict="PASS",
-                   reason="resolved current LOCAL container %s -> %s (%s)" % (
-                       identity["cid"], identity["image"], identity["image_id"][:19]))
-        if require_image:
-            rec.update(require_image=require_image,
-                       require_image_id=identity["image_id"], image_match=True)
+        rec["verdict"] = "NOT_MEASURED"
+        rec["reason"] = "Native tools run directly; no container image was inspected."
         return rec
 
     if rec["status"] == "not_found":

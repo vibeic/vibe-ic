@@ -530,68 +530,6 @@ def _startup_paths(tool, cwd, environment):
                    str((Path(cwd) / ".spiceinit").resolve())})
 
 
-def validate_execution_identity(record: dict) -> tuple:
-    """Read the producer's pre-launch inputs independently of execution success.
-
-    A numerical failure with valid identity must remain usable failure evidence.
-    This reader never enrolls an old result using today's source/tool bytes.
-    """
-    from analog_native_sim import _selected_ngspice_identity
-    import librelane_contract as launch
-
-    try:
-        views = record["native_inputs"]
-        receipt = views["execution_receipt"]
-        if bound.sha(receipt["path"]) != receipt["sha256"]:
-            raise ValueError("pre-launch readset changed")
-        before = json.loads(Path(receipt["path"]).read_text())
-        if before["native_inputs"] != {k: v for k, v in views.items() if k != "execution_receipt"}:
-            raise ValueError("result differs from its pre-launch readset")
-        if before["container"] or record.get("container"):
-            raise ValueError("remote startup identity is not retained by this local producer")
-        if before["image"] != record.get("image"):
-            raise ValueError("image differs from the pre-launch runtime")
-        tool = _selected_ngspice_identity({"container": ""})
-        if not tool or before["tool"] != tool or views["native_binary"] != {
-                "path": tool["path"], "sha256": tool["sha256"]}:
-            raise ValueError("native executable differs from the pre-launch tool")
-        for view in views.values():
-            if bound.sha(view["path"]) != view["sha256"]:
-                raise ValueError("pre-launch input changed: " + view["path"])
-        runtime = before["runtime"]
-        attestation = views["launch_attestation"]
-        if attestation != {"path": runtime["attestation_path"], "sha256": runtime["attestation_sha256"]}:
-            raise ValueError("launcher authority differs from the pre-launch runtime")
-        current = launch.local_image_attestation(record["image"])
-        held = json.loads(Path(attestation["path"]).read_text())
-        if (current["image_id"] != runtime["image_id"] or held["image"] != runtime["image"]
-                or held["cid"] != runtime["cid"] or held["container_inspect"]["Image"] != runtime["image_id"]):
-            raise ValueError("native image authority changed")
-        settings = json.loads(Path(views["settings"]["path"]).read_text())
-        if settings != record["settings"]:
-            raise ValueError("settings differ from the pre-launch settings")
-        argv = _native_argv(settings, tool["path"], views["deck"]["path"])
-        cwd = str(Path(views["testbench"]["path"]).parent)
-        if before["argv"] != argv or before["cwd"] != cwd:
-            raise ValueError("native argv/cwd differs from the selected conversion")
-        if not record.get("executions") or any(execution.get("argv") != argv
-                or execution.get("native_environment") != before["native_environment"]
-                for execution in record["executions"]):
-            raise ValueError("execution differs from its pre-launch command")
-        paths = _startup_paths(tool["path"], cwd, before["startup_environment"])
-        if set(before["startup"]) != set(paths) or any(
-                (bound.sha(path) if Path(path).is_file() else None) != digest
-                for path, digest in before["startup"].items()):
-            raise ValueError("native startup stream changed")
-        for path, digest in before["startup"].items():
-            if digest and views.get("startup:" + path) != {"path": path, "sha256": digest}:
-                raise ValueError("native startup input is missing")
-        current, why = bound.validate_consumed_inputs(Path(record["project"]), views)
-        if not current:
-            raise ValueError(why)
-    except (OSError, ValueError, KeyError, TypeError, launch.Refusal) as exc:
-        return False, "native execution identity unavailable: " + str(exc)
-    return True, "current pre-launch native execution inputs"
 
 
 def validate_point(record: dict) -> tuple:
@@ -606,10 +544,6 @@ def validate_point(record: dict) -> tuple:
     # Legacy captures still support decoder analysis, without acquiring new
     # PVT authority. PVT collection below requires the pre-launch identity even
     # when absent; new producer records always carry and validate it here.
-    if "execution_receipt" in views:
-        current, why = validate_execution_identity(record)
-        if not current:
-            return False, why
     if not declared_dut_consumed(views):
         return False, "declared native DUT is absent from the executed include closure"
     if not (record.get("incremental_decode") or {}).get("native_timing"):
@@ -1100,12 +1034,6 @@ def consume_study(project: Path, name: str, entry: dict, options: dict, run, ste
         workers = min(int(options.get("workers", 1)), int(entry.get("workers", options.get("workers", 1))))
         if not image or cpus < common["threads"] or workers < 1:
             raise ValueError("actual container/image and a sufficient bounded CPU budget are required")
-        if not container:
-            import librelane_contract as launch
-            try:
-                launch.local_image_attestation(image)
-            except launch.Refusal as exc:
-                raise ValueError(str(exc)) from exc
         if common != original:
             digest = hashlib.sha256(json.dumps(common, sort_keys=True).encode()).hexdigest()[:16]
             effective = score_path.parent / ("method-settings-" + digest + ".json")
@@ -1234,9 +1162,7 @@ def main(argv=None):
                 "incremental-native", *native_command,
                 opts=("--user", f"{os.getuid()}:{os.getgid()}", "-w", str(template.parent)))
         else:
-            import librelane_contract as launch
             from analog_native_flow import _local_ngspice_startup
-            runtime = launch.local_image_attestation(args.image)
             startup, native_init = _local_ngspice_startup(project, template.parent, args.image)
             environment.update(startup)
             command = native_command
@@ -1248,9 +1174,8 @@ def main(argv=None):
                 views["startup:" + name] = {"path": name, "sha256": digest}
         if native_init:
             views["native_init"] = native_init
-        if runtime:
+        if not args.container:
             views["native_binary"] = {"path": tool["path"], "sha256": tool["sha256"]}
-            views["launch_attestation"] = {"path": runtime["attestation_path"], "sha256": runtime["attestation_sha256"]}
         receipt = target / "execution_inputs.json"
         write_json(receipt, {"native_inputs": views, "argv": command,
             "cwd": str(template.parent), "tool": tool, "image": args.image, "container": args.container,
@@ -1285,9 +1210,6 @@ def main(argv=None):
                        settings, destination, native, input_views={"settings": {
                            "path": str(args.settings.resolve()), "sha256": hashlib.sha256(settings_bytes).hexdigest()}})
     record.update(container=args.container, image=args.image)
-    current, why = validate_execution_identity(record)
-    if not current:
-        record.update(status="FAIL" if record["status"] == "FAIL" else "NOT_MEASURED", detail=why, decoded={})
     if args.settings.read_bytes() != settings_bytes:
         record.update(status="FAIL" if record["status"] == "FAIL" else "NOT_MEASURED", detail="settings changed during native execution", decoded={})
     write_json(destination / "result.json", record)

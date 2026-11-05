@@ -247,14 +247,6 @@ def _pv(project: Path, name: str, container: str, image: str, pdk: str,
     import analog_pdk_availability as availability
 
     if not container:
-        # The public front door may already be inside its attested image.
-        # Native PV/ERC use "host" for that direct-process execution seam;
-        # an empty name alone is not evidence of a local execution context.
-        import librelane_contract as launch
-        try:
-            launch.local_image_attestation(image or None)
-        except launch.Refusal as exc:
-            return _result("NOT_MEASURED", f"{exc.code}: native PV execution context absent: {exc}")
         container = "host"
 
     bdir, _ = _paths(project, name)

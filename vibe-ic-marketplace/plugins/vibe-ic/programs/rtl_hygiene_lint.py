@@ -6976,35 +6976,27 @@ def _native_driver_run(script, work, include_dirs, context, selected_image=None,
     context.update(backend='local', selected_image=selected or None, image=None,
                    command=None, native_command=command,
                    native_returncode=None, transport_returncode=None)
-    if selected:
+    import _container_exec as native_route
+    if selected and not native_route.no_container_route():
         import librelane_contract as contract
-        if os.environ.get(contract.LOCAL_ATTESTATION_ENV):
-            context['backend'] = 'in-image'
-            try:
-                identity = contract.local_image_attestation(selected)
-            except contract.Refusal as exc:
-                raise ValueError(str(exc)) from exc
-            context.update(backend='in-image', image=identity['image'],
-                           image_identity=identity)
-        else:
-            import _eda_image as image
-            context['backend'] = 'docker'
-            import _eda_pin
-            if _eda_pin.is_bare_image_id(selected):
-                raise ValueError(image.image_id_refusal(selected))
-            digest, kind, why = image.local_digest(selected)
-            context.update(backend='docker', image_digest=digest,
-                           image_digest_kind=kind)
-            if not digest:
-                raise NativeElaborationCapabilityAbsent(
-                    'NATIVE_TOOL_ABSENT: selected native EDA image with Yosys '
-                    'is unavailable: ' + why)
-            target = image._pinned(selected, digest, kind)
-            context['image'] = target
-            # A fresh process receipt separates the tool's natural exit from a
-            # Docker/entrypoint failure. The outer supervisor owns its lifetime.
-            receipt = work / 'native_process.json'
-            launcher = '''import json, pathlib, shutil, subprocess, sys
+        import _eda_image as image
+        context['backend'] = 'docker'
+        import _eda_pin
+        if _eda_pin.is_bare_image_id(selected):
+            raise ValueError(image.image_id_refusal(selected))
+        digest, kind, why = image.local_digest(selected)
+        context.update(backend='docker', image_digest=digest,
+                       image_digest_kind=kind)
+        if not digest:
+            raise NativeElaborationCapabilityAbsent(
+                'NATIVE_TOOL_ABSENT: selected native EDA image with Yosys '
+                'is unavailable: ' + why)
+        target = image._pinned(selected, digest, kind)
+        context['image'] = target
+        # A fresh process receipt separates the tool's natural exit from a
+        # Docker/entrypoint failure. The outer supervisor owns its lifetime.
+        receipt = work / 'native_process.json'
+        launcher = '''import json, pathlib, shutil, subprocess, sys
 command = sys.argv[2:]
 record = {'command': command, 'tool_path': shutil.which(command[0]),
           'native_returncode': None}
@@ -7018,37 +7010,37 @@ except OSError as exc:
 pathlib.Path(sys.argv[1]).write_text(json.dumps(record, indent=2))
 sys.exit(record['native_returncode'] if record['native_returncode'] is not None else 127)
 '''
-            volumes = []
-            for directory in include_dirs:
-                volumes += ['-v', f'{directory}:{directory}:ro']
-            volumes += ['-v', f'{work}:{work}']
-            import _docker_memory as memory
-            argv = ['docker', 'run', '--rm', '--network', 'none',
-                    *memory.docker_memory_flags(), *volumes,
-                    target, '--skip', 'python3', '-c', launcher, str(receipt), *command]
-            context['command'] = argv
-            try:
-                result = contract.run_container(argv, supervised=True, log=work / 'native.log')
-            except contract.Refusal as exc:
-                raise ValueError(str(exc)) from exc
-            context['command'] = list(result.args)
-            context['transport_returncode'] = result.returncode
-            if not receipt.is_file():
-                atomic_write_text(work / 'native.log', result.stdout + result.stderr)
-                raise ValueError('selected native EDA target did not emit a tool receipt '
-                                 f'(transport rc={result.returncode}); {work}')
-            process = json.loads(receipt.read_text())
-            context['native_process'] = process
-            context['native_returncode'] = process.get('native_returncode')
-            if process.get('launch_error'):
-                atomic_write_text(work / 'native.log', result.stdout + result.stderr)
-                raise NativeElaborationCapabilityAbsent(
-                    'NATIVE_TOOL_ABSENT: selected native EDA target could not '
-                    f'launch {tool_name}: ' + process['launch_error'])
-            if process.get('command') != command or process.get('native_returncode') != result.returncode:
-                atomic_write_text(work / 'native.log', result.stdout + result.stderr)
-                raise ValueError('selected native EDA target/tool result mismatch; ' + str(work))
-            return result
+        volumes = []
+        for directory in include_dirs:
+            volumes += ['-v', f'{directory}:{directory}:ro']
+        volumes += ['-v', f'{work}:{work}']
+        import _docker_memory as memory
+        argv = ['docker', 'run', '--rm', '--network', 'none',
+                *memory.docker_memory_flags(), *volumes,
+                target, '--skip', 'python3', '-c', launcher, str(receipt), *command]
+        context['command'] = argv
+        try:
+            result = contract.run_container(argv, supervised=True, log=work / 'native.log')
+        except contract.Refusal as exc:
+            raise ValueError(str(exc)) from exc
+        context['command'] = list(result.args)
+        context['transport_returncode'] = result.returncode
+        if not receipt.is_file():
+            atomic_write_text(work / 'native.log', result.stdout + result.stderr)
+            raise ValueError('selected native EDA target did not emit a tool receipt '
+                             f'(transport rc={result.returncode}); {work}')
+        process = json.loads(receipt.read_text())
+        context['native_process'] = process
+        context['native_returncode'] = process.get('native_returncode')
+        if process.get('launch_error'):
+            atomic_write_text(work / 'native.log', result.stdout + result.stderr)
+            raise NativeElaborationCapabilityAbsent(
+                'NATIVE_TOOL_ABSENT: selected native EDA target could not '
+                f'launch {tool_name}: ' + process['launch_error'])
+        if process.get('command') != command or process.get('native_returncode') != result.returncode:
+            atomic_write_text(work / 'native.log', result.stdout + result.stderr)
+            raise ValueError('selected native EDA target/tool result mismatch; ' + str(work))
+        return result
     context['tool_path'] = shutil.which(command[0])
     context['command'] = command
     try:

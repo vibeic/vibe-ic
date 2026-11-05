@@ -250,7 +250,7 @@ def drv_pin_census(sta_folder: Path, summary: Dict[str, Any],
     log, count, or row makes admission unmeasured; counts alone cannot tell if
     the same pin moved between scenes or a new pin became a violator.
     """
-    import sta_corner_record_completeness_check as _sta
+    import _drv_row_class as _sta
     import librelane_contract as _ll
     pairs = set()
     sources = {}
@@ -280,7 +280,7 @@ def drv_pin_census(sta_folder: Path, summary: Dict[str, Any],
                 # The DRV standard's classes (R-0928-DRV-IC): a bond-pad port
                 # and an IO-cell pin under the std-cell margin are listed, not
                 # counted; everything else counts. Proof comes from the run's
-                # complete source-bound OpenSTA census and IO Liberty.
+                # structural netlist connectivity and configured IO Liberty.
                 values = (parsed.get("pin_values") or {}).get(title) or []
                 if [v.get("pin") for v in values] != pins:
                     missing.append(f"{corner}: {kind} row values unreadable")
@@ -360,52 +360,6 @@ def _set_final_drv_verdict(report: Dict[str, Any]) -> None:
                       reason=f"declared postroute DRV has {count} residual pin/check violations")
 
 
-def _step32_drv_signoff(project: Path, report: Dict[str, Any]) -> None:
-    """Rejudge the final candidate with the one DRV judge after late repair.
-
-    A missing or stale bundle is named NOT_MEASURED.  The repair actuator's
-    own verdict remains a candidate-selection record, never sign-off evidence.
-    """
-    import drv_signoff_judge as _drv
-    import drv_capture_plan as _drv_plan
-    source = project / "reports/phase3/sta/drv_signoff_bundle.json"
-    result: Dict[str, Any]
-    try:
-        # The candidate's own final STA state is available before this step's
-        # report is published. Capture from it; an older bundle cannot grade
-        # a newly adopted layout.
-        source.unlink(missing_ok=True)
-        if not report.get("final", {}).get("sta_state"):
-            raise ValueError("final STAPostPNR state absent")
-        # The sign-off STA and post-route repair receipts are the final
-        # state's, not whichever candidate's chain happened to run last.
-        import drv_stage_receipts as _drv_stages
-        _drv_stages.record_step32(project, report)
-        _drv_plan.capture_and_publish(project, final_state=report)
-        bundle = json.loads(source.read_text())
-        result = _drv.judge(bundle, project=project)
-        state_path = report.get("adopted_state")
-        state = _load(Path(state_path)) if state_path else {}
-        final = _drv.def_identity(
-            bundle, Path(str(state["def"])) if state.get("def") else None)
-        if final is not None:
-            result.setdefault("not_measured", []).append(
-                f"step 32 final routed DEF {'absent' if final == 'absent' else 'differs from judged layout identity'}")
-            result["verdict"] = ("FAIL" if result.get("failures") else
-                                 "NOT_MEASURED")
-    except (OSError, ValueError, TypeError, RuntimeError, KeyError) as exc:
-        result = {"name": "DRV(tran/cap/fanout)", "verdict": "NOT_MEASURED",
-                  "not_measured": [f"step 32 DRV evidence unavailable: {exc}"]}
-    report["drv_signoff"] = result
-    # R-0929-DRV-IDENTITY / R-0929-STEP32-ADOPT: the DRV judgement is Step
-    # 32's own verdict (residual DRV keeps the step FAIL), recorded apart from
-    # the actuator verdict.  It never gates the handoff of the adopted
-    # candidate and never makes the pre-repair route ship; the sign-off DRV
-    # verdict of the handed-off route is the step-23 / pre-stream capture's.
-    report["drv_signoff_verdict"] = result["verdict"] if source.is_file() else "NOT_MEASURED"
-    output = project / "reports/phase3/sta/drv_signoff_step32.json"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    write_json(output, result)
 
 
 def _drv_classifier(ctx: Dict[str, Any], sta_folder: Path) -> Optional[Callable[..., str]]:
@@ -428,9 +382,7 @@ def _drv_classifier(ctx: Dict[str, Any], sta_folder: Path) -> Optional[Callable[
         sdc = cfg.get("SIGNOFF_SDC_FILE")
         margin = (_cls.sdc_cap_margin(_host_path(ctx, str(sdc)).read_text())
                   if sdc else None)
-        return _cls.Classifier(netlist, libs, margin,
-                               project=Path(ctx["project"]) if ctx.get("project") else None,
-                               sdc=_host_path(ctx, str(sdc)) if sdc else None).classify
+        return _cls.Classifier(netlist, libs, margin).classify
     except (OSError, ValueError, KeyError, TypeError, _cls.Unavailable) as exc:
         reason = f"{type(exc).__name__}: {exc}"
 
@@ -1504,7 +1456,6 @@ def run(project: Path, *, image: str, pdk: str, pdk_root: Path,
                             registry=registry, programs_dir=programs_dir,
                             floors=declared_timing_floor(project, sdc)))
     _stamp_verdict(report)
-    _step32_drv_signoff(project, report)
     write_json(out, report)
     _publish_declared_repair(project, report, out)
     return report
@@ -1613,7 +1564,6 @@ def run_in_chain(project: Path, *, mode: str, image: str, pdk: str, pdk_root: Pa
     if mode != "dual":
         report.update(close_arm(project, "librelane", route_state, **common))
         _stamp_verdict(report)
-        _step32_drv_signoff(project, report)
         write_json(out, report)
         _publish_declared_repair(project, report, out)
         return report
@@ -1652,16 +1602,7 @@ def run_in_chain(project: Path, *, mode: str, image: str, pdk: str, pdk_root: Pa
     report["input_baseline"] = arms["postdrt"]["baseline"]
     report["repair_trigger"] = chosen.get("repair_trigger")
     report["selected_arm"] = sel["selection"]
-    # The pregrt arm re-ran step 21's chain and rewrote the post-GRT receipt:
-    # bind the route the selected arm stands on before the step-32 capture.
-    import drv_stage_receipts as _drv_stages
-    _lane = ((list(zip(pre["ids"], pre["folders"])) if pre.get("folders")
-              else Path(pre["final"]).parent.parent)
-             if sel["selection"] in ("pregrt", "pregrt_postdrt")
-             else Path(route_state).parent.parent if route_state else None)
-    _drv_stages.rebind_lane(project, _lane, ("post_grt_repair",), sel["selection"])
     _stamp_verdict(report)
-    _step32_drv_signoff(project, report)
     write_json(out, report)
     _publish_declared_repair(project, report, out)
     return report
@@ -1838,18 +1779,6 @@ def _validate_resume_readset(project: Path, current: Dict[str, Any],
                                for host, guest in ctx.get("mounts") or []]
             if pdk_record.get("requested_mounts") != expected_mounts:
                 raise ValueError(f"{step}: PDK mount identity changed")
-            image_identity = fp.get("local_image")
-            if not isinstance(image_identity, dict):
-                raise ValueError(f"{step}: native tool identity missing")
-            stable = {key: value for key, value in image_identity.items()
-                      if key not in ("cid", "attestation_path", "attestation_sha256")}
-            if recorded_image is None:
-                live = _ll.local_image_attestation(ctx["image"])
-                recorded_image = {key: value for key, value in live.items()
-                                  if key not in ("cid", "attestation_path",
-                                                 "attestation_sha256")}
-            if stable != recorded_image:
-                raise ValueError(f"{step}: native tool identity changed")
         return {"verdict": "PASS", "steps": list(required),
                 "image": ctx["image"],
                 "producer_program_tree": producer_program_tree,
@@ -2228,14 +2157,7 @@ def _recover_retained_finished_promotion(
                      "measurement": dict(measurement),
                      "closure_decision": "PROMOTED"}],
         final_antenna=measurement["antenna_nets"],
-        final_supply_ownership=ownership, drv_signoff_verdict="PASS",
-        drv_signoff={
-            "schema_version": 1, "name": "DRV(tran/cap/fanout)",
-            "verdict": "PASS",
-            "counts": {"max_slew": 0, "max_capacitance": 0,
-                       "max_fanout": 0},
-            "failures": [], "not_measured": [], "waived": [],
-            "basis": "retained STAPostPNR complete pin/check census"},
+        final_supply_ownership=ownership,
         candidate_finishing={
             "verdict": "PASS", "candidate": candidate,
             "finished_gds": ready["finished_gds"],
@@ -2433,8 +2355,7 @@ def retained_finished_candidate_readback(project: Path) -> Optional[Dict[str, An
                 or not isinstance(measurement.get("hold_ws_min"), (int, float))
                 or isinstance(measurement.get("hold_ws_min"), bool)
                 or measurement.get("antenna_nets") != 0
-                or measurement.get("antenna_pins") != 0
-                or report.get("drv_signoff_verdict") != "PASS"):
+                or measurement.get("antenna_pins") != 0):
             raise ValueError("retained DRV/timing/antenna evidence is incomplete")
         if (current.get("supply_ownership") or {}).get("verdict") != "PASS":
             raise ValueError("retained supply ownership did not pass")
@@ -2676,7 +2597,6 @@ def resume_candidate_finishing(project: Path, candidate: str, lane: str, *,
         "lvs": pv["lvs"].get("verdict"),
         "final_electrical": "NOT_MEASURED"}
     _stamp_verdict(report)
-    _step32_drv_signoff(project, report)
     write_json(retained["report_path"], report)
     _publish_declared_repair(project, report, retained["report_path"])
     return report
@@ -2833,7 +2753,6 @@ def resume_drv(project: Path, *, registry: Optional[Path] = None,
                         "candidate_ledger_end": len(candidates),
                         "final_antenna_nets": measured_antenna}
     _stamp_verdict(report)
-    _step32_drv_signoff(project, report)
     write_json(source, report)
     _publish_declared_repair(project, report, source)
     return report

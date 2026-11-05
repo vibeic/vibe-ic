@@ -1022,7 +1022,6 @@ def _native_library_text_pairs(project: Path, layout: Path, layout_sha: str):
         switch = lc._load(switch_path) if switch_path.is_file() else {}
         if 'local_provider' in fp:
             image = fp.get('image')
-            native._retained_local_provider(project, fp['local_provider'], image)
         else:
             image = native._image(project, switch)
         mounts = native._pdk_mounts(project, switch, folder, image)

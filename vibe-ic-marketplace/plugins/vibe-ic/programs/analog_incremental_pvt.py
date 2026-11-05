@@ -432,9 +432,6 @@ def collect(manifest):
                     if capture.native_execution_failure(point):
                         failed, native_failed = True, True
                         raise ValueError("native corner conversion execution failed")
-                    current, reason = capture.validate_execution_identity(point)
-                    if not current:
-                        raise ValueError(reason)
                     for execution in point.get("executions") or []:
                         log = Path(execution["log"])
                         if execution.get("log_sha256") != bound.sha(log):

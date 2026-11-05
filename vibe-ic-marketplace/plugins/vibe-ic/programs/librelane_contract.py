@@ -10,7 +10,6 @@ import math
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -30,53 +29,21 @@ class Refusal(RuntimeError):
         super().__init__(f"{code}: {detail}")
 
 
-LOCAL_ATTESTATION_ENV = 'VIBEIC_LIBRELANE_LOCAL_ATTESTATION'
 LOCAL_PROVIDER_ROUTE_ENV = 'VIBEIC_LIBRELANE_ROUTE'
-LOCAL_PROVIDER_IDENTITY_PREFIX = 'local://librelane@sha256:'
 
 
-class LocalProviderIdentity(str):
-    """String-compatible identity for a host-owned LibreLane provider."""
+class LocalRuntime(str):
+    """The executable and paths required to run LibreLane on this host."""
 
-    def __new__(cls, reference: str, *, librelane_root: str | None,
-                pdk_root: str, pdk: str | None, source_sha256: str,
-                pdk_root_sha256: str | None, executable: str,
-                executable_sha256: str, source_kind: str,
-                network_mode: str, network_namespace: str,
-                network_helper: str | None, network_helper_sha256: str | None):
-        value = str.__new__(cls, reference)
-        value.route = 'LOCAL'
-        value.provider = 'host-owned-librelane'
+    def __new__(cls, executable: str, *, librelane_root: str, pdk_root: str,
+                pdk: str | None, network_mode: str):
+        value = str.__new__(cls, executable)
+        value.executable = executable
         value.librelane_root = librelane_root
         value.pdk_root = pdk_root
         value.pdk = pdk
-        value.source_sha256 = source_sha256
-        value.pdk_root_sha256 = pdk_root_sha256
-        value.executable = executable
-        value.executable_sha256 = executable_sha256
-        value.source_kind = source_kind
         value.network_mode = network_mode
-        value.network_namespace = network_namespace
-        value.network_helper = network_helper
-        value.network_helper_sha256 = network_helper_sha256
         return value
-
-    def as_record(self) -> dict[str, Any]:
-        return {'route': self.route, 'provider': self.provider,
-                'reference': str(self), 'librelane_root': self.librelane_root,
-                'pdk_root': self.pdk_root, 'pdk': self.pdk,
-                'source_sha256': self.source_sha256,
-                'pdk_root_sha256': self.pdk_root_sha256,
-                'executable': self.executable,
-                'executable_sha256': self.executable_sha256,
-                'source_kind': self.source_kind,
-                'network_mode': self.network_mode,
-                'network_namespace': self.network_namespace,
-                'network_helper': self.network_helper,
-                'network_helper_sha256': self.network_helper_sha256}
-
-
-_LOCAL_PROVIDER_IDENTITIES: dict[str, LocalProviderIdentity] = {}
 
 
 def _provider_switch(project: Path | None) -> dict[str, Any]:
@@ -122,148 +89,33 @@ def _provider_roots(project: Path | None, pdk: str | None) -> tuple[str | None, 
             (str(selected) if selected not in (None, '') else None))
 
 
-def _local_tree_sha256(root: Path | None) -> str | None:
-    if root is None:
-        return None
-    try:
-        if root.is_symlink() or not root.exists():
-            return None
-        if root.is_file():
-            return hashlib.sha256(root.read_bytes()).hexdigest()
-        result = hashlib.sha256()
-        for path in sorted(root.rglob('*')):
-            if path.is_symlink():
-                return None
-            if path.is_dir() or '__pycache__' in path.parts or path.suffix in {'.pyc', '.pyo'}:
-                continue
-            if not path.is_file():
-                return None
-            relative = path.relative_to(root).as_posix().encode()
-            result.update(len(relative).to_bytes(8, 'big'))
-            result.update(relative)
-            result.update(hashlib.sha256(path.read_bytes()).digest())
-        return result.hexdigest()
-    except OSError:
-        return None
-
-
-def _local_executable_identity(value: str | None = None) -> tuple[str, str]:
-    candidate = value or os.environ.get('VIBEIC_LIBRELANE_EXECUTABLE') or sys.executable
-    path = Path(candidate).expanduser()
-    if not path.is_absolute():
-        resolved = shutil.which(str(path))
-        path = Path(resolved) if resolved else path
-    try:
-        path = path.resolve(strict=True)
-        if not path.is_file() or not os.access(path, os.X_OK):
-            raise OSError('not an executable file')
-        return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError as exc:
-        raise Refusal('LL_LOCAL_EXECUTABLE_INVALID', f'{path}: {exc}') from None
-
-
-def _local_network_namespace() -> str:
-    try:
-        return os.readlink('/proc/self/ns/net')
-    except OSError as exc:
-        raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
-                      f'cannot identify host network namespace: {exc}') from None
-
-
-def _local_network_helper_identity() -> tuple[str, str]:
-    helper = shutil.which('bwrap')
-    if not helper:
-        raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
-                      'bwrap is required to provide a LOCAL network namespace')
-    try:
-        path = Path(helper).resolve(strict=True)
-        if not path.is_file() or not os.access(path, os.X_OK):
-            raise OSError('not an executable file')
-        return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError as exc:
-        raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
-                      f'cannot bind bwrap identity: {exc}') from None
-
-
-def local_provider_identity(project: Path | None = None,
-                            pdk: str | None = None) -> LocalProviderIdentity | None:
-    """Resolve an explicitly selected host-owned LibreLane/PDK provider."""
-    # A generic no-container/native fallback is still the legacy attested-image
-    # route.  Only an explicit LOCAL/HOST/NATIVE selection may promote the
-    # caller into the typed host-provider identity contract.
+def local_runtime(project: Path | None = None, pdk: str | None = None) -> LocalRuntime | None:
     if not _explicit_local_route(project):
         return None
-    root_value, source_value, selected = _provider_roots(project, pdk)
-    if not root_value:
-        if _explicit_local_route(project):
-            raise Refusal('LL_LOCAL_PROVIDER_UNDECLARED',
-                          'LOCAL requires pdk_root_host or VIBEIC_LIBRELANE_PDK_ROOT')
-        return None
-    if not source_value:
-        raise Refusal('LL_LOCAL_SOURCE_UNDECLARED',
-                      'LOCAL requires librelane_root_host or VIBEIC_LIBRELANE_ROOT')
+    root, source, selected = _provider_roots(project, pdk)
+    root = str(Path(root).expanduser()) if root else None
+    source = str(Path(source).expanduser()) if source else None
     if selected and not _PDK_NAME.fullmatch(selected):
         raise Refusal('LL_PDK_NAME_INVALID', repr(selected))
-    root = Path(root_value).expanduser()
-    if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+    if not root or not Path(root).is_dir():
         raise Refusal('LL_LOCAL_PDK_ROOT_INVALID', str(root))
-    source = Path(source_value).expanduser() if source_value else None
-    if source is not None and (not source.is_absolute() or source.is_symlink() or
-                               not source.is_dir()):
+    if not source or not (Path(source) / 'librelane/__init__.py').is_file():
         raise Refusal('LL_LOCAL_LIBRELANE_ROOT_INVALID', str(source))
-    if source is not None:
-        package_init = source / 'librelane' / '__init__.py'
-        if package_init.is_symlink() or not package_init.is_file():
-            raise Refusal('LL_LOCAL_SOURCE_UNATTESTED',
-                          f'LibreLane package is not bound under {source}')
-    executable, executable_sha = _local_executable_identity(
-        _provider_switch(project).get('librelane_executable'))
-    source_sha = _local_tree_sha256(source) if source is not None else executable_sha
-    if not source_sha:
-        raise Refusal('LL_LOCAL_SOURCE_UNATTESTED',
-                      f'cannot hash declared LibreLane source {source}')
-    source_kind = 'source_tree' if source is not None else 'executable'
-    switch = _provider_switch(project)
-    network_mode = (switch.get('local_network_mode') or
-                    os.environ.get('VIBEIC_LIBRELANE_LOCAL_NETWORK') or 'none')
-    network_mode = str(network_mode).strip().lower()
-    if network_mode not in {'none', 'host'}:
-        raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
-                      f'unsupported local network mode {network_mode!r}')
-    network_namespace = _local_network_namespace()
-    network_helper, network_helper_sha = (
-        _local_network_helper_identity() if network_mode == 'none' else (None, None))
-    root_sha = _local_tree_sha256(root)
-    if not root_sha:
-        raise Refusal('LL_LOCAL_PROVIDER_IDENTITY_UNBOUND',
-                      f'cannot hash PDK root {root}')
-    material = json.dumps({'route': 'LOCAL', 'provider': 'host-owned-librelane',
-                           'librelane_root': str(source.resolve()) if source else None,
-                           'pdk_root': str(root.resolve()), 'pdk': selected,
-                           'source_sha256': source_sha, 'source_kind': source_kind,
-                           'pdk_root_sha256': root_sha, 'executable': executable,
-                           'executable_sha256': executable_sha,
-                           'network_mode': network_mode,
-                           'network_namespace': network_namespace,
-                           'network_helper': network_helper,
-                           'network_helper_sha256': network_helper_sha},
-                          sort_keys=True, separators=(',', ':')).encode()
-    reference = LOCAL_PROVIDER_IDENTITY_PREFIX + hashlib.sha256(material).hexdigest()
-    identity = LocalProviderIdentity(
-        reference, librelane_root=str(source.resolve()) if source else None,
-        pdk_root=str(root.resolve()), pdk=selected, source_sha256=source_sha,
-        pdk_root_sha256=root_sha, executable=executable,
-        executable_sha256=executable_sha, source_kind=source_kind,
-        network_mode=network_mode, network_namespace=network_namespace,
-        network_helper=network_helper, network_helper_sha256=network_helper_sha)
-    _LOCAL_PROVIDER_IDENTITIES[reference] = identity
-    return identity
+    executable = (_provider_switch(project).get('librelane_executable') or
+                  os.environ.get('VIBEIC_LIBRELANE_EXECUTABLE') or sys.executable)
+    executable = shutil.which(str(executable))
+    if executable is None:
+        raise Refusal('LL_LOCAL_EXECUTABLE_INVALID', 'LibreLane Python executable is unavailable')
+    network = str(_provider_switch(project).get('local_network_mode') or
+                  os.environ.get('VIBEIC_LIBRELANE_LOCAL_NETWORK') or 'none').strip().lower()
+    if network not in {'none', 'host'}:
+        raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', f'network mode {network!r}')
+    return LocalRuntime(executable, librelane_root=str(Path(source).resolve()),
+                        pdk_root=str(Path(root).resolve()), pdk=selected, network_mode=network)
 
 
-def _provider_for_image(image: Any) -> LocalProviderIdentity | None:
-    if isinstance(image, LocalProviderIdentity):
-        return image
-    return _LOCAL_PROVIDER_IDENTITIES.get(str(image))
+def _provider_for_image(image: Any) -> LocalRuntime | None:
+    return image if isinstance(image, LocalRuntime) else None
 
 
 def native_tool_command(image: Any, command: list[str]) -> tuple[str, list[str]]:
@@ -350,78 +202,6 @@ def _container_image_arg(argv: list[Any]) -> Any | None:
     return None
 
 
-def _local_reference_token(argv: list[Any]) -> str | None:
-    """Find an exact typed LOCAL reference without scanning command text."""
-    pattern = re.escape(LOCAL_PROVIDER_IDENTITY_PREFIX) + r'[0-9a-f]{64}'
-    return next((part for part in argv
-                 if isinstance(part, str) and re.fullmatch(pattern, part)), None)
-
-
-def local_image_attestation(image: str | None = None) -> dict[str, Any]:
-    """Read the host's live launch receipt, bound to THIS container and image.
-
-    The host mounts its ordinary launch_identity.json read-only after inspecting
-    the fresh CID. A pulled manifest or exact local image ID binds the bytes;
-    an image environment string alone is never execution proof.
-    This is deliberately uncached: changed/absent authority refuses even on reuse.
-    """
-    path = Path(os.environ.get(LOCAL_ATTESTATION_ENV, ''))
-    try:
-        raw = path.read_bytes()
-        def unique(pairs):
-            out = {}
-            for key, value in pairs:
-                if key in out:
-                    raise ValueError(f'duplicate key {key}')
-                out[key] = value
-            return out
-        record = json.loads(raw, object_pairs_hook=unique)
-        inspected = record['container_inspect']
-        cid, reference = record['cid'], record['image']
-        import _eda_pin
-        wanted = image or os.environ.get('VIBEIC_EDA_IMAGE') or reference
-        image_digest = _eda_pin.reference_digest(reference)
-        host_images = record['image_inspect']
-        host_image = next(item for item in host_images
-                          if item['Id'] == inspected['Image'])
-        manifest = inspected.get('ImageManifestDescriptor', {}).get('digest')
-        host_config = inspected.get('HostConfig', {})
-        if not isinstance(host_config, dict):
-            raise ValueError('HostConfig is not an inspection object')
-        repo_digests = host_image.get('RepoDigests', [])
-        if (not isinstance(repo_digests, list)
-                or not all(isinstance(ref, str) for ref in repo_digests)):
-            raise ValueError('host image RepoDigests is not a string list')
-        held = [_eda_pin.reference_digest(ref) for ref in repo_digests]
-        image_bound = (
-            bool(re.fullmatch(r'sha256:[0-9a-f]{64}', reference))
-            and reference == wanted == inspected['Config']['Image'] == inspected['Image']
-        ) or (
-            bool(image_digest) and '@sha256:' in reference
-            and _eda_pin.reference_digest(wanted) == image_digest
-            and _eda_pin.reference_digest(inspected['Config']['Image']) == image_digest
-            and (manifest == image_digest or image_digest in held)
-        )
-        if (not re.fullmatch(r'[0-9a-f]{64}', cid)
-                or inspected['Id'] != cid
-                or inspected['Config']['Hostname'] != socket.gethostname()
-                or not socket.gethostname().startswith(cid[:12])
-                or inspected['State']['Running'] is not True
-                or inspected['State'].get('Paused') or inspected['State'].get('Dead')
-                or not image_bound):
-            raise ValueError('host CID/image inspection does not bind this LOCAL process')
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration) as exc:
-        raise Refusal('LL_LOCAL_IMAGE_UNATTESTED', f'{path}: {exc}') from None
-    return {'image': reference, 'image_id': inspected['Image'],
-            'repo_digests': list(repo_digests), 'cid': cid,
-            'network_mode': host_config.get('NetworkMode'),
-            'memory': host_config.get('Memory'),
-            'memory_swap': host_config.get('MemorySwap'),
-            'auto_remove': host_config.get('AutoRemove'),
-            'attestation_path': str(path.resolve()),
-            'attestation_sha256': hashlib.sha256(raw).hexdigest()}
-
-
 def _local_memory_bytes(value: str) -> int:
     """Decode the Docker byte/unit values emitted by this owner."""
     if value == '-1':
@@ -435,7 +215,7 @@ def _local_memory_bytes(value: str) -> int:
 
 def _run_local(argv: list[str], *, probe_deadline_s: float | None,
                supervised: bool, log: Path | None,
-               provider: LocalProviderIdentity | None = None,
+               provider: LocalRuntime | None = None,
                **kw: Any) -> subprocess.CompletedProcess:
     """Execute only the Docker-run shapes emitted by this LibreLane owner.
 
@@ -446,13 +226,12 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
     Unknown launch options refuse rather than silently discarding their meaning.
     """
     mounts, variables, entrypoint, container_workdir = [], {}, None, None
-    network, memory, memory_swap, auto_remove = None, None, None, False
+    network, memory, memory_swap = None, None, None
     cpus, pids_limit = None, None
     at = argv.index('run') + 1
     while at < len(argv) and argv[at].startswith('-'):
         option = argv[at]
         if option == '--rm':
-            auto_remove = True
             at += 1
             continue
         if option not in ('-v', '-e', '--entrypoint', '--memory', '--memory-swap',
@@ -539,35 +318,12 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
                           f'LOCAL provider {provider} cannot run on a Docker-backed route')
         image = str(image)
         argv[at] = image
-    if provider is not None:
-        if _local_network_namespace() != provider.network_namespace:
-            raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
-                          'the host network namespace changed since provider admission')
-        if (provider.librelane_root and
-                _local_tree_sha256(Path(provider.librelane_root)) != provider.source_sha256):
-            raise Refusal('LL_LOCAL_SOURCE_CHANGED', provider.librelane_root)
-        if _local_tree_sha256(Path(provider.pdk_root)) != provider.pdk_root_sha256:
-            raise Refusal('LL_LOCAL_PDK_CHANGED', provider.pdk_root)
-        if network is None:
-            network = provider.network_mode
-        if network != provider.network_mode:
-            raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
-                          f'requested {network!r}; provider binds {provider.network_mode!r}')
-        if provider.network_mode == 'none':
-            if (not provider.network_helper or
-                    _local_executable_identity(provider.network_helper)[1] !=
-                    provider.network_helper_sha256):
-                raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
-                              'the bound LOCAL network helper changed or disappeared')
-        if memory is None or memory <= 0:
-            raise Refusal('LL_LOCAL_MEMORY_UNATTESTED',
-                          'LOCAL execution requires a finite --memory bound')
-        if memory_swap is None or memory_swap != memory:
-            raise Refusal('LL_LOCAL_SWAP_UNATTESTED',
-                          'LOCAL execution requires --memory-swap equal to --memory')
-        if not auto_remove:
-            raise Refusal('LL_LOCAL_AUTOREMOVE_UNATTESTED',
-                          'LOCAL execution requires Docker-equivalent --rm process lifetime')
+    if provider is not None and network is None:
+        network = provider.network_mode
+    if provider is not None and (memory is None or memory <= 0):
+        raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', 'a finite --memory limit is required')
+    if provider is not None and memory_swap != memory:
+        raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', '--memory-swap must equal --memory on the host route')
     command = argv[at + 1:]
     if entrypoint:
         command = [entrypoint, *command]
@@ -576,24 +332,20 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
     else:
         raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', 'missing explicit --skip command')
     command = [_ce.localise_mounted_paths(part, mounts) for part in command]
-    if provider is not None:
-        executable = shutil.which(command[0]) if command else None
-        if not executable:
-            raise Refusal('LL_LOCAL_EXECUTABLE_INVALID', command[0] if command else '<empty>')
-        executable = str(Path(executable).resolve())
-        if (executable != provider.executable or
-                hashlib.sha256(Path(executable).read_bytes()).hexdigest() !=
-                provider.executable_sha256):
-            raise Refusal('LL_LOCAL_EXECUTABLE_MISMATCH',
-                          f'{executable} is not the bound {provider.executable}')
-        if provider.network_mode == 'none':
-            command = [provider.network_helper, '--bind', '/', '/', '--unshare-net', '--', *command]
+    if provider is not None and command and command[0] in {'python', 'python3'}:
+        command[0] = provider.executable
+    if provider is not None and network == 'none':
+        helper = shutil.which('bwrap')
+        if helper is None:
+            raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', 'bwrap is needed for --network none')
+        command = [helper, '--bind', '/', '/', '--unshare-net', '--', *command]
     environment = dict(kw.pop('env', None) or os.environ)
     environment.update({key: _ce.localise_mounted_paths(value, mounts)
                         for key, value in variables.items()})
     if provider is not None and provider.librelane_root:
         environment['PYTHONPATH'] = os.pathsep.join(
             [provider.librelane_root, environment.get('PYTHONPATH', '')]).rstrip(os.pathsep)
+        environment['PATH'] = str(Path(provider.executable).parent) + os.pathsep + environment.get('PATH', '')
     if provider is not None or any(value is not None for value in (memory, cpus, pids_limit)):
         # Apply native limits in a separate launcher.  A
         # preexec_fn in a supervised/threaded parent can deadlock after fork;
@@ -667,19 +419,6 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
                           f'LOCAL tool made no progress for {grace:g} s; '
                           f'{_salvage(watched.out, watched.err, log)}')
         result = _wd.completed_process(command, watched)
-    if provider is not None:
-        changed = []
-        if (provider.librelane_root and
-                _local_tree_sha256(Path(provider.librelane_root)) != provider.source_sha256):
-            changed.append(f'LL_LOCAL_SOURCE_CHANGED: {provider.librelane_root}')
-        if _local_tree_sha256(Path(provider.pdk_root)) != provider.pdk_root_sha256:
-            changed.append(f'LL_LOCAL_PDK_CHANGED: {provider.pdk_root}')
-        if changed:
-            detail = '; '.join(changed)
-            if result.returncode:
-                result.stderr = (result.stderr or '') + f'\n{detail}\n'
-            else:
-                raise Refusal('LL_LOCAL_SOURCE_CHANGED', detail)
     return result
 
 
@@ -701,9 +440,6 @@ def _local_config_source(source: Path, mounts: list[tuple[Path, str]], *,
         return value
     native = source.with_name(source.stem + '.local.json')
     write_json(native, paths(_load(source)))
-    write_json(native.with_suffix('.provenance.json'), {
-        'source': str(source), 'source_sha256': digest(source),
-        'native_sha256': digest(native), 'mounts': mapping, 'execution_route': 'LOCAL'})
     return native
 
 
@@ -940,10 +676,6 @@ def run_container(argv: list[str], *, probe_deadline_s: float | None = None,
     if (probe_deadline_s is None) == (not supervised):
         raise ValueError('run_container: pass exactly one of probe_deadline_s= or supervised=True')
     image_arg = _container_image_arg(argv)
-    if image_arg is None and (_explicit_local_route(None) or
-                              _local_reference_token(argv) is not None):
-        raise Refusal('LL_LOCAL_IMAGE_UNRESOLVABLE',
-                      'LOCAL route cannot identify an unambiguous image token')
     provider = _provider_for_image(image_arg)
     mismatch = _provider_route_mismatch(image_arg)
     if mismatch is not None:
@@ -3048,15 +2780,14 @@ def pdk_root_resolution(project: Path | None = None, pdk: str | None = None, *,
         raise mismatch
     provider = _provider_for_image(image)
     if provider is None and _explicit_local_route(project):
-        provider = local_provider_identity(project, pdk)
+        provider = local_runtime(project, pdk)
     if provider is not None:
         if provider.pdk and pdk and provider.pdk != str(pdk):
             raise Refusal('LL_LOCAL_PDK_PROVIDER_MISMATCH',
                           f'provider declares {provider.pdk!r}; caller requested {pdk!r}')
-        answer = {'path': provider.pdk_root, 'source': 'local_provider',
-                  'identity': str(provider), 'provider': provider.as_record(),
+        answer = {'path': provider.pdk_root, 'source': 'local_runtime',
                   'pdk': provider.pdk or pdk,
-                  'pdk_from': ('provider identity' if provider.pdk else 'caller')}
+                  'pdk_from': ('runtime configuration' if provider.pdk else 'caller')}
         if project is not None and (project / 'phase3').is_dir():
             write_json(project / PDK_ROOT_PROVENANCE_REL, answer)
         return answer
@@ -3126,25 +2857,13 @@ def resolve_pdk_root(project: Path | None = None, pdk: str | None = None, *,
 
 
 def resolve_image(project: Path | None = None, *, record: bool = True) -> str:
-    """Switch ``image`` > ``VIBEIC_LIBRELANE_IMAGE`` > the host's resolved image.
-
-    The fallback is the plugin's ONE runtime resolver, `_eda_pin.image_reference`
-    (the newest released vibeic-eda image on this host, by its own version
-    label, as a digest).  The source never stores a digest or version: the EDA
-    image and the plugin release separately (owner 2026-08-21, 2026-09-17).
-    When nothing resolves this refuses by name; it never guesses.
-    """
-    path = project / 'phase3/librelane_switch.json' if project else None
-    declared = _load(path).get('image') if path and path.is_file() else None
-    provider = local_provider_identity(project)
-    if provider is not None:
-        if record and project is not None and (project / 'phase3').is_dir():
-            write_json(project / 'phase3/librelane_image.provenance.json',
-                       {'image': str(provider), 'source': 'host-owned LOCAL provider',
-                        'provider': provider.as_record()})
-        return provider
-    if declared or os.environ.get('VIBEIC_LIBRELANE_IMAGE'):
-        return str(declared or os.environ['VIBEIC_LIBRELANE_IMAGE'])
+    """Resolve the native executable or selected container image."""
+    runtime = local_runtime(project)
+    if runtime is not None:
+        return runtime
+    switch = _provider_switch(project)
+    if switch.get('image') or os.environ.get('VIBEIC_LIBRELANE_IMAGE'):
+        return str(switch.get('image') or os.environ['VIBEIC_LIBRELANE_IMAGE'])
     import _eda_pin
     try:
         return _eda_pin.image_reference()
@@ -3207,14 +2926,6 @@ def image_capability(image: str, docker: str = 'docker') -> dict:
     mismatch = _provider_route_mismatch(provider)
     if mismatch is not None:
         raise mismatch
-    if provider is not None:
-        key = (str(provider), docker)
-        if key not in _CAPABILITY:
-            _CAPABILITY[key] = {
-                'image': str(provider), 'execution_route': 'LOCAL',
-                'provider': provider.as_record(), 'openroad_aliases': {},
-                'tcl_probe': 'NOT_MEASURED: host-owned LOCAL provider'}
-        return _CAPABILITY[key]
     key = (str(image), docker)
     if key in _CAPABILITY:
         return _CAPABILITY[key]

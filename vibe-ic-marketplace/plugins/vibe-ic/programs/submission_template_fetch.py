@@ -537,23 +537,18 @@ def _technology_probe(image: str, command: List[str], *, parser: bool = False,
     Only the legacy EDA launcher and a genuinely absent entrypoint are known.
     """
     if local:
-        try:
-            import librelane_contract as contract
-            identity = contract.local_image_attestation(image)
-            raw = Path(identity["attestation_path"]).read_bytes()
-            if hashlib.sha256(raw).hexdigest() != identity["attestation_sha256"]:
-                raise ValueError("LOCAL launch receipt changed during read")
-            records = [item for item in json.loads(raw)["image_inspect"]
-                       if item["Id"] == identity["image_id"]]
-        except (contract.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
-            return 126, "", f"technology LOCAL image authority unavailable: {exc}"
-        err = ""
-    else:
-        rc, out, err = _run(["docker", "image", "inspect", image], timeout=120)
-        try:
-            records = json.loads(out) if rc == 0 else []
-        except ValueError:
-            records = []
+        import os
+        if registry_root is not None:
+            root = Path(os.environ.get("PDK_ROOT", str(Path(registry_root).parent))) / Path(registry_root).name
+            if not command or not command[-1].startswith(registry_root + "/"):
+                return 126, "", "technology artifact is outside the declared registry root"
+            command = [*command[:-1], str(root / command[-1][len(registry_root) + 1:])]
+        return _run(command, timeout=600)
+    rc, out, err = _run(["docker", "image", "inspect", image], timeout=120)
+    try:
+        records = json.loads(out) if rc == 0 else []
+    except ValueError:
+        records = []
     try:
         if len(records) != 1 or not isinstance(records[0]["Config"], dict):
             raise ValueError("image Config unavailable")
