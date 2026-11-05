@@ -104,3 +104,58 @@ def stuck_at(project, directory, *, state, config):
     result["metrics"] = metrics
     result["reports"] += [str(path) for path in directory.glob("scan_*") if path.is_file()]
     return result
+
+
+def path_delay(project, directory, *, state, config):
+    import path_delay_fault_atpg_run as producer
+    from lec_post_layout_check import _LIB_CELL_RE
+    from sdf_gate_sim import netlist_used_cells
+
+    state, config = state or {}, config or {}
+    corner = config.get("DEFAULT_CORNER", "")
+    clock = config.get("CLOCK_PORT")
+    clocks = [clock] if isinstance(clock, str) else clock or []
+    spef = state.get("spef") or {}
+    if isinstance(spef, dict):
+        spef = next((path for pattern, path in spef.items() if fnmatch.fnmatchcase(corner, pattern)), None)
+
+    def libraries(value):
+        groups = [paths for pattern, paths in value.items() if fnmatch.fnmatchcase(corner, pattern)] if isinstance(value, dict) else [value]
+        return [str(path) for group in groups for path in (group if isinstance(group, (list, tuple)) else [group]) if path]
+
+    main = libraries(config.get("CELL_LIBS") or config.get("LIB") or [])
+    if not state.get("nl") or not state.get("sdc") or not spef or not main or len(clocks) != 1:
+        return {"ran": False, "exit_code": None,
+                "detail": "Path-delay ATPG needs native NL, SDC, SPEF, one clock and the selected corner's Liberty."}
+    used = netlist_used_cells(Path(state["nl"]).read_text())
+    extra = libraries(config.get("PAD_LIBS") or []) + libraries(config.get("EXTRA_LIBS") or [])
+    selected = main + [path for path in extra if not Path(path).is_file()
+                       or used.intersection(_LIB_CELL_RE.findall(Path(path).read_text()))]
+    if any(not Path(path).is_file() for path in selected):
+        return {"ran": False, "exit_code": None, "detail": "A selected native timing Liberty is missing."}
+    relative = lambda path: os.path.relpath(path, project)
+    started = time.perf_counter()
+    code, data = producer.run_pdf_atpg(project, netlist_rel=relative(state["nl"]),
+        cut_rel=relative(directory / "cut_netlist.v"), flat_rel=relative(directory / "flat_core.v"),
+        sta_netlist=relative(state["nl"]), sdc=relative(state["sdc"]), spef=relative(spef),
+        liberty=main[0], top=config["DESIGN_NAME"], clock=clocks[0], dff_cells=None,
+        k=producer.DEFAULT_K, floor=producer.PDF_FLOOR_DEFAULT,
+        timing_fraction=producer.TIMING_FRACTION_DEFAULT, pdk_dir=None,
+        timing_source={"corner": corner, "liberties": selected})
+    report = directory / "path_delay_coverage.json"
+    report.write_text(json.dumps(data, indent=2) + "\n")
+    canonical = project / "reports/phase2/dft/path_delay_coverage.json"
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    canonical.write_text(report.read_text())
+    metrics = {key: data[key] for key in ("pdf_sensitised_coverage_pct", "pdf_robust_coverage_pct",
+               "pdf_sensitised_fault_coverage_pct", "graded_paths", "testable_paths", "sensitised_paths",
+               "robust_paths", "false_or_held_paths", "at_speed_meaningful_paths") if data.get(key) is not None}
+    if data.get("pdf_sensitised_coverage_pct") is not None:
+        metrics["path_fault_coverage"] = data["pdf_sensitised_coverage_pct"]
+    status = "NOT_MEASURED" if code == 2 or data.get("verdict") in {"NOT_APPLICABLE", "NOT_MEASURED", "BLOCKED"} else "FAIL" if code else "PASS"
+    return {"ran": True, "exit_code": code, "metrics": metrics, "reports": [str(report)],
+            "tool_seconds": time.perf_counter() - started,
+            "native_steps": [{"name": "path_delay_fault_atpg_run", "ran": True, "exit_code": code, "status": status}],
+            "detail": f"Native endpoint-anchored path sensitisation at {corner}; "
+                      f"at-speed meaningful paths={data.get('at_speed_meaningful_paths', 'NOT_MEASURED')}. "
+                      + "; ".join(data.get("reasons", []))}
