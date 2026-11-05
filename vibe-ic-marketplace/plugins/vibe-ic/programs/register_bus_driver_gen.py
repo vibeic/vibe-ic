@@ -1831,6 +1831,7 @@ def emit_sequence_tb(case: dict, plan: dict, bus: dict, dut_module: str,
     user = h.get("user")
     user_default = bus.get("user_default") or ""
     L: List[str] = []
+    L.append("`timescale 1ns/1ps")
     L.append("// AUTO-GENERATED known-answer-vector testbench, driven over the")
     L.append("// REGISTER BUS THE DESIGN DECLARES. Nothing below is hard-coded:")
     L.append(f"// case        : {name}")

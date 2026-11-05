@@ -137,6 +137,19 @@ def test_plain_design_gets_its_declared_address_width(tmp_path):
     assert "32'h00000020" not in tb, "a 32-bit address literal survived"
 
 
+def test_register_bus_bench_can_bind_the_native_sdc_period(tmp_path):
+    from sdf_gate_sim import bind_bench_clock
+
+    tb, why = K.emit_case_register_bus(_project(tmp_path), CASE,
+                                      "block_cipher_core", PORTS)
+    assert tb is not None, why
+    retimed, info = bind_bench_clock(tb, "dut", {
+        "sdc": "constraints.sdc", "unit_source": "SDC nanoseconds",
+        "clocks_s": {"clk_i": 17.5e-9}})
+    assert info["clocks"][0]["bench_half_period"] == "8.75"
+    assert "always #8.75 clk_i = ~clk_i;" in retimed
+
+
 def test_plain_design_also_gets_reset_under_active_controls(tmp_path):
     tb, why = K.emit_case_register_bus(_project(tmp_path), CASE,
                                        "block_cipher_core", PORTS)
