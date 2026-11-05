@@ -104,3 +104,15 @@ def test_actual_native_synthesis_handoff_reopens_without_proof_replay():
     project = Path(os.environ['FLOW109_NEUTRAL_CANONICAL'])
     result = handoff.bound_handoff(project)
     assert result and result['verdict'] == 'PASS', result
+
+
+@pytest.mark.parametrize('target', ['opaque-kit-r2', 'opaque_kit.rev2'])
+def test_exact_opaque_selection_retains_declared_target(tmp_path, target):
+    put(tmp_path / 'input/project.json', {'pdk': target})
+    try:
+        observed = contract.phase2_pdk(tmp_path, selected=target)[0]
+    except contract.Refusal as exc:
+        observed = exc.code
+    assert observed == target
+    with pytest.raises(contract.Refusal, match='LL_PHASE2_PDK_CONFLICT'):
+        contract.phase2_pdk(tmp_path, selected=target + '-other')
