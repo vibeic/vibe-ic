@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -449,6 +450,59 @@ def declared_electrical_checks(project):
     return list(checks.values())
 
 
+def _simulation_in_runtime(project, work, tool):
+    import _eda_pin
+
+    container = os.environ.get("EDA_CONTAINER") or _eda_pin.default_container_name()
+    transport = work / "runtime"
+    transport.mkdir()
+    commands = Commands(transport)
+    inspected = commands.run(["docker", "inspect", "--format", "{{json .Mounts}}", container])
+    if inspected is None or inspected.returncode:
+        return {**commands.result(detail="The declared simulation runtime could not be opened."),
+                "ran": False, "exit_code": None}
+    mounts = [(str(Path(mount["Source"]).resolve()), mount["Destination"])
+              for mount in json.loads(inspected.stdout) if mount["Type"] == "bind"]
+
+    def mapped(value, pairs):
+        if isinstance(value, str):
+            for source, destination in sorted(pairs, key=lambda pair: len(pair[0]), reverse=True):
+                if value == source or value.startswith(source.rstrip("/") + "/"):
+                    return destination.rstrip("/") + value[len(source):]
+        elif isinstance(value, list):
+            return [mapped(item, pairs) for item in value]
+        elif isinstance(value, dict):
+            return {key: mapped(item, pairs) for key, item in value.items()}
+        return value
+
+    result_path = work / "simulation_result.json"
+    code = """import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from flow_native_adapters import Commands, simulation
+project, work = map(Path, sys.argv[2:4])
+commands = Commands(work)
+try:
+    result = simulation(project, work, json.loads(sys.argv[4]), commands)
+except (OSError, ValueError, KeyError) as exc:
+    result = commands.result(detail=str(exc))
+Path(sys.argv[5]).write_text(json.dumps(result))
+"""
+    argv = ["python3", "-c", code, str(Path(__file__).resolve().parent),
+            str(project), str(work), json.dumps(mapped(tool, mounts)), str(result_path)]
+    options = ["-w", mapped(str(work), mounts)]
+    if os.environ.get("TMPDIR"):
+        options.extend(["-e", "TMPDIR=" + mapped(os.environ["TMPDIR"], mounts)])
+    completed = commands.run(["docker", "exec", *options, container, "bash", "-lc",
+                              "exec " + shlex.join(mapped(argv, mounts))])
+    if completed is None or completed.returncode or not result_path.is_file():
+        return {**commands.result(detail="The declared simulation runtime did not return a result."),
+                "ran": False, "exit_code": None}
+    result = mapped(json.loads(result_path.read_text()), [(target, source) for source, target in mounts])
+    result["reports"] = commands.result()["reports"] + result.get("reports", [])
+    return result
+
+
 def execute(project, directory, tool, route, *, state=None, config=None):
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
@@ -464,6 +518,10 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if adapter is None:
         return commands.result(detail=f"No native adapter for {tool.get('adapter')!r}.")
     try:
+        if tool.get("adapter") == "simulation":
+            from _container_exec import no_container_route
+            if not no_container_route():
+                return _simulation_in_runtime(project, work, tool)
         return adapter(project, work, tool, commands)
     except (OSError, ValueError, KeyError) as exc:
         return commands.result(detail=str(exc))
