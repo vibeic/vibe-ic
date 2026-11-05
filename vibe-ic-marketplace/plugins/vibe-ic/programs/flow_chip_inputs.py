@@ -144,6 +144,95 @@ def _paths(value) -> list[Path]:
     return [Path(str(path)) for path in value or []]
 
 
+def _selected_slot(project: Path):
+    """Read the selected operator slot; its published rectangles are inputs."""
+    import _submission_template as submission
+    import yaml
+
+    root = project / submission.SLOTS_DIR_REL
+    files = sorted([*root.glob("*.yaml"), *root.glob("*.yml"), *root.glob("*.json")])
+    if not files:
+        return None
+    report = project / submission.REPORT_REL
+    declared = (json.loads(report.read_text()).get("ingest", {}).get("declared_slot")
+                if report.is_file() else None)
+    answers = project / submission.DESIGN_ANSWERS_REL
+    if answers.is_file():
+        operator = json.loads(answers.read_text()).get("operator_template") or {}
+        selected = operator.get("slot")
+        if declared and selected and declared != selected:
+            raise ValueError(f"Conflicting selected operator slots: {declared!r}, {selected!r}")
+        declared = selected or declared
+    if not declared:
+        raise ValueError("Operator slots are supplied but no slot is selected in the design inputs")
+    records = []
+    for path in files:
+        try:
+            value = yaml.safe_load(path.read_text())
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Unreadable operator slot: {path}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"Unreadable operator slot: {path}")
+        record = value
+        if "die_area" not in value:
+            _, name = submission._first_key(value, submission.SLOT_NAME_KEYS)
+            record = {"slot": name or path.stem,
+                      "die_area": submission._rect_field(value, submission.DIE_AREA_KEY),
+                      "core_area": submission._rect_field(value, submission.CORE_AREA_KEY),
+                      "pads": submission._pad_lists(value, set())}
+        if record.get("slot") == declared:
+            records.append(record)
+    if len(records) != 1:
+        raise ValueError(f"Selected operator slot {declared!r} has {len(records)} matching records")
+    return records[0]
+
+
+def _slot_geometry(native: dict, slot: dict) -> dict:
+    import _submission_template as submission
+
+    native = dict(native)
+    for field, key in (("die_area", "DIE_AREA"), ("core_area", "CORE_AREA")):
+        value = slot.get(field)
+        if value is None and field == "core_area":
+            continue
+        rect = submission.parse_rect((value or {}).get("rect") or (value or {}).get("raw"))
+        if rect is None or min(submission.rect_wh(rect)) <= 0:
+            raise ValueError(f"Selected operator slot {slot['slot']!r} has no usable {key}")
+        native[key] = [float(number) for number in rect]
+    return native
+
+
+def _slot_pads(project: Path, chosen: dict, ordered: dict, slot: dict):
+    """Resolve the slot's pad instances against this generated wrapper."""
+    lists = (slot.get("pads") or {}).get("lists") or []
+    if not lists:
+        return chosen, ordered
+    sides = {side: [] for side in SIDES}
+    reverse_sides = {"PAD_" + name: side for side, name in SIDES.items()}
+    for entry in lists:
+        key = str(entry["key"]).upper()
+        if key not in reverse_sides:
+            raise ValueError(f"Operator slot pad list {key!r} names no die side")
+        sides[reverse_sides[key]] = entry["raw"]
+    by_port = {}
+    for instance, entry in chosen.items():
+        if entry.get("port"):
+            by_port.setdefault(entry["port"], []).append(instance)
+    bound = electrical._bind_side_names(project, sides, list(by_port))
+    result, used = {}, set()
+    for side, names in sides.items():
+        for name, port in zip(names, bound[side]):
+            candidates = [name] if name in chosen else by_port.get(port, [])
+            if len(candidates) != 1 or candidates[0] in used or name in result:
+                raise ValueError(f"Operator slot pad {name!r} does not resolve to one unused wrapper pad")
+            original = candidates[0]
+            result[name] = chosen[original]
+            used.add(original)
+    if used != set(chosen):
+        raise ValueError(f"Operator slot omits wrapper pads: {sorted(set(chosen) - used)}")
+    return result, sides
+
+
 def _library(native: dict):
     root, pdk = str(_required(native, "PDK_ROOT")), str(_required(native, "PDK"))
     lefs = _paths(_required(native, "PAD_LEFS"))
@@ -376,7 +465,7 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
     lines.extend(f"    wire {_identifier(net)};" for net in sorted(internal))
     for tie in used.values():
         if tie.get("source") != "pad":
-            lines.append(f"    {tie['master']} {tie['instance']} (.{tie['pin']}({tie['net']}));")
+            lines.append(f"    {tie['master']} {_identifier(tie['instance'])} (.{tie['pin']}({tie['net']}));")
     buses = electrical.io_bus_ports(library["verilog"])
     for instances in ordered.values():
         for instance in instances:
@@ -397,7 +486,7 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
             power = [f".{pin}({_identifier(net)})" for pin, net in pairs.items() if pin in pg]
             if entry.get("is_ring_connector"):
                 lines.append("    (* keep = 1 *)")
-            lines.extend([f"    {entry['master']} {instance} (", "        " + ", ".join(regular)])
+            lines.extend([f"    {entry['master']} {_identifier(instance)} (", "        " + ", ".join(regular)])
             if power:
                 lines.extend(["`ifdef USE_POWER_PINS", ("        , " if regular else "        ") + ", ".join(power), "`endif"])
             lines.append("    );")
@@ -497,8 +586,13 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     destination.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     native, ports, area, runs = _native_core(project, core_config, destination, on_tool_run)
+    slot = _selected_slot(project)
+    if slot is not None:
+        native = _slot_geometry(native, slot)
     library = _library(native)
     chosen, ordered, supplies, power, ground, placement = _ring(project, native, ports, library)
+    if slot is not None:
+        chosen, ordered = _slot_pads(project, chosen, ordered, slot)
     die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement)
     top = core_config["DESIGN_NAME"] + "_chip"
     wrapper = destination / "wrapper.v"
@@ -547,6 +641,7 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     attach(project, result, destination, core_config.get("PDN_CFG"))
     tool_seconds = sum(run["tool_seconds"] for run in runs)
     report = {"ports": ports, "pads": chosen, "pad_sides": ordered,
+              "operator_slot": slot.get("slot") if slot else None,
               "geometry": geometry, "die_area_um": die, "core_area_um": core,
               "sizing_runs": runs, "tool_seconds": tool_seconds,
               "program_seconds": time.monotonic() - started - tool_seconds,

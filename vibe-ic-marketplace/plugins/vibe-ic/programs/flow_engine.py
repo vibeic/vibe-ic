@@ -722,6 +722,9 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         nonlocal summary
         rows = [read_json(step_root / name / "result.json") for name in sorted(results, key=positions.get)]
         summary = {"route": route, "selected": len(selected), "selected_names": [row["name"] for row in selected],
+                   "not_selected": [{"name": row["name"], "condition": row["when"],
+                       "features": {node.id: features[node.id] for node in ast.walk(ast.parse(row["when"], mode="eval")) if isinstance(node, ast.Name)},
+                       "reason": row.get("applicability_reason")} for row in table["steps"] if row["name"] not in selected_names],
                    "run": len(rows), "steps": rows,
                    **{key: sum(item["status"] == value for item in rows)
                       for key, value in (("pass", "PASS"), ("fail", "FAIL"), ("not_measured", "NOT_MEASURED"))},

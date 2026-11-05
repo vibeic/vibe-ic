@@ -68,8 +68,6 @@ def generate(registry, native):
             reason = None
             if operator == "matches_adopted_reference":
                 reason = "Adopted-reference comparison removed by the owner."
-            elif re.search(r"identity|binding|qualification|stale|adoption|approval", metric):
-                reason = "Only identity, binding, adoption, or qualification content."
             elif metric in native.get("deleted_metrics", []):
                 reason = native["deleted_metrics"][metric]
             if reason:
@@ -84,8 +82,6 @@ def generate(registry, native):
                                                                            native.get("operator_source", {}))}
             if operator == "eq":
                 check.update(operator="==", limit=expectation["value"], unit=expectation.get("unit"))
-            elif re.search(r"errors|violations|mismatches|unconnected|unresolved|unowned|unassigned|illegal|unreachable|missing", metric):
-                check.update(operator="==", limit=0, unit="count", source=native.get("defect_source", {}))
             elif operator == "covers_all":
                 check["required_from"] = native.get("required_sets", {}).get(metric, {
                     "kind": "design_or_tool_population", "metric": metric})
