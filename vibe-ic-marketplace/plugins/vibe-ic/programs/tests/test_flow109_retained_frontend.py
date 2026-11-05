@@ -393,13 +393,25 @@ def test_native_census_preserves_reset_polarity_and_registered_output_refusals(t
         metrics._d12_census(tmp_path, source, observed)
 
 
-def test_missing_formal_result_reaches_the_native_producer(tmp_path, monkeypatch):
+@pytest.mark.parametrize('retained', [None, 'stale_source', 'unfinished_program'])
+def test_missing_formal_result_reaches_the_native_producer(tmp_path, monkeypatch, retained):
     import design_one_shot_runner as owner
     import formal_harness_gen as generator
     import formal_property_run as producer
     import p0_tool_frontend_check as frontend
+    import formal_proof_evidence_check as evidence
+    import _path_layout as layout
     attempt = tmp_path / 'attempt'
     attempt.mkdir()
+    formal = layout.formal_dir(tmp_path)
+    if retained:
+        formal.mkdir(parents=True)
+        (formal / 'results.json').write_text(json.dumps({'verdict': 'INCOMPLETE',
+            'unresolved_obligations': [{'status': 'PROGRAM_NOT_DISCHARGED',
+                                        'program_rule': {'kind': 'STRUCTURAL'}}]}))
+        (formal / 'old.log').write_text('retained native transcript\n')
+    monkeypatch.setattr(evidence, 'proof_source_staleness', lambda *_:
+                        ['source changed'] if retained == 'stale_source' else [])
     monkeypatch.setattr(flow109, '_bound_attempt', lambda *a: attempt)
     monkeypatch.setattr(frontend, '_top', lambda *a: 'neutral')
     monkeypatch.setattr(generator, 'generate', lambda **kw: {
@@ -407,6 +419,12 @@ def test_missing_formal_result_reaches_the_native_producer(tmp_path, monkeypatch
         'rtl_files': [], 'top': 'neutral', 'harness_module': 'formal_neutral'})
     def native(*a, **kw):
         assert kw['top'] == 'neutral'
+        if retained:
+            histories = list((formal.parent / 'formal_history').glob('pre_refresh_*'))
+            assert len(histories) == 1
+            assert (histories[0] / 'old.log').read_bytes() == (formal / 'old.log').read_bytes()
+        if retained == 'unfinished_program':
+            assert kw['continuation_refresh_reason'] == 'program-owner-identity-absent'
         raise RuntimeError('native producer reached')
     def old_reader(*a, **kw):
         raise RuntimeError('read-only path reached before native producer')
@@ -414,6 +432,27 @@ def test_missing_formal_result_reaches_the_native_producer(tmp_path, monkeypatch
     monkeypatch.setattr(owner, 'step_d14_formal_read', old_reader)
     with pytest.raises(RuntimeError, match='^native producer reached$'):
         owner._publish_d14_owner(tmp_path, {})
+
+
+@pytest.mark.parametrize('verdict', ['PASS', 'FAIL'])
+def test_current_conclusive_formal_result_is_read_without_replay(tmp_path, monkeypatch, verdict):
+    import design_one_shot_runner as owner
+    import formal_harness_gen as generator
+    import formal_proof_evidence_check as evidence
+    import _path_layout as layout
+    attempt = tmp_path / 'attempt'; attempt.mkdir()
+    formal = layout.formal_dir(tmp_path); formal.mkdir(parents=True)
+    (formal / 'results.json').write_text(json.dumps({'verdict': verdict,
+        'proof_verdict': verdict, 'properties': [{'status': verdict}]}))
+    monkeypatch.setattr(flow109, '_bound_attempt', lambda *_: attempt)
+    monkeypatch.setattr(evidence, 'proof_source_staleness', lambda *_: [])
+    monkeypatch.setattr(generator, 'generate', lambda **_: pytest.fail('current proof replayed'))
+    def reader(*_):
+        raise RuntimeError('retained proof read')
+    monkeypatch.setattr(owner, 'step_d14_formal_read', reader)
+    with pytest.raises(RuntimeError, match='^retained proof read$'):
+        owner._publish_d14_owner(tmp_path, {})
+    assert not (formal.parent / 'formal_history').exists()
 
 
 def test_missing_lint_result_reaches_the_native_route(tmp_path, monkeypatch):
