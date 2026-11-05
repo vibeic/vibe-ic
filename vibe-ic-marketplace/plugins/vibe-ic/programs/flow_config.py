@@ -42,10 +42,10 @@ def native_defaults(config):
         excluded.append("*_1")
     changes = {"EXTRA_EXCLUDED_CELLS": list(dict.fromkeys(excluded))}
     caps = [value for value in (config.get("MAX_CAPACITANCE_CONSTRAINT"),
-                               config.get("CTS_MAX_CAP")) if value is not None]
+                               config.get("CTS_MAX_CAP") or None) if value is not None]
     slews = [value for value in (config.get("MAX_TRANSITION_CONSTRAINT"),
-                                config.get("CTS_MAX_SLEW")) if value is not None]
-    # CTS resets both characterization axes when either axis is unspecified.
+                                config.get("CTS_MAX_SLEW") or None) if value is not None]
+    # Zero requests native auto; CTS resets both axes when either is unspecified.
     if caps and slews:
         changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
     return config.copy(**changes)
