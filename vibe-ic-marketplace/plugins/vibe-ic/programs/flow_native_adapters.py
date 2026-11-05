@@ -747,6 +747,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if tool.get("adapter") == "path_delay_atpg":
         from flow_atpg import path_delay
         return path_delay(project, work, state=state, config=config)
+    if tool.get("adapter") == "small_delay_atpg":
+        from flow_atpg import small_delay
+        return small_delay(project, work, config=config)
     if tool.get("adapter") == "security_requirements":
         from flow_security import requirements
         return requirements(project, work, tool)

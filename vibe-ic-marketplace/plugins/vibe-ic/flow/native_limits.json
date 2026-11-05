@@ -4440,6 +4440,10 @@
     "path_delay_atpg": {
       "kind": "adapter",
       "adapter": "path_delay_atpg"
+    },
+    "small_delay_defect_atpg": {
+      "kind": "adapter",
+      "adapter": "small_delay_atpg"
     }
   },
   "report_check_readers": {
