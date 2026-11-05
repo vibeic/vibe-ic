@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import _physical_current as current
-import phase3_one_shot_runner as runner
+import _path_layout as paths
 
 
 def _put(project: Path, rel: str, text: str) -> Path:
@@ -86,7 +86,7 @@ def current_fixture(monkeypatch, project: Path, sdc_text: str, *,
     floor = _put(project, "phase3/stage3/pnr/floorplan.def",
                  "DESIGN top ;\nEND DESIGN\n")
     pdk = _pdk(project)
-    sdcs = runner._pl.clock_plan_input_sdcs(project)
+    sdcs = paths.clock_plan_input_sdcs(project)
     if not sdcs:
         sdcs = [_put(project, "phase3/stage3/pnr/constraint.sdc", sdc_text)]
     else:
@@ -95,7 +95,6 @@ def current_fixture(monkeypatch, project: Path, sdc_text: str, *,
         if len(sdcs) == 1 and not sdcs[0].read_text().strip():
             sdcs[0].write_text(sdc_text)
     _native_model(monkeypatch, pdk.name)
-    monkeypatch.setattr(runner, "_detect_pdk", lambda *_a, **_k: pdk)
 
     plan = project / "phase3/stage3/cts/clock_plan.json"
     original = None
