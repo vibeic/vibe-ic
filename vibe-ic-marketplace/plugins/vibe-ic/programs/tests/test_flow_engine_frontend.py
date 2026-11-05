@@ -345,8 +345,8 @@ def test_debug_author_failure_refreshes_from_ai_output_and_retains_history(tmp_p
     backup.write_text(json.dumps({"schema": "vibeic.benchmark.ai_backup_record.v1", "author": author}))
     (rtl.parent.parent / "fallback_skill.md").write_text("Use spec-to-rtl to implement the generic inverter.\n")
     def lint_only(command, **kwargs):
-        assert command[command.index("--entry-step") + 1] == "2"
-        assert command[command.index("--exit-step") + 1] == "2"
+        assert json.loads(command[-2])["entry_step"] == "2"
+        assert json.loads(command[-2])["verify_through"] == "2"
         report.write_text(json.dumps({"steps": [{"name": "rtl_gen", "status": "NOT_APPLICABLE"},
                                                 {"name": "rtl_validate", "status": "PASS"}]}))
         return SimpleNamespace(returncode=0)
