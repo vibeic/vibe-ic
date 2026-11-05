@@ -780,21 +780,3 @@ one of them back, which makes the text a hint sheet for one design rather than
 craft that transfers. `arith_ss_corner_risk_check` names the chains in YOUR
 RTL, and `gate_directed_rtl_repair` routes them here as
 `slow-corner-wide-arithmetic`.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/SKILL_NAME/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in this skill directory enumerates every required
-element of your output: section headers, handoff lines, summary blocks.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

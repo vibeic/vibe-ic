@@ -184,26 +184,6 @@ program flags only the zero-false-positive self-breaking sub-case.
 > `spare_cell_preservation_check.py` MUST still PASS (spare set + keep attrs
 > intact, 0 removed); if your repair drops a spare it is a regression — restore
 > it and re-run the checker. See the `design-for-eco` skill.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/rtl-repair/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
-
 ## Completion flags and source waveform timing
 
 Before repairing a receive or packet FSM, separate three events: accepting the

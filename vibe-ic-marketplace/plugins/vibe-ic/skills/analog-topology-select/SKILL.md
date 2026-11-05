@@ -151,22 +151,6 @@ These templates are from `analog-sizing/PRACTICAL_NOTES.md` — all verified wor
 
 - `analog/<block>/topology.md` → `/analog-sizing` (Step A2, continued)
 - Rejected topologies documented for future reference
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-topology-select/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**
-
-
 ## Captured by benchmark-enhancement-capture — 2026-05-28 (RTLLM Shape B + benchmark_clean + CVDP cross-step capture)
 
 ### Skill: ΔΣ modulator topology — 2nd-order SC CIFB with 1-bit quantizer + feedback DAC

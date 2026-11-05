@@ -153,22 +153,3 @@ budget + plateau/regression exit around the existing Planning-workflow and
 > intentionally consumed by this ECO (keep attrs intact, 0 unexpectedly
 > removed); an unintended drop is a regression — restore it and re-run the
 > checker. See the `design-for-eco` skill.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/eco-plan/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

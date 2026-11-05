@@ -630,26 +630,6 @@ three beliefs that justified it are each impossible:
 Yielding does not pause your turn; it ENDS it, and the "then write the result"
 step never runs. The rule above is not a preference about style — it is the
 only way the deliverable gets written.
-
-## Compliance gate (mandatory)
-
-Save the final result and run the skill compliance check:
-
-```bash
-python3 programs/benchmark_result_md_lint.py <RESULT.md>
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-  --requirements plugins/vibe-ic/skills/open-benchmark-methodology/compliance.yaml \
-  <RESULT.md>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in this skill directory enumerates every required
-element of your output: section headers, handoff lines, summary blocks.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.
-
 ## Handoff
 
 End with `## Summary` or `## Verdict`, followed by a clear `Next:` statement.

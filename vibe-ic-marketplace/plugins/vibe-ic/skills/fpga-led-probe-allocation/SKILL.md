@@ -182,22 +182,3 @@ This skill emits a *template*. Validate with:
 When camera capture is part of the verification flow, the LED probe
 allocation should also be cited in `RESULTS.md` so a reviewer can map
 the captured JPGs back to the design.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/fpga-led-probe-allocation/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

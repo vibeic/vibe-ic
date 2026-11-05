@@ -122,18 +122,3 @@ The deliverable is one markdown case record. The template below is the whole sha
     | phase3/stage3/sta/paths.rpt | sha256:0a5b93f6 | opensta |
 
     Next: run /ppa-benchmark
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/ppa-distill/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed, exit 2 =
-the checker could not read one of its own inputs and reached no conclusion.
-
-**Your task is not complete until the audit returns PASS.**

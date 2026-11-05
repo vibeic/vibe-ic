@@ -130,17 +130,3 @@ binds numbers (next section), not a deterministic rule.
 
 - `analog/<block>/spec.json` → `/analog-topology-select` (Step A2)
 - `analog/analog_block_list.json` → triggers the analog track in the flow
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-spec-extract/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**

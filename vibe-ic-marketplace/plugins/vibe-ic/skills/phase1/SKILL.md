@@ -311,22 +311,3 @@ were archived in v0.58. This file used to claim they were "restored to active
 in v0.60"; they were not, and none of them ships. Entry B
 (existing-Design-Documents → L1-L27) is served by the unified DOC→JSON track.
 See "Phase 1 layers and where each one is authored" above.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/phase1/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

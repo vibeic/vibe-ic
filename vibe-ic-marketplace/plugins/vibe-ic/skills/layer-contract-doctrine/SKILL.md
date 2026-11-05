@@ -455,22 +455,3 @@ only when `NOT_A_LAYER_FACT` also appears in the record
 (`X_na_layer_requires_not_a_layer_fact`). Writing `n/a` to dodge the
 layer-assignment question therefore FAILs, which is the point — the escape
 hatch is a verdict, not a shrug.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/layer-contract-doctrine/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

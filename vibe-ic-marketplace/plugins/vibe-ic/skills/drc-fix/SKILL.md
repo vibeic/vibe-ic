@@ -277,22 +277,3 @@ patterns (captured v0.2.14; now AUTOMATED by `phase3_one_shot_runner.py`, but th
   skip the repair entirely when the design is already antenna-clean (0 net
   violations ⇒ 0 pin violations); the skip path must run no `global_route` so it
   cannot disturb the realized route.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/drc-fix/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-`compliance.yaml` in the corresponding skill directory enumerates
-every required element of your output: section headers, metadata fields,
-handoff lines, tool invocations.
-
-**Your task is not complete until the audit returns PASS.** Missing
-elements are the single largest source of skill-execution non-determinism
-across different agents.

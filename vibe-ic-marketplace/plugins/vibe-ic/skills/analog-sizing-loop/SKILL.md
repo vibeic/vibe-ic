@@ -206,17 +206,3 @@ the dedup key — re-proposing a W/L/bias combination already simulated this
 session is rejected with `reason="DUPLICATE"` instead of burning another
 multi-corner SPICE sweep. The `sizing_history.json` output should record each
 admitted point's fingerprint so the dedup set is reproducible across resumes.
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-sizing-loop/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**

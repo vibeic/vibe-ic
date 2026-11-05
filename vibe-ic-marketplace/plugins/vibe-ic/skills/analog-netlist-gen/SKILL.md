@@ -132,17 +132,3 @@ These rules are enforced by programs, not by prose. Run them after emitting `.sp
 
 - `analog/<block>/<block>.sp` + `tb_<block>.sp` → `/ams-sim` or `eda_spice_corner` (Step A4)
 - If simulation fails → back to `/analog-sizing` for re-sizing
-
-## Compliance gate (mandatory)
-
-After producing your output, save it to a file and run:
-
-```bash
-python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
-    --requirements plugins/vibe-ic/skills/analog-netlist-gen/compliance.yaml \
-    <your_output_file>
-```
-
-Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
-
-**Your task is not complete until the audit returns PASS.**
