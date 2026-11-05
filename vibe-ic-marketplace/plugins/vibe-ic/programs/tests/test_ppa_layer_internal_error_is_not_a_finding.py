@@ -249,7 +249,7 @@ def test_no_ppa_program_lets_a_traceback_reach_the_exit_code(prog, tmp_path):
         # or, worse, defaulting a missing field to zero.
         "ppa_eco_spare_records.py": ["--spare-plan", j, "--stage",
                                      "post_route"],
-        "ppa_feasibility_check.py": ["--candidates", j],
+
         "ppa_head_to_head_check.py": [j],
         "ppa_measurement_check.py": ["--coverage", j, "--expect", j],
         "ppa_metric_extract.py": ["--records", j],
@@ -259,7 +259,7 @@ def test_no_ppa_program_lets_a_traceback_reach_the_exit_code(prog, tmp_path):
         # it (rc=1 with a [REFUSE] line), never fall over reading it.
         "ppa_pnr_search_space.py": ["--verify", j],
         "ppa_predict_aggregate.py": ["--cell-count", "1"],
-        "ppa_problem_integrity_check.py": ["--baseline", j, "--candidate", j],
+
         "ppa_report_gen.py": [j],
         "ppa_search_run.py": [j],
         # FOUR ENTRIES THIS TABLE WAS MISSING, and their absence was RED rather

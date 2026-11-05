@@ -100,9 +100,7 @@ def _cases(tmp_path):
                             "records": []}),
           "--expect", _w(tmp_path / "expect.json", [])],
          "an empty record set against an empty denominator"),
-        ("ppa_feasibility_check.py",
-         ["--candidates", _w(tmp_path / "cand.json", {"candidates": []})],
-         "a candidate set with no candidate"),
+
         ("ppa_pareto_check.py",
          ["--candidates", _w(tmp_path / "cand2.json", {"candidates": []})],
          "a candidate set with no candidate"),

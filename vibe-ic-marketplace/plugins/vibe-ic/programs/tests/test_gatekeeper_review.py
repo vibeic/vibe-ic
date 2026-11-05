@@ -92,7 +92,7 @@ def _build_clean_plugin(tmp_path: Path, version: str = "1.0.96") -> Path:
     # + flow_condition_reachability_check (vibe-ic#220); ship inert
     # pass-through stand-ins so the audit does not flag them missing. This
     # tuple must track audit_d2's guard list.
-    for guard in ("gate_self_assertion_check", "single_testpath_guard",
+    for guard in (
                   "flow_condition_reachability_check"):
         (progs / f"{guard}.py").write_text(
             "import sys\n"
@@ -574,7 +574,6 @@ def test_cli_main_merge_ok(tmp_path):
     assert report["verdict"] == "MERGE_OK", report["blocking"]
     assert report["cadence"] == "TARGETED"
     assert report["version_bump"] == "1.0.95->1.0.96"
-
 
 
 def test_an_absent_answers_document_now_blocks_the_merge(tmp_path):

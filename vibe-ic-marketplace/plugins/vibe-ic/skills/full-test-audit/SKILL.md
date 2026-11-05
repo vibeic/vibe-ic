@@ -24,7 +24,7 @@ extractability) needs LLM judgment and is run as a fan-out here.
 ## Part 1 — Full test (the CI way, not a subset)
 
 **`./run_tests.sh` IS the full suite. A bare `pytest` is NOT.** `pytest.ini`
-declares ONE testpath on purpose (`single_testpath_guard.py` pins it), so a bare
+declares ONE testpath on purpose, so a bare
 `pytest` reaches `programs/tests` and stops there. MEASURED at e37d10e1e that
 leaves 141 of 3117 tracked test files unrun — `skills/*/tests` 82,
 `mcp-eda/test` 48, `tools/phase1_engine/tests` 8, `_shared` 3 — while the 74
@@ -59,8 +59,7 @@ python3 <plugin>/programs/plugin_full_audit.py <plugin> --json reports/full_audi
   `programs/tests/` test. `*_protocol_synth` modules are covered generically by
   `test_all_protocol_synth_overlay.py` (reported separately, not a gap). Any
   OTHER unreferenced program is a real D1 gap → write a dedicated test.
-- **D2** PASS iff: `gate_self_assertion_check` finds 0 anti-fabrication
-  self-assertion holes; `single_testpath_guard` confirms one test tree; no flow
+- **D2** PASS iff: no flow
   step is gated on `files_exist` only WITHOUT an explicit `AUDIT NOTE (by-design`
   marker; and every `program_exit_zero` gate target exists on disk (no dangling).
 

@@ -1399,7 +1399,7 @@ def test_the_json_record_carries_what_the_text_says(tmp_path):
 #: entry asks for is still the right remedy for the DURATION half and is still
 #: owed.
 _REVIEWED_ADVISORY_RESIDUAL = {
-    ("programs/tests/test_matrix_mutation_ledger.py", "L.replay_many"): (
+    ( "L.replay_many"): (
         "REPLAY_TIMEOUT=900 bounds one `_run_cell` pytest-cell subprocess. "
         "MEASURED 24-pair witness plan, 32 cores, instrumented at `_run_cell`: "
         "32 invocations, worst single call 42.61 s at jobs=8 / 26.8 s "

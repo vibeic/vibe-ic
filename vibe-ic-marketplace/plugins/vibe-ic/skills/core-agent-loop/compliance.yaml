@@ -99,7 +99,5 @@ requirements:
       disclosure wording the SKILL.md prescribes for issues that
       genuinely have no acceptance section. Pattern alternation makes
       this tolerant of the no-acceptance-section case; a bare N/N PASS
-      with neither phrase fails. The deterministic verbatim-execution
-      check lives in acceptance_evidence_in_fix_comment_check.py (#478);
-      this requirement is the publish-layer second line of defence.
+      with neither phrase fails.
     pattern: '(驗收|無驗收區)'

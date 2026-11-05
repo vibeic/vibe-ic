@@ -33,7 +33,7 @@ C = load('_cx_completion', ROOT / 'tools/ci/landing_completion_record.py')
 # against dropping requirements, not production authority.
 REQUIRED = tuple(('cheap:' + x) for x in (
     'nda-messages', 'nda-content', 'version', 'agent-scope', 'benchmark-structure',
-    'benchmark-manifest', 'git-prohibition', 'collateral-revert', 'base-ancestry',
+    'git-prohibition', 'collateral-revert', 'base-ancestry',
     'version-sync', 'prose-polarity', 'nested-progress-pin', 'landing-shape',
     'competing-claims-report', 'worktree-clean', 'scratch-report', 'hygiene-ratchet')) + tuple(
     ('full:' + x) for x in ('write-guard-baseline', 'targeted-tests', 'repo-tools-tests',

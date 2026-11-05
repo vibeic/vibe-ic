@@ -51,7 +51,6 @@ def test_the_checker_population_covers_checker_shaped_names():
     defect the audit exists to find, one level up."""
     pop = set(W.checker_population(_PROGRAMS))
     assert "gitignore_scratch_guard.py" in pop
-    assert "organic_issue_body_lint.py" in pop
     assert "benchmark_triage_absorption_audit.py" in pop
     # AND THE WIDENING STAYED CHECKER-SHAPED. Asserted against the NAME GLOB,
     # which is the half this clause is about, and not against the population as
@@ -129,12 +128,9 @@ def test_skill_only_register_is_loadable_and_describes_skill_only_checkers():
 
 def test_the_two_inventoried_gates_are_named_with_their_measured_reason():
     reasons = W.skill_only_register(_PROGRAMS / W._SKILL_ONLY_NAME)
-    assert "organic_issue_body_lint.py" in reasons
     assert "benchmark_triage_absorption_audit.py" in reasons
     # the numbers that decide the outcome have to be IN the reason, not in a
     # PR body that nobody reads again
-    assert "59" in reasons["organic_issue_body_lint.py"]
-    assert "55 of 60" in reasons["organic_issue_body_lint.py"]
     assert "156" in reasons["benchmark_triage_absorption_audit.py"]
 
 

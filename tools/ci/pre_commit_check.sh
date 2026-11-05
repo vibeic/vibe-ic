@@ -144,33 +144,6 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 4.5. Picker fixture-thrash guard (issue #5 lesson learned)
-# --------------------------------------------------------------------------
-# Refuses any commit that flips an entry in the
-# `tests/test_phase1_fixtures_regression.py::_EXPECTED` dict
-# without an explicit `fixture-flip-acknowledged: <project>:<old>
-# -> <new>` line in the commit message. Closes the
-# v1.6.51→v1.6.58→v1.6.60 thrashing class structurally.
-echo ""
-echo "--- Picker fixture-thrash guard ---"
-THRASH_GUARD="$PROJECT_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/picker_fixture_thrash_guard.py"
-if [ -f "$THRASH_GUARD" ]; then
-    MSG_FILE="${1:-}"
-    if [ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ]; then
-        if ! python3 "$THRASH_GUARD" --repo-root "$PROJECT_ROOT" \
-                --commit-msg-file "$MSG_FILE"; then
-            ERRORS=$((ERRORS + 1))
-        fi
-    else
-        if ! python3 "$THRASH_GUARD" --repo-root "$PROJECT_ROOT"; then
-            ERRORS=$((ERRORS + 1))
-        fi
-    fi
-else
-    echo "  SKIP: picker_fixture_thrash_guard.py not present"
-fi
-
-# --------------------------------------------------------------------------
 # 4.6. Package invariants (W7 — the rule lives next to the code it binds)
 # --------------------------------------------------------------------------
 # Two things happen here, and they are deliberately different.

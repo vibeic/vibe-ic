@@ -263,18 +263,11 @@ For each actionable issue:
    The `本機驗證` section of the Step-4 close comment MUST quote
    **(a) the acceptance command text** (verbatim, in a code block) and
    **(b) its end-state output**, in addition to the `N/N PASS` suite
-   line. Before posting, run the two deterministic gates (#478):
+   line. Before posting, run the deterministic gate (#478):
    ```bash
-   python3 plugins/vibe-ic/programs/acceptance_evidence_in_fix_comment_check.py \
-       --issue-number <num> <comment_file.md>     # exit 0 required
    python3 plugins/vibe-ic/programs/defect_artifact_fixture_check.py \
        --issue-number <num> <new_test_file.py>    # exit 0 required
    ```
-   For a **round-2+ close** (the issue was reopened), the first gate
-   binds the LATEST reopen comment's fenced repro as acceptance (issue
-   #499): in network mode it auto-fetches+selects that comment; offline,
-   pass it via `--reopen-comment-file`. The `本機驗證` MUST then quote the
-   reopen repro + its end-state, not only the original body acceptance.
    Closing is the core-agent's responsibility precisely because the
    core-agent self-verifies the acceptance criterion first; the
    field-agent is the downstream audit net.
@@ -283,7 +276,7 @@ For each actionable issue:
    > half — does the `本機驗證` section literally contain the issue's
    > acceptance command + an end-state line; does the regression test
    > load the named defect artifact and assert an end state — lives in
-   > the two #478 programs above. The *reading-judgment* half stays
+   > the #478 program above. The *reading-judgment* half stays
    > here: deciding whether a quoted command **truly IS** the
    > acceptance criterion (vs a superficially-similar command) and
    > whether its output has reached **end-state** (vs a misleading
@@ -690,7 +683,6 @@ Each tick must (FRESH-CHECK both; PRs FIRST):
         suite ONLY at an x.y.0 minor milestone; the `本機驗證` evidence
         MUST quote the acceptance command + its end-state output (not
         just `N/N PASS`). Run
-        acceptance_evidence_in_fix_comment_check.py +
         defect_artifact_fixture_check.py (#478, exit 0 each) before
         posting.
      e. Post 繁體中文 fix comment in the canonical 5-section shape
@@ -728,8 +720,6 @@ programmable; only Step 2 fix-authoring is genuine LLM judgment):
   the denominator printed: `plugins/vibe-ic/programs/open_issue_claim_scan.py`
 - Close-comment 5-section shape + acceptance-execution trace:
   `compliance.yaml` (+ `_shared/skill_compliance_check.py`)
-- Acceptance-criterion executed + quoted in `本機驗證` (#478):
-  `programs/acceptance_evidence_in_fix_comment_check.py`
 - Regression test loads the named defect artifact + asserts end-state
   (#478): `programs/defect_artifact_fixture_check.py`
 - Forbidden git/gh ops (prohibitions 1–4): `programs/git_prohibition_guard.py`

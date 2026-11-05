@@ -764,23 +764,6 @@ verification round) — all are now standing rules for EVERY fix audit:
    test lies. This is also why the gatekeeper re-derives the fix rather
    than trusting your patch's green tests (guardrail 1).
 
-   **Filing convention (flow #485):** every `## 驗收` section you FILE
-   must contain **at least one concrete executable command in fenced
-   code** — narrative-only bullets leave the deterministic
-   `acceptance_evidence_in_fix_comment_check` gate unable to bite (it
-   then emits a named `ACCEPTANCE_NARRATIVE_ONLY` warning instead of
-   biting, and the trace has to be audited manually). The intake check
-   (`regression_issue_intake_check`) warns at filing time on
-   zero-command acceptance sections.
-
-   **Filing-time lint (flow #489):** ORGANIC-form issues never pass
-   through the (network-only, template-gated) intake check — so the
-   filing step is draft → lint → create:
-   `python3 programs/organic_issue_body_lint.py <draft.md>` (or stdin
-   `-`). Fix any `MISSING_ACCEPTANCE` / `ACCEPTANCE_NARRATIVE_ONLY` /
-   `NO_DEFECT_ARTIFACT` warning (the last one points at the flow #487
-   snapshot helper) BEFORE `gh issue create`.
-
 4. **A published L document is the output of a PAST run — ask it which
    one.** (2026-07-28, #522.) On one day three issues were filed against
    `benchmark-data/**/generated_docs/L*.json` produced ~70 releases

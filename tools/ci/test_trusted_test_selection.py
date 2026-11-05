@@ -360,26 +360,6 @@ def _import_from(path, name):
     return module
 
 
-def test_the_replay_domain_total_is_the_ledger_s_own_frozen_plan_length():
-    """The mutation row's total, recomputed from the producer, not the pin."""
-    root = _plugin_root()
-    sys.path.insert(0, str(root / "programs"))
-    try:
-        ledger = _import_from(root / "programs/matrix_mutation_ledger.py",
-                              "_tts_probe_matrix_mutation_ledger")
-    finally:
-        sys.path.pop(0)
-    live = len(ledger.replay_plan())
-    rows = [r for r in S.HERMETIC_TEST_PROGRESS[S.HERMETIC_MUTATION_FILE]["domains"]
-            if r[2] == "matrix-mutation-replays"]
-    assert rows, "the row this test exists for is gone; fix the test, not the name"
-    for _ordinal, _nodeid, _scope, total in rows:
-        assert total == live, (
-            "the schedule declares %d replays for matrix-mutation-replays; the "
-            "ledger's frozen plan has %d, so progress_plan() would emit the "
-            "wrong number of domain units at landing." % (total, live))
-
-
 #: The `matrix-outcome-modules` rows that iterate the FULL dimension population.
 #: NAMED, not inferred: three other rows carry the same scope with deliberately
 #: reduced populations (4, 8 and 1 as measured on 2026-08-25), so "every

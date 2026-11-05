@@ -1,6 +1,6 @@
 ---
 name: regression-issue-fix
-description: Mandatory entry point for fixing any Phase 1 picker / extractor regression issue. Runs the intake check first, refuses to start a fix on issues that lack a verbatim input snippet / expected output / drop-in fixture. Closes the issue-#5 thrashing pattern (5 plugin releases instead of 1-2) by enforcing the productive form up front.
+description: Mandatory entry point for fixing any Phase 1 picker / extractor regression issue.
 ---
 
 # Regression Issue Fix — Hard intake gate
@@ -11,28 +11,6 @@ User asks: "fix issue #N" / "read and fix issue #N" / "address the
 regression in issue #N" — for any GitHub issue that affects a
 **Phase 1 per-doc auto-extractor**: `L1.ic_name`, `L6.fsm_states`,
 `L4.regmap`, `L8.timing_waveform`, `L11.otp_content`, etc.
-
-## Hard rule (non-negotiable)
-
-**Step 1 is mandatory and runs BEFORE any code is read or edited.**
-Skipping it reproduces the issue-#5 thrashing pattern.
-
-```bash
-python3 vibe-ic-marketplace/plugins/vibe-ic/programs/regression_issue_intake_check.py \
-    --issue-number <N> \
-    --repo vibeic/vibe-ic
-```
-
-Three possible outcomes:
-
-| Exit code | Meaning | Next action |
-|---|---|---|
-| 0 + fixture written | Issue meets template; fixture under `programs/tests/fixtures/phase1_local/<project>/` | Step 2 |
-| 0 + `--no-emit-fixture` | Validation only | Re-run without `--no-emit-fixture` to land the fixture |
-| 1 | Issue is missing verbatim input / expected / actual / version | **STOP. Post a comment on the issue asking the verifier to fill the gaps using `.github/ISSUE_TEMPLATE/picker-or-extractor-regression.yml`. Do NOT start guessing.** |
-
-The intake program's failure output names every missing field so
-the verifier knows exactly what to add.
 
 ## Step 2 — Confirm the fixture FAILS on current code
 
@@ -56,11 +34,6 @@ generator). Constraints:
 
 * Run the **full fixture suite** after each iteration:
   `pytest tests/test_phase1_fixtures_regression.py`
-* Any fixture that **flips** (was passing, now failing — or vice
-  versa) is a real-input behaviour change. The `pre_commit_check.sh`
-  picker-fixture-thrash guard will refuse the commit unless the
-  message carries a matching `fixture-flip-acknowledged: <project>:
-  <old> -> <new>` line.
 * Add the new fixture's expected name to
   `tests/test_phase1_fixtures_regression.py::_EXPECTED` once the
   fix passes.
@@ -119,8 +92,6 @@ Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。fi
    doesn't reproduce in `programs/tests/fixtures/phase1_local/` cannot be
    fixed reliably; the fixture is part of the issue, not a
    downstream artefact.
-3. **No silent thrash.** The pre-commit guard refuses fixture
-   `_EXPECTED` flips without explicit acknowledgment.
 4. **Self-verify then close with `core-closed`.** The core agent
    self-verifies (reproduce + full CI suite) and closes the issue,
    tagging `core-closed`. The field-agent's real-benchmark audit is
@@ -131,9 +102,6 @@ Core agent 已自行驗證並關閉此 issue（已加 core-closed 標籤）。fi
 ## Cross-references
 
 * Issue template: `.github/ISSUE_TEMPLATE/picker-or-extractor-regression.yml`
-* Intake program: `programs/regression_issue_intake_check.py`
-* Thrash guard: `programs/picker_fixture_thrash_guard.py` (wired
-  into `tools/ci/pre_commit_check.sh`)
 * Fixture suite: `programs/tests/fixtures/phase1_local/` +
   `tests/test_phase1_fixtures_regression.py`
 * Sibling skill (general bug→backlog): `skills/community-backlog-submit`

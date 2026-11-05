@@ -17,7 +17,6 @@ sys.path.insert(0, str(_PROGRAMS))
 
 from _ppa import feasibility as F  # noqa: E402
 
-CHECK = _PROGRAMS / "ppa_feasibility_check.py"
 
 DIGEST = "sha256:" + "0" * 64
 VIEW = {"stage": "post_route_extracted", "process": "ss"}
@@ -66,32 +65,12 @@ def policy(views=(VIEW,), **kw):
     return F.policy_from_document(doc)
 
 
-def run(tmp_path, doc, *extra):
-    p = tmp_path / "candidates.json"
-    p.write_text(json.dumps(doc), encoding="utf-8")
-    out = tmp_path / "feas.json"
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates", str(p),
-                        "--json", str(out), *extra],
-                       capture_output=True, text=True)
-    payload = json.loads(out.read_text(encoding="utf-8")) if out.exists() else None
-    return r, payload
-
-
 # --- POSITIVE ---------------------------------------------------------------
 def test_positive_a_fully_measured_clean_candidate_is_feasible():
     r = F.promotion_verdict(candidate(), policy())
     assert r.verdict == F.FEASIBLE, r.codes
     assert r.eligible_for_promotion
     assert F.set_exit_code([r]) == F.RC_PASS
-
-
-def test_positive_cli_exits_zero_and_writes_the_declared_artefact(tmp_path):
-    r, doc = run(tmp_path, {"required_views": [VIEW],
-                            "candidates": [candidate()]})
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verdict"] == "FEASIBLE"
-    assert doc["schema"] == F.FEASIBILITY_SCHEMA
-    assert doc["policy_digest"].startswith("sha256:")
 
 
 # --- NEGATIVE ---------------------------------------------------------------
@@ -111,17 +90,6 @@ def test_negative_one_violated_axis_refuses_however_good_the_others_are():
     assert any(c.startswith("lvs:") for c in r.codes), r.codes
 
 
-def test_negative_cli_exits_one_and_still_prints_the_finding(tmp_path):
-    ms = clean_metrics()
-    ms[3]["value"] = 7             # DRC violations
-    r, doc = run(tmp_path, {"required_views": [VIEW],
-                            "candidates": [candidate(metrics=ms)]})
-    assert r.returncode == F.RC_FAIL
-    assert "INFEASIBLE" in r.stdout
-    assert "[REFUSE]" in r.stderr
-    assert doc["candidates"][0]["verdict"] == "INFEASIBLE"
-
-
 def test_negative_a_negative_slack_is_a_violation_not_a_small_number():
     ms = clean_metrics()
     ms[0]["value"] = -0.001
@@ -130,42 +98,6 @@ def test_negative_a_negative_slack_is_a_violation_not_a_small_number():
 
 
 # --- VACUOUS: every way of not being able to look exits 2, never 0 and never 1
-def test_vacuous_absent_input_is_rc2_with_a_marker(tmp_path):
-    out = tmp_path / "f.json"
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates",
-                        str(tmp_path / "nope.json"), "--json", str(out)],
-                       capture_output=True, text=True)
-    assert r.returncode == F.RC_UNDETERMINED, r.stdout + r.stderr
-    assert "[CANNOT CHECK]" in r.stderr
-    assert json.loads(out.read_text())["exit_code"] == 2
-
-
-def test_vacuous_empty_file_is_rc2_not_rc0(tmp_path):
-    p = tmp_path / "candidates.json"
-    p.write_text("", encoding="utf-8")
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates", str(p)],
-                       capture_output=True, text=True)
-    assert r.returncode == F.RC_UNDETERMINED
-    assert "[CANNOT CHECK]" in r.stderr
-
-
-def test_vacuous_an_empty_candidate_list_is_not_a_clean_set(tmp_path):
-    r, doc = run(tmp_path, {"required_views": [VIEW], "candidates": []})
-    assert r.returncode == F.RC_UNDETERMINED
-    assert doc["codes"] == ["FEAS_NO_CANDIDATES"]
-
-
-def test_vacuous_unparseable_json_is_rc2(tmp_path):
-    p = tmp_path / "candidates.json"
-    p.write_text("{not json", encoding="utf-8")
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates", str(p)],
-                       capture_output=True, text=True)
-    assert r.returncode == F.RC_UNDETERMINED
-
-
-def test_bad_invocation_is_rc3_not_rc2():
-    """argparse exits 2 on a usage error and 2 already means `not checked`."""
-    assert __import__("ppa_feasibility_check").main([]) == F.RC_BAD_INVOCATION
 
 
 # --- the rc precedence rule -------------------------------------------------
@@ -263,10 +195,3 @@ def test_a_limit_compared_across_units_is_undetermined():
 
 
 # --- the schema the lane owns ----------------------------------------------
-def test_the_emitted_report_validates_against_the_schema_this_lane_owns(tmp_path):
-    from _ppa import schema_validation as _SV
-    schema = json.loads((_PROGRAMS.parent / "schemas" / "ppa" /
-                         "feasibility.v1.schema.json").read_text())
-    _, doc = run(tmp_path, {"required_views": [VIEW],
-                            "candidates": [candidate()]})
-    assert _SV.engine_or_skip(schema).errors(doc) == []

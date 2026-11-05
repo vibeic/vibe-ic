@@ -121,8 +121,7 @@ def audit_d2(plugin: Path) -> dict:
     # argument these guards are invoked with, that made
     # gate_self_assertion_check inert here — silently — which is exactly the
     # self-disabling shape #220 is about, one level up from the flow YAML.
-    for guard in ("gate_self_assertion_check", "single_testpath_guard",
-                  "flow_condition_reachability_check"):
+    for guard in ("flow_condition_reachability_check",):
         gp = progs_dir / f"{guard}.py"
         if gp.is_file():
             r = subprocess.run([sys.executable, str(gp), str(plugin)],

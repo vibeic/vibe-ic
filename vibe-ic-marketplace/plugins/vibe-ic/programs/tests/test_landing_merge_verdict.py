@@ -129,7 +129,7 @@ _VERIFIER_CLOSURE = frozenset({
     "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/macro_obs_geometry_intersect_check.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py",
+
     "vibe-ic-marketplace/plugins/vibe-ic/programs/policy_direction_pin_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/pytest_per_file_junit.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py",
@@ -137,8 +137,8 @@ _VERIFIER_CLOSURE = frozenset({
     "vibe-ic-marketplace/plugins/vibe-ic/programs/step_metrics.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_census_freshness.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_coverage.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py",
+
+
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_acceptance.json",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_gate.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/trusted_pytest_entry.py",
@@ -1132,7 +1132,6 @@ def test_the_per_file_question_is_only_asked_of_a_report_that_claims_it(
     # A LOST AGGREGATE ASKS TOO, even with no per-file evidence at all: that is
     # the recovery path, and it is the one that has files to name.
     assert V.per_file_record_gaps(p, _SEL2, False) == sorted(_SEL2)
-
 
 
 def test_a_partial_base_arm_cannot_clear_a_silenced_failure(tmp_path):
@@ -2808,10 +2807,6 @@ _WAVE_ARTEFACTS = (
 )
 
 
-
-
-
-
 def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
     """When each wave artefact FIRST appeared in the verifier's run directory.
 
@@ -2834,10 +2829,6 @@ def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
                     seen[name] = round(time.monotonic() - start, 3)
         time.sleep(interval)
     return seen
-
-
-
-
 
 
 def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(

@@ -68,8 +68,6 @@ CONTROL_TESTS = (
 # elapsed time, stdout, or CPU activity.
 HERMETIC_CENSUS_FILE = "programs/tests/test_flow_matrix_census_freshness.py"
 HERMETIC_MATRIX_FILE = "programs/tests/test_flow_matrix_coverage.py"
-HERMETIC_ARTEFACT_FILE = "programs/tests/test_matrix_artefact_mutation_channel.py"
-HERMETIC_MUTATION_FILE = "programs/tests/test_matrix_mutation_ledger.py"
 # EVERY DOMAIN TOTAL BELOW WAS MEASURED ON 2026-08-25, and three of the nine
 # were wrong. They are the face of this table that NOTHING READS:
 # `test_nested_progress_schedule_matches_live_pytest_collection` takes `items`
@@ -251,57 +249,7 @@ HERMETIC_TEST_PROGRESS = {
              "matrix-outcome-modules", 1),
         ),
     },
-    HERMETIC_ARTEFACT_FILE: {
-        # 36 -> 37, re-derived from the live collection at 51061c8e0 with
-        # plugin autoload and bytecode writes disabled.  The added item is
-        # `test_external_corpus_tracking_refuses_an_untracked_fixture`, item
-        # 37, so the one scheduled replay producer remains item 19 and its
-        # domain total remains 8.  Only the collection cardinality moves.
-        #
-        # 37 -> 38 (vibe-ic#2138), re-derived the same way -- ONE
-        # `pytest --collect-only -q -p no:cacheprovider` from the plugin root
-        # with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and
-        # `PYTHONDONTWRITEBYTECODE=1`, on 8HD-9 in the pinned image, both env
-        # arms.  `f5474d758` added
-        # `test_an_absent_corpus_is_refused_by_name_and_not_by_errno` and did
-        # not move this number, so the guard fired on MAIN:
-        # `test_nested_progress_schedule_matches_live_pytest_collection` read
-        # `assert 38 == 37`.
-        #
-        # THE ORDINAL DOES NOT MOVE WITH IT, and that is measured rather than
-        # assumed: the added item collects at position 34, AFTER the scheduled
-        # replay producer at 19, so item 19 is still
-        # `test_lock2_the_replay_reproduces_the_recorded_verdict
-        # [ART-DRC-ROUTER-SUMMARY]` and its domain total is still 8.  (Compare
-        # the `HERMETIC_MUTATION_FILE` note below, where an item arriving
-        # BEFORE the witness moved both numbers: which of the two happens is a
-        # property of where the item lands, never of the fact that one landed.)
-        #
-        # AND THE STALENESS IS NOW CLOSED AT THE LANDING, not here.  A pin
-        # guarding a population that moves on every landing must go stale, so
-        # `programs/nested_progress_pin_check.py` runs in the cheap tier of
-        # `tools/gatekeeper-land.sh` and refuses a landing whose live
-        # collection disagrees with this table, naming the file and BOTH
-        # numbers.  Deriving this number instead was considered and refused;
-        # that program's docstring records why.
-        "items": 38,
-        # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
-        # this is the second. It is NOT a claim that these items are short:
-        # it is the MEASURED set of producer items carrying no schedule at
-        # 1ec22dabc, written down so that an ELEVENTH cannot appear in
-        # silence. `test_the_published_total_equals_the_live_census` reached
-        # the landing gate exactly that way — discovered by the AST, scheduled
-        # by nobody, killed at 300 s with rc 199 — and a file-level inventory
-        # check could not see it. Adding a producer call to a new item now
-        # forces a decision here or a measured row above.
-        "producer_items_without_schedule": (),
-        "producer_profiles": (("replay_many",),),
-        "domains": (
-            (19, HERMETIC_ARTEFACT_FILE
-             + "::test_lock2_the_replay_reproduces_the_recorded_verdict[ART-DRC-ROUTER-SUMMARY]",
-             "matrix-artefact-replays", 8),
-        ),
-    },
+
     # 126 -> 125 AND ORDINAL 92 -> 91, 2026-08-24. RE-DERIVED, never adjusted to
     # make the assertion pass: vibe-ic#1779 folded step `1.6x` into step `2`, so
     # the ledger lost the one parametrised cell that step owned. MEASURED with
@@ -316,40 +264,7 @@ HERMETIC_TEST_PROGRESS = {
     # exactly one; correcting the count and leaving the ordinal would leave the
     # schedule pointing at `[D1-UNREACHABLE-CLAUSE]`, which is what position 92
     # now holds, and the domain assertion would then be checking the wrong test.
-    HERMETIC_MUTATION_FILE: {
-        # items 125 -> 126 and ordinal 91 -> 92: v1.11.80 added
-        # `test_0_5ic_d3_live_replay_closes_the_exact_coverage_delta`, which
-        # sorts before the parametrised `test_lock2_...` family.
-        # 126 -> 127 and ordinal 92 -> 93, re-derived at 51061c8e0: the
-        # `step37.4` flow cell adds one parametrised
-        # `test_every_enforced_cell_carries_a_named_mutation` item before the
-        # witness family.  The replay population itself remains 25.
-        # 127 -> 128 and ordinal 93 -> 94, re-derived at 6886af48b (v1.25.11,
-        # the 1.25.x FULL resync): `9ef6a544e` registered the `step37.3` flow
-        # cell, one more `[step37.3]` item before the witness family.  The
-        # replay population itself remains 25.
-        "items": 128,
-        # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
-        # this is the second. It is NOT a claim that these items are short:
-        # it is the MEASURED set of producer items carrying no schedule at
-        # 1ec22dabc, written down so that an ELEVENTH cannot appear in
-        # silence. `test_the_published_total_equals_the_live_census` reached
-        # the landing gate exactly that way — discovered by the AST, scheduled
-        # by nobody, killed at 300 s with rc 199 — and a file-level inventory
-        # check could not see it. Adding a producer call to a new item now
-        # forces a decision here or a measured row above.
-        "producer_items_without_schedule": (
-            "test_a_cut_off_replay_omits_unstarted_pairs_and_never_a_verdict",
-            "test_replay_many_callback_failure_refuses_the_population",
-            "test_replay_many_reports_only_finite_completed_units_in_result_order",
-        ),
-        "producer_profiles": (("replay_many",),),
-        "domains": (
-            (94, HERMETIC_MUTATION_FILE
-             + "::test_lock2_the_mutation_really_reddens_its_witness[D1-BLIND-GATE-PROGRAMS]",
-             "matrix-mutation-replays", 25),
-        ),
-    },
+
 }
 
 # These are the only call shapes allowed to create the nested populations above
@@ -359,12 +274,10 @@ _NESTED_PRODUCER_CALLS = {
     "_collect_items_from_paths",
     "_run_outcome_reports",
     "enforcement_census",
-    "replay_many",
 }
 
 HERMETIC_TEST_RUNTIME_OVERLAYS = tuple(sorted({
     "tools/ci/hermetic_test_arm_entry.sh",
-    f"{PLUGIN_REL}/programs/matrix_mutation_ledger.py",
     *(f"{PLUGIN_REL}/{path}" for path in HERMETIC_TEST_PROGRESS),
 }))
 

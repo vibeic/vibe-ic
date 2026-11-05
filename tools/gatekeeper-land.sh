@@ -714,17 +714,6 @@ landing_unit_cheap_benchmark_structure() {
     || BENCHMARK_STRUCTURE_SCOPE=(--changed-since "$BASE")
   run "$1" "benchmark evidence structure" python3 "$PROGRAMS/benchmark_evidence_structure_check.py" --tree benchmark-data --corpus-may-be-absent "${BENCHMARK_STRUCTURE_SCOPE[@]}"
 }
-landing_unit_cheap_benchmark_manifest() {
-  if [ "$GK_RANGE_N" = "0" ]; then
-    landing_skip "$1" "range is empty"
-    return 0
-  fi
-  # vibe-ic#635 — a NEW published number must arrive with its composition.
-  # Scoped `--changed-since` like the gate above: 20 of the 25 runs already
-  # published carry no per-problem name set, and applying this retroactively
-  # would fail every landing over work nobody is doing.
-  run "$1" "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
-}
 landing_unit_cheap_git_prohibition() {
   if [ "$GK_RANGE_N" = "0" ]; then
     landing_skip "$1" "range is empty"

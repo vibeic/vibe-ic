@@ -2,7 +2,7 @@
   "_comment": "Gates no automatic verdict INVOKES (vibe-ic#693, rule re-derived under vibe-ic#2065). MAY ONLY SHRINK. A gate here produces no verdict, and the tree looks the same either way. `skill_only` is recorded because a skill mention runs the gate only if an agent remembers to \u2014 which for a gate that catches a vacuous pass is the same as absent at the moment it matters.",
   "measured_under": "invocation.v2",
   "unwired": [
-    "acceptance_evidence_in_fix_comment_check",
+
     "analog_a8_before_floorplan_check",
     "analog_corner_margin_check",
     "analog_per_block_pv_completeness_check",
@@ -12,7 +12,7 @@
     "checkpoint_gate_check",
     "clock_scale_consistency_check",
     "cmd_response_conformance_check",
-    "convergence_doctrine_present_check",
+
     "corner_coverage_audit",
     "corner_yield_vs_spec_check",
     "coverage_metric_check",
@@ -25,10 +25,10 @@
     "hardware_pass_attestation_check",
     "ir_drop_budget_check",
     "opcode_field_width_consistency_check",
-    "organic_issue_body_lint",
-    "page_states_one_figure_twice_check",
+
+
     "phase1_loop_stop_condition_check",
-    "regression_issue_intake_check",
+
     "reports_subfolder_taxonomy_check",
     "rtl_signal_name_semantic_check",
     "signaltap_stp_completeness_check",
@@ -39,7 +39,7 @@
     "verilog_selfcheck_lint"
   ],
   "skill_only": [
-    "acceptance_evidence_in_fix_comment_check",
+
     "analog_a8_before_floorplan_check",
     "analog_per_block_pv_completeness_check",
     "benchmark_result_md_lint",
@@ -48,7 +48,7 @@
     "checkpoint_gate_check",
     "clock_scale_consistency_check",
     "cmd_response_conformance_check",
-    "convergence_doctrine_present_check",
+
     "corner_coverage_audit",
     "corner_yield_vs_spec_check",
     "coverage_metric_check",
@@ -59,9 +59,9 @@
     "handoff_bundle_check",
     "hardware_pass_attestation_check",
     "ir_drop_budget_check",
-    "organic_issue_body_lint",
+
     "phase1_loop_stop_condition_check",
-    "regression_issue_intake_check",
+
     "reports_subfolder_taxonomy_check",
     "signaltap_stp_completeness_check",
     "top_level_outputs_in_canonical_check",

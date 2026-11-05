@@ -37,11 +37,11 @@ _PPA_GLOB_MEMBERS = frozenset({
     "ppa_area_threshold_check.py", "ppa_closure_run.py",
     "ppa_contract_build.py", "ppa_contract_check.py",
     "ppa_diagnostic_router.py", "ppa_eco_spare_records.py",
-    "ppa_feasibility_check.py", "ppa_head_to_head_check.py",
+     "ppa_head_to_head_check.py",
     "ppa_measurement_check.py", "ppa_metric_extract.py",
     "ppa_page_claim_check.py", "ppa_pareto_check.py",
     "ppa_pnr_search_space.py", "ppa_pr_scope_check.py",
-    "ppa_predict_aggregate.py", "ppa_problem_integrity_check.py",
+    "ppa_predict_aggregate.py",
     "ppa_report_gen.py", "ppa_search_run.py", "ppa_signoff_records.py",
 })
 #: The finding itself: layer members no `ppa_*.py` glob reaches.

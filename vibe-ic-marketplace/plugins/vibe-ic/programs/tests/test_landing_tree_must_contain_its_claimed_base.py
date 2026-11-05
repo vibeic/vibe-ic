@@ -589,7 +589,7 @@ def _synthetic_plugin(repo: Path, version: str = "9.9.9") -> Path:
     (flow / "phase1_phase2_phase3.yaml").write_text(
         "steps:\n  - id: s1\n    gate:\n"
         '      program_exit_zero: "widget"\n')
-    for guard_name in ("gate_self_assertion_check", "single_testpath_guard",
+    for guard_name in (
                        "flow_condition_reachability_check"):
         (progs / f"{guard_name}.py").write_text(
             "import sys\n"

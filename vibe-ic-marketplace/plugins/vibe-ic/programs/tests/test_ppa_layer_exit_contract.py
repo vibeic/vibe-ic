@@ -189,7 +189,7 @@ def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
         # `value` key at all.
         "ppa_eco_spare_records.py":    ["--spare-plan", a, "--stage",
                                         "post_route"],
-        "ppa_feasibility_check.py":    ["--candidates", a],
+
         "ppa_head_to_head_check.py":   [a],
         "ppa_measurement_check.py":    ["--coverage", a, "--expect", a],
         "ppa_metric_extract.py":       ["--records", a],
@@ -217,7 +217,7 @@ def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
         # A run DIRECTORY that is not there. See `_VACUOUS_RC` for why this
         # program's declared answer is 3 and not 2.
         "ppa_signoff_records.py":      [str(emptydir / "absent_run_dir")],
-        "ppa_problem_integrity_check.py": ["--baseline", a, "--candidate", a],
+
         "ppa_report_gen.py":           [a],
         "ppa_search_run.py":           [a],
     }

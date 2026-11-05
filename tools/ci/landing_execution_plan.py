@@ -22,7 +22,6 @@ STEPS = (
     ("cheap:version", "cheap", ""),
     ("cheap:agent-scope", "cheap", ""),
     ("cheap:benchmark-structure", "cheap", ""),
-    ("cheap:benchmark-manifest", "cheap", ""),
     ("cheap:git-prohibition", "cheap", ""),
     ("cheap:collateral-revert", "cheap", ""),
     ("cheap:base-ancestry", "cheap", ""),

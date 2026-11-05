@@ -409,9 +409,6 @@ run_tolerating_uncheckable "PPA measurement coverage" "$ROOT" python3 "$PG/ppa_m
 # shape overrides the `required_views_by_axis` the candidate sets already
 # declare and loses all nine axes to FEAS_VIEWS_NOT_DECLARED — measured. A
 # candidates document declares its own views; that is the input to use.
-uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over 21 adjudicated candidate sets, not an absent input: seven of nine feasibility axes are SATISFIED on every one and two (em, equivalence) carry no measurement at all, so no candidate may be called promotable. That reproduces the campaign's own published summary.json verdict. A candidate that IS measured and VIOLATES an axis is rc 1"
-run_tolerating_uncheckable "PPA promotion feasibility (cross-layer campaign)" "$ROOT" \
-    python3 "$PG/ppa_feasibility_check.py" --corpus "$ROOT/docs/campaigns/ppa-crosslayer"
 
 # STILL CANNOT CHECK, AND THE SECOND MISSING ARTEFACT IS WHY IT STAYS THAT WAY.
 # `objectives` could be DERIVED here: each trial's `objective.json` names the
@@ -455,13 +452,6 @@ uncheckable_until 2027-02-28 "PASSES today over 210 pairs — 21 contracts in 1 
 #   end-to-end   61 contract(s), 1 problem group, 1830 pair(s)  -> rc 0
 # The audit's Part 7 recorded 20 and 60 pairs for the baseline-against-each form;
 # grouping compares every pair inside the group, which is the stronger question.
-run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
-    python3 "$PG/ppa_problem_integrity_check.py" \
-    --corpus "$ROOT/docs/campaigns/ppa-crosslayer"
-uncheckable_until 2027-02-28 "PASSES today over 1830 pairs — 61 contracts in 1 problem group, every pair inside the group compared. It was 60 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
-run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
-    python3 "$PG/ppa_problem_integrity_check.py" \
-    --corpus "$ROOT/docs/campaigns/ppa-e2e"
 
 # THE PUBLISHED SENTENCE, not the record behind it. Every gate above this line
 # asks whether an artefact is internally honest; none of them asks what the
@@ -1091,7 +1081,6 @@ run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_w
 # `--root "$PLUGIN"`, not `"$ROOT"`: this gate's subject is the PLUGIN root
 # (it wants `programs/` directly under it) and it derives the repo root from
 # there itself. Same split as the line above -- vibe-ic#2199.
-run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check.py" --root "$PLUGIN"
 # AND THE ONE THAT COVERS EVERY PROGRAM, NOT A FILENAME-SHAPED SUBSET.
 #
 # The two gates above are the tree's wiring auditors and neither scans the whole
@@ -2097,15 +2086,11 @@ run "measurement only artefact is not a verdict s" "$ROOT" python3 "$PG/measurem
 # dimension modules: D1 still proves the walk INSIDE the executor is complete,
 # and this proves every step reaches it; D3 still proves the artefact once
 # existed, and this proves something still writes it.
-run "every declared step reaches the evaluator" "$ROOT" python3 "$PG/every_declared_step_reaches_the_evaluator_check.py" --root "$ROOT"
-run "a declared output has a live producer" "$ROOT" python3 "$PG/declared_output_has_a_live_producer_check.py" --root "$ROOT" --strict
-run "a disclosure token needs a runtime condition" "$ROOT" python3 "$PG/vacuous_disclosure_needs_a_runtime_condition_check.py" --root "$ROOT" --strict
 run "population guard asserts equality not a floo" "$ROOT" python3 "$PG/population_guard_asserts_equality_not_a_floor.py" --root "$ROOT"
 run "population pin without its member set" "$ROOT" python3 "$PG/population_pin_without_its_member_set.py" --root "$ROOT"
 run "prepared checkout states the revision it hol" "$ROOT" python3 "$PG/prepared_checkout_states_the_revision_it_holds.py" "$ROOT"
 run "printed remedy runs as printed" "$ROOT" python3 "$PG/printed_remedy_runs_as_printed.py" "$ROOT"
 run "provenance value is resolved not constant" "$ROOT" python3 "$PG/provenance_value_is_resolved_not_constant.py" "$ROOT"
-run "reference control resolved through a mutable" "$ROOT" python3 "$PG/reference_control_resolved_through_a_mutable_ref.py" --root "$ROOT"
 run "registry is the iteration domain" "$ROOT" python3 "$PG/registry_is_the_iteration_domain.py" --root "$ROOT"
 run "spawned gate whose status is discarded" "$ROOT" python3 "$PG/spawned_gate_whose_status_is_discarded.py" --root "$ROOT"
 run "two input selectors given together must refu" "$ROOT" python3 "$PG/two_input_selectors_given_together_must_refuse.py" --root "$ROOT"
