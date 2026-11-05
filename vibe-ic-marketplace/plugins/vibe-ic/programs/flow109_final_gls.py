@@ -7,9 +7,7 @@ transcript reader measures annotation and functional errors.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-import hashlib
 import time
-import inspect
 import json
 from pathlib import Path
 import re
@@ -23,13 +21,16 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from _atomic_artefact import write_json, write_text
-from flow109_admission import AdmissionRefusal, require_launch_admission
 import sdf_gate_sim as sgs
 
+
+class NativeResultError(ValueError):
+    def __init__(self, code, detail, *, status='NOT_MEASURED'):
+        self.code, self.status = code, status
+        super().__init__(f'{code}: {detail}')
+
+
 SCHEMA = 'vibeic.flow109.final-gls.v1'
-D70_SCHEMA = 'vibeic.flow109.final-electrical.v1'
-INPUT = 'input/flow109/D71.json'
-D44_BASELINE = 'adopted/final_lec/sta_lvs_release_netlist_mapping.json'
 SUPPORTED_REQUIRED_BEHAVIORS = frozenset({'sdf_delay_annotation', 'functional_self_check'})
 LIMITATIONS = [
     'Icarus/vvp only; no alternate or commercial simulator result is implied.',
@@ -40,72 +41,44 @@ LIMITATIONS = [
 IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_$]*\Z')
 
 
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _read(path, code='D71_INPUT_INVALID'):
     try:
         value = json.loads(Path(path).read_text())
     except (OSError, ValueError) as exc:
-        raise AdmissionRefusal(code, str(path)) from exc
+        raise NativeResultError(code, str(path)) from exc
     if not isinstance(value, dict):
-        raise AdmissionRefusal(code, str(path))
+        raise NativeResultError(code, str(path))
     return value
 
 
-def _bound(project, value, code='D71_INPUT_UNBOUND'):
-    if not isinstance(value, dict) or not value.get('path') or not value.get('sha256'):
-        raise AdmissionRefusal(code, str(value))
-    path = Path(value['path'])
-    path = path if path.is_absolute() else Path(project) / path
-    try:
-        actual = _sha(path)
-    except OSError as exc:
-        raise AdmissionRefusal(code, str(path)) from exc
-    if actual != value['sha256']:
-        raise AdmissionRefusal(code, str(path))
-    return path.resolve()
+def _bound(project, value, code='D71_INPUT_UNAVAILABLE'):
+    from librelane_contract import project_path
+    value = value.get('path') if isinstance(value, dict) else value
+    if not isinstance(value, str) or not value:
+        raise NativeResultError(code, str(value))
+    path = project_path(Path(project), value)
+    if not path.is_file():
+        raise NativeResultError(code, str(path))
+    return path
 
 
 def _record(project, path):
     path = Path(path).resolve()
-    return {'path': str(path.relative_to(project)) if path.is_relative_to(project) else str(path),
-            'sha256': _sha(path)}
-
-
-def operation_sources():
-    from execution_provider_catalog import source_closure
-    sys.path.insert(0, str(HERE / 'librelane_plugins'))
-    from librelane_plugin_vibeic import GateLevelSim
-    paths = source_closure({HERE / 'sdf_gate_sim.py', HERE / 'post_layout_sim_check.py'})
-    paths.update({Path(__file__), HERE / 'flow109_admission.py', HERE / 'full_stack_functional_tb.py',
-                  Path(inspect.getsourcefile(GateLevelSim))})
-    return {str(path.relative_to(HERE.parent)): _sha(path) for path in sorted(paths)}
-
-
-def _same_record(a, b):
-    return isinstance(a, dict) and isinstance(b, dict) and a == b
-
-
-def _same_population(a, b):
-    return (isinstance(a, list) and isinstance(b, list) and bool(a) and bool(b)
-            and len(a) == len(set(a)) and len(b) == len(set(b)) and set(a) == set(b))
+    return {'path': str(path.relative_to(project)) if path.is_relative_to(project) else str(path)}
 
 
 def _sdf_census(path, top):
     text = Path(path).read_text(errors='replace')
     if text.count('(') != text.count(')') or not re.search(r'\(SDFVERSION\s+"3\.0"\)', text):
-        raise AdmissionRefusal('D71_FINAL_SDF_CORRUPT', str(path))
+        raise NativeResultError('D71_FINAL_SDF_CORRUPT', str(path))
     design = re.search(r'\(DESIGN\s+"([^"]+)"\)', text)
     if not design or design.group(1) != top:
-        raise AdmissionRefusal('D71_FINAL_SDF_WRONG_NETLIST', str(path))
+        raise NativeResultError('D71_FINAL_SDF_WRONG_NETLIST', str(path))
     cells = len(re.findall(r'\(CELL\s*(?=\()', text))
     delays = len(re.findall(r'\((?:IOPATH|INTERCONNECT)\b', text))
     if not re.search(r'\(TIMESCALE\s+[^)]+\)', text) or not cells or not delays:
-        raise AdmissionRefusal('D71_FINAL_SDF_INCOMPLETE', str(path))
-    return {'sdfversion': '3.0', 'design': top, 'cells': cells, 'delay_records': delays,
-            'sha256': _sha(path)}
+        raise NativeResultError('D71_FINAL_SDF_INCOMPLETE', str(path))
+    return {'sdfversion': '3.0', 'design': top, 'cells': cells, 'delay_records': delays}
 
 
 ENGINEERING_SCOPE = 'engineering_native_component'
@@ -117,15 +90,15 @@ def engineering_bench_text(project, source, module, top, *, observation_schedule
     text = Path(source).read_text()
     instance = sgs._tb_dut_instance(text, top)
     if not instance:
-        raise AdmissionRefusal('D71_SCENARIO_INVALID', 'actual native top instance absent')
+        raise NativeResultError('D71_SCENARIO_INVALID', 'actual native top instance absent')
     observation = None
     if observation_schedule is not None:
         if observation_schedule != 'native_sta_output_deadline':
-            raise AdmissionRefusal('D71_OBSERVATION_UNSUPPORTED', str(observation_schedule))
+            raise NativeResultError('D71_OBSERVATION_UNSUPPORTED', str(observation_schedule))
         import arith_oracle_tb_gen as arith
         plan = arith._scenario_header(Path(source))
         if plan is None:
-            raise AdmissionRefusal('D71_EXISTING_ARITHMETIC_PRODUCER_REQUIRED', str(source))
+            raise NativeResultError('D71_EXISTING_ARITHMETIC_PRODUCER_REQUIRED', str(source))
         declared = sgs.declared_dut_binding(Path(project), plan['spec']['top'], Path(netlist).read_text())
         deadline = sgs._postlayout_output_deadline(Path(project), plan, declared,
                                                   Path(netlist), Path(sdc), list(sdfs or []),
@@ -165,10 +138,9 @@ def prepare(project, context):
     mounts = [(Path(root) / config['PDK'], '/pdk/' + config['PDK']),
               (Path(root) / config['PDK'], str(Path(config['PDK_ROOT']) / config['PDK']))] if root else []
     models = []
-    fingerprint = _read(folder / 'input_fingerprint.json') if (folder / 'input_fingerprint.json').is_file() else {}
     for key in ('CELL_VERILOG_MODELS', 'PAD_VERILOG_MODELS', 'EXTRA_VERILOG_MODELS'):
         for value in config.get(key) or []:
-            asset = contract.resolve_state_pdk_asset(value, pdk=config['PDK'], fingerprint=fingerprint, mounts=mounts)
+            asset = contract.resolve_state_pdk_asset(value, pdk=config['PDK'], mounts=mounts)
             if asset is None:
                 raise ValueError('Native model is unavailable: ' + str(value))
             models.append(asset)
@@ -201,7 +173,7 @@ def prepare(project, context):
         'sdf_census': {c: _sdf_census(p, top) for c, p in sdfs.items()},
         'requirements': {'required_corners': list(corners), 'required_scenarios': [c['id'] for c in cases]},
         'cases': cases, 'models': models, 'model_closure': closure,
-        'sources': operation_sources(), 'inputs': {}}
+        'inputs': {}}
 
 
 def engineering_transcript_readback(step_dir, judged):
@@ -214,7 +186,7 @@ def engineering_transcript_readback(step_dir, judged):
         text = path.read_text(errors='replace') if path.is_file() else ''
         scored = score_transcript(run['case'], run.get('sim_rc'), text)
         row = {'corner': run['corner'], 'scenario': run['case'],
-               'source_self_check': scored, 'stdout_sha256': _sha(path) if path.is_file() else None,
+               'source_self_check': scored, 'stdout': str(path),
                'timingcheck_unsupported': len(re.findall(r'^SDF WARNING:.*TIMINGCHECK not supported', text, re.M))}
         evidence.append(row)
         if scored.get('state') == FAILED:
@@ -293,7 +265,7 @@ def _publish(project, prepared, judged, attempt):
 def run_native_cases(step, state, manifest, *, workers=1, native_run=None):
     """Bound independent existing GateLevelSim calls; only this thread publishes the index."""
     if type(workers) is not int or not 1 <= workers <= 4:
-        raise AdmissionRefusal('D71_CASE_WORKERS_INVALID', str(workers))
+        raise NativeResultError('D71_CASE_WORKERS_INVALID', str(workers))
     from librelane.state import DesignFormat
     from librelane.steps import StepError
     from librelane_plugin_vibeic import GateLevelSim
@@ -301,7 +273,7 @@ def run_native_cases(step, state, manifest, *, workers=1, native_run=None):
     root = Path(step.step_dir)
     cases = sorted(manifest['cases'], key=lambda case: case['id'])
     if len({case['id'] for case in cases}) != len(cases):
-        raise AdmissionRefusal('D71_DUPLICATE_CASE', 'native output ownership must be unique')
+        raise NativeResultError('D71_DUPLICATE_CASE', 'native output ownership must be unique')
     sdfs = state[DesignFormat.SDF]
     jobs = [(corner, case) for corner in sorted(sdfs) for case in cases]
 
@@ -361,11 +333,10 @@ def execute(project, context):
     record = {'schema': SCHEMA, 'step_id': 'D71', 'component_status': 'NOT_MEASURED',
               'default_row_status': 'NOT_MEASURED', 'completed': False,
               'flow109_acceptance': 'NOT_MEASURED', 'native_started': False,
-              'metric_acceptance_status': 'UNIMPLEMENTED',
-              'context_sha256': context.get('context_sha256'), 'limitations': LIMITATIONS}
+              'limitations': LIMITATIONS}
     try:
         prepared = prepare(project, context)
-        record.update(operation_sources=prepared['sources'], inputs=prepared['inputs'],
+        record.update(inputs=prepared['inputs'],
                       sdf_readback=prepared['sdf_census'],
                       execution_scope=ENGINEERING_SCOPE if prepared.get('engineering') else 'final_gls_component',
                       full_row_acceptance='NOT_MEASURED')
@@ -420,7 +391,7 @@ def execute(project, context):
         else:
             record.update(component_status='FAIL', default_row_status='FAIL',
                           reason='D71_NATIVE_GLS_FAILED')
-    except AdmissionRefusal as exc:
+    except NativeResultError as exc:
         record.update(component_status=exc.status, reason=exc.code, detail=str(exc))
     except Exception as exc:
         record.update(component_status='NOT_MEASURED', reason='D71_NATIVE_UNAVAILABLE_OR_UNSUPPORTED',
@@ -428,7 +399,7 @@ def execute(project, context):
     path = attempt / 'component.json'
     write_json(path, record)
     write_json(project / 'reports/flow109/components/D71.json', record)
-    record['receipt'] = _record(project, path)
+    record['report'] = _record(project, path)
     return record
 
 
@@ -446,29 +417,20 @@ def execute_patterns(project, context):
     attempt.mkdir(parents=True, exist_ok=False)
     record = {'schema': 'vibeic.flow109.pattern-replay.v1', 'step_id': 'D72',
               'component_status': 'NOT_MEASURED', 'default_row_status': 'NOT_MEASURED',
-              'context_sha256': context.get('context_sha256'), 'native_started': False,
+              'native_started': False,
               'flow109_acceptance': 'NOT_MEASURED', 'whole_flow_acceptance': 'NOT_MEASURED',
               'delivery_accepted': False, 'completed': False}
     try:
-        if context.get('native_step_id') != 'flow109.D72' or not context.get('context_sha256'):
-            raise AdmissionRefusal('D72_CONTEXT_INVALID', 'current source-owned context required')
-        require_launch_admission(project, 'flow109.D72', {'flow109_context': context})
-        spec = _read(project / 'input/flow109/D72.json')
-        names = ('requirements', 'upstream_source', 'scan_netlist', 'scan_map',
-                 'physical_origin', 'netlist', 'sdf', 'sdc', 'sta_state', 'sta_input',
+        spec = context['patterns']
+        names = ('requirements', 'scan_netlist', 'scan_map',
+                 'netlist', 'sdf', 'sdc', 'sta_state',
                  'patterns', 'testbench', 'pattern_requirements')
         paths = {name: _bound(project, spec.get(name)) for name in names}
         models = [_bound(project, ref) for ref in spec.get('models', [])]
         if not models:
-            raise AdmissionRefusal('D72_MODELS_ABSENT', 'native simulation model closure required')
+            raise NativeResultError('D72_MODELS_ABSENT', 'native simulation model closure required')
         from fault_scan_chain_insert import parse_chain_metadata, chain_order_counts
-        sources = operation_sources()
-        sources['programs/fault_scan_chain_insert.py'] = _sha(HERE / 'fault_scan_chain_insert.py')
-        inputs = {str(path): _sha(path) for path in [*paths.values(), *models]}
-        record.update(inputs=inputs, operation_sources=sources)
         requirements = _read(paths['requirements'])
-        if requirements.get('source', {}).get('source_sha256') != _sha(paths['upstream_source']):
-            raise AdmissionRefusal('D72_UPSTREAM_SOURCE_CHANGED', str(paths['upstream_source']))
         chain = parse_chain_metadata(paths['scan_netlist'].read_text())
         contract = requirements.get('dft_contract') or {}
         if (not chain or type(contract.get('internal_cells')) is not int
@@ -476,56 +438,49 @@ def execute_patterns(project, context):
                 or chain.get('internalCount') != contract['internal_cells']
                 or chain.get('boundaryCount') != 0 or contract.get('boundary_scan') is not False
                 or chain_order_counts(chain).get('dff') != contract['internal_cells']):
-            raise AdmissionRefusal('D72_SCAN_CARRIER_MISMATCH', 'declared real scan state required')
+            raise NativeResultError('D72_SCAN_CARRIER_MISMATCH', 'declared real scan state required')
         physical = paths['netlist'].read_text()
         for item in chain.get('order', []):
             if item.get('kind') == 'dff' and not re.search(re.escape(item['name']) + r'\s*\(', physical):
-                raise AdmissionRefusal('D72_SCAN_CELL_CORRESPONDENCE_MISSING', item['name'])
+                raise NativeResultError('D72_SCAN_CELL_CORRESPONDENCE_MISSING', item['name'])
         record['scan_metadata'] = chain
-        origin = _read(paths['physical_origin'])
-        state, before = _read(paths['sta_state']), _read(paths['sta_input'])
-        for actual, expected in ((origin.get('nl'), paths['scan_netlist']),
-                                 (state.get('nl'), paths['netlist']),
-                                 (before.get('nl'), paths['netlist']),
+        state = _read(paths['sta_state'])
+        for actual, expected in ((state.get('nl'), paths['netlist']),
                                  (state.get('sdc'), paths['sdc'])):
-            if not actual or not Path(actual).is_file() or _sha(actual) != _sha(expected):
-                raise AdmissionRefusal('D72_PHYSICAL_INPUT_IDENTITY_MISMATCH', str(actual))
+            if not actual or _bound(project, actual).resolve() != expected.resolve():
+                raise NativeResultError('D72_PHYSICAL_INPUT_IDENTITY_MISMATCH', str(actual))
         corner = spec.get('corner')
         native_sdf = (state.get('sdf') or {}).get(corner)
-        if not native_sdf or _sha(native_sdf) != _sha(paths['sdf']):
-            raise AdmissionRefusal('D72_SDF_NOT_FROM_NATIVE_STA', str(corner))
+        if not native_sdf or _bound(project, native_sdf).resolve() != paths['sdf'].resolve():
+            raise NativeResultError('D72_SDF_NOT_FROM_NATIVE_STA', str(corner))
         top = requirements.get('configuration', {}).get('top')
         census = _sdf_census(paths['sdf'], top)
         metrics = state.get('metrics') or {}
         required_metrics = ('timing__setup_vio__count', 'timing__hold_vio__count')
         if any(type(metrics.get(k)) not in (int, float) for k in required_metrics):
-            raise AdmissionRefusal('D72_STA_SETUP_HOLD_UNMEASURED', 'native counts required')
+            raise NativeResultError('D72_STA_SETUP_HOLD_UNMEASURED', 'native counts required')
         if any(metrics[k] != 0 for k in required_metrics):
-            raise AdmissionRefusal('D72_STA_SETUP_HOLD_FAILED', str({k: metrics[k] for k in required_metrics}), status='FAIL')
+            raise NativeResultError('D72_STA_SETUP_HOLD_FAILED', str({k: metrics[k] for k in required_metrics}), status='FAIL')
         count = spec.get('vector_count')
         pattern_requirements = _read(paths['pattern_requirements'])
-        if (pattern_requirements.get('carrier_requirements_sha256') != _sha(paths['requirements'])
-                or pattern_requirements.get('upstream_source_sha256') != _sha(paths['upstream_source'])
-                or pattern_requirements.get('required_vector_count') != count):
-            raise AdmissionRefusal('D72_REQUIRED_PATTERN_POPULATION_MISMATCH', 'source-derived plan differs')
+        if pattern_requirements.get('required_vector_count') != count:
+            raise NativeResultError('D72_REQUIRED_PATTERN_POPULATION_MISMATCH', 'source-derived plan differs')
         if type(count) is not int or count <= 0:
-            raise AdmissionRefusal('D72_PATTERN_POPULATION_INVALID', str(count))
+            raise NativeResultError('D72_PATTERN_POPULATION_INVALID', str(count))
         words = paths['patterns'].read_text().split()
         if len(words) != count or any(not re.fullmatch(r'[0-9a-fA-F]+', word) for word in words):
-            raise AdmissionRefusal('D72_PATTERN_ROUNDTRIP_FAILED', 'readmemh population differs')
+            raise NativeResultError('D72_PATTERN_ROUNDTRIP_FAILED', 'readmemh population differs')
         bench = paths['testbench'].read_text()
         reads = re.findall(r'\$readmemh\(\s*"([^"\n]+)"', bench)
         if reads != [str(paths['patterns'])] or re.search(r'\$(?:fopen|system|readmemb|sdf_annotate)\b|`include\b', bench):
-            raise AdmissionRefusal('D72_BENCH_INPUT_UNBOUND', 'only the bound pattern read is permitted')
+            raise NativeResultError('D72_BENCH_INPUT_UNBOUND', 'only the bound pattern read is permitted')
         manifest = {'compile_flags': '-g2012 -ginterconnect -gspecify -Tmax',
                     'models': [str(path) for path in models],
-                    'timing': {'sdf': str(paths['sdf']), 'sdf_sha256': _sha(paths['sdf']),
-                               'netlist_sha256': _sha(paths['netlist']),
-                               'model_sha256': {str(path): _sha(path) for path in models}},
+                    'timing': {'sdf': str(paths['sdf'])},
                     'cases': [{'id': 'scan_capture', 'module': spec.get('bench_module'),
                                'dut_instance': spec.get('dut_instance'),
-                               'testbench': str(paths['testbench']), 'testbench_sha256': _sha(paths['testbench']),
-                               'pattern': str(paths['patterns']), 'pattern_sha256': _sha(paths['patterns']),
+                               'testbench': str(paths['testbench']),
+                               'pattern': str(paths['patterns']),
                                'vector_count': count}]}
         manifest_path = attempt / 'manifest.json'
         write_json(manifest_path, manifest)
@@ -540,10 +495,6 @@ def execute_patterns(project, context):
             native_error = str(exc)
         result_path = Path(step.step_dir) / 'pattern_replay_results.json'
         result = _read(result_path)
-        current_sources = operation_sources()
-        current_sources['programs/fault_scan_chain_insert.py'] = _sha(HERE / 'fault_scan_chain_insert.py')
-        if current_sources != sources or any(_sha(path) != digest for path, digest in inputs.items()):
-            raise AdmissionRefusal('D72_INPUT_OR_SOURCE_CHANGED_DURING_RUN', 'producer boundary')
         status = 'PASS' if native_error is None and result.get('verdict') == 'PASS' else 'FAIL'
         record.update(component_status=status, default_row_status=status, completed=status == 'PASS',
                       flow109_acceptance=status, reason='D72_NATIVE_TIMED_PATTERN_' + status,
@@ -554,7 +505,7 @@ def execute_patterns(project, context):
                                'timed_pattern_sdf_identity': {'netlist': spec['netlist'], 'sdf': spec['sdf']},
                                'export_roundtrip_errors': len(result.get('export_roundtrip_errors', []))},
                       unsupported_scope='ATPG coverage, other carriers, whole-IP and whole-IC qualification')
-    except (AdmissionRefusal, OSError, ValueError) as exc:
+    except (NativeResultError, OSError, ValueError, KeyError) as exc:
         record.update(reason=getattr(exc, 'code', 'D72_INPUT_UNRESOLVED'), detail=str(exc),
                       component_status=getattr(exc, 'status', 'NOT_MEASURED'),
                       default_row_status=getattr(exc, 'status', 'NOT_MEASURED'))

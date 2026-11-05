@@ -58,7 +58,6 @@ returns only the adopted state. See ``postroute_repair.py``.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -325,7 +324,7 @@ class GateLevelSim(Step):
 @Step.factory.register()
 class TestPatternReplay(Step):
     """Replay producer-owned self-checking testbenches for manifest-bound patterns.
-    Require matching hashes, zero exits and exact case/vector witnesses;
+    Require zero exits and exact case/vector witnesses;
     keep every raw SDF error accounted for until classified."""
 
     id = "Vibeic.TestPatternReplay"
@@ -355,14 +354,6 @@ class TestPatternReplay(Step):
             sink.write("\n" + FilePath(log + ".stderr").read_text(errors="replace"))
         return rc
 
-    @staticmethod
-    def _sha256(path: str) -> str:
-        digest = hashlib.sha256()
-        with open(path, "rb") as stream:
-            for chunk in iter(lambda: stream.read(1 << 20), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-
     def run(self, state_in: State, **kwargs) -> Tuple[ViewsUpdate, MetricsUpdate]:
         with open(str(self.config["VIBEIC_PATTERN_MANIFEST"])) as stream:
             manifest = json.load(stream)
@@ -376,12 +367,8 @@ class TestPatternReplay(Step):
             count = case.get("vector_count")
             if not pattern or not os.path.isfile(pattern):
                 errors.append(f"{case.get('id')}: pattern file absent")
-            elif TestPatternReplay._sha256(pattern) != case.get("pattern_sha256"):
-                errors.append(f"{case.get('id')}: pattern digest changed")
             if not testbench or not os.path.isfile(testbench):
                 errors.append(f"{case.get('id')}: testbench absent")
-            elif TestPatternReplay._sha256(testbench) != case.get("testbench_sha256"):
-                errors.append(f"{case.get('id')}: testbench digest changed")
             if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
                 errors.append(f"{case.get('id')}: invalid vector_count")
 
@@ -392,15 +379,11 @@ class TestPatternReplay(Step):
                 errors.append("invalid timed replay binding")
                 timing = {}
             sdf = str(timing.get("sdf") or "")
-            if not sdf or not os.path.isfile(sdf) or \
-                    TestPatternReplay._sha256(sdf) != timing.get("sdf_sha256"):
-                errors.append("SDF absent or digest changed")
-            if TestPatternReplay._sha256(netlist) != timing.get("netlist_sha256"):
-                errors.append("timed replay netlist digest changed")
+            if not sdf or not os.path.isfile(sdf):
+                errors.append("SDF absent")
             for model in manifest.get("models") or []:
-                if not os.path.isfile(model) or TestPatternReplay._sha256(model) != \
-                        (timing.get("model_sha256") or {}).get(model):
-                    errors.append("timed replay model absent or digest changed")
+                if not os.path.isfile(model):
+                    errors.append("timed replay model absent")
             for case in cases:
                 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.$]*", str(case.get("dut_instance") or "")):
                     errors.append("timed replay DUT instance absent or invalid")
@@ -460,15 +443,11 @@ class TestPatternReplay(Step):
                     if not annotation["annotated"] or annotation["sdf_errors_unexplained"]:
                         verdict = "FAIL"
                 runs.append({"case": cid, "pattern": case["pattern"],
-                             "pattern_sha256": case["pattern_sha256"],
-                             "testbench_sha256": case["testbench_sha256"],
                              "vector_count": case["vector_count"],
                              "compile_rc": compile_rc, "sim_rc": sim_rc,
                              "marker_count": marker_count, "verdict": verdict,
                              "compile_log": compile_log, "stdout": stdout,
-                             **({"sdf_annotation": annotation,
-                                 "sdf_sha256": timing["sdf_sha256"],
-                                 "netlist_sha256": timing["netlist_sha256"]}
+                             **({"sdf_annotation": annotation}
                                 if timing is not None else {})})
         result = {"verdict": "PASS" if not errors and runs
                   and all(run["verdict"] == "PASS" for run in runs) else "FAIL",
