@@ -254,13 +254,12 @@ def _nbit_unsigned_adder_with_carry(text: str, ins, outs, top: str) -> Optional[
         if request is None or not re.search(r"\bfull[-\s]+adders?\b", request["body"], re.I):
             continue
         requested_style = re.sub(r"^\s*" + target + r"\s*", "", request["body"], count=1, flags=re.I).strip()
-        statement_start = len(requests)
         for piece in re.split(r"\s+(?:and|but)\s+", requested_style, flags=re.I):
             parsed = construction.fullmatch(piece.strip())
             if parsed is None or request["deny"] and parsed["deny"]:
                 return None
             positive = not (request["deny"] or parsed["deny"])
-            if positive and False in requests[statement_start:]:
+            if requests and positive != requests[-1]:
                 return None
             requests.append(positive)
     explicit_full_adders = bool(requests) and all(requests)
