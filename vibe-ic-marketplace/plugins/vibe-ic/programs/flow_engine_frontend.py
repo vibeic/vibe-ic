@@ -227,6 +227,14 @@ class OwnerSession:
         native = [{"name": row["name"], "ran": row["status"] in ("PASS", "FAIL"),
                    "exit_code": row.get("extras", {}).get("exit_code"), "status": row["status"]}
                   for row in own if row["status"] != "NOT_APPLICABLE"]
+        authoring = kind in ("rtl", "rtl_gen")
+        if authoring:
+            from _rtl_include_hub import silicon_rtl_selection
+            produced = list(silicon_rtl_selection(self.project / "phase2/stage1/rtl"))
+            native = [row for row in native if row["status"] not in ("WAIVED", "PASS_WITH_WAIVERS")]
+            native.append({"name": "rtl_output", "ran": True, "exit_code": 0 if produced else 1,
+                           "status": "PASS" if produced else "FAIL",
+                           "detail": "Owner produced RTL." if produced else "The owner produced no RTL."})
         metrics.update({row["name"]: row["status"] for row in own})
         sources = [path, *([lint_path] if measured else [])]
         for row in own:
@@ -242,7 +250,7 @@ class OwnerSession:
                 if source != destination:
                     shutil.copyfile(source, destination)
                 reports.append(str(destination))
-        return {"ran": bool(own), "exit_code": None, "metrics": metrics,
+        return {"ran": bool(own) or authoring, "exit_code": None, "metrics": metrics,
                 "reports": reports, "tool_seconds": sum(item["tool_seconds"] for item in tools),
                 "native_steps": [*native, *tools],
                 "detail": "Existing owner report; native verdicts remain in its steps."}
