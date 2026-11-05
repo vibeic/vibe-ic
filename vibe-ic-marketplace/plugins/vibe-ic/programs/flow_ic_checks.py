@@ -119,7 +119,8 @@ class ElectricalRules(Step):
         materials = [recipe / name for name in ("cvcrc", "models", "cdl.awk", "power.awk")]
         if any(not path.is_file() for path in [*materials, cdl]):
             raise StepException("NOT_MEASURED: selected PDK CVC recipe or standard-cell CDL is unavailable")
-        power, ground = self.config["VDD_NETS"], self.config["GND_NETS"]
+        power = self.config.get("VDD_NETS") or [self.config["VDD_PIN"]]
+        ground = self.config.get("GND_NETS") or [self.config["GND_PIN"]]
         if len(power) != 1 or len(ground) != 1:
             raise StepException("NOT_MEASURED: PDK CVC recipe needs one declared supply pair")
         commands = Commands(root)
@@ -149,4 +150,38 @@ class ElectricalRules(Step):
         for name in ("instances", "nets", "devices"):
             if parsed[name] is not None:
                 metrics[f"cvc_{name}"] = parsed[name]
+        return {}, metrics
+
+
+@Step.factory.register()
+class PercGeometry(Step):
+    id = "VibeIC.PercGeometry"
+    name = "Native PERC geometry screen"
+    inputs = [DesignFormat.DEF]
+    outputs = []
+    config_vars = [variable for variable in Step.factory.get("OpenROAD.TapEndcapInsertion").config_vars
+                   if variable.name in {"WELLTAP_CELL", "FP_TAPCELL_DIST"}]
+
+    def run(self, state_in, **kwargs):
+        from latchup_esd_spacing_check import run_geometry_layer, GAP_STATUSES
+
+        lefs = [path for key in ("CELL_LEFS", "PAD_LEFS", "EXTRA_LEFS")
+                for path in self.config.get(key) or []]
+        tap = self.config.get("WELLTAP_CELL")
+        settings = ({"screen_um": float(self.config["FP_TAPCELL_DIST"])}
+                    if self.config.get("FP_TAPCELL_DIST") else {})
+        report = run_geometry_layer(str(state_in[DesignFormat.DEF]),
+            netlist_file=state_in.get(DesignFormat.SPICE), lefs=lefs,
+            rated_tap_masters=[tap] if tap else [], tapless_pdk=not bool(tap), **settings)
+        (Path(self.step_dir) / "perc_geometry.json").write_text(json.dumps(report, indent=2) + "\n")
+        if report["any_conclusive_gap"]:
+            raise StepError("Native PERC geometry found a conclusive tap-spacing or clamp-connectivity gap")
+        if report["spacing"]["status"] in {"INCOMPLETE", "UNDECIDED"}:
+            raise StepException(f"NOT_MEASURED: native PERC tap spacing: {report['spacing']}")
+        metrics = {"perc_conclusive_geometry_gaps": sum(
+            report.get(name, {}).get("status") in GAP_STATUSES
+            for name in ("spacing", "guardring", "clamp_netlist"))}
+        for native, metric in (("n_tap", "perc_tap_count"), ("n_std", "perc_logic_count")):
+            if native in report["spacing"]:
+                metrics[metric] = report["spacing"][native]
         return {}, metrics

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -15,9 +14,7 @@ import _submission_template as submission
 import _tapeout_declaration as declaration
 import pad_bterm_coincidence_check
 import pad_side_constraint_check
-import provider_bond_pad_edge
 import librelane_contract as contract
-from _staged_pdk_tech_lef import discover_staged_tech_lefs, select_staged_tech_lef
 
 SCHEMA = "vibeic.flow109.package-ready.v1"
 STEP = "D75"
@@ -37,10 +34,6 @@ class D75Refusal(ValueError):
         super().__init__(f"{code}: {detail}")
 
 
-def _sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _read(path):
     try:
         value = json.loads(Path(path).read_text())
@@ -51,20 +44,6 @@ def _read(path):
     raise D75Refusal("D75_REQUIRED_INPUT_ABSENT_OR_INVALID", str(path))
 
 
-def _record(project, path):
-    path = contract.project_path(project, path)
-    if not path.is_file():
-        raise D75Refusal("D75_REQUIRED_INPUT_ABSENT_OR_INVALID", str(path))
-    return {"path": str(path.relative_to(project)) if path.is_relative_to(project) else str(path),
-            "sha256": _sha(path), "bytes": path.stat().st_size}
-
-
-def operation_sources():
-    return {"programs/" + path.name: _sha(path) for path in
-            (Path(__file__), Path(provider_bond_pad_edge.__file__),
-             Path(pad_bterm_coincidence_check.__file__))}
-
-
 def _native_folder(project):
     from librelane_postroute import STEP23_RECORD
     path = project / STEP23_RECORD
@@ -73,34 +52,13 @@ def _native_folder(project):
     return contract.project_path(project, _read(path)["sta_state"]).parent
 
 
-def _pdk_path(project, raw, folder, config):
-    path = contract.project_path(project, raw)
-    if path.is_file():
-        return path
-    receipt = folder / "vibeic_receipt.json"
-    fingerprint = _read(receipt) if receipt.is_file() else None
-    selected = contract.resolve_state_pdk_asset(raw, pdk=config.get("PDK"), fingerprint=fingerprint)
-    if selected is None:
-        raise D75Refusal("D75_PDK_ASSET_ABSENT", str(raw))
-    return selected
-
-
 def _io_lefs(project, report):
     folder = _native_folder(project)
     config = _read(folder / "config.json") if folder else {}
     values = config.get("PAD_LEFS") or report.get("io_library_lefs")
     if not isinstance(values, list) or not values:
         raise D75Refusal("D75_IO_LIBRARY_UNBOUND", str(IO_REPORT))
-    return list(dict.fromkeys(_pdk_path(project, raw, folder, config) if folder
-                             else contract.project_path(project, raw) for raw in values))
-
-
-def _tech_lef(project):
-    root = project / "input/pdk"
-    selected = select_staged_tech_lef(root, discover_staged_tech_lefs(root))
-    if selected is None:
-        raise D75Refusal("D75_TECH_LEF_UNBOUND", str(root))
-    return selected.path
+    return list(dict.fromkeys(contract.project_path(project, raw) for raw in values))
 
 
 def _current_native_geometry(project, io_lefs):
@@ -115,15 +73,15 @@ def _current_native_geometry(project, io_lefs):
                if fnmatch.fnmatch(corner, pattern)]
     if len(choices) != 1:
         raise D75Refusal("D75_TECH_LEF_UNBOUND", str(choices))
-    tech = _pdk_path(project, choices[0], folder, config)
-    inputs = [_record(project, current_def), _record(project, tech)]
+    tech = contract.project_path(project, choices[0])
+    inputs = [str(current_def), str(tech)]
     detail = {"source": str(folder / "state_out.json"), "top": config.get("DESIGN_NAME"),
               "def": inputs[0], "tech": inputs[1]}
     result = {"def": current_def, "tech": tech, "inputs": inputs, "detail": detail}
     for key, state_key in (("odb", "odb"), ("netlist", "nl")):
         if state.get(state_key):
             result[key] = contract.project_path(project, state[state_key])
-            detail[key] = _record(project, result[key])
+            detail[key] = str(result[key])
     return result
 
 
@@ -135,13 +93,6 @@ def _aggregate(checks):
     statuses = [row.get("status") for row in checks]
     return ("FAIL" if "FAIL" in statuses else "NOT_MEASURED"
             if not statuses or any(s not in ("PASS", "NOT_APPLICABLE") for s in statuses) else "PASS")
-
-
-def validate(project, component):
-    if component.get("schema") != SCHEMA or component.get("step_id") != STEP:
-        raise D75Refusal("D75_COMPONENT_INVALID", "schema/step")
-    if component.get("component_status") != _aggregate(component.get("checks") or []):
-        raise D75Refusal("D75_COMPONENT_INVALID", "native check statuses disagree")
 
 
 def execute(project, context=None, *, def_path=None, tech_lef=None, io_lefs=None):
