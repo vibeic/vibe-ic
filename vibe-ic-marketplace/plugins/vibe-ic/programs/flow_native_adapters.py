@@ -169,26 +169,27 @@ def simulation_sources(project, files, top, benches):
     for path in [*_v662_design_src_rtl_files(project), *files, *hdl_benches]:
         sources[path] = _strip_comments(path.read_text(errors="replace"))
     index = build_index(sources)
-    # Preserve the selected implementation when staged RTL also has a copy.
+    # Selected RTL wins, then staged sources, then supplied dependencies.
     for kind in ("mod_def", "pkg_def", "macro_def"):
         for name, providers in index[kind].items():
             selected = [path for path in providers if path in files]
-            if selected:
-                index[kind][name] = selected
+            index[kind][name] = selected or providers[:1]
     reachable = set()
     for root in [top, *(_tb_top_module(path) for path in hdl_benches)]:
         closure, _ = resolve_closure(root, sources, index)
         reachable.update(closure)
-    return package_first_order(list(dict.fromkeys([*files, *(path for path in sorted(reachable)
-        if path.suffix in (".v", ".sv") and path not in hdl_benches)])))
+    selected = list(dict.fromkeys([*files, *(path for path in sources
+        if path in reachable and path not in hdl_benches)]))
+    return (package_first_order([path for path in selected if path.suffix in (".v", ".sv")]),
+            list(dict.fromkeys(path.parent for path in [*benches, *selected])))
 
 
-def cocotb_run(directory, tb, files, top, commands, simulator):
+def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs):
     import verilator_coverage_measure as coverage
     directory.mkdir()
     makefile = directory / "simulation.mk"
     flags = " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
-    includes = " ".join(dict.fromkeys(str(f.parent.resolve()) for f in files))
+    includes = " ".join(str(path.resolve()) for path in include_dirs)
     makefile.write_text(
         f"SIM = {simulator}\nTOPLEVEL_LANG = verilog\n"
         f"VERILOG_SOURCES = {' '.join(str(f.resolve()) for f in files)}\n"
@@ -244,10 +245,13 @@ def simulation(project, directory, tool, commands):
         return commands.result(reports=[producer_report] if producer_report.is_file() else [],
             detail="Produced RTL and a program-generated testbench are required.")
     silicon_files = files
-    files = simulation_sources(project, files, top, benches)
+    files, include_dirs = simulation_sources(project, files, top, benches)
     reports, dats, assertions, native_steps = [], [], [], []
 
     def invoke(argv, cwd):
+        if argv[0] == "verilator":
+            argv = [argv[0], *["-I" + str(path) for path in include_dirs
+                              if "-I" + str(path) not in argv], *argv[1:]]
         completed = commands.run(argv, cwd)
         return ((completed.returncode, completed.stdout, completed.stderr) if completed is not None
                 else (127, "", "Native executable is absent."))
@@ -259,12 +263,12 @@ def simulation(project, directory, tool, commands):
         if tb.suffix == ".py":
             if not top or not shutil.which("cocotb-config"):
                 return commands.result(reports=reports, detail="Cocotb and the declared top are required.")
-            functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus")
+            functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus", include_dirs)
             report = run / "functional/results.xml"
             summary = parse_junit(report)
             if summary and summary["tests"] > 0 and not summary["skipped"]:
                 failures = summary["failures"] + summary["errors"]
-            completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator")
+            completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator", include_dirs)
             data = run / "coverage/coverage.dat"
             if report.is_file():
                 reports.append(report)
@@ -275,7 +279,7 @@ def simulation(project, directory, tool, commands):
         else:
             executable = run / "functional.vvp"
             compiled = commands.run(["iverilog", "-g2012", "-s", coverage._tb_top_module(tb),
-                "-o", executable, *["-I" + str(f.parent) for f in files], *files, tb])
+                "-o", executable, *["-I" + str(path) for path in include_dirs], *files, tb])
             functional = (commands.run(["vvp", executable], cwd=tb.parent)
                           if compiled is not None and compiled.returncode == 0 else compiled)
             if functional is not None and compiled is not None and compiled.returncode == 0:
