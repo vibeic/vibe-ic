@@ -1119,6 +1119,23 @@
           "line": 132
         }
       }
+    ],
+    "metal_density_fill": [
+      {
+        "metric": "*__density_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 471
+        },
+        "unit": "count",
+        "when": "ic"
+      }
     ]
   },
   "adapters": {
@@ -1267,8 +1284,7 @@
         "steps": [
           "KLayout.Filler",
           "KLayout.Density",
-          "VibeIC.DensityTopUp",
-          "Checker.KLayoutDensity"
+          "VibeIC.DensityTopUp"
         ],
         "imports": [
           "flow_density_topup"
@@ -3194,11 +3210,11 @@
     ],
     "metal_density_fill": [
       {
-        "old_name": "klayout__density_error__count",
+        "old_name": "*__density_error__count",
         "class": "N",
-        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "reason": "Native backend density error count and zero-error limit unchanged.",
         "native_metrics": [
-          "klayout__density_error__count"
+          "*__density_error__count"
         ]
       },
       {
@@ -3218,7 +3234,7 @@
         "class": "R",
         "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
         "native_metrics": [
-          "klayout__density_error__count"
+          "*__density_error__count"
         ]
       },
       {
