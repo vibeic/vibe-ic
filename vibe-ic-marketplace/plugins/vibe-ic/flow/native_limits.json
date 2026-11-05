@@ -1216,7 +1216,8 @@
         "_cdc_netlist.normalization_script",
         "_cdc_netlist.load",
         "_cdc_netlist.judge"
-      ]
+      ],
+      "parallel": true
     },
     "functional_simulation_and_coverage": {
       "adapter": "simulation",
@@ -1227,7 +1228,8 @@
         "verilator_coverage_measure.parse_coverage_dat",
         "verilator_coverage_measure.scope_totals",
         "_sim_results_bridge.parse_junit"
-      ]
+      ],
+      "parallel": true
     },
     "formal_verification": {
       "adapter": "formal",
@@ -1236,7 +1238,8 @@
       "native_commands": [
         "sby --dumptasks INPUT",
         "sby -f -d OUTPUT INPUT TASK"
-      ]
+      ],
+      "parallel": true
     },
     "ip_release_views_and_documentation": {
       "kind": "snapshot",
@@ -1246,7 +1249,8 @@
         "lib": ".lib",
         "gds": ".gds",
         "nl": ".v"
-      }
+      },
+      "timing_group": "librelane"
     },
     "design_release": {
       "kind": "snapshot",
@@ -1257,7 +1261,8 @@
         "gds": ".gds",
         "nl": ".v"
       },
-      "metric": "release_required_items"
+      "metric": "release_required_items",
+      "timing_group": "librelane"
     },
     "signoff_aggregation": {
       "kind": "aggregate"
@@ -3896,19 +3901,22 @@
       "kind": "adapter",
       "adapter": "eqy",
       "program": "flow_native_verification.py",
-      "metric": "unproved_equivalence"
+      "metric": "unproved_equivalence",
+      "timing_group": "librelane"
     },
     "final_adopted_netlist_equivalence": {
       "kind": "adapter",
       "adapter": "eqy",
       "program": "flow_native_verification.py",
-      "metric": "final_lec_unproved"
+      "metric": "final_lec_unproved",
+      "timing_group": "librelane"
     },
     "finishing_geometry_fidelity": {
       "kind": "adapter",
       "adapter": "xor",
       "program": "flow_native_verification.py",
-      "metric": "unexplained_stream_xor"
+      "metric": "unexplained_stream_xor",
+      "timing_group": "librelane"
     },
     "pre_layout_timing": {
       "kind": "librelane",
@@ -3927,7 +3935,8 @@
     "implemented_netlist_cdc_and_rdc": {
       "kind": "adapter",
       "adapter": "implemented_cdc",
-      "program": "flow_native_adapters.py"
+      "program": "flow_native_adapters.py",
+      "parallel": true
     },
     "candidate_gate_level_simulation": {
       "kind": "adapter",
@@ -3953,7 +3962,8 @@
             "line": 2751
           }
         }
-      ]
+      ],
+      "parallel": true
     },
     "final_sdf_gate_level_replay": {
       "kind": "adapter",
@@ -3980,7 +3990,8 @@
           }
         }
       ],
-      "corners": "all"
+      "corners": "all",
+      "parallel": true
     }
   },
   "report_check_readers": {
