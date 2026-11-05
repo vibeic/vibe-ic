@@ -132,7 +132,8 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
     docs = project / "phase1/generated_docs"
     l9 = _load(docs / "L9_INTEGRATION_SPEC.json")
     l1 = _load(docs / "L1_DATASHEET.json")
-    top = l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell")
+    top = (_load(project / "plugin_output/declaration.json").get("top_module")
+           or l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell"))
     modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
                             for path in rtl))
     if top not in modules:
@@ -228,7 +229,16 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     config.update(_settings(fields, pdk))
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
-        config.update(PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+        from sdc_constraints import create_clocks_in_text
+
+        config.update(FALLBACK_SDC=str(sdc), PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+        declared = create_clocks_in_text(sdc.read_text())
+        ports = list(dict.fromkeys(clock["port_name"] for clock in declared if clock["port_name"]))
+        periods = [clock["period_ns"] for clock in declared if clock["period_ns"] is not None]
+        if ports:
+            config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
+        if periods:
+            config["CLOCK_PERIOD"] = min(periods)
     notes = project / "work/flow/config_sources.json"
     notes.parent.mkdir(parents=True, exist_ok=True)
     notes.write_text(json.dumps({"sources": sources, "assumptions": assumptions}, indent=2) + "\n")
