@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -202,9 +203,12 @@ class OwnerSession:
             if kind != "phase1":
                 (self.project / "reports/phase2/lint/native_lint.json").unlink(missing_ok=True)
             self.log = directory / "owner.log"
-            with self.log.open("w") as log:
+            with tempfile.TemporaryFile() as log:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
                     env={**os.environ, "VIBEIC_FLOW_ENGINE": "legacy"}, cwd=directory, check=False)
+                log.seek(0)
+                with self.log.open("wb") as destination:
+                    shutil.copyfileobj(log, destination)
         report = json.loads(path.read_text()) if path.is_file() else {}
         rows = report.get("steps", [])
         if kind == "phase1":
