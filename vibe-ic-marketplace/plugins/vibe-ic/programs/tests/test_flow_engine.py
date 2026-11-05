@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 import sys
 from decimal import Decimal
@@ -41,6 +42,29 @@ def test_tool_result_against_original_limit(tmp_path, code, value, inputs, statu
 def test_failed_step_does_not_block_independent_tool(tmp_path):
     report = execute(tmp_path, [command_row("bad", 2), command_row("good")])
     assert [row["status"] for row in report["steps"]] == ["FAIL", "PASS"]
+
+
+@pytest.mark.parametrize("errors,status", [(0, "PASS"), (1, "FAIL")])
+def test_manufacturability_reads_final_native_result_before_aggregation(tmp_path, errors, status):
+    names = {"design_for_manufacturability", "final_electrical_analysis", "signoff_aggregation"}
+    rows = [deepcopy(row) for row in engine.read_json(engine.TABLE)["steps"] if row["name"] in names]
+    measurement = command_row("final_electrical_analysis", errors)
+    measurement["tool"]["command"][2] = (
+        "import pathlib; p=pathlib.Path('calls'); "
+        "p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); "
+        + measurement["tool"]["command"][2])
+    for row in rows:
+        row["when"] = "always"
+        if row["name"] == measurement["name"]:
+            row["tool"], row["checks"] = measurement["tool"], measurement["checks"]
+    report = execute(tmp_path, rows)
+    actual = {row["name"]: row for row in report["steps"]}
+    summary = actual["design_for_manufacturability"]
+    assert summary["status"] == status
+    assert summary["native_metrics"]["errors"] == errors
+    assert actual["signoff_aggregation"]["status"] == status
+    assert actual["signoff_aggregation"]["native_metrics"]["non_passing_steps"] == (0 if errors == 0 else 2)
+    assert (tmp_path / "calls").read_text() == "1"
 
 
 def test_from_preserves_earlier_folder_and_clears_later_results(tmp_path):
@@ -408,7 +432,7 @@ def test_native_seal_skip_is_missing_measurement_and_verifier_failure_still_fail
 @pytest.mark.parametrize("target,nature,entry,exit_step,count", [
     ("rtl", "debug", "4", "4", 4),
     ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 39),
-    ("shippable_gds", "spec_generation", "D1", "37.5ic", 41),
+    ("shippable_gds", "spec_generation", "D1", "37.5ic", 45),
 ])
 def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         tmp_path, target, nature, entry, exit_step, count):

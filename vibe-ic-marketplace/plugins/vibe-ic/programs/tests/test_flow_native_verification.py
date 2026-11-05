@@ -611,6 +611,80 @@ def test_gls_accepts_native_physical_cell_models(tmp_path, connected):
     assert result["native_steps"][0]["status"] == "PASS", result
 
 
+@pytest.mark.parametrize("kind,different,expected", [
+    ("passive", False, "PASS"), ("passive", True, "FAIL"),
+    ("logic", False, "FAIL"), ("state", False, "FAIL"),
+    ("signal", False, "FAIL"), ("constant", False, "FAIL"),
+    ("init", False, "FAIL"), ("io", False, "FAIL"),
+    ("macro", False, "FAIL"), ("conditional", False, "FAIL"),
+    ("unused_signal", False, "FAIL"), ("ansi", False, "FAIL"),
+    ("header_macro", False, "FAIL"),
+])
+def test_gls_omits_only_passive_supply_connectors(tmp_path, kind, different, expected):
+    if not all(shutil.which(name) for name in ("yosys", "iverilog", "vvp")):
+        pytest.skip("Native Yosys and Icarus are required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different)
+    model = project / "connector.v"
+    config["PAD_VERILOG_MODELS"] = [str(model)]
+    behavior = {
+        "passive": "assign p1=p0; assign g1=g0;",
+        "signal": "assign p1=p0; assign g1=g0;",
+        "logic": "assign p1=~p0; assign g1=g0;",
+        "state": "reg q; always @(posedge p0) q<=p1; assign g1=q;",
+        "constant": "assign p1=1'b1; assign g1=g0;",
+        "init": "reg q=1'b0; assign p1=q; assign g1=g0;",
+        "io": "assign p1=p0; assign g1=g0;",
+        "macro": "`ifdef ACTIVE\nreg q; always @(posedge p0) q<=p1; assign g1=q;\n"
+                 "`else\nassign p1=p0; assign g1=g0;\n`endif",
+        "conditional": "reg q; always @(posedge p0) q<=p1; assign g1=q;",
+        "unused_signal": "assign p1=p0; assign g1=g0;",
+        "ansi": "assign p1=p0; assign g1=g0;",
+        "header_macro": "assign p1=p0; assign g1=g0;",
+    }[kind]
+    names = "p0,p1,g0,g1" + (",unused" if kind == "unused_signal" else "")
+    declarations = ("input p0; output p1; inout g0,g1;" if kind == "io" else f"inout {names};")
+    header = f"module connector({names});\n{declarations}\n"
+    source = header + behavior + "\nendmodule\n"
+    if kind == "ansi":
+        source = "module connector(inout p0,p1,g0,g1);\n" + behavior + "\nendmodule\n"
+    elif kind == "macro":
+        source = "`define ACTIVE\n" + source
+    elif kind == "conditional":
+        source = "`define ACTIVE\n`ifdef ACTIVE\n" + source + "`else\n" + header + \
+                 "assign p1=p0; assign g1=g0;\nendmodule\n`endif\n"
+    elif kind == "header_macro":
+        library = Path(config["CELL_VERILOG_MODELS"][0])
+        library.write_text(library.read_text() + "\n`define CONNECTOR_PORTS p0,p1,g0,g1\n")
+        source = "module connector(`CONNECTOR_PORTS);\n" + declarations + "\n" + behavior + "\nendmodule\n"
+    model.write_text(source)
+    lef = project / "physical.lef"
+    lef.write_text("MACRO connector\n" + "".join(
+        f" PIN {pin}\n  DIRECTION INOUT ;\n  USE {use} ;\n END {pin}\n"
+        for pin, use in [("p0", "POWER"), ("p1", "SIGNAL" if kind == "signal" else "POWER"),
+                         ("g0", "GROUND"), ("g1", "GROUND")]
+        + ([("unused", "SIGNAL")] if kind == "unused_signal" else [])) + "END connector\n")
+    config["PAD_LEFS"] = [str(lef)]
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("endmodule", "wire v0,v1,g0,g1,aux0,aux1;\n"
+        "connector rail(.p0(v0),.p1(v1),.g0(g0),.g1(g1),.aux0(aux0),.aux1(aux1));\nendmodule"))
+    original = netlist.read_bytes()
+    original_sdf = Path(state["sdf"]["typical"]).read_bytes()
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == expected, result
+    assert netlist.read_bytes() == original
+    assert Path(state["sdf"]["typical"]).read_bytes() == original_sdf
+    if kind == "passive":
+        summary = json.loads((directory / "gls.json").read_text())
+        assert summary["physical_only_types_omitted"] == ["connector"]
+        assert result["metrics"]["sdf_delays_applied"] > 0
+        assert result["metrics"]["sdf_annotation_errors"] == 0
+        assert bool(result["metrics"]["gls_failures"]) == different
+    else:
+        assert json.loads((directory / "gls.json").read_text())["physical_only_types_omitted"] == []
+
+
 def test_gls_uses_the_native_sdc_clock(tmp_path):
     if not shutil.which("iverilog") or not shutil.which("vvp"):
         pytest.skip("Native Icarus is required")
@@ -759,28 +833,129 @@ def test_late_arithmetic_observers_preserve_every_drive_edge(tmp_path):
     assert traces[0] == traces[1]
 
 
-def test_generated_serial_clock_preserves_picosecond_precision(tmp_path):
+@pytest.mark.parametrize("period,sample,literal", [
+    (2000.002, 1000.001, "1000.001"),
+    (2000000000.002, 1000000000.001, "1000000000.001"),
+])
+@pytest.mark.parametrize("scenario", [False, True])
+def test_generated_serial_clock_preserves_picosecond_precision(tmp_path, period, sample, literal, scenario):
     if not shutil.which("iverilog") or not shutil.which("vvp"):
         pytest.skip("Native Icarus is required")
     from test_serial_parallel_declared_function_oracle import _declared_scenario_project
     import arith_oracle_tb_gen as arithmetic
 
-    _declared_scenario_project(tmp_path)
+    cases = _declared_scenario_project(tmp_path)
     spec, why = arithmetic.extract_serial_arith_spec(tmp_path, "digital_arithmetic_primitive")
     assert spec, why
     bench, executable = tmp_path / "precision.v", tmp_path / "precision.vvp"
-    text = arithmetic.emit_serial_oracle_module("tb_precision", spec,
-        clock_period_ns=2000.002, sample_offset_ns=1000.001)
-    assert "#1000.001;" in text
-    bench.write_text(text + '\nmodule monitor; realtime first_edge; initial begin '
-        '@(posedge tb_precision.clk); first_edge=$realtime; @(posedge tb_precision.clk); '
-        'if (($realtime-first_edge)<2000.0015 || ($realtime-first_edge)>2000.0025) '
-        '$fatal(1,"Declared clock period changed: %0.3f",$realtime-first_edge); '
-        '$display("PERIOD_NS=%0.3f",$realtime-first_edge); $finish; end endmodule\n')
+    if scenario:
+        plan = arithmetic.arithmetic_scenario_plan(tmp_path, "digital_arithmetic_primitive", cases[1])
+        assert plan
+        plan["observation"].update(clock_period_ns=period, sample_offset_ns=sample)
+        text = arithmetic.emit_arithmetic_scenario_module("tb_precision", plan)
+    else:
+        text = arithmetic.emit_serial_oracle_module("tb_precision", spec,
+            clock_period_ns=period, sample_offset_ns=sample)
+    period_ps = round(period * 1000)
+    bench.write_text(text + '\n`timescale 1ps/1ps\nmodule monitor; time first_edge; initial begin '
+        '@(posedge tb_precision.clk); first_edge=$time; @(posedge tb_precision.clk); '
+        f'if (($time-first_edge)!=64\'d{period_ps}) '
+        '$fatal(1,"Declared clock period changed: %0d",$time-first_edge); '
+        '$display("PERIOD_PS=%0d",$time-first_edge); $finish; end endmodule\n')
     built = subprocess.run(["iverilog", "-g2012", "-s", "tb_precision", "-s", "monitor",
         "-o", str(executable), str(bench), str(tmp_path / "phase2/stage1/rtl/neutral_serial.v")],
         capture_output=True, text=True)
     assert built.returncode == 0, built.stderr
     run = subprocess.run(["vvp", str(executable)], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
-    assert "PERIOD_NS=2000.002" in run.stdout
+    assert f"#{literal};" in text
+    assert f"PERIOD_PS={period_ps}" in run.stdout
+
+
+@pytest.mark.parametrize("outcome,expected", [("skip", "NOT_MEASURED"), ("fail", "FAIL"), ("pass", "PASS")])
+@pytest.mark.parametrize("virtual_clock", [False, True])
+def test_native_cocotb_gls_distinguishes_skipped_reference(tmp_path, outcome, expected, virtual_clock):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=True)
+    if virtual_clock:
+        sdc = project / "virtual.sdc"
+        sdc.write_text("create_clock -name virtual -period 20\n")
+        state["sdc"] = str(sdc)
+    bench = project / "phase2/stage1/sim/tb_unit.py"
+    action = {"skip": 'pytest.skip("reference model unfilled")',
+              "fail": 'assert int(dut.y.value)==1, "functional mismatch"',
+              "pass": "assert int(dut.y.value)==0"}[outcome]
+    bench.write_text("import cocotb\nimport pytest\nfrom cocotb.triggers import Timer\n"
+        "@cocotb.test()\nasync def reference(dut):\n"
+        "    dut.a.value=0\n    await Timer(3,unit='ns')\n"
+        f"    {action}\n")
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == expected, result
+    if outcome == "skip":
+        assert "gls_failures" not in result["metrics"], result
+    else:
+        assert result["metrics"]["gls_failures"] == int(outcome == "fail"), result
+
+
+@pytest.mark.parametrize("outcome,expected", [("skip", "NOT_MEASURED"), ("fail", "FAIL"), ("pass", "PASS")])
+@pytest.mark.parametrize("period", [20, 24, 2000.002, 1000000000.002])
+def test_generated_cocotb_chip_clock_uses_native_sdc(tmp_path, outcome, expected, period):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    from professional_tb_gen import _emit_common_header
+
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=True)
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("module unit(input a", "module neutral_chip(inout clk, input a"))
+    sdf = Path(state["sdf"]["typical"])
+    sdf.write_text(sdf.read_text().replace('"unit"', '"neutral_chip"'))
+    config["DESIGN_NAME"] = "neutral_chip"
+    sdc = project / "clock.sdc"
+    sdc.write_text(f"create_clock -name clock -period {period} [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    bench = project / "phase2/stage1/sim/tb_unit.py"
+    header = _emit_common_header({"top": "logical_unit", "cr": {
+        "clk": "clk", "rst": None, "period_ns": 10, "active_high": False},
+        "ports": [{"name": "clk", "dir": "input"}, {"name": "a", "dir": "input"}]})
+    action = {"skip": 'pytest.skip("reference model unfilled")',
+              "fail": 'assert int(dut.y.value)==1, "functional mismatch"',
+              "pass": "assert int(dut.y.value)==0"}[outcome]
+    bench.write_text(header + "\nimport pytest\nfrom cocotb.utils import get_sim_time\n"
+        "@cocotb.test()\nasync def reference(dut):\n"
+        "    dut.a.value=0\n    _start_clock(dut)\n    await RisingEdge(dut.clk)\n"
+        "    first=get_sim_time(unit='ps')\n    await RisingEdge(dut.clk)\n"
+        "    measured=get_sim_time(unit='ps')-first\n"
+        "    print(f'ACTUAL_CLOCK_NS={measured/1000}',flush=True)\n"
+        f"    assert measured == {round(period * 1000)}\n"
+        f"    {action}\n")
+    original = bench.read_bytes()
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == expected, result
+    assert bench.read_bytes() == original
+    logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
+                     if str(path).endswith(".log"))
+    assert f"ACTUAL_CLOCK_NS={period}" in logs
+    if outcome == "skip":
+        assert "gls_failures" not in result["metrics"], result
+
+
+def test_python_suite_without_clock_setting_is_not_native_clock_replay(tmp_path):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
+        pytest.skip("Native Icarus and cocotb are required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, cocotb=True)
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("input a", "input clk, input a"))
+    sdc = project / "clock.sdc"
+    sdc.write_text("create_clock -name clock -period 20 [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
+    assert "no supported setting" in result["native_steps"][0]["detail"]
+    assert "gls_failures" not in result["metrics"], result
