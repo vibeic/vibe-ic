@@ -130,7 +130,8 @@ def design_features(project: Path, route: dict, table: dict, *, sources: dict | 
     for path in sorted(docs.glob("L*.json")):
         document = read_json(path)
         layers.setdefault(path.stem.split("_", 1)[0],
-                          (document.get("fields", document), str(path.relative_to(project)),
+                          (document["fields"] if isinstance(document.get("fields"), dict) else document,
+                           str(path.relative_to(project)),
                            "fields/" if isinstance(document.get("fields"), dict) else ""))
         for prefix, container in (("", document), ("fields/", document.get("fields", {})),
                                   ("features/", document.get("features", {}))):
