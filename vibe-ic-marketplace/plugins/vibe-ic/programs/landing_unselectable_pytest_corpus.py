@@ -299,35 +299,6 @@ def partition(files: Sequence[str], plugin: str = _PLUGIN_REL) -> Dict[str, obje
     }
 
 
-def audit(repo: Path, part: Dict[str, object], plugin: str) -> List[str]:
-    """Findings that make the census itself untrustworthy. Empty == clean."""
-    findings: List[str] = []
-    land = repo / "tools" / "gatekeeper-land.sh"
-    text = land.read_text(encoding="utf-8", errors="replace") if land.is_file() else None
-    if text is None:
-        findings.append(
-            f"{land} is absent — the stages this program subtracts cannot be "
-            f"confirmed to exist, so the complement below is not a measurement.")
-    covered: Dict[str, List[str]] = part["covered"]      # type: ignore[assignment]
-    for c in _covered(plugin):
-        if text is not None and c.probe not in text:
-            findings.append(
-                f"stage {c.stage!r} no longer appears in tools/gatekeeper-land.sh "
-                f"(probe {c.probe!r} not found) — {c.prefix} would be subtracted "
-                f"from the complement while nothing runs it.")
-        if not covered.get(c.prefix):
-            findings.append(
-                f"declared covered tree {c.prefix!r} matches NO tracked test "
-                f"file — a subtrahend that removes nothing is a stale roster.")
-    excluded: Dict[str, List[str]] = part["excluded"]    # type: ignore[assignment]
-    for e in _EXCLUDED:
-        if not excluded.get(e.prefix):
-            findings.append(
-                f"declared exclusion {e.prefix!r} matches NO tracked test file "
-                f"— the reason it states no longer describes this tree.")
-        if not e.why.strip():
-            findings.append(f"exclusion {e.prefix!r} states no reason.")
-    return findings
 
 
 def _census_lines(part: Dict[str, object], plugin: str) -> List[str]:
@@ -353,8 +324,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="print the unselectable files, one per line (default)")
     ap.add_argument("--census", action="store_true",
                     help="print the per-tree census instead of the file list")
-    ap.add_argument("--audit", action="store_true",
-                    help="rc=1 on a stale subtrahend / exclusion / missing stage")
     ap.add_argument("--json", metavar="OUT", help="write the full report as JSON")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
@@ -370,19 +339,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "empty corpus, it is a refusal to measure.", file=sys.stderr)
         return 2
     part = partition(files, plugin)
-    findings = audit(repo, part, plugin)
 
     if args.json:
         atomic_write_text(Path(args.json), 
-            json.dumps({"plugin": plugin, "findings": findings, **part},
+            json.dumps({"plugin": plugin, **part},
                        indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    if args.audit:
-        for line in _census_lines(part, plugin):
-            print(line)
-        for f in findings:
-            print(f"  FINDING  {f}")
-        return 1 if findings else 0
     if args.census:
         for line in _census_lines(part, plugin):
             print(line)

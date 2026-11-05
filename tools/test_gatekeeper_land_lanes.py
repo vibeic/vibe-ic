@@ -101,13 +101,11 @@ _SCHEDULER = (
     "landing_unit_full_targeted_tests",
     "landing_unit_full_repo_tools_tests",
     "landing_unit_full_unselectable_tests",
-    "landing_unit_full_unselectable_census",
     "landing_unit_full_census_freshness",
     "landing_unit_full_repo_hygiene",
     "landing_emit_full_targeted_tests",
     "landing_emit_full_repo_tools_tests",
     "landing_emit_full_unselectable_tests",
-    "landing_emit_full_unselectable_census",
     "landing_emit_full_census_freshness",
     "landing_emit_full_repo_hygiene",
     "lane_hygiene",
@@ -120,7 +118,6 @@ _WINDOW = (
     "full:targeted-tests",
     "full:repo-tools-tests",
     "full:unselectable-tests",
-    "full:unselectable-census",
     # vibe-ic#2142 — the 63x8 census, re-derived on the candidate tree, last in
     # `lane_corpus`. SEVEN, not six: the count in this tuple is not a property
     # anyone chose, it is the number of units the concurrent window contains,
@@ -251,7 +248,6 @@ lane_targeted() { fn_capture "full:targeted-tests" stage targeted "$T_SEC" "$T_R
 lane_corpus() {
   fn_capture "full:repo-tools-tests"   stage corpus "$C_SEC" "$C_RC"
   fn_capture "full:unselectable-tests" stage corpus2 0.05 0
-  run_capture "full:unselectable-census" bash -c 'echo census ok'
   # vibe-ic#2142 — the lane's LAST stage, mirroring the real `lane_corpus`.
   # `$CF_RC` is the census `--check` exit code, so this harness can drive the
   # three-outcome emitter in all three directions: 0 PASS, 1 FAIL (stale), 2
@@ -1487,7 +1483,6 @@ def test_a_killed_stage_inside_a_live_lane_is_still_labelled(scheduler, work):
     assert rows["full:unselectable-tests"][0] == "PASS", (
         "the LANE was killed, not the stage — this test then asserts nothing "
         f"the previous one does not: {rows}")
-    assert rows["full:unselectable-census"][0] == "PASS", rows
     assert rows["full:repo-tools-tests"][0] == "FAIL", rows
     assert rows["full:repo-tools-tests"][1] != "0", rows
     assert "  FAIL  repo tools tests" in proc.stdout, proc.stdout

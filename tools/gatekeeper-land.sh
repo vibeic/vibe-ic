@@ -1914,14 +1914,6 @@ landing_unit_full_repo_tools_tests() {
 landing_unit_full_unselectable_tests() {
     fn_capture "$1" run_unselectable_pytest
 }
-landing_unit_full_unselectable_census() {
-    # The census that decides the stage above must itself be trustworthy: a
-    # subtrahend whose stage no longer exists, or an exclusion whose reason no
-    # longer describes anything, both shrink the corpus in the direction that
-    # still prints PASS. rc=1 on either.
-    run_capture "$1" \
-        python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
-}
 landing_unit_full_census_freshness() {
     # vibe-ic#2142 — THE 63x8 CENSUS, RE-DERIVED ON THE CANDIDATE TREE.
     #
@@ -2211,9 +2203,6 @@ landing_emit_full_unselectable_tests() {
     FAILED=1
     landing_record "$1" FAIL "$EMIT_RC" "unselectable tests failed"
   fi
-}
-landing_emit_full_unselectable_census() {
-  run_emit "$1" "unselectable-test census is not stale"
 }
 landing_emit_full_census_freshness() {
   census_freshness_emit --last

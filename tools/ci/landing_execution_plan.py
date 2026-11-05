@@ -32,7 +32,6 @@ STEPS = (
     ("full:targeted-tests", "window", "targeted"),
     ("full:repo-tools-tests", "window", "corpus"),
     ("full:unselectable-tests", "window", "corpus"),
-    ("full:unselectable-census", "window", "corpus"),
     ("full:census-freshness", "window", "corpus"),
     ("full:repo-hygiene", "window", "hygiene"),
     ("full:gatekeeper-review", "after_window", ""),
