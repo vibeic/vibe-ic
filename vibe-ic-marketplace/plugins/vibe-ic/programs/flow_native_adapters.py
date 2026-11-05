@@ -1,4 +1,3 @@
-"""Native CDC, simulation and formal commands absent from LibreLane's chain."""
 from __future__ import annotations
 
 import json
@@ -67,9 +66,9 @@ def cdc(project, directory, tool, commands):
         return commands.result(reports=[raw, script], detail="Native CDC graph normalization did not complete.")
     netlist = native.load(graph, top)
     crossing, reset = {}, {}
-    findings = native.judge(netlist, "reg_crossing", metadata=crossing)
-    findings += native.judge(netlist, "async_input", is_probable_async_port)
-    findings += native.judge(netlist, "reset_dependency", metadata=reset)
+    findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
+    findings += native.judge(netlist, "async_input", is_probable_async_port, calibrate=False)
+    findings += native.judge(netlist, "reset_dependency", metadata=reset, calibrate=False)
     unresolved = [r for r in findings if r.get("rule") == "RESET_ROLE_UNRESOLVED"]
     violations = [r for r in findings if r.get("rule") != "RESET_ROLE_UNRESOLVED"]
     report = directory / "cdc.json"

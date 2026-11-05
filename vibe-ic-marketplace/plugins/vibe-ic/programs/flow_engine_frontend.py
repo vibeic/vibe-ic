@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Public owner-program adapters for the opt-in native step engine."""
 from __future__ import annotations
 
 import argparse
@@ -203,7 +202,7 @@ class OwnerSession:
             self.log = directory / "owner.log"
             with self.log.open("w") as log:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
-                    env={**os.environ, "VIBEIC_FLOW_ENGINE": "legacy"}, check=False)
+                    env={**os.environ, "VIBEIC_FLOW_ENGINE": "legacy"}, cwd=directory, check=False)
         report = json.loads(path.read_text()) if path.is_file() else {}
         rows = report.get("steps", [])
         if kind == "phase1":

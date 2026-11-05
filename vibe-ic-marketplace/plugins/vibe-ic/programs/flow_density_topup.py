@@ -1,4 +1,3 @@
-"""Run the existing PDK-derived metal-fill engine inside a native State chain."""
 from __future__ import annotations
 
 import json
@@ -94,9 +93,9 @@ class DensityTopUp(Density):
                            FILL_OUT=str(output), FILL_REPORT=str(report), FILL_CELL=self.config["DESIGN_NAME"])
         command = ["python3", str(engine)]
         result = self.run_pya_script(command, env=environment, check=False, **kwargs)
+        if result["returncode"]:
+            raise subprocess.CalledProcessError(result["returncode"], command)
         if not output.is_file() or not report.is_file():
-            if result["returncode"]:
-                raise subprocess.CalledProcessError(result["returncode"], command)
             raise StepException("NOT_MEASURED: native fill left no layout or report")
         measured = json.loads(report.read_text())
         if measured.get("verdict") not in {"PASS", "PARTIAL"}:

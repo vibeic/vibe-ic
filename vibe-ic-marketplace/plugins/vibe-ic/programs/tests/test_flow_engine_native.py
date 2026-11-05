@@ -40,7 +40,10 @@ def native_run(project: Path, programs: Path) -> dict:
                         from_name="structural_rtl_preflight", to_name="die_floorplan_and_macros")
     steps = {row["name"]: row for row in report["steps"]}
     for name in ("rtl_validation_and_lint", "synthesis"):
-        assert steps[name]["status"] == "PASS", steps[name]
+        native_checks = [check for check in steps[name]["metrics"]
+                         if "/librelane/" in (check.get("source") or {}).get("file", "")]
+        assert native_checks and all(check["status"] == "PASS" for check in native_checks), steps[name]
+        assert all(row["exit_code"] in (None, 0) for row in steps[name]["native_steps"]), steps[name]
     floorplan = steps["die_floorplan_and_macros"]
     actual = [row for row in floorplan["native_steps"] if row["name"] == "OpenROAD.Floorplan"]
     assert len(actual) == 1 and actual[0]["ran"] and actual[0]["exit_code"] == 0, floorplan

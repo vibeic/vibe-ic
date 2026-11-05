@@ -89,3 +89,71 @@ def test_native_decimal_and_infinite_path_group_values(tmp_path):
     path = tmp_path / "result.json"
     engine.write_json(path, {"metrics": measured, "absent_path_group": float("inf")})
     assert json.loads(path.read_text())["absent_path_group"] == "Infinity"
+
+
+def test_known_failure_survives_an_independent_missing_tool():
+    outcome = engine.ToolResult(True, 0, native_steps=[{"ran": True}, {"ran": False}])
+    assert engine.evaluate(outcome, [{"status": "FAIL"}]) == "FAIL"
+
+
+def test_native_missing_report_is_not_a_chip_failure():
+    outcome = engine.ToolResult(True, 1, native_steps=[
+        {"ran": True, "exit_code": 1, "status": "NOT_MEASURED"}])
+    assert engine.evaluate(outcome, [{"status": "NOT_MEASURED"}]) == "NOT_MEASURED"
+
+
+def test_existing_native_results_survive_an_added_table_entry(tmp_path):
+    row = command_row("existing")
+    counter = tmp_path / "calls"
+    row["tool"]["command"][2] = (
+        "import pathlib; p=pathlib.Path('calls'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); "
+        + row["tool"]["command"][2])
+    execute(tmp_path, [row])
+    result = execute(tmp_path, [row, command_row("added")])
+    assert counter.read_text() == "1"
+    assert result["pass"] == 2
+
+
+def test_document_owner_runs_before_feature_selection(tmp_path, monkeypatch):
+    import flow_engine_frontend
+    calls = []
+
+    def extract(self, directory, kind):
+        calls.append(kind)
+        docs = tmp_path / "phase1/generated_docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "L1.json").write_text(json.dumps({"features": {"requires_ir": True}}))
+        return {"ran": True, "exit_code": 0, "metrics": {"errors": 0}}
+
+    monkeypatch.setattr(flow_engine_frontend.OwnerSession, "result", extract)
+    first, second = command_row("documents"), command_row("after_extraction")
+    first["tool"] = {"kind": "adapter", "program": "phase1_one_shot_runner.py", "function": "doc_extract"}
+    second["when"] = "requires_ir"
+    report = execute(tmp_path, [first, second])
+    assert calls == ["phase1"]
+    assert [row["name"] for row in report["steps"]] == ["documents", "after_extraction"]
+    assert report["pass"] == 2
+
+
+def test_unselected_profile_does_not_require_its_reports(tmp_path):
+    row = command_row("conditional")
+    row["tool"] = {"kind": "profiles", "profiles": [
+        {"when": "always", "tool": row["tool"]},
+        {"when": "otherwise", "tool": command_row("unused")["tool"]}]}
+    row["checks"].append({"metric": "unused_report", "operator": "<=", "limit": 0, "when": "otherwise"})
+    assert execute(tmp_path, [row])["steps"][0]["status"] == "PASS"
+
+
+def test_from_does_not_restore_an_invalidated_later_state(tmp_path, monkeypatch):
+    restored = []
+    monkeypatch.setattr(engine.NativeChain, "initialize", lambda self: None)
+    monkeypatch.setattr(engine.NativeChain, "restore", lambda self, path: restored.append(path.name))
+    rows = [command_row(name) for name in ("first", "middle", "last")]
+    rows[0]["tool"]["command"][2] = (
+        "import pathlib,sys; pathlib.Path(sys.argv[1]).with_name('state_out.json').write_text('{}'); "
+        + rows[0]["tool"]["command"][2])
+    execute(tmp_path, rows)
+    (tmp_path / "steps/middle/state_out.json").write_text("{}")
+    execute(tmp_path, rows, from_name="first", to_name="first")
+    execute(tmp_path, rows, from_name="last")
+    assert restored == ["first"]

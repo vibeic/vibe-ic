@@ -7,6 +7,7 @@ import ast
 from dataclasses import dataclass, field
 from decimal import Decimal
 import fnmatch
+import importlib
 import json
 import math
 import operator
@@ -97,7 +98,10 @@ def select_route(project: Path) -> dict:
 def design_features(project: Path, route: dict, table: dict) -> dict:
     names = set()
     expressions = [row["when"] for row in table["steps"]]
+    expressions += [check["when"] for row in table["steps"] for check in row.get("checks", [])
+                    if check.get("when") not in (None, "otherwise")]
     expressions += list(table.get("predicates", {}).values())
+    expressions += [default["when"] for default in table.get("feature_defaults", {}).values()]
     for expression in expressions:
         names.update(node.id for node in ast.walk(ast.parse(expression, mode="eval"))
                      if isinstance(node, ast.Name))
@@ -107,12 +111,18 @@ def design_features(project: Path, route: dict, table: dict) -> dict:
     features.update(always=True, ic=target in {"gds", "shippable_gds", "foundry_handoff"}, hard_ip=target == "ip_hardmacro",
                     soft_ip=target == "ip_soft", model_ip=target == "ip_model",
                     rtl_only=target == "rtl", has_digital=True)
+    explicit = set()
     for path in sorted(docs.glob("L*.json")):
         document = read_json(path)
         for container in (document, document.get("fields", {}), document.get("features", {})):
-            features.update({key: value for key, value in container.items()
-                             if key in names and type(value) is bool})
-    features["requires_cts"] = bool(
+            declared = {key: value for key, value in container.items()
+                        if key in names and type(value) is bool}
+            features.update(declared)
+            explicit.update(declared)
+    features.update(ic=target in {"gds", "shippable_gds", "foundry_handoff"},
+                    hard_ip=target == "ip_hardmacro", rtl_only=target == "rtl")
+    if "requires_cts" not in explicit:
+        features["requires_cts"] = bool(
         read_json(docs / "L8_TIMING_WAVEFORM.json").get("clock_domains")
         or read_json(docs / "L8_RTL_CONSTANTS.json").get("clock_domains"))
     pending = dict(table.get("predicates", {}))
@@ -122,6 +132,9 @@ def design_features(project: Path, route: dict, table: dict) -> dict:
         for source, implied in table.get("implications", {}).items():
             if features.get(source):
                 features.update(dict.fromkeys(implied, True))
+        for key, default in table.get("feature_defaults", {}).items():
+            if key not in explicit and predicate(default["when"], features):
+                features[key] = default["value"]
     return features
 
 
@@ -212,7 +225,8 @@ class NativeChain:
         from librelane.state import State
         path = directory / "state_out.json"
         if path.is_file():
-            self.state = State.load(read_json(path))
+            restored = State.load(read_json(path))
+            self.state = State(restored, metrics={**dict(self.state.metrics), **dict(restored.metrics)})
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
         try:
@@ -220,6 +234,8 @@ class NativeChain:
         except (ImportError, FileNotFoundError, ValueError) as exc:
             return ToolResult(detail=str(exc))
         from librelane.steps import Step, StepError, StepException
+        for module in tool.get("imports", []):
+            importlib.import_module(module)
         result = ToolResult()
         for name in tool.get("steps", []):
             step_class = Step.factory.get(name)
@@ -233,30 +249,59 @@ class NativeChain:
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
                                             "native_config_disabled": True})
                 continue
-            step = step_class(self.owner.config, self.state)
+            emitted = {}
+
+            class ObservedStep(step_class):
+                def run(self, *args, **kwargs):
+                    views, metrics = super().run(*args, **kwargs)
+                    emitted.update(metrics)
+                    return views, metrics
+
+            step = ObservedStep(self.owner.config, self.state)
+            metric_name = getattr(step, "metric_name", None)
+            if metric_name:
+                result.metrics.update({key: value for key, value in self.state.metrics.items()
+                                       if key == metric_name or key.startswith(metric_name + "__corner:")})
             missing = [item.id for item in step.inputs
                        if not item.optional and self.state.get_by_df(item) is None]
             if missing:
                 result.detail += f" {name} missing input: {missing}."
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
                                             "missing_inputs": missing})
-                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs})
+                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs},
+                                              metrics=self.state.metrics)
                 continue
             destination = directory / name.lower().replace(".", "_")
             started = time.perf_counter()
             if name in {"Yosys.Synthesis", "Pyosys.Synthesis"} and self.common_started is None:
                 self.common_started = started
             code, ran, detail = 0, True, ""
+            status = "PASS"
             try:
-                self.state = step.start(toolbox=self.toolbox, step_dir=str(destination))
+                destination.mkdir(parents=True, exist_ok=True)
+                working_directory = Path.cwd()
+                try:
+                    os.chdir(destination)
+                    self.state = step.start(toolbox=self.toolbox, step_dir=str(destination))
+                finally:
+                    os.chdir(working_directory)
             except StepError as exc:
                 underlying = getattr(exc, "underlying_error", None)
                 code = getattr(underlying, "returncode", 1) or 1
                 detail = str(exc)
+                status = "NOT_MEASURED" if "NOT_MEASURED" in detail else "FAIL"
             except (StepException, FileNotFoundError) as exc:
                 code, ran, detail = None, False, str(exc)
+                status = "NOT_MEASURED"
             if code or not ran:
-                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs})
+                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs},
+                                              metrics=self.state.metrics)
+            result.metrics.update(emitted)
+            if name == "OpenROAD.IRDropReport" and "ir__drop__worst" in emitted:
+                libraries = self.toolbox.filter_views(self.owner.config, self.owner.config["LIB"])
+                voltage = self.toolbox.get_lib_voltage(str(libraries[0])) if libraries else None
+                if voltage:
+                    result.metrics["ir__drop__worst__pct"] = float(emitted["ir__drop__worst"]) / float(voltage) * 100
             elapsed = time.perf_counter() - started
             result.tool_seconds += elapsed
             result.ran |= ran
@@ -265,13 +310,46 @@ class NativeChain:
             elif result.exit_code is None and ran:
                 result.exit_code = 0
             result.native_steps.append({"name": name, "ran": ran, "exit_code": code,
+                                        "status": status,
                                         "tool_seconds": elapsed, "detail": detail,
                                         "reports": str(destination)})
             result.detail += detail
-        result.metrics = dict(self.state.metrics)
         result.reports = [str(path) for path in directory.rglob("*") if path.is_file()]
         (directory / "state_out.json").write_text(self.state.dumps())
         return result
+
+    def snapshot(self, directory: Path, tool: dict) -> ToolResult:
+        if self.state is None:
+            return ToolResult(detail="No native State has been produced")
+        destination = self.project / tool["destination"]
+        self.state.save_snapshot(str(destination))
+        formats = tool.get("formats", {})
+        from librelane.state import DesignFormat
+        missing = []
+        exported = []
+        for name, extension in formats.items():
+            value = self.state.get_by_df(DesignFormat.factory.get(name))
+            if value is None:
+                missing.append(name)
+                continue
+            if isinstance(value, dict):
+                value = value.get(self.config["DEFAULT_CORNER"])
+            if value is None:
+                missing.append(name)
+                continue
+            shutil.copyfile(str(value), destination / (self.config["DESIGN_NAME"] + extension))
+            exported.append(name)
+        text = [f"# {self.config['DESIGN_NAME']} integration views", "",
+                "Views and reports were exported by LibreLane from its final State.",
+                "See the native metrics and the per-step results for measured limits.", ""]
+        if missing:
+            text.append("NOT_MEASURED views: " + ", ".join(missing))
+        (destination / "README.md").write_text("\n".join(text) + "\n")
+        reports = [str(path) for path in destination.rglob("*") if path.is_file()]
+        metrics = {**dict(self.state.metrics), "ip_endpoint_views": {
+            "required": list(formats), "observed": exported}}
+        return ToolResult(True, 0, metrics, reports,
+                          detail="Missing native views: " + ", ".join(missing) if missing else "Native views exported")
 
 
 def choose_tool(tool: dict, features: dict) -> dict:
@@ -279,11 +357,28 @@ def choose_tool(tool: dict, features: dict) -> dict:
         return tool
     for profile in tool["profiles"]:
         if profile["when"] == "otherwise" or predicate(profile["when"], features):
-            return profile["tool"]
+            return {**profile["tool"], "selected_profile": profile["when"]}
     return {"kind": "adapter", "gap": "No applicable native tool profile"}
 
 
-def measure(checks: list, metrics: dict, config: dict, features: dict) -> list[dict]:
+def document_value(project: Path | None, reference: dict) -> Any:
+    if project is None:
+        return None
+    for location in reference.get("paths", []):
+        filename, _, pointer = location.partition("#")
+        for path in sorted(project.glob(filename)):
+            value = read_json(path)
+            try:
+                for key in pointer.strip("/").split("/") if pointer.strip("/") else []:
+                    value = value[int(key)] if isinstance(value, list) else value[key]
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            return value
+    return None
+
+
+def measure(checks: list, metrics: dict, config: dict, features: dict,
+            project: Path | None = None) -> list[dict]:
     observed = []
     for check in checks:
         expression = check.get("when", "always")
@@ -295,6 +390,8 @@ def measure(checks: list, metrics: dict, config: dict, features: dict) -> list[d
         limit = check.get("limit")
         if check.get("limit_config"):
             limit = config.get(check["limit_config"])
+        if limit is None and check.get("limit_from"):
+            limit = document_value(project, check["limit_from"])
         matches = {name: value for name, value in metrics.items()
                    if fnmatch.fnmatchcase(name, check["metric"])}
         if check.get("corner_config") and config.get(check["corner_config"]) is not None:
@@ -307,23 +404,46 @@ def measure(checks: list, metrics: dict, config: dict, features: dict) -> list[d
         for name, value in matches.items():
             status = "NOT_MEASURED"
             compare = COMPARE.get(check.get("operator"))
+            if check.get("operator") == "covers_all":
+                required = (value.get("required") if isinstance(value, dict) else None)
+                if required is None:
+                    required = document_value(project, check.get("required_from", {}))
+                observed_set = value.get("observed") if isinstance(value, dict) else value
+                if isinstance(required, list) and isinstance(observed_set, list):
+                    missing = [item for item in required if item not in observed_set]
+                    status, limit = ("FAIL" if missing else "PASS"), required
+                    value = {"observed": observed_set, "missing": missing}
+            elif check.get("operator") == "within_declared_bounds":
+                if isinstance(limit, dict) and isinstance(value, (int, float, Decimal)) and math.isfinite(value):
+                    lower, upper = limit.get("min"), limit.get("max")
+                    bounds = [bound for bound in (lower, upper) if bound is not None]
+                    if bounds and all(isinstance(bound, (int, float, Decimal)) and math.isfinite(bound) for bound in bounds):
+                        status = "PASS" if ((lower is None or value >= lower)
+                                            and (upper is None or value <= upper)) else "FAIL"
             if (compare and isinstance(value, (int, float, Decimal))
-                    and isinstance(limit, (int, float, Decimal)) and math.isfinite(value)):
+                    and isinstance(limit, (int, float, Decimal)) and math.isfinite(value) and math.isfinite(limit)):
                 status = "PASS" if compare(value, limit) else "FAIL"
             observed.append({**check, "metric": name, "value": value,
-                             "limit": limit, "status": status})
+                             "limit": limit, "status": status,
+                             **({"missing": f"Native value or original limit for {check['metric']}"}
+                                if status == "NOT_MEASURED" else {})})
     return observed
 
 
 def evaluate(tool: ToolResult, measurements: list) -> str:
-    if tool.ran and tool.exit_code:
+    actual_failure = (not tool.native_steps or any(
+        item.get("exit_code") and item.get("status") != "NOT_MEASURED" for item in tool.native_steps))
+    if tool.ran and tool.exit_code and actual_failure:
         return "FAIL"
     if not tool.ran:
         return "NOT_MEASURED"
-    if any(not item["ran"] and not item.get("native_config_disabled") for item in tool.native_steps):
-        return "NOT_MEASURED"
+    if any(item.get("status") == "FAIL" for item in tool.native_steps):
+        return "FAIL"
     if any(item["status"] == "FAIL" for item in measurements):
         return "FAIL"
+    if any((not item["ran"] or item.get("status") == "NOT_MEASURED")
+           and not item.get("native_config_disabled") for item in tool.native_steps):
+        return "NOT_MEASURED"
     if not tool.ran or not measurements or any(item["status"] == "NOT_MEASURED" for item in measurements):
         return "NOT_MEASURED"
     return "PASS"
@@ -335,6 +455,28 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
     project = Path(project).resolve()
     table = table or read_json(TABLE)
     route = route or select_route(project)
+    from flow_engine_frontend import OwnerSession
+    owner_route = route
+    if from_name and route.get("input_contract") == "original":
+        requested = next(row for row in table["steps"] if row["name"] == from_name)
+        mapped = requested.get("legacy_id", {})
+        if isinstance(mapped, dict) and mapped.get("native"):
+            owner_route = {**route, "entry_step": mapped["native"][0]}
+    owner_session = OwnerSession(project, owner_route, force=bool(from_name))
+    prepared = {}
+    entry_rows = [row for row in table["steps"]
+                  if str(route["entry_step"]) in [row["name"], *aliases(row)]]
+    if len(entry_rows) == 1:
+        entry = entry_rows[0]
+        tool = entry["tool"]
+        if (from_name in (None, entry["name"]) and tool.get("function") == "doc_extract"
+                and tool.get("program") == "phase1_one_shot_runner.py"
+                and (from_name == entry["name"]
+                     or not (project / "reports/orchestrator/phase1_one_shot.json").is_file())):
+            before = time.perf_counter()
+            directory = project / "steps" / entry["name"]
+            prepared[entry["name"]] = (ToolResult(**owner_session.result(directory, "phase1")),
+                                        time.perf_counter() - before)
     features = design_features(project, route, table)
     selected = select_steps(table, route, features, from_name, to_name)
     chain = NativeChain(project, route)
@@ -345,8 +487,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
     if from_name:
         first = positions[from_name]
         for row in table["steps"][first - 1:]:
-            path = step_root / row["name"] / "result.json"
-            path.unlink(missing_ok=True)
+            for name in ("result.json", "state_out.json"):
+                (step_root / row["name"] / name).unlink(missing_ok=True)
         for row in reversed(table["steps"][:first - 1]):
             directory = step_root / row["name"]
             if (directory / "state_out.json").is_file():
@@ -357,40 +499,94 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
     for row in selected:
         beginning = time.perf_counter()
         directory = step_root / row["name"]
-        if directory.exists():
-            shutil.rmtree(directory)
-        directory.mkdir()
         tool = choose_tool(row["tool"], features)
         kind = tool["kind"]
-        if kind == "command":
+        saved = read_json(directory / "result.json")
+        extra_tool_seconds = 0.0
+        retained = bool(saved.get("tool_ran") and (
+            kind in {"librelane", "command", "snapshot"}
+            or kind == "adapter" and (
+                tool.get("adapter") and any(isinstance(value, (int, float))
+                                             for value in saved.get("native_metrics", {}).values())
+                or tool.get("function") in {"doc_extract", "step_rtl_gen"}
+                and any(item.get("ran") for item in saved.get("native_steps", [])))))
+        if retained:
+            native = ToolResult(True, saved["tool_exit_code"], saved.get("native_metrics", {}),
+                                saved.get("reports", []), saved["tool_seconds"], saved.get("detail", ""),
+                                saved.get("native_steps", []))
+            for item in native.native_steps:
+                if "NOT_MEASURED" in item.get("detail", ""):
+                    item["status"] = "NOT_MEASURED"
+            if kind == "librelane":
+                chain.initialize()
+                chain.restore(directory)
+                completed = {item["name"] for item in native.native_steps}
+                additional = [name for name in tool["steps"] if name not in completed]
+                if additional:
+                    added = chain.execute(directory, {**tool, "steps": additional})
+                    native.metrics.update(added.metrics)
+                    native.native_steps.extend(added.native_steps)
+                    native.reports = added.reports
+                    native.tool_seconds += added.tool_seconds
+                    extra_tool_seconds = added.tool_seconds
+                    if added.exit_code:
+                        native.exit_code = added.exit_code
+        else:
+            if directory.exists() and row["name"] not in prepared:
+                shutil.rmtree(directory)
+            directory.mkdir(exist_ok=True)
+        if retained:
+            pass
+        elif row["name"] in prepared:
+            native = prepared[row["name"]][0]
+        elif tool.get("function") == "step_rtl_gen":
+            native = ToolResult(**owner_session.result(directory, "rtl_gen"))
+        elif route.get("input_contract") == "original" and "Verilator.Lint" in tool.get("steps", []):
+            native = ToolResult(**owner_session.result(directory, "rtl_validate"))
+        elif kind == "command":
             native = command_tool(project, directory, tool)
         elif kind == "librelane":
             native = chain.execute(directory, tool)
+        elif kind == "snapshot":
+            native = chain.snapshot(directory, tool)
         elif kind == "native_report":
             previous = results.get(tool["from"]) or read_json(step_root / tool["from"] / "result.json")
-            native = ToolResult(bool(previous.get("tool_ran")), previous.get("tool_exit_code"),
+            native = ToolResult(bool(previous.get("tool_ran")), None,
                                 previous.get("native_metrics", {}), previous.get("reports", []),
                                 detail=f"Native reports from {tool['from']}")
         elif kind == "adapter" and tool.get("adapter"):
             from flow_native_adapters import execute
             native = ToolResult(**execute(project, directory, tool, route))
-        elif kind == "adapter" and tool.get("program") in {"phase1_one_shot_runner.py", "design_one_shot_runner.py"}:
-            from flow_engine_frontend import run_owner
-            owner_kind = "phase1" if tool["program"] == "phase1_one_shot_runner.py" else "rtl"
-            native = ToolResult(**run_owner(project, route, directory, owner_kind))
+        elif kind == "adapter" and tool.get("function") == "doc_extract":
+            native = ToolResult(**owner_session.result(directory, "phase1"))
         else:
             native = ToolResult(detail=tool.get("gap", "Native adapter is not available"))
-        observed = measure(row["checks"], native.metrics, chain.config, features)
-        elapsed = time.perf_counter() - beginning
+        checks = [check for check in row["checks"] if check.get("when") != "otherwise"
+                  or tool.get("selected_profile", "otherwise") == "otherwise"]
+        if "Checker.SetupViolations" in tool.get("steps", []):
+            from flow_native_adapters import declared_electrical_checks
+            checks = [*checks, *declared_electrical_checks(project)]
+        observed = measure(checks, native.metrics, chain.config, features, project)
+        elapsed = time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]
         result = {"name": row["name"], "title": row["title"],
                   "status": evaluate(native, observed), "tool_ran": native.ran,
                   "tool_exit_code": native.exit_code, "metrics": observed,
                   "native_metrics": native.metrics, "native_steps": native.native_steps,
                   "reports": native.reports, "detail": native.detail,
                   "tool_seconds": native.tool_seconds,
-                  "program_seconds": max(0, elapsed - native.tool_seconds),
-                  "ai_seconds": None, "ai_review": "PENDING",
-                  "wall_seconds": elapsed, "tool_kind": kind}
+                  "program_seconds": (saved["program_seconds"] if retained else 0) + max(0, elapsed - (extra_tool_seconds if retained else native.tool_seconds)),
+                  "ai_seconds": saved.get("ai_seconds") if retained else None,
+                  "ai_review": saved.get("ai_review", "PENDING") if retained else "PENDING",
+                  "wall_seconds": (saved["wall_seconds"] if retained else 0) + elapsed,
+                  "completed_at": saved.get("completed_at", time.time()) if retained else time.time(),
+                  "tool_kind": kind, "retained": retained}
+        for key in ("ai_finding", "reviewed_at"):
+            if retained and key in saved:
+                result[key] = saved[key]
+        if not native.ran:
+            result.update(ai_seconds=0.0, ai_review="NO_NATIVE_RESULT")
+        elif kind == "native_report":
+            result.update(ai_seconds=0.0, ai_review="REUSES_PRODUCER_REVIEW", review_from=tool["from"])
         write_json(directory / "result.json", result)
         results[row["name"]] = result
         results = {name: read_json(step_root / name / "result.json") for name in results}
@@ -429,9 +625,48 @@ def record_review(project: Path, name: str, seconds: float, finding: str | None 
     result = read_json(path)
     if not result:
         raise FileNotFoundError(path)
-    result.update(ai_seconds=seconds, ai_review="FINDING" if finding else "REVIEWED",
-                  ai_finding=finding)
+    result.setdefault("completed_at", path.stat().st_mtime)
+    result.update(ai_seconds=(result.get("ai_seconds") or 0) + seconds,
+                  ai_review="FINDING" if finding else "REVIEWED",
+                  ai_finding=finding, reviewed_at=time.time())
     write_json(path, result)
+
+
+def refresh_report(project: Path, budget_seconds: float | None = None) -> dict:
+    path = project / "reports/flow_engine.json"
+    report = read_json(path)
+    rows = [read_json(project / "steps" / row["name"] / "result.json") for row in report["steps"]]
+    report.update(steps=rows, run=len(rows),
+                  **{status: sum(row["status"] == value for row in rows)
+                     for status, value in (("pass", "PASS"), ("fail", "FAIL"), ("not_measured", "NOT_MEASURED"))})
+    for metric in ("tool_seconds", "program_seconds"):
+        report[metric] = sum(row[metric] for row in rows)
+    report["ai_seconds"] = (sum(row["ai_seconds"] for row in rows)
+                            if all(row.get("ai_seconds") is not None for row in rows) else None)
+    report["ai_measured_seconds"] = sum(row.get("ai_seconds") or 0 for row in rows)
+    report["ai_unmeasured_steps"] = [row["name"] for row in rows if row.get("ai_seconds") is None]
+    native_starts, native_ends = [], []
+    for row in rows:
+        for native in row.get("native_steps", []):
+            directory = Path(native.get("reports", ""))
+            config = directory / "config.json"
+            if native["name"] in {"Yosys.Synthesis", "Pyosys.Synthesis"} and config.is_file():
+                native_starts.append(config.stat().st_mtime)
+            runtime = directory / "runtime.txt"
+            if runtime.is_file():
+                native_ends.append(runtime.stat().st_mtime)
+        if row.get("reviewed_at") is not None and row["tool_kind"] in {"librelane", "native_report"}:
+            native_ends.append(row["reviewed_at"])
+    report["common_wall_seconds"] = max(native_ends) - min(native_starts) if native_starts and native_ends else None
+    report["timing_reference"] = "Native synthesis config publication through native completion and concurrent review completion"
+    budget = budget_seconds if budget_seconds is not None else report.get("budget_seconds")
+    report["budget_seconds"] = budget
+    elapsed = report["common_wall_seconds"]
+    report["runtime_status"] = ("OVER_BUDGET" if budget is not None and elapsed is not None and elapsed > budget
+                                else "IN_BUDGET" if budget is not None and elapsed is not None else "NOT_MEASURED")
+    report["slowest_steps"] = [row["name"] for row in sorted(rows, key=lambda row: row["tool_seconds"], reverse=True)[:5]]
+    write_json(path, report)
+    return report
 
 
 def main() -> int:
@@ -447,10 +682,16 @@ def main() -> int:
     review.add_argument("--step", required=True)
     review.add_argument("--seconds", type=float, required=True)
     review.add_argument("--finding")
+    report = sub.add_parser("report")
+    report.add_argument("--project", type=Path, required=True)
+    report.add_argument("--budget-seconds", type=float)
     args = parser.parse_args()
     try:
         if args.action == "review":
             record_review(args.project, args.step, args.seconds, args.finding)
+            return 0
+        if args.action == "report":
+            print(json.dumps(refresh_report(args.project, args.budget_seconds), default=str))
             return 0
         result = run(args.project, from_name=args.from_name, to_name=args.to_name,
                      budget_seconds=args.budget_seconds)

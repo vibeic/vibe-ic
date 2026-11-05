@@ -4750,7 +4750,11 @@
               "steps": [
                 "KLayout.Filler",
                 "KLayout.Density",
+                "VibeIC.DensityTopUp",
                 "Checker.KLayoutDensity"
+              ],
+              "imports": [
+                "flow_density_topup"
               ]
             }
           },

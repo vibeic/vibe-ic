@@ -1033,8 +1033,11 @@ def clock_domains(nl: Netlist, lookup: Optional[_LookupSnapshot] = None
 
 def reg_crossing_findings(nl: Netlist,
                           lookup: Optional[_LookupSnapshot] = None, *,
-                          metadata: Optional[dict] = None) -> List[dict]:
+                          metadata: Optional[dict] = None, calibrate: bool = True) -> List[dict]:
     """A flop of domain A read by a flop of domain B (clock_domain_reg_crossing)."""
+    if calibrate:
+        import instrument_calibration
+        instrument_calibration.assert_calibrated("_cdc_netlist::reg_crossing_findings")
     lookup = lookup or _LookupSnapshot(nl)
     domains = clock_domains(nl, lookup)
     if len(domains) < 2 and metadata is None:
@@ -1101,13 +1104,16 @@ def reg_crossing_findings(nl: Netlist,
 
 
 def async_input_findings(nl: Netlist, is_candidate,
-                         lookup: Optional[_LookupSnapshot] = None) -> List[dict]:
+                         lookup: Optional[_LookupSnapshot] = None, *, calibrate: bool = True) -> List[dict]:
     """A top-level async input port sampled without a 2-flop synchroniser.
 
     `is_candidate(name)` is the regex gate's own port-name classifier; the
     candidate set is drawn from the netlist's PORTS only, so an internal net is
     never an async input whatever it is called (#2063).
     """
+    if calibrate:
+        import instrument_calibration
+        instrument_calibration.assert_calibrated("_cdc_netlist::async_input_findings")
     lookup = lookup or _LookupSnapshot(nl)
     clock_or_reset = {nl.root(f.clk) for f in nl.flops} | \
         {nl.root(f.arst) for f in nl.flops if f.arst is not None}
@@ -1145,7 +1151,8 @@ def reset_role_candidates(nl: Netlist) -> List[dict]:
 
 def reset_dependency_findings(
         nl: Netlist, lookup: Optional[_LookupSnapshot] = None, *,
-        metadata: Optional[dict] = None, reset_roles: Optional[dict] = None) -> List[dict]:
+        metadata: Optional[dict] = None, reset_roles: Optional[dict] = None,
+        calibrate: bool = True) -> List[dict]:
     """Complete reset-cycle detection; one ERROR witness per cyclic SCC.
 
     Reset roles and graph edges retain their existing meaning. Iterative
@@ -1154,6 +1161,9 @@ def reset_dependency_findings(
     examine each node/edge exactly twice. Witness walks examine at most one
     further graph's worth of edges, with no recursion limit.
     """
+    if calibrate:
+        import instrument_calibration
+        instrument_calibration.assert_calibrated("_cdc_netlist::reset_dependency_findings")
     lookup = lookup or _LookupSnapshot(nl)
     reset_roles = reset_roles or {}
     unresolved = [r for r in reset_role_candidates(nl)
@@ -1279,7 +1289,8 @@ def reset_dependency_findings(
 
 
 def judge(nl: Netlist, rule: str, is_candidate=None, *,
-          metadata: Optional[dict] = None, reset_roles: Optional[dict] = None) -> List[dict]:
+          metadata: Optional[dict] = None, reset_roles: Optional[dict] = None,
+          calibrate: bool = True) -> List[dict]:
     """The one entry every gate uses to judge a netlist.
 
     Each rule carries its own `assert_calibrated` line: one pair per rule, so
@@ -1287,12 +1298,12 @@ def judge(nl: Netlist, rule: str, is_candidate=None, *,
     """
     lookup = _LookupSnapshot(nl)
     if rule == "reg_crossing":
-        return reg_crossing_findings(nl, lookup, metadata=metadata)
+        return reg_crossing_findings(nl, lookup, metadata=metadata, calibrate=calibrate)
     if rule == "async_input":
         return async_input_findings(
-            nl, is_candidate or (lambda _n: False), lookup)
+            nl, is_candidate or (lambda _n: False), lookup, calibrate=calibrate)
     if rule == "reset_dependency":
-        return reset_dependency_findings(nl, lookup, metadata=metadata, reset_roles=reset_roles)
+        return reset_dependency_findings(nl, lookup, metadata=metadata, reset_roles=reset_roles, calibrate=calibrate)
     raise ValueError(rule)
 
 
