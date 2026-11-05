@@ -30,7 +30,7 @@ IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_R
 
 
 def implementation_setting(key: str) -> bool:
-    return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_"))
+    return key in IMPLEMENTATION_SETTINGS or key.startswith(("CTS_", "PDN_", "GRT_DESIGN_REPAIR_"))
 
 
 def _load(path: Path) -> dict[str, Any]:
