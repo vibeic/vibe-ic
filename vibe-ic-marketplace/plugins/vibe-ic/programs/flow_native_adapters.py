@@ -69,23 +69,49 @@ def inputs(project, tool):
 def cdc(project, directory, tool, commands, *, state=None, config=None):
     import _cdc_netlist as native
     from cdc_async_input_check import is_probable_async_port
-    files, top = inputs(project, tool)
-    if not files or not top:
+    implemented = tool.get("adapter") == "implemented_cdc"
+    native_top = (config or {}).get("DESIGN_NAME") if implemented else None
+    files, top = ([], native_top) if native_top else inputs(project, tool)
+    if not top or (not implemented and not files):
         return commands.result(detail="Produced RTL and the declared top module are required.")
     raw, graph = directory / "graph_raw.json", directory / "graph.json"
     script = directory / "elaborate.ys"
-    if tool.get("adapter") == "implemented_cdc":
+    if implemented:
         import fnmatch
         from flow109_netlist_cdc import _word
+        from lec_post_layout_check import _LIB_CELL_RE
+        from sdf_gate_sim import missing_empty_cell_stubs, netlist_used_cells
         netlist = state.get("nl") if state is not None else None
-        libraries = config.get("CELL_LIBS") or config.get("LIB") or {}
-        liberty = [Path(p) for pattern, paths in libraries.items()
-                   if fnmatch.fnmatchcase(config.get("DEFAULT_CORNER", ""), pattern)
-                   for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
-        if not netlist or not Path(netlist).is_file() or not liberty:
+        if not netlist or not Path(netlist).is_file():
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
+        text = Path(netlist).read_text()
+        used = netlist_used_cells(text)
+        liberty = []
+        for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
+            libraries = config.get(key) or []
+            groups = ([paths for pattern, paths in libraries.items()
+                       if fnmatch.fnmatchcase(config.get("DEFAULT_CORNER", ""), pattern)]
+                      if isinstance(libraries, dict) else [libraries])
+            for paths in groups:
+                values = [Path(p) for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
+                if key in {"PAD_LIBS", "EXTRA_LIBS"}:
+                    values = [path for path in values if not path.is_file()
+                              or used.intersection(_LIB_CELL_RE.findall(path.read_text()))]
+                liberty.extend(values)
+        liberty = list(dict.fromkeys(liberty))
+        if not liberty:
+            return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
+        defined = {name for path in liberty if path.is_file()
+                   for name in _LIB_CELL_RE.findall(path.read_text())}
+        stubs = missing_empty_cell_stubs(text, used - defined, "")
+        models = []
+        if stubs:
+            physical = directory / "physical_cells.v"
+            physical.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
+            models.append("read_verilog -lib " + _word(physical))
         script.write_text("\n".join([
             *["read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
+            *models,
             "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
             "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
     else:
