@@ -464,7 +464,7 @@ def declared_retention_memory(project: Path, dut: str,
     roles = decl.get("sram_interface")
     if (not isinstance(roles, dict) or type(roles.get("read_latency_cycles", 0)) is not int
             or roles.get("read_latency_cycles", 0) != latency
-            or ("read_enable" in roles) != ("ren" in stated)):
+            or ("read_enable" in roles or "ren" in roles) != ("ren" in stated)):
         return None, "NOT_MEASURED: selected protocol needs matching explicit SRAM roles and read timing"
     if single_port:
         if decl["sram_interface_protocol"] == SINGLE_PORT_RETENTION_PROTOCOL:
@@ -473,7 +473,7 @@ def declared_retention_memory(project: Path, dut: str,
                 return None, "NOT_MEASURED: selected single-port alias needs equal read/write address roles without address"
         elif any(key in roles for key in ("read_address", "write_address")):
             return None, "NOT_MEASURED: single-port SRAM needs one address role, not separate read/write addresses"
-    memory = {role: roles.get(key) for role, key in (
+    memory = {role: roles.get(key, roles.get(role)) for role, key in (
         ("raddr", "read_address"), ("waddr", "write_address"),
         ("wdata", "write_data"), ("rdata", "read_data"), ("we", "write_enable"))}
     if single_port and decl["sram_interface_protocol"] != SINGLE_PORT_RETENTION_PROTOCOL:
@@ -496,7 +496,7 @@ def declared_retention_memory(project: Path, dut: str,
             or bits(outs[memory["we"]]) != 1):
         return None, "NOT_MEASURED: unsupported or unknown byte-memory port widths"
     if latency == 1:
-        enable = roles.get("read_enable")
+        enable = roles.get("read_enable", roles.get("ren"))
         if "ren" in stated and (not isinstance(enable, str) or enable not in outs or bits(outs[enable]) != 1
                                 or enable in memory.values()):
             return None, "NOT_MEASURED: selected SRAM read enable does not bind to a scalar output"

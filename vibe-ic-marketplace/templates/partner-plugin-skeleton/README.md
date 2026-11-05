@@ -40,16 +40,6 @@ partner-<vendor>-<topic>/
 Before contributing, read:
 - `docs/CONTRIBUTING_PARTNER_PLUGIN.md` (umbrella guide)
 
-## Validate your plugin locally
-
-```bash
-cd vibe-ic-marketplace/
-# Add your plugin to root marketplace.json's plugins[] array first.
-python3 plugins/vibe-ic/programs/marketplace_version_sync_check.py \
-    --marketplace-dir .
-# If FAIL, fix the version field in your plugin.json.
-```
-
 ## Test install locally
 
 ```bash

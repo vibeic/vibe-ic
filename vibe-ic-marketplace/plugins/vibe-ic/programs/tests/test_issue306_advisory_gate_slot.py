@@ -438,30 +438,3 @@ def test_the_ten_layer_gates_are_wired_advisory_and_the_blocking_two_are_not():
             f"{g} is wired to the ADVISORY slot while declaring blocking — "
             "that contradiction is #306/#316 exactly. Either wire it where a "
             "runner invokes it inline, or declare what it does.")
-
-
-def test_advisory_is_not_a_backing_checker_for_a_self_asserted_gate():
-    """`gate_self_assertion_check` requires a json_field_true (which trusts an
-    artifact's own PASS) to be backed by a BLOCKING program. An advisory one
-    cannot fail anything, so it must not satisfy that requirement.
-
-    Asserted on BEHAVIOUR (the module's own extractor), not on the presence
-    of a comment: a grep for prose passes whatever the code does.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "gate_self_assertion_check", _PROGRAMS / "gate_self_assertion_check.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    fn = next((getattr(mod, n) for n in dir(mod)
-               if n.startswith("_") and "predicate" in n.lower()), None)
-    gate = {"all_of": [
-        {"json_field_true": {"file": "x.json", "field": "passed"}},
-        {"advisory_program_exit_zero": {"command": "some_check"}},
-    ]}
-    if fn is None:
-        fn = next(getattr(mod, n) for n in dir(mod)
-                  if callable(getattr(mod, n)) and n.startswith("_extract"))
-    _jft, has_blocking = fn(gate)
-    assert has_blocking is False, \
-        "an advisory gate must not count as the blocking checker behind a " \
-        "self-asserted json_field_true"

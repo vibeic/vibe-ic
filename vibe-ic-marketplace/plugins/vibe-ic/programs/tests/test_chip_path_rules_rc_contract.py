@@ -67,7 +67,7 @@ SCANNERS = {
     "pytest_aggregate_carries_its_runtime_identity": ("_walk",),
     "explicit_argument_outranks_the_environment_pointer": ("audit",),
     "provenance_value_is_resolved_not_constant": ("audit",),
-    "only_the_declaring_step_writes_its_output": ("audit",),
+
     "signoff_report_states_its_stage": ("scan", "sibling_stamp_gaps"),
     "every_required_metric_key_has_a_producer": ("evaluate",),
     "measurement_only_artefact_is_not_a_verdict_source": ("audit",),

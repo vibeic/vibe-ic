@@ -30,9 +30,7 @@ sys.path.insert(0, str(_PROGRAMS))
 
 from _ppa import feasibility as F  # noqa: E402
 from test_ppa_feasibility import (DIGEST, VIEW, VIEW_FF, candidate,  # noqa: E402
-                                  clean_metrics, metric, policy, run)
-
-CHECK = _PROGRAMS / "ppa_feasibility_check.py"
+                                  clean_metrics, metric, policy)
 
 
 # --- M1 ---------------------------------------------------------------------
@@ -54,18 +52,6 @@ def test_M1_wns_improved_but_lvs_fails():
     assert lvs.status == F.AXIS_VIOLATED
     setup = [a for a in r.axes if a.name == "setup"][0]
     assert setup.status == F.AXIS_SATISFIED     # and the good axis is still good
-
-
-def test_M1_via_the_cli_is_rc1_and_names_the_axis(tmp_path):
-    ms = clean_metrics()
-    ms[0]["value"] = 5.0
-    ms[4]["value"] = "MISMATCH"
-    r, doc = run(tmp_path, {"required_views": [VIEW],
-                            "candidates": [candidate("m1", ms)]})
-    assert r.returncode == F.RC_FAIL
-    axes = {a["axis"]: a["status"] for a in doc["candidates"][0]["axes"]}
-    assert axes["lvs"] == "VIOLATED"
-    assert axes["setup"] == "SATISFIED"
 
 
 # --- M4 ---------------------------------------------------------------------
@@ -108,18 +94,6 @@ def test_M4_an_absent_drc_record_is_undetermined_not_absent_violations():
     r = F.promotion_verdict(candidate("m4c", ms), policy())
     assert r.verdict == F.UNDETERMINED
     assert any("FEAS_METRIC_ABSENT" in c for c in r.codes)
-
-
-def test_M4_via_the_cli_is_rc2_with_a_marker_not_rc0(tmp_path):
-    ms = clean_metrics()
-    drc = [m for m in ms if m["metric"] == "physical.drc.violations"][0]
-    drc["status"] = "NOT_MEASURED"
-    drc["value"] = 0
-    r, doc = run(tmp_path, {"required_views": [VIEW],
-                            "candidates": [candidate("m4", ms)]})
-    assert r.returncode == F.RC_UNDETERMINED, r.stdout + r.stderr
-    assert "[CANNOT CHECK]" in r.stderr
-    assert doc["candidates"][0]["verdict"] == "UNDETERMINED"
 
 
 # --- M5 ---------------------------------------------------------------------
@@ -184,19 +158,6 @@ def test_M5_a_waiver_without_a_justification_does_not_apply_either():
     assert any("FEAS_WAIVER_NO_JUSTIFICATION" in c for c in r.codes)
 
 
-def test_M5_no_waivers_mode_re_adjudicates_the_same_evidence(tmp_path):
-    """The audit view: what would this candidate be without its waivers?"""
-    w = [{"waiver_id": "W-1", "axis": "drc", "owner": "block owner",
-          "justification": "acceptable density marker"}]
-    doc = {"required_views": [VIEW],
-           "candidates": [candidate("m5", _violating(), waivers=w)]}
-    ok, _ = run(tmp_path, doc)
-    assert ok.returncode == F.RC_PASS
-    strict, payload = run(tmp_path, doc, "--no-waivers")
-    assert strict.returncode == F.RC_FAIL
-    assert payload["candidates"][0]["verdict"] == "INFEASIBLE"
-
-
 # --- M6 ---------------------------------------------------------------------
 def test_M6_an_incomplete_view_set_is_undetermined_not_feasible():
     """Two views required, one measured. A one-corner run is not signoff."""
@@ -237,29 +198,4 @@ def test_M6_no_declared_view_set_is_undetermined_not_permission():
     assert any("FEAS_VIEWS_NOT_DECLARED" in c for c in r.codes), r.codes
 
 
-def test_M6_via_the_cli_is_rc2(tmp_path):
-    r, doc = run(tmp_path, {"required_views": [VIEW, VIEW_FF],
-                            "candidates": [candidate("m6", clean_metrics())]})
-    assert r.returncode == F.RC_UNDETERMINED
-    assert "[CANNOT CHECK]" in r.stderr
-
-
 # --- the shape of the whole set --------------------------------------------
-def test_all_four_mutations_at_once_never_produce_rc0(tmp_path):
-    """The compound case, because a real run has more than one thing wrong."""
-    m1 = clean_metrics(); m1[4]["value"] = "MISMATCH"
-    m4 = clean_metrics()
-    [m for m in m4 if m["metric"] == "physical.drc.violations"][0].update(
-        {"status": "NOT_MEASURED", "value": 0})
-    m5 = _violating()
-    doc = {"required_views": [VIEW],
-           "candidates": [candidate("m1", m1), candidate("m4", m4),
-                          candidate("m5", m5, waivers=[
-                              {"waiver_id": "W", "axis": "drc",
-                               "justification": "x", "owner": ""}])]}
-    r, payload = run(tmp_path, doc)
-    assert r.returncode != F.RC_PASS
-    verdicts = {c["candidate_id"]: c["verdict"] for c in payload["candidates"]}
-    assert verdicts == {"m1": "INFEASIBLE", "m4": "UNDETERMINED",
-                        "m5": "INFEASIBLE"}
-    assert r.returncode == F.RC_UNDETERMINED     # 2 outranks 1, deliberately

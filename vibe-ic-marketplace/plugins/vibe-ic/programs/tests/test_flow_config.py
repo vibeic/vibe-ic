@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import sys
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from flow_config import build_config, resolve_rtl_inputs, write_config
+from flow_config import build_config, declared_power_checks, resolve_rtl_inputs, write_config
 
 
 @pytest.fixture
@@ -35,6 +36,95 @@ def declarations(project, rows):
     path.write_text(json.dumps(data))
 
 
+def power_document(project, text):
+    path = project / "input/docs/verification_plan.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def test_power_baseline_and_scoped_limit_follow_actual_run_conditions(project):
+    power_document(project, "## Quality metrics\n"
+                   "> `sky130A` / `sky130_fd_sc_hd` / TT corner / 10 ns\n"
+                   "### Measured baseline\n| total power | **1.31 mW** |\n"
+                   "### Acceptance range\n| total power(TT) | <= 1.70 mW | sign-off |\n")
+    config = {"PDK": "sky130A", "STD_CELL_LIBRARY": "sky130_fd_sc_hd", "CLOCK_PERIOD": 10,
+              "STA_CORNERS": ["nom_tt_025C_1v80"]}
+    metrics = {"power__total__corner:nom_tt_025C_1v80": 0.0017}
+    baseline, check = declared_power_checks(project, config=config, metrics=metrics)
+    assert baseline["applicable"] is False
+    assert baseline["limit"] == {}
+    assert baseline["value"] == [Decimal("0.00131")]
+    assert "no comparator" in baseline["reason"]
+    assert check.get("applicable", True)
+    assert check["limit"] == {"max": Decimal("0.00170")}
+    assert check["source"]["line"] == 6
+    assert check["source"]["text"] == "| total power(TT) | <= 1.70 mW | sign-off |"
+    for changed in ({"PDK": "gf180mcuD"}, {"STD_CELL_LIBRARY": "other_cells"},
+                    {"CLOCK_PERIOD": 24}, {"STA_CORNERS": ["nom_ff_025C_1v80"]}):
+        mismatch_metrics = {} if "STA_CORNERS" in changed else metrics
+        unmatched = declared_power_checks(project, config={**config, **changed}, metrics=mismatch_metrics)
+        assert all(entry["applicable"] is False for entry in unmatched)
+        assert "conditions" in unmatched[-1]["reason"]
+    assert all(entry["applicable"] is False for entry in declared_power_checks(project))
+
+
+@pytest.mark.parametrize("bound", ["41.6 mW", "41600 uW", "0.0416 W"])
+def test_matching_strict_power_ceiling_preserves_decimal_equality(project, bound):
+    power_document(project, f"Total power (including core power and pads) < {bound} at TT.\n")
+    check, = declared_power_checks(project, metrics={"power__total__corner:nom_tt_025C_1v80": 0.0416})
+    assert check.get("applicable", True)
+    assert check["metric"] == "power__total__corner:*tt*"
+    assert check["limit"] == {"max": Decimal("0.0416"), "max_exclusive": True}
+    assert not Decimal(str(0.0416)) < check["limit"]["max"]
+    assert "die pads" in check["scope"]
+
+
+@pytest.mark.parametrize("text", ["Total power target < TBD mW.\n", "Total power target < 5.\n",
+                                 "Total power < 5 mW, informational only.\n", "Core-only total power < 5 mW.\n",
+                                 "Per-rail power budget < 5 mW.\n", "Total power target (core scope unclear) < 5 mW.\n"])
+def test_unparsed_or_informational_power_text_is_not_a_check(project, text):
+    power_document(project, text)
+    assert declared_power_checks(project) == []
+
+
+def test_structured_budget_is_preferred_and_retains_exact_literal_and_scope(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text('{"fields":{"power_budget_mw":{"max":41.60000000000000000000000000001,'
+                    '"max_exclusive":true,"corner":"TT"},"pdk_target":"sky130A",'
+                    '"clock_target":{"period_ns":10},"scope":"total netlist including core and pads"}}')
+    power_document(project, "Total power < 1 mW.\n")
+    check, = declared_power_checks(project, config={"PDK": "sky130A", "CLOCK_PERIOD": 10,
+                                                   "STA_CORNERS": ["nom_tt_025C_1v80"]})
+    assert check.get("applicable", True)
+    assert check["limit"] == {"max": Decimal("0.04160000000000000000000000000001"), "max_exclusive": True}
+    assert check["source"]["file"] == "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    assert check["source"]["field"] == "fields.power_budget_mw"
+    assert check["source"]["bound"]["max"] == Decimal("41.60000000000000000000000000001")
+    unmatched, = declared_power_checks(project, config={"PDK": "gf180mcuD", "CLOCK_PERIOD": 24,
+                                                       "STA_CORNERS": ["nom_tt_025C_5v00"]})
+    assert unmatched["applicable"] is False
+    assert "PDK" in unmatched["reason"] and "CLOCK_PERIOD" in unmatched["reason"]
+
+
+def test_power_reader_uses_original_prompt_without_tools_or_artifact_writes(project, monkeypatch):
+    path = project / "input/phase1_prompt.md"
+    path.parent.mkdir()
+    path.write_text("Total power must be under 5 mW.\n")
+    ignored = project / "input/flow109/requirements.json"
+    ignored.parent.mkdir()
+    ignored.write_text('{"power_budget_mw":1}')
+    before = {str(path.relative_to(project)): path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    def unexpected_tool(*args, **kwargs):
+        pytest.fail("The declared-power reader invoked a tool")
+    monkeypatch.setattr(subprocess, "run", unexpected_tool)
+    check, = declared_power_checks(project)
+    assert check["limit"] == {"max": Decimal("0.005"), "max_exclusive": True}
+    assert check["source"]["file"] == "input/phase1_prompt.md"
+    after = {str(path.relative_to(project)): path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    assert after == before
+
+
 def test_config_uses_documents_and_leaves_pdk_defaults(project):
     config = build_config(project, route="ip")
     assert config["DESIGN_NAME"] == "unit"
@@ -44,6 +134,25 @@ def test_config_uses_documents_and_leaves_pdk_defaults(project):
     assert config["VERILOG_FILES"] == [str(project / "phase2/stage1/rtl/unit.v")]
     assert "PDN_CFG" not in config
     assert "FP_CORE_UTIL" not in config
+
+
+def test_authored_integration_top_and_sdc_reach_native_config(project):
+    rtl = project / "phase2/stage1/rtl"
+    (rtl / "wrapper.sv").write_text(
+        "module wrapper(input clk, aux_clk, output q); unit u(.clk(clk),.q(q)); endmodule\n")
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text(json.dumps({"top_module": "wrapper"}))
+    sdc = project / "phase3/stage3/pnr/constraint.sdc"
+    sdc.parent.mkdir(parents=True)
+    sdc.write_text("create_clock -name main -period 12 [get_ports clk]\n"
+                   "create_clock -name aux -period 24 [get_ports aux_clk]\n")
+    config = build_config(project, route="ip")
+    assert config["DESIGN_NAME"] == "wrapper"
+    assert config["CLOCK_PORT"] == ["clk", "aux_clk"]
+    assert config["CLOCK_PERIOD"] == 12
+    for key in ("FALLBACK_SDC", "PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+        assert config[key] == str(sdc)
 
 
 def test_generated_lowercase_pdk_keeps_installed_registry_spelling(project):
@@ -174,16 +283,38 @@ def test_cli_records_implementation_choices_and_preserves_source_constraints(pro
     assert build_config(project, route="ip")["FP_CORE_UTIL"] == 45
 
 
-@pytest.mark.parametrize("missing_rtl", [False, True])
-def test_failed_config_command_preserves_existing_declaration(project, missing_rtl):
+def test_cli_unsets_one_implementation_choice_and_keeps_the_others(project):
     declaration = project / "plugin_output/declaration.json"
     declaration.parent.mkdir()
-    original = '{"author_choice":"retained"}\n'
+    declaration.write_text(json.dumps({
+        "PDN_VWIDTH": 2.4, "RUN_POST_GRT_DESIGN_REPAIR": True,
+        "author_choice": "retained"}))
+    command = [sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
+               "--project", str(project), "--unset", "PDN_VWIDTH"]
+    for _ in range(2):
+        result = subprocess.run(command, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        config = json.loads(Path(result.stdout.strip()).read_text())
+        assert "PDN_VWIDTH" not in config
+        assert config["RUN_POST_GRT_DESIGN_REPAIR"] is True
+        assert config["CLOCK_PERIOD"] == 17.5
+        assert json.loads(declaration.read_text()) == {
+            "RUN_POST_GRT_DESIGN_REPAIR": True, "author_choice": "retained"}
+
+
+@pytest.mark.parametrize("missing_rtl", [False, True])
+@pytest.mark.parametrize("unset", [False, True])
+def test_failed_config_command_preserves_existing_declaration(project, missing_rtl, unset):
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    original = '{"author_choice":"retained","FP_CORE_UTIL":25}\n'
     declaration.write_text(original)
     if missing_rtl:
         (project / "phase2/stage1/rtl/unit.v").unlink()
+    settings = ["--unset", "FP_CORE_UTIL"] if unset else ["--set", "FP_CORE_UTIL=35"]
     result = subprocess.run([sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
-        "--project", str(project), "--set", "FP_CORE_UTIL=35", "--output", str(project)],
+        "--project", str(project), *settings,
+        "--output", str(project)],
         capture_output=True, text=True)
     assert result.returncode != 0
     assert declaration.read_text() == original
@@ -215,6 +346,7 @@ def test_implementation_pdn_widths_reach_native_configuration(project):
 @pytest.mark.parametrize(("key", "value"), [
     ("PDN_VWIDTH", 2.4), ("RUN_POST_GRT_DESIGN_REPAIR", True),
     ("GRT_DESIGN_REPAIR_MAX_CAP_PCT", 30), ("GRT_DESIGN_REPAIR_MAX_SLEW_PCT", 30),
+    ("EXTRA_EXCLUDED_CELLS", ["delay_weak*"]),
 ])
 def test_cli_records_supported_implementation_choice(project, key, value):
     output = project / "config.json"

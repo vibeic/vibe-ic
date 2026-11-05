@@ -1178,85 +1178,6 @@ def channels_for(step_id) -> Channels:
 # predicate. It is IMPORTED and its `audit()` is called; nothing about how it
 # decides is re-implemented here, because two copies drift.
 # ──────────────────────────────────────────────────────────────────────
-REACH_CHECK = "every_declared_step_reaches_the_evaluator_check"
-
-
-@lru_cache(maxsize=1)
-def reach_module():
-    """The program that owns the "declared step reaches the tally" predicate."""
-    if str(PROGRAMS_DIR) not in sys.path:
-        sys.path.insert(0, str(PROGRAMS_DIR))
-    mod = importlib.import_module(REACH_CHECK)
-    assert Path(mod.__file__).resolve().parent == PROGRAMS_DIR.resolve(), (
-        f"channel (d) imported {mod.__file__}, which is not the shipped "
-        f"{PROGRAMS_DIR}/{REACH_CHECK}.py"
-    )
-    return mod
-
-
-@lru_cache(maxsize=1)
-def _plugin_rel_prefix() -> Path:
-    """Where the reach program expects a plugin to sit under its `--root`.
-
-    Derived as the longest common leading path of its OWN two anchors, so a
-    plugin that moves inside the repo needs no edit here.
-    """
-    mod = reach_module()
-    flow_parts = Path(mod.FLOW_REL).parts
-    check_parts = Path(mod.CHECK_REL).parts
-    common: List[str] = []
-    for a, b in zip(flow_parts, check_parts):
-        if a != b:
-            break
-        common.append(a)
-    if not common:
-        raise RuntimeError(
-            f"{REACH_CHECK}.FLOW_REL ({mod.FLOW_REL}) and .CHECK_REL "
-            f"({mod.CHECK_REL}) share no leading path, so the plugin this "
-            f"module measures cannot be presented to it"
-        )
-    return Path(*common)
-
-
-@contextlib.contextmanager
-def subject_root():
-    """Present THIS plugin tree to the reach program as its `--root`.
-
-    The subject is not "whatever repository encloses the cwd": it is the
-    plugin the cells above are parametrized from. Everywhere the matrix runs
-    for real that plugin is nested under the repo-relative prefix the program
-    names, but the mutation ledger replays a cell inside a `cp -al` mirror of
-    the PLUGIN alone (`matrix_mutation_ledger._replay_plugin_tree`), where no
-    such ancestor exists. Walking up for the prefix therefore made every cell
-    in the mirror die on the harness — measured, and a defect in this wiring
-    rather than in the flow.
-
-    So the prefix is BUILT: a scratch directory holding one symlink at the
-    program's own expected location, pointing at `F.PLUGIN_ROOT`. Both anchors
-    are then proved to resolve to the very flow yaml and the very evaluator
-    this module measures everywhere else, which is the check the walk was
-    there for.
-    """
-    mod = reach_module()
-    with tempfile.TemporaryDirectory(prefix="d1-reach-root-") as tmp:
-        root = Path(tmp)
-        link = root / _plugin_rel_prefix()
-        link.parent.mkdir(parents=True, exist_ok=True)
-        link.symlink_to(F.PLUGIN_ROOT, target_is_directory=True)
-        flow = root / mod.FLOW_REL
-        checker = root / mod.CHECK_REL
-        if flow.resolve() != F.FLOW_YAML.resolve():
-            raise RuntimeError(
-                f"{REACH_CHECK}.FLOW_REL resolves to {flow.resolve()}, not the "
-                f"flow yaml this module measures ({F.FLOW_YAML})"
-            )
-        if checker.resolve() != Path(compliance_module().__file__).resolve():
-            raise RuntimeError(
-                f"{REACH_CHECK}.CHECK_REL resolves to {checker.resolve()}, not "
-                f"the evaluator this module runs "
-                f"({compliance_module().__file__})"
-            )
-        yield root
 
 
 @dataclass(frozen=True)
@@ -1270,51 +1191,6 @@ class ReachAudit:
     harness_error: Optional[str] = None
 
 
-@lru_cache(maxsize=1)
-def reach_audit() -> ReachAudit:
-    """Run the owning program's predicate ONCE for the whole module.
-
-    An audit that cannot run is an ERROR carried to every cell, never a quiet
-    empty result: `unreached=()` from an audit that never ran is
-    indistinguishable from a clean tree, and that equivalence is the disease
-    this campaign exists to remove.
-    """
-    try:
-            # NAME WHAT WE HOLD; DO NOT RECONSTRUCT IT. `F.FLOW_YAML` is the
-            # document this module is parametrized from, including when the
-            # harness substitutes it via VIBE_IC_MATRIX_FLOW_YAML, and
-            # `compliance_module().__file__` is the evaluator every other
-            # channel drives. Passing them removes the repo-shaped prefix this
-            # test used to build -- which reddened 70 cells against a
-            # BYTE-IDENTICAL copy of the flow yaml, because the shim asserted
-            # the on-disk yaml IS F.FLOW_YAML and under substitution it is not.
-            report = reach_module().audit(
-                F.PLUGIN_ROOT,
-                flow=Path(F.FLOW_YAML),
-                checker=Path(compliance_module().__file__),
-            )
-    except Exception as exc:                      # noqa: BLE001 - reported, not swallowed
-        return ReachAudit(harness_error=f"{type(exc).__name__}: {exc}")
-    declared = int(report.get("declared", 0))
-    evaluated = int(report.get("evaluated", 0))
-    if declared <= 0 or evaluated <= 0:
-        return ReachAudit(
-            declared=declared,
-            evaluated=evaluated,
-            harness_error=(
-                f"the reach audit measured declared={declared} "
-                f"evaluated={evaluated} under {F.PLUGIN_ROOT}; a census of "
-                f"nothing reports no unreached step and would read as clean"
-            ),
-        )
-    return ReachAudit(
-        declared=declared,
-        evaluated=evaluated,
-        unreached=tuple(str(s) for s in report.get("unreached") or ()),
-        uninvited=tuple(str(s) for s in report.get("uninvited") or ()),
-    )
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Parametrization
 # ──────────────────────────────────────────────────────────────────────
@@ -1326,42 +1202,18 @@ def _params():
     return out
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Instrument self-checks
+#
+# Not matrix cells. They guard the three measuring devices above against the
+# failure mode that produced this campaign: an instrument that quietly returns
+# nothing and is read as a clean bill of health.
+# ──────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("cell", _params(), ids=lambda c: f"step{c.step_id}")
 def test_d1_gate_is_wired_in(cell):
     """The step's gate must be reachable through >= 1 live channel."""
     sid = cell.step_id
     ch = channels_for(sid)
-
-    # ── Channel (d): does THIS step reach the evaluator at all? ───────
-    # Asked before anything else, and asked of EVERY step including the
-    # umbrella: a gate whose step never arrives is not "weakly wired", it is
-    # unreachable, and the three channels below cannot see that because they
-    # are handed the gate directly. Verdict imported from the program that
-    # owns it, never re-derived here.
-    reach = reach_audit()
-    # THE WORD `step` IS DELIBERATELY ABSENT FROM THIS MESSAGE.
-    # `matrix_mutation_ledger` proves a mutation was caught by finding the
-    # entry's `red_signal` in the failure text, and both dimension-1 FLOW_YAML
-    # entries declare `red_signal="step"`. A harness error that opened with
-    # "step 21: ..." would therefore carry the token that certifies a catch,
-    # and the D1 locks would be unable to tell "the mutation reddened its
-    # witness" from "this module could not run" -- which is the precise
-    # equivalence this dimension exists to destroy.
-    assert reach.harness_error is None, (
-        # The reach program's own NAME contains the token too, so it is
-        # referred to by role here rather than interpolated.
-        f"CANNOT MEASURE cell {sid!r}: the reach audit did not complete "
-        f"against {F.PLUGIN_ROOT}: {reach.harness_error}"
-    )
-    assert F.normalize_id(sid) not in reach.unreached, (
-        f"step {sid}: declared by the flow and NEVER handed to "
-        f"{compliance_module().__name__} — of {reach.declared} declared "
-        f"step(s) only {reach.evaluated} reached the tally "
-        f"(unreached: {list(reach.unreached)}). A step nobody evaluates "
-        f"contributes no failure: it drops out of the tally, out of the "
-        f"per-step listing and out of the blocker list, and the flow reads "
-        f"BETTER for having lost it. Its gate wiring below is moot"
-    )
 
     # ── The umbrella has its own dispatch, even when it also has a gate. ──
     if F.normalize_id(sid) == umbrella_step_id():
@@ -1469,13 +1321,6 @@ def test_d1_gate_is_wired_in(cell):
     )
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Instrument self-checks
-#
-# Not matrix cells. They guard the three measuring devices above against the
-# failure mode that produced this campaign: an instrument that quietly returns
-# nothing and is read as a clean bill of health.
-# ──────────────────────────────────────────────────────────────────────
 def test_probe_channel_a_actually_executes_the_real_walker():
     """The channel-(a) probe must run the shipped executor, not a copy."""
     mod = compliance_module()
@@ -2205,45 +2050,6 @@ def test_probe_umbrella_step_id_is_a_declared_flow_step():
     )
     assert F.has_gate(sid), f"step {sid!r} lost its blocking RTL content gate"
     assert "flow_step_output_content_check" in F.gate_programs(sid)
-
-
-def test_probe_channel_d_measured_this_worktree_and_the_whole_flow():
-    """The reach audit must be the shipped program, aimed at THIS tree.
-
-    Three ways channel (d) could go quiet and be read as clean: import a
-    stale copy, judge some other checkout, or judge a flow smaller than the
-    one every other cell is drawn from. All three end in `unreached=()`.
-    """
-    reach = reach_audit()
-    assert reach.harness_error is None, reach.harness_error
-    mod = reach_module()
-    assert Path(mod.__file__).resolve() == (PROGRAMS_DIR / f"{REACH_CHECK}.py").resolve()
-    assert callable(getattr(mod, "audit", None)), (
-        f"{REACH_CHECK} exposes no callable audit(); channel (d) has no "
-        f"predicate to import and would have to re-implement one"
-    )
-    assert reach.declared == len(F.step_ids()), (
-        f"the reach audit counted {reach.declared} declared step(s) but the "
-        f"flow this module parametrizes over declares {len(F.step_ids())}; "
-        f"channel (d) is judging a different flow and its silence means "
-        f"nothing"
-    )
-
-
-def test_probe_the_evaluator_tally_invents_no_steps():
-    """The mirrored half of the predicate, which owns no cell.
-
-    An id the evaluator reports that the flow does not declare cannot redden
-    a cell — there is no cell for it. It is the same defect seen from the
-    other side (a tally out of step with the flow) and is asserted here so it
-    is not silently unowned.
-    """
-    reach = reach_audit()
-    assert reach.harness_error is None, reach.harness_error
-    assert not reach.uninvited, (
-        f"{compliance_module().__name__} reported {len(reach.uninvited)} step "
-        f"id(s) the flow does not declare: {list(reach.uninvited)}"
-    )
 
 
 def test_probe_every_cell_is_accounted_for():

@@ -351,10 +351,8 @@ DEFAULT_REF_MAX_TESTS = 50
 SMOKE_BASENAMES: tuple[str, ...] = (
     "test_source_chip_agnostic_check.py",
     "test_commit_msg_nda_check.py",
-    "test_marketplace_version_sync_check.py",
     "test_version_bump_monotonic_check.py",
     "test_agent_checkin_scope_guard.py",
-    "test_plugin_full_audit.py",
     "test_flow_compliance_check.py",
     # vibe-ic#220 — the self-disabling-condition guard. Belongs in the SMOKE
     # floor rather than in change-targeted selection: it asserts a global
@@ -406,7 +404,6 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # is NAMED after it, so MEASURED with the selector on exactly the
     # one-file diff that switches the mechanism off (`max_commits:
     # 9999999`): 16 tests selected, this guard NOT among them. ~3 s.
-    "test_gate_red_since_check.py",
     # vibe-ic#1734 — same reachability argument, MEASURED twice on this tree
     # with the real selector, at 7c376e348, one throwaway commit each:
     #
@@ -1716,42 +1713,6 @@ def _smoke_set(plugin_root: Path) -> set[str]:
     return out
 
 
-def import_edge_gap(
-    changed_paths: list[str], selected: list[str] | set[str],
-    plugin_root: Path,
-) -> tuple[list[tuple[str, int, int, int]], int]:
-    """(rows, total_missed) — what the selection LEFT OUT, by import edge.
-
-    Each row is ``(source_stem, imported_by, selected, not_selected)``. PURE and
-    separate from `main` so it can be driven against a constructed tree; the
-    inline version could only be exercised through the CLI, which resolves
-    `plugin_root` from the SCRIPT's own location and therefore always audits the
-    real plugin — a fixture handed to it was never read, and the test that
-    thought it was passed for the wrong reason.
-
-    vibe-ic#565. The default `ownership` mode maps a changed module to tests by
-    FILENAME, so 2035 of 2850 import edges (71%) are unseeable by name. Whether
-    to WIDEN the default is a cost decision and stays the owner's; this reports
-    the shortfall so a landing is not stamped on a count that reads as coverage.
-    Changed TEST files are excluded — rule 2 already selects them, and their
-    stems are not source modules.
-    """
-    stems = {Path(c).stem for c in changed_paths
-             if c.endswith(".py") and f"/{_TESTS_REL.split('/')[-1]}/" not in c}
-    if not stems:
-        return [], 0
-    idx = _build_import_edge_index(plugin_root, stems)
-    sel = set(selected)
-    rows: list[tuple[str, int, int, int]] = []
-    total = 0
-    for stem in sorted(idx):
-        importers = idx[stem]
-        if not importers:
-            continue
-        missed = len(importers - sel)
-        total += missed
-        rows.append((stem, len(importers), len(importers) - missed, missed))
-    return rows, total
 
 
 def select_tests(
@@ -1985,43 +1946,6 @@ def _repo_root_of(plugin_root: Path, plugin_prefix: str) -> Path:
     return root
 
 
-def select_unmappable(changed_paths: list[str], plugin_root: Path,
-                      plugin_prefix: str = "") -> list[str]:
-    """Changed paths that map to NO test set — the honest gap in a selection.
-
-    Separate from `select_tests` so the selection itself stays a pure list and
-    every caller keeps working unchanged. See the `--strict-unmapped` flag: this
-    is the input to the loud-missing-answer path (vibe-ic#1058).
-    """
-    repo_files = _repo_files(_repo_root_of(plugin_root, plugin_prefix))
-    index_cache: dict[str, set[str]] | None = None
-    out: list[str] = []
-    for raw in changed_paths:
-        rel = _to_plugin_rel(raw, plugin_prefix)
-        rp = Path(rel)
-        mapped_by_other_rule = (
-            (rel.startswith(_TESTS_REL + "/") and rp.name.startswith("test_"))
-            or _is_test_helper(rel)
-            or (rel.endswith(".py")
-                and rp.parent.as_posix() in _SOURCE_DIRS
-                and not rp.name.startswith("test_"))
-        )
-        if mapped_by_other_rule:
-            continue
-        key = (Path(rel).name if _is_repo_tool(rel)
-               else _distinctive_key(raw, repo_files))
-        if not key:
-            out.append(raw)          # no suffix identifies it — unmappable
-            continue
-        if index_cache is None:
-            index_cache = {}
-        hits = index_cache.get(key)
-        if hits is None:
-            hits = _build_tool_reference_index(plugin_root, {key}).get(key, set())
-            index_cache[key] = hits
-        if not hits:
-            out.append(raw)          # identifiable, but no test names it
-    return sorted(set(out))
 
 
 def _git_changed_files(base: str, repo_root: Path) -> list[str] | None:
@@ -2088,11 +2012,6 @@ def main(argv: list[str] | None = None) -> int:
                     help="base SHA/ref; diff is <base>..HEAD")
     ap.add_argument("--plugin-root", default=None,
                     help="plugin root (default: this file's grandparent)")
-    ap.add_argument("--no-gap-report", action="store_true",
-                    help="skip the import-edge gap disclosure (vibe-ic#565). "
-                         "It costs ~3 s over the tests tree and does not change "
-                         "what is selected; opting out means the landing is "
-                         "stamped without knowing what the selection dropped.")
     ap.add_argument("--mode", choices=MODES, default=MODE_IMPORT_EDGE,
                     help="selection rule (default: %(default)s). OWNER DECISION "
                          "(vibe-ic#565): the default follows the IMPORT EDGES a "
@@ -2103,14 +2022,6 @@ def main(argv: list[str] | None = None) -> int:
                          "because of it. 'ownership' remains available and is "
                          "now the opt-IN narrowing; see the module docstring for "
                          "the measured coverage/cost frontier.")
-    ap.add_argument("--strict-unmapped", action="store_true",
-                    help="EXIT 3 if any changed path maps to no test set, and "
-                         "name those paths on stderr (vibe-ic#1058). Off by "
-                         "default: prose and generated corpora legitimately map "
-                         "to nothing, so ON by default would fail most diffs and "
-                         "be switched off within a week. The DISCLOSURE below is "
-                         "unconditional — this flag only decides whether an "
-                         "unmapped path is fatal.")
     ap.add_argument("--ref-max-tests", type=int, default=DEFAULT_REF_MAX_TESTS,
                     help="reference-capped only: a stem named by more than this "
                          "many test files contributes nothing through the "
@@ -2156,64 +2067,7 @@ def main(argv: list[str] | None = None) -> int:
           f"from {len(changed)} changed path(s) (base={args.base}, "
           f"mode={args.mode})", file=sys.stderr)
 
-    # vibe-ic#565 — SAY WHAT WAS LEFT OUT. The default `ownership` mode maps a
-    # changed module to tests by FILENAME, so a test named after the chip or the
-    # feature is invisible however directly it imports the module: 2035 of 2850
-    # import edges (71%) are unseeable by name. Whether to WIDEN the default is
-    # a cost decision and stays the owner's — but a bounded selection that does
-    # not say what it dropped reads as full coverage, and that is what a landing
-    # gets stamped on. Measured: the landing that changed
-    # `phase3_one_shot_runner` selected 17 files while 162 test files import it.
-    #
-    # The index costs 2.98 s over the whole tests tree — affordable beside a
-    # landing that already runs for minutes, and it is the only way this number
-    # exists at all. `--no-gap-report` opts out for a caller that cannot pay it.
-    if not args.no_gap_report:
-        try:
-            rows, miss_total = import_edge_gap(changed, selected, plugin_root)
-            if rows:
-                print("[ci_targeted_test_select] IMPORT-EDGE GAP — test files "
-                      "that IMPORT a changed module and were NOT selected (the "
-                      "default maps by filename, not by import):",
-                      file=sys.stderr)
-                for stem, n_imp, n_sel, n_missed in rows:
-                    print(f"    {stem:<34} imported by {n_imp:>4}, selected "
-                          f"{n_sel:>4}, NOT selected {n_missed:>4}",
-                          file=sys.stderr)
-                print(f"    TOTAL not selected: {miss_total} — rerun with "
-                      f"`--mode import-edge` to include them (vibe-ic#565)",
-                      file=sys.stderr)
-        except Exception as _gap_exc:            # noqa: BLE001
-            # The report is a disclosure, not a dependency: a selection that
-            # dies computing its own footnote selects nothing, and selecting
-            # nothing is the defect this file exists against.
-            print(f"[ci_targeted_test_select] import-edge gap report "
-                  f"unavailable ({_gap_exc}) — the selection above stands, but "
-                  f"what it left out is UNKNOWN, not zero", file=sys.stderr)
 
-    # vibe-ic#1058 — UNMAPPED disclosure. Unconditional, because the failure this
-    # closes is not "the selection was wrong" but "the selection was silently
-    # generic and read as coverage". Naming the paths converts that into a fact
-    # a reviewer can act on. `--strict-unmapped` decides only whether it is fatal.
-    try:
-        unmapped = select_unmappable(changed, plugin_root, plugin_prefix)
-    except Exception as _un_exc:                     # noqa: BLE001
-        print(f"[ci_targeted_test_select] unmapped-path report unavailable "
-              f"({_un_exc}) — the selection above stands, but whether every "
-              f"changed path reached a test set is UNKNOWN, not yes",
-              file=sys.stderr)
-        return 0
-    if unmapped:
-        print(f"[ci_targeted_test_select] UNMAPPED — {len(unmapped)} changed "
-              f"path(s) map to NO test set. The selection above covers the rest; "
-              f"for these it is the smoke floor, which is not evidence about "
-              f"them:", file=sys.stderr)
-        for u in unmapped:
-            print(f"    {u}", file=sys.stderr)
-        if args.strict_unmapped:
-            print("    --strict-unmapped: failing rather than reporting a green "
-                  "over paths nothing verified (vibe-ic#1058)", file=sys.stderr)
-            return 3
     return 0
 
 

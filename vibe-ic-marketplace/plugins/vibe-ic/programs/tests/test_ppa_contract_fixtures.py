@@ -41,7 +41,6 @@ SCHEMA_DIR = PLUGIN_ROOT / "schemas" / "ppa"
 
 BUILD = PROGRAMS / "ppa_contract_build.py"
 CHECK = PROGRAMS / "ppa_contract_check.py"
-INTEGRITY = PROGRAMS / "ppa_problem_integrity_check.py"
 
 #: A syntactically valid digest reference that names nothing real, so no test
 #: can accidentally depend on a registry being reachable.

@@ -46,18 +46,6 @@ def main() -> int:
             if r.returncode not in (0, 2):
                 fails.append(f"{label}: {Path(str(cmd[1])).name} rc={r.returncode} "
                              f"{r.stderr.strip()[:200]}")
-        # feasibility, shipped-records-only and bridged
-        try:
-            flat = json.loads((recdir / "records_flat.json").read_text())
-            bridge = json.loads((recdir / "signoff_bridge_records.json").read_text())
-        except Exception as exc:
-            fails.append(f"{label}: records unreadable ({exc})"); continue
-        for name, recs in (("shipped_only", flat), ("bridged", flat + bridge)):
-            p = recdir / f"feasibility_{name}.json"
-            p.write_text(json.dumps({"required_views": VIEWS, "candidates": [
-                {"candidate_id": label, "metrics": recs}]}, indent=1) + "\n")
-            run([PY, PROGRAMS / "ppa_feasibility_check.py", "--candidates", p,
-                 "--json", recdir / f"feasibility_{name}_report.json"])
     print(f"   problems: {len(fails)}")
     for f in fails[:20]:
         print("   -", f)

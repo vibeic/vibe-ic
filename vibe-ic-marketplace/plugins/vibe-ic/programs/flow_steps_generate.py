@@ -46,6 +46,9 @@ def generate(registry, native):
                     profiles.append({"when": condition, "tool": replacement})
                 if name in native.get("report_rows", {}):
                     tool = {"kind": "native_report", "from": native["report_rows"][name]}
+                    readers = native.get("report_check_readers", {}).get(name)
+                    if readers:
+                        tool["check_readers"] = readers
                     if name in native.get("report_scopes", {}):
                         tool["scope"] = native["report_scopes"][name]
             profiles.append({"when": profile["select_when"], "tool": tool})
@@ -173,6 +176,13 @@ def classify_checks(table, native):
             selection = native["row_applicability"][row["name"]]
             row["when"] = selection["when"]
             row["applicability_reason"] = selection["reason"]
+    steps = table["steps"]
+    for row in reversed(steps.copy()):
+        if row["tool"]["kind"] == "native_report":
+            producer = next(item for item in steps if item["name"] == row["tool"]["from"])
+            if steps.index(row) < steps.index(producer):
+                steps.remove(row)
+                steps.insert(steps.index(producer) + 1, row)
     return mapping, dropped, work
 
 

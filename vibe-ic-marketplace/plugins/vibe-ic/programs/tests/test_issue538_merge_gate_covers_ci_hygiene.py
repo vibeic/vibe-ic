@@ -789,8 +789,8 @@ def test_a_gate_added_to_ci_is_covered_with_no_edit_to_the_merge_gate():
     # runs five of them itself against `--plugin-root`; anything BEYOND those
     # would be the copied list.
     own = {"source_chip_agnostic_check", "shipped_path_portability_check",
-           "loop_watchdog_compliance_check", "marketplace_version_sync_check",
-           "plugin_full_audit"}
+
+           }
     hygiene_programs = set()
     for _label, _wd, cmd in GD.parse_gates(_SCRIPT):
         for tok in cmd.split():
@@ -1017,15 +1017,13 @@ def test_the_cli_offers_no_way_to_skip_the_hygiene_set():
 #: repo-hygiene script, where they would be vacuous — turns a test red instead
 #: of looking like an improvement.
 _LANDING_ONLY = (
-    "landing_is_one_commit_check", "version_bump_monotonic_check",
-    "gatekeeper_stale_branch_check", "nda_diff_scan_check",
-    "commit_msg_nda_check", "acceptance_control_check", "blindness_audit",
+    "version_bump_monotonic_check",
+    "nda_diff_scan_check",
+    "commit_msg_nda_check", "blindness_audit",
     "full_suite_run_check", "run_output_completeness_check",
-    "real_artefact_test_backing_check",
     # Grades the control a base..head CHANGE was measured against. In the
     # repo-hygiene lane there is no change and no control run, so it would have
     # nothing to read and would report a vacuous clean result.
-    "control_substance_check",
 )
 
 

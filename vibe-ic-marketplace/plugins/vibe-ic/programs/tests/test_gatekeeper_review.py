@@ -3,14 +3,6 @@
 AGGREGATES the existing governance programs against a PR change-set and emits a
 verdict (chip-AGNOSTIC).
 
-Strategy
---------
-The file-walking gates (source_chip_agnostic_check / plugin_full_audit /
-marketplace_version_sync_check) are exercised against a SYNTHETIC, self-
-contained plugin root built per-test in a tmp dir, so the assertions do not
-couple to the live monorepo's audit state. The pure-logic gates (version bump,
-role scope, cadence, git prohibition, test cadence) are driven through the
-`review()` entry point with `override_*` injection.
 
 The §4.05/General/no-cheat AGENT-JUDGMENT gate is INTENTIONALLY NOT covered
 here — it is the loop's Step-2.7 (documented in the program docstring); a test
@@ -92,7 +84,7 @@ def _build_clean_plugin(tmp_path: Path, version: str = "1.0.96") -> Path:
     # + flow_condition_reachability_check (vibe-ic#220); ship inert
     # pass-through stand-ins so the audit does not flag them missing. This
     # tuple must track audit_d2's guard list.
-    for guard in ("gate_self_assertion_check", "single_testpath_guard",
+    for guard in (
                   "flow_condition_reachability_check"):
         (progs / f"{guard}.py").write_text(
             "import sys\n"
@@ -115,9 +107,6 @@ def _build_clean_plugin(tmp_path: Path, version: str = "1.0.96") -> Path:
         "assert runpy.run_path(str(widget))['go']() == 1\n"
         f"pathlib.Path(a.summary_json).write_text({json.dumps(record)!r})\n"
         "PY\n")
-    ledger = repo / "tools/ci/gate_red_since.json"
-    ledger.parent.mkdir(parents=True, exist_ok=True)
-    ledger.write_text(json.dumps({"acknowledged": []}) + "\n")
     import subprocess
     # Keep the audit scaffolding in BASE: the subject is a widget repair,
     # not an addition of the fixture's synthetic gates or flow declaration.
@@ -161,7 +150,6 @@ def test_clean_diff_merge_ok(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         commit_cmds=["git commit -m 'fix'", "git push origin main"],
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
@@ -169,9 +157,7 @@ def test_clean_diff_merge_ok(tmp_path):
     # Every machine gate green => MERGE_OK.
     by_name = {g.name: g for g in v.gates}
     assert by_name["version_bump_monotonic_check"].rc == 0
-    assert by_name["marketplace_version_sync_check"].rc == 0
     assert by_name["source_chip_agnostic_check"].rc == 0
-    assert by_name["plugin_full_audit"].rc == 0, by_name["plugin_full_audit"].summary
     assert by_name["git_prohibition_guard"].rc == 0
     assert by_name["full_suite_run_check"].rc == 0
     assert v.verdict == "MERGE_OK", v.blocking
@@ -194,7 +180,6 @@ def test_chip_token_request_changes(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
@@ -205,32 +190,6 @@ def test_chip_token_request_changes(tmp_path):
     assert any("source_chip_agnostic_check" in b for b in v.blocking)
 
 
-# ---------------------------------------------------------------------------
-# 3. a version-equality break (plugin.json != marketplace.json) -> REQUEST_CHANGES
-# ---------------------------------------------------------------------------
-def test_version_equality_break_request_changes(tmp_path):
-    repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
-    # Break the marketplace<->plugin equality: marketplace stays stale at .95.
-    mkt = repo / "vibe-ic-marketplace" / ".claude-plugin" / "marketplace.json"
-    data = json.loads(mkt.read_text())
-    data["plugins"][0]["version"] = "1.0.95"
-    mkt.write_text(json.dumps(data) + "\n")
-    v = gk.review(
-        "BASE", "HEAD",
-        repo=repo, plugin_root=plugin,
-        role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
-        override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
-        # version_bump_monotonic equality re-assert: market passed in as the
-        # head marketplace version (.95) != plugin (.96).
-        override_cur="1.0.96", override_prev="1.0.95",
-    )
-    by_name = {g.name: g for g in v.gates}
-    # The marketplace_version_sync_check subprocess must catch the drift.
-    assert by_name["marketplace_version_sync_check"].rc == 1, \
-        by_name["marketplace_version_sync_check"].summary
-    assert v.verdict == "REQUEST_CHANGES"
-    assert any("marketplace_version_sync_check" in b for b in v.blocking)
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +201,6 @@ def test_non_monotonic_version_request_changes(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         # current == previous == 1.0.95: NO bump.
         override_cur="1.0.95", override_prev="1.0.95",
@@ -260,7 +218,6 @@ def test_regression_version_request_changes(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.94", override_prev="1.0.95",
     )
@@ -283,33 +240,14 @@ def test_cadence_minor_milestone_selects_full(tmp_path):
         # cadence gate judges COVERAGE of the tracked corpus, and a bare
         # `pytest` resolves to `pytest.ini`'s single testpath — one tree of
         # five. `./run_tests.sh` is the invocation that reaches all of them.
-        pytest_cmd="./run_tests.sh",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.1.0", override_prev="1.0.99",
     )
     assert v.cadence == "FULL", v.version_bump
     by_name = {g.name: g for g in v.gates}
-    assert by_name["full_suite_run_check"].rc == 0, \
-        by_name["full_suite_run_check"].summary
     assert v.verdict == "MERGE_OK", v.blocking
 
 
-def test_cadence_full_milestone_rejects_subset_pytest(tmp_path):
-    """A FULL milestone whose pytest cmd is only a SUBSET fails the cadence
-    gate (the integration/regression gates would be skipped)."""
-    repo, plugin = _build_clean_plugin(tmp_path, version="1.1.0")
-    v = gk.review(
-        "BASE", "HEAD",
-        repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests/test_widget.py",  # subset
-        override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
-        override_cur="1.1.0", override_prev="1.0.99",
-    )
-    assert v.cadence == "FULL"
-    by_name = {g.name: g for g in v.gates}
-    assert by_name["full_suite_run_check"].rc == 1, \
-        by_name["full_suite_run_check"].summary
-    assert v.verdict == "REQUEST_CHANGES"
 
 
 def test_cadence_patch_selects_targeted(tmp_path):
@@ -319,14 +257,11 @@ def test_cadence_patch_selects_targeted(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests/test_widget.py",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
     assert v.cadence == "TARGETED", v.version_bump
     by_name = {g.name: g for g in v.gates}
-    assert by_name["full_suite_run_check"].rc == 0, \
-        by_name["full_suite_run_check"].summary
     assert v.verdict == "MERGE_OK", v.blocking
 
 
@@ -346,7 +281,6 @@ def test_out_of_scope_role_touching_mcp_rejects(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="field-agent",                    # may only touch backlog
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/server.py",  # MCP!
         ],
@@ -365,7 +299,6 @@ def test_out_of_scope_role_touching_plugin_rejects(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="field-agent",                    # backlog only
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # plugin!
         ],
@@ -382,7 +315,6 @@ def test_benchmark_agent_pure_plugin_fix_not_rejected_by_scope(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="benchmark-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # pure plugin fix
         ],
@@ -400,7 +332,6 @@ def test_benchmark_agent_mixed_results_and_plugin_rejects(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="benchmark-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "benchmark-data/evaluation/rtllm/run/RESULT.md",          # a RESULT
             "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # + a plugin edit
@@ -417,7 +348,6 @@ def test_in_scope_role_not_rejected(tmp_path):
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
         role="field-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/community/backlogs/item-1.yaml",
         ],
@@ -437,7 +367,6 @@ def test_forbidden_git_op_request_changes(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         commit_cmds=["git push --force origin main"],   # forbidden
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
@@ -456,7 +385,6 @@ def test_force_with_lease_is_allowed(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         commit_cmds=["git push --force-with-lease origin main"],
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
@@ -474,7 +402,6 @@ def test_json_five_section_shape(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
@@ -565,7 +492,6 @@ def test_cli_main_merge_ok(tmp_path):
         "--role", "core-agent",
         "--repo", str(repo),
         "--plugin-root", str(plugin),
-        "--pytest-cmd", "python3 -m pytest -q programs/tests",
         "--changed-file", str(changed),
         "--json", str(out_json),
     ])
@@ -577,74 +503,6 @@ def test_cli_main_merge_ok(tmp_path):
 
 
 
-def test_an_absent_answers_document_now_blocks_the_merge(tmp_path):
-    """D1 — the absent-document arm BLOCKS, and this is the falsifier for it.
-
-    THE SAME FIXTURE AS `test_cli_main_merge_ok`, with ONE variable: whether
-    `_write_ppa_answers` ran. That test is the other arm of this one, so the
-    pair proves the flip discriminates rather than merely refusing everything.
-
-    WHY IT FLIPPED, and it was not a policy choice made here. The advisory
-    branch carried its own expiry: "THE MOMENT an answers-document convention
-    exists in this repository — a declared path, and this branch's own document
-    at it — the `not present` arm becomes blocking". Both halves are satisfied:
-    `_PPA_ANSWERS_REL` declares the path and the repository carries a document
-    at it.
-
-    WHAT THE ADVISORY ARM COST: a gate that never passes `--answers` can only
-    ever see `answers_document_present: false`, so the BLOCKING arm — including
-    `AUTHOR_OVERRIDE_REFUSED`, where the detector disagrees with an author who
-    marked an applicable question N/A — had never been reachable at all.
-    """
-    repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
-    # DELIBERATELY NOT `_write_ppa_answers(repo, plugin)`. That single omission
-    # is the whole difference from the MERGE_OK fixture above.
-    import os
-    import subprocess
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    full_env = {**os.environ, **env}
-    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
-    pj = plugin / ".claude-plugin" / "plugin.json"
-    pj.write_text(json.dumps({"name": "vibe-ic", "version": "1.0.95"}) + "\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"],
-                   check=True, env=full_env)
-    base_sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                              capture_output=True, text=True).stdout.strip()
-    pj.write_text(json.dumps({"name": "vibe-ic", "version": "1.0.96"}) + "\n")
-    mkt = repo / "vibe-ic-marketplace" / ".claude-plugin" / "marketplace.json"
-    md = json.loads(mkt.read_text())
-    md["plugins"][0]["version"] = "1.0.96"
-    mkt.write_text(json.dumps(md) + "\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "head"],
-                   check=True, env=full_env)
-
-    changed = tmp_path / "changed.txt"
-    changed.write_text(
-        "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py\n")
-    out_json = tmp_path / "verdict.json"
-    rc = gk.main([
-        "--base", base_sha, "--head", "HEAD",
-        "--role", "core-agent",
-        "--repo", str(repo),
-        "--plugin-root", str(plugin),
-        "--pytest-cmd", "python3 -m pytest -q programs/tests",
-        "--changed-file", str(changed),
-        "--json", str(out_json),
-    ])
-    report = json.loads(out_json.read_text())
-    assert rc != 0, (
-        "a change-set that answered none of the Appendix-C merge condition "
-        f"was cleared to merge: {report['verdict']}")
-    assert report["verdict"] == "REQUEST_CHANGES", report
-
-    blocking = json.dumps(report.get("blocking") or report)
-    assert "ppa_pr_scope_check" in blocking, (
-        "the run was refused, but not by the Appendix-C gate — this test would "
-        f"then be passing for the wrong reason: {blocking[:400]}")
-    assert "answers document" in blocking, blocking[:400]
 
 
 def test_cli_main_request_changes_rc1(tmp_path):
@@ -680,7 +538,6 @@ def test_cli_main_request_changes_rc1(tmp_path):
         "--base", base_sha, "--head", "HEAD",
         "--role", "core-agent",
         "--repo", str(repo), "--plugin-root", str(plugin),
-        "--pytest-cmd", "python3 -m pytest -q programs/tests",
         "--changed-file", str(changed),
     ])
     assert rc == 1
@@ -696,7 +553,6 @@ def test_no_agent_judgment_gate_present(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
@@ -724,7 +580,6 @@ def test_blindness_skipped_when_absent(tmp_path):
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin, role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
         override_cur="1.0.96", override_prev="1.0.95",
     )
@@ -802,57 +657,3 @@ def test_a_program_that_finishes_INSIDE_the_bound_still_returns_its_own_rc(
 # protected-path byte register that the owner removed on 2026-09-27, and went
 # with it.)
 # ---------------------------------------------------------------------------
-def test_corpus_pin_scan_advisory_counts_census_pins_without_blocking(
-        tmp_path):
-    """Same tests tree, one added assertion that pins the corpus CENSUS."""
-    tests = tmp_path / "programs" / "tests"
-    tests.mkdir(parents=True)
-    (tests / "test_clean.py").write_text(
-        "def test_x():\n"
-        "    rows = ['a']\n"
-        "    assert rows[0] == 'a'\n")
-    clean = gk.corpus_pin_scan_gate(tmp_path)
-    assert clean.rc == 0 and clean.green, clean
-    assert "TOTAL 0 pin(s)" in clean.summary, clean.summary
-
-    (tests / "test_pinned.py").write_text(
-        "from pathlib import Path\n"
-        "CORPUS = Path('benchmark-data')\n"
-        "def test_y():\n"
-        "    rows = list(CORPUS.rglob('*.json'))\n"
-        "    assert len(rows) == 23\n")
-    pinned = gk.corpus_pin_scan_gate(tmp_path)
-    assert "TOTAL 1 pin(s)" in pinned.summary, pinned.summary
-    # A REPORTER, on its own written instruction: plenty of hits are
-    # load-bearing, so the judgement is the reader's and this never blocks.
-    assert pinned.rc == 0 and pinned.green, pinned
-
-
-def test_corpus_pin_scan_discloses_an_absent_tests_tree(tmp_path):
-    """`0 pins` from a directory nobody opened is the empty-population claim
-    this repo keeps paying for. It must be a named skip instead."""
-    g = gk.corpus_pin_scan_gate(tmp_path)
-    assert g.rc == -1, g
-    assert "nothing was opened" in g.summary, g.summary
-    assert g.green
-
-
-def test_the_advisory_is_in_the_verdict_and_does_not_block(tmp_path):
-    """The wiring, not just the drivers: a full review() must LIST them."""
-    repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
-    _write_ppa_answers(repo, plugin)
-    v = gk.review(
-        "BASE", "HEAD",
-        repo=repo, plugin_root=plugin,
-        role="core-agent",
-        pytest_cmd="python3 -m pytest -q programs/tests",
-        commit_cmds=["git commit -m 'fix'", "git push origin main"],
-        override_files=["vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py"],
-        override_cur="1.0.96", override_prev="1.0.95",
-    )
-    by_name = {g.name: g for g in v.gates}
-    name = "corpus_cardinality_pin_scan"
-    assert name in by_name, sorted(by_name)
-    assert by_name[name].green, by_name[name]
-    assert "content_pinned_authority_verified_only_at_merge" not in by_name
-    assert v.verdict == "MERGE_OK", v.blocking

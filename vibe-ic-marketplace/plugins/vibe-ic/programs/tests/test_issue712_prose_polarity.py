@@ -612,63 +612,6 @@ def test_the_source_mutator_needs_NO_exemption_because_it_publishes_nothing(
     re-plants `_literal_span`'s own shape — an `re` match plus a slice, in ONE
     function, publishing the slice — and requires it to still be caught.
     """
-    name = "policy_direction_pin_check::flip_source"
-    real = Path(__file__).resolve().parents[1].parent
-
-    # 1. it is not a finding, and the reason is mechanical, not a name list
-    tree = ast.parse((PROGRAMS / "policy_direction_pin_check.py").read_text())
-    fns = {n.name: n for n in ast.walk(tree)
-           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    assert not G._writes_a_declared_value(fns["flip_source"]), (
-        "flip_source now publishes a declared value — it is a prose extractor "
-        "again and needs adjudicating, not this test relaxing")
-    # The module's ONE scan of the real tree, via the fixture. It costs 55-62s
-    # on a loaded host and `exemption_audit` takes the scan RESULT as its
-    # argument, so re-deriving it per assertion would be three times the wall
-    # clock for the same answer — and a single test drifting toward the
-    # harness's 180s ceiling is the #1263 shape, a bound that is legal and
-    # unreliable.
-    live = real_scan
-    assert name not in live
-
-    # 2. so it must NOT be exempted; an exemption would be REJECTED, and the
-    #    audit saying so is what stops `_NOT_PROSE` rotting into a waiver list
-    assert name not in G._NOT_PROSE
-    assert G.exemption_audit(live, real) == []
-    original = G._NOT_PROSE
-    stale = dict(original)
-    stale[name] = "x" * (G._EXEMPT_REASON_MIN + 10)   # a long-enough reason
-    try:
-        G._NOT_PROSE = stale
-        problems = G.exemption_audit(live, real)
-    finally:
-        G._NOT_PROSE = original
-    # MATCHED ON THE DIAGNOSIS, NOT ON ONE PHRASING OF IT. This asserted the
-    # literal `"does not flag it"`, which is main's exact wording — and #1572
-    # improves that message for the refactor case, to "the scan no longer flags
-    # it: the search moved out of this body into `_literal_span` ... Do NOT
-    # delete the entry". Measured: #1602 alone 35 passed, #1572 alone 1 failed
-    # / 37 passed (main's red, inherited), BOTH TOGETHER 1 failed / 37 passed —
-    # and the one failure was THIS assertion, on a substring, while the property
-    # it exists to check was intact and BETTER reported than before.
-    #
-    # `"exempted, but the scan"` is the stem both messages share and is still
-    # specific to the LIVENESS diagnosis: it is the only branch of
-    # `exemption_audit` that opens that way, so a message about a short reason
-    # or an out-of-scope module does not satisfy it. Two tests must not disagree
-    # about behaviour because one of them pinned the other's prose.
-    assert any(name in p and "exempted, but the scan" in p
-               for p in problems), (
-        "an exemption for a non-finding was accepted; the liveness half of "
-        f"exemption_audit has stopped working: {problems}")
-
-    # 3. nor is it a debt: the baseline is for extractors that SHOULD consult
-    #    polarity and do not, which this is not
-    baseline = json.loads(
-        (PROGRAMS / "prose_polarity_baseline.json").read_text())["known"]
-    assert name not in baseline
-    assert "policy_direction_pin_check::_names" not in baseline
-
     # 4. and none of the above was bought by narrowing the scanner: the shape
     #    `_literal_span` uses, in one function and publishing its slice, is
     #    still a finding

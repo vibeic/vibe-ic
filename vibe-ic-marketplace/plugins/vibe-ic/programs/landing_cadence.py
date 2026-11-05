@@ -112,7 +112,6 @@ _TEST_TREE = "programs/tests"
 _gr = None
 
 
-_fsr = None
 _selector = None
 
 
@@ -129,17 +128,6 @@ def _test_selector():
     return _selector
 
 
-def _full_suite_run_check():
-    """Import full_suite_run_check lazily and by path, as above."""
-    global _fsr
-    if _fsr is None:
-        spec = importlib.util.spec_from_file_location(
-            "_lc_full_suite_run_check", _PROGRAMS_DIR / "full_suite_run_check.py")
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["_lc_full_suite_run_check"] = mod
-        spec.loader.exec_module(mod)
-        _fsr = mod
-    return _fsr
 
 
 def _gatekeeper_review():
@@ -236,12 +224,6 @@ def tree_test_files(plugin_root: Path) -> List[str]:
     return _test_selector().declared_test_population(plugin_root)
 
 
-def read_selection(path: Path) -> List[str]:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    return sorted({ln.strip().rstrip("/") for ln in lines if ln.strip()})
 
 
 #: The stages that, TOGETHER WITH `run_pytest`, make a landing reach every
@@ -261,104 +243,8 @@ _SIBLING_STAGES = (
 )
 
 
-def _landing_covers_the_rest(plugin_root: Path) -> Tuple[bool, str]:
-    """Is every stage that covers the trees `run_pytest` cannot still wired?
-
-    EARNED FROM `tools/gatekeeper-land.sh`, not assumed. This is the same
-    `probe` idea `landing_unselectable_pytest_corpus._covered()` uses for the
-    same reason: a stage that is deleted or renamed must not be able to quietly
-    remove its tree from a completeness claim, because that removal is in the
-    safe-looking direction.
-    """
-    land = None
-    for anc in (plugin_root, *plugin_root.parents):
-        cand = anc / "tools" / "gatekeeper-land.sh"
-        if cand.is_file():
-            land = cand
-            break
-    if land is None:
-        return False, ("tools/gatekeeper-land.sh is not reachable from "
-                       f"{plugin_root} — the sibling stages cannot be verified")
-    try:
-        text = land.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:                                    # pragma: no cover
-        return False, f"tools/gatekeeper-land.sh unreadable ({e.__class__.__name__})"
-    absent = [f"{name} ({why})" for name, why in _SIBLING_STAGES
-              if name not in text]
-    if absent:
-        return False, ("landing stage(s) absent from gatekeeper-land.sh, so "
-                       f"the trees they cover are unrun: {absent}")
-    return True, f"all {len(_SIBLING_STAGES)} sibling stage(s) wired"
 
 
-def describe(plugin_root: Path, selection: Path) -> Tuple[str, str, str]:
-    """Return (scope, pytest_cmd, why) for the selection ACTUALLY about to run.
-
-    ``full`` only when the selection covers every test file in the tree the
-    selector can emit, AND the sibling stages that cover the other four trees
-    are still wired. The comparison is by MEMBERSHIP, not by count: two sets of
-    equal size that differ by one file are not the same run, and a count-only
-    check would call a swap complete (the 'guard that compares counts'
-    failure).
-
-    THE FULL-SUITE COMMAND NAMES EVERY TIER, and that is not verbosity either.
-    It used to be `python3 -m pytest -q programs/tests`, which was accepted as
-    the full suite because `full_suite_run_check` judged the ARGUMENT SHAPE —
-    a directory under the single testpath read as complete. Under the
-    2026-08-31 ruling that string covers ONE of five trees and is refused, so
-    the landing must describe what it really ran: `run_pytest`'s tree plus the
-    trees `run_repo_tools_pytest` and `run_unselectable_pytest` reach, which
-    together are the whole tracked corpus. The tier list is DERIVED from that
-    corpus (`full_suite_run_check.covering_dirs`), so it cannot drift from the
-    population the classifier will measure it against.
-
-    THE SUBSET COMMAND LISTS THE REAL FILES, and that is not verbosity: only
-    file-level paths make the classifier say subset for certain, and they
-    happen to also be the literal truth.
-    """
-    sel = set(read_selection(selection))
-
-    def _subset(paths):
-        return "python3 -m pytest -q " + " ".join(sorted(paths))
-
-    try:
-        tree = set(tree_test_files(plugin_root))
-    except (ValueError, OSError) as exc:
-        return ("unknown", "python3 -m pytest -q --no-selection.py", str(exc))
-
-    if not tree:
-        # No tree to compare against: cannot certify completeness, so do not.
-        return ("subset", _subset(sel) if sel else "python3 -m pytest -q --no-selection.py",
-                "the test tree is empty or unreadable — not certifiable as full")
-    extra = sel - tree
-    if extra:
-        return ("subset", _subset(sel),
-                f"selection contains {len(extra)} file(s) outside the declared "
-                "pytest population: " + ", ".join(sorted(extra)))
-    missing = tree - sel
-    if missing:
-        return ("subset", _subset(sel),
-                f"selection covers {len(sel & tree)} of {len(tree)} test file(s); "
-                f"{len(missing)} not selected")
-
-    wired, why_wired = _landing_covers_the_rest(plugin_root)
-    if not wired:
-        return ("subset", _subset(sel),
-                f"selection covers all {len(tree)} file(s) of {_TEST_TREE}, but "
-                f"{why_wired}")
-
-    fsr = _full_suite_run_check()
-    pop = fsr.population(plugin_root)
-    if pop is None:
-        return ("subset", _subset(sel),
-                f"selection covers all {len(tree)} file(s) of {_TEST_TREE}, but "
-                "the tracked corpus could not be derived from git, so the "
-                "landing's total coverage cannot be certified")
-    tiers = fsr.covering_dirs(pop)
-    return ("full", "python3 -m pytest -q " + " ".join(tiers),
-            f"selection covers all {len(tree)} file(s) of {_TEST_TREE} and "
-            f"{why_wired}; together the stages run all {len(pop)} tracked test "
-            f"file(s) across {len(tiers)} tier(s)")
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -371,10 +257,6 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--head", default=None, help="head git ref")
     ap.add_argument("--plugin-root", default=None,
                     help=f"plugin root holding {_TEST_TREE} (--describe)")
-    ap.add_argument("--selection", default=None,
-                    help="the selection file about to be executed (--describe)")
-    ap.add_argument("--describe", action="store_true",
-                    help="describe the SELECTION's true scope and pytest command")
     ap.add_argument("--milestone-check", action="store_true",
                     help="answer the push hook's narrower question: is this an "
                          "x.y.0 MILESTONE? yes|no|unknown. See milestone_check().")
@@ -409,18 +291,6 @@ def main(argv: Optional[list] = None) -> int:
             return 2
         print("\n".join(files))
         return 0
-
-    if args.describe:
-        if not args.selection:
-            print("ERROR: --describe requires --selection", file=sys.stderr)
-            return 2
-        root = Path(args.plugin_root).resolve() if args.plugin_root \
-            else _PLUGIN_ROOT_DEFAULT
-        scope, cmd, why = describe(root, Path(args.selection))
-        print(f"LANDING_TEST_SCOPE={scope}")
-        print(f"LANDING_PYTEST_CMD={cmd}")
-        print(f"LANDING_TEST_SCOPE_WHY={why}")
-        return 2 if scope == "unknown" else 0
 
     if not (args.repo and args.base and args.head):
         print("ERROR: --repo, --base and --head are required", file=sys.stderr)

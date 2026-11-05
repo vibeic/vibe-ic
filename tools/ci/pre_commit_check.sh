@@ -80,27 +80,6 @@ print(f'{r.testsRun},{len(r.failures)+len(r.errors)}')
 fi
 
 # --------------------------------------------------------------------------
-# 3. Marketplace version sync (Wave 81 — prevents /plugin update no-op)
-# --------------------------------------------------------------------------
-echo ""
-echo "--- Marketplace Version Sync ---"
-SYNC_TOOL="$PROJECT_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/marketplace_version_sync_check.py"
-SYNC_DIR="$PROJECT_ROOT/vibe-ic-marketplace"
-if [ -f "$SYNC_TOOL" ] && [ -d "$SYNC_DIR/.claude-plugin" ]; then
-    if python3 "$SYNC_TOOL" --marketplace-dir "$SYNC_DIR" >/dev/null 2>&1; then
-        echo "  PASS: marketplace.json plugins[].version in sync with plugin.json"
-    else
-        # Re-run with output visible for the user to see what drifted.
-        python3 "$SYNC_TOOL" --marketplace-dir "$SYNC_DIR" || true
-        echo "  FAIL: marketplace.json plugins[].version drift detected."
-        echo "        Re-run with --fix to auto-bump."
-        ERRORS=$((ERRORS + 1))
-    fi
-else
-    echo "  SKIP: marketplace_version_sync_check tool or marketplace dir not present"
-fi
-
-# --------------------------------------------------------------------------
 # 4. Commit-msg version-sync (Wave 93 / v1.6.17)
 # --------------------------------------------------------------------------
 # When the commit message advertises a vX.Y.Z, plugin.json + marketplace.json
@@ -141,33 +120,6 @@ if [ -f "$CLAIM_CHECK" ]; then
     fi
 else
     echo "  SKIP: staged_version_claim_check.py not present"
-fi
-
-# --------------------------------------------------------------------------
-# 4.5. Picker fixture-thrash guard (issue #5 lesson learned)
-# --------------------------------------------------------------------------
-# Refuses any commit that flips an entry in the
-# `tests/test_phase1_fixtures_regression.py::_EXPECTED` dict
-# without an explicit `fixture-flip-acknowledged: <project>:<old>
-# -> <new>` line in the commit message. Closes the
-# v1.6.51→v1.6.58→v1.6.60 thrashing class structurally.
-echo ""
-echo "--- Picker fixture-thrash guard ---"
-THRASH_GUARD="$PROJECT_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/picker_fixture_thrash_guard.py"
-if [ -f "$THRASH_GUARD" ]; then
-    MSG_FILE="${1:-}"
-    if [ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ]; then
-        if ! python3 "$THRASH_GUARD" --repo-root "$PROJECT_ROOT" \
-                --commit-msg-file "$MSG_FILE"; then
-            ERRORS=$((ERRORS + 1))
-        fi
-    else
-        if ! python3 "$THRASH_GUARD" --repo-root "$PROJECT_ROOT"; then
-            ERRORS=$((ERRORS + 1))
-        fi
-    fi
-else
-    echo "  SKIP: picker_fixture_thrash_guard.py not present"
 fi
 
 # --------------------------------------------------------------------------

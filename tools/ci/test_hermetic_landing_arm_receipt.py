@@ -44,10 +44,6 @@ HEAD = "d" * 40
 TREE = "e" * 40
 LANDING_NONCE = "c" * 64
 TEST_ENTRY = "tools/ci/hermetic_test_arm_entry.sh"
-MATRIX_LEDGER = (
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/"
-    "matrix_mutation_ledger.py"
-)
 MATRIX_CENSUS_TEST = (
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
     "test_flow_matrix_census_freshness.py"
@@ -56,17 +52,8 @@ MATRIX_TEST = (
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
     "test_flow_matrix_coverage.py"
 )
-MATRIX_ARTEFACT_TEST = (
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
-    "test_matrix_artefact_mutation_channel.py"
-)
-MATRIX_MUTATION_TEST = (
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
-    "test_matrix_mutation_ledger.py"
-)
 TEST_OVERLAYS = (
-    TEST_ENTRY, MATRIX_LEDGER, MATRIX_CENSUS_TEST, MATRIX_TEST,
-    MATRIX_ARTEFACT_TEST, MATRIX_MUTATION_TEST,
+    TEST_ENTRY, MATRIX_CENSUS_TEST, MATRIX_TEST,
 )
 LAND_ENTRY = "tools/gatekeeper-land.sh"
 

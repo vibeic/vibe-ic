@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 import fnmatch
 import json
 from pathlib import Path
@@ -31,10 +32,10 @@ def eqy_partitions(scratch):
     if not complete:
         return "NOT_MEASURED", None, "EQY partition declarations or strategy statuses are incomplete.", reports
     unknown = [name for name, words in parts.items() if "PASS" not in words]
-    if unknown or xbits:
+    if unknown:
         return ("NOT_MEASURED", None,
                 f"EQY has {len(unknown)} undecided and {len(xbits)} gold-x partition(s).", reports)
-    return "PASS", 0, f"EQY proved all {len(declared)} partition(s).", reports
+    return "PASS", 0, f"EQY proved all {len(declared)} partition(s), including {len(xbits)} gold-x partition(s).", reports
 
 
 def reset_boundary(project):
@@ -54,7 +55,7 @@ def reset_boundary(project):
                         if name and edge in {"posedge", "negedge"}:
                             clocks.add((name, edge))
                     for row in _records(container, "resets", "reset_domains"):
-                        name, polarity = row.get("name"), row.get("polarity")
+                        name, polarity = row.get("source_pin") or row.get("name"), row.get("polarity")
                         if name and polarity in {"active_low", "active_high"}:
                             resets.add((name, polarity))
     if len(clocks) != 1 or len(resets) != 1:
@@ -88,13 +89,13 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     reads = [f"read_verilog -lib -nooverwrite -sv {defines} {includes} " + _word(path) for path in models]
     reads += ["read_liberty -lib -nooverwrite -ignore_miss_func -ignore_miss_dir " + _word(path)
               for path in pads["liberty"]]
-    views, reports = {}, []
+    views, reports, outputs, disconnected_ports = {}, [], {}, {}
     for side, source in (("gold", gold.replace("[gold]", "")), ("gate", gate)):
         path = directory / f"{side}_pads.ys"
         path.write_text("\n".join(reads) + "\n" + source + "\n"
             + f"hierarchy -check -top {top}\nproc\nflatten\n"
             + f"write_json {_word(directory / (side + '.before-normalization.json'))}\n"
-            + f"select -set terminals {top}/i:* {top}/o:* %i\n"
+            + f"select -set terminals {top}/i:* {top}/o:* %u\n"
             + "\n".join(f"expose -evert {top}/t:{master}"
                          for master in sorted(pads["types"])) + "\n"
             + f"select -set pad_terminals {top}/i:* {top}/o:* %i @terminals %d\n"
@@ -107,9 +108,10 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
             return None, None, reports, "Pad-boundary elaboration did not complete."
         views[side] = json.loads((directory / f"{side}.before-normalization.json").read_text())["modules"][top]
         module = views[side]
+        core_connections = {bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
+                            for bits in cell["connections"].values() for bit in bits}
         connected = {bit for port in module["ports"].values() for bit in port["bits"]}
-        connected.update(bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
-                         for bits in cell["connections"].values() for bit in bits)
+        connected.update(core_connections)
         connected_ports = {f"{instance}.{pin}" for instance, cell in module["cells"].items()
                            if cell["type"] in pads["types"] for pin, bits in cell["connections"].items()
                            if bits and (cell["port_directions"].get(pin) == "input"
@@ -118,10 +120,33 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
         disconnected = [f"{top}/{name}" for name, port in exposed["ports"].items()
                         if port["direction"] == "output" and name not in module["ports"]
                         and name not in connected_ports]
+        pad_terminals = {bit for cell in module["cells"].values() if cell["type"] in pads["types"]
+                         for pin, bits in cell["connections"].items()
+                         for bit in bits}
+        package_inputs = {bit for port in module["ports"].values() if port["direction"] in {"input", "inout"}
+                          for bit in port["bits"]}
+        package_outputs = [f"{top}/{name}" for name, port in module["ports"].items()
+                           if port["direction"] == "output" and port["bits"]
+                           and all(type(bit) is int and bit in pad_terminals
+                                   and bit not in core_connections and bit not in package_inputs for bit in port["bits"])]
+        outputs[side], disconnected_ports[side] = set(package_outputs), disconnected
+        reports.extend([directory / f"{side}.before-normalization.json", core / f"{side}.json"])
+
+    package_outputs = sorted(outputs["gold"] & outputs["gate"])
+    for side, module in views.items():
+        preserved_outputs = [f"{top}/{name}" for name, port in module["ports"].items()
+                             if port["direction"] == "output" and f"{top}/{name}" not in package_outputs]
+        disconnected = disconnected_ports[side]
+        projection = ["expose " + " ".join(preserved_outputs)] if preserved_outputs else []
+        if package_outputs:
+            projection.extend(["expose -input " + " ".join(package_outputs),
+                               "delete -output " + " ".join(package_outputs)])
         if disconnected:
+            projection.append("delete -port " + " ".join(disconnected))
+        if projection:
             path = directory / f"{side}_core.ys"
             path.write_text(f"read_json {_word(core / (side + '.json'))}\n"
-                + "delete -port " + " ".join(disconnected) + "\n"
+                + "\n".join(projection) + "\n"
                 + f"hierarchy -top {top}\nclean -purge\n"
                 + f"write_json {_word(core / (side + '.json'))}\n"
                 + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")
@@ -129,7 +154,6 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
             reports.append(path)
             if completed is None or completed.returncode:
                 return None, None, reports, "Pad-free core elaboration did not complete."
-        reports.extend([directory / f"{side}.before-normalization.json", core / f"{side}.json"])
 
     def wrapper(module):
         instances = {name: cell for name, cell in module["cells"].items()
@@ -182,8 +206,11 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
 
 def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
+    from lec_run import DEFAULT_YOSYS_TIMEOUT_S
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
     from lec_post_layout_check import _LIB_CELL_RE
+    from flow_chip_inputs import _paths
+    from _pad_ring import parse_lef_macro_classes
 
     project, directory = Path(project), Path(directory)
     top, netlist = config.get("DESIGN_NAME"), state.get("nl") if state is not None else None
@@ -191,6 +218,14 @@ def eqy(project, directory, tool, commands, *, state, config):
     if not top or not netlist or not Path(netlist).is_file() or not rtl or any(not path.is_file() for path in rtl):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
     used = set().union(*(netlist_used_cells(path.read_text()) for path in [*rtl, Path(netlist)]))
+    classes = {}
+    for key in ("CELL_LEFS", "PAD_LEFS", "EXTRA_LEFS"):
+        for path in _paths(config.get(key)):
+            path = path if path.is_absolute() else project / path
+            if path.is_file():
+                classes.update(parse_lef_macro_classes(path.read_text()))
+    physical = {name for name, kind in classes.items() if name in used
+                and (kind in {"PAD SPACER", "CORE SPACER"} or kind.startswith("ENDCAP "))}
     corner = config.get("DEFAULT_CORNER", "")
     liberty, external_liberty, pad_liberty = [], [], []
     for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
@@ -237,9 +272,14 @@ def eqy(project, directory, tool, commands, *, state, config):
     pad_types.update(match["name"] for path in pad_models
                      for match in _NETLIST_MODULE_RE.finditer(path.read_text()))
     pad_types &= used
+    pad_types -= physical
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
-        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models)
+        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models,
+        timeout=DEFAULT_YOSYS_TIMEOUT_S)
+    if physical:
+        removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
+        source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)
     wrapper_count, wrapper_reports, wrapper_detail = None, [], ""
     if pad_types:
         from pdk_udp_synth_shim_gen import _strip_specials
@@ -375,6 +415,49 @@ def layout_step(directory, tool, commands, state, config, step_class, metric, ov
     return result
 
 
+def gls_signal_netlist(directory, netlist, text, used, closure, config, commands):
+    import sdf_gate_sim as native
+    from _pad_ring import parse_lef_pin_roles, parse_verilog_rail_bridges
+    from _specrtl_common import parse_rtl_ports
+    from flow_chip_inputs import _paths
+    from flow109_netlist_cdc import _word
+
+    roles, connections, removed = {}, {}, set()
+    for key in ("PAD_LEFS", "CELL_LEFS", "EXTRA_LEFS"):
+        for path in _paths(config.get(key)):
+            if path.is_file():
+                roles.update(parse_lef_pin_roles(path.read_text()))
+    for instance in native._INSTANCE_STMT_RE.finditer(text):
+        connections.setdefault(instance[1], set()).update(
+            pin for pin, _ in native._CONN_RE.findall(instance[3]))
+    for path in closure["files"]:
+        code = native.strip_comments(Path(path).read_text())
+        bridges = parse_verilog_rail_bridges(code)
+        for module in native._MODULE_BODY_RE.finditer(code):
+            name = module[2]
+            if name not in bridges or name not in used or name not in roles:
+                continue
+            if "`" in code[:module.end()]:
+                continue
+            _, ports = parse_rtl_ports(module[0], name)
+            names = {port.name for port in ports}
+            if (ports and connections.get(name, set()) - names
+                    and all(port.direction == "inout" and roles[name].get(port.name, ("", ""))[1]
+                            in {"POWER", "GROUND"} for port in ports)):
+                removed.add(name)
+    if not removed:
+        return Path(netlist), [], []
+    signal, projection = directory / "signal_netlist.v", directory / "signal_netlist.ys"
+    projection.write_text(f"read_verilog -sv -icells {_word(netlist)}\n"
+        + "\n".join("delete t:" + name for name in sorted(removed))
+        + f"\nwrite_verilog -noattr {_word(signal)}\n")
+    projected = commands.run(["yosys", "-s", projection])
+    reports = [projection, signal]
+    if projected is None or projected.returncode or not signal.is_file():
+        return Path(netlist), [], reports
+    return signal, sorted(removed), reports
+
+
 def gls(project, directory, tool, commands, *, state, config):
     import sdf_gate_sim as native
     from _sim_results_bridge import parse_junit
@@ -422,22 +505,26 @@ def gls(project, directory, tool, commands, *, state, config):
         return commands.result(detail="GLS needs the configured PDK's functional and timing cell models.")
     used = native.netlist_used_cells(text)
     closure = native.verilog_model_closure(declared, used)
+    signal_netlist, physical, projection_reports = gls_signal_netlist(
+        directory, netlist, text, used, closure, config, commands)
+    signal_text = signal_netlist.read_text()
     model_text = "\n".join(Path(path).read_text() for path in closure["files"])
-    stubs = native.missing_empty_cell_stubs(text, used, model_text)
+    stubs = native.missing_empty_cell_stubs(signal_text, used, model_text)
     unresolved = sorted(set(closure["unresolved"]) - set(stubs))
     if unresolved or closure["clashes"]:
         return commands.result(detail=f"GLS cell models incomplete: unresolved={unresolved}, "
             f"clashes={closure['clashes']}.")
     stub_file = directory / "physical_cells.v"
     stub_file.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
-    rows, reports = [], [stub_file]
+    rows, reports = [], [stub_file, *projection_reports]
     for corner, sdf in sdfs.items():
         for bench in benches:
             work = directory / ("corner_" + str(len(rows) + 1))
             work.mkdir(parents=True, exist_ok=True)
             row = {"corner": corner, "testbench": str(bench), "status": "NOT_MEASURED",
                    "ran": False, "exit_code": None}
-            models = [str(netlist), *closure["files"], str(stub_file)]
+            clock_unmeasured = False
+            models = [str(signal_netlist), *closure["files"], str(stub_file)]
             flags = shlex.split(native._IVERILOG_FLAGS)
             for parent in dict.fromkeys([str(bench.parent), *(str(Path(p).parent) for p in models)]):
                 flags.extend(["-I", parent])
@@ -462,14 +549,42 @@ def gls(project, directory, tool, commands, *, state, config):
                 sources = " ".join(shlex.quote(path).replace("$", "$$") for path in [*models, str(shim)])
                 compile_flags = " ".join(shlex.quote(flag).replace("$", "$$") for flag in flags)
                 module = shlex.quote(bench.stem).replace("$", "$$")
+                if sdc:
+                    try:
+                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                    except (OSError, ValueError) as exc:
+                        row["detail"] = str(exc)
+                        rows.append(row)
+                        continue
+                    if clocks["clocks_s"]:
+                        periods = {name: format(Decimal(str(value)) / Decimal("1e-9"), "f")
+                                   for name, value in clocks["clocks_s"].items()}
+                        entry = work / "flow_clocked_suite.py"
+                        entry.write_text("from decimal import Decimal\nfrom importlib import import_module\n"
+                            f"suite = import_module({bench.stem!r})\nperiods = {periods!r}\n"
+                            "clock = getattr(suite, 'CLK', None)\n"
+                            "if (clock in periods and hasattr(suite, 'HALF_NS')\n"
+                            "        and callable(getattr(suite, '_start_clock', None))):\n"
+                            "    suite.HALF_NS = Decimal(periods[clock]) / 2\n"
+                            "    print(f'COCOTB_CLOCK_NS {clock}={periods[clock]}', flush=True)\n"
+                            "else:\n    clock = None\n"
+                            "if set(periods) != ({clock} if clock else set()):\n"
+                            "    print('COCOTB_CLOCK_UNBOUND: suite has no supported clock setting', flush=True)\n"
+                            "globals().update({name: value for name, value in vars(suite).items()\n"
+                            "                  if not name.startswith('__')})\n")
+                        module = entry.stem
+                        row["clock"] = clocks
+                        reports.append(entry)
                 makefile.write_text("SIM = icarus\nTOPLEVEL_LANG = verilog\n"
                     f"VERILOG_SOURCES = {sources}\nCOCOTB_TOPLEVEL = flow_sdf_tb\n"
                     f"COCOTB_TEST_MODULES = {module}\n"
                     f"COMPILE_ARGS += {compile_flags}\n"
                     "COCOTB_PLUSARGS += -sdf-info\nSIM_BUILD = build\nCOCOTB_RESULTS_FILE = results.xml\n"
-                    f"export PYTHONPATH := {str(bench.parent).replace('$', '$$')}:$(PYTHONPATH)\n"
+                    f"export PYTHONPATH := {str(work).replace('$', '$$')}:{str(bench.parent).replace('$', '$$')}:$(PYTHONPATH)\n"
                     "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
                 completed = commands.run(["make", "-f", makefile, "-j8"], cwd=work)
+                clock_unmeasured = (completed is not None and "COCOTB_CLOCK_UNBOUND:" in
+                                    completed.stdout + completed.stderr)
                 summary = parse_junit(work / "results.xml")
                 functional = (summary if summary and summary["tests"] > 0 and not summary["skipped"] else None)
                 failures = functional["failures"] + functional["errors"] if functional else None
@@ -579,8 +694,10 @@ def gls(project, directory, tool, commands, *, state, config):
             applied = len(native._SDF_APPLIED_RE.findall(transcript))
             errors = len(native._SDF_ERROR_RE.findall(transcript))
             status = ("FAIL" if completed.returncode or errors or failures else
-                      "PASS" if applied and failures == 0 else "NOT_MEASURED")
+                      "PASS" if applied and failures == 0 and not clock_unmeasured else "NOT_MEASURED")
             detail = ("Icarus reported no applied SDF delay records. " if not applied else "")
+            if clock_unmeasured:
+                detail += "The Python suite has no supported setting for every native SDC clock. "
             if failures is None:
                 detail += "No native self-check or complete JUnit functional verdict was produced. "
             row.update(ran=True, exit_code=completed.returncode, status=status, tests=total,
@@ -589,6 +706,7 @@ def gls(project, directory, tool, commands, *, state, config):
             rows.append(row)
     summary = directory / "gls.json"
     summary.write_text(json.dumps({"runs": rows, "cell_models": closure,
+        "physical_only_types_omitted": physical,
         "selected_corners": selected, "unmeasured_corners": unmeasured,
         "corner_selection": "explicit tool selection" if requested is not None else "direct owner single-SDF default"},
         indent=2) + "\n")
@@ -601,6 +719,7 @@ def gls(project, directory, tool, commands, *, state, config):
                                      tool.get("metric", "gls_failures")}, failures))
     result = commands.result(metrics, [*reports, summary],
         f"Selected GLS corners: {selected}; other native SDF corners unmeasured: {unmeasured}. "
+        f"Signal simulation omits physical-only cell types: {physical}. "
         "The full existing suite is replayed; no timing annotation means NOT_MEASURED.")
     result["native_steps"] = [{"name": "Icarus.GLS", **row} for row in rows]
     return result

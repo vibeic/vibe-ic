@@ -6,6 +6,7 @@ import argparse
 import fnmatch
 import json
 import re
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ SETTINGS = {
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
 }
 IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_REPAIR",
-                           "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
+                           "EXTRA_EXCLUDED_CELLS", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
 
 
 def implementation_setting(key: str) -> bool:
@@ -111,6 +112,67 @@ def _input_docs(project: Path) -> dict[str, str]:
             and path.suffix.lower() in {".md", ".rst", ".txt", ".markdown"}}
 
 
+def declared_power_checks(project: Path, *, config: dict | None = None, metrics: dict | None = None) -> list[dict]:
+    config, metrics = config or {}, metrics or {}
+    number = r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+    pattern = re.compile(rf"(<=|>=|<|>|≤|≥|under\b|below\b|at\s+most\b|at\s+least\b)?\s*({number})\s*([mµμu]?W)\b", re.I)
+    scales, inputs = {"W": 0, "mW": -3, "uW": -6, "µW": -6, "μW": -6}, []
+    for path in sorted((project / "phase1/generated_docs").glob("L*.json")):
+        text = path.read_text(); document = json.loads(text, parse_float=Decimal)
+        for prefix, holder in (("", document), ("fields.", document.get("fields", {}))):
+            for key, unit in (("power_budget_uw", "uW"), ("power_budget_mw", "mW"), ("total_power_mw", "mW")):
+                raw = holder.get(key); spec = raw if isinstance(raw, dict) else {"max": raw}
+                metadata = {**document, **holder, **holder.get("clock_target", {}), **spec}
+                if raw is None or (key == "total_power_mw" and not isinstance(raw, dict)) or metadata.get("informational") or any(metadata.get(k) is False for k in ("signoff", "signoff_gate", "gating")) or metadata.get("rail"):
+                    continue
+                if re.search(r"\b(?:core|rail|domain|block)\b", str(metadata.get("scope", "")), re.I) and not re.search(r"\bincluding\b", str(metadata.get("scope", "")), re.I):
+                    continue
+                statement = " ".join(f"{('>' if side == 'min' else '<') + ('' if spec.get(side + '_exclusive') else '=')} {spec[side]} {spec.get('unit', unit)}" for side in ("min", "max") if isinstance(spec.get(side), (int, float, Decimal)) and not isinstance(spec[side], bool))
+                statement = raw if isinstance(raw, str) else statement
+                context = " ".join(f"{value} ns" if field in {"period_ns", "clock_period_ns", "CLOCK_PERIOD"} else f"{field}={value}" for field, value in metadata.items() if not isinstance(value, (dict, list)))
+                hits = list(re.finditer(rf'"{key}"\s*:', text)); line = text.count("\n", 0, hits[0].start()) + 1 if len(hits) == 1 else None
+                inputs.append(({"file": str(path.relative_to(project)), "field": prefix + key, "line": line, "bound": raw, "unit": spec.get("unit", unit)}, statement, context))
+    inputs = [entry for entry in inputs if pattern.search(entry[1])]
+    if not inputs:
+        for file, text in _input_docs(project).items():
+            context = ""
+            for line_number, line in enumerate(text.splitlines(), 1):
+                if re.match(r"^##\s", line):
+                    context = ""
+                if line.lstrip().startswith(("#", ">")):
+                    context += "\n" + line
+                if not re.search(r"\btotal[ _-]+power\b", line, re.I) or (re.search(r"\b(?:core|rail|domain|block)\b", line, re.I) and not re.search(r"\bincluding\b", line, re.I)) or re.search(r"informational|not.*gate|❌|資訊|(?:core|rail)[ -](?:only|total)|per[- ]rail|power\s*\(\s*(?:core|rail)\b|\|\s*(?:no|false|否)\s*\|", line, re.I):
+                    continue
+                inputs.append(({"file": file, "line": line_number, "text": line}, line, context + "\n" + line))
+    checks, pdks = [], "|".join(re.escape(row["name"]) for row in _load(PROGRAMS / "pdk_registry.json").get("pdks", []))
+    actual_corners = list(config.get("STA_CORNERS") or []) + [key.split("__corner:")[-1] for key in metrics if key.startswith("power__total__corner:")]
+    for source, text, context in inputs:
+        values = []
+        for match in (item for item in pattern.finditer(text.replace("*", "")) if item[3] in scales):
+            value = Decimal(match[2]); sign, digits, exponent = value.as_tuple()
+            values.append((" ".join((match[1] or "").lower().split()), Decimal((sign, digits, exponent + scales[match[3]])), match[3]))
+        if not values:
+            continue
+        limits = {("min" if op in {">", ">=", "≥", "at least"} else "max"): value for op, value, _ in values if op}
+        limits.update({("min" if op == ">" else "max") + "_exclusive": True for op, _, _ in values if op in {"<", ">", "under", "below"}})
+        source = {**source, "bound": source.get("bound", [match[0] for match in pattern.finditer(text.replace("*", ""))]), "unit": source.get("unit", [unit for _, _, unit in values])}
+        mismatches = []
+        for key, condition in (("PDK", rf"(?:PDK|pdk_target)\s*=\s*([\w.-]+)|\b({pdks})\b"), ("STD_CELL_LIBRARY", r"(?:STD_CELL_LIBRARY|scl)\s*=\s*([\w.-]+)|\b(\w+_fd_sc_\w+)\b"), ("CLOCK_PERIOD", rf"({number})\s*ns\b")):
+            stated = {item.casefold() for groups in re.findall(condition, context, re.I) for item in (groups if isinstance(groups, tuple) else (groups,)) if item}
+            actual = str(config.get(key, "")).casefold()
+            if stated and (actual not in stated if key != "CLOCK_PERIOD" else any(Decimal(value) != Decimal(actual or 'NaN') for value in stated)):
+                mismatches.append(key)
+        corners = set(re.findall(r"\b(tt|ff|ss)\b", context, re.I))
+        if corners and not all(any(re.search(rf"(?:^|_){corner}(?:_|$)", actual, re.I) for actual in actual_corners) for corner in corners):
+            mismatches.append("corner")
+        metric = "power__total__corner:" + ("*" + next(iter(corners)).lower() + "*" if len(corners) == 1 else "*")
+        check = {"metric": metric, "operator": "within_declared_bounds", "limit": limits, "unit": "W", "source": source, "scope": "Native estimated total current netlist power including die pads and native activity assumptions."}
+        if mismatches or not limits:
+            check.update(applicable=False, reason="Run conditions differ or are unknown: " + ", ".join(mismatches) if mismatches else "Source number has no comparator; it is not a limit.", value=[value for _, value, _ in values])
+        checks.append(check)
+    return checks
+
+
 def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
     from _rtl_include_hub import silicon_rtl_selection
     from _design_module_set import module_names_in_text
@@ -132,7 +194,8 @@ def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
     docs = project / "phase1/generated_docs"
     l9 = _load(docs / "L9_INTEGRATION_SPEC.json")
     l1 = _load(docs / "L1_DATASHEET.json")
-    top = l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell")
+    top = (_load(project / "plugin_output/declaration.json").get("top_module")
+           or l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell"))
     modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
                             for path in rtl))
     if top not in modules:
@@ -228,7 +291,16 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     config.update(_settings(fields, pdk))
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
-        config.update(PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+        from sdc_constraints import create_clocks_in_text
+
+        config.update(FALLBACK_SDC=str(sdc), PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+        declared = create_clocks_in_text(sdc.read_text())
+        ports = list(dict.fromkeys(clock["port_name"] for clock in declared if clock["port_name"]))
+        periods = [clock["period_ns"] for clock in declared if clock["period_ns"] is not None]
+        if ports:
+            config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
+        if periods:
+            config["CLOCK_PERIOD"] = min(periods)
     notes = project / "work/flow/config_sources.json"
     notes.parent.mkdir(parents=True, exist_ok=True)
     notes.write_text(json.dumps({"sources": sources, "assumptions": assumptions}, indent=2) + "\n")
@@ -262,12 +334,18 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--set", action="append", default=[], metavar="KEY=JSON",
                         help="Record an implementation setting in the existing declaration.")
+    parser.add_argument("--unset", action="append", default=[], metavar="KEY",
+                        help="Remove an implementation setting from the existing declaration.")
     args = parser.parse_args()
     previous = None
-    if args.set:
+    if args.set or args.unset:
         declaration = args.project.resolve() / "plugin_output/declaration.json"
         previous = declaration.read_bytes() if declaration.exists() else None
         choices = _load(declaration)
+        for key in args.unset:
+            if not implementation_setting(key):
+                parser.error(f"Unsupported implementation setting: {key}")
+            choices.pop(key, None)
         for item in args.set:
             key, separator, raw = item.partition("=")
             if not separator or not implementation_setting(key):
@@ -281,7 +359,7 @@ def main() -> int:
     try:
         output = write_config(args.project, route=args.route, output=args.output)
     except Exception:
-        if args.set:
+        if args.set or args.unset:
             if previous is None:
                 declaration.unlink()
             else:

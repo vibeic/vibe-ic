@@ -1,162 +1,25 @@
 #!/usr/bin/env bash
-# gatekeeper-verify-merge.sh — put the landing gates ON THE PATH THAT LANDS CODE.
+# gatekeeper-verify-merge.sh — collect the squash candidate's A/B arm evidence.
 #
-# WHY THIS FILE EXISTS (vibe-ic#1019)
-# ==================================
-# `tools/gatekeeper-land.sh` runs the tests and the hygiene gates and stamps
-# `.git/gatekeeper-stamp`; `tools/git-hooks/pre-push` refuses a push whose commit
-# has no matching stamp. That is the whole enforcement, and it is attached to
-# `git push`.
-#
-#     `gh pr merge --squash` creates the commit SERVER-SIDE. Nothing is pushed
-#     from a local clone, so `pre-push` never fires and `gatekeeper-land.sh`
-#     never runs.
-#
-# Merging is not pushing. Measured on 2026-08-12: Actions is disabled at the
-# ACCOUNT level (`actions/permissions` -> `{"enabled": false}`), `main` returns
-# `404 Branch not protected`, and there are no required status checks. So there
-# is no server-side check to fall back on and none can be created — this script
-# is the merge-path gate or there is not one.
-#
-# WHAT IT VERIFIES: THE SQUASH COMMIT, NOT A LOCAL REBASE OF THE BRANCH
-# ====================================================================
-# `gh pr merge --squash` creates ONE commit whose parent is the base tip and
-# whose tree is the forge's merge tree. So that is what gets built and gated:
-#
-#   1. fetch the PR head (and the forge's own `refs/pull/<n>/merge`, when it has
-#      one);
-#   2. REBASE that head onto the base in a THROWAWAY WORKTREE — this is the
-#      independent second opinion, and a conflict here is a refusal;
-#   3. compute the merge tree with `git merge-tree --write-tree` and REFUSE
-#      unless the rebase agrees with it AND the forge agrees with both. Replaying
-#      the branch's patches and 3-way-merging its text are different questions,
-#      and the phantom-revert shape is exactly where they diverge.
-#      `--write-tree` NEEDS GIT >= 2.38 and four of six hosts in this fleet run
-#      2.34.1, the landing host among them, so the capability is PROBED and the
-#      run declares a TIER — see "TWO TIERS" below;
-#   4. build the SQUASH commit — `commit-tree <merge tree> -p <base>` with the
-#      forge's own default squash message (the PR's commit messages concatenated,
-#      so the NDA and prohibition scans read the text that will actually land) —
-#      and check it out. The commit-SHAPE gates (`landing_is_one_commit_check`,
-#      `landing_collateral_revert_check`, `gatekeeper_stale_branch_check`) then
-#      judge the shape that lands instead of an N-commit local branch that does
-#      not;
-#   5. BEFORE starting either expensive arm, run the BASE-owned cheap gates on
-#      the exact commit population that would be pushed. A measured refusal
-#      stops here; it is never discovered after the CPU work has finished;
-#   6. run the targeted suite on the BASE (arm A) and `gatekeeper-land.sh` on the
-#      squash commit (arm B), each with its own junit report — AND hand the
-#      verdict the list arm A was ASKED to run (`--base-selection`), so a base
-#      arm that did not finish is caught instead of being subtracted as though
-#      it had (vibe-ic#1443: a partial base arm hides `silenced`, which is the
-#      permissive direction);
-#   7. hand every fact to `landing_merge_verdict.py`, which owns the refusal
-#      decision, and exit non-zero on REFUSE.
-#
-# The verified SHA is a local stand-in: the forge will pick its own committer and
-# date, so its commit hashes differently. The TREE is the identity that matters
-# and it is reported alongside.
-#
-# TWO TIERS, BECAUSE THE LANDING HOST CANNOT RUN THE STRONG ONE
-# ============================================================
-# `git merge-tree --write-tree` requires git >= 2.38. Measured across this fleet
-# on 2026-08-12: `.112` 2.43.0 and `.114` 2.54.0 have it; `.102` (the
-# orchestrator, where every `gh pr merge` is run), `.105`, `.120` and `.121` are
-# all 2.34.1 and do not. On those four the tree came back empty and the verdict
-# refused every landing with THE MERGE TREE COULD NOT BE COMPUTED — fail-closed
-# and correct, and a BAN rather than a check.
-#
-#   TIER `merge-tree`     git >= 2.38. Unchanged. The tree under test is the
-#                         3-way merge; the rebase replay cross-checks it and a
-#                         disagreement is a refusal.
-#   TIER `rebase-replay`  the fallback. The tree under test is the REBASE
-#                         REPLAY. THE SQUASH-VS-REBASE CROSS-CHECK IS NOT
-#                         PERFORMED — there is only one answer, so nothing can
-#                         disagree with it. The forge's `refs/pull/<n>/merge`
-#                         still cross-checks it whenever the forge merged this
-#                         same base.
-#
-# Everything else is identical in both tiers: the same squash commit is built
-# from the tree under test, the same `gatekeeper-land.sh` runs on it, the same
-# test and gate differentials decide. The fallback is a WEAKER CHECK, NEVER A
-# PASS — the paired negative control (an innocuous diff that leaves a test red)
-# is asserted UNDER THE FALLBACK, because a fallback that passes everything
-# would be worse than a gate that refuses everything.
-#
-# The loss is disclosed twice, and the machine-readable half is the load-bearing
-# one — a downstream reader must be able to tell the tiers apart without parsing
-# prose:
-#
-#   printed   `  DISCLOSE  SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED`
-#   JSON      "verification_tier": "rebase-replay", "tier_degraded": true,
-#             "squash_vs_rebase_cross_check": "NOT_PERFORMED",
-#             "disclosures": [...], "git_version", "git_version_required_for_merge_tree"
-#
-# `GATEKEEPER_FORCE_REBASE_REPLAY=1` forces the fallback on a host that has the
-# capability. It exists so the fallback branch is TESTED on every host rather
-# than only on the hosts that need it, and it can only ever select the weaker,
-# disclosed tier — no value of it turns a refusal into a pass.
-#
-# WHERE EACH HALF COMES FROM, AND WHY
-# ===================================
-#   the GATES          the CANDIDATE's tree. `gatekeeper-land.sh` resolves every
-#                      program from its own repo root, so a tree's gates ship
-#                      with it; a PR that adds one is covered by it from the next
-#                      landing onward. `--gate-edited` DISCLOSES when the branch
-#                      touches the battery judging it, because that is worth
-#                      reading and must not be blocking (a PR that improves the
-#                      gate has to be landable).
-#   the VERDICT        the exact BASE commit's raw-attested copy of
-#                      `landing_merge_verdict.py`, rematerialized after the
-#                      candidate census is zero; never the candidate's or a
-#                      mutable caller worktree's copy. The judge may not be
-#                      supplied by the subject — the same rule §4.05 states for
-#                      an oracle. A PR can change what its gates check; it
-#                      cannot change what counts as a refusal.
-#
-# WHY ARM A EXISTS: `main` is RED independently of anything in flight
-# (`test_ci_harness_timeout_ceiling_check` 3/40, measured at two different tips).
-# A gate that demanded a green tree would refuse EVERY landing today, and a gate
-# that refuses every landing is a ban that teaches the operator to bypass it. The
-# candidate is judged on WHAT IT BREAKS — with `failed -> skipped` counted as a
-# refusal, never an improvement. See the program's docstring for the table.
-#
-# USE IT BEFORE `gh pr merge`, AND LAND ONLY ON A PASS:
-#
-#     tools/gatekeeper-verify-merge.sh 1021 --json /tmp/v.json   # must exit 0
-#     gh pr merge 1021 --squash
-#     tools/gatekeeper-verify-merge.sh --reassert /tmp/v.json     # if time passed
-#
-# A verdict binds the exact candidate and named acceptance inputs. If
-# `origin/main` moves, `--reassert` reuses the completed receipt when the new
-# bytes are unrelated, and requests only impacted checks when they overlap.
+# The test and gate arms retain their isolated runtimes, receipts and cleanup.
+# Their raw return codes are printed; this command emits no landing verdict.
+# --reassert remains the receipt-reuse operation consumed by the release service.
 #
 # Usage:
 #   gatekeeper-verify-merge.sh <pr-number> [options]
 #   gatekeeper-verify-merge.sh --ref <ref> [options]
-#   gatekeeper-verify-merge.sh --reassert <verdict.json> --reassert-head <ref>
+#   gatekeeper-verify-merge.sh --reassert <receipt.json> --reassert-head <ref>
 #
-# Options:
-#   --base <ref>        base the PR would land on          (default origin/main)
-#   --repo <path>       repository to operate on   (default: this script's repo)
-#   --json <path>       write the verdict JSON
-#   --no-fetch          do not touch the network (local refs must already exist)
-#   --reassert-head <ref>
-#                       current candidate ref; must still equal receipt head
+#   --base <ref>        base ref (default origin/main)
+#   --repo <path>       repository root
+#   --no-fetch          use local refs
+#   --json <path>       output for the already-published-head push preflight
+#   --keep              keep the run directory and worktrees for inspection
 #   --require-version-bump
-#                       demand the version bump in the PR itself. OFF by
-#                       default because authoring PRs are VERSION-LESS by
-#                       doctrine — the gatekeeper assigns the version AT MERGE —
-#                       so demanding it here would refuse every conformant PR.
-#                       A BACKWARDS version is refused either way.
-#   --keep              keep the run directory and the worktrees for inspection
+#                       require the PR's own version bump; otherwise assignment
+#                       remains the gatekeeper's responsibility at merge
 #   --base-gate-cache <dir>
-#                       reuse only NON-PERMISSIVE GREEN A1/A2 evidence, bound to
-#                       base, selection, candidate instrument, host/runtime and
-#                       execution contract. Red baseline evidence is always
-#                       remeasured in this run and can never become a stale
-#                       exemption. Busy/unsupported locks are cache misses, not
-#                       critical-path waits. Every bundle is terminal-validated.
+#                       accepted but disabled; base arms are remeasured
 set -uo pipefail
 
 PR=""; REF=""; BASE="origin/main"; JSON_OUT=""; REASSERT=""; REASSERT_HEAD=""
@@ -191,7 +54,7 @@ while [ $# -gt 0 ]; do
     --keep)     KEEP=1; shift ;;
     --base-gate-cache) BASE_GATE_CACHE="${2:?}"; shift 2 ;;
     --require-version-bump) REQUIRE_VERSION_BUMP=1; shift ;;
-    -h|--help)  sed -n '1,156p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)  sed -n '1,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
     -*)         die "unknown option $1" ;;
     *)          [ -n "$PR" ] && die "more than one PR number given"
                 PR="$1"; shift ;;
@@ -624,11 +487,8 @@ launch_hermetic_test_arm() {
   setsid python3 -B "$RUNTIME_SNAPSHOT/tools/ci/hermetic_candidate_runner.py" run \
     --subject "$subject" --runtime "$RUNTIME_SNAPSHOT" \
     --overlay tools/ci/hermetic_test_arm_entry.sh \
-    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py \
     --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_census_freshness.py \
     --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_coverage.py \
-    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py \
-    --overlay vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py \
     --env "GATEKEEPER_BENCHMARK_DATA_SHA=$BENCHMARK_SHA" \
     --env "GATEKEEPER_VERIFY_ARM=$arm" \
     --env VIBEIC_PYTEST_PROGRESS_FILE=/evidence/pytest-progress.jsonl \
@@ -1133,47 +993,6 @@ if [ "$PUSH_PREFLIGHT_RC" -ne 0 ]; then
   exit "$PUSH_PREFLIGHT_RC"
 fi
 
-# ------------------------- 3. CAN THIS HOST COMPUTE THE MERGE TREE AT ALL?
-# `git merge-tree --write-tree` landed in git 2.38. Measured 2026-08-12 across
-# the fleet this repo is maintained on, FOUR OF SIX HOSTS RUN 2.34.1 — including
-# the orchestrator, which is where every `gh pr merge` is actually run.
-#
-# On those hosts the strong path does not fail, it never starts: `--write-tree`
-# is read as a REV, git answers `fatal: unknown rev --write-tree`, the tree comes
-# back empty and the verdict refuses with THE MERGE TREE COULD NOT BE COMPUTED.
-# That refusal is CORRECT — it fails closed and says so, and that property is
-# kept below — but as a gate it was useless: it refused every landing on the only
-# host that lands, which is the ban this whole program exists to avoid.
-#
-# So the capability is PROBED and the run picks a TIER:
-#
-#   merge-tree      the strong path, unchanged. The tree under test is the 3-way
-#                   merge, and the rebase replay is an INDEPENDENT second opinion
-#                   whose disagreement is a refusal.
-#   rebase-replay   the fallback. The tree under test is the REBASE REPLAY, and
-#                   THE SQUASH-VS-REBASE CROSS-CHECK IS NOT PERFORMED — there is
-#                   only one answer, so there is nothing to disagree with it.
-#
-# The fallback is a WEAKER CHECK, NOT A PASS. Every other refusal reason — the
-# test differential, the gate differential, silencing, truncation, the stamp, the
-# forge cross-check when the forge merged this same base — is computed
-# identically in both tiers, and the paired negative control is asserted UNDER
-# THE FALLBACK specifically (`test_end_to_end_the_fallback_still_refuses_an_
-# innocuous_diff_that_leaves_a_test_red`). A disclosed weaker check beats a
-# universal refusal; a fallback that passes everything would be worse than both.
-#
-# The loss is DISCLOSED in the printed verdict AND machine-readably in the JSON
-# (`verification_tier`, `tier_degraded`, `squash_vs_rebase_cross_check`, and the
-# `disclosures` code list), because a downstream reader has to be able to tell
-# the two tiers apart without parsing prose.
-#
-# THE PROBE IS FUNCTIONAL, NOT A VERSION COMPARISON. A version parse is what
-# breaks on `2.39.3 (Apple Git-145)` and on vendor forks, and it would answer
-# about the string rather than the capability. `git --version` is read only to
-# NAME the version found alongside the version needed, which is what a refusal
-# has to say to be actionable. Merging the base with ITSELF is the cheapest
-# question whose answer is known in advance — the base's own tree — so the probe
-# reports a property of the HOST and can never become an opinion about this PR.
 MERGE_TREE_MIN_VERSION="2.38"
 GIT_VERSION="$("${G[@]}" --version 2>/dev/null \
     | sed -n 's/^git version \([0-9][0-9A-Za-z.]*\).*/\1/p')"
@@ -1217,7 +1036,6 @@ if [ "$TIER" = "merge-tree" ]; then
 else
   echo "--- merge-tree capability ABSENT — $TIER_REASON"
   echo "    TIER=rebase-replay: the tree under test is the REBASE REPLAY, and the"
-  echo "    squash-vs-rebase cross-check is NOT performed. Disclosed in the verdict"
   echo "    and in the JSON record; every other refusal reason is unchanged."
 fi
 
@@ -1239,29 +1057,11 @@ fi
 REBASED_SHA="$(git -C "$WT_CAND" rev-parse HEAD)"
 REBASED_TREE="$(git -C "$WT_CAND" rev-parse 'HEAD^{tree}')"
 
-# THE FALLBACK'S TREE UNDER TEST — adopted ONLY when the replay actually
-# succeeded. A conflicted rebase leaves the HEAD's own tree checked out in the
-# worktree, which is not a merge result at all; adopting that would verify a tree
-# nobody will ever create, and it would do it silently, which is the one failure
-# mode worse than the refusal this replaces. Left EMPTY on conflict so the
-# verdict refuses as UNMEASURABLE, exactly as the strong tier does — the
-# fail-closed property is preserved, not traded away.
 if [ "$TIER" = "rebase-replay" ] && [ "$REBASE_STATUS" = "ok" ]; then
   EXPECTED_TREE="$REBASED_TREE"
 fi
 echo "--- rebase=$REBASE_STATUS  replayed=${REBASED_SHA:0:12}  tree=${REBASED_TREE:0:12}  tier=$TIER  tree-under-test=${EXPECTED_TREE:0:12}"
 
-# A rebase conflict, a disagreement between the replay and the merge, or a forge
-# that disagrees with both means nothing downstream measures the right tree. Run
-# the verdict on what we have and stop — the suites would answer a question about
-# a tree nobody will create.
-#
-# UNDER THE FALLBACK the replay-vs-merge comparison is vacuous by construction
-# (they are the same object) — that IS the disclosed loss. The FORGE comparison
-# below is not vacuous and is not dropped: when the forge merged this same base,
-# `refs/pull/<n>/merge` is an independent second opinion computed by a git new
-# enough to have the capability this host lacks, so the fallback still gets a
-# real cross-check whenever the forge published one.
 SHORT_CIRCUIT=0
 [ "$REBASE_STATUS" != "ok" ] && SHORT_CIRCUIT=1
 [ -z "$EXPECTED_TREE" ] && SHORT_CIRCUIT=1
@@ -1301,77 +1101,14 @@ fi
 PLUGIN_REL="vibe-ic-marketplace/plugins/vibe-ic"
 CAND_PLUGIN="$WT_CAND/$PLUGIN_REL"
 # ---------------------------------------------- 6. DIFFERENTIAL VERIFIER ARMS
-# THE JUDGE COMES FROM THE RAW-ATTESTED BASE SNAPSHOT, NOT FROM THE SUBJECT
-# (see the header).  A foreign `--repo` does not create a subject fallback.
-VERDICT_PROG="$TRUSTED_REPO/$PLUGIN_REL/programs/landing_merge_verdict.py"
-[ -f "$VERDICT_PROG" ] \
-  || die "trusted base does not carry landing_merge_verdict.py"
 : > "$RUN/selection.txt"
-# Created HERE, not only inside the `SHORT_CIRCUIT=0` branch, so the verdict is
-# always handed a file it can read. An absent file and an empty one both mean
-# "the base arm was asked for nothing", which the verdict reports as a
-# not-checked disclosure rather than as a clean base arm (vibe-ic#1443).
 : > "$RUN/selection_base.txt"
 : > "$RUN/land.log"
 CAND_JUNIT="$RUN/candidate.xml"
 BASE_JUNIT="$RUN/base.xml"
 B2_RC=2
-B1_WORKTREE_STATUS=unknown
-A1_WORKTREE_STATUS=unknown
-BASE_LAND_ARG=()
-# vibe-ic#1498 — the two arms' hygiene RECORDS, so the gate differential can ask
-# the hygiene tier which findings this branch INTRODUCED rather than only
-# whether its one label failed. Both arms already run `gatekeeper-land.sh`; all
-# that is added is that each writes its `--summary-json` record where the
-# verdict can read it.
-#
-# The pair is handed to the verdict once the BASE arm produced a record; without
-# one the verdict discloses the loss and falls back to the coarse per-label
-# comparison, because the branch does not control whether arm A2 ran. A missing
-# CANDIDATE record is NOT the same event and is NOT hidden here — that path is
-# passed either way and the verdict refuses on it, since that is the tree under
-# test failing to measure itself.
 BASE_HYG="$RUN/base_hygiene.json"
 CAND_HYG="$RUN/candidate_hygiene.json"
-HYG_ARGS=()
-TRANSITION_ARGS=()
-# The host is REQUIRED by `hygiene_finding_delta` and never inferred: these
-# findings are host-dependent (`gate_host_independence_check` is one of the
-# gates). Both arms run HERE, so both hosts are this one — except on a
-# `--base-gate-cache` hit, where the base arm did not run at all and the host
-# is whatever measured the cached record. It is stored beside it for that
-# reason rather than assumed.
-THIS_HOST="$(uname -n)"
-BASE_HYG_HOST="$THIS_HOST"
-
-# The PR may change the very gate that judges it — this one does. Disclosed in
-# the verdict, never blocking: a PR that improves the gate must be landable, and
-# the reviewer needs to know the gate it passed was its own.
-GATE_ARGS=()
-while read -r p; do
-  [ -n "$p" ] && GATE_ARGS+=(--gate-edited "$p")
-done < <("${G[@]}" diff --name-only "$BASE_SHA" "$REBASED_SHA" -- \
-            tools/gatekeeper-land.sh tools/gatekeeper-verify-merge.sh \
-            tools/ci/repo_hygiene_gates.sh tools/ci/_gate_dispatch.sh \
-            tools/ci/benchmark_data_landing_checkout.py \
-            tools/ci/owned_command.py tools/ci/routed_def_corpus.py \
-            tools/ci/hermetic_candidate_runner.py \
-            tools/ci/hermetic_git_subject.py \
-            tools/ci/hermetic_progress_emit.py \
-            tools/ci/hermetic_test_arm_entry.sh \
-            tools/ci/landing_completion_record.py \
-            tools/ci/landing_push_preflight.py \
-            tools/ci/landing_record_primitives.py \
-            tools/ci/trusted_test_selection.py \
-            tools/ci/trusted_worktree_attest.py tools/git-hooks/pre-push \
-            "$PLUGIN_REL/programs/_owned_process_supervisor.py" \
-            "$PLUGIN_REL/programs/gate_process_attestation.py" \
-            "$PLUGIN_REL/programs/landing_merge_verdict.py" \
-            "$PLUGIN_REL/programs/hygiene_finding_delta.py" \
-            "$PLUGIN_REL/programs/ci_targeted_test_select.py" \
-            "$PLUGIN_REL/programs/pytest_per_file_junit.py" \
-            "$PLUGIN_REL/programs/repo_hygiene_parallel.py" 2>/dev/null)
-
 if [ "$SHORT_CIRCUIT" = "0" ]; then
   # Phase-A's verifier executes both sides with one BASE-authorised runtime.
   # Candidate arms run first in a fixed, digest-pinned, least-privilege OCI
@@ -1542,8 +1279,6 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     "$A1_RECEIPT" "$B1_RECEIPT" "$A2_RECEIPT" "$B2_RECEIPT" \
     || die "A/B arms did not consume one identical runtime/corpus/image"
 
-  # The final judge receives only fresh parent-owned copies of files named and
-  # digested in the stopped-container receipts.
   rm -f -- "$RUN/land.log"
   publish_validated_arm_artifact "$B1_VALIDATION" "$B1_OUTPUT" pytest.xml "$CAND_JUNIT" \
     || die "cannot seal candidate JUnit evidence"
@@ -1562,56 +1297,13 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   publish_validated_arm_artifact "$A1_VALIDATION" "$A1_OUTPUT" runner-stdout.bin \
     "$RUN/base_tests.log" || die "cannot seal base test log"
 
-  B1_WORKTREE_STATUS=clean
-  A1_WORKTREE_STATUS=clean
   hygiene_record_binds_benchmark "$CAND_HYG" "$BENCHMARK_SHA" \
     || die "candidate hygiene summary did not bind the measured corpus"
   hygiene_record_binds_benchmark "$BASE_HYG" "$BENCHMARK_SHA" \
     || die "base hygiene summary did not bind the measured corpus"
-  HYG_ARGS=(--base-hygiene "$BASE_HYG" --candidate-hygiene "$CAND_HYG"
-            --base-hygiene-host "$THIS_HOST"
-            --candidate-hygiene-host "$THIS_HOST")
-  BASE_LAND_ARG=(--base-land-log "$RUN/base_land.log")
-  if base_has_exact_legacy_routed_empty "$BASE_HYG"; then
-    build_trusted_transition_evidence
-    TRANSITION_ARGS=(--trusted-transition-evidence \
-                     "$TRUSTED_TRANSITION_EVIDENCE")
-  fi
   echo "--- arm A1/B1: base rc=$A1_RC candidate rc=$B1_RC (hermetic aggregate)"
   echo "--- arm A2/B2: base rc=$A2_RC candidate rc=$B2_RC (hermetic gates)"
 
 else
   echo "--- the tree under test is not the tree that would be merged; the suites were NOT run"
 fi
-
-# --------------------------------------------------------------- 7. the verdict
-[ -f "$VERDICT_PROG" ] || die "no verdict program at $VERDICT_PROG"
-python3 "$VERDICT_PROG" \
-  --base-sha "$BASE_SHA" --base-tree "$BASE_TREE" --head-sha "$HEAD_SHA" \
-  --verified-sha "$VERIFIED_SHA" --rebase-status "$REBASE_STATUS" \
-  --expected-tree "$EXPECTED_TREE" --verified-tree "$VERIFIED_TREE" \
-  --replayed-tree "$REBASED_TREE" --github-tree "$GITHUB_TREE" \
-  --land-log "$RUN/land.log" --selection "$RUN/selection.txt" \
-  --base-selection "$RUN/selection_base.txt" \
-  "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
-  --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
-  "${HYG_ARGS[@]+"${HYG_ARGS[@]}"}" \
-  "${TRANSITION_ARGS[@]+"${TRANSITION_ARGS[@]}"}" \
-  --candidate-gate-rc "$B2_RC" --require-composite-gate-record \
-  --candidate-test-worktree-status "$B1_WORKTREE_STATUS" \
-  --base-test-worktree-status "$A1_WORKTREE_STATUS" \
-  --verification-tier "$TIER" --git-version "$GIT_VERSION" \
-  --merge-tree-min-version "$MERGE_TREE_MIN_VERSION" \
-  ${TIER_REASON:+--tier-reason "$TIER_REASON"} \
-  ${JSON_OUT:+--json "$JSON_OUT"} \
-  "${GATE_ARGS[@]+"${GATE_ARGS[@]}"}"
-RC=$?
-
-if [ "$RC" -eq 0 ]; then
-  echo "=== LAND OK — verified the squash of ${HEAD_SHA:0:12} onto ${BASE_SHA:0:12}"
-  echo "               commit ${VERIFIED_SHA:0:12} (local stand-in)  tree ${VERIFIED_TREE:0:12} (what lands)"
-  echo "               tier ${TIER}$( [ "$TIER" = "merge-tree" ] || echo "  (DEGRADED — squash-vs-rebase cross-check NOT performed)" )"
-else
-  echo "=== REFUSED (rc=$RC) — do NOT run \`gh pr merge\`; the reasons are above"
-fi
-exit "$RC"

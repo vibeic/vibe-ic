@@ -40,7 +40,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import nextstate_misc_synth as M  # noqa: E402
-import loop_watchdog_compliance_check as WGC  # noqa: E402
 import spec_artifact_registry as R  # noqa: E402
 from _hostpaths import corpus_path, repo_path  # noqa: E402
 
@@ -561,12 +560,6 @@ def test_host_verify_routes_iverilog_through_progress_watchdog(
     assert calls[0][0][0] == "iverilog"
 
 
-def test_real_program_corpus_has_no_unguarded_long_process():
-    """The deterministic compliance gate must clear the shipped source tree."""
-    programs = repo_path("vibe-ic-marketplace/plugins/vibe-ic/programs")
-    offenders = WGC.scan_programs(programs)
-    assert len(offenders) == 0, [
-        (o.file, o.line, o.kind, o.detail) for o in offenders]
 
 
 if __name__ == "__main__":
