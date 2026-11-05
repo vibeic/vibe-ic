@@ -637,10 +637,13 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
                     constraints[key][field] = declared
                     emitted.append(f"L19.constraints.pad_order_by_side.{field}")
         if (key == "tapeout_geometry" and isinstance(constraints.get(key), dict)
-                and isinstance(value, dict) and value.get("seal_ring")
-                and "seal_ring" not in constraints[key]):
-            constraints[key]["seal_ring"] = value["seal_ring"]
-            emitted.append("L19.constraints.tapeout_geometry.seal_ring")
+                and isinstance(value, dict)):
+            for field, declared in value.items():
+                if field == "seal_ring" and field in constraints[key]:
+                    continue
+                if constraints[key].get(field) != declared:
+                    constraints[key][field] = declared
+                    emitted.append(f"L19.constraints.tapeout_geometry.{field}")
         _put_if_absent(constraints, key, value, emitted, "L19.constraints")
     if constraints:
         l19["constraints"] = constraints

@@ -28,6 +28,45 @@ def _write_doc(project: Path, name: str, text: str) -> None:
     (root / name).write_text(text, encoding="utf-8")
 
 
+def test_current_declaration_refreshes_existing_delivery_geometry(tmp_path):
+    _write_consumers(tmp_path)
+    path = tmp_path / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    doc = json.loads(path.read_text())
+    doc["constraints"] = {"tapeout_geometry": {
+        "deliverable": "DIE", "top_cell": "prior_top",
+        "integration_note": "preserve caller annotation"}}
+    path.write_text(json.dumps(doc))
+    declaration = tmp_path / "input/submission_template/tapeout_declaration.json"
+    declaration.parent.mkdir(parents=True)
+    geometry = {"deliverable": "HARDMACRO", "top_cell": "neutral_top",
+                "macro_area_um": [0, 0, 200, 200], "macro_origin_um": [0, 0]}
+    declaration.write_text(json.dumps({"answers": geometry}))
+
+    result = C.run(tmp_path)
+
+    actual = json.loads(path.read_text())["constraints"]["tapeout_geometry"]
+    assert {key: actual[key] for key in geometry} == geometry
+    assert actual["integration_note"] == "preserve caller annotation"
+    assert "L19.constraints.tapeout_geometry.deliverable" in result["emitted"]
+
+
+def test_unchanged_declaration_keeps_geometry_bytes_stable(tmp_path):
+    _write_consumers(tmp_path)
+    declaration = tmp_path / "input/submission_template/tapeout_declaration.json"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(json.dumps({"answers": {
+        "deliverable": "HARDMACRO", "top_cell": "neutral_top",
+        "macro_area_um": [0, 0, 200, 200]}}))
+    C.run(tmp_path)
+    path = tmp_path / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    before = path.read_bytes()
+
+    result = C.run(tmp_path)
+
+    assert path.read_bytes() == before
+    assert result["emitted_count"] == 0
+
+
 def test_io_default_is_bound_to_its_numeric_clause(tmp_path):
     _write_consumers(tmp_path)
     _write_doc(tmp_path, "L9_constraints.md", """layer: L9
