@@ -97,6 +97,9 @@ def test_owner_session_runs_one_window_for_all_result_readers(tmp_path, monkeypa
     ]}
     def publish(*args, **kwargs):
         report.write_text(json.dumps(measured))
+        rtl = tmp_path / "phase2/stage1/rtl"
+        rtl.mkdir(parents=True)
+        (rtl / "unit.v").write_text("module unit; endmodule\n")
         return SimpleNamespace(returncode=0)
     selected = {"entry_step": "1", "verify_through": "2", "input_contract": "original",
                 "delivery_target": "rtl"}
@@ -262,7 +265,7 @@ def test_fresh_physical_author_uses_only_the_table_author_window(tmp_path, monke
     with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
         observed = frontend.OwnerSession(tmp_path, selected).result(tmp_path / "steps/author", "rtl_gen")
     execute.assert_called_once()
-    assert observed["metrics"]["rtl_gen"] == "PASS_WITH_WAIVERS"
+    assert observed["metrics"]["rtl_gen"] == "FAIL"
     assert observed["native_steps"][0]["status"] == "FAIL"
     assert observed["native_steps"][0]["detail"] == "The owner produced no RTL."
 
@@ -286,6 +289,9 @@ def test_debug_closure_runs_only_owner_backed_dependencies(tmp_path, input_contr
     route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
              "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
     report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    prior_backup = tmp_path / "phase2/stage1/ai_backup_author.json"
+    prior_backup.parent.mkdir(parents=True)
+    prior_backup.write_text(json.dumps({"author": {"kind": "AI", "model": "prior-author"}}))
     def publish(command, **kwargs):
         assert command[command.index("--entry-step") + 1] == "1"
         assert command[command.index("--exit-step") + 1] == "2"
@@ -308,6 +314,7 @@ def test_debug_closure_runs_only_owner_backed_dependencies(tmp_path, input_contr
     execute.assert_called_once()
     assert requirements["native_steps"][0]["source"].startswith("task_nature_route.")
     assert authored["metrics"]["rtl_gen"] == "PASS"
+    assert authored["native_steps"][-1]["source"]["author"] == {"kind": "PROGRAM", "program": "existing_program"}
     assert checked["metrics"]["rtl_validate"] == "PASS"
     assert session.route == route
     assert not (tmp_path / "reports/orchestrator/phase1_one_shot.json").exists()
@@ -347,6 +354,7 @@ def test_debug_resume_keeps_ai_canonical_rtl_and_lints_only(tmp_path, input_cont
 
 @pytest.mark.parametrize("input_contract", ["original", "structured"])
 def test_debug_author_failure_refreshes_from_ai_output_and_retains_history(tmp_path, input_contract):
+    import ai_signed_judgement
     import flow_engine
     route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
              "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
@@ -367,11 +375,14 @@ def test_debug_author_failure_refreshes_from_ai_output_and_retains_history(tmp_p
     backup = rtl.parent.parent / "ai_backup_author.json"
     author = {"kind": "AI", "model": "fixture-author-model"}
     backup.write_text(json.dumps({"schema": "vibeic.benchmark.ai_backup_record.v1", "author": author}))
+    (rtl.parent.parent / "fallback_skill.md").write_text("Use spec-to-rtl to implement the generic inverter.\n")
     judgement = tmp_path / "reports/audit/ai_judgements/1.json"
     judgement.parent.mkdir(parents=True)
     judgement.write_text(json.dumps({"schema": "vibeic.ai-judgement.v1", "step_id": "1",
                                      "verdict": "PASS", "signed_by": "fixture-reviewer",
+                                     "evidence_sha256": ai_signed_judgement.evidence_sha256(tmp_path, "1"),
                                      "judgement": "Reviewed the authored RTL."}))
+    assert ai_signed_judgement.check(tmp_path, "1")[0]
     def lint_only(command, **kwargs):
         assert command[command.index("--entry-step") + 1] == "2"
         assert command[command.index("--exit-step") + 1] == "2"
@@ -405,6 +416,9 @@ def test_existing_canonical_author_output_without_identity_reports_unknown_sourc
     rtl = tmp_path / "phase2/stage1/rtl/unit.v"
     rtl.parent.mkdir(parents=True)
     rtl.write_text("module unit; endmodule\n")
+    judgement = tmp_path / "reports/audit/ai_judgements/1.json"
+    judgement.parent.mkdir(parents=True)
+    judgement.write_text(json.dumps({"signed_by": "reviewer-is-not-the-author"}))
     with patch.object(frontend.subprocess, "run", side_effect=AssertionError("existing RTL author reran")):
         result = frontend.OwnerSession(tmp_path, route, force=True).result(tmp_path / "steps/author", "rtl_gen")
     assert result["metrics"]["rtl_gen"] == "PASS"
