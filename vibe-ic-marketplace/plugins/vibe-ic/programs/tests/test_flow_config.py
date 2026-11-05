@@ -174,16 +174,38 @@ def test_cli_records_implementation_choices_and_preserves_source_constraints(pro
     assert build_config(project, route="ip")["FP_CORE_UTIL"] == 45
 
 
-@pytest.mark.parametrize("missing_rtl", [False, True])
-def test_failed_config_command_preserves_existing_declaration(project, missing_rtl):
+def test_cli_unsets_one_implementation_choice_and_keeps_the_others(project):
     declaration = project / "plugin_output/declaration.json"
     declaration.parent.mkdir()
-    original = '{"author_choice":"retained"}\n'
+    declaration.write_text(json.dumps({
+        "PDN_VWIDTH": 2.4, "RUN_POST_GRT_DESIGN_REPAIR": True,
+        "author_choice": "retained"}))
+    command = [sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
+               "--project", str(project), "--unset", "PDN_VWIDTH"]
+    for _ in range(2):
+        result = subprocess.run(command, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        config = json.loads(Path(result.stdout.strip()).read_text())
+        assert "PDN_VWIDTH" not in config
+        assert config["RUN_POST_GRT_DESIGN_REPAIR"] is True
+        assert config["CLOCK_PERIOD"] == 17.5
+        assert json.loads(declaration.read_text()) == {
+            "RUN_POST_GRT_DESIGN_REPAIR": True, "author_choice": "retained"}
+
+
+@pytest.mark.parametrize("missing_rtl", [False, True])
+@pytest.mark.parametrize("unset", [False, True])
+def test_failed_config_command_preserves_existing_declaration(project, missing_rtl, unset):
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    original = '{"author_choice":"retained","FP_CORE_UTIL":25}\n'
     declaration.write_text(original)
     if missing_rtl:
         (project / "phase2/stage1/rtl/unit.v").unlink()
+    settings = ["--unset", "FP_CORE_UTIL"] if unset else ["--set", "FP_CORE_UTIL=35"]
     result = subprocess.run([sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
-        "--project", str(project), "--set", "FP_CORE_UTIL=35", "--output", str(project)],
+        "--project", str(project), *settings,
+        "--output", str(project)],
         capture_output=True, text=True)
     assert result.returncode != 0
     assert declaration.read_text() == original
