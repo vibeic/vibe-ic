@@ -205,6 +205,18 @@ its ordinary validation and inheritance rules. Stale material, invalid questions
 and file-presence changes are refused. Original evidence remains immutable and
 the new review/test paths must receive fresh independent evidence.
 
+When a correction proposes a typed witness, its rationale does not attach it.
+The fresh independent reviewer must assess the entire witness against the full
+visible source and bind only a source-qualified witness as the current
+`verification_test`, with its exact hash and source evidence, at the actual newly
+issued `task.challenge_path`; preview paths provide no authority. Preserve and
+execute every active inherited challenge and require ordinary native proof and
+combined coverage. Reusing the prior current test does not establish the proposed
+witness's binding; file presence does not qualify an uncontracted diagnostic.
+
+*why_not_bucket_a*: `benchmark_dispatch.py` enforces hashes, paths and inheritance;
+selecting a semantically valid witness requires IC-expert judgment.
+
 ## Blind clean-room evaluation
 
 A canonical run is a fresh full-dataset run. Do not read or inherit:
