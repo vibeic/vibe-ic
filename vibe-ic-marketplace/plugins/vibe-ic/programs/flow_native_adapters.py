@@ -736,6 +736,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") == "dfm":
+        from dfm_screen_check import execute as dfm
+        return dfm(project, work, tool, route, state=state, config=config)
     if tool.get("adapter") == "ir_drop":
         from flow_ir_corners import execute as ir_drop
         return ir_drop(project, work, tool, route, state=state, config=config)

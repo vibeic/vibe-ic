@@ -56,27 +56,50 @@ def test_failed_step_does_not_block_independent_tool(tmp_path):
 
 
 @pytest.mark.parametrize("errors,status", [(0, "PASS"), (1, "FAIL")])
-def test_manufacturability_reads_final_native_result_before_aggregation(
-        tmp_path, errors, status, physical_step_table):
+def test_manufacturability_runs_its_own_screen_before_aggregation(
+        tmp_path, monkeypatch, errors, status, physical_step_table):
+    import flow_adapter_jobs
+
+    routed = tmp_path / "captured.def"
+    routed.write_text("""VERSION 5.8 ;
+DESIGN unit ;
+VIAS 1 ;
+- cut + VIARULE vr + CUTSIZE 200 200 + ROWCOL 1 1 ;
+END VIAS
+NETS 1 ;
+- signal ( inst A ) + ROUTED met1 ( 0 0 ) cut ( 1 0 ) ;
+END NETS
+""")
+    worker = tmp_path / "screen_worker.py"
+    worker.write_text(f"import sys; sys.path.insert(0, {str(engine.HERE)!r})\n" + """
+import pickle
+from pathlib import Path
+import dfm_screen_check
+payload = pickle.load(sys.stdin.buffer)
+native = dfm_screen_check.execute(payload['project'], payload['directory'],
+    payload['tool'], payload['route'], state={'def': payload['tool']['routed_def']}, config={})
+Path(sys.argv[1]).write_bytes(pickle.dumps({'native': native}))
+""")
+    monkeypatch.setattr(flow_adapter_jobs, '_worker_command',
+                        lambda output: [sys.executable, str(worker), str(output)])
     names = {"design_for_manufacturability", "final_electrical_analysis", "signoff_aggregation"}
     rows = [deepcopy(row) for row in physical_step_table["steps"] if row["name"] in names]
     measurement = command_row("final_electrical_analysis", errors)
-    measurement["tool"]["command"][2] = (
-        "import pathlib; p=pathlib.Path('calls'); "
-        "p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); "
-        + measurement["tool"]["command"][2])
     for row in rows:
         row["when"] = "always"
         if row["name"] == measurement["name"]:
             row["tool"], row["checks"] = measurement["tool"], measurement["checks"]
+        elif row["name"] == "design_for_manufacturability":
+            row["tool"]["routed_def"] = str(routed)
     report = execute(tmp_path, rows)
     actual = {row["name"]: row for row in report["steps"]}
-    summary = actual["design_for_manufacturability"]
-    assert summary["status"] == status
-    assert summary["native_metrics"]["errors"] == errors
+    screen = actual["design_for_manufacturability"]
+    assert screen["status"] == "PASS"
+    assert screen["native_metrics"]["signal_via_uses"] == 1
+    assert screen["native_metrics"]["single_cut_fraction"] == 1
+    assert actual["final_electrical_analysis"]["status"] == status
     assert actual["signoff_aggregation"]["status"] == status
-    assert actual["signoff_aggregation"]["native_metrics"]["non_passing_steps"] == (0 if errors == 0 else 2)
-    assert (tmp_path / "calls").read_text() == "1"
+    assert actual["signoff_aggregation"]["native_metrics"]["non_passing_steps"] == errors
 
 
 @pytest.mark.parametrize("bounded", [False, True])
