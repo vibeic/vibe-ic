@@ -231,7 +231,8 @@ def test_actual_eqy_uses_documented_reset_state(tmp_path, different, domain_alia
 
 
 @pytest.mark.parametrize("different", [False, True])
-def test_actual_eqy_detects_unequal_logic(tmp_path, different):
+@pytest.mark.parametrize("physical", [False, True])
+def test_actual_eqy_detects_unequal_logic(tmp_path, different, physical):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
     gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
@@ -241,6 +242,11 @@ def test_actual_eqy_detects_unequal_logic(tmp_path, different):
     liberty.write_text("library(neutral) {}\n")
     config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
               "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]}}
+    if physical:
+        gate.write_text(gate.read_text().replace("endmodule", "\nFRAME frame();\nendmodule"))
+        lef = tmp_path / "cells.lef"
+        lef.write_text("MACRO FRAME\n CLASS CORE SPACER ;\nEND FRAME\n")
+        config["CELL_LEFS"] = {"typical": [str(lef)]}
     result = eqy(tmp_path, tmp_path, {"metric": "final_lec_unproved"}, Commands(tmp_path),
                  state={"nl": str(gate)}, config=config)
     assert result["ran"], result
@@ -386,7 +392,8 @@ def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("change", ["none", "unused_models", "renamed_core_ports", "open_pad_pins", "unknown_core",
     "inline_unknown_core", "inline_z_core", "inline_undriven_core", "core", "core_pin", "terminal", "instance", "type",
-    "direct_output", "direct_bad_output", "direct_unknown_output"])
+    "direct_output", "direct_bad_output", "direct_unknown_output", "physical_corner", "physical_spacer",
+    "physical_core_spacer", "unclassified_physical", "functional_filler_name", "physical_with_rewire"])
 @pytest.mark.parametrize("package_output", [False, True])
 def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, package_output):
     if not shutil.which("eqy"):
@@ -444,18 +451,38 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
             "module INPAD_ALT(inout PAD,output Y); assign Y=PAD; endmodule\n"
             "module OUTPAD(input A,inout PAD); assign PAD=A; endmodule\n"
             "module UNUSED(inout A,Y); rnmos (Y,A,1'b1); endmodule\n")
+    physical = {"physical_corner": "ENDCAP TOPRIGHT", "physical_spacer": "PAD SPACER",
+                "physical_core_spacer": "CORE SPACER", "unclassified_physical": "PAD INOUT",
+                "functional_filler_name": "PAD INPUT", "physical_with_rewire": "PAD SPACER"}
+    if change in physical:
+        lef = models / "cells.lef"
+        lef.write_text(f"MACRO FRAME\n CLASS {physical[change]} ;\nEND FRAME\n")
+        if change == "functional_filler_name":
+            pads.write_text(pads.read_text() + "module FRAME(input D,output Y); assign Y=~D; endmodule\n")
+            instance = "FRAME filler_corner(.D(a),.Y(unused_signal));"
+        else:
+            pads.write_text(pads.read_text() + "module FRAME(inout VDD,VSS); endmodule\n")
+            instance = "FRAME inserted(.VDD(clk),.VSS(rst_n));"
+        gate.write_text(gate.read_text().replace("endmodule", instance + "\nendmodule"))
+        if change == "physical_with_rewire":
+            gate.write_text(gate.read_text().replace(".PAD(a)", ".PAD(rst_n)"))
     config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(core), str(gold)],
               "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(cells)]},
               "PAD_VERILOG_MODELS": [str(pads)]}
+    if change in physical:
+        config["PAD_LEFS"] = [str(lef)]
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
     rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
-    assert rows.get("Yosys.Wrapper") == ("FAIL" if change in {"terminal", "instance", "type", "direct_bad_output"} else "PASS"), result
+    wrapper_failures = {"terminal", "instance", "type", "direct_bad_output", "unclassified_physical",
+                        "functional_filler_name", "physical_with_rewire"}
+    assert rows.get("Yosys.Wrapper") == ("FAIL" if change in wrapper_failures else "PASS"), result
     if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin", "direct_output", "direct_bad_output"}:
         assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin", "direct_bad_output"} else "PASS"), result
     if change in {"unknown_core", "inline_unknown_core", "inline_z_core", "inline_undriven_core", "direct_unknown_output"}:
         assert rows.get("Yosys.EQY.Core") == "PASS" and result["exit_code"] == 0, result
         assert result["metrics"]["unproved_equivalence"] == 0, result
-    elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "direct_output"}:
+    elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "direct_output",
+                    "physical_corner", "physical_spacer", "physical_core_spacer"}:
         assert result["metrics"]["unproved_equivalence"] == 0, result
     else:
         assert result["metrics"].get("unproved_equivalence", 0) > 0, result

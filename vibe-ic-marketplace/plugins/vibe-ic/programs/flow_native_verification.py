@@ -201,6 +201,8 @@ def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
     from lec_post_layout_check import _LIB_CELL_RE
+    from flow_chip_inputs import _paths
+    from _pad_ring import parse_lef_macro_classes
 
     project, directory = Path(project), Path(directory)
     top, netlist = config.get("DESIGN_NAME"), state.get("nl") if state is not None else None
@@ -208,6 +210,14 @@ def eqy(project, directory, tool, commands, *, state, config):
     if not top or not netlist or not Path(netlist).is_file() or not rtl or any(not path.is_file() for path in rtl):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
     used = set().union(*(netlist_used_cells(path.read_text()) for path in [*rtl, Path(netlist)]))
+    classes = {}
+    for key in ("CELL_LEFS", "PAD_LEFS", "EXTRA_LEFS"):
+        for path in _paths(config.get(key)):
+            path = path if path.is_absolute() else project / path
+            if path.is_file():
+                classes.update(parse_lef_macro_classes(path.read_text()))
+    physical = {name for name, kind in classes.items() if name in used
+                and (kind in {"PAD SPACER", "CORE SPACER"} or kind.startswith("ENDCAP "))}
     corner = config.get("DEFAULT_CORNER", "")
     liberty, external_liberty, pad_liberty = [], [], []
     for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
@@ -254,9 +264,13 @@ def eqy(project, directory, tool, commands, *, state, config):
     pad_types.update(match["name"] for path in pad_models
                      for match in _NETLIST_MODULE_RE.finditer(path.read_text()))
     pad_types &= used
+    pad_types -= physical
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
         views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models)
+    if physical:
+        removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
+        source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)
     wrapper_count, wrapper_reports, wrapper_detail = None, [], ""
     if pad_types:
         from pdk_udp_synth_shim_gen import _strip_specials
