@@ -432,7 +432,7 @@ def test_native_seal_skip_is_missing_measurement_and_verifier_failure_still_fail
 @pytest.mark.parametrize("target,nature,entry,exit_step,count", [
     ("rtl", "debug", "4", "4", 4),
     ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 39),
-    ("shippable_gds", "spec_generation", "D1", "37.5ic", 41),
+    ("shippable_gds", "spec_generation", "D1", "37.5ic", 45),
 ])
 def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         tmp_path, target, nature, entry, exit_step, count):
