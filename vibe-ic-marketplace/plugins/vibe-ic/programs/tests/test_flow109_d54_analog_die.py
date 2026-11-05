@@ -352,3 +352,41 @@ def test_real_a14_producer_and_publisher_need_no_collector(carrier, monkeypatch,
     rc, result = invoke(carrier)
     assert result['default_row_status'] == expected, result
     assert rc == rc_expected
+
+
+@pytest.mark.parametrize('state', ['absent', 'malformed', 'missing_field', 'PASS', 'FAIL'])
+def test_local_digital_correlation_preserves_input_absence_and_native_verdict(tmp_path, monkeypatch, state):
+    import _container_exec
+    import _delivery_route
+    import path_spice_tool
+    monkeypatch.setenv(flow109.CONTEXT_ENV, '')
+    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    monkeypatch.setattr(_container_exec, 'no_container_route', lambda: True)
+    _delivery_route.admit(tmp_path, 'ic')
+    selected = {**features(False), 'requires_dft': False, 'requires_scan': False}
+    put(tmp_path / 'manifest.json', {'features': selected})
+    put(tmp_path / 'input/feature-decisions.json', {'dft': {
+        'requires_scan': False, 'reason': 'Functional core with no scan architecture selected.'}})
+    path = tmp_path / 'reports/phase3/sta_postpnr_signoff.json'
+    if state != 'absent':
+        put(path, {} if state == 'missing_field' else {'sta_state': str(tmp_path / 'sta/state.json')})
+        if state == 'malformed':
+            path.write_text('{')
+    calls = []
+    def native_probe(*args, **kwargs):
+        calls.append('SOURCE_CONTROL native transport only')
+        return {'verdict': state, 'wall_seconds': 0}
+    monkeypatch.setattr(path_spice_tool, 'run_case_correlation', native_probe)
+    monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(tmp_path))
+    args = SimpleNamespace(flow='109', flow109_manifest=tmp_path / 'manifest.json',
+        flow109_plan_only=False, execution_mode='default', entry_step='D54', exit_step='D54', pdk='')
+    try:
+        rc = flow109.prepare_front_door(args, tmp_path)
+    except (OSError, ValueError, KeyError) as exc:
+        rc = 'UNCAUGHT_' + type(exc).__name__
+    missing = state not in ('PASS', 'FAIL')
+    assert rc == (2 if missing else 0 if state == 'PASS' else 1), rc
+    report = json.loads((tmp_path / 'reports/flow109/default_rows/D54.json').read_text())
+    assert report['default_row_status'] == ('NOT_MEASURED' if missing else state), report
+    assert report['native_started'] is (not missing), report
+    assert bool(calls) is (not missing)
