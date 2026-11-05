@@ -2040,37 +2040,65 @@ def d30_consumed_changes(project: Path, context: Mapping[str, Any]) -> dict:
     import _cdc_netlist as graph
     import librelane_eqy as lec
     import flow109
+    import shlex, subprocess, tempfile
     project = Path(project).resolve()
     try:
         if context.get('features', {}).get('has_power_intent') is not False:
             raise MetricRefusal('D30_POWER_CHANGE_POPULATION_UNMEASURED', 'power-intent delta producer required')
-        prepared = _d25_inputs(project)
-        # This is a read-only current registry contract, never a new execution
-        # context/request. The adopted producer receipt must match it too.
         row = flow109.resolve_step(flow109.resolve_plan(context['features']), 'D25')
-        original = lec.d25_reopen(project, prepared, {'resolved_row': row})
-        record = _d30_file(project, original['execution_record'], 'adopted native change views')
-        doc = json.loads(record.read_text())
-        if original['proof']['verdict'] != 'PASS':
-            raise MetricRefusal('D30_CHANGE_PROOF_UNQUALIFIED', 'adopted original LEC must pass')
+        generic = not (project / 'input/flow109/D25.json').is_file() and (project / 'reports/lec_eqy.json').is_file()
+        if generic:
+            current = flow109.execution_context(flow109.resolve_plan(context['features']), 'D25', 'D25')
+            accepted = accept_d25(project, current)
+            if accepted['status'] != 'PASS':
+                raise MetricRefusal('D30_CHANGE_PROOF_UNQUALIFIED', accepted.get('reason', 'native proof'))
+            folder = Path(accepted['native_consumer']['source'])
+            def native_ref(path):
+                path = Path(path)
+                return {'path': path.relative_to(project).as_posix(), 'sha256': _sha(path.read_bytes())}
+            cfg = json.loads((folder / 'config.json').read_text())
+            state = json.loads((folder / 'state_in.json').read_text())
+            subject = {'rtl': [native_ref(p) for p in cfg['VERILOG_FILES']],
+                       'gate_netlist': native_ref(state['nl'])}
+            execution = native_ref(folder / 'vibeic_receipt.json')
+            refs = [execution, native_ref(folder / 'config.json'), native_ref(folder / 'state_in.json')]
+            consumed = {str(project / r['path']): r['sha256'] for r in refs + subject['rtl'] + [subject['gate_netlist']]}
+            views = {side: native_ref(folder / 'scratch' / (side + '.il')) for side in ('gold', 'gate')}
+            with tempfile.TemporaryDirectory() as tmp:
+                for side, view in views.items():
+                    converted = Path(tmp) / (side + '.json')
+                    subprocess.run(['yosys', '-Q', '-T', '-p',
+                        f'read_rtlil {shlex.quote(str(project / view["path"]))}; write_json {shlex.quote(str(converted))}'],
+                        check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    views[side] = (view, graph.load(converted, top=cfg['DESIGN_NAME']))
+        else:
+            prepared = _d25_inputs(project)
+            original = lec.d25_reopen(project, prepared, {'resolved_row': row})
+            record = _d30_file(project, original['execution_record'], 'adopted native change views')
+            doc = json.loads(record.read_text())
+            if original['proof']['verdict'] != 'PASS':
+                raise MetricRefusal('D30_CHANGE_PROOF_UNQUALIFIED', 'adopted original LEC must pass')
+            subject, consumed = original['subject'], dict(original['consumed_inputs'])
+            clock, top = original['mode']['clock']['port'], original['mode']['top']
+            execution = original['execution_record']
+            refs = [execution, original['execution_authority']]
         authority, _, source = _d12_source(project, 'clock_reset_crossing_census', D12_FIELDS)
-        original_rtl = {r['path']: r['sha256'] for r in original['subject']['rtl']}
-        source_input = source['subject']['input']
+        original_rtl = {r['path']: r['sha256'] for r in subject['rtl']}
+        source_input = source.get('subject', {}).get('input', {})
         source_rtl = {r['path']: r['sha256'] for r in source_input['files']
-                      if r['path'] in source_input['rtl_files']}
-        if source_rtl != original_rtl:
+                      if r['path'] in source_input.get('rtl_files', [])} if source_input else {}
+        if not generic and source_rtl != original_rtl:
             raise MetricRefusal('D30_CHANGE_INPUT_STALE', 'original RTL and input-role subjects differ')
-        consumed = dict(original['consumed_inputs'])
-        for ref in (original['execution_record'], original['execution_authority'], authority):
+        for ref in refs + [authority]:
             path = _d30_file(project, {k: ref[k] for k in ('path', 'sha256')}, 'change source')
             consumed[str(path)] = _sha(path.read_bytes())
         path = _d30_file(project, authority['source'], 'original input roles')
         consumed[str(path)] = _sha(path.read_bytes())
-        for ref in source_input['files']:
+        for ref in source_input.get('files', []):
             path = _d30_file(project, ref, 'original role source input')
             consumed[str(path)] = ref['sha256']
         inputs = source['input_domains']
-        clock = original['mode']['clock']['port']
+        clock = next((name for name, role in inputs.items() if role['role'] == 'clock'), None) if generic else clock
         population = {}
         combinational = {'$and', '$or', '$xor', '$xnor', '$not', '$logic_not', '$logic_and',
             '$logic_or', '$mux', '$pmux', '$buf', '$pos', '$add', '$sub', '$mul', '$neg',
@@ -2079,12 +2107,17 @@ def d30_consumed_changes(project: Path, context: Mapping[str, Any]) -> dict:
             '$reduce_or', '$reduce_xor', '$reduce_xnor', '$reduce_bool', '$_BUF_', '$_NOT_',
             '$_AND_', '$_OR_', '$_XOR_', '$_XNOR_', '$_MUX_', '$scopeinfo'}
         for side in ('gold', 'gate'):
-            views = [r for r in doc['derivation'][side]['files'] if r['path'].endswith('/after.json')]
-            if len(views) != 1:
-                raise MetricRefusal('D30_CHANGE_POPULATION_UNMEASURED', side + ': original native JSON absent')
-            path = _d30_file(project, views[0], side + ' native JSON')
-            consumed[str(path)] = views[0]['sha256']
-            nl = graph.load(path, top=original['mode']['top'])
+            if generic:
+                view, nl = views[side]
+                consumed[str(project / view['path'])] = view['sha256']
+            else:
+                native_views = [r for r in doc['derivation'][side]['files'] if r['path'].endswith('/after.json')]
+                if len(native_views) != 1:
+                    raise MetricRefusal('D30_CHANGE_POPULATION_UNMEASURED', side + ': original native JSON absent')
+                view = native_views[0]
+                path = _d30_file(project, view, side + ' native JSON')
+                consumed[str(path)] = view['sha256']
+                nl = graph.load(path, top=top)
             decoded = {f.name for f in nl.flops}
             if (not decoded or nl.memories or nl.ambiguous_drivers
                     or any(name not in decoded and c['type'] not in combinational
@@ -2102,14 +2135,15 @@ def d30_consumed_changes(project: Path, context: Mapping[str, Any]) -> dict:
             if len(nl.flop_of_q()) != q_bits:
                 raise MetricRefusal('D30_CHANGE_POPULATION_UNMEASURED', side + ': state driver population differs')
             population[side] = {'cells': len(nl.cells), 'flop_cells': len(nl.flops),
-                'q_bits': q_bits, 'clock_domains': [clock], 'native_view': views[0]}
+                'q_bits': q_bits, 'clock_domains': [clock], 'native_view': view}
         if any(_sha(Path(name).read_bytes()) != digest for name, digest in consumed.items()):
             raise MetricRefusal('D30_CHANGE_INPUT_STALE', 'native/role source changed')
         return {'status': 'MEASURED', 'value': [], 'population': population,
-            'subject': original['subject'], 'has_power_intent': False,
-            'consumed_inputs': consumed, 'execution_record': original['execution_record'],
+            'subject': subject, 'has_power_intent': False,
+            'consumed_inputs': consumed, 'execution_record': execution,
             'scope': 'no register clock/reset-domain crossing changes in complete single-clock synchronous views; no authored power-intent changes; no physical power/timing qualification'}
-    except (graph.Refusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except (graph.Refusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError,
+            subprocess.CalledProcessError) as exc:
         return {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D30_CHANGE_POPULATION_UNMEASURED'),
                 'detail': str(exc)}
 
