@@ -860,7 +860,7 @@ def test_a_gate_that_refuses_still_refuses(monkeypatch):
     later change makes either of them report a pass, this goes red before the
     naming rules are ever consulted.
     """
-    for checker, flag in (("ppa_head_to_head_check.py", "--corpus")):
+    for checker, flag in (("ppa_head_to_head_check.py", "--corpus"),):
         proc = _run(checker, [flag, str(PROGRAMS / "__no_such_corpus__")])
         assert proc.returncode == RC_UNDETERMINED, (
             f"{checker} over an absent corpus returned {proc.returncode}; "
