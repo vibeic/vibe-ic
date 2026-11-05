@@ -100,7 +100,7 @@ def test_package_requires_an_actual_package_type(tmp_path, table, package, expec
     actual = features(tmp_path, table)
     assert actual['package_declared'] is expected
     assert actual['package_interface'] is expected
-    assert not actual['package_model_required']
+    assert actual['package_model_required'] is expected
 
 
 def test_empty_and_unstated_fields_are_not_obligations(tmp_path, table):

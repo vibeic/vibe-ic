@@ -184,6 +184,9 @@ def design_features(project: Path, route: dict, table: dict, *, sources: dict | 
     if isinstance(package, dict) and present(package.get("package_type")):
         observe("package_declared", "L1", "package_info")
         observe("package_interface", "L1", "package_info")
+        observe("package_model_required", "L1", "package_info")
+    elif not features.get("package_model_required") and "package_model_required" not in explicit:
+        sources["package_model_required"] = "No declared package type or model in L1 package_info/package_type or package_model."
     observe("requires_aging", "L25", "aging_margin")
     observe("requires_em", "L25", "em_budget")
     observe("requires_system_scenarios", "L22", "system_scenarios")
