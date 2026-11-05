@@ -327,7 +327,11 @@ executable sources untouched.
   fingerprint, and must differ from the identity of any prior re-entry on this
   task. It is checked again after the runner.
 
-This operation is BLOCKING and supports only an unaccepted, unpublished
+Unaccepted PROGRAM candidates with a valid current review use common request fields
+after an upgrade, without signed-input fields. Ordinary workers regenerate unchanged
+public input, retain prior projects and challenges, and require fresh AI review.
+
+The following signed-input rules apply only to an unaccepted, unpublished
 `AI_REPAIR` task with a valid signed input snapshot. It does not authorize AI
 edits, refresh a signature, supersede a test, or accept a result. The normal
 repair boundary automatically saves both `repair_input_candidate_snapshot` and
@@ -361,7 +365,7 @@ accepted so no caller breaks; supplying both under CONFLICTING values is refused
 because an ambiguous identity is not an identity.
 
 **What it refuses.** A wrong request or task schema; a missing or duplicate task
-id; a non-`AI_REPAIR` candidate; a stale `task_sha256`, `prompt_sha256`,
+id; a candidate outside `PROGRAM`/`AI_REPAIR`; a stale `task_sha256`, `prompt_sha256`,
 `stale_output_sha256`, repair record, input manifest or Program identity; a
 request naming no source identity at all; an absent, too-short or unattributed
 rationale or author; an unchanged, unnamed or non-running version pair; a signed
