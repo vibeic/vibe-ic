@@ -431,7 +431,7 @@ def run_public(args):
         if forwarded.get("from_name"):
             forwarded["from_name"] = "die_floorplan_and_macros"
     summary = flow_engine.run(project, route=route, **forwarded)
-    from flow_pdn_recovery import plan_recovery, apply_plan, finish_replay
+    from flow_pdn_recovery import plan_recovery, apply_plan, finish_replay, record_common_completion
     recovery_started = time.perf_counter()
     if original_common_start is not None:
         summary["native_common_started_at"] = original_common_start
@@ -452,6 +452,11 @@ def run_public(args):
         summary["common_wall_seconds"] = time.perf_counter() - original_common
         if original_common_start is not None:
             summary["native_common_started_at"] = original_common_start
+    completed_common = record_common_completion(summary)
+    if completed_common:
+        from flow_engine_timing import timing_summary
+        summary.update(timing_summary(summary))
+    if original_common is not None or completed_common:
         flow_engine.write_json(project / "reports/flow_engine.json", summary)
     return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
 

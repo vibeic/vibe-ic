@@ -42,6 +42,30 @@ def recorded_common_start(project: Path):
     return min(starts) if starts else None
 
 
+def record_common_completion(report):
+    """Recover a replay's missing clock end from completed common tool rows."""
+    start = report.get("native_common_started_at")
+    if start is None or report.get("native_common_completed_at") is not None:
+        return False
+    names = set(report.get("common_step_names", []))
+    rows = {row["name"]: row for row in report.get("steps", [])
+            if row.get("timing_group") == "librelane"}
+    if not names or not names <= rows.keys():
+        return False
+    tools = [rows[name] for name in names if rows[name].get("tool_kind") != "native_report"]
+    for row in tools:
+        native = row.get("native_steps", [])
+        disabled = bool(native) and all(item.get("native_config_disabled") for item in native)
+        if (not row.get("timing_complete", True) or row.get("completed_at") is None
+                or not row.get("tool_ran") and not disabled):
+            return False
+    ends = [row["completed_at"] for row in tools if row.get("tool_ran")]
+    if not ends or max(ends) < start:
+        return False
+    report["native_common_completed_at"] = max(ends)
+    return True
+
+
 def printed_bound(value: str, upper: bool) -> Decimal:
     number = Decimal(value)
     half_unit = Decimal(5).scaleb(number.as_tuple().exponent - 1)

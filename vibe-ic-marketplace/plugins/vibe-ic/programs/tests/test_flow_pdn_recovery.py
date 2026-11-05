@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from flow_pdn_recovery import Wire, RecoveryPlan, finish_replay, measured_settings, plan_recovery, printed_bound, _wires
+from flow_pdn_recovery import Wire, RecoveryPlan, finish_replay, measured_settings, plan_recovery, printed_bound, record_common_completion, _wires
 
 
 class Tech:
@@ -33,6 +33,32 @@ def hotspot(layer="vertical", current="1.100e-03", area="1.0000e+00"):
 def test_printed_current_and_area_bounds_follow_actual_decimal_precision():
     assert printed_bound("1.100e-03", True) == Decimal("0.0011005")
     assert printed_bound("1.0000e+00", False) == Decimal("0.99995")
+
+
+def test_common_completion_excludes_later_report_and_independent_check():
+    tool = {"name": "floorplan", "timing_group": "librelane", "tool_kind": "librelane",
+            "tool_ran": True, "completed_at": 20}
+    report = {"native_common_started_at": 10, "native_common_completed_at": None,
+              "common_step_names": ["floorplan", "timing_report"], "steps": [tool,
+                  {**tool, "name": "timing_report", "tool_kind": "native_report", "completed_at": 30},
+                  {**tool, "name": "independent_check", "timing_group": "other", "completed_at": 40}]}
+    assert record_common_completion(report)
+    assert report["native_common_completed_at"] == 20
+
+
+@pytest.mark.parametrize("change", ["pending", "unfinished", "unmeasured", "not_run"])
+def test_unfinished_common_execution_has_no_completion_bound(change):
+    tool = {"name": "floorplan", "timing_group": "librelane", "tool_kind": "librelane",
+            "tool_ran": True, "completed_at": 20}
+    report = {"native_common_started_at": 10, "native_common_completed_at": None,
+              "common_step_names": ["floorplan"], "steps": [tool]}
+    if change == "pending":
+        report["common_step_names"].append("placement")
+    else:
+        tool.update({"unfinished": {"completed_at": None}, "unmeasured": {"timing_complete": False},
+                     "not_run": {"tool_ran": False}}[change])
+    assert not record_common_completion(report)
+    assert report["native_common_completed_at"] is None
 
 
 def test_measured_strap_width_and_ring_follow_exact_capacity_without_margin():
@@ -152,7 +178,11 @@ def test_actual_retained_engine_cannot_erase_original_public_clock(tmp_path, mon
     assert "native_common_started_at" not in retained
     report = json.loads((tmp_path / "reports/flow_engine.json").read_text())
     assert report["native_common_started_at"] == 100
-    assert report["common_wall_seconds"] > 100
+    completed = max(row["completed_at"] for row in report["steps"])
+    for _ in range(2):
+        report = flow_engine.refresh_report(tmp_path)
+        assert report["common_native_wall_seconds"] == pytest.approx(completed - 100, rel=0, abs=1e-6)
+        assert report["common_wall_seconds"] == pytest.approx(completed - 100, rel=0, abs=1e-6)
 
 
 def test_actual_floorplan_resume_keeps_failed_attempt_execution_times(tmp_path, monkeypatch):
@@ -161,6 +191,8 @@ def test_actual_floorplan_resume_keeps_failed_attempt_execution_times(tmp_path, 
     from test_flow_engine import command_row
     names = ["pre_layout_timing", "die_floorplan_and_macros", "candidate_electromigration"]
     rows = [command_row(name) for name in names]
+    for row in rows:
+        row["tool"]["timing_group"] = "librelane"
     table = tmp_path / "steps.json"
     table.write_text(json.dumps({"steps": rows}))
     monkeypatch.setattr(flow_engine, "TABLE", table)
@@ -178,6 +210,12 @@ def test_actual_floorplan_resume_keeps_failed_attempt_execution_times(tmp_path, 
     assert report["selected_names"] == names
     assert report["pdn_recovery"]["physical_replays"] == 1
     assert next(row["tool_seconds"] for row in report["steps"] if row["name"] == names[1]) > old_floorplan
+    started = min(row["started_at"] for row in first["steps"])
+    completed = max(row["completed_at"] for row in report["steps"])
+    for _ in range(2):
+        report = flow_engine.refresh_report(tmp_path)
+        assert report["native_common_started_at"] == started
+        assert report["common_native_wall_seconds"] == pytest.approx(completed - started, rel=0, abs=1e-6)
 
 
 def test_replayed_metrics_replace_old_candidate_and_spent_times_remain(tmp_path):
