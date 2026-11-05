@@ -32,7 +32,7 @@ def transition_check(rtl_files, top, claims, work_dir, container=None, simdef=""
         signal = claim.get("signal", "")
         if signal not in mappings:
             mapping = _transition_mapping(optimized, raw, top, signal,
-                Path(work_dir) / f"explicit_transition_{signal.encode().hex()}", container)
+                Path(work_dir) / f"reset_transition_0_{signal.encode().hex()}", container)
             mapping["source_binding"] = {
                 "rtl_sha256": rec["rtl_sha256"], "defines": rec["elaborations"][0]["defines"],
                 "optimized_netlist_sha256": fsc.file_sha256(optimized_path),
