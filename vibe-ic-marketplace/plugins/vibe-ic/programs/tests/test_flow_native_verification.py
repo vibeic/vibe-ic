@@ -282,6 +282,29 @@ def test_actual_eqy_undecided_strategy_is_not_a_design_failure(tmp_path):
     assert "undecided" in result["detail"], result
 
 
+def test_actual_eqy_native_strategy_timeout_is_unmeasured(tmp_path, monkeypatch):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    import lec_run
+
+    monkeypatch.setattr(lec_run, "DEFAULT_YOSYS_TIMEOUT_S", 1)
+    gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
+    gold.write_text("module unit(input [19:0] a,b,output [39:0] y); assign y=a*b; endmodule\n")
+    gate.write_text("module unit(input [19:0] a,b,output reg [39:0] y); integer i; "
+                   "always @* begin y=0; for(i=0;i<20;i=i+1) "
+                   "if(b[i]) y=y+({20'b0,a}<<i); end endmodule\n")
+    liberty.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]}}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
+    assert not result["metrics"], result
+    assert (tmp_path / "equivalence.eqy").read_text().count("timeout 1\n") == 2
+    statuses = list((tmp_path / "scratch/strategies").glob("*/*/status"))
+    assert any(path.read_text().strip() == "TIMEOUT" for path in statuses)
+
+
+
 @pytest.mark.parametrize("model_key", ["PAD_LIBS", "EXTRA_LIBS", "PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS", "LIBERTY_SIBLING", "SIMULATION_DIRECTIVES"])
 @pytest.mark.parametrize("different", [False, True])
 def test_eqy_preserves_chip_ports_and_declared_external_logic(tmp_path, model_key, different):
@@ -395,7 +418,8 @@ def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
     "direct_output", "direct_bad_output", "direct_unknown_output", "physical_corner", "physical_spacer",
     "physical_core_spacer", "unclassified_physical", "functional_filler_name", "physical_with_rewire"])
 @pytest.mark.parametrize("package_output", [False, True])
-def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, package_output):
+@pytest.mark.parametrize("logical_pad_ports", [False, True])
+def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, package_output, logical_pad_ports):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
     reset_docs(tmp_path)
@@ -451,6 +475,10 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
             "module INPAD_ALT(inout PAD,output Y); assign Y=PAD; endmodule\n"
             "module OUTPAD(input A,inout PAD); assign PAD=A; endmodule\n"
             "module UNUSED(inout A,Y); rnmos (Y,A,1'b1); endmodule\n")
+    if logical_pad_ports:
+        pads.write_text(pads.read_text().replace("INPAD(inout PAD", "INPAD(input PAD")
+            .replace("INPAD_ALT(inout PAD", "INPAD_ALT(input PAD")
+            .replace("OUTPAD(input A,inout PAD", "OUTPAD(input A,output PAD"))
     physical = {"physical_corner": "ENDCAP TOPRIGHT", "physical_spacer": "PAD SPACER",
                 "physical_core_spacer": "CORE SPACER", "unclassified_physical": "PAD INOUT",
                 "functional_filler_name": "PAD INPUT", "physical_with_rewire": "PAD SPACER"}
@@ -519,6 +547,31 @@ def test_pad_boundary_removes_logical_package_outputs_and_keeps_core_outputs(tmp
         assert "y" not in module["ports"] or module["ports"]["y"]["direction"] != "output"
         assert (module["ports"].get("monitor", {}).get("direction") == "output") == direct_output
         assert not any(cell["type"] in {"INPAD", "OUTPAD"} for cell in module["cells"].values())
+
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_power_pad_boundary_keeps_paired_interfaces_consistent(tmp_path, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    gold, gate, liberty, model = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib", "pads.v")]
+    interface = "module unit(input a,output y,output \\VDD! );\nPADGND supply(.GND(\\VDD! ));\n"
+    gold.write_text(interface + "assign y=a; endmodule\n")
+    gate.write_text(interface + "reg unused; always @(posedge a) unused <= \\VDD! ; "
+        + "assign y=" + ("~a" if different else "a") + "; endmodule\n")
+    liberty.write_text("library(neutral) {}\n")
+    model.write_text("(* blackbox *) module PADGND(inout GND); endmodule\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)], "DEFAULT_CORNER": "typical",
+              "LIB": {"typical": [str(liberty)]}, "PAD_VERILOG_MODELS": [str(model)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    assert result["metrics"]["unproved_equivalence"] == int(different), result
+    assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
+    interfaces = []
+    for side in ("gold", "gate"):
+        ports = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]["ports"]
+        interfaces.append({name: port["direction"] for name, port in ports.items()})
+    assert interfaces[0] == interfaces[1]
+    assert interfaces[0]["VDD!"] == "output"
 
 
 def test_xor_reuses_native_state_number(tmp_path):
