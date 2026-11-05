@@ -280,7 +280,8 @@ class NativeChain:
                 result.detail += f" {name} missing input: {missing}."
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
                                             "missing_inputs": missing})
-                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs},
+                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs
+                                                                    if item not in step.inputs},
                                               metrics=self.state.metrics)
                 continue
             destination = directory / name.lower().replace(".", "_")
@@ -307,7 +308,8 @@ class NativeChain:
                 status = "NOT_MEASURED"
             if code or not ran:
                 producer_unavailable = True
-                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs},
+                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs
+                                                                    if item not in step.inputs},
                                               metrics=self.state.metrics)
             result.metrics.update(emitted)
             if name == "OpenROAD.IRDropReport" and "ir__drop__worst" in emitted:
@@ -633,6 +635,14 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             native = ToolResult(**owner_session.result(directory, "phase1"))
         else:
             native = ToolResult(detail=tool.get("gap", "Native adapter is not available"))
+        for reader in tool.get("report_readers", []):
+            module, function = reader["reader"].rsplit(".", 1)
+            source = directory / reader["native_step"].lower().replace(".", "_")
+            report = getattr(importlib.import_module(module), function)(
+                source, read_json(source / "config.json") or chain.config)
+            native.metrics.update(report.get("metrics", {}))
+            native.reports.extend(report.get("reports", []))
+            native.detail += " " + report.get("detail", "")
         checks = [check for check in row["checks"] if check.get("when") != "otherwise"
                   or tool.get("selected_profile", "otherwise") == "otherwise"]
         observations, declared_checks = report_observations(row, directory, native, chain.config, features, project)

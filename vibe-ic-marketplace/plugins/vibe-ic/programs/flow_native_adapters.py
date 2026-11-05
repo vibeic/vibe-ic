@@ -46,7 +46,7 @@ def inputs(project, tool):
     return files or produced, top or declared
 
 
-def cdc(project, directory, tool, commands):
+def cdc(project, directory, tool, commands, *, state=None, config=None):
     import _cdc_netlist as native
     from cdc_async_input_check import is_probable_async_port
     files, top = inputs(project, tool)
@@ -54,7 +54,24 @@ def cdc(project, directory, tool, commands):
         return commands.result(detail="Produced RTL and the declared top module are required.")
     raw, graph = directory / "graph_raw.json", directory / "graph.json"
     script = directory / "elaborate.ys"
-    script.write_text(native.yosys_script(files, top, raw) + "\n")
+    if tool.get("adapter") == "implemented_cdc":
+        import fnmatch
+        from flow109_netlist_cdc import _word
+        netlist = state.get("nl") if state is not None else None
+        libraries = config.get("CELL_LIBS") or config.get("LIB") or {}
+        liberty = [Path(p) for pattern, paths in libraries.items()
+                   if fnmatch.fnmatchcase(config.get("DEFAULT_CORNER", ""), pattern)
+                   for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
+        if not netlist or not Path(netlist).is_file() or not liberty:
+            return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
+        script.write_text("\n".join([
+            *["read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
+            *["read_verilog -lib -nooverwrite -DFUNCTIONAL -DUNIT_DELAY= " + _word(path)
+              for path in config.get("CELL_VERILOG_MODELS", [])],
+            "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
+            "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
+    else:
+        script.write_text(native.yosys_script(files, top, raw) + "\n")
     built = commands.run(["yosys", "-s", script])
     if built is None or built.returncode or not raw.is_file():
         return commands.result(reports=[script], detail="Native CDC elaboration did not produce its graph.")
@@ -67,7 +84,8 @@ def cdc(project, directory, tool, commands):
     crossing, reset = {}, {}
     findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
     findings += native.judge(netlist, "async_input", is_probable_async_port, calibrate=False)
-    findings += native.judge(netlist, "reset_dependency", metadata=reset, calibrate=False)
+    findings += native.judge(netlist, "reset_dependency", metadata=reset, calibrate=False,
+                             require_reset_roles=False)
     unresolved = [r for r in findings if r.get("rule") == "RESET_ROLE_UNRESOLVED"]
     violations = [r for r in findings if r.get("rule") != "RESET_ROLE_UNRESOLVED"]
     report = directory / "cdc.json"
@@ -75,6 +93,8 @@ def cdc(project, directory, tool, commands):
     metrics = {}
     if crossing.get("traversal_complete") and reset.get("cycle_detection_complete") and not unresolved:
         metrics["unresolved_crossings"] = len(violations)
+        if tool.get("adapter") == "implemented_cdc":
+            metrics["new_unexplained_crossings"] = len(violations)
     return commands.result(metrics, [graph, report],
                            "Decoded structural CDC/RDC; protocol and MTBF require their own native proof.")
 
@@ -232,7 +252,10 @@ def formal(project, directory, tool, commands):
         if listing is None:
             return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
         if listing.returncode:
-            return commands.result(reports=reports, detail="SymbiYosys could not read its task input.")
+            result = commands.result(reports=reports, detail="SymbiYosys could not read its task input.")
+            result["native_steps"] = [{"name": "SymbiYosys.Input", "ran": True,
+                "exit_code": listing.returncode, "status": "NOT_MEASURED"}]
+            return result
         for task_index, task in enumerate(listing.stdout.split() or [""]):
             key = f"{source.name}:{task}"
             required.append(key)
@@ -260,7 +283,8 @@ def formal(project, directory, tool, commands):
         metrics["unproved_required_properties"] = sum(word == "FAIL" for word in statuses)
     if covers and all(word in {"PASS", "FAIL"} for word in covers):
         metrics["vacuous_required_proofs"] = sum(word == "FAIL" for word in covers)
-    metrics["proof_partition_coverage"] = {"required": required, "observed": observed}
+    if required and all(row["status"] in {"PASS", "FAIL"} for row in native_steps):
+        metrics["proof_partition_coverage"] = {"required": required, "observed": observed}
     result = commands.result(metrics, reports,
         "Native property proofs only. Antecedent reachability is measured only when its cover tasks exist.")
     result["native_steps"] = native_steps
@@ -306,10 +330,12 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
-    if tool.get("adapter") in {"eqy", "xor"}:
+    if tool.get("adapter") in {"eqy", "xor", "gls"}:
         import flow_native_verification
         return getattr(flow_native_verification, tool["adapter"])(
             project, work, tool, commands, state=state, config=config or {})
+    if tool.get("adapter") == "implemented_cdc":
+        return cdc(project, work, tool, commands, state=state, config=config or {})
     adapter = ADAPTERS.get(tool.get("adapter"))
     if adapter is None:
         return commands.result(detail=f"No native adapter for {tool.get('adapter')!r}.")
