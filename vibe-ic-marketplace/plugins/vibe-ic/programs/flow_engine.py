@@ -839,7 +839,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             retained = bool(saved.get("tool_ran") and (
                 kind in {"librelane", "command", "snapshot"}
                 or kind == "adapter" and (
-                    tool.get("adapter") and any(isinstance(value, (int, float))
+                    tool.get("adapter") and tool["adapter"] not in {"physical_declarations", "macro_views"}
+                    and any(isinstance(value, (int, float))
                                                  for value in saved.get("native_metrics", {}).values())
                     or tool.get("function") == "doc_extract"
                     and any(item.get("ran") for item in saved.get("native_steps", [])))))

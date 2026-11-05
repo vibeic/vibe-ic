@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1470
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1470)
+- **Total programs (excluding helpers / shims):** 1471
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1471)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1461 |
+| `any` | 1462 |
 
 ## Alphabetical listing
 
@@ -526,6 +526,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_scan_physical` | any | — | D36 BLOCKING native leaf for the existing Phase-3 physical owner. |
 | `flow109_system_security` | any | — | D16/D17/D73 readers for existing full-stack and formal producers. |
 | `flow109_technology_qualification` | any | — | D03 native technology selection. BLOCKING on native config/pin refusal. |
+| `flow_activity` | any | — | Run functional activity and native vector power on a captured State. |
 | `flow_adapter_jobs` | any | — | One FIFO subprocess lane for independent native adapters. |
 | `flow_artifact_paths` | any | — | flow_artifact_paths |
 | `flow_chip_inputs` | any | — | Generate native Chip inputs from the elaborated core and active PDK. |
@@ -1542,7 +1543,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1461 programs)
+### `any` (1462 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2040,6 +2041,7 @@ _(no programs in this group)_
 - `flow109_scan_physical` — D36 BLOCKING native leaf for the existing Phase-3 physical owner.
 - `flow109_system_security` — D16/D17/D73 readers for existing full-stack and formal producers.
 - `flow109_technology_qualification` — D03 native technology selection. BLOCKING on native config/pin refusal.
+- `flow_activity` — Run functional activity and native vector power on a captured State.
 - `flow_adapter_jobs` — One FIFO subprocess lane for independent native adapters.
 - `flow_artifact_paths` — flow_artifact_paths
 - `flow_chip_inputs` — Generate native Chip inputs from the elaborated core and active PDK.
