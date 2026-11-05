@@ -199,7 +199,7 @@ def step_report(project: Path) -> Tuple[Optional[Dict[str, Any]], Optional[str]]
         if status is not None and not any(row.get("name") == "sim" for row in d["steps"]):
             d["steps"].append({"name": "sim"})
         for row in d["steps"]:
-            if row.get("name") == "sim":
+            if row.get("name") == "sim" and row.get("status") not in _STATUS_FAILING:
                 row.update(status=status if status in {"PASS", "FAIL"} else "NOT_MEASURED", detail="reports/flow_engine.json")
     return d, None
 
