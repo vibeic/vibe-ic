@@ -188,3 +188,18 @@ def test_owned_clauses_require_their_actual_source_and_consumer(tmp_path, mutati
     result = _run(tmp_path)
     assert result.returncode == 1, result.stdout + result.stderr
     assert "source-owned integration/timing obligations missing" in result.stdout
+
+
+@pytest.mark.parametrize('missing_normative', [False, True])
+def test_reference_scope_matches_existing_document_policy(tmp_path, missing_normative):
+    doc = 'Core Protocol\n'
+    if missing_normative:
+        doc += 'Reset Procedure\n'
+    _setup(tmp_path, doc, {'L2_FRS.json': {'requirement': 'Core Protocol'}})
+    (tmp_path / 'phase1/input_doc/context_guide.txt').write_text(
+        '\n'.join(f'Context Chapter{letter}' for letter in 'ABCDEFGHIJK'))
+    (tmp_path / 'phase1/completeness_check_config.json').write_text(json.dumps({
+        'reference_docs': ['context_guide.txt']}))
+    result = _run(tmp_path)
+    assert result.returncode == (1 if missing_normative else 0), result.stdout + result.stderr
+    assert ('FAIL' if missing_normative else 'PASS') in result.stdout

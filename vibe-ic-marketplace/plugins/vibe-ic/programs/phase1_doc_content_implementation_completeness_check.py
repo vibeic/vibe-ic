@@ -68,6 +68,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
+from phase1_doc_input_completeness_check import _is_reference_doc, _load_reference_doc_globs
 
 
 WAIVER_PREFIX = "phase1_section_intentionally_unimplemented_"
@@ -137,12 +138,15 @@ def _scan_sections(project: Path) -> List[dict]:
     out: List[dict] = []
     seen_files: Set[Path] = set()
     seen_slugs: Set[str] = set()
+    references = _load_reference_doc_globs(project)
     for sub in _DOC_DIRS:
         d = project / sub
         if not d.is_dir():
             continue
         for f in d.iterdir():
             if not f.is_file() or f.suffix.lower() not in (".txt", ".md"):
+                continue
+            if _is_reference_doc(f.name, references):
                 continue
             if f in seen_files:
                 continue
