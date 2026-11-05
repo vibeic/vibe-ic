@@ -66,8 +66,6 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
         script.write_text("\n".join([
             *["read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
-            *["read_verilog -lib -nooverwrite -DFUNCTIONAL -DUNIT_DELAY= " + _word(path)
-              for path in config.get("CELL_VERILOG_MODELS", [])],
             "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
             "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
     else:

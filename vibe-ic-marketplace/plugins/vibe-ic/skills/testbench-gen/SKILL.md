@@ -100,6 +100,28 @@ It **combines open-source** frameworks rather than re-inventing them: **cocotb**
   `TODO(spec-to-assertion)` stubs for you to formalise (never fabricated as a
   passing SVA).
 
+### Skill: Reuse the reference model with physical propagation delays
+
+**When to apply:** an expert reference testbench is replayed against an
+implemented netlist or SDF annotation.
+
+**What to do:** preserve the clock frequency, transaction sequence and expected
+cycle behavior. Sample outputs after their declared or native propagation delay,
+before the next sampling edge. An arbitrary subcycle delay in an RTL testbench
+does not create a specification limit for the physical chip.
+
+Prove asynchronous reset while the clock is held stopped: establish idle inputs,
+assert reset, allow propagation, check the specified reset outputs, and check
+that they remain reset without any active clock edge. Then release reset and
+restart the clock according to the input contract. Do not replace unknown
+outputs with zero or suppress native SDF diagnostics.
+
+For configuration that commits at a period boundary, wait for the previously
+active period as well as the new period before checking a settled configuration.
+Keep the separate in-flight update test that checks the current pulse is not
+truncated. RTL and gate-level replay must both pass; a reference-model correction
+does not change an earlier native result.
+
 ### Skill: Software-visible field profiles for reference models
 
 **Pattern**: An instruction extension or interface selection is treated as proof of every software-readable or writable field, so a reference model confuses internal saved state with the selected software interface.

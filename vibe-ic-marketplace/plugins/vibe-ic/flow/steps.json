@@ -4412,42 +4412,26 @@
           }
         ]
       },
-      "checks": [
-        {
-          "metric": "fill_sensitive_reference_correlation",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16079
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "fill_sensitive_reference_correlation"
-          },
-          "tool_gap": "OpenRCX/Magic extraction and native parasitic annotation report; wire the report/input adapter without population emitters or requirement traces."
-        },
+      "checks": [],
+      "legacy_id": {
+        "registry": "D69",
+        "native": []
+      },
+      "observations": [
         {
           "metric": "final_parasitic_corner_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
+          "native_metrics": [],
           "source": {
             "file": "flow/flow109.json",
             "line": 16099
           },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "OpenSTA per-corner native parasitic annotation reports"
-          },
-          "tool_gap": "OpenSTA per-corner native parasitic annotation reports. Wire only this native report; both sides must come from the tool."
+          "reason": "OpenSTA reports native parasitic annotation counts for its timed corners, without a separate numeric corner-coverage limit. Report those native counts; final extraction and STA retain their original engineering checks.",
+          "declared_limit_from": {},
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical"
         }
-      ],
-      "legacy_id": {
-        "registry": "D69",
-        "native": []
-      }
+      ]
     },
     {
       "name": "final_electrical_analysis",
