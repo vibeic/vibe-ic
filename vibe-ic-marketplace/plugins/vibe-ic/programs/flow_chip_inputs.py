@@ -377,6 +377,8 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
             regular = electrical._named_connections(instance, entry["master"],
                 [(pin, net) for pin, net in pairs.items() if pin not in pg], buses)
             power = [f".{pin}({_identifier(net)})" for pin, net in pairs.items() if pin in pg]
+            if entry.get("is_ring_connector"):
+                lines.append("    (* keep = 1 *)")
             lines.extend([f"    {entry['master']} {instance} (", "        " + ", ".join(regular)])
             if power:
                 lines.extend(["`ifdef USE_POWER_PINS", ("        , " if regular else "        ") + ", ".join(power), "`endif"])

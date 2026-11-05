@@ -108,6 +108,36 @@ def test_incompatible_connector_supply_voltages_are_refused(receiver_ring):
         chip._ring(*receiver_ring)
 
 
+def test_unpowered_synthesis_preserves_the_physical_ring_connector(tmp_path):
+    import shutil
+    import subprocess
+
+    yosys = shutil.which("yosys")
+    if yosys is None:
+        pytest.skip("native Yosys is required to measure generated connector retention")
+    master, instance = "neutral_bridge", "u_connector"
+    chosen = {instance: {"master": master, "is_ring_connector": True,
+                         "supply_connections": {"CORE": "power", "QUIET": "power"}}}
+    native = {"SYNTH_TIEHI_CELL": "neutral_hi/Y", "SYNTH_TIELO_CELL": "neutral_lo/Y"}
+    library = {"verilog": [], "pg_pins": {master: {"CORE", "QUIET"}}}
+    wrapper = chip._wrapper("neutral_core", "neutral_chip", [], chosen,
+                            {"N": [instance]}, ["power"], native, library)
+    (tmp_path / "models.v").write_text("""(* blackbox *) module neutral_bridge (
+`ifdef USE_POWER_PINS
+    inout CORE, QUIET
+`endif
+); endmodule
+""")
+    (tmp_path / "design.v").write_text(wrapper + "module neutral_core; endmodule\n")
+    run = subprocess.run([yosys, "-Q", "-T", "-p",
+        "read_verilog -lib models.v; read_verilog design.v; "
+        "synth -top neutral_chip; write_json synthesized.json"],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    cells = json.loads((tmp_path / "synthesized.json").read_text())["modules"]["neutral_chip"]["cells"]
+    assert {name: cell["type"] for name, cell in cells.items()} == {instance: master}
+
+
 def _write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
