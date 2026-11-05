@@ -322,11 +322,19 @@ def test_unassigned_signals_are_placed_without_changing_declared_sides(inputs):
     assert sides["S"] == ["reset"]
 
 
-def test_missing_document_io_delay_is_named(inputs):
-    project, config, _, ports, _ = inputs
-    (project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").write_text("{}")
-    with pytest.raises(FileNotFoundError, match="L19.constraints.io_delay"):
-        chip._sdc(project, config, ports)
+@pytest.mark.parametrize("missing_document", [False, True])
+def test_undeclared_io_delay_uses_resolved_native_default(inputs, missing_document):
+    project, config, native, _, _ = inputs
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    if missing_document:
+        path.unlink()
+    else:
+        path.write_text("{}")
+    native["IO_DELAY_CONSTRAINT"] = 30
+    result = chip.prepare(project, config)
+    text = Path(result["PNR_SDC_FILE"]).read_text()
+    assert "set_input_delay 7.2" in text
+    assert "set_output_delay 7.2" in text
 
 
 def test_existing_sdc_keeps_clock_names_exceptions_and_budgets(inputs):
