@@ -150,8 +150,6 @@ def test_reaching_the_registry_is_OPT_IN_and_nothing_else_opts_in(monkeypatch):
 #: other direction, so the skip is gone instead: the applicable set is derived
 #: once, here, and pinned non-empty below so an empty subset FAILS rather than
 #: quietly asserting nothing.
-_CONTAINER_STARTING_GATES = tuple(
-    rel for rel in _BLOCKING_IMAGE_GATES if _starts_a_container(rel))
 
 
 

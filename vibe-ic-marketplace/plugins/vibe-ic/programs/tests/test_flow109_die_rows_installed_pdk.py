@@ -38,11 +38,6 @@ def _ref(project, relative, text):
 
 
 
-ROWS = {'D32': (_d32, 'D32_INSTALLED_PDK_UNAVAILABLE'),
-        'D42': (_d42, 'D42_INSTALLED_PDK_UNAVAILABLE'),
-        'D43': (_d43, 'D43_INSTALLED_DECLARED_PDK_UNAVAILABLE'),
-        'D47': (_d47, 'D47_INSTALLED_TECHNOLOGY_UNAVAILABLE'),
-        'D60': (_d60, 'D60_INSTALLED_TECHNOLOGY_UNAVAILABLE')}
 
 
 @pytest.fixture

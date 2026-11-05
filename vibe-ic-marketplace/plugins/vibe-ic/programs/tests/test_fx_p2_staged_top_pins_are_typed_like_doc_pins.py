@@ -93,4 +93,3 @@ def test_the_alias_gate_accepts_the_l1_this_producer_writes(tmp_path):
          str(proj)], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "[PASS]" in r.stdout, r.stdout
-

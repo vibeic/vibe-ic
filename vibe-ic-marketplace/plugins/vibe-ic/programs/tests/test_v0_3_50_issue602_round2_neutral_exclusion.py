@@ -248,5 +248,3 @@ def test_real_issue600_commit_is_producer():
     assert pop, why
     verdicts = {sha: F.classify_diff(diff)["verdict"] for sha, diff in pop}
     _P.assert_population_is_safe_and_producer_is_reachable(verdicts)
-
-

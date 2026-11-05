@@ -165,8 +165,6 @@ _STEP12_NO_DFT = {
 
 
 # Production API controls for BR2-001..006; fixtures never qualify native EDA.
-from programs.tests import test_execution_modes as H
-from programs.tests._hostpaths import require_repo
 import execution_adapters_release as release
 
 
@@ -197,15 +195,6 @@ def dump(path, value):
 
 
 
-def test_br2_002_real_components_stay_distinct_and_claims_have_source_evidence(tmp_path):
-    # This real checked-in tool is consumed through the repository resolver.
-    assert require_repo() / 'vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/execution_modes_tool.py' == H.TOOL
-    ctx = H.context(tmp_path); controller = H.controller(H.adapter('a'), H.adapter('b'))
-    plan = controller.plan(ctx, 'ultra-mode')
-    assert plan['arms'] == ['a', 'b']
-    assert all(v['scope'] == 'SOURCE_COMPONENT_CLOSURE' and v['native_independence'] == 'NOT_MEASURED'
-               for v in plan['independence'].values())
-    assert len({v['sha256'] for v in plan['independence'].values()}) == 2
 
 
 

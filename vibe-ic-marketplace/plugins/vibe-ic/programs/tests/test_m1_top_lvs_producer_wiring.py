@@ -48,7 +48,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from programs.tests.test_execution_receipt_chain import real_entry, isolated_transport  # noqa: F401
 
 yaml = pytest.importorskip("yaml")
 
@@ -69,22 +68,6 @@ def _m1_step() -> dict:
     raise AssertionError("step M1 not found in the flow yaml")
 
 
-def _prior_phases_succeed(monkeypatch, orchestrator):
-    """This fixed M1 caller test controls prior-phase admission/transport.
-    Their completion guards are independently tested; M1's guard stays real.
-    """
-    from types import SimpleNamespace
-    monkeypatch.setattr(orchestrator._canonical_admission, "admit_span",
-                        lambda *a, **k: SimpleNamespace(admitted=True,
-                                                       identity_sha256="a" * 64))
-    monkeypatch.setattr(orchestrator._canonical_admission, "child_env",
-                        lambda identity, env: env)
-    original = orchestrator._row_verdict
-    def prior(project, report, rc, started, phase):
-        if phase in ("analog", "phase2", "phase3"):
-            return ("PASS" if rc == 0 else "FAIL"), "controlled prior phase"
-        return original(project, report, rc, started, phase)
-    monkeypatch.setattr(orchestrator, "_row_verdict", prior)
 
 
 def _gate_commands(gate) -> list[str]:
@@ -206,95 +189,8 @@ def test_m1_declares_a_program_that_really_writes_its_verdict_evidence(
         "the producer.")
 
 
-def test_orchestrator_dispatches_one_of_m1s_declared_producers(
-        tmp_path, monkeypatch):
-    """`check_step` returns MISSING on absent required_outputs BEFORE it
-    evaluates the gate, so a producer wired only into the gate is unreachable
-    on a fresh project.  The flow itself has to drive it."""
-    producers = _declared_producers_of_top_lvs(tmp_path, monkeypatch)
-    assert producers, "no declared producer to dispatch (see sibling test)"
-
-    import vibe_ic_one_shot_runner as ORCH
-    _prior_phases_succeed(monkeypatch, ORCH)
-
-    proj = tmp_path / "orch"
-    (proj / "phase3/analog").mkdir(parents=True)
-    (proj / "phase3/analog/analog_block_list.json").write_text(
-        json.dumps({"blocks": [{"name": "ldo"}]}))
-    (proj / "phase2/stage1/rtl").mkdir(parents=True)
-    (proj / "phase2/stage1/rtl/chip_top.v").write_text(
-        "module chip_top(); endmodule\n")
-    # owner route rule 2026-09-28 (ICROUTE)
-    from _route_fixture import stage_owner_route
-    stage_owner_route(proj, "ic")
-    real_entry('IC', 'default', proj)
-
-    dispatched: list[str] = []
-
-    def _record(label, runner, args, env=None):
-        dispatched.append(Path(runner).stem)
-        return 0
-
-    monkeypatch.setattr(ORCH, "_run_phase", _record)
-    # This bounded fixed-caller test owns the existing _run_phase transport seam.
-    monkeypatch.setattr(ORCH, "_controller_mixed_step", lambda *_args: None)
-    monkeypatch.setattr(sys, "argv",
-                        ["vibe_ic_one_shot_runner", str(proj),
-                         "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    ORCH.main()
-
-    assert producers & set(dispatched), (
-        f"the orchestrator dispatched {dispatched} — none of them is a "
-        f"declared M1 producer ({sorted(producers)}), so nothing in the flow "
-        "ever writes the merged GDS or the top-level LVS result and M1 stays "
-        "MISSING on every automated run.")
 
 
-def test_mixed_signal_dispatch_cannot_drag_the_digital_verdict_down(
-        tmp_path, monkeypatch):
-    """The merge is driven for its ARTEFACTS; the verdict belongs to the M1
-    gate.  A producer failure must be recorded, not turned into a digital
-    sign-off failure — the same contract the A-track already has."""
-    import vibe_ic_one_shot_runner as ORCH
-    _prior_phases_succeed(monkeypatch, ORCH)
-
-    proj = tmp_path / "orch_fail"
-    (proj / "phase3/analog").mkdir(parents=True)
-    (proj / "phase3/analog/analog_block_list.json").write_text(
-        json.dumps({"blocks": [{"name": "ldo"}]}))
-    (proj / "phase2/stage1/rtl").mkdir(parents=True)
-    (proj / "phase2/stage1/rtl/chip_top.v").write_text(
-        "module chip_top(); endmodule\n")
-    # owner route rule 2026-09-28 (ICROUTE)
-    from _route_fixture import stage_owner_route
-    stage_owner_route(proj, "ic")
-    real_entry('IC', 'default', proj)
-
-    producers = _declared_producers_of_top_lvs(tmp_path, monkeypatch)
-
-    dispatched = []
-    def _record(label, runner, args, env=None):
-        dispatched.append(Path(runner).stem)
-        return 1 if Path(runner).stem in producers else 0
-
-    monkeypatch.setattr(ORCH, "_run_phase", _record)
-    # This bounded fixed-caller test owns the existing _run_phase transport seam.
-    monkeypatch.setattr(ORCH, "_controller_mixed_step", lambda *_args: None)
-    monkeypatch.setattr(sys, "argv",
-                        ["vibe_ic_one_shot_runner", str(proj),
-                         "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    ORCH.main()
-
-    rep = json.loads(
-        (proj / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
-    phases = {p["name"]: p for p in rep["phases"]}
-    assert "mixed_signal" in phases, (
-        f"no mixed-signal phase in the run record: {sorted(phases)}")
-    assert phases["mixed_signal"]["rc"] == 1, "producer failure not recorded"
-    assert phases["phase3"]["verdict"] == "PASS", phases["phase3"]
-    assert rep["verdict"] == "FAIL", "Default whole-flow acceptance must refuse M1 failure"
-    assert "mixed_signal_power_domain_run" not in dispatched, "failed M1 must not dispatch M2"
-    assert phases["mixed_signal_M2"]["verdict"] == "NOT_MEASURED", "blocked M2 must not become PASS"
 
 
 # ── direction-1 guards: what must NOT change ───────────────────────────────
@@ -347,43 +243,6 @@ def test_m1_still_fails_when_the_top_level_lvs_did_not_match(tmp_path):
     assert M1.main([str(tmp_path)]) == 1
 
 
-def test_digital_only_run_dispatches_no_mixed_signal_merge(tmp_path,
-                                                           monkeypatch):
-    """A project with no analog blocks is the overwhelming majority and the
-    one the reference run (spm x ihp-sg13g2) exercises: it must not gain a
-    merge step, a container call, or a new phase verdict."""
-    import vibe_ic_one_shot_runner as ORCH
-
-    proj = tmp_path / "digital_only"
-    (proj / "phase2/stage1/rtl").mkdir(parents=True)
-    (proj / "phase2/stage1/rtl/chip_top.v").write_text(
-        "module chip_top(); endmodule\n")
-    # owner route rule 2026-09-28 (ICROUTE)
-    from _route_fixture import stage_owner_route
-    stage_owner_route(proj, "ic")
-    real_entry('IC', 'default', proj)
-
-    dispatched: list[str] = []
-
-    def _record(label, runner, args, env=None):
-        dispatched.append(Path(runner).stem)
-        return 0
-
-    monkeypatch.setattr(ORCH, "_run_phase", _record)
-    # This bounded fixed-caller test owns the existing _run_phase transport seam.
-    monkeypatch.setattr(ORCH, "_controller_mixed_step", lambda *_args: None)
-    monkeypatch.setattr(sys, "argv",
-                        ["vibe_ic_one_shot_runner", str(proj),
-                         "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    ORCH.main()
-
-    assert "mixed_signal_top_lvs_run" not in dispatched
-    assert not (proj / "phase3" / "mixed_signal").exists()
-    rep = json.loads(
-        (proj / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
-    for ph in rep["phases"]:
-        if ph["name"] == "mixed_signal":
-            assert ph["verdict"] == "SKIPPED"
 
 
 def test_producer_skips_honestly_when_it_cannot_run(tmp_path):

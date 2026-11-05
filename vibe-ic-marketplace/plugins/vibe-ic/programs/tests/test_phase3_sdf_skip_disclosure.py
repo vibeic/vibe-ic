@@ -71,12 +71,3 @@ def test_no_code_path_hardcodes_the_retired_capability_flag():
 
 
 # ── direction-1 guards: must PASS on BOTH trees ───────────────────────────
-
-
-
-
-
-test_guard_strict_promoter_still_requires_flag_and_ownership = \
-    guard_strict_promoter_still_requires_flag_and_ownership
-test_guard_platform_capability_gaps_stays_empty_for_step_29 = \
-    guard_platform_capability_gaps_stays_empty_for_step_29

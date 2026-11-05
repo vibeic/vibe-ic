@@ -43,7 +43,7 @@ def test_emit_typed_clock_domains_no_op_when_l9_absent(tmp_path):
     is still absent (the v1.6.88 bug), the synthesise-from-L9.top_ports
     branch must early-return and produce no entries. This documents
     why the call site had to move out of step 9."""
-    from programs.phase1_one_shot_runner import _emit_typed_clock_domains
+    from programs.phase1_doc_one_shot_runner import _emit_typed_clock_domains
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     # NO L9 file — simulates the v1.6.88 step-ordering bug.
@@ -59,9 +59,7 @@ def test_post_emit_typed_clock_domains_synthesises_primary_after_l9(tmp_path):
     """v1.6.89: the post-pass invocation runs AFTER L9 is on disk and
     must successfully synthesise a typed primary clock_domains[] entry
     from L9.top_ports."""
-    from programs.phase1_one_shot_runner import (
-        _post_emit_typed_clock_domains,
-    )
+    from programs.phase1_doc_one_shot_runner import _post_emit_typed_clock_domains
     project = tmp_path
     docs = project / "phase1" / "generated_docs"
     docs.mkdir(parents=True, exist_ok=True)
@@ -179,7 +177,7 @@ def test_gate_side_filter_rejects_freq_without_clock_keyword(tmp_path):
 
 def test_is_real_submodule_name_rejects_doc_headers():
     """Direct unit test of _is_real_submodule_name."""
-    from programs.phase1_one_shot_runner import _is_real_submodule_name
+    from programs.phase1_doc_one_shot_runner import _is_real_submodule_name
     # Doc-table headers must REJECT.
     for hdr in ("Type", "Name", "Description", "Notes", "Function",
                 "Owner", "Status", "Source", "Field", "Value", "ID",
@@ -205,7 +203,7 @@ def test_l9_submodule_extractor_rejects_type_header_token(tmp_path):
     """End-to-end: when datasheet prose includes a `Submodule:` line
     whose value is the table-header token `Type`, the extractor must
     NOT record `Type` as a submodule."""
-    from programs.phase1_one_shot_runner import gen_l9_integration_spec
+    from programs.phase1_doc_one_shot_runner import gen_l9_integration_spec
     project = tmp_path
     docs = project / "phase1" / "generated_docs"
     docs.mkdir(parents=True, exist_ok=True)

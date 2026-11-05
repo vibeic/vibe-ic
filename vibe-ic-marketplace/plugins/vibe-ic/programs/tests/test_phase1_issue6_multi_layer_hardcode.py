@@ -32,14 +32,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import (
-    gen_l4_regmap,
-    gen_l7_test_debug,
-    gen_l8_timing_waveform,
-    gen_l9_integration_spec,
-    gen_l11_otp_content,
-    gen_l13_lab_calibration,
-)
+from programs.phase1_doc_one_shot_runner import gen_l4_regmap, gen_l7_test_debug, gen_l8_timing_waveform, gen_l9_integration_spec, gen_l11_otp_content, gen_l13_lab_calibration
 import pytest
 
 _GEN_DIR = Path("phase1") / "generated_docs"

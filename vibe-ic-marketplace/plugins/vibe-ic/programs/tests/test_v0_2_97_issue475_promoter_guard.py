@@ -42,13 +42,7 @@ for _p in (str(PROGRAMS), str(PLUGIN_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from programs.phase1_one_shot_runner import (  # noqa: E402
-    _is_real_port_token,
-    _is_sdc_directive_token,
-    _is_stdcell_lib_shape_token,
-    _pin_has_port_like_evidence,
-    gen_l9_integration_spec,
-)
+from programs.phase1_doc_one_shot_runner import _is_real_port_token, _is_sdc_directive_token, _is_stdcell_lib_shape_token, _pin_has_port_like_evidence, gen_l9_integration_spec
 
 _GEN_DIR = Path("phase1") / "generated_docs"
 

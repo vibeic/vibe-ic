@@ -220,4 +220,3 @@ def test_a_disagreement_resolves_the_same_way_in_any_order(order):
     g = _gate()
     merged, _ = g.merge_macro_obs([g.parse_macro_obs(t) for t in order])
     assert len(merged[MASTER]["obs"]) == 1
-

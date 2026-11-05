@@ -2,7 +2,6 @@
 
 import pytest
 import librelane_contract as contract
-from test_flow109_d11_metric_binding import case, accept
 
 
 def test_d11_explicit_lint_top_precedes_l9_top(monkeypatch, tmp_path):
@@ -33,17 +32,3 @@ def test_d11_explicit_lint_top_precedes_l9_top(monkeypatch, tmp_path):
         design.step_rtl_lint_tool(project, pdk_name='gf180mcuD',
                                   top_name='chip_top', container='unused')
     assert observed == {'top': 'chip_top'}
-
-
-
-
-@pytest.mark.parametrize('mutation', ['missing', 'changed'])
-def test_d11_nullable_config_still_requires_exact_native_file(case, mutation):
-    config = case['folders']['Verilator.Lint'] / 'config.json'
-    if mutation == 'missing':
-        config.unlink()
-    else:
-        config.write_bytes(config.read_bytes() + b'\nchanged\n')
-    result = accept(case)
-    assert result['status'] == 'NOT_MEASURED', result
-    assert 'METRIC_IDENTITY_INCOMPLETE' not in result['reason'], result

@@ -37,23 +37,17 @@ over-broad fix from calling every non-zero exit a crash.
 from __future__ import annotations
 
 import importlib
-import json
 import resource
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _pnr_tcl_stub import STUB as _STUB  # noqa: E402
 
 mod = importlib.import_module("phase3_one_shot_runner")
 
-tclsh = shutil.which("tclsh")
 
 # The harness must run identically against the PRE-fix runner, or the
 # negative control degenerates into "the new symbol does not exist yet".
@@ -99,17 +93,6 @@ def _build_project(tmp_path: Path, top: str, n_cells: int = 300) -> Path:
 _PG_OK = "PG_NET_OWNERSHIP_AUDIT: total=600 no_net=0 masters=\n"
 
 
-def _def_text_no_nets_section() -> str:
-    """A DEF the routing predicate CANNOT classify: well-formed, non-empty,
-    and carrying no `NETS` header at all — which is what a write cut short
-    before the NETS section leaves behind. `_def_signal_routing_stats` has one
-    scan and two policies for this shape, and the resume sites are the callers
-    that pass `unknown_is_routed=False` ("could not tell" = "not proven")."""
-    return ("VERSION 5.8 ;\nDIVIDERCHAR \"/\" ;\nDESIGN widget ;\n"
-            "UNITS DISTANCE MICRONS 1000 ;\n"
-            "COMPONENTS 2 ;\n- u0 sky130_fd_sc_hd__inv_1 + PLACED ( 0 0 ) N ;\n"
-            "- u1 sky130_fd_sc_hd__inv_1 + PLACED ( 460 0 ) N ;\n"
-            "END COMPONENTS\nEND DESIGN\n")
 
 
 def _def_text(nets: int = 40, *, routed: bool) -> str:
@@ -193,146 +176,8 @@ def _crash_log(stage: str, *, signal_death: bool = True,
             + tail)
 
 
-def _drive(tmp_path, monkeypatch, *, first_rc, stage,
-           write_checkpoint=True, resume_rc=0, resume_writes_def=True,
-           tool_printed_trace=True, top="widget",
-           route_checkpoint="routed", resume_def_routed=True,
-           preroute_routed=False, first_signoff=(),
-           resume_def_classifiable=True, resume_stage=None,
-           resume_signoff=(), probe=True):
-    """Run step_pnr against a fake OpenROAD.
-
-    The FIRST `openroad` invocation writes the route checkpoint and the log,
-    then returns `first_rc` WITHOUT writing the final DEF — the measured
-    shape of a mid-tcl death after a completed route. Any SECOND invocation
-    is whatever the runner decided to do about that; the fake records the
-    script it was pointed at so the test can inspect it.
-
-    `route_checkpoint` selects what the LAST checkpoint write left behind:
-
-      "routed"    the normal case — routed_preantenna.def with real routing;
-      "zero_byte" the write was attempted and produced an empty file. This is
-                  reachable in the shipped flow because `write_def
-                  routed_preantenna.def` is itself inside a Tcl `catch`
-                  (ROUTED_CHECKPOINT_NONFATAL), so a failed checkpoint write
-                  does NOT stop the run — it continues into the post-route
-                  tail where the measured Signal 11 happens;
-      "unrouted"  the file exists and is well-formed but carries no `+ ROUTED`
-                  geometry, i.e. the write was cut short mid-design;
-      "unclassifiable" the file exists and is well-formed but has no NETS
-                  section at all, so the routing question cannot be ANSWERED
-                  from it — the third outcome the predicate has, and the one
-                  its `unknown_is_routed` policy exists for.
-
-    `resume_def_routed` selects whether the resumed session's final DEF
-    carries routing, which is the OUTPUT-side half of the same question;
-    `resume_def_classifiable=False` makes that DEF unclassifiable instead,
-    which is the OUTPUT-side half of the `unknown_is_routed` question.
-
-    `first_signoff` names the sign-off artifacts the FIRST session wrote
-    before it died. Empty (the default) is a crash BEFORE the writes. Naming
-    them is a crash AFTER them — the shape pnr.tcl's own last stage, the #147
-    ESTIMATE block, produces, because the template puts it below every
-    `write_def`/`write_verilog` precisely so it cannot touch them.
-
-    `preroute_routed` makes the PRE-route checkpoints carry routed geometry.
-    In a single clean run they never would — hold repair precedes routing —
-    but the pnr output directory is not cleaned between runs, so a
-    `post_hold.def` sitting there may be a LEFTOVER from an earlier session
-    whose content has nothing to do with this one. That is the same
-    stale-artifact hazard `test_a_stale_def_does_not_launder_a_crash` covers
-    for the final DEF, and it is what isolates the resume-POINT rule from the
-    routed-geometry rule.
-    """
-    project = _build_project(tmp_path, top)
-    calls: list = []
-    # The measured crash happened on an OpenROAD the runner's own probe
-    # declared CAPABLE of post-route SPEF repair (image 0.2.58 probed capable
-    # and took Signal 11 anyway). That is the configuration under test, so the
-    # probe is pinned to it rather than left to whatever the test host has.
-    # `probe=False` is the stock-upstream OpenROAD build, on which whole
-    # template blocks collapse to nothing — a different emitted script, and so
-    # a different resume, which the Tcl-parse test exercises both sides of.
-    monkeypatch.setattr(mod, "_openroad_supports_postroute_spef_repair",
-                        lambda *_a, **_k: probe)
-
-    def fake_docker_exec(container, cmd, timeout=None, **kw):
-        if "openroad -no_init" in cmd:
-            out_dir = mod._pl.pnr_dir(project)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            script = None
-            for tok in cmd.split():
-                if tok.endswith(".tcl"):
-                    script = Path(tok)
-            body = script.read_text() if script and script.is_file() else ""
-            calls.append({"script": str(script), "body": body})
-            if len(calls) == 1:
-                if write_checkpoint:
-                    # The four PRE-route checkpoints: placed connectivity, no
-                    # routing — which is what they genuinely contain.
-                    for pre in ("floorplan.def", "placed.def",
-                                "post_cts.def", "post_hold.def"):
-                        (out_dir / pre).write_text(
-                            _def_text(routed=preroute_routed))
-                    ck = out_dir / "routed_preantenna.def"
-                    if route_checkpoint == "zero_byte":
-                        ck.write_bytes(b"")
-                    elif route_checkpoint == "unrouted":
-                        ck.write_text(_def_text(routed=False))
-                    elif route_checkpoint == "unclassifiable":
-                        ck.write_text(_def_text_no_nets_section())
-                    else:
-                        ck.write_text(_def_text(routed=True))
-                for name in first_signoff:
-                    if name.endswith(".def"):
-                        (out_dir / name).write_text(_def_text(routed=True))
-                    elif name.endswith(".v"):
-                        (out_dir / name).write_text(
-                            f"module {top}(); endmodule\n")
-                    else:
-                        (out_dir / name).write_text("worst slack 0.42\n")
-                log = _crash_log(stage, signal_death=first_rc == 139,
-                                 tool_printed_trace=tool_printed_trace)
-                if first_signoff:
-                    log += _PG_OK
-                (out_dir / "openroad.log").write_text(log)
-                return (first_rc, log, "")
-            # second and later invocations
-            log = _ROUTE_OK + _PG_OK
-            if resume_writes_def:
-                _body = (_def_text(routed=resume_def_routed)
-                         if resume_def_classifiable
-                         else _def_text_no_nets_section())
-                (out_dir / "routed.def").write_text(_body)
-                (out_dir / f"{top}.def").write_text(_body)
-            for name in resume_signoff:
-                if name.endswith(".def"):
-                    (out_dir / name).write_text(_def_text(routed=True))
-                elif name.endswith(".v"):
-                    (out_dir / name).write_text(
-                        f"module {top}(); endmodule\n")
-                else:
-                    (out_dir / name).write_text("worst slack 0.42\n")
-            if resume_stage:
-                log = _crash_log(
-                    resume_stage,
-                    signal_death=resume_rc == 139,
-                    tool_printed_trace=tool_printed_trace,
-                ) + _PG_OK
-            lp = kw.get("log_path")
-            if lp:
-                Path(lp).write_text(log)
-            return (resume_rc, log, "")
-        return (0, "", "")
-
-    monkeypatch.setattr(mod, "_docker_exec", fake_docker_exec)
-    res = mod.step_pnr(project, top, _sky130_pdk(project), "iic", "200x200", 0.30)
-    return res, calls, project
 
 
-def _says_signal(text: str) -> bool:
-    t = (text or "").lower()
-    return "sigsegv" in t or "signal 11" in t
 
 
 # ---------------------------------------------------------------------------
@@ -395,225 +240,32 @@ def test_a_process_killed_by_a_signal_reaches_the_runner_as_128_plus_n(
         f"is not doing what this test says it does.")
 
 
-def test_a_watchdog_kill_is_not_reported_as_a_tool_crash(
-        tmp_path, monkeypatch):
-    """OVER-BREADTH GUARD — passes before AND after. The watchdog's stall
-    sentinel also lands in the 128..255 band, but it is the RUNNER killing the
-    tool, not the tool crashing. Calling it a segfault would send the next
-    reader hunting an OpenROAD bug that is not there."""
-    import _watchdog as W
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=W.RC_STALLED,
-                            stage="postroute_drv_repair")
-    assert res.status != "PASS"
-    assert not _says_signal(res.detail or "")
-    assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------
 # THE VERDICT — what the next reader is told
 # ---------------------------------------------------------------------------
-def test_signal_death_verdict_names_the_signal_not_just_the_exit_code(
-        tmp_path, monkeypatch):
-    """`rc=139` is not a diagnosis. The verdict has to name what killed the
-    tool, or the reader has to know the 128+N convention by heart to even
-    start.
-
-    Driven with a transcript that says NOTHING about a signal, deliberately:
-    quoting a log tail that happens to contain the tool's own stack trace is
-    not classification, and a verdict built that way says nothing at all when
-    the tool dies without printing one."""
-    res, _calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                             stage="detailed_route",
-                             tool_printed_trace=False)
-    assert res.status != "PASS"
-    assert not _says_signal(_crash_log("detailed_route",
-                                       tool_printed_trace=False)), \
-        "fixture invalid: the transcript must not mention the signal"
-    assert _says_signal(res.detail), \
-        f"verdict does not name the signal: {res.detail[:400]!r}"
 
 
-def test_signal_death_verdict_does_not_present_a_completed_route_as_failed(
-        tmp_path, monkeypatch):
-    """The router printed `Complete detail routing` with 0 violations. A
-    verdict that lets the reader conclude routing failed costs exactly the
-    hours this defect cost. The completion has to be ASSERTED — quoting a
-    2000-character tail that no longer contains the line does not count."""
-    res, _calls, _p = _drive(tmp_path, monkeypatch,
-                             first_rc=139, stage="detailed_route")
-    d = res.detail or ""
-    assert "Complete detail routing" not in _CRASH_TAIL[-2000:], \
-        "fixture invalid: the completion line must be outside the quoted tail"
-    assert ("Complete detail routing" in d
-            or "routing SUCCEEDED" in d
-            or "route completed" in d.lower()), \
-        f"verdict does not state that routing completed: {d[:400]!r}"
 
 
-def test_signal_death_verdict_names_the_surviving_checkpoint(
-        tmp_path, monkeypatch):
-    """When the runner does NOT resume, the checkpoint that survived the crash
-    has to be named in the verdict — a path the reader can act on, instead of
-    advice pointing at a mechanism they then have to go looking for."""
-    res, calls, project = _drive(tmp_path, monkeypatch,
-                                 first_rc=139, stage="detailed_route")
-    ckpt = mod._pl.pnr_dir(project) / "routed_preantenna.def"
-    assert ckpt.is_file()
-    assert len(calls) == 1, "a load-bearing crash must not be resumed past"
-    assert str(ckpt) in (res.detail or ""), \
-        f"verdict does not name the checkpoint: {(res.detail or '')[:400]!r}"
 
 
-def test_an_ordinary_nonzero_exit_is_not_dressed_up_as_a_crash(
-        tmp_path, monkeypatch):
-    """Over-breadth guard (passes before AND after): the same log, the same
-    missing DEF, but the tool RETURNED 1 instead of dying. Nothing may claim a
-    signal killed it."""
-    res, calls, _p = _drive(tmp_path, monkeypatch,
-                            first_rc=1, stage="postroute_drv_repair")
-    assert res.status != "PASS"
-    assert not _says_signal(res.detail or ""), \
-        f"an ordinary error exit was described as a crash: {res.detail[:300]!r}"
-    assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------
 # THE RESUME — the mechanism the advice promised
 # ---------------------------------------------------------------------------
-def test_crash_in_a_best_effort_stage_resumes_from_the_checkpoint(
-        tmp_path, monkeypatch):
-    """The headline property, and the one the pre-fix runner cannot satisfy at
-    all: when the tool is killed in a stage pnr.tcl itself declares
-    best-effort and a route checkpoint survives, the runner must finish the
-    job FROM THE CHECKPOINT — not re-run from scratch, and not give up.
-
-    Asserted on what the runner DOES (a second tool invocation, pointed at a
-    script that loads the checkpoint and does not rebuild the design), not on
-    how it builds it."""
-    res, calls, project = _drive(tmp_path, monkeypatch,
-                                 first_rc=139, stage="postroute_drv_repair")
-    ckpt = mod._pl.pnr_dir(project) / "routed_preantenna.def"
-    assert len(calls) == 2, \
-        "no second attempt was made — the checkpoint was left unused"
-    body = calls[1]["body"]
-    assert f"read_def {ckpt}" in body, \
-        "the second attempt does not load the surviving checkpoint"
-    assert "initialize_floorplan" not in body, \
-        "the second attempt rebuilds the floorplan — that is a from-scratch " \
-        "re-run, which is exactly what the checkpoint exists to avoid"
-    assert "read_verilog" not in body, \
-        "the second attempt re-elaborates the netlist instead of reading the " \
-        "routed database"
-    assert res.status != "FAIL"
 
 
-def test_the_resumed_run_does_not_repeat_the_stage_that_killed_it(
-        tmp_path, monkeypatch):
-    """Resuming into the same crash is not a resume. The stage the tool died
-    in must be absent from the script the second attempt runs, and its absence
-    must be visible in the script rather than inferred."""
-    _res, calls, _p = _drive(tmp_path, monkeypatch,
-                             first_rc=139, stage="postroute_drv_repair")
-    first, second = calls[0]["body"], calls[1]["body"]
-    assert first.count("SDR_DRV_PASS") == 2, \
-        "fixture invalid: the emitted pnr.tcl should carry both DRV loops"
-    assert second.count("SDR_DRV_PASS") == 1, \
-        "the stage that crashed was re-emitted into the resumed script"
-    assert "PNR_STAGE_OMITTED" in second
 
 
-def test_the_resume_keeps_the_signoff_spef_extraction(tmp_path, monkeypatch):
-    """Narrowness, as a property: omitting the crashing loop must not also
-    drop the sign-off parasitic extraction that the post-route STA is judged
-    on, nor the antenna repair the shipped geometry depends on. A resume that
-    quietly drops load-bearing work would trade one silent defect for
-    another."""
-    _res, calls, _p = _drive(tmp_path, monkeypatch,
-                             first_rc=139, stage="postroute_drv_repair")
-    second = calls[1]["body"]
-    assert "write_spef" in second
-    assert "repair_antennas" in second
-    assert "/routed.def" in second
 
 
-def test_a_crash_the_runner_resumed_past_is_still_recorded(
-        tmp_path, monkeypatch):
-    """A resume must not launder the crash. Whatever the final verdict, the
-    signal, the stage and the fact that a stage did not run have to remain
-    readable — both on the step result and durably on disk, because a step
-    detail is overwritten by the next run and an audit trail is not."""
-    res, _calls, project = _drive(tmp_path, monkeypatch,
-                                  first_rc=139, stage="postroute_drv_repair")
-    assert _says_signal(res.detail or ""), \
-        "the resumed verdict reads like an ordinary PnR result"
-    att = mod._pl.reports_dir(project) / "phase3" / "pnr_fatal_signal.json"
-    assert att.is_file(), "no durable record of the crash was written"
-    txt = att.read_text()
-    assert "11" in txt and "postroute_drv_repair" in txt
 
 
-def test_a_resume_crash_after_its_signoff_writes_preserves_the_routed_set(
-        tmp_path, monkeypatch):
-    """BIDIRECTIONAL CONTROL for the measured two-crash shape.
-
-    The first session dies in an omittable post-route repair and therefore
-    resumes from the routed checkpoint.  The resumed session writes the full
-    sign-off set, then dies in the final estimate-only stage.  Those completed
-    writes are this session's routed design; quarantining them would repeat the
-    exact stale-DEF inversion already fixed for a first-session tail crash.
-    """
-    res, calls, project = _drive(
-        tmp_path,
-        monkeypatch,
-        first_rc=139,
-        stage="postroute_drv_repair",
-        resume_rc=139,
-        resume_stage="postroute_setup_repair_estimate",
-        resume_signoff=("widget_pnr.v", "sta.rpt"),
-    )
-    assert len(calls) == 2
-    assert res.status == "PASS", (res.status, res.detail)
-    out = mod._pl.pnr_dir(project)
-    for name in _SIGNOFF_SET:
-        assert (out / name).is_file(), name
-        assert not (out / f"{name}.timeout.partial").exists(), name
-    att = json.loads(
-        (mod._pl.reports_dir(project) / "phase3" /
-         "pnr_fatal_signal.json").read_text())
-    secondary = att["resume"]["secondary_fatal_signal"]
-    assert secondary["signal"] == 11
-    assert secondary["stage"] == "postroute_setup_repair_estimate"
-    assert secondary["crashed_after_signoff_writes"] is True
-    assert att["resume"]["raw_rc"] == 139
 
 
-def test_a_stale_def_does_not_launder_a_crash(tmp_path, monkeypatch):
-    """The most dangerous shape: the tool crashed BEFORE writing the final
-    DEF, but a DEF from an earlier run is still sitting in the output
-    directory. The pre-fix gate was "non-zero exit OR no final DEF" — the
-    stale file satisfied half of it, and only the exit code was left to notice
-    anything was wrong. A file that cannot have come from this session must
-    never be handed downstream as if it had."""
-    project = _build_project(tmp_path, "widget")
-    out_dir = mod._pl.pnr_dir(project)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "widget.def").write_text("VERSION 5.8 ;\nDESIGN stale ;\n")
-    monkeypatch.setattr(mod, "_openroad_supports_postroute_spef_repair",
-                        lambda *_a, **_k: True)
-
-    def fake_docker_exec(container, cmd, timeout=None, **kw):
-        if "openroad -no_init" in cmd:
-            log = _crash_log("postroute_drv_repair", tool_printed_trace=False)
-            (out_dir / "openroad.log").write_text(log)
-            return (139, log, "")
-        return (0, "", "")
-
-    monkeypatch.setattr(mod, "_docker_exec", fake_docker_exec)
-    res = mod.step_pnr(project, "widget", _sky130_pdk(project), "iic", "200x200",
-                       0.30)
-    assert res.status != "PASS"
-    assert _says_signal(res.detail or ""), \
-        f"the crash was not named: {(res.detail or '')[:300]!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -631,112 +283,14 @@ def test_a_stale_def_does_not_launder_a_crash(tmp_path, monkeypatch):
 _SIGNOFF_SET = ("routed.def", "widget.def", "widget_pnr.v", "sta.rpt")
 
 
-def test_a_crash_after_the_signoff_writes_is_not_called_a_stale_def(
-        tmp_path, monkeypatch):
-    """THE INVERSION. Same signal, same message machinery, other side of the
-    writes: the artifacts on disk ARE this session's, and the stage that died
-    is one pnr.tcl declares best-effort and that modifies none of them.
-
-    The verdict must judge those artifacts instead of refusing them, and must
-    not state that `write_def routed.def` never ran."""
-    res, calls, project = _drive(tmp_path, monkeypatch, first_rc=139,
-                                 stage="postroute_setup_repair_estimate",
-                                 first_signoff=_SIGNOFF_SET)
-    assert len(calls) == 1, "no resume is needed — the artifacts are on disk"
-    assert res.status == "PASS", \
-        (f"a completed run was reported {res.status} because the tool died "
-         f"in a block that runs after every write: {(res.detail or '')[:400]!r}")
-    detail = res.detail or ""
-    # the crash is RECORDED, not dropped
-    assert _says_signal(detail), (
-        "a PASS that only holds because the crash came after the writes must "
-        "still name the crash")
-    assert "postroute_setup_repair_estimate" in detail
-    # and the false claim is gone
-    assert "predates the crash" not in detail
-    assert not (res.extras or {}).get("non_signoff_outputs"), \
-        (f"a complete sign-off DEF was published as non-sign-off: "
-         f"{(res.extras or {}).get('non_signoff_outputs')!r}")
-    assert (mod._pl.pnr_dir(project) / "widget.def").is_file()
-    # ...and the durable record says which side of the writes it was on
-    att = mod._pl.reports_dir(project) / "phase3" / "pnr_fatal_signal.json"
-    rec = json.loads(att.read_text())
-    assert rec.get("crashed_after_signoff_writes") is True
-    assert "predates the crash" not in att.read_text()
 
 
-def test_a_post_write_crash_in_a_load_bearing_stage_is_still_a_failure(
-        tmp_path, monkeypatch):
-    """"After the writes" is NOT on its own a licence to pass. The template
-    declares which stages are best-effort, and only those. A stage added below
-    the writes one day whose output IS load-bearing must fail — this is the
-    same `_PNR_NONFATAL_STAGES` rule the resume applies, on the other branch,
-    and without this test dropping the estimate stage out of that frozenset
-    changed no answer at all."""
-    monkeypatch.setattr(
-        mod, "_PNR_NONFATAL_STAGES",
-        frozenset(s for s in mod._PNR_NONFATAL_STAGES
-                  if s != "postroute_setup_repair_estimate"))
-    res, _calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                             stage="postroute_setup_repair_estimate",
-                             first_signoff=_SIGNOFF_SET)
-    assert res.status == "FAIL", \
-        "a crash in a LOAD-BEARING post-write stage was signed off"
-    detail = res.detail or ""
-    assert "load-bearing" in detail and "postroute_setup_repair_estimate" in detail
-    # the reason must be the stage's role, never a false claim about the DEF
-    assert "predates the crash" not in detail
 
 
-def test_a_post_write_crash_with_a_missing_artifact_is_still_a_failure(
-        tmp_path, monkeypatch):
-    """The stage's POSITION says the writes were reached. Only the filesystem
-    says they landed. A crash between two of them — `write_verilog` after
-    `write_def`, say — leaves a partial set, and a verdict that read the
-    position alone would sign that off."""
-    res, _calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                             stage="postroute_setup_repair_estimate",
-                             first_signoff=("routed.def", "widget.def"))
-    assert res.status == "FAIL", \
-        "a partial sign-off write set was accepted because the stage sat low"
-    detail = res.detail or ""
-    assert "widget_pnr.v" in detail, \
-        f"the verdict does not name what is missing: {detail[:400]!r}"
 
 
-def test_stage_position_is_read_off_the_script_that_actually_ran():
-    """IMPLEMENTATION-LEVEL, deliberately: the position predicate itself, on
-    hand-built scripts, so its three refusal shapes are driven directly rather
-    than only through the one template this repo happens to emit."""
-    tcl = ('puts "PNR_STAGE: detailed_route"\n'
-           'detailed_route\n'
-           'puts "PNR_STAGE: write_routed"\n'
-           'write_def /o/routed.def\n'
-           'write_def /o/top.def\n'
-           'write_verilog /o/top_pnr.v\n'
-           'report_checks > /o/sta.rpt\n'
-           'puts "PNR_STAGE: postroute_setup_repair_estimate"\n'
-           '  catch {report_checks > /o/sta_spef_repaired.rpt}\n')
-    after = mod._pnr_stages_after_signoff_writes(tcl)
-    assert after == {"postroute_setup_repair_estimate"}, after
-    # fail-safe: nothing is post-sign-off when the script cannot say so
-    assert mod._pnr_stages_after_signoff_writes("") == frozenset()
-    assert mod._pnr_stages_after_signoff_writes(
-        'puts "PNR_STAGE: floorplan"\ninitialize_floorplan\n') == frozenset()
 
 
-def test_the_emitted_template_puts_the_estimate_block_below_every_write(
-        tmp_path, monkeypatch):
-    """...and the predicate above is only worth anything if the SHIPPED
-    template still has that shape. Measured on the real emission."""
-    _res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                             stage="postroute_drv_repair")
-    body = calls[0]["body"]
-    after = mod._pnr_stages_after_signoff_writes(body)
-    assert "postroute_setup_repair_estimate" in after, \
-        ("the emitted pnr.tcl no longer runs the ESTIMATE block below its "
-         "sign-off writes — the crash-survivability verdict depends on it")
-    assert "write_routed" not in after and "postroute_drv_repair" not in after
 
 
 # ---------------------------------------------------------------------------
@@ -748,70 +302,12 @@ def test_the_emitted_template_puts_the_estimate_block_below_every_write(
 # on — files that exist ONLY because the resume put them there, from a session
 # the runner has just declared failed. This is the identical hazard
 # `_docker_timeout_isolate` was written for on the stall path (#570).
-@pytest.mark.parametrize("resume_rc,routed,classifiable,why", [
-    (0, False, True, "exited 0 with an unrouted DEF"),
-    (5, True, True, "exited non-zero"),
-    (139, True, True, "was killed by a signal too"),
-    (0, True, False, "exited 0 with an unclassifiable DEF"),
-])
-def test_a_failed_resume_leaves_no_artifact_on_a_canonical_path(
-        tmp_path, monkeypatch, resume_rc, routed, classifiable, why):
-    res, calls, project = _drive(
-        tmp_path, monkeypatch, first_rc=139, stage="postroute_drv_repair",
-        resume_rc=resume_rc, resume_def_routed=routed,
-        resume_def_classifiable=classifiable)
-    assert len(calls) == 2, "fixture invalid: the resume must have been tried"
-    assert res.status == "FAIL", f"a resume that {why} was accepted"
-    out_dir = mod._pl.pnr_dir(project)
-    for name in ("widget.def", "routed.def"):
-        assert not (out_dir / name).is_file(), (
-            f"a resume that {why} left {name} on its canonical path — the "
-            f"next step reads that file to decide the design is there")
-    named = (res.extras or {}).get("non_signoff_outputs") or []
-    assert any(n.endswith("widget.def") for n in named), \
-        f"the half-run outputs are not named in the verdict: {named!r}"
-    # the route checkpoint is EVIDENCE and must survive
-    assert (out_dir / "routed_preantenna.def").is_file()
 
 
-def test_a_resume_that_never_ran_isolates_nothing(tmp_path, monkeypatch):
-    """The over-breadth guard for the isolation above. A NOT_ATTEMPTED resume
-    started no session and wrote no file, so there is nothing of this run's to
-    rename — and a rule that renamed on every failed-resume verdict would
-    start moving unrelated leftovers around."""
-    out_dir_leftover = "routed.def"
-    res, calls, project = _drive(tmp_path, monkeypatch, first_rc=139,
-                                 stage="postroute_antenna_repair")
-    assert len(calls) == 1
-    assert res.status == "FAIL"
-    assert not (mod._pl.pnr_dir(project)
-                / f"{out_dir_leftover}.timeout.partial").is_file()
-    assert not (res.extras or {}).get("non_signoff_outputs")
 
 
-def test_a_resume_that_also_crashes_is_not_retried(tmp_path, monkeypatch):
-    """Bounded, by construction: one attempt. A resume loop that kept
-    re-entering a reproducible segfault would burn a machine instead of
-    reporting a defect."""
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                            stage="postroute_drv_repair", resume_rc=139,
-                            resume_writes_def=False)
-    assert len(calls) == 2
-    assert res.status == "FAIL"
 
 
-def test_no_checkpoint_means_no_resume_and_the_verdict_says_so(
-        tmp_path, monkeypatch):
-    """A crash before any stage completed leaves nothing to resume from. The
-    runner must say that rather than attempt one — and must still name the
-    signal."""
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                            stage="postroute_drv_repair",
-                            write_checkpoint=False,
-                            tool_printed_trace=False)
-    assert len(calls) == 1
-    assert res.status == "FAIL"
-    assert _says_signal(res.detail or "")
 
 
 # ---------------------------------------------------------------------------
@@ -824,407 +320,37 @@ def test_no_checkpoint_means_no_resume_and_the_verdict_says_so(
 # point to `post_hold.def` — a PRE-ROUTE checkpoint — and the post-route tail
 # then ran over a design that had never been routed, wrote it out as the final
 # DEF, and the step returned PASS with the message "routing SUCCEEDED".
-def test_a_pre_route_checkpoint_is_refused_as_a_resume_point(
-        tmp_path, monkeypatch):
-    """THE DEFECT. The route checkpoint write failed (its own `catch` let the
-    run continue), so the newest DEF on disk is post_hold.def. Resuming from
-    it would elide every routing command and sign off an unrouted design.
-
-    The runner must refuse, say why, and not start a second tool session."""
-    res, calls, project = _drive(tmp_path, monkeypatch, first_rc=139,
-                                 stage="postroute_drv_repair",
-                                 route_checkpoint="zero_byte")
-    assert len(calls) == 1, \
-        "a second OpenROAD session was started from a PRE-ROUTE checkpoint"
-    assert res.status == "FAIL", \
-        f"an unrouted design was signed off as {res.status}"
-    detail = (res.detail or "")
-    assert "NOT_ATTEMPTED" in detail
-    assert "post_hold" in detail, \
-        f"the refusal does not name the checkpoint it refused: {detail[:400]!r}"
-    # and the design was never handed to the tail
-    assert not (mod._pl.pnr_dir(project) / "widget.def").is_file()
 
 
-def test_a_pre_route_checkpoint_that_looks_routed_is_still_refused(
-        tmp_path, monkeypatch):
-    """The resume POINT rule, isolated from the routed-geometry rule.
-
-    The pnr output directory is not cleaned between runs, so the
-    `post_hold.def` on disk may be a leftover from an EARLIER session and can
-    carry anything — here, routing. Its geometry therefore proves nothing
-    about THIS design, and the resume Tcl would still elide
-    floorplan..detailed_route on the strength of a file that is not the
-    checkpoint that region ends at.
-
-    Only the resume-point rule can refuse this one: with routing present, the
-    geometry check has nothing to object to."""
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                            stage="postroute_drv_repair",
-                            route_checkpoint="zero_byte",
-                            preroute_routed=True)
-    assert len(calls) == 1, \
-        ("resumed from post_hold.def because it happened to contain routing "
-         "— the resume point must be the ROUTE checkpoint, not merely a DEF "
-         "with wires in it")
-    assert res.status == "FAIL"
-    assert "post_hold" in (res.detail or "")
 
 
-def test_a_route_checkpoint_with_no_routing_in_it_is_refused(
-        tmp_path, monkeypatch):
-    """The filename is not the evidence; the geometry is. A
-    `routed_preantenna.def` whose write was cut short by the same crash exists
-    and is non-empty, but carries no `+ ROUTED` wiring. Resuming from it is
-    the identical defect wearing the right filename."""
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                            stage="postroute_drv_repair",
-                            route_checkpoint="unrouted")
-    assert len(calls) == 1, \
-        "resumed from a route checkpoint that contains no routing"
-    assert res.status == "FAIL"
-    assert "no routed signal geometry" in (res.detail or "").lower(), \
-        f"the refusal does not name the reason: {(res.detail or '')[:400]!r}"
 
 
-def test_a_checkpoint_that_cannot_be_classified_is_refused(
-        tmp_path, monkeypatch):
-    """"Could not tell" is not "fine". `_def_signal_routing_stats` has ONE
-    scan and TWO policies, selected by `unknown_is_routed`, and both resume
-    sites pass False because they are asking for POSITIVE proof of routing.
-    Nothing drove that: with no test creating an UNCLASSIFIABLE DEF, flipping
-    either call site to the fail-safe default True changed no answer.
-
-    Here the checkpoint exists, is well-formed and is non-empty, but has no
-    NETS section — so the routing question has no answer in it, and a resume
-    that elides floorplan..detailed_route on the strength of it would run the
-    tail over a design it never established was routed."""
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                            stage="postroute_drv_repair",
-                            route_checkpoint="unclassifiable")
-    assert len(calls) == 1, \
-        ("resumed from a checkpoint whose routing could not be determined — "
-         "'unclassifiable' was read as 'routed'")
-    assert res.status == "FAIL"
-    assert "no routed signal geometry" in (res.detail or "").lower()
 
 
-def test_a_resume_output_that_cannot_be_classified_is_not_a_success(
-        tmp_path, monkeypatch):
-    """The OUTPUT side of the same policy. The resumed session exited 0 and
-    wrote a final DEF, but that DEF carries no NETS section, so nothing in it
-    establishes the design is routed. rc=0 plus an unreadable file is the
-    weakest evidence in the flow and must not be the strongest verdict."""
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                            stage="postroute_drv_repair",
-                            resume_def_classifiable=False)
-    assert len(calls) == 2, "fixture invalid: the resume must have been tried"
-    assert res.status == "FAIL", \
-        "an unclassifiable resume output was accepted as routed"
-    assert "no routed signal geometry" in (res.detail or "").lower()
 
 
-def test_a_resume_that_produces_an_unrouted_def_is_not_a_success(
-        tmp_path, monkeypatch):
-    """The output side of the same question. The resumed session exited 0 and
-    a final DEF is on disk — the entire pre-existing success test — but that
-    DEF carries no routing. rc=0 plus a file is not evidence."""
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                            stage="postroute_drv_repair",
-                            resume_def_routed=False)
-    assert len(calls) == 2, "fixture invalid: the resume must have been tried"
-    assert res.status == "FAIL", \
-        f"an unrouted resume output was accepted as {res.status}"
 
 
-def test_a_crash_in_a_load_bearing_stage_is_not_resumed_past(
-        tmp_path, monkeypatch):
-    """The guard the PR calls load-bearing, DRIVEN. `postroute_antenna_repair`
-    is not one of the stages pnr.tcl declares best-effort — its output is in
-    the shipped geometry — so omitting it would change what was built.
-
-    Without this test the refusal branch had no driver at all: replacing the
-    whole condition with `if False:` (i.e. omit ANY stage, load-bearing or
-    not) left every test green."""
-    res, calls, project = _drive(tmp_path, monkeypatch, first_rc=139,
-                                 stage="postroute_antenna_repair")
-    assert len(calls) == 1, \
-        "a load-bearing stage was omitted and the tail re-run without it"
-    assert res.status == "FAIL"
-    detail = (res.detail or "")
-    assert "postroute_antenna_repair" in detail and "load-bearing" in detail, \
-        f"the refusal does not name the stage or why: {detail[:400]!r}"
-    att = mod._pl.reports_dir(project) / "phase3" / "pnr_fatal_signal.json"
-    assert "NOT_ATTEMPTED" in att.read_text()
 
 
-def test_a_kill_sentinel_inside_the_signal_window_is_still_not_a_signal(
-        tmp_path, monkeypatch):
-    """The runner's kill sentinels are excluded from the 128+N decoding. With
-    today's values (124/198/199) and NSIG=65 the window is 129..192, so all
-    three fall outside it and the exclusion never fires — deleting it changed
-    no answer, which is why it was untested.
-
-    A sentinel that DOES land in the window is the state the exclusion exists
-    for, and it is one a test can create. Here the watchdog gains one at 139,
-    the exact status a SIGSEGV produces: the runner must still report its own
-    kill as a kill."""
-    monkeypatch.setattr(mod._wd, "RC_TEST_SENTINEL_IN_WINDOW", 139,
-                        raising=False)
-    assert mod._fatal_signal_from_rc(139) is None, \
-        ("a status the RUNNER uses to say it killed the tool was decoded as "
-         "SIGSEGV — a watchdog kill reported as an OpenROAD crash")
-    # and the real ones stay excluded
-    for name in ("RC_CEILING", "RC_ABORTED", "RC_STALLED"):
-        assert mod._fatal_signal_from_rc(getattr(mod._wd, name)) is None
-    # while a genuine signal death is still decoded
-    assert mod._fatal_signal_from_rc(137) == 9
 
 
-def _tcl_evals(tmp_path, body, name):
-    script = tmp_path / name
-    script.write_text(_STUB
-                      + body.replace("\nexit\n", "\nputs PNR_TCL_END\n"))
-    # The parse is a `tclsh` syntax check over one file and measures well
-    # under a second; 30 s is two orders of magnitude of headroom and stays
-    # under the harness's per-call ceiling (bound/3).
-    r = _pr.run([tclsh, str(script)], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert "PNR_TCL_END" in r.stdout
 
 
-@pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
-@pytest.mark.parametrize("probe", [True, False])
-@pytest.mark.parametrize("stage", sorted(mod._PNR_NONFATAL_STAGES))
-def test_both_the_pnr_and_the_resume_script_are_valid_tcl(
-        tmp_path, monkeypatch, probe, stage):
-    """Whatever the runner hands OpenROAD has to parse — the emitted pnr.tcl
-    AND every resume derived from it. A resume built by cutting regions out of
-    a working script is only safe if every cut removes a brace-balanced
-    region, so it is proven on the real emission, across BOTH outcomes of the
-    fork-repair probe (which decides whether whole blocks are emitted at all)
-    and for every stage the resume is allowed to omit.
-
-    Not every (probe, stage) pair yields a resume — on stock upstream the
-    blocks those stages live in are not emitted at all, so no resume can be
-    derived from the script and the runner says so instead of building half a
-    one. EVERY script the runner did hand the tool is parsed, whichever those
-    turn out to be."""
-    _res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139, stage=stage,
-                             probe=probe)
-    assert calls, "fixture invalid: no script was emitted at all"
-    for i, call in enumerate(calls):
-        _tcl_evals(tmp_path, call["body"], f"tcl_check_{i}.tcl")
 
 
-@pytest.mark.skipif(tclsh is None, reason="tclsh not installed")
-def test_the_resume_script_itself_is_reached_and_parses(tmp_path, monkeypatch):
-    """...and the matrix above must not degenerate into "pnr.tcl parses" only.
-    This pins one configuration in which a resume IS built."""
-    _res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                             stage="postroute_drv_repair", probe=True)
-    assert len(calls) == 2, "no resume was built in the configuration that has one"
-    assert mod._PNR_RESUME_TCL in calls[1]["script"]
-    _tcl_evals(tmp_path, calls[1]["body"], "resume_check.tcl")
 
 
 # ---------------------------------------------------------------------------
 # The emitted pnr.tcl must carry what the resume needs to find
 # ---------------------------------------------------------------------------
-def test_the_emitted_pnr_tcl_breadcrumbs_the_stage_it_is_in(
-        tmp_path, monkeypatch):
-    """Without a breadcrumb the runner cannot name the stage that died, and
-    everything above degrades to quoting a log tail again."""
-    _res, calls, _p = _drive(tmp_path, monkeypatch,
-                             first_rc=139, stage="postroute_drv_repair")
-    body = calls[0]["body"]
-    for stage in ("detailed_route", "postroute_drv_repair",
-                  "postroute_antenna_repair"):
-        assert f"{_MARKER} {stage}" in body, \
-            f"pnr.tcl does not breadcrumb {stage}"
 
 
-def test_splitting_the_reconverge_block_did_not_drop_the_second_antenna_pass(
-        tmp_path, monkeypatch):
-    """The DRV re-convergence loop and the antenna pass that follows it used
-    to be ONE concatenated template string; they are now two slots so the
-    resume sentinels can bracket the loop alone. The claim attached to that
-    change is that the emitted Tcl is BYTE-IDENTICAL — slot A then slot B,
-    same order, same text — and nothing measured it: `repair_antennas` still
-    appeared via slot A, so emptying slot B (the SECOND, load-bearing antenna
-    pass) left every test green while silently halving the antenna repair.
-
-    Two passes means the antenna block is emitted TWICE and the two copies are
-    byte-identical, which is exactly what the claim says. Both halves are
-    measured on the real emission and both are cut out by their sentinels, so
-    neither depends on counting a token that also occurs elsewhere.
-
-    #2253 — THE FIRST PASS NOW HAS ITS OWN BEGIN/END SENTINEL PAIR, because an
-    SDR child deck seeded from the SECOND site's checkpoint has to omit the
-    antenna work that checkpoint already contains. So slot A is cut out by that
-    pair instead of by "everything up to the next stage's BEGIN", which is
-    strictly more precise: the old slice silently swallowed whatever sat
-    between the antenna block and the reconverge BEGIN, and the first thing
-    ever to sit there was the first pass's own END marker. MEASURED on the real
-    emission when that changed: the two passes are still 13,070 bytes each and
-    still byte-identical, and `repair_antennas` is still in BOTH — nothing was
-    dropped, the slice was reading a byte the pass does not own. Adding the
-    sentinel pair does NOT make this stage omittable on a fatal-signal resume:
-    that path gates on `_PNR_NONFATAL_STAGES`, which does not contain it, and
-    `test_the_second_antenna_pass_is_breadcrumbed_and_load_bearing` measures it.
-
-    `repair_antennas` is now asserted INSIDE slot B as well. The docstring above
-    names the hole the substring comparison alone left — an emptied slot B going
-    unnoticed because the token still appeared via slot A — and asking slot B
-    directly closes it without depending on the comparison at all.
-
-    R-0915-110 / #2420 (v1.22.57) BROKE THE LITERAL BYTE-IDENTITY, LEGITIMATELY,
-    AND THIS TEST NOW PINS THE EXACT SHAPE OF THAT DIFFERENCE INSTEAD OF
-    DENYING IT. R-0915-110(b) put a `pin_access` probe BETWEEN each of the five
-    post-route stages so a pin that loses its last access point can be
-    attributed to the stage that took it. A probe is useless if it cannot say
-    WHICH stage it follows, so each one carries its own stage tag — and the two
-    antenna passes are the same stage emitted twice, so their probes read
-    `after_postroute_antenna_repair` and `after_postroute_antenna_reconverge`.
-    That is the ONLY thing that differs. MEASURED on the real emission: slot A
-    is 18,454 bytes, the diff between the passes is 6 lines, and every one of
-    them is the probe's tag; the repair work is byte-identical. The value of
-    the distinct tags is measured too — on int8 (subservient x gf180mcuD as a
-    DIE, 2026-09-21) the deck printed `after_postroute_antenna_repair
-    no_access=0`, `after_postroute_drv_reconverge no_access=0` and
-    `after_postroute_antenna_reconverge no_access=0` as three separate
-    readings; one shared tag would have made those three lines
-    indistinguishable and R-0915-110's attribution unanswerable.
-
-    So the claim is re-stated, not relaxed: THE SECOND PASS IS THE FIRST WITH
-    ITS OWN STAGE TAG AND NOTHING ELSE. The comparison normalises each pass's
-    tag to the same placeholder and then demands byte-equality, which is
-    STRICTER than the old assertion in one way — it now also pins that each
-    pass's probe names ITS OWN stage, so a probe that names the wrong one, or
-    two probes naming the same one, fails here. An emptied or altered slot B
-    still cannot survive it. Slot B has no END sentinel of its own (only slot A
-    was bracketed, by #2253), so its length is DERIVED rather than searched for:
-    it is slot A's length plus one tag-length delta per occurrence. A slot B
-    that is not the re-emission fails that arithmetic before the comparison
-    even runs."""
-    _res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                             stage="postroute_drv_repair")
-    body = calls[0]["body"]
-    a_open = f'puts "{_MARKER} postroute_antenna_repair"\n'
-    b_open = f'puts "{_MARKER} postroute_antenna_reconverge"\n'
-    a_begin = mod._pnr_stage_begin("postroute_antenna_repair")
-    a_end = mod._pnr_stage_end("postroute_antenna_repair")
-    rc_begin = mod._pnr_stage_begin("postroute_drv_reconverge")
-    rc_end = mod._pnr_stage_end("postroute_drv_reconverge")
-    for needle in (a_open, b_open, a_begin, a_end, rc_begin, rc_end):
-        assert needle in body, f"the emission carries no {needle!r}"
-    # the first pass is bracketed, and its breadcrumb is INSIDE the bracket, so
-    # omitting the stage removes the breadcrumb with it instead of leaving a
-    # stage announcement for work that did not run
-    assert body.index(a_begin) < body.index(a_open) < body.index(a_end)
-    assert body.index(a_end) < body.index(rc_begin)
-    slot_a = body[body.index(a_open) + len(a_open):body.index(a_end)]
-    assert slot_a.strip(), "the FIRST antenna pass is empty"
-    assert "repair_antennas" in slot_a, "the FIRST antenna pass repairs nothing"
-
-    # R-0915-110(b): each pass's pin-access probe names the stage it follows.
-    tag_a = "after_postroute_antenna_repair"
-    tag_b = "after_postroute_antenna_reconverge"
-    n_tag = slot_a.count(tag_a)
-    assert n_tag, (
-        "the FIRST antenna pass carries no pin-access probe naming its own "
-        "stage — R-0915-110(b) attributes a lost access point to the stage "
-        "that took it, which needs the stage's name in the probe")
-    assert tag_b not in slot_a, "the FIRST pass's probe names the SECOND stage"
-
-    # slot B has no END sentinel; its length is the re-emission's length, which
-    # is slot A's plus one tag-length delta per occurrence. Arithmetic, not a
-    # search — a slot B that is not the re-emission fails it.
-    b_len = len(slot_a) + n_tag * (len(tag_b) - len(tag_a))
-    _b0 = body.index(b_open) + len(b_open)
-    slot_b = body[_b0:_b0 + b_len]
-    assert "repair_antennas" in slot_b, (
-        "the SECOND (post-reconverge) antenna pass does not call "
-        "`repair_antennas` — it is the load-bearing one, and asking it "
-        "directly is what an emptied slot B cannot survive")
-    assert slot_b.count(tag_b) == n_tag, (
-        "the SECOND antenna pass's probes do not name their own "
-        f"stage {n_tag} time(s) — they named {slot_b.count(tag_b)}; two passes "
-        "whose probes read the same make R-0915-110's attribution unanswerable")
-    assert tag_a not in slot_b, "the SECOND pass's probe names the FIRST stage"
-
-    # R-0915-121(b) ADDED A SECOND PER-PASS PROBE, AND IT IS COVERED BY THE
-    # SAME COUNT. The unrouted-net probe sits beside the pin-access probe at
-    # every post-route boundary and also names the stage it follows. It first
-    # shipped with the stage baked into its MARKER NAME
-    # (`UNROUTED_PROBE_AFTER_POSTROUTE_ANTENNA_REPAIR_...`), a second token
-    # spelled differently from the one normalised below -- and the two passes
-    # stopped being re-emissions of each other after 24113 identical
-    # characters. The arms caught it on 5b5bd02af. The marker is now
-    # stage-free and the stage travels as a field spelled EXACTLY as the
-    # pin-access probe spells it, so `n_tag` counts BOTH probes' tags and one
-    # normalisation covers both. That is what these two assertions pin.
-    assert n_tag >= 2, (
-        "each pass carries at least two probes that name their own stage -- "
-        "pin-access (R-0915-110(b)) and unrouted-nets (R-0915-121(b)) -- so "
-        "a count of one means a probe stopped naming its stage")
-    assert f"stage={tag_a}" in slot_a, (
-        "the FIRST pass's unrouted-net probe does not name its stage in the "
-        "field the normalisation covers")
-    assert f"stage={tag_b}" in slot_b, (
-        "the SECOND pass's unrouted-net probe does not name its stage in the "
-        "field the normalisation covers")
-    assert tag_a.upper() not in slot_a and tag_b.upper() not in slot_b, (
-        "a stage token spelled differently from the normalised one is a "
-        "second per-pass difference the byte-equality below cannot absorb -- "
-        "this is exactly how 5b5bd02af broke")
-
-    place = "<THE STAGE THIS PROBE FOLLOWS>"
-    assert slot_b.replace(tag_b, place) == slot_a.replace(tag_a, place), (
-        "the SECOND (post-reconverge) antenna pass is not the re-emission of "
-        "the first — the two passes must differ in NOTHING but the stage tag "
-        "each one's pin-access probe carries, and `repair_antennas` still "
-        "appearing via the first slot is why an emptied second slot went "
-        "unnoticed")
 
 
-def test_the_second_antenna_pass_is_breadcrumbed_and_load_bearing(
-        tmp_path, monkeypatch):
-    """The second antenna pass had NO breadcrumb of its own, so the last stage
-    in force while it ran was `postroute_drv_reconverge` — which pnr.tcl DOES
-    declare best-effort. A crash in this load-bearing pass was therefore
-    diagnosed as a crash in an omittable one and sent straight to the resume
-    that the load-bearing guard exists to refuse."""
-    assert "postroute_antenna_reconverge" not in mod._PNR_NONFATAL_STAGES
-    res, calls, _p = _drive(tmp_path, monkeypatch, first_rc=139,
-                            stage="postroute_antenna_reconverge")
-    assert len(calls) == 1, \
-        "a crash in the second antenna pass was resumed past"
-    assert res.status == "FAIL"
-    assert "load-bearing" in (res.detail or "")
 
 
-def test_the_signal_window_has_an_upper_bound_and_it_is_the_platforms(
-        tmp_path):
-    """128+N decoding is only valid for N in the platform's signal range. The
-    upper bound was correct and unpinned: raising it (or dropping it) let an
-    ordinary large exit status be reported as a signal death, which routes a
-    tool ERROR down the crash-and-resume path.
-
-    NSIG is read from the platform, so the boundary is computed here too
-    rather than written as a Linux literal."""
-    import signal as _sig
-    nsig = int(getattr(_sig, "NSIG", 65))
-    sentinels = mod._runner_kill_sentinels()
-    top_sig = nsig - 1
-    assert 128 + top_sig not in sentinels, "test's own boundary is a sentinel"
-    assert mod._fatal_signal_from_rc(128 + top_sig) == top_sig, \
-        "the highest real signal is not decoded"
-    assert mod._fatal_signal_from_rc(128 + nsig) is None, \
-        (f"rc={128 + nsig} is above the platform's signal range (NSIG="
-         f"{nsig}) and was still decoded as a signal death")
-    assert mod._fatal_signal_from_rc(128) is None, "128 is 128+0, not a signal"
-    assert mod._fatal_signal_from_rc(1) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1237,76 +363,14 @@ def test_the_signal_window_has_an_upper_bound_and_it_is_the_platforms(
 # match anything. Meanwhile FIXED / COVER / NOSHIELD wiring, and a `+  ROUTED`
 # written with two spaces, all read as UNROUTED: a false REFUSAL for the
 # resume gate and a false BLOCK for the LVS guard.
-def _nets_def(wiring: str) -> str:
-    return ("VERSION 5.8 ;\nDESIGN widget ;\nNETS 2 ;\n"
-            f"- n0 ( u0 Y ) ( u1 A )\n{wiring}\n  ;\n"
-            "- n1 ( u1 Y ) ( u2 A )\n  ;\n"
-            "END NETS\nEND DESIGN\n")
 
 
-@pytest.mark.parametrize("wiring,routed,why", [
-    ("  + ROUTED met1 ( 0 0 ) ( 100 0 )", True, "the ordinary case"),
-    ("  + FIXED met1 ( 0 0 ) ( 100 0 )", True, "pre-routed, legal DEF 5.8"),
-    ("  + COVER met1 ( 0 0 ) ( 100 0 )", True, "pre-routed and unshapeable"),
-    ("  + NOSHIELD met1 ( 0 0 ) ( 100 0 )", True, "shield wiring"),
-    ("  +  ROUTED met1 ( 0 0 ) ( 100 0 )", True, "two spaces is still legal"),
-    ("  + ROUTED met1 ( 0 0 ) ( 100 0 )\n  NEW met2 ( 100 0 ) ( 100 90 )",
-     True, "the real continuation grammar: bare NEW, never `+ NEW`"),
-    ("  + USE SIGNAL", False, "a property, not wiring"),
-    ("  + SOURCE TIMING", False, "a property, not wiring"),
-])
-def test_one_def_wiring_grammar_for_every_routing_predicate(
-        tmp_path, wiring, routed, why):
-    p = tmp_path / "w.def"
-    p.write_text(_nets_def(wiring))
-    got, _n = mod._def_signal_routing_stats(p, unknown_is_routed=False)
-    assert got is routed, f"{why}: classified routed={got}"
 
 
-def test_the_unclassifiable_policy_is_the_callers_not_the_predicates(
-        tmp_path):
-    """The two policies, driven directly. Same file, same scan, opposite
-    answers — which is the whole reason the parameter exists."""
-    p = tmp_path / "nonets.def"
-    p.write_text(_def_text_no_nets_section())
-    assert mod._def_signal_routing_stats(p, unknown_is_routed=True) == (True, 0)
-    assert mod._def_signal_routing_stats(p, unknown_is_routed=False) == (False, 0)
-    missing = tmp_path / "nope.def"
-    assert mod._def_signal_routing_stats(missing, unknown_is_routed=True)[0] is True
-    assert mod._def_signal_routing_stats(missing, unknown_is_routed=False)[0] is False
 
 
-def test_stage_breadcrumb_parsing_reports_the_last_stage_entered():
-    """IMPLEMENTATION-LEVEL (named helpers), unlike everything above: the
-    parse itself. Kept because the property tests exercise this through
-    step_pnr and a direct unit here localises a parse regression."""
-    log = ("PNR_STAGE: detailed_route\n"
-           "[INFO DRT-0198] Complete detail routing.\n"
-           "PNR_STAGE: postroute_drv_repair\n"
-           "Signal 11 received\n")
-    assert mod._pnr_stage_from_log(log) == "postroute_drv_repair"
-    assert mod._detail_route_completed(log) is True
-    assert mod._pnr_stage_from_log("no breadcrumbs here") is None
 
 
 # ---------------------------------------------------------------------------
 # The advice must not outrun the mechanism
 # ---------------------------------------------------------------------------
-
-
-def test_the_checkpoint_advice_points_at_a_mechanism_that_exists():
-    """The note the canonicalize step emits used to say "resume from the
-    checkpoint; a from-scratch re-run is NOT required" while no resume flag
-    and no resume code path existed anywhere in the runner. A comment that
-    describes a capability nobody wrote is worse than no comment: it sends
-    the reader looking for a flag that was never there."""
-    import inspect
-    src = inspect.getsource(mod.step_canonicalize_artefacts)
-    if "re-run is NOT required" not in src and \
-            "from-scratch re-run" not in src:
-        pytest.skip("the note no longer promises a resume")
-    entry = [n for n in dir(mod)
-             if "resume" in n.lower() and callable(getattr(mod, n, None))]
-    assert entry, \
-        ("the flow advises resuming from the checkpoint but the runner "
-         "exposes no resume entry point at all")

@@ -9,9 +9,7 @@ Closes GitHub issue #5 BUG 1. Quality gates on `_ic_name_from_docs`:
 """
 from __future__ import annotations
 
-from programs.phase1_one_shot_runner import (
-    _ic_name_from_docs, _strip_markdown_punct, _is_fpga_board_name,
-)
+from programs.phase1_doc_one_shot_runner import _ic_name_from_docs, _strip_markdown_punct, _is_fpga_board_name
 import pytest
 
 

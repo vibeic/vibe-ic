@@ -106,5 +106,3 @@ def test_an_emitter_that_set_its_own_provenance_is_not_overwritten(tmp_path):
                 {"schema_version": 1, "source_documents": list(mine)},
                 _REAL_EVIDENCE)
     assert out["source_documents"] == mine
-
-

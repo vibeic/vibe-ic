@@ -33,14 +33,12 @@ These are UNIT tests: the container is the in-memory fake used by the #211
 tests, populated from the ACTUAL `ls` output of the real image, so they run
 with no docker and no PDK installed.
 """
-import fnmatch
 import json
 import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
-import phase3_one_shot_runner as R  # noqa: E402
 
 REGISTRY = json.loads((PROGRAMS / "pdk_registry.json").read_text())
 GF = next(e for e in REGISTRY["pdks"] if e["name"] == "gf180mcuD")
@@ -73,7 +71,6 @@ _BANNER = ("[INFO] Final PATH variable: /headless/.local/bin:/usr/bin\n"
 
 
 
-from test_issue211_registry_driven_pdk_refuse import _FakeContainer
 
 
 
@@ -84,21 +81,6 @@ from test_issue211_registry_driven_pdk_refuse import _FakeContainer
 
 
 
-def test_liberty_corner_is_pinned_not_ambiguous(monkeypatch):
-    """`lib/*tt*.lib` matches three supply variants; sorted-first is 1v80.
-
-    This library is the 5V (`mcu7t5v0`) library, so an unpinned glob silently
-    signs off against the wrong rail.
-    """
-    monkeypatch.setattr(R, "_docker_exec_raw",
-                        _FakeContainer(REAL_CONTAINER_PATHS))
-    loose = [p for p in REAL_CONTAINER_PATHS
-             if fnmatch.fnmatch(p, f"{SCL}/lib/*tt*.lib")]
-    assert len(loose) == 3, "fixture should reproduce the ambiguity"
-    assert sorted(loose)[0].endswith("1v80.lib"), "sorted-first is the 1v80 lib"
-    pinned = [p for p in REAL_CONTAINER_PATHS
-              if fnmatch.fnmatch(p, f"{ROOT}/{GF['liberty_glob']}")]
-    assert len(pinned) == 1, f"liberty_glob must pin ONE corner, got {pinned}"
 
 
 

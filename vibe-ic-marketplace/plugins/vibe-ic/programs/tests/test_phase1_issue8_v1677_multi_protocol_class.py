@@ -13,7 +13,7 @@ protocol acronyms in the source — either alone is too loose.
 from __future__ import annotations
 import json
 from pathlib import Path
-from programs.phase1_one_shot_runner import gen_l2_frs
+from programs.phase1_doc_one_shot_runner import gen_l2_frs
 
 _GEN_DIR = Path("phase1") / "generated_docs"
 
@@ -152,7 +152,7 @@ def test_l2_4_protocols_alone_without_marker_does_NOT_trigger(tmp_path):
 def test_l2_count_distinct_protocols_word_bounded(tmp_path):
     """Helper sanity: AXI / AXI-lite / AXI stream all collapse to
     the single AXI acronym for the distinct count."""
-    from programs.phase1_one_shot_runner import _count_distinct_protocols
+    from programs.phase1_doc_one_shot_runner import _count_distinct_protocols
     text = "Supports AXI, AXI-lite, and AXI stream wrappers."
     assert _count_distinct_protocols(text) == 1
     text = "Supports AXI, APB, UART, I2C, and Ethernet."

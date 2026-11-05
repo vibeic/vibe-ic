@@ -23,11 +23,7 @@ import gzip
 import inspect
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import (
-    _extract_svg,
-    _extract_dia,
-    extract_text_pipeline,
-)
+from programs.phase1_doc_one_shot_runner import _extract_svg, _extract_dia, extract_text_pipeline
 
 
 # ---------------------------------------------------------------------------

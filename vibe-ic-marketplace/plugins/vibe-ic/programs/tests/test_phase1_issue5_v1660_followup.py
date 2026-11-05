@@ -38,12 +38,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import (
-    _ic_name_from_docs,
-    _is_fpga_board_name,
-    _is_strict_single_token_ic_name,
-    gen_l6_control_logic,
-)
+from programs.phase1_doc_one_shot_runner import _ic_name_from_docs, _is_fpga_board_name, _is_strict_single_token_ic_name, gen_l6_control_logic
 import pytest
 
 

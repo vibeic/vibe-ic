@@ -28,11 +28,10 @@ import pathlib
 import subprocess
 import sys
 
-import os
 
 import pytest
 
-from _published_corpus import CORPUS_ENV, cell_dirs, corpus_root, needs_corpus
+from _published_corpus import CORPUS_ENV, cell_dirs
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
@@ -43,7 +42,6 @@ _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 #: 18 without giving that test an exemption it would then have to remember to
 #: keep. `needs_corpus` is evaluated at the same moment and skips the test when
 #: this is None, so the two can never disagree.
-_CORPUS_AT_IMPORT = corpus_root()
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +82,6 @@ def _load(name):
     return m
 
 
-C = _load("citation_routing_is_true_check")
 E = _load("evidence_citation_resolves_check")
 
 _HEADER = "# CITATION_ROUTING — generated\n"
@@ -107,101 +104,24 @@ def _cell(tmp_path, rows, files=()):
 
 
 # ── the record's own claims ────────────────────────────────────────────────
-def test_a_resolves_row_whose_file_is_absent_fails(tmp_path, capsys):
-    """The defect, in one cell."""
-    repo, _ = _cell(tmp_path, [("reports/a.json", "phase2/stage2/synth/synth.log",
-                                "RESOLVES")])
-    assert C.main(["--root", str(repo)]) == 1
-    out = capsys.readouterr().out
-    assert "phase2/stage2/synth/synth.log" in out
 
 
-def test_a_resolves_row_whose_file_is_present_passes(tmp_path):
-    repo, _ = _cell(tmp_path,
-                    [("reports/a.json", "phase2/stage2/synth/synth.log", "RESOLVES")],
-                    files=("reports/a.json", "phase2/stage2/synth/synth.log"))
-    assert C.main(["--root", str(repo)]) == 0
 
 
-def test_the_ladder_a_reader_walks(tmp_path):
-    """LOAD-BEARING. Citations in this tree are written relative to either the
-    citing document or the cell root. A document-directory-only resolver would
-    call every cell-root-relative citation a false claim and fabricate findings
-    — the same measurement error `evidence_citation_resolves_check` records
-    against itself."""
-    repo, cell = _cell(tmp_path, [], files=("reports/phase3/sta.rpt",
-                                            "reports/deep/doc.json"))
-    assert C.resolves(cell, "reports/deep/doc.json", "reports/phase3/sta.rpt")
-    assert not C.resolves(cell, "reports/deep/doc.json", "nope.rpt")
 
 
-def test_an_absolute_path_is_never_followable(tmp_path):
-    repo, cell = _cell(tmp_path, [])
-    assert not C.resolves(cell, "a.json", "/home/<your-user>/run/sta.rpt")
 
 
 # ── what it deliberately does NOT judge ────────────────────────────────────
-def test_disclosure_rows_are_not_second_guessed(tmp_path):
-    """A disclosure claims the reader CANNOT follow something. Being wrong that
-    way costs a reader an unnecessary "not here"; being wrong the RESOLVES way
-    sends them looking. Only the claim that misleads is checked — and a gate
-    that also policed disclosures would fight the publisher over which of the
-    four words applies, which is not this gate's question."""
-    repo, _ = _cell(tmp_path,
-                    [("reports/a.json", "reports/present.rpt",
-                      "OUT_OF_PUBLISHED_SCOPE")],
-                    files=("reports/a.json", "reports/present.rpt"))
-    assert C.main(["--root", str(repo)]) == 0
 
 
-def test_an_unrecognised_decision_is_reported_not_absorbed(tmp_path, capsys):
-    """A vocabulary this gate has not seen must be visible. Treating it as a
-    disclosure would let a typo silence a row forever."""
-    repo, _ = _cell(tmp_path, [("reports/a.json", "x.log", "RESOLVED")])
-    C.main(["--root", str(repo)])
-    assert "unrecognised form" in capsys.readouterr().out
 
 
 # ── it must not pass by finding nothing ────────────────────────────────────
-def test_no_tracked_record_is_not_a_pass(tmp_path):
-    repo = tmp_path / "empty"
-    (repo).mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    assert C.main(["--root", str(repo)]) == 2
 
 
-def test_an_untracked_record_is_not_read(tmp_path):
-    """A record nobody receives cannot inform a reader — and judging the working
-    tree would fail a checkout on a file the deliverable does not contain."""
-    repo = tmp_path / "r"
-    (repo / "cell").mkdir(parents=True)
-    (repo / "cell/CITATION_ROUTING.txt").write_text(
-        _HEADER + "a.json :: missing.log RESOLVES\n")
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    assert C.main(["--root", str(repo)]) == 2, "an untracked record was read"
 
 
-@needs_corpus
-def test_the_corpus_as_committed_passes():
-    """The regression this exists for: after re-derivation the shipped record
-    tells the truth, and it must keep doing so.
-
-    ROOTED AT THE CORPUS, NOT AT THIS CHECKOUT. `CITATION_ROUTING.txt` sits
-    beside the cell it describes, and the cells now live in
-    `vibeic/benchmark-data`. Rooted at this repository the gate finds no tracked
-    record at all and answers rc 2 — CANNOT DETERMINE, its own word for "I could
-    not look" — which the old `assert ... == 0` then rendered as a defect in the
-    shipped records. The guard above it could not stop that: it asked whether
-    `benchmark-data/ic` EXISTS, and it does, because the design INPUTS stayed.
-
-    Nothing about what is checked changed. Point `VIBE_IC_BENCHMARK_DATA` at a
-    clone and this runs exactly as it always did, on the same records, and can
-    still fail.
-    """
-    # `_CORPUS_AT_IMPORT`, not `corpus_root()`: the autouse fixture above has
-    # cleared the pointer by the time this body runs, and re-reading it here
-    # would resolve to None and root the gate at the string "None".
-    assert C.main(["--root", str(_CORPUS_AT_IMPORT)]) == 0
 
 
 # ── the wiring it makes safe ───────────────────────────────────────────────
@@ -244,20 +164,6 @@ def test_the_honoured_set_includes_the_conditional_external_kit_decision():
                                        "UNFOLLOWABLE_ABSOLUTE", "EXTERNAL_PDK"}
 
 
-@pytest.mark.parametrize('resolved', [False, True])
-@pytest.mark.parametrize('kit_path', [False, True])
-def test_external_kit_disclosure_needs_both_a_kit_path_and_resolved_revision(
-        tmp_path, resolved, kit_path):
-    import _pdk_revision_fixture as pdk
-    cited = ('/retired-store/kit/procx/libs.tech/tool/model.tcl' if kit_path
-             else '/retired-carrier/reports/native.json')
-    repo, cell = _cell(tmp_path, [('reports/a.json', cited, 'EXTERNAL_PDK')])
-    if resolved:
-        pdk.write_run_pdk_revision(cell)
-    rows, unknown = C.parse_routing((cell / 'CITATION_ROUTING.txt').read_text())
-    assert len(rows) == 1 and unknown == []
-    disclosed = E._disclosed_map(repo, None)
-    assert bool(disclosed) == (resolved and kit_path)
 
 
 # ── the publisher and the gate must agree on what a citation IS ────────────

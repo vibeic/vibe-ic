@@ -19,10 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from programs.phase1_one_shot_runner import (
-    _flag_no_X_in_input,
-    _TOPIC_FILENAME_PATTERNS,
-)
+from programs.phase1_doc_one_shot_runner import _flag_no_X_in_input, _TOPIC_FILENAME_PATTERNS
 
 
 # ---------------------------------------------------------------------------

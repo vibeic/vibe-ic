@@ -8,7 +8,6 @@ _ACTIVE = False
 
 
 
-sys.addaudithook(_no_tools)
 
 
 

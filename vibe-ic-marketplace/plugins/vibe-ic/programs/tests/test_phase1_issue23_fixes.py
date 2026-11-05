@@ -31,7 +31,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 def test_is_real_submodule_name_rejects_non_rtl_shaped_words():
     """Bare English words must NOT pass — they are not RTL-shaped."""
-    from programs.phase1_one_shot_runner import _is_real_submodule_name
+    from programs.phase1_doc_one_shot_runner import _is_real_submodule_name
     rejected = [
         "along", "costs", "data", "value",
         "signal", "ground", "voltage", "above", "below",
@@ -46,7 +46,7 @@ def test_is_real_submodule_name_rejects_non_rtl_shaped_words():
 
 def test_is_real_submodule_name_keeps_rtl_shaped_names():
     """Real RTL module names (underscore / digit / subsystem stem) must pass."""
-    from programs.phase1_one_shot_runner import _is_real_submodule_name
+    from programs.phase1_doc_one_shot_runner import _is_real_submodule_name
     accepted = [
         "tx_phy", "aes_core", "crc8", "wrapper",
         "byte_assembler", "id_bus_logic", "mem_unit",
@@ -62,7 +62,7 @@ def test_is_real_submodule_name_keeps_rtl_shaped_names():
 
 def test_looks_rtl_shaped_distinguishes_stem_vs_bare_word():
     """Direct test of `_looks_rtl_shaped` for the bare-stem vs bare-word edge."""
-    from programs.phase1_one_shot_runner import _looks_rtl_shaped
+    from programs.phase1_doc_one_shot_runner import _looks_rtl_shaped
     # Underscore present → accepted
     assert _looks_rtl_shaped("axi_block")
     # Digit present → accepted
@@ -83,7 +83,7 @@ def test_looks_rtl_shaped_distinguishes_stem_vs_bare_word():
 
 def test_is_vendor_tool_doc_recognises_patterns():
     """Direct test of `_is_vendor_tool_doc` predicate."""
-    from programs.phase1_one_shot_runner import _is_vendor_tool_doc
+    from programs.phase1_doc_one_shot_runner import _is_vendor_tool_doc
     # Vendor-tool patterns must match
     assert _is_vendor_tool_doc("ug-m10-gpio-15.1.pdf")
     assert _is_vendor_tool_doc("an-456-some-app-note.pdf")
@@ -101,7 +101,7 @@ def test_l9_skips_vendor_tool_intel_ug_pdf(tmp_path):
 
     Real chip-spec doc must still contribute its declared submodule.
     """
-    from programs.phase1_one_shot_runner import gen_l9_integration_spec
+    from programs.phase1_doc_one_shot_runner import gen_l9_integration_spec
     project = tmp_path
     extracted_dir = project / "phase1" / "input_doc"
     extracted_dir.mkdir(parents=True, exist_ok=True)

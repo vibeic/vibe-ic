@@ -17,10 +17,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import (
-    extract_text_pipeline, extract_one,
-    extract_html, extract_extensionless_text, extract_odt,
-)
+from programs.phase1_doc_one_shot_runner import extract_text_pipeline, extract_one, extract_html, extract_extensionless_text, extract_odt
 
 
 # ---------------------------------------------------------------------------

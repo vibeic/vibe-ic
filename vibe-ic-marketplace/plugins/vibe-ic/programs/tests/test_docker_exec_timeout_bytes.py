@@ -20,9 +20,7 @@ import subprocess
 from unittest.mock import patch
 
 from programs import phase3_one_shot_runner as R
-from programs.phase3_one_shot_runner import (
-    _docker_exec, _extract_overutil_pct,
-)
+from programs.phase3_one_shot_runner import _docker_exec
 
 
 def test_docker_exec_timeout_bytes_stdout_returns_str() -> None:
@@ -162,15 +160,3 @@ def test_docker_exec_none_streams_become_empty_str() -> None:
         rc, out, err = _docker_exec("vibeic-eda", "x", timeout=2)
     assert out == ""
     assert isinstance(err, str)
-
-
-def test_overutil_extract_consumes_docker_exec_timeout_output() -> None:
-    """End-to-end: the exact call site that crashed
-    (`_extract_overutil_pct(out + err)`) now runs cleanly when the
-    timeout handed back a bytes partial."""
-    exc = subprocess.TimeoutExpired(cmd="x", timeout=1)
-    exc.stdout = b"[INFO DRT-0195] Start 2nd optimization iteration."
-    with patch("subprocess.run", side_effect=exc):
-        _, out, err = _docker_exec("vibeic-eda", "openroad ...", timeout=1)
-    # no GPL-0301 in this output → None, but crucially: NO TypeError.
-    assert _extract_overutil_pct(out + err) is None

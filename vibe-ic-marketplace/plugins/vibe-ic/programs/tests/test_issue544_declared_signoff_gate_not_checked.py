@@ -56,10 +56,8 @@ _RUNNER_SRC = _PROGRAMS / "phase3_one_shot_runner.py"
 
 sys.path.insert(0, str(_PROGRAMS))
 
-import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
 import _watchdog                                           # noqa: E402
 
-_CEILING_REPO_ROOT = ceiling_check.find_repo_root()
 
 #: CI's per-test harness bound, READ from the workflows (vibe-ic#542). The
 #: landed version of this line was `= 180`, a second copy of a value this file

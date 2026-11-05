@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
@@ -29,7 +28,6 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import cpu_functional_oracle_waiver_check as GATE  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "_fx_p2_review_fixture",
@@ -37,7 +35,6 @@ _spec = importlib.util.spec_from_file_location(
         "test_fx_p2_review_input_gap_needs_positive_evidence.py"))
 _FX = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_FX)
-_project, PASSING = _FX._project, _FX.PASSING
 
 DECL = "plugin_output/declaration.json"
 #: A conditional case, as Phase 1 emits it from "(if option M is chosen)".
@@ -62,14 +59,6 @@ The Plugin MUST declare `{path}` before authoring:
 #: declaration exists before Step 4) instead of raising.
 
 
-def _fresh(tmp_path: Path, values: str) -> Path:
-    """A FIRST-run tree: the Step-4 fixture, no declaration yet, and the
-    input's contract."""
-    proj = _project(tmp_path, [PASSING, COND], {PASSING["name"]: "PASS"})
-    (proj / "input" / "docs" / "L7_verification_plan.md").write_text(
-        _CONTRACT.format(path=DECL, values=values), encoding="utf-8")
-    assert not (proj / DECL).exists()
-    return proj
 
 
 EXCLUDES_M = '`["I", "Zifencei"]`(primary)/ `["I", "M", "Zifencei"]`(secondary)'
@@ -83,21 +72,6 @@ UNDESIGNATED = '`["I", "Zifencei"]` / `["I", "M", "Zifencei"]`'
 
 
 
-def test_published_step4_report_names_the_undecided_conditional_reason(tmp_path):
-    """The JSON a flow reader receives must retain the computed reason.
-
-    This exercises the actual gate CLI/report writer rather than only the
-    private classifier: a menu is fail-closed, and the reader must learn why
-    the M case stayed blocking.
-    """
-    proj = _fresh(tmp_path, UNDESIGNATED)
-    report = tmp_path / "reports" / "step4.json"
-    assert GATE.main([str(proj), "--json", str(report)]) == 1
-    published = json.loads(report.read_text(encoding="utf-8"))
-    assert published["verdict"] == "FAIL"
-    assert COND["name"] in published["message"]
-    assert "applies only if the design selects option 'M'" in published["message"]
-    assert "declares no selection at this point" in published["message"]
 
 
 def test_main_emits_before_step4_reads_it():

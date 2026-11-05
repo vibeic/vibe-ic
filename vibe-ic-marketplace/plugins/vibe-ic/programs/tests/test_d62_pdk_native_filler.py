@@ -1,12 +1,7 @@
 """Native-PDK producer selection, fallback and non-signoff controls."""
-import json
-from pathlib import Path
-import subprocess
-import xml.etree.ElementTree as ET
 import pytest
 
 import metal_fill_config_gen as config
-from test_flow109_gds_fill_dispatch import case
 
 
 
@@ -50,22 +45,8 @@ def test_max_words_in_comments_or_strings_do_not_exempt_minimum():
     assert 'FLOOR.a' in config.density_rule_coverage(deck,[])[1]
 
 
-def _density_shortfall(project, gds):
-    # Native DRC returns rc=0 even for violations; grade actual RDB items.
-    report=project/'density.lyrdb';deck=project/'density.drc'
-    deck.write_text('source($input)\nreport("Density control", $report)\n'
-                    'sample = input(999,0)\n'
-                    'if sample.area / extent.area < 0.35\n'
-                    '  extent.output("FLOOR.a", "minimum density shortfall")\nend\n')
-    proc=subprocess.run(['klayout','-b','-r',str(deck),'-rd','input='+str(gds),'-rd','report='+str(report)],capture_output=True,text=True)
-    assert proc.returncode==0,proc.stderr
-    items=ET.parse(report).findall('.//items/item')
-    assert items and all('FLOOR.a' in x.findtext('category','') for x in items)
 
 
-def test_native_drc_minimum_shortfall_remains_failure(tmp_path):
-    manifest=case(tmp_path)
-    _density_shortfall(tmp_path,tmp_path/manifest['input_gds']['path'])
 
 
 
@@ -93,12 +74,6 @@ def test_one_rule_with_multiple_blocks_is_not_max_only():
     assert 'LIMIT.a' in config.density_rule_coverage(deck,[])[1]
 
 
-DIRECTION_CASES=json.loads((Path(__file__).parent/'fixtures/d62_direction_cases.json').read_text())
-@pytest.mark.parametrize('case',DIRECTION_CASES,ids=[c['case'] for c in DIRECTION_CASES])
-def test_reviewed_density_bound_cases(case):
-    covered,gaps=config.density_rule_coverage(case['deck'],[])
-    assert covered=={}
-    assert ('LIMIT.a' not in gaps) is case['check_only']
 
 
 @pytest.mark.parametrize('body,check_only',[

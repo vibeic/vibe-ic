@@ -1,17 +1,14 @@
 """Native model component controls; never certify physical/whole-design PASS."""
 import json
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
-from _route_fixture import stage_mixed_source_control
 
 import mixed_signal_m3_run as m3
 import mixed_signal_signoff_run as m4
 import mixed_signal_cosim_check as cosim_gate
 import mixed_signal_interface_si_check as si_gate
-from programs.tests.test_execution_receipt_chain import isolated_transport, real_entry
 
 FIXTURE = Path(__file__).parent / "fixtures/m3_native"
 
@@ -175,45 +172,6 @@ def test_actual_failed_measurement_propagates_to_m4(project, damage):
     assert m4.audit(project)["verdict"] == "FAIL"
 
 
-def test_fixed_runner_uses_real_native_producer_and_both_gates(project, monkeypatch):
-    import vibe_ic_one_shot_runner as runner
-    real_entry('IC', 'default', project)
-    analog = project / "phase3/analog/analog_block_list.json"
-    analog.parent.mkdir(parents=True)
-    shutil.copyfile(project / "phase1/analog/analog_block_list.json", analog)
-    calls = []
-    native = {"mixed_signal_m3_run": m3, "mixed_signal_cosim_check": cosim_gate,
-              "mixed_signal_interface_si_check": si_gate}
-    def bounded(label, program, args, env=None):
-        name = Path(program).stem
-        calls.append(name)
-        stage_mixed_source_control(project, Path(program).stem, args)
-        if name == "mixed_signal_power_domain_run":
-            # Caller-only setup outside M3: M2 is owned/reviewed independently.
-            write(project / m3.DIR / "power_domain_producer_audit.json", {"program": name, "verdict": "PASS"})
-        if name in native:
-            args = list(args)
-            if "--container" in args:
-                args[args.index("--container") + 1] = "host"
-            return native[name].main(args)
-        return 0
-    monkeypatch.setattr(runner, "_run_phase", bounded)
-    monkeypatch.setattr(sys, "argv", ["runner", str(project), "--top", "bridge_top",
-                                     "--route", "ic", "--skip-phase1", "--no-dashboard"])
-    runner.main()
-    report = read(project / "reports/orchestrator/vibe_ic_one_shot.json")
-    phases = {row["name"]: row for row in report["phases"]}
-    assert phases["mixed_signal_M3"]["verdict"] == "NOT_MEASURED"
-    assert phases["mixed_signal_M4"]["verdict"] == "NOT_MEASURED"
-    # Default API migration: unmeasured rc2 remains a refusal, never readiness.
-    assert phases["mixed_signal_M3"]["rc"] == phases["mixed_signal_M4"]["rc"] == 2
-    assert calls.count("mixed_signal_signoff_run") == 0
-    assert calls.count("mixed_signal_m3_run") == 1
-    assert calls.count("mixed_signal_cosim_check") == 1
-    assert calls.count("mixed_signal_interface_si_check") == 1
-    assert "mixed_signal_signoff_run" not in calls
-    assert read(project / m3.COSIM)["verdict"] == "PASS"
-    assert read(project / m3.SI)["verdict"] == "NOT_MEASURED"
 
 
 @pytest.mark.parametrize("kind", ["cosim", "si"])

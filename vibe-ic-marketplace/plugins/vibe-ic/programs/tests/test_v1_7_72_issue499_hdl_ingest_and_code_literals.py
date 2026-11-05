@@ -36,10 +36,7 @@ import _code_literal as CL
 import _hdl_enum as HE
 import _input_ingest as II
 import l4_regmap_enumerated_values_typed_check as L4GATE
-from programs.phase1_one_shot_runner import (  # noqa: F401
-    extract_one,
-    extract_text_pipeline,
-)
+from programs.phase1_doc_one_shot_runner import extract_one, extract_text_pipeline
 import phase1_doc_one_shot_runner as RUNNER
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

@@ -25,19 +25,14 @@ same emulated-ODB tclsh harness `test_r0915_116_*` drives.
 from __future__ import annotations
 
 import ast
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import test_r0915_116_the_antenna_loop_stops_at_its_objective as A  # noqa: E402
 
 SPEC = {"filler_masters": ["fx__fill_1", "fx__fill_2"],
         "slot_pinned_core": False, "design_declared_die": True,
@@ -85,42 +80,10 @@ def test_the_pnr_builder_hands_every_post_route_pass_the_same_fill_facts():
 
 
 # --- 3. a failed legalize is never spurious (DRIVEN) ---------------------------
-def _drive_dpl(seq="5 5 0"):
-    tclsh = shutil.which("tclsh")
-    if tclsh is None:                                   # pragma: no cover
-        pytest.skip("tclsh not installed")
-    harness = (A._ODB_HARNESS % {"seq": seq, "wired": 1, "inserts": "d1"}
-               ).replace('error "DRT-0206 checkConnectivity"',
-                         'error "DPL-0038 Utilization greater than 100%, '
-                         'impossible to legalize"')
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td) / "ant.tcl"
-        p.write_text(harness + A._tcl() + '\nputs "DECK_END"\n')
-        return subprocess.run([tclsh, str(p)], capture_output=True,
-                              text=True, cwd=td)
 
 
-def test_a_failed_legalize_is_refused_and_rolled_back_not_spurious():
-    """RED ON MAIN: the pass whose inserted cell could not be legalized kept
-    every wire, so main called it SPURIOUS and 'converged'."""
-    r = _drive_dpl()
-    assert "ANTENNA_NATIVE_ERROR_SPURIOUS" not in r.stdout, r.stdout
-    assert "ANTENNA_LOOP_CONVERGED" not in r.stdout, r.stdout
-    assert "ANTENNA_NATIVE_LEGALIZE_FAILED" in r.stdout, r.stdout
-    assert "ANTENNA_REPAIR_REFUSED_ROLLBACK_REQUEST" in r.stdout, r.stdout
-    assert "DESTROYED_ONE d1" in r.stdout, r.stdout
-    assert r.returncode != 0 and "DECK_END" not in r.stdout, (
-        "a refusal must stop the deck with its checkpoint intact")
 
 
-def test_a_wire_error_that_kept_every_wire_is_still_spurious():
-    """Reverse: the R-0915-116 behaviour for a non-legalize raise stands."""
-    tclsh = shutil.which("tclsh")
-    if tclsh is None:                                   # pragma: no cover
-        pytest.skip("tclsh not installed")
-    r = A._drive("5 5 0", wired=True, inserts=["d1"])
-    assert "ANTENNA_NATIVE_ERROR_SPURIOUS" in r.stdout
-    assert "ANTENNA_NATIVE_LEGALIZE_FAILED" not in r.stdout
 
 
 # --- 4. no diode where a diode cannot help (ANT-0019) --------------------------

@@ -122,10 +122,6 @@ def _reader_a(tmp_path, text, name):
 
 
 
-_READERS = {
-    "_parse_def_components": _reader_a,
-    "_padring_def_components": _reader_b,
-}
 
 
 # ── 1. the ambiguous fixtures: ONE answer ────────────────────────────────

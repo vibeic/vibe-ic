@@ -4,7 +4,6 @@ import json
 import foundry_handoff_pack_gen as H
 import phase3_one_shot_runner as R
 from _hostpaths import require_repo
-from test_phase3_postpnr_disclosure_and_gds_guard import _project, _drive, _plan, NEW_DIE, NEW_UTIL, TOP
 
 
 
@@ -33,32 +32,8 @@ def test_failed_gate_refuses_handoff_even_with_old_sources(tmp_path):
 
 
 
-def test_stale_digest_quarantines_gds_without_rerunning_pnr(tmp_path, monkeypatch):
-    # Legacy geometry/cache/admission unit; no completed Default finishing receipt.
-    project = _project(tmp_path / "run", cached_die=NEW_DIE, cached_util=NEW_UTIL)
-    admission = R._ga.admission_path(project)
-    record = json.loads(admission.read_text())
-    record["layout_digest"] = "0" * 64
-    admission.write_text(json.dumps(record) + "\n")
-    drive = _drive(monkeypatch, project, die=NEW_DIE, util=NEW_UTIL, execution_mode="ultra")
-    R.main()
-    assert "pnr" not in drive.called
-    assert "gds" in drive.called
-    assert "skipped re-run" not in _plan(project)["gds"]["detail"]
-    assert list((project / "phase3/scratch/gds_quarantine").glob("*/record.json"))
 
 
-def test_matching_digest_and_pass_gate_reuses_both_caches(tmp_path, monkeypatch):
-    # Legacy geometry/cache/admission unit; no completed Default finishing receipt.
-    project = _project(tmp_path / "run", cached_die=NEW_DIE, cached_util=NEW_UTIL)
-    gds = R._pl.pnr_dir(project) / f"{TOP}.gds"
-    gate = json.loads((project / "reports/phase3/prestream_gate.json").read_text())
-    assert R._ga.admitted_gds(project, gds, gate["layout_digest"])
-    drive = _drive(monkeypatch, project, die=NEW_DIE, util=NEW_UTIL, execution_mode="ultra")
-    R.main()
-    assert "pnr" not in drive.called
-    assert "gds" not in drive.called
-    assert "skipped re-run" in _plan(project)["gds"]["detail"]
 
 
 

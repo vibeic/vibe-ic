@@ -31,10 +31,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from programs.phase1_one_shot_runner import (
-    extract_text_pipeline, gen_l1_datasheet, gen_l2_frs,
-    gen_l3_cmd_protocol,
-)
+from programs.phase1_doc_one_shot_runner import extract_text_pipeline, gen_l1_datasheet, gen_l2_frs, gen_l3_cmd_protocol
 
 
 def _read_l_doc(project: Path, name: str) -> dict:

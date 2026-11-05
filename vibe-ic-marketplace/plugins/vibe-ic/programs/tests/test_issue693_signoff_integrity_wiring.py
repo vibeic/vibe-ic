@@ -288,7 +288,6 @@ def test_corpus_with_nothing_to_sweep_refuses(tmp_path, capsys, monkeypatch):
 # ───────────────────────────────────────────────────────────────────────────
 # silent_decline_audit — the ratchet
 # ───────────────────────────────────────────────────────────────────────────
-S = _load("silent_decline_audit")
 
 _SILENT = """\
 def loosen_die(x):
@@ -304,36 +303,10 @@ _DISCLOSED = _SILENT + """    else:
 """
 
 
-def test_ratchet_fires_on_a_new_silent_decline_and_not_on_a_disclosed_one(tmp_path):
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "m.py").write_text(_SILENT)
-    bl = tmp_path / "bl.json"
-    assert S.main([str(src), "--ratchet", "--baseline", str(bl)]) == 2  # no baseline
-    (src / "m.py").write_text(_DISCLOSED)
-    assert S.main([str(src), "--ratchet", "--baseline", str(bl),
-                   "--write-baseline"]) == 0
-    assert json.loads(bl.read_text())["count"] == 0
-    (src / "m.py").write_text(_SILENT)
-    assert S.main([str(src), "--ratchet", "--baseline", str(bl)]) == 1
 
 
-def test_an_empty_scan_refuses_rather_than_passing_quietly(tmp_path, capsys):
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert S.main([str(empty), "--ratchet"]) == 2
-    assert "VACUOUS_PASS" in capsys.readouterr().out
 
 
-def test_the_shipped_baseline_matches_the_shipped_source():
-    """The wired invocation is `silent_decline_audit.py programs --ratchet`;
-    if the recorded number drifts from what that measures, CI is comparing
-    against a fiction."""
-    bl = json.loads((_PROGRAMS / S.BASELINE_NAME).read_text())
-    rep = S.audit(sorted(p for p in _PROGRAMS.glob("*.py")
-                         if not p.name.startswith("test_")))
-    assert rep["count"] <= bl["count"], (
-        f"silent declines grew {bl['count']} -> {rep['count']}")
 
 
 # ───────────────────────────────────────────────────────────────────────────

@@ -125,10 +125,7 @@ def test_l9_drops_de10_board_pin_patterns(tmp_path):
     """ADC_CLK_<N>, MAX10_CLK<X>_<N>, GPIO_<N>, HEX_<N>, KEY_<N>,
     LEDR_<N>, SW_<N>, DRAM_* must NOT promote into L9.ports — they
     are FPGA-board hardware-pin names, never chip top-level ports."""
-    from programs.phase1_one_shot_runner import (
-        gen_l1_datasheet,
-        gen_l9_integration_spec,
-    )
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet, gen_l9_integration_spec
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     extracted = {
@@ -166,12 +163,7 @@ def test_l9_dedupes_iid_bus_typo_against_id_bus(tmp_path):
     """When L1.pin_table extraction surfaces both `id_bus` AND
     `iid_bus` (double-i typo), the canonical wins and the typo
     is dropped via Levenshtein-≤1 dedup."""
-    from programs.phase1_one_shot_runner import (
-        gen_l1_datasheet,
-        gen_l3_cmd_protocol,
-        gen_l9_integration_spec,
-        _dedupe_typo_against_canonical,
-    )
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet, gen_l3_cmd_protocol, gen_l9_integration_spec, _dedupe_typo_against_canonical
     # Direct unit test on the helper — most reliable.
     ports = [
         {"name": "id_bus",  "direction": "inout"},
@@ -190,9 +182,7 @@ def test_dedupe_keeps_non_canonical_when_no_canonical_neighbour(tmp_path):
     """Edit-distance-1 must only fire when the canonical IS present —
     don't drop a real `vbg` just because some unrelated port resembles
     something canonical."""
-    from programs.phase1_one_shot_runner import (
-        _dedupe_typo_against_canonical,
-    )
+    from programs.phase1_doc_one_shot_runner import _dedupe_typo_against_canonical
     ports = [
         {"name": "vbg",  "direction": "input"},
         {"name": "vref", "direction": "input"},
@@ -210,7 +200,7 @@ def test_dedupe_keeps_non_canonical_when_no_canonical_neighbour(tmp_path):
 
 def test_l11_fsm_rejects_chip_part_numbers(tmp_path):
     """EXAMPLE_CHIP, A1101, EXAMPLE_TESTER are chip part-numbers, never FSM states."""
-    from programs.phase1_one_shot_runner import gen_l11_otp_content
+    from programs.phase1_doc_one_shot_runner import gen_l11_otp_content
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     extracted = {
@@ -236,7 +226,7 @@ def test_l11_fsm_rejects_chip_part_numbers(tmp_path):
 def test_l11_fsm_rejects_new_acronym_blacklist(tmp_path):
     """I2C / SDQ / OSC / GPIO / UVLO / VID / OFF / DFT / ESN / CLM /
     LRM / MPD must not appear in fsm_state_catalogue."""
-    from programs.phase1_one_shot_runner import gen_l11_otp_content
+    from programs.phase1_doc_one_shot_runner import gen_l11_otp_content
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     extracted = {
@@ -273,7 +263,7 @@ def test_l8_bare_value_re_rejects_dot_only_garbage():
     decimal) followed by `hz`, producing `2.hz` parser garbage. The
     tightened regex (`\\d+(?:\\.\\d+)?`) requires a digit after any
     decimal point."""
-    from programs.phase1_one_shot_runner import _TIMING_BARE_VALUE_RE
+    from programs.phase1_doc_one_shot_runner import _TIMING_BARE_VALUE_RE
     # The garbage form must not match.
     assert not _TIMING_BARE_VALUE_RE.match("2.hz"), (
         "regex still accepts `2.hz` parser garbage"

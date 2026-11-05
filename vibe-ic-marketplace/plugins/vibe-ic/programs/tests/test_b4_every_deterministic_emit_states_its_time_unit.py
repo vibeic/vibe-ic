@@ -83,11 +83,6 @@ def _declare(project: Path, body: str = DECLARED) -> None:
 
 
 #: (id, driver). Each id names the emit path the driver actually enters.
-PATHS = [
-    ("_try_deterministic_rtl_dispatch", _drive_dispatch),
-    ("_try_canonical_primitive_rtl", _drive_canonical),
-    ("_try_phase1_behavioral_fsm_rtl_bound", _drive_behavioral),
-]
 
 
 
@@ -220,3 +215,7 @@ def test_the_publisher_is_not_where_the_unit_is_stated():
     assert "_emit_states_declared_timescale" not in called
     assert "_state_declared_timescale" not in called
     assert "_project_declared_timescale" not in called
+
+BEHAVIORAL_PROSE = (
+    _PROGRAMS / "tests" / "fixtures" / "real_benchmark" /
+    "directional_bump_fall_moore_prompt.md").read_text()

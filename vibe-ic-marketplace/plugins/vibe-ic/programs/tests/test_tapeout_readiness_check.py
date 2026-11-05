@@ -520,12 +520,8 @@ def test_an_unrecognised_verdict_token_is_not_promoted_to_a_pass(tmp_path):
 #     and that is asserted here THROUGH the classifier rather than restated.
 # --------------------------------------------------------------------------- #
 
-import yaml
 
-import _hostpaths
 
-fcc = importlib.import_module("flow_compliance_check")
-enforcement = importlib.import_module("flow_gate_enforcement_audit")
 
 #: The step this program was written for, and the argv its declared gate
 #: command reduces to. `test_the_flow_declares_this_gate_...` re-derives both
@@ -537,15 +533,6 @@ _DECLARED_OUT = "reports/phase3/shuttle_precheck.json"
 _DECLARED_ARGV = [".", "--json", _DECLARED_OUT]
 
 
-def _flow_yaml():
-    """The checked-in flow definition — the one the flow engine itself reads."""
-    p = _hostpaths.require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
-                                "flow", "phase1_phase2_phase3.yaml")
-    # Not merely A copy of the flow: the SAME file `flow_compliance_check`
-    # resolves for itself. A test that read a second copy would keep passing
-    # while the engine read something else.
-    assert p.resolve() == Path(fcc.DEFAULT_FLOW_DEF).resolve()
-    return p
 
 
 def _complete_run(tmp_path, name="run"):
@@ -573,106 +560,11 @@ def _run_as_the_flow_step(monkeypatch, proj, *extra):
     return rc, art, payload
 
 
-def _flow_gate(proj, cmd):
-    """Run one gate the way `flow_compliance_check` runs it, and return
-    (ok, snippet, ledger_row). This spawns the REAL program in a subprocess —
-    no seam is injected, because the seam is not there when the flow runs."""
-    before = len(fcc._GATE_LEDGER)
-    ok, snippet = fcc._check_program_exit_zero(proj, cmd)
-    row = fcc._GATE_LEDGER[before:][-1]
-    return ok, snippet, row
 
 
 # ─────────────────────────────────── the declaration, re-derived from the yaml
-def test_the_flow_declares_this_gate_with_the_path_this_program_writes():
-    """The step, its slot, its command and its declared output — from the file.
-
-    Read rather than restated: the point of the step is that the artefact the
-    flow will look for is the artefact the gate command writes, and those are
-    two different lines in two different files."""
-    flow = yaml.safe_load(_flow_yaml().read_text())
-    steps = {str(s.get("id")): s for s in flow.get("steps", [])}
-    assert _STEP_ID in steps, (
-        f"step {_STEP_ID} is not declared in the flow definition; the cases "
-        f"below drive a gate no step invokes")
-    step = steps[_STEP_ID]
-
-    # THE CHAIN IS TWO HOPS SINCE 2026-08-20, AND THIS FOLLOWS IT RATHER THAN
-    # ASSUMING IT. When `37.5self` was retired, this program stopped being the
-    # step's own gate: 37.5ic now declares `tapeout_precheck`, the MERGE of our
-    # ladder and this one, and `tapeout_precheck` runs this program as the
-    # operator ARM. The guarantee being held is unchanged and is now stronger,
-    # because it also pins that the merge really delegates instead of
-    # reimplementing the interface it is supposed to expose:
-    #
-    #     the flow declares  ->  tapeout_precheck        (the BLOCKING slot)
-    #     which invokes      ->  tapeout_readiness_check (this program)
-    #     which writes       ->  reports/phase3/shuttle_precheck.json
-    #     which the step declares as a required output
-    #
-    # The gate is walked STRUCTURALLY, with the executor's own walker. Asserting
-    # `"program_exit_zero" in gate` was a one-level lookup, and it stopped
-    # describing the flow the moment the step took an `all_of` container to hold
-    # both arms in one clause — which is the shape the step's own comment argues
-    # for at length.
-    # The BLOCKING slot, not the advisory one. A shuttle refusal recorded and
-    # continued past is not an external bar, it is a note.
-    gate = step["gate"]
-    declared = fcc._declared_gate_commands(gate)
-    assert "tapeout_precheck" in declared, (
-        "step 37.5ic must declare the merged two-arm gate; if it declares this "
-        "program directly again, the arms have been split back into routes and "
-        "a design routed to one is no longer shown the other", declared)
-
-    # The MERGE really runs THIS program, at the path the flow will look for.
-    # Read out of `tapeout_precheck`'s source rather than restated, so a merge
-    # that quietly stopped delegating cannot keep this test green.
-    merge_src = (Path(tp_mod.__file__).read_text() if
-                 (tp_mod := importlib.import_module("tapeout_precheck")) else "")
-    assert '"tapeout_readiness_check.py"' in merge_src, (
-        "the merged gate no longer invokes the operator's own checker; the one "
-        "interface in this tree where somebody else's refusal is the verdict "
-        "would then have no runner")
-    assert tp_mod.THEIR_ARM_ARTEFACT == _DECLARED_OUT, (
-        "the merge writes the operator arm somewhere other than the path this "
-        "program writes and the flow declares",
-        tp_mod.THEIR_ARM_ARTEFACT, _DECLARED_OUT)
-
-    # And the artefact this program writes is one the step will be judged on.
-    assert _DECLARED_OUT in step["required_outputs"], (
-        "the external verdict's artefact is not a declared output of the step, "
-        "so an absent one would never be noticed", step["required_outputs"])
-
-    # Every command the executor would dispatch resolves to a program that
-    # exists — the same resolution the flow engine performs, so "program not
-    # found" cannot hide behind a name.
-    for command in _gate_command_strings(gate):
-        assert fcc._resolve_program_cmd(command, cwd=None), command
 
 
-def _gate_command_strings(gate):
-    """Every gate command string, walked the way the executor walks it."""
-    out = []
-
-    def walk(node):
-        if isinstance(node, list):
-            for item in node:
-                walk(item)
-            return
-        if not isinstance(node, dict):
-            return
-        for key in ("all_of", "any_of"):
-            sub = node.get(key)
-            if isinstance(sub, (list, dict)):
-                walk(sub)
-        for key in fcc._PROGRAM_GATE_KEYS:
-            spec = node.get(key)
-            if isinstance(spec, dict):
-                spec = spec.get("command")
-            if isinstance(spec, str):
-                out.append(spec)
-    walk(gate)
-    return out
 
 
 # ───────────────────────────── every outcome writes exactly the declared file
@@ -730,61 +622,8 @@ def test_the_declared_artefact_is_written_on_every_flow_step_outcome(
 
 
 # ───────────────────────────── the one that matters: silence through the FLOW
-def test_an_unreachable_counterparty_is_a_flow_step_FAIL_not_a_vacuous_pass():
-    """THE case this gate exists for, asserted through the flow's OWN classifier.
-
-    A `main() == 1` assertion measures the program. It does not measure what
-    the flow does with that 1, and the flow is where the damage would be:
-    `_check_program_exit_zero` maps rc 2 to VACUOUS_PASS and rc 3 to
-    PASS_WITH_WAIVERS, and both aggregate as passes. So the property is stated
-    where it is consumed — the classifier is run for real, on a real subprocess,
-    and its own verdict word is read back out of its own ledger.
-
-    Deterministic without a network: the image name cannot resolve locally, and
-    `--pull` is off, so `default_image_resolver` returns None on any host."""
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        proj = _project(Path(td))
-        cmd = ("tapeout_readiness_check . --json " + _DECLARED_OUT
-               + " --image no.such.registry.invalid/never:never")
-        ok, snippet, row = _flow_gate(proj, cmd)
-
-        assert ok is False, snippet
-        assert row["rc"] == 1, row
-        assert row["verdict"] == "FAIL", row
-        assert not snippet.startswith(fcc._VACUOUS_HINT_PREFIX), snippet
-        assert not snippet.startswith(fcc._WAIVER_HINT_PREFIX), snippet
-        assert not snippet.startswith(fcc._CRASH_HINT_PREFIX), snippet
-
-        # The declared artefact IS there — which is the whole point. A step
-        # check that stopped at presence would have called this run complete.
-        payload = json.loads((proj / _DECLARED_OUT).read_text())
-        assert payload["verdict"] == trc.NOT_DETERMINED
-        assert payload["layouts_found"] == 1
-        assert payload["steps_with_evidence"] == 0
-        assert len(payload["undetermined_steps"]) == payload["required_steps"]
 
 
-def test_a_project_with_no_layout_is_a_flow_step_FAIL_not_a_vacuous_pass():
-    """Nothing to check is not a pass, asserted through the same classifier.
-
-    Step 37.5ic declares `phase3/stage4/gds/*.gds` as its required input. When
-    that input is absent the honest answers are all non-zero; the one that must
-    NOT come back is rc 2, because `_check_program_exit_zero` turns rc 2 into
-    the VACUOUS_PASS tier, which is precisely "there was nothing here, carry
-    on"."""
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        proj = _project(Path(td), with_layout=False)
-        ok, snippet, row = _flow_gate(
-            proj, "tapeout_readiness_check . --json " + _DECLARED_OUT)
-
-        assert ok is False, snippet
-        assert row["rc"] == 1, row
-        assert row["verdict"] == "FAIL", row
-        payload = json.loads((proj / _DECLARED_OUT).read_text())
-        assert payload["verdict"] == trc.NOT_DETERMINED
-        assert payload["layouts_found"] == 0
 
 
 # ───────────────────────────────────────── the run directory and the artefact

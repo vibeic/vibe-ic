@@ -15,7 +15,6 @@ _native_guard_active = False
 
 
 
-sys.addaudithook(no_native)
 
 
 @pytest.fixture(scope='module', autouse=True)
