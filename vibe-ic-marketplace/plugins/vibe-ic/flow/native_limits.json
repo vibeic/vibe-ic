@@ -2149,8 +2149,13 @@
       },
       {
         "old_name": "coverage_targets",
-        "class": "T",
-        "reason": "Actual Step4 callers enforce line 70, toggle 60, branch 70; benchmark reporting independently enforces line 90. Flow109 D13 compares exact native counts against per-category declared bounds and keeps informational target applicability. Direct L-document bound comparison remains unwired; use stricter applicable targets and require real measurements. Published SPM reports show 100/98.48/100 but contain no numeric declared bounds. See COVERAGE_LIMITS.md."
+        "class": "R",
+        "reason": "Report measured native coverage without an undeclared target. Original Step4 floors remain line 70, toggle 60, branch 70; a document-declared bound is also compared and a missing declared measurement remains NOT_MEASURED. See COVERAGE_LIMITS.md.",
+        "native_metrics": [
+          "coverage_line_pct",
+          "coverage_toggle_pct",
+          "coverage_branch_pct"
+        ]
       }
     ],
     "formal_verification": [

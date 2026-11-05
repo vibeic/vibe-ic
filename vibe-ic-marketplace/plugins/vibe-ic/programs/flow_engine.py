@@ -430,8 +430,8 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
             limit = document_value(project, check["limit_from"])
         matches = {name: value for name, value in metrics.items()
                    if fnmatch.fnmatchcase(name, check["metric"])}
-        if check.get("corner_config") and config.get(check["corner_config"]) is not None:
-            corners = config[check["corner_config"]]
+        corners = [corner for corner in config.get(check.get("corner_config"), []) or [] if corner]
+        if corners:
             matches = {key: value for key, value in matches.items()
                        if any(fnmatch.fnmatchcase(key.split("__corner:")[-1], corner)
                               for corner in corners)}

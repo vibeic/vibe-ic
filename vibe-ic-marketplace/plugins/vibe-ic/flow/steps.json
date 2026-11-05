@@ -877,21 +877,6 @@
             "line": 2576,
             "note": "Actual old Step4 check caller supplies no threshold overrides."
           }
-        },
-        {
-          "metric": "coverage_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4288
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "coverage_targets"
-          },
-          "tool_gap": "Actual Step4 callers enforce line 70, toggle 60, branch 70; benchmark reporting independently enforces line 90. Flow109 D13 compares exact native counts against per-category declared bounds and keeps informational target applicability. Direct L-document bound comparison remains unwired; use stricter applicable targets and require real measurements. Published SPM reports show 100/98.48/100 but contain no numeric declared bounds. See COVERAGE_LIMITS.md."
         }
       ],
       "legacy_id": {
@@ -899,7 +884,29 @@
         "native": [
           "4"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "coverage_targets",
+          "native_metrics": [
+            "coverage_line_pct",
+            "coverage_toggle_pct",
+            "coverage_branch_pct"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 4288
+          },
+          "reason": "Report measured native coverage without an undeclared target. Original Step4 floors remain line 70, toggle 60, branch 70; a document-declared bound is also compared and a missing declared measurement remains NOT_MEASURED. See COVERAGE_LIMITS.md.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "coverage_targets"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "has_digital"
+        }
+      ]
     },
     {
       "name": "formal_verification",
