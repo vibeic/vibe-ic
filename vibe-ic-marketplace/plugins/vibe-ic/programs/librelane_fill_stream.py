@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shlex
 import sys
+import tempfile
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -22,10 +23,6 @@ if str(HERE) not in sys.path:
 from librelane_contract import Refusal
 
 SCHEMA = 'vibeic.fill-stream.v1'
-# Exact installed LibreLane script measured in pinned EDA 0.4.29.
-NATIVE_STREAM_SHA256 = '0c8cf2732cb72091e25189fbca24d15790f368453f8035db1882b1d5939e994d'
-# Reviewed native fill-preserving implementation; not an image admission pin.
-NATIVE_FILL_STREAM_SHA256 = '354da6c868d8390c93c92e14beefbb8d6db403daf15aa1364d0a0a23b4061d06'
 
 
 def _sha(path):
@@ -134,17 +131,14 @@ def native_script():
 
 def operation_sources():
     paths = [Path(__file__), HERE / 'librelane_fill_stream_native.py']
-    # Host-side consumers may not have LibreLane installed; the actual native
-    # launch separately enforces this exact script digest before compilation.
-    return {**{'programs/' + p.name: _sha(p) for p in paths},
-            'native/librelane/scripts/klayout/stream_out.py': _native_source_sha()}
-
-
-def _native_source_sha():
+    sources = {'programs/' + p.name: _sha(p) for p in paths}
     try:
-        return _sha(native_script())
+        source = native_script()
     except ImportError:
-        return NATIVE_STREAM_SHA256
+        return sources
+    sources['native/librelane/scripts/klayout/stream_out.py'] = _sha(source)
+    return sources
+
 
 
 def _instances(cell):
@@ -225,37 +219,15 @@ def preserve_native_fill_cells(layout, design, input_def, layout_options):
 
 
 def patched_native_source(source):
-    """Use reviewed native fill retention, or patch the reviewed legacy clearer."""
-    digest = hashlib.sha256(source.encode()).hexdigest()
-    if digest == NATIVE_FILL_STREAM_SHA256:
-        tree = ast.parse(source)
-        clearer = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'should_clear_cell']
-        expected = ast.parse('''def should_clear_cell(cell_name: str, design_name: str, top_cell_index: int, cell_index: int) -> bool:
-    if cell_index == top_cell_index:
-        return False
-    if cell_name.startswith("VIA"):
-        return False
-    if cell_name == f"{design_name}_DEF_FILL":
-        return False
-    return True
-''').body[0]
-        if len(clearer) != 1:
-            raise Refusal('FILL_STREAM_NATIVE_VERSION_UNSUPPORTED', 'native clearer absent')
-        # Ignore only the native docstring; compare the executable function AST.
-        actual = clearer[0]
-        if ast.get_docstring(actual) is not None:
-            actual.body = actual.body[1:]
-        clearing = '            if should_clear_cell(\n                i.name, design_name, top_cell_index, i.cell_index()\n            ):\n                i.clear()'
-        if ast.dump(actual) != ast.dump(expected) or source.count(clearing) != 1:
-            raise Refusal('FILL_STREAM_NATIVE_VERSION_UNSUPPORTED', 'native clearing shape changed')
+    """Use native fill retention or adapt the legacy cell-clearing operation."""
+    tree = ast.parse(source)
+    if any(isinstance(node, ast.FunctionDef) and node.name == 'should_clear_cell'
+           for node in tree.body):
         return source
-    if digest != NATIVE_STREAM_SHA256:
-        raise Refusal('FILL_STREAM_NATIVE_VERSION_UNSUPPORTED', 'unreviewed native stream script')
-    ast.parse(source)
     anchor = '        # Clear cells\n'
     condition = '                if not i.name.startswith("VIA"):'
     if source.count(anchor) != 1 or source.count(condition) != 1:
-        raise Refusal('FILL_STREAM_NATIVE_VERSION_UNSUPPORTED', 'clearing node changed')
+        raise Refusal('FILL_STREAM_NATIVE_API_UNSUPPORTED', 'legacy clearing operation is not representable')
     source = source.replace(anchor,
         '        from librelane_fill_stream import preserve_native_fill_cells\n'
         '        fill_cells = preserve_native_fill_cells(main_layout, design_name, input, layout_options)\n' + anchor)

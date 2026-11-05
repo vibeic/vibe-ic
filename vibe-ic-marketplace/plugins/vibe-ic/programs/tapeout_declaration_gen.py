@@ -30,21 +30,20 @@ FINAL_REL = "reports/phase3/tapeout_declaration_final.json"
 
 
 def final_gds(project: Path) -> Path:
-    """The final stream this run published, including a relocated run."""
+    """Read the GDS view from the selected native State, including relocated runs."""
     import librelane_contract as contract
-    from librelane_fill_dfm import DEFAULT_STREAM_REL
-    from tapeout_readiness_check import discover_layouts
-    selected = project / DEFAULT_STREAM_REL
-    if selected.is_file():
-        record = json.loads(selected.read_text())
-        path = contract.project_path(project, record["canonical"])
-        if path.is_file():
-            return path
-        raise ValueError(f"published final GDS is missing: {path}")
-    layouts = discover_layouts(project)
-    if len(layouts) != 1:
-        raise ValueError(f"expected one final layout, found {len(layouts)}")
-    return layouts[0]
+    from _prestream_native import final_state, load
+    project = Path(project).resolve()
+    selected = final_state(project, streamed=True)
+    if selected is None:
+        raise ValueError('CURRENT_FINAL_STATE_MISSING: state_out.json')
+    value = load(selected).get('gds')
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f'CURRENT_FINAL_STATE_VIEW_INVALID: gds must be a path string in {selected}')
+    path = contract.project_path(project, value)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f'CURRENT_FINISHED_GDS_MISSING: {path}')
+    return path
 
 
 _FINAL_MEASURE = r'''
