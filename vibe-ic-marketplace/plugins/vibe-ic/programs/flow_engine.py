@@ -239,6 +239,7 @@ class NativeChain:
         for module in tool.get("imports", []):
             importlib.import_module(module)
         result = ToolResult()
+        producer_unavailable = False
         for name in tool.get("steps", []):
             step_class = Step.factory.get(name)
             if step_class is None:
@@ -261,12 +262,18 @@ class NativeChain:
 
             step = ObservedStep(self.owner.config, self.state)
             metric_name = getattr(step, "metric_name", None)
+            if (metric_name and producer_unavailable and not any(
+                    key == metric_name or key.startswith(metric_name + "__corner:") for key in result.metrics)):
+                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
+                                            "status": "NOT_MEASURED", "missing_inputs": [metric_name]})
+                continue
             if metric_name:
                 result.metrics.update({key: value for key, value in self.state.metrics.items()
                                        if key == metric_name or key.startswith(metric_name + "__corner:")})
             missing = [item.id for item in step.inputs
                        if not item.optional and self.state.get_by_df(item) is None]
             if missing:
+                producer_unavailable = True
                 result.detail += f" {name} missing input: {missing}."
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
                                             "missing_inputs": missing})
@@ -296,6 +303,7 @@ class NativeChain:
                 code, ran, detail = None, False, str(exc)
                 status = "NOT_MEASURED"
             if code or not ran:
+                producer_unavailable = True
                 self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs},
                                               metrics=self.state.metrics)
             result.metrics.update(emitted)
@@ -586,7 +594,9 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         observed = measure(checks, native.metrics, chain.config, features, project)
         elapsed = time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]
         result = {"name": row["name"], "title": row["title"],
-                  "status": evaluate(native, observed), "tool_ran": native.ran,
+                  "status": (previous.get("status", "NOT_MEASURED")
+                             if kind == "native_report" and not checks else evaluate(native, observed)),
+                  "tool_ran": native.ran,
                   "tool_exit_code": native.exit_code, "metrics": observed,
                   "native_metrics": native.metrics, "native_steps": native.native_steps,
                   "reports": native.reports, "detail": native.detail,

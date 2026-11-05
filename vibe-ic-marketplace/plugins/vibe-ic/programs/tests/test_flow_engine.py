@@ -95,6 +95,16 @@ def test_aggregate_counts_earlier_selected_failures(tmp_path):
     assert report["steps"][-1]["native_metrics"]["non_passing_steps"] == 1
 
 
+@pytest.mark.parametrize("code,inputs,status", [(0, (), "PASS"), (1, (), "FAIL"),
+                                                   (0, ("absent.v",), "NOT_MEASURED")])
+def test_report_only_row_reuses_its_producer_verdict(tmp_path, code, inputs, status):
+    producer = command_row("producer", code=code, inputs=inputs)
+    reader = command_row("reader")
+    reader.update(tool={"kind": "native_report", "from": "producer"}, checks=[])
+    result = execute(tmp_path, [producer, reader])
+    assert [row["status"] for row in result["steps"]] == [status, status]
+
+
 def test_native_decimal_and_infinite_path_group_values(tmp_path):
     checks = [{"metric": "slack", "operator": ">=", "limit": Decimal("0")}]
     measured = engine.measure(checks, {"slack": Decimal("1.2")}, {}, {"always": True})

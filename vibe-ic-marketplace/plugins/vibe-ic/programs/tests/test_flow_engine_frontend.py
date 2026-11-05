@@ -144,6 +144,22 @@ def test_owner_lint_numbers_are_read_from_its_report(tmp_path):
     assert all(result["metrics"].get(key) == value for key, value in numbers.items())
 
 
+@pytest.mark.parametrize("produced", [True, False])
+@pytest.mark.parametrize("owner_status", ["WAIVED", "PASS_WITH_WAIVERS", "PASS"])
+def test_author_fallback_is_decided_by_produced_rtl(tmp_path, produced, owner_status):
+    import flow_engine
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"steps": [{"name": "rtl_gen", "status": owner_status}]}))
+    if produced:
+        rtl = tmp_path / "phase2/stage1/rtl"
+        rtl.mkdir(parents=True)
+        (rtl / "unit.v").write_text("module unit; endmodule\n")
+    session = frontend.OwnerSession(tmp_path, {"delivery_target": "ip_hardmacro"})
+    result = flow_engine.ToolResult(**session.result(tmp_path / "steps/author", "rtl_gen"))
+    assert flow_engine.evaluate(result, []) == ("PASS" if produced else "FAIL")
+
+
 def test_public_entry_retains_the_existing_router_closure(tmp_path, monkeypatch):
     route = {"entry_step": "1", "verify_through": "2", "answer_step": "1",
              "delivery_target": "rtl", "input_contract": "original",
