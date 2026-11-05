@@ -79,10 +79,8 @@ def _chip_pdn(project: Path, pdk: str) -> dict:
     registry = _load(PROGRAMS / "pdk_registry.json")
     ring = next((row.get("pdn_ring", {}) for row in registry.get("pdks", [])
                  if row.get("name") == pdk), {})
-    result: dict[str, Any] = {"PDN_SKIPTRIM": True}
-    if ring:
-        result.update(PDN_CORE_RING=True,
-                      PDN_CORE_RING_CONNECT_TO_PADS=bool(ring.get("connect_to_pad_layers")))
+    result: dict[str, Any] = {"PDN_SKIPTRIM": True, "PDN_CORE_RING": True,
+                              "PDN_CORE_RING_CONNECT_TO_PADS": True}
     for field, keys in {
         "layers": ("PDN_CORE_VERTICAL_LAYER", "PDN_CORE_HORIZONTAL_LAYER"),
         "widths": ("PDN_CORE_RING_VWIDTH", "PDN_CORE_RING_HWIDTH"),
@@ -223,7 +221,7 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
         config.update(_chip_pdn(project, pdk))
     implementation = _load(project / "plugin_output/declaration.json")
     config.update({key: value for key, value in implementation.items()
-                   if implementation_setting(key)})
+                   if implementation_setting(key) or key.startswith("PDN_")})
     config.update(_settings(fields, pdk))
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
