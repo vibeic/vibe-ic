@@ -798,6 +798,54 @@ def test_gls_names_missing_native_inputs(tmp_path):
     assert not result["ran"] and "State netlist" in result["detail"]
 
 
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_regenerates_declared_vectors_on_native_chip_ports(tmp_path, different):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    from testbench_gen import emit_unit_tbs
+
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different)
+    rtl = project / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "core_unit.v").write_text(
+        "module core_unit(input clk,rst_n,input [7:0] message,output [7:0] digest); "
+        "assign digest=message; endmodule\n")
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    cases = [{"name": f"vector_{index}", "kind": "known_answer_vector",
+              "inputs": {"message": value}, "expected_outputs": {"digest": value},
+              "citation": "Input vector table", "source": "input_document",
+              "evidence": "input/docs/spec.md"}
+             for index, value in enumerate(("00", "a5", "5a", "ff"))]
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps({"test_cases": cases}))
+    assert emit_unit_tbs(project, top="core_unit", scaffold=False, case_stated=True) == 4
+    benches = sorted((project / "phase2/stage1/sim/tb").glob("*.v"))
+    original = {path: path.read_bytes() for path in benches}
+    Path(state["nl"]).write_text(
+        "module chip_unit(input clk,rst_n,input [7:0] message,output [7:0] digest);\n"
+        + "\n".join(f"delay_cell gate{bit}(.a(message[{bit}]),.y(digest[{bit}]));" for bit in range(8))
+        + "\nendmodule\n")
+    Path(state["sdf"]["typical"]).write_text(
+        '(DELAYFILE (SDFVERSION "3.0") (DESIGN "chip_unit") (DIVIDER /) (TIMESCALE 1ns)\n'
+        + "\n".join(f'(CELL (CELLTYPE "delay_cell") (INSTANCE gate{bit}) '
+                       '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))' for bit in range(8)) + ")\n")
+    sdc = project / "timing.sdc"
+    sdc.write_text("set_units -time ns\ncreate_clock -period 24 [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    config["DESIGN_NAME"] = "chip_unit"
+    result = gls(project, directory, {"testbenches": [str(path) for path in benches]},
+                 Commands(directory), state=state, config=config)
+    assert len(result["native_steps"]) == 4, result
+    assert {row["status"] for row in result["native_steps"]} == ({"FAIL"} if different else {"PASS"}), result
+    assert all(row["sdf_delays_applied"] > 0 and row["sdf_errors"] == 0 for row in result["native_steps"]), result
+    assert (result["metrics"]["gls_failures"] > 0) is different, result
+    assert {path: path.read_bytes() for path in benches} == original
+    assert all("chip_unit dut" in Path(row["generated_testbench"]).read_text()
+               for row in result["native_steps"]), result
+
+
 def test_gls_replays_every_state_corner(tmp_path):
     if not shutil.which("iverilog") or not shutil.which("vvp"):
         pytest.skip("Native Icarus is required")
