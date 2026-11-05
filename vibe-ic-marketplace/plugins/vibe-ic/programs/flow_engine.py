@@ -492,9 +492,13 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
             if (compare and isinstance(value, (int, float, Decimal))
                     and isinstance(limit, (int, float, Decimal)) and math.isfinite(value) and math.isfinite(limit)):
                 status = "PASS" if compare(value, limit) else "FAIL"
+            unavailable = value in check.get("unavailable_values", [])
+            if unavailable:
+                status = "NOT_MEASURED"
             observed.append({**check, "metric": name, "value": value,
                              "limit": limit, "status": status,
-                             **({"missing": f"Native value or original limit for {check['metric']}"}
+                             **({"missing": check["unavailable_reason"] if unavailable else
+                                 f"Native value or original limit for {check['metric']}"}
                                 if status == "NOT_MEASURED" else {})})
     return observed
 

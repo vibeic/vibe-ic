@@ -356,3 +356,19 @@ def test_report_reuse_cannot_hide_failed_resume_preparation(tmp_path, monkeypatc
     assert result["status"] == "FAIL"
     assert result["tool_exit_code"] == 3
     assert result["tool_seconds"] > 0
+
+
+@pytest.mark.parametrize("value,status", [(1, "PASS"), (0, "NOT_MEASURED"), (None, "NOT_MEASURED")])
+def test_native_seal_skip_is_missing_measurement_and_verifier_failure_still_fails(value, status):
+    row = next(row for row in engine.read_json(engine.TABLE)["steps"]
+               if row["name"] == "seal_ring_and_die_identification")
+    measured = engine.measure(row["checks"], {"design__seal_ring__verified": value}, {},
+                              {"always": True, "ic": True, "owner_die": True})
+    assert len(measured) == 1
+    assert measured[0]["value"] == value
+    assert measured[0]["limit"] == 1
+    assert measured[0]["status"] == status
+    assert engine.evaluate(engine.ToolResult(True, 0), measured) == status
+    failed = engine.ToolResult(True, 1, native_steps=[{
+        "name": "KLayout.SealRing", "ran": True, "status": "FAIL", "exit_code": 1}])
+    assert engine.evaluate(failed, measured) == "FAIL"
