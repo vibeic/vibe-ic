@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 from decimal import Decimal, ROUND_CEILING
 import fnmatch
 import gzip
@@ -80,53 +79,93 @@ def sized_widths(config, current_a, tech_lef):
     return result
 
 
-def tcl_word(value):
-    return "".join({"\n": r"\n", "\r": r"\r", "\t": r"\t"}.get(char,
-        "\\" + char if char in '\\ $;{}[]"' else char) for char in str(value))
+def coherent_geometry(config, widths, tech, parallel_length_um=0, explicit=()):
+    units = tech.getDbUnitsPerMicron()
+    grid = Decimal(tech.getManufacturingGrid()) / Decimal(units)
+    if grid <= 0:
+        raise ValueError("PDK technology has no manufacturing grid")
+    snap = lambda value: float((Decimal(str(value)) / grid).to_integral_value(rounding=ROUND_CEILING) * grid)
+    count = len(config["VDD_NETS"]) + len(config["GND_NETS"])
+    result = dict(widths)
+
+    def spacing(layer_name, width):
+        layer = tech.findLayer(str(layer_name))
+        if layer is None:
+            raise ValueError(f"PDN routing layer is absent from technology: {layer_name}")
+        size = round(width * units)
+        length = math.ceil(parallel_length_um * units)
+        return max(layer.getSpacing(size, length), layer.findTwSpacing(size, size, length)) / units
+
+    def at_least(key, value):
+        if key in explicit and Decimal(str(config[key])) < Decimal(str(value)):
+            raise ValueError(f"Declared {key}={config[key]} cannot fit native PDN geometry minimum {value}")
+        if key in explicit:
+            return declared_value(key)
+        return snap(max(Decimal(str(config[key])), Decimal(str(value))))
+
+    def declared_value(key):
+        value = Decimal(str(config[key]))
+        if value % grid:
+            raise ValueError(f"Declared {key}={value} is not on the PDK manufacturing grid {grid}")
+        return float(value)
+
+    for axis, direction in (("V", "VERTICAL"), ("H", "HORIZONTAL")):
+        width = widths[f"PDN_{axis}WIDTH"]
+        gap = at_least(f"PDN_{axis}SPACING", spacing(config[f"PDN_{direction}_LAYER"], width))
+        result[f"PDN_{axis}SPACING"] = gap
+        result[f"PDN_{axis}PITCH"] = at_least(f"PDN_{axis}PITCH",
+            count * (Decimal(str(width)) + Decimal(str(gap))))
+        result[f"PDN_{axis}OFFSET"] = (declared_value(f"PDN_{axis}OFFSET") if f"PDN_{axis}OFFSET" in explicit
+            else snap(Decimal(str(config[f"PDN_{axis}OFFSET"]))
+                + (Decimal(str(width)) - Decimal(str(config[f"PDN_{axis}WIDTH"]))) / 2))
+        if config.get("PDN_CORE_RING"):
+            layer = config.get(f"PDN_CORE_{direction}_LAYER") or config[f"PDN_{direction}_LAYER"]
+            result[f"PDN_CORE_RING_{axis}SPACING"] = at_least(f"PDN_CORE_RING_{axis}SPACING",
+                spacing(layer, widths[f"PDN_CORE_RING_{axis}WIDTH"]))
+    return result
 
 
-def attach(project, config, destination, original_source):
-    if Path(str(original_source)).resolve() != (project / "work/flow/pdn_cfg.tcl").resolve():
-        return
-    base = Path(config["PDN_CFG"])
-    script = destination / "pdn_current.tcl"
-    program = Path(__file__).resolve()
-    script.write_text(
-        "set pdn_env [file join $::env(STEP_DIR) pdn_current_env.tcl]\n"
-        + "file copy -force $::env(_TCL_ENV_IN) $pdn_env\n"
-        + "set pdn_env_file [open $pdn_env a]\n"
-        + 'puts $pdn_env_file ""\n'
-        + "foreach {key value} [exec python3 " + tcl_word(program)
-        + " --project " + tcl_word(project)
-        + " --config [file join $::env(STEP_DIR) config.json]] {\n"
-        + "  puts $pdn_env_file [list set ::env($key) $value]\n"
-        + "  set ::env($key) $value\n"
-        + '  utl::metric_float "pdn__requested_width__um__variable:$key" $value\n'
-        + "}\nclose $pdn_env_file\n"
-        + "set ::env(_TCL_ENV_IN) $pdn_env\nsource " + tcl_word(base) + "\n")
-    config["PDN_CFG"] = str(script)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Size native Chip power conductors from estimated current")
-    parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--config", type=Path, required=True)
-    args = parser.parse_args()
-    config = json.loads(args.config.read_text())
-    path = args.project / "steps/pre_layout_timing/result.json"
-    metrics = json.loads(path.read_text()).get("native_metrics", {}) if path.is_file() else {}
-    current, samples = estimated_current(config, metrics)
-    tech = matching(config["TECH_LEFS"], config["DEFAULT_CORNER"])
-    widths = sized_widths(config, current, tech[0].read_text()) if len(tech) == 1 else {}
-    report = {"estimated_current_a": current, "corners": samples, "requested_widths_um": widths,
-              "model": "The full estimated supply current may flow in each strap and ring conductor. "
-                       "Pre-layout modeled power omits routed loading and clock-tree changes; "
-                       "native geometry checks and final EM determine adequacy."}
-    output = args.project / "work/flow/chip/pdn_sizing.json"
+def current_settings(project, config, parallel_length_um=0):
+    base = project / "work/flow/pdn_cfg.tcl"
+    if Path(str(config.get("PDN_CFG", ""))).resolve() != base.resolve():
+        return {}
+    power = project / "steps/pre_layout_timing/result.json"
+    if not power.is_file():
+        return {}
+    current, samples = estimated_current(config, json.loads(power.read_text()).get("native_metrics", {}))
+    lefs = matching(config["TECH_LEFS"], config["DEFAULT_CORNER"])
+    if len(lefs) != 1:
+        raise ValueError("PDN sizing needs one native technology LEF for the default corner")
+    widths = sized_widths(config, current, lefs[0].read_text())
+    if not widths:
+        return {}
+    import odb
+    from flow_config import _load, _settings
+    docs = _load(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json")
+    explicit = set(_settings(docs.get("fields", {}), config["PDK"]))
+    explicit.update(_load(project / "plugin_output/declaration.json"))
+    database = odb.dbDatabase.create()
+    try:
+        odb.read_lef(database, str(lefs[0]))
+        settings = coherent_geometry(config, widths, database.getTech(), parallel_length_um, explicit)
+    finally:
+        odb.dbDatabase.destroy(database)
+    output = project / "work/flow/chip/pdn_sizing.json"
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2) + "\n")
-    print(" ".join(f"{key} {value:.12g}" for key, value in widths.items()))
+    output.write_text(json.dumps({"estimated_current_a": current, "corners": samples,
+        "requested_widths_um": widths, "settings": settings, "parallel_length_um": parallel_length_um,
+        "model": "Full estimated supply current is a conservative conductor bound. "
+                 "Widths and native spacing/pitch/offset geometry are resolved before floorplan; "
+                 "native connectivity, DRC and final EM determine adequacy."}, indent=2) + "\n")
+    return settings
 
 
-if __name__ == "__main__":
-    main()
+def needs_estimate(route, from_name, table):
+    if route["delivery_target"] not in {"gds", "shippable_gds", "foundry_handoff"}:
+        return False
+    from flow_engine import aliases
+    positions = {name: index for index, row in enumerate(table["steps"])
+                 for name in [row["name"], *aliases(row)]}
+    first = positions[str(from_name or route["entry_step"])]
+    last = positions[str(route["verify_through"])]
+    return first <= positions["pre_layout_timing"] < positions["die_floorplan_and_macros"] <= last
