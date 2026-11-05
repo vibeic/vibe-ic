@@ -629,6 +629,8 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters))
     result = dict(core_config)
     result.update(pdn_settings)
+    from flow_clock_geometry import clock_settings
+    result.update(clock_settings(native))
     for axis in ("VERTICAL", "HORIZONTAL"):
         key = f"PDN_CORE_{axis}_LAYER"
         if result.get(key) == native.get(f"PDN_{axis}_LAYER"):

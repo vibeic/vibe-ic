@@ -27,7 +27,7 @@ SETTINGS = {
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
 }
 IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_REPAIR",
-                           "EXTRA_EXCLUDED_CELLS", "DECAP_CELLS", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
+                           "SYNTH_STRATEGY", "EXTRA_EXCLUDED_CELLS", "DECAP_CELLS", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
 
 
 def implementation_setting(key: str) -> bool:
@@ -320,6 +320,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
 def build_native_config(project: Path | str, *, route: str | None = None, pdk: str | None = None,
                         on_tool_run=None) -> dict[str, Any]:
     config = build_config(project, route=route, **({"pdk": pdk} if pdk else {}))
+    config = _native_pdn_numbers(config)
     if route in {"ic", "DIE"}:
         from flow_chip_inputs import prepare
         config = prepare(Path(project).resolve(), config,
@@ -335,7 +336,12 @@ def build_native_config(project: Path | str, *, route: str | None = None, pdk: s
         span = (max(float(extent[2]) - float(extent[0]), float(extent[3]) - float(extent[1]))
                 if extent else None)
         config.update(current_settings(Path(project).resolve(), resolved, parallel_length_um=span))
-    return config
+    return _native_pdn_numbers(config)
+
+
+def _native_pdn_numbers(config):
+    return {key: Decimal(str(value)) if key.startswith("PDN_") and isinstance(value, float)
+            else value for key, value in config.items()}
 
 
 def write_config(project: Path | str, *, route: str | None = None,
