@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1507
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1507)
+- **Total programs (excluding helpers / shims):** 1509
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1509)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1498 |
+| `any` | 1500 |
 
 ## Alphabetical listing
 
@@ -554,11 +554,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_engine_report` | any | — | Render measured engine results and an integration guide for exported views. |
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
+| `flow_ic_checks` | any | — | flow_ic_checks |
 | `flow_ir_corners` | any | — | flow_ir_corners |
 | `flow_native_adapters` | any | — | flow_native_adapters |
 | `flow_native_timing` | any | — | Read OpenSTA's existing reports for the native flow selector. |
 | `flow_native_verification` | any | — | flow_native_verification |
 | `flow_output_substance` | any | — | did the run actually produce this output, or only a file? |
+| `flow_pdn_current` | any | — | flow_pdn_current |
 | `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
 | `flow_spare_cells` | any | — | flow_spare_cells |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
@@ -1579,7 +1581,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1498 programs)
+### `any` (1500 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2105,11 +2107,13 @@ _(no programs in this group)_
 - `flow_engine_report` — Render measured engine results and an integration guide for exported views.
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
+- `flow_ic_checks` — flow_ic_checks
 - `flow_ir_corners` — flow_ir_corners
 - `flow_native_adapters` — flow_native_adapters
 - `flow_native_timing` — Read OpenSTA's existing reports for the native flow selector.
 - `flow_native_verification` — flow_native_verification
 - `flow_output_substance` — did the run actually produce this output, or only a file?
+- `flow_pdn_current` — flow_pdn_current
 - `flow_phase_attribution` — WHO did each of the four phases, and HOW.
 - `flow_spare_cells` — flow_spare_cells
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.

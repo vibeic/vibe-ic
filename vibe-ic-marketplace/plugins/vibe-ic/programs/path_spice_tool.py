@@ -1486,7 +1486,7 @@ def run_case_correlation(project, image, pdk_root, pdk, *, sta_step_dir):
                'FAIL' if any(row.get('verdict') in ('MISMATCH', 'CRITICAL_MISMATCH')
                              for row in rows) else 'NOT_MEASURED')
     result = {'verdict': verdict, 'corner': corner, 'simulator': 'ngspice',
-              'paths': rows, 'sta_state': str(folder / 'state_out.json'),
+              'paths': rows, 'sta_rc': prepared['sta_rc'], 'sta_state': str(folder / 'state_out.json'),
               'wall_seconds': time.monotonic() - started,
               'scope': 'native extracted path SPICE vs STA at the original Liberty-grid tolerance'}
     write_json(project / 'reports/phase3/spice_correlation.json', result)
