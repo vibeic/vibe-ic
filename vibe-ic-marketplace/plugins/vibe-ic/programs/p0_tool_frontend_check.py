@@ -95,12 +95,22 @@ def _top(project: Path, *, include_runtime: bool = True) -> str | None:
         from design_one_shot_runner import _v661_resolve_dut_module
         return _v661_resolve_dut_module(project, "", None)
     if include_runtime:
-        import execution_policy as execution
-        runtime = execution._ordinary_runtime
-        if runtime is not None and runtime['project'] == Path(project).resolve():
-            selected = runtime['parameters'].get('top')
-            if selected:
-                return selected
+        tops = set()
+        for base in (project / "steps", project / "phase3/librelane"):
+            for path in base.glob("**/config.json"):
+                if not (path.parent / "state_out.json").is_file():
+                    continue
+                try:
+                    config = json.loads(path.read_text())
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(config, dict):
+                    continue
+                selected = config.get("DESIGN_NAME")
+                if isinstance(selected, str) and re.fullmatch(r"[a-zA-Z_$][\w$]*", selected):
+                    tops.add(selected)
+        if len(tops) == 1:
+            return tops.pop()
     for name in ("L9_INTEGRATION_SPEC.json", "L9_INTEGRATION.json"):
         path = project / "phase1/generated_docs" / name
         if path.is_file():

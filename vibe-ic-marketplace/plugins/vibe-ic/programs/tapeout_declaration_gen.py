@@ -390,5 +390,4 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    from execution_modes import frontend_producer_main
-    sys.exit(frontend_producer_main(main))
+    sys.exit(main())

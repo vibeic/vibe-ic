@@ -522,25 +522,6 @@ def _input_plan(project: Path) -> _routed_progress.FiniteInputPlan:
         *_routed_progress.planned_reads("drc-report", reports),
         *_routed_progress.planned_reads("layout", layouts),
     ]
-    current = _current_drc_record(project)
-    if current is not None:
-        # The current reader verifies these declared roles before choosing the
-        # measured layout. Keep them in the same finite input manifest.
-        proof_paths = {current, project / "provenance.jsonl"}
-        try:
-            record = json.loads(current.read_text())
-            for field in ("inputs", "outputs"):
-                for row in record[field].values():
-                    proof_paths.add(project / row["path"])
-        except (OSError, ValueError, TypeError, KeyError, AttributeError):
-            pass  # The strict current reader publishes the typed refusal.
-        proof_paths = {p.absolute() for p in proof_paths
-                       if p.is_file() and p.absolute().is_relative_to(index.root)}
-        names = {p.relative_to(index.root).as_posix() for p in proof_paths}
-        proof = index.select(lambda relative: relative in names,
-                             sorted(proof_paths),
-                             population="current DRC declared roles")
-        reads.extend(_routed_progress.planned_reads("current-drc", proof))
     return _routed_progress.FiniteInputPlan(
         [index.population_unit("drc-vacuous-pass:git-index")], reads)
 
@@ -548,44 +529,6 @@ def _input_plan(project: Path) -> _routed_progress.FiniteInputPlan:
 def semantic_progress_units(cell: Path) -> List[str]:
     """Trusted parent's exact finite manifest for the default cell argv."""
     return _input_plan(Path(cell)).units
-
-
-def _current_drc_record(project: Path) -> Optional[Path]:
-    """Only the selected Default owner supplies a current DRC subject."""
-    import execution_policy
-    import librelane_fill_dfm as fill
-    project = Path(project).resolve()
-    current = project / "reports/phase3/direct_current_drc.json"
-    if (execution_policy.request()["mode"] == "default"
-            and (project / fill.DEFAULT_STREAM_REL).is_file()
-            and current.is_file()):
-        return current
-    return None
-
-
-def _current_drc_layout(project: Path, report: Path) -> Tuple[Optional[Path], str]:
-    """Use the actual native input for the current canonical/raw DRC report."""
-    project = Path(project).resolve()
-    if report.resolve() not in (
-            project / "reports/phase3/drc_signoff.rpt",
-            project / "phase3/reports/drc.rpt"):
-        return None, ""
-    if _current_drc_record(project) is None:
-        return None, ""
-    import _physical_current as current
-    try:
-        record = current.read_direct_half(project, "drc")
-        if record.get("verdict") != "CURRENT":
-            return None, record.get("reason") or "CURRENT_DRC_NOT_MEASURED"
-        observed = current.entry(project, report)
-        if observed not in [record["outputs"][role]
-                            for role in ("report", "native_report")]:
-            return None, "CURRENT_DRC_REPORT_UNBOUND"
-        # read_direct_half has verified the native invocation's input SHA,
-        # current material closure, report, log, and canonical publication.
-        return project / record["inputs"]["gds"]["path"], ""
-    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
-        return None, f"CURRENT_DRC_LAYOUT_REFUSED: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -1779,19 +1722,6 @@ def audit(path: Path, layout: Optional[Path] = None,
                 rule="DRC_LOG_READABLE", severity="ERROR",
                 message="DRC log could not be read.", file=str(fp)))
             continue
-        current_layout, current_refusal = _current_drc_layout(path, fp)
-        if current_refusal:
-            c["file"] = str(fp)
-            c["current_layout_refusal"] = current_refusal
-            per_file.append(c)
-            any_drc_log = True
-            any_step_never_reported = True
-            result.findings.append(Finding(
-                rule="DRC_CURRENT_LAYOUT_REFUSED", severity="ERROR",
-                message=f"Current DRC subject binding refused: {current_refusal}. "
-                        "INCONCLUSIVE; other layouts cannot replace it.",
-                file=str(fp)))
-            continue
         if not nonempty:
             # A ZERO-BYTE REPORT IS THE RUN SAYING IT PRODUCED NOTHING.
             #
@@ -1835,14 +1765,10 @@ def audit(path: Path, layout: Optional[Path] = None,
         c["file"] = str(fp)
 
         # --- establish geometry from OBSERVABLES, in decreasing authority ---
-        if current_layout is not None:
-            bound, is_bound = [current_layout], True
-            c["layout_bound_by_current_receipt"] = True
-        else:
-            bound, is_bound = _bind_layouts(layout_cands, cited)
+        bound, is_bound = _bind_layouts(layout_cands, cited)
         measures = [measure_layout(p) for p in bound]
         c["layout_measures"] = [asdict(m) for m in measures]
-        c["layout_bound_by_name"] = is_bound and current_layout is None
+        c["layout_bound_by_name"] = is_bound
         # ONE KIND ONLY. A DEF's component census never testifies about a GDS
         # deck's denominator -- see `_subject_pool` for the run this cost.
         subject, subject_kind = _subject_pool(measures)
