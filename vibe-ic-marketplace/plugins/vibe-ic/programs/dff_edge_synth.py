@@ -240,7 +240,7 @@ def synth(prompt_text: str, top: str = "TopModule") -> Optional[str]:
             f"  always @(negedge {clk})\n"
             f"    qn <= {d};\n\n"
             f"  always @(*)\n"
-            f"    {qn} <= {clk} ? qp : qn;\n"
+            f"    {qn} = {clk} ? qp : qn;\n"
         )
         return _emit_header(top, ins, outs) + "\n" + body + "\nendmodule\n"
 
