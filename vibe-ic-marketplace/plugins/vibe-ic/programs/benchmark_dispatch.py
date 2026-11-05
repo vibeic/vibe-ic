@@ -6724,6 +6724,9 @@ def _stage_product_manifest(run_p: Path, source: str | Path | None) -> None:
     """Retain explicit operator features; never synthesize absent feature facts."""
     if source is None:
         return
+    from flow_engine_frontend import selected_engine
+    if selected_engine([]) == "native":
+        raise ValueError("--flow109-manifest belongs to the legacy engine")
     import flow109
     try:
         raw = Path(source).read_bytes()
@@ -6737,6 +6740,9 @@ def _stage_product_manifest(run_p: Path, source: str | Path | None) -> None:
 
 
 def _forward_product_manifest(run_p: Path, project: Path, receipt: dict | None = None) -> None:
+    from flow_engine_frontend import selected_engine
+    if selected_engine([]) == "native":
+        return
     source = Path(run_p) / "input" / "flow109-manifest.json"
     if source.is_file():
         _write_immutable_bytes(Path(project) / "input" / "flow109-manifest.json",
@@ -6781,15 +6787,20 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     import task_nature_route as tnr                       # noqa: PLC0415
     if delivery_route not in {"ic", "ip"}:
         raise ValueError(f"invalid delivery runner route: {delivery_route!r}")
-    import flow109
-    selected = (flow109.resolve_task_manifest(proj, entry or "D1", exit_step,
-                                              delivery_target, delivery_route)
-                if resolve_manifest else None)
+    from flow_engine_frontend import selected_engine
+    native_engine = selected_engine([]) == "native"
+    selected = None
+    if resolve_manifest and not native_engine:
+        import flow109
+        selected = flow109.resolve_task_manifest(proj, entry or "D1", exit_step,
+                                                delivery_target, delivery_route)
     if selected is not None:
         delivery_target = "rtl"
     argv = [sys.executable, str(runner), str(proj),
             "--route", delivery_route, "--skip-analog", "--skip-hardware",
             "--no-dashboard"]
+    if native_engine:
+        argv += ["--engine", "native"]
     if delivery_target == "rtl":
         argv += ["--delivery-target", "rtl"]
     if input_contract == "original":
@@ -6805,10 +6816,10 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
         # and DFT/LEC. Forward the exit itself; the phase2 runner prunes every
         # dispatch site wholly past it as SKIPPED-BY-EXIT.
         argv += ["--exit-step", str(exit_step)]
-    if entry and entry != "D1":
+    if entry and (entry != "D1" or native_engine):
         argv += ["--entry-step", str(entry)]
     manifest_path = Path(proj) / "input" / "flow109-manifest.json"
-    if manifest_path.is_file():
+    if not native_engine and manifest_path.is_file():
         manifest = _strict_json_loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError("FLOW109_MANIFEST_INVALID: expected object")

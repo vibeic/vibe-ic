@@ -4658,6 +4658,9 @@ def _main(args=None) -> int:
     _line_buffer_own_stream()
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
+    from flow_engine_frontend import selected_engine
+    p.add_argument("--engine", choices=("legacy", "native"), default=selected_engine(),
+                   help="Opt in to the native table runner; the existing path remains the default.")
     p.add_argument('--step', help='Flow109 row for a single diagnostic gate')
     p.add_argument('--only', help='Exact source-owned diagnostic gate name')
     p.add_argument('--dry-run', action='store_true',
@@ -4790,6 +4793,9 @@ def _main(args=None) -> int:
     p.add_argument('--receipt-channel-fd', type=int, help=argparse.SUPPRESS)
     _execution.add_arguments(p)
     args = p.parse_args() if args is None else args
+    if getattr(args, "engine", "legacy") == "native":
+        from flow_engine_frontend import run_public
+        return run_public(args)
     if args.resume_request and (args.entry_step or args.exit_step):
         p.error("--resume-request cannot be combined with explicit --entry-step/--exit-step")
     if bool(args.area_receipt) != bool(args.area_run_manifest):
