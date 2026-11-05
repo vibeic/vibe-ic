@@ -220,6 +220,27 @@ def test_declared_observation_cannot_drop_a_missing_native_number(tmp_path):
     assert engine.evaluate(native, measured) == "NOT_MEASURED"
 
 
+@pytest.mark.parametrize("category", ["line", "toggle", "branch"])
+def test_zero_native_coverage_points_have_no_percentage_floor(category):
+    metric = f"coverage_{category}_pct"
+    numbers = {f"coverage_{category}_points": 0}
+    native = engine.ToolResult(True, 0, numbers)
+    checks = [{"metric": metric, "operator": ">=", "limit": 70}]
+    measured = engine.measure(checks, numbers, {}, {"always": True})
+    assert measured[0]["status"] == "NOT_APPLICABLE"
+    assert measured[0]["points"] == 0 and measured[0]["value"] is None
+    assert measured[0]["limit"] == 70 and measured[0]["reason"]
+    assert engine.evaluate(native, measured) == "PASS"
+
+
+@pytest.mark.parametrize("points", [None, False, 1])
+def test_missing_or_nonempty_coverage_population_keeps_missing_percentage_unmeasured(points):
+    numbers = {"coverage_branch_points": points} if points is not None else {}
+    measured = engine.measure([{"metric": "coverage_branch_pct", "operator": ">=", "limit": 70}],
+                              numbers, {}, {"always": True})
+    assert measured[0]["status"] == "NOT_MEASURED"
+
+
 def test_native_decimal_and_infinite_path_group_values(tmp_path):
     checks = [{"metric": "slack", "operator": ">=", "limit": Decimal("0")}]
     measured = engine.measure(checks, {"slack": Decimal("1.2")}, {}, {"always": True})

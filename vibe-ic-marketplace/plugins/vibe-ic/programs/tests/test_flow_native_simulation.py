@@ -12,6 +12,52 @@ import flow_engine
 from flow_native_adapters import Commands, execute
 
 
+@pytest.mark.parametrize("case,status", [
+    ("zero", "PASS"), ("absent", "NOT_MEASURED"),
+    ("failed", "FAIL"), ("low", "FAIL"),
+])
+def test_native_empty_coverage_population_keeps_real_failures(tmp_path, monkeypatch, case, status):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "verilator", "verilator_coverage")):
+        pytest.skip("Native functional and coverage simulators are required")
+    import verilator_coverage_measure as coverage
+
+    rtl = tmp_path / "unit.v"
+    rtl.write_text("module unit(input wire a, output wire z); assign z=~a; endmodule\n")
+    tb = tmp_path / "tb_unit.v"
+    drive = "" if case == "low" else "a=1; #1; "
+    expected = 0 if case == "failed" else 1
+    tb.write_text("module tb_unit; reg a; wire z; unit dut(a,z); initial begin a=0; #1; "
+                  f"if (z === 1'b{expected}) $display(\"ORACLE_TB_DONE pass=1/1\"); "
+                  "else $display(\"ORACLE_TB_DONE pass=0/1\"); "
+                  f"{drive}$finish; end endmodule\n")
+    if case == "absent":
+        monkeypatch.setattr(coverage, "COVERAGE_INSTRUMENTATION_FLAGS", ())
+    result = execute(tmp_path, tmp_path / "output", {
+        "adapter": "simulation", "rtl": [str(rtl)], "top": "unit", "testbenches": [str(tb)]}, {})
+    row = next(item for item in flow_engine.read_json(flow_engine.TABLE)["steps"]
+               if item["name"] == "functional_simulation_and_coverage")
+    measured = flow_engine.measure(row["checks"], result["metrics"], {}, {"always": True}, tmp_path)
+    verdict = flow_engine.evaluate(flow_engine.ToolResult(**result), measured)
+    (tmp_path / "native-result.json").write_text(json.dumps({"tool": result, "checks": measured,
+                                                            "status": verdict}, indent=2))
+    assert verdict == status, (result, measured)
+    if case == "absent":
+        assert not list((tmp_path / "output").rglob("coverage.dat"))
+        assert not any(key.endswith("_points") for key in result["metrics"])
+    elif case == "zero":
+        assert result["metrics"]["coverage_branch_points"] == 0
+        assert "coverage_branch_pct" not in result["metrics"]
+        branch = next(item for item in measured if item["metric"] == "coverage_branch_pct")
+        assert branch["status"] == "NOT_APPLICABLE" and branch["points"] == 0
+        assert branch["value"] is None and branch["limit"] == 70
+    elif case == "low":
+        assert result["metrics"]["coverage_toggle_points"] > 0
+        assert result["metrics"]["coverage_toggle_pct"] < 60
+        assert any(item["status"] == "FAIL" for item in measured)
+    else:
+        assert result["metrics"]["assertion_failures"] == 1
+
+
 @pytest.mark.parametrize("exit_code", [0, 7])
 def test_commands_publish_output_before_the_process_exits(tmp_path, exit_code):
     release = tmp_path / "release"
