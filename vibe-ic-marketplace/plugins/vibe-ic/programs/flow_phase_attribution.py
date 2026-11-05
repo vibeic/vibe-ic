@@ -747,7 +747,7 @@ def attribute(project: Path,
         route_why = None
     if rtl_present is None:
         rtl_present = rtl_present_at_input(project)
-    return {
+    out = {
         "schema": SCHEMA,
         "project": str(project),
         "phase1_routing": phase1_routing(routing, entry, evidence, exit_step,
@@ -756,6 +756,19 @@ def attribute(project: Path,
         "phase3_verifying": phase3_verifying(rep, why),
         "phase4_debugging": phase4_debugging(rep, why),
     }
+    from flow_engine_frontend import selected_engine
+    if selected_engine([]) == "native":
+        native = _read_json(Path(project) / "reports/flow_engine.json") or {}
+        status = next((row.get("status") for row in native.get("steps", [])
+                       if row.get("name") == "functional_simulation_and_coverage"), None)
+        phase = out["phase3_verifying"]
+        for key in ("ran", "not_attempted"):
+            phase.setdefault(key, {}).pop("sim", None)
+        measured = status in {"PASS", "FAIL"}
+        phase["ran" if measured else "not_attempted"]["sim"] = status if measured else "NOT_MEASURED"
+        phase["failed"] = sorted(name for name, result in phase["ran"].items() if result in _STATUS_FAILING)
+        phase["sim_source"] = "reports/flow_engine.json#functional_simulation_and_coverage"
+    return out
 
 
 def summarize(attributions: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
