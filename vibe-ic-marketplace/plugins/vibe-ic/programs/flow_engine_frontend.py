@@ -169,6 +169,7 @@ class OwnerSession:
 
     def result(self, directory, kind):
         directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
         if kind != "phase1" and self.route["delivery_target"] == "rtl" and not self.executed:
             command = [sys.executable, str(Path(__file__).with_name("design_one_shot_runner.py")),
                        str(self.project), "--entry-step", str(self.route["entry_step"]),
@@ -176,7 +177,8 @@ class OwnerSession:
                        "--rtl-input", self.route.get("input_contract", "structured"),
                        "--skip-hardware", "--skip-analog", "--skip-phase3",
                        "--execution-mode", "default", "--engine", "native"]
-            directory.mkdir(parents=True, exist_ok=True)
+            for output in ("reports/orchestrator/phase2_one_shot.json", "reports/phase2/lint/native_lint.json"):
+                (self.project / output).unlink(missing_ok=True)
             self.log = directory / "owner.log"
             with self.log.open("w") as log:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
@@ -202,11 +204,20 @@ class OwnerSession:
                    "exit_code": row.get("extras", {}).get("exit_code"), "status": row["status"]}
                   for row in own if row["status"] != "NOT_APPLICABLE"]
         metrics.update({row["name"]: row["status"] for row in own})
-        reports = [str(path)] if path.is_file() else []
-        if measured:
-            reports.append(str(lint_path))
+        sources = [path, *([lint_path] if measured else [])]
+        for row in own:
+            for output in row.get("output_files", []):
+                source = Path(output)
+                sources.append(source if source.is_absolute() else self.project / source)
         if self.log:
-            reports.append(str(self.log))
+            sources.append(self.log)
+        reports = []
+        for source in dict.fromkeys(sources):
+            if source.is_file():
+                destination = directory / source.name
+                if source != destination:
+                    shutil.copyfile(source, destination)
+                reports.append(str(destination))
         return {"ran": bool(own), "exit_code": None, "metrics": metrics,
                 "reports": reports, "tool_seconds": sum(item["tool_seconds"] for item in tools),
                 "native_steps": [*native, *tools],

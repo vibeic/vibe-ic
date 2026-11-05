@@ -90,19 +90,24 @@ def test_native_lint_without_rtl_does_not_resolve_an_image(tmp_path):
 def test_owner_session_runs_one_window_for_all_result_readers(tmp_path, monkeypatch):
     report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
     report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({"steps": [
+    measured = {"steps": [
         {"name": "rtl_gen", "status": "PASS", "extras": {}},
         {"name": "rtl_validate", "status": "PASS", "extras": {}},
-    ]}))
+    ]}
+    def publish(*args, **kwargs):
+        report.write_text(json.dumps(measured))
+        return SimpleNamespace(returncode=0)
     selected = {"entry_step": "1", "verify_through": "2", "input_contract": "original",
                 "delivery_target": "rtl"}
-    with patch.object(frontend.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as execute:
+    with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
         session = frontend.OwnerSession(tmp_path, selected)
         authored = session.result(tmp_path / "steps/author", "rtl_gen")
         checked = session.result(tmp_path / "steps/lint", "rtl_validate")
     execute.assert_called_once()
     assert authored["metrics"]["rtl_gen"] == "PASS"
     assert checked["metrics"]["rtl_validate"] == "PASS"
+    assert json.loads((tmp_path / "steps/author/phase2_one_shot.json").read_text()) == measured
+    assert json.loads((tmp_path / "steps/lint/phase2_one_shot.json").read_text()) == measured
 
 
 def test_public_entry_retains_the_existing_router_closure(tmp_path, monkeypatch):
@@ -121,3 +126,15 @@ def test_public_entry_retains_the_existing_router_closure(tmp_path, monkeypatch)
     with patch.object(engine, "run", wraps=engine.run) as execute:
         assert frontend.run_public(args) == 0
     assert execute.call_args.kwargs["route"] == route
+
+
+def test_failed_owner_invocation_cannot_reuse_the_previous_report(tmp_path):
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"steps": [{"name": "rtl_validate", "status": "PASS"}]}))
+    selected = {"entry_step": "2", "verify_through": "2", "input_contract": "original",
+                "delivery_target": "rtl"}
+    with patch.object(frontend.subprocess, "run", return_value=SimpleNamespace(returncode=2)):
+        result = frontend.OwnerSession(tmp_path, selected).result(tmp_path / "steps/lint", "rtl_validate")
+    assert not result["ran"]
+    assert result["metrics"] == {}
