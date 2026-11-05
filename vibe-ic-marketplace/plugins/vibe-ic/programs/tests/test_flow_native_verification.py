@@ -271,7 +271,8 @@ def test_stream_xor_does_not_satisfy_finished_geometry(tmp_path):
 
 
 @pytest.mark.parametrize("different", [False, True])
-def test_finished_geometry_uses_current_gds(tmp_path, different):
+@pytest.mark.parametrize("sealed", [False, True])
+def test_finished_geometry_uses_current_gds(tmp_path, different, sealed):
     pytest.importorskip("librelane")
     pya = pytest.importorskip("klayout.db")
     from librelane.common import Path as NativePath
@@ -286,8 +287,13 @@ def test_finished_geometry_uses_current_gds(tmp_path, different):
         path = tmp_path / f"{side}.gds"
         layout.write(str(path))
         paths.append(NativePath(str(path)))
-    state = State({"mag_gds": paths[0], "gds": paths[1]}, metrics={
-        "design__xor_difference__count": 0, "design__core__bbox": "0 0 1 1"})
+    metrics = {"design__xor_difference__count": 0, "design__core__bbox": "0 0 1 1"}
+    if sealed:
+        metrics["design__seal_ring__verified"] = 1
+        seal_step = tmp_path / "steps/seal_ring_and_die_identification"
+        seal_step.mkdir(parents=True)
+        (seal_step / "state_out.json").write_text(State({"gds": paths[0]}).dumps())
+    state = State({"mag_gds": paths[0], "gds": paths[1]}, metrics=metrics)
     config, _ = Config.load({"DESIGN_NAME": "unit", "PDK": "sky130A",
         "VIBEIC_FINISHING_PRE_GDS": str(paths[0])},
         FinishingXOR.get_all_config_variables(), design_dir=str(tmp_path))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,20 @@ def test_config_uses_documents_and_leaves_pdk_defaults(project):
     assert config["VERILOG_FILES"] == [str(project / "phase2/stage1/rtl/unit.v")]
     assert "PDN_CFG" not in config
     assert "FP_CORE_UTIL" not in config
+
+
+def test_generated_lowercase_pdk_keeps_installed_registry_spelling(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"fields": {"pdk_target": "sky130a"}}))
+    assert build_config(project)["PDK"] == "sky130A"
+
+
+def test_explicit_pdk_does_not_require_rewriting_generated_documents(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"fields": {}}))
+    before = path.read_bytes()
+    assert build_config(project, pdk="sky130A")["PDK"] == "sky130A"
+    assert path.read_bytes() == before
 
 
 def test_declaration_values_keep_native_units_and_pdk_scope(project):
@@ -137,6 +152,41 @@ def test_non_ic_routes_leave_native_pdn_construction_defaults(project, route):
 def test_config_cli_output_is_the_config_the_caller_receives(project):
     output = write_config(project, route="HARDMACRO")
     assert json.loads(output.read_text()) == build_config(project, route="HARDMACRO")
+
+
+def test_cli_records_implementation_choices_and_preserves_source_constraints(project):
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text('{"author_choice": "retained"}')
+    command = [sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
+               "--project", str(project), "--route", "ip", "--set", "FP_CORE_UTIL=35",
+               "--set", 'CTS_CLK_BUFFERS=["native_buf_2","native_buf_4"]']
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    choices = json.loads(declaration.read_text())
+    assert choices["author_choice"] == "retained"
+    config = json.loads(Path(result.stdout.strip()).read_text())
+    assert config["FP_CORE_UTIL"] == 35
+    assert config["CTS_CLK_BUFFERS"] == ["native_buf_2", "native_buf_4"]
+    assert config["CLOCK_PERIOD"] == 17.5
+    assert config["PDK"] == "sky130A"
+    declarations(project, [{"kind": "flow_setting", "token": "FP_CORE_UTIL", "value": "45"}])
+    assert build_config(project, route="ip")["FP_CORE_UTIL"] == 45
+
+
+@pytest.mark.parametrize("missing_rtl", [False, True])
+def test_failed_config_command_preserves_existing_declaration(project, missing_rtl):
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    original = '{"author_choice":"retained"}\n'
+    declaration.write_text(original)
+    if missing_rtl:
+        (project / "phase2/stage1/rtl/unit.v").unlink()
+    result = subprocess.run([sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
+        "--project", str(project), "--set", "FP_CORE_UTIL=35", "--output", str(project)],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert declaration.read_text() == original
 
 
 def test_declared_grid_offsets_override_derived_ring_offsets(project):

@@ -3319,14 +3319,14 @@
     "final_geometry_rc_and_pex": [
       {
         "old_name": "fill_sensitive_reference_correlation",
-        "class": "T",
-        "reason": "OpenRCX/Magic extraction and native parasitic annotation report; wire the report/input adapter without population emitters or requirement traces."
+        "class": "D",
+        "reason": "No extraction tool reports a fill-sensitive reference correlation value. Native final extraction and final electrical analysis already run on the finished geometry."
       },
       {
         "old_name": "final_parasitic_corner_coverage",
-        "class": "T",
-        "reason": "OpenSTA per-corner native parasitic annotation reports. Wire only this native report; both sides must come from the tool.",
-        "native_population": "OpenSTA per-corner native parasitic annotation reports"
+        "class": "R",
+        "reason": "OpenSTA reports native parasitic annotation counts for its timed corners, without a separate numeric corner-coverage limit. Report those native counts; final extraction and STA retain their original engineering checks.",
+        "native_metrics": []
       }
     ],
     "final_electrical_analysis": [
