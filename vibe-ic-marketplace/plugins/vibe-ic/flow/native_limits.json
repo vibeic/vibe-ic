@@ -4448,6 +4448,10 @@
     "final_test_pattern_replay": {
       "kind": "adapter",
       "adapter": "final_patterns"
+    },
+    "safety_fault_injection_and_diagnostic_coverage": {
+      "kind": "adapter",
+      "adapter": "safety_injection"
     }
   },
   "report_check_readers": {

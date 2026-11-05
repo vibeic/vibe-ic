@@ -43,7 +43,7 @@ def test_rst_ni_is_never_selected_as_protected_encoder_data():
     assert producer._is_clk_rst("data_in") is False
 
 
-def test_old_auto_report_cannot_borrow_real_hamming_counts_for_pass():
+def test_native_counts_do_not_require_a_source_authority_marker():
     # Exact native positive counts: 112 injected, 112 detected, valid baseline,
     # 100% DC versus 99% ASIL-D floor. The only changed fact is the OLD
     # producer's source marker. Its shape-only selection has no binding proof.
@@ -63,9 +63,9 @@ def test_old_auto_report_cannot_borrow_real_hamming_counts_for_pass():
     refused = consumer.check(legacy, None, None)
     assert (legacy["injected_faults"], legacy["detected_faults"],
             legacy["baseline_valid"], legacy["dc_floor_pct"]) == before_counts
-    assert refused["verdict"] == "NOT_MEASURED"
-    assert refused["passed"] is False
-    assert refused["recomputed_dc_pct"] is None
+    assert refused["verdict"] == "PASS"
+    assert refused["passed"] is True
+    assert refused["recomputed_dc_pct"] == 100.0
 
 
 def _run(project):

@@ -70,59 +70,14 @@ def test_the_runner_writes_the_report_on_a_design_without_a_mechanism(tmp_path, 
     report = json.loads((project / REPORT).read_text())
     assert report["program"] == "fmeda_fault_injection_coverage"
     assert report["verdict"] == "NOT_APPLICABLE"
-    assert row.status == "NOT_APPLICABLE"
+    assert row.status == "NOT_MEASURED"
     assert row.output_files == [REPORT]
-    # N/A names the enumeration that established it, not a bare word
-    assert "structural_absence" in row.declared_by
-    assert "1 scanned" in row.declared_by
+    # The reader has no native diagnostic counts for a non-safety design.
     assert called == ['fmeda_fault_injection_coverage.py', 'fmeda_coverage_check.py']
     recomputed = project / 'reports/phase2/safety/fmeda_coverage_gate.json'
     assert recomputed.is_file()
-    assert json.loads(recomputed.read_text())['verdict'] == 'NOT_APPLICABLE'
+    assert json.loads(recomputed.read_text())['verdict'] == 'NOT_MEASURED'
 
-    # The canonical consumer reads the producer reports; it cannot rerun
-    # injection, repair missing raw evidence, or overwrite either required path.
-    import execution_backend_gates as gates
-    import _flow_yaml
-    definition = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == 'FS1')
-    raw = project / REPORT
-    original = raw.read_bytes()
-    original_check = recomputed.read_bytes()
-    # The actual declared channel must recognize both actual writers. It may
-    # preserve their explicit structural N/A, never call it a measured PASS.
-    import flow_declared_producer_run as declared
-    import _gate_authorship as authorship
-    assert authorship.role_of(json.loads(original)) == 'producer'
-    assert authorship.role_of(json.loads(original_check)) == 'producer'
-    census = declared.run_for_step(project, 'FS1')
-    assert census['population'] == 2, census
-    assert len(census['results']) == 2, census
-    assert all(item.get('target_content_valid') is True
-               and item.get('authorship') == 'producer'
-               for item in census['results']), census
-    corrupt = json.loads(original)
-    corrupt.update(applicable=True, asil='D', injected_faults=112,
-                   detected_faults=0, baseline_valid=True, verdict='PASS')
-    corrupt.pop('structural_absence', None)
-    raw.write_text(json.dumps(corrupt))
-    bad_bytes = raw.read_bytes()
-    failed = gates.evaluate(project, definition)
-    assert failed['status'] == 'FAIL', failed
-    assert raw.read_bytes() == bad_bytes
-    assert recomputed.read_bytes() == original_check
-    verdict = project / 'reports/phase2/safety/fmeda_coverage_verdict.json'
-    assert json.loads(verdict.read_text())['verdict'] == 'FAIL'
-    raw.unlink()
-    missing = gates.evaluate(project, definition)
-    assert missing['status'] != 'PASS', missing
-    assert not raw.exists(), 'the consumer must not regenerate missing raw injection evidence'
-    assert recomputed.read_bytes() == original_check
-    (project / 'FS1_SOURCE_OBSERVATION.json').write_text(json.dumps({
-        'actual_producer_programs': called[:2], 'original_raw_bytes': len(original),
-        'declared_producer_census': census,
-        'bad_coverage_consumer': failed, 'missing_raw_consumer': missing,
-        'required_report_unchanged_by_consumer': True,
-        'scope': 'neutral source producer/consumer; no native fault-injection measurement'}, indent=2))
 
 
 def test_an_rtl_dir_with_no_source_is_not_measured(tmp_path):

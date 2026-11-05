@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1479
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1479)
+- **Total programs (excluding helpers / shims):** 1480
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1480)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1470 |
+| `any` | 1471 |
 
 ## Alphabetical listing
 
@@ -561,6 +561,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_pdn_current` | any | — | flow_pdn_current |
 | `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
 | `flow_power` | any | — | Call the existing power-intent tools without initializing the physical chain. |
+| `flow_safety` | any | — | Invoke the existing diagnostic injection producer and read its measurements. |
 | `flow_security` | any | — | Run supplied security property decks through the existing native formal adapter. |
 | `flow_spare_cells` | any | — | flow_spare_cells |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
@@ -571,7 +572,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_step_output_content_check` | any | — | Content check for flow step outputs; refusal exits nonzero. |
 | `flow_steps_generate` | any | — | One-time migration of the old registry into the editable native step table. |
 | `flow_system_scenarios` | any | — | Run produced full-stack HDL scenarios through the existing Icarus helper. |
-| `fmeda_coverage_check` | any | — | independent anti-fabrication gate over the FMEDA diagnostic-coverage report emitted by `fmeda_fault_injection_coverage.py`. |
+| `fmeda_coverage_check` | any | — | Read native FMEDA injection counts against the requested ASIL/DC floor. |
 | `fmeda_fault_injection_coverage` | any | — | REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p... |
 | `fork_downgrade_visibility_check` | any | — | Every abort our EDA fork downgrades to a warning must still be visible to the flow. |
 | `formal_complexity_classify` | any | — | deterministic k-induction feasibility classifier for formal property verification (FPV). |
@@ -1551,7 +1552,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1470 programs)
+### `any` (1471 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2084,6 +2085,7 @@ _(no programs in this group)_
 - `flow_pdn_current` — flow_pdn_current
 - `flow_phase_attribution` — WHO did each of the four phases, and HOW.
 - `flow_power` — Call the existing power-intent tools without initializing the physical chain.
+- `flow_safety` — Invoke the existing diagnostic injection producer and read its measurements.
 - `flow_security` — Run supplied security property decks through the existing native formal adapter.
 - `flow_spare_cells` — flow_spare_cells
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
@@ -2094,7 +2096,7 @@ _(no programs in this group)_
 - `flow_step_output_content_check` — Content check for flow step outputs; refusal exits nonzero.
 - `flow_steps_generate` — One-time migration of the old registry into the editable native step table.
 - `flow_system_scenarios` — Run produced full-stack HDL scenarios through the existing Icarus helper.
-- `fmeda_coverage_check` — independent anti-fabrication gate over the FMEDA diagnostic-coverage report emitted by `fmeda_fault_injection_coverage.py`.
+- `fmeda_coverage_check` — Read native FMEDA injection counts against the requested ASIL/DC floor.
 - `fmeda_fault_injection_coverage` — REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p...
 - `fork_downgrade_visibility_check` — Every abort our EDA fork downgrades to a warning must still be visible to the flow.
 - `formal_complexity_classify` — deterministic k-induction feasibility classifier for formal property verification (FPV).
