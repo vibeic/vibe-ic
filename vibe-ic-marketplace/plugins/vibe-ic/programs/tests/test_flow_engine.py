@@ -85,6 +85,18 @@ def test_router_window_remains_bounded(tmp_path):
         engine.run(tmp_path, table={"steps": rows}, route=decision, to_name="floorplan")
 
 
+def test_debug_entry_runs_the_router_declared_prerequisite_closure(tmp_path):
+    rows = [command_row(name) for name in ("requirements", "author", "lint", "unselected", "simulation", "floorplan")]
+    for row, native in zip(rows, ("D1", "1", "2", "3", "4", "15")):
+        row["legacy_id"] = {"registry": "", "native": [native]}
+    route = {"task_nature": "debug", "entry_step": "4", "verify_through": "4",
+             "delivery_target": "rtl", "input_contract": "original",
+             "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
+    report = engine.run(tmp_path, table={"steps": rows}, route=route)
+    assert [row["name"] for row in report["steps"]] == ["requirements", "author", "lint", "simulation"]
+    assert report["route"] == route
+
+
 def test_missing_limit_never_becomes_pass(tmp_path):
     row = command_row("unlimited")
     row["checks"][0]["limit"] = None

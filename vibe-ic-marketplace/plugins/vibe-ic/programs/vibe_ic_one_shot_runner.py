@@ -4661,6 +4661,7 @@ def _main(args=None) -> int:
     from flow_engine_frontend import selected_engine
     p.add_argument("--engine", choices=("legacy", "native"), default=selected_engine(),
                    help="Opt in to the native table runner; the existing path remains the default.")
+    p.add_argument("--from", dest="from_name", help="Rerun the native engine from this selected step name.")
     p.add_argument('--step', help='Flow109 row for a single diagnostic gate')
     p.add_argument('--only', help='Exact source-owned diagnostic gate name')
     p.add_argument('--dry-run', action='store_true',
@@ -4796,6 +4797,8 @@ def _main(args=None) -> int:
     if getattr(args, "engine", "legacy") == "native":
         from flow_engine_frontend import run_public
         return run_public(args)
+    if getattr(args, "from_name", None):
+        p.error("--from requires the native engine")
     if args.resume_request and (args.entry_step or args.exit_step):
         p.error("--resume-request cannot be combined with explicit --entry-step/--exit-step")
     if bool(args.area_receipt) != bool(args.area_run_manifest):
