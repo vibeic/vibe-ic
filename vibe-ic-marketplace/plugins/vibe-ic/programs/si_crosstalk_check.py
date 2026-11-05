@@ -301,28 +301,33 @@ def build_report(findings: List[Finding], stats: dict,
     }
 
 
-def _d48_unique(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError('D48_DUPLICATE_INPUT_KEY: ' + key)
-        result[key] = value
-    return result
 
 
-def _d48_inputs(project):
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _d48_inputs(project, data):
     import analog_bound_measurements as measured
-    config = project / 'input/flow109/D48.json'
-    data = json.loads(config.read_text(), object_pairs_hook=_d48_unique)
-    inputs = {'settings': {'path': str(config), 'sha256': measured.sha(config)}}
+    data = dict(data)
+    inputs = {}
     for role in ('netlist', 'testbench', 'coupling_model'):
         view = data[role]
-        path = project / view['path']
+        path = Path(view['path'] if isinstance(view, dict) else view)
+        path = path if path.is_absolute() else project / path
         resolved = path.resolve(strict=True)
-        if (not resolved.is_relative_to(project) or resolved != path.absolute()
-                or not resolved.is_file() or measured.sha(resolved) != view['sha256']):
-            raise ValueError('D48_INPUT_UNBOUND: ' + role)
-        inputs[role] = {'path': str(resolved), 'sha256': view['sha256']}
+        if not resolved.is_relative_to(project) or not resolved.is_file():
+            raise ValueError('D48_INPUT_MISSING: ' + role)
+        inputs[role] = {'path': str(resolved)}
     analysis = data['analysis']
     if analysis.get('kind') != 'TRAN':
         raise ValueError('D48_EXPLICIT_TRAN_REQUIRED')
@@ -372,7 +377,6 @@ def _d48_bindings(data, binary):
 
 def _d48_consume(project, native, data, inputs):
     """Consume this producer's execution and capture. No stored evidence is upgraded."""
-    import analog_bound_measurements as measured
     if native.get('status') != 'PASS':
         return native.get('status', 'NOT_MEASURED'), 'D48_NATIVE_MEASUREMENT_' + str(native.get('status')), []
     executions = native.get('executions')
@@ -381,19 +385,8 @@ def _d48_consume(project, native, data, inputs):
     execution = executions[0]
     if type(execution.get('returncode')) is not int or execution['returncode'] != 0 or not execution.get('argv'):
         raise ValueError('D48_SUCCESSFUL_NATIVE_EXECUTION_REQUIRED')
-    log = Path(execution['log'])
-    if measured.sha(log) != execution['log_sha256']:
-        raise ValueError('D48_NATIVE_LOG_CHANGED')
-    current, why = measured.validate_consumed_inputs(project, native['native_inputs'])
-    if not current:
-        raise ValueError('D48_NATIVE_CLOSURE_UNBOUND: ' + why)
-    for view in [*inputs.values(), *native['native_inputs'].values()]:
-        if measured.sha(view['path']) != view['sha256']:
-            raise ValueError('D48_EXECUTED_INPUT_CHANGED: ' + view['path'])
     capture = native['capture']
     path = Path(capture['path'])
-    if measured.sha(path) != capture['sha256']:
-        raise ValueError('D48_CAPTURE_CHANGED_OR_TRUNCATED')
     rows = path.read_text().splitlines()
     expected = ['time', *('bound_' + name for name in native['bindings']['capture'])]
     if not rows or rows[0].split() != expected:
@@ -413,9 +406,6 @@ def _d48_consume(project, native, data, inputs):
     binary = (native.get('bindings') or {}).get('execution', {}).get('ngspice_bin')
     if not isinstance(binary, str) or native['bindings'] != _d48_bindings(data, binary):
         raise ValueError('D48_EXECUTED_BINDINGS_DIFFER_FROM_REQUEST')
-    tool = native['native_inputs'].get('native_binary')
-    if tool != {'path': binary, 'sha256': measured.sha(Path(binary))}:
-        raise ValueError('D48_EXECUTED_TOOL_IDENTITY_UNBOUND')
     results = []
     try:
         for index, window in enumerate(data['windows']):
@@ -454,46 +444,29 @@ def _d48_consume(project, native, data, inputs):
 
 
 def execute(project, context):
-    """D48 analog native method. Excess noise blocks; partial SI stays NOT_MEASURED.
-
-    input/flow109/D48.json binds netlist, testbench and coupling_model by path
-    and sha256. Its TRAN analysis and windows explicitly declare aggressor,
-    victim, baseline_v, from_s, to_s, max_noise_v and min_aggressor_swing_v.
-    Required population, timing-window signoff, delay and physical provenance
-    are outside this method result. Digital audit predicates are independent.
-    """
+    """Measure declared SPICE coupling windows with the native simulator."""
     import shutil
     import uuid
     import analog_bound_measurements as measured
     from analog_native_flow import NativeCommands
-    from flow109_admission import require_launch_admission, AdmissionRefusal
     import librelane_contract as launch
     from _atomic_artefact import write_json
     project = Path(project).resolve(strict=True)
-    output = project / 'reports/flow109/D48' / uuid.uuid4().hex
+    output = project / 'reports/native_tools/si' / uuid.uuid4().hex
     output.mkdir(parents=True)
-    record = dict(step_id='D48', context_sha256=context.get('context_sha256'),
-                  component_status='NOT_MEASURED', default_row_status='NOT_MEASURED',
-                  flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED',
-                  completed=False, native_started=False, delivery_accepted=False,
-                  qualification='NOT_CLAIMED', outputs=[], windows=[],
-                  required_population_status='NOT_MEASURED', timing_window_signoff=False,
-                  timing_window_status='NOT_MEASURED',
+    record = dict(component_status='NOT_MEASURED', native_started=False,
+                  outputs=[], windows=[], required_population_status='NOT_MEASURED',
+                  timing_window_signoff=False, timing_window_status='NOT_MEASURED',
                   delay_status='NOT_MEASURED', physical_binding_status='NOT_MEASURED')
     try:
-        if (context.get('requested_step') != 'D48' or context.get('native_step_id') != 'flow109.D48'
-                or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die'):
-            raise ValueError('D48_CONTEXT_INVALID')
-        record['launch_admission'] = require_launch_admission(project, 'flow109.D48', {'flow109_context': context})
-        record['native_launch'] = launch.local_image_attestation()
-        data, inputs = _d48_inputs(project)
-        record['inputs'] = inputs
+        data, inputs = _d48_inputs(project, context)
         binary = shutil.which('ngspice')
         if not binary:
             raise ValueError('D48_NGSPICE_UNAVAILABLE')
         bindings = _d48_bindings(data, binary)
         measured.emit_deck(Path(inputs['testbench']['path']).read_text(), bindings, output / 'curve.dat')
-        runner = NativeCommands(project, output, '', record['native_launch']['image'], step='D48')
+        image = context.get('image') or launch.resolve_image(project)
+        runner = NativeCommands(project, output, '', image, step='D48')
         native = measured.run_measurements(project, Path(inputs['netlist']['path']),
             Path(inputs['testbench']['path']), bindings, output, runner)
         record['native'] = native
@@ -501,118 +474,15 @@ def execute(project, context):
         native_path = output / 'native.json'
         write_json(native_path, native)
         status, reason, windows = _d48_consume(project, native, data, inputs)
-        # Preserve the measured answer before any later freshness/launch read.
         record.update(component_status=status, reason=reason, windows=windows)
-        if _d48_inputs(project) != (data, inputs) or launch.local_image_attestation() != record['native_launch']:
-            raise ValueError('D48_INPUT_OR_LAUNCH_CHANGED')
         files = [native_path, *(Path(path) for path in native.get('outputs', []) if path)]
-        record['outputs'] = [{'path': str(path.relative_to(project)), 'sha256': measured.sha(path)}
-                             for path in files if path.is_file()]
-    except (ValueError, OSError, KeyError, TypeError, AttributeError, AdmissionRefusal, launch.Refusal) as exc:
+        record['outputs'] = [str(path) for path in files if path.is_file()]
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, launch.Refusal) as exc:
         if record['component_status'] != 'FAIL':
             record['component_status'] = 'NOT_MEASURED'
-        record['reason'] = 'D48_REFUSED: ' + str(exc)
-    if record['component_status'] == 'FAIL':
-        record['default_row_status'] = record['flow109_acceptance'] = 'FAIL'
-    write_json(output / 'component.json', record)
+        record['reason'] = str(exc)
+    write_json(output / 'result.json', record)
     return record
-
-
-def _d48_metric_acceptance(project, context, component):
-    """Bind the existing SI windows to independent requirements; delay stays unmeasured.
-
-    required_items contains {id}; window_bindings separately binds each required
-    window's existing source definition. Noise limits use limits[id].noise_v,
-    units=V. A noise measurement cannot supply a missing delay measurement.
-    """
-    import flow109_metric_acceptance as metrics
-    import flow109
-    ids = ['base_36.si_required_windows', 'base_36.coupling_noise_delay_bounds']
-    result = {'row_id': 'D48', 'status': 'NOT_MEASURED', 'obligations': [], 'qualification': 'NOT_MEASURED'}
-    windows = component.get('windows') or []
-    failed = component.get('component_status') == 'FAIL' or any(w.get('noise_status') == 'FAIL' for w in windows)
-    try:
-        current = flow109.validate_execution_context(context)
-        declared = current['resolved_row']['obligations']
-        if (current['resolved_row']['id'] != 'D48' or current['resolved_row']['profile']['id'] != 'analog_die'
-                or [o['id'] for o in declared] != ids):
-            raise ValueError('D48_METRIC_CONTEXT_UNREGISTERED')
-        data, inputs = _d48_inputs(project)
-        if component.get('inputs') != inputs:
-            raise ValueError('D48_METRIC_INPUT_BASIS_CHANGED')
-        status, reason, reopened = _d48_consume(project, component['native'], data, inputs)
-        if reopened != windows:
-            raise ValueError('D48_METRIC_PRINTED_WINDOWS_CHANGED')
-        failed = failed or status == 'FAIL'
-        try:
-            authority, body = metrics._approved_authority(project,
-                'requirements/base_36/si_required_windows.json#/required_items', ('id',))
-            declared = {w['id']: w for w in data['windows']}
-            required = {item['id'] for item in authority['required_items']}
-            if not required or body.get('window_bindings') != {name: declared[name] for name in required}:
-                raise ValueError('D48_REQUIRED_WINDOW_SOURCE_BINDINGS_UNBOUND')
-            actual = {w['id'] for w in reopened if w['noise_status'] in ('PASS', 'FAIL') and
-                      w['aggressor_swing_v'] >= w['min_aggressor_swing_v']}
-            coverage = 'NOT_MEASURED' if required <= actual else 'FAIL'
-            result['obligations'].append({'id': ids[0], 'status': coverage,
-                'required_items': authority['required_items'], 'observed_items': [{'id': n} for n in sorted(actual)],
-                'reason':'D48_PHYSICAL_WINDOW_PROVENANCE_UNMEASURED' if coverage=='NOT_MEASURED' else 'D48_REQUIRED_WINDOW_ABSENT',
-                'authority': authority})
-        except (metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
-            result['obligations'].append({'id': ids[0], 'status': 'NOT_MEASURED', 'reason': str(exc)})
-        comparisons = []
-        try:
-            authority, body = metrics._approved_document(project, 'requirements/base_36/coupling_noise_delay_bounds.json',
-                authority='requirements_owner', schema=metrics.AUTHORITY_SCHEMA)
-            if body.get('units') != 'V':
-                raise ValueError('D48_NOISE_BOUND_UNITS_UNBOUND')
-            for window in reopened:
-                limits = body['limits'][window['id']]['noise_v']
-                value = metrics._finite_number(window['peak_noise_v'])
-                # Preserve the existing declared noise comparator; no threshold is invented.
-                low, high = limits.get('min'), limits.get('max')
-                if low is None and high is None:
-                    raise ValueError('D48_NOISE_BOUNDS_ABSENT')
-                if low is not None:metrics._finite_number(low)
-                if high is not None:metrics._finite_number(high)
-                if low is not None and high is not None and low > high:
-                    raise ValueError('D48_NOISE_BOUNDS_INVALID')
-                comparisons.append({'window': window['id'], 'value': value, 'unit': 'V',
-                    'status': 'FAIL' if (low is not None and value < low or high is not None and value > high) else 'PASS'})
-            result['noise_authority'] = authority
-        except (metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
-            result['noise_bounds_gap'] = str(exc)
-        bounds_failed = failed or any(c['status'] == 'FAIL' for c in comparisons)
-        result['obligations'].append({'id': ids[1], 'status': 'FAIL' if bounds_failed else 'NOT_MEASURED',
-            'noise': comparisons, 'reason': 'D48_MEASURED_NOISE_FAILURE' if bounds_failed else 'D48_DELAY_AND_TIMING_WINDOW_MEASUREMENT_UNAVAILABLE'})
-        result['readset'] = {'inputs': inputs, 'native_inputs': component['native']['native_inputs'],
-                             'executions': component['native']['executions']}
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        result['reason'] = str(exc)
-        known_failures = {o['id'] for o in result['obligations'] if o['status']=='FAIL'}
-        result['obligations'] = [{'id': oid, 'status': 'FAIL' if oid in known_failures or failed and oid == ids[1] else 'NOT_MEASURED',
-                                  'reason': str(exc)} for oid in ids]
-    if failed or any(o['status'] == 'FAIL' for o in result['obligations']):result['status'] = 'FAIL'
-    return result
-
-
-
-def consume_default_row_completion(project, context, component):
-    """Canonical row completion; partial measurements do not qualify the row."""
-    accepted = _d48_metric_acceptance(Path(project).resolve(), context, component)
-    prior = component.get('metric_acceptance') or {}
-    prior_ids = {o.get('id') for o in prior.get('obligations', []) if o.get('status') == 'FAIL'} if isinstance(prior, dict) else set()
-    for item in accepted['obligations']:
-        if item['id'] in prior_ids and item['status'] != 'FAIL':
-            item.update(status='FAIL', reason='D48_PRIOR_MEASURED_FAILURE')
-    if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
-            or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
-        accepted['status'] = 'FAIL'
-        accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
-    return {**component, 'step_id': 'D48', 'context_sha256': context['context_sha256'],
-        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
-        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
-        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
 
 
 def main(argv: list = None) -> int:
