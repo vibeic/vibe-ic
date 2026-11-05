@@ -165,6 +165,31 @@ def test_the_general_core_does_not_import_any_adapter():
     assert not any("benchmark" in m for m in imported), imported
 
 
+@pytest.mark.parametrize("engine", ["native", "legacy"])
+@pytest.mark.parametrize("owner_status", ["PASS", "FAIL", None])
+@pytest.mark.parametrize("native_status", [
+    "PASS", "FAIL", "NOT_MEASURED", "SKIPPED", "missing-row", "missing-report"])
+def test_sim_attribution_uses_the_selected_engine_verdict(
+        tmp_path, monkeypatch, engine, owner_status, native_status):
+    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
+    steps = [_step("rtl_validate", "FAIL", required_site={"site": "rtl_validate"}),
+             _step("step4_functional_evidence", "PASS")]
+    if owner_status:
+        steps.append(_step("sim", owner_status))
+    p = _project(tmp_path, steps, prompt=_PROMPT)
+    if native_status != "missing-report":
+        rows = [] if native_status == "missing-row" else [
+            _step("functional_simulation_and_coverage", native_status)]
+        (p / "reports/flow_engine.json").write_text(json.dumps({"steps": rows}))
+    phase = fpa.attribute(p)["phase3_verifying"]
+    expected = (native_status if native_status in {"PASS", "FAIL"} else "NOT_MEASURED"
+                ) if engine == "native" else owner_status
+    assert {**phase["not_attempted"], **phase["ran"]}.get("sim") == expected
+    assert ("sim" in phase["ran"]) + ("sim" in phase["not_attempted"]) == (expected is not None)
+    assert phase["failed"] == sorted(["rtl_validate"] + (["sim"] if expected == "FAIL" else []))
+    assert phase["required_site_results"] == fpa.phase3_verifying({"steps": steps}, None)["required_site_results"]
+
+
 # ── FLOW-BACK TEST ───────────────────────────────────────────────────────────
 def test_flow_back_a_plain_design_gets_all_four_phases(tmp_path):
     """The decisive one: a user's project, no harness, all four attributed."""
