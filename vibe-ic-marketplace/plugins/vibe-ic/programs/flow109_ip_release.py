@@ -29,6 +29,7 @@ class D79Refusal(ValueError):
         super().__init__(f"{code}: {detail}")
 
 
+@dataclass(frozen=True)
 class Endpoint:
     kind: str
     name: str
