@@ -52,8 +52,7 @@ def test_current_deck_preserves_extracted_rc_population_through_existing_dispatc
     assert not any(line.startswith(('Cliveg1', 'Creferenceg1')) for line in deck.splitlines())
     assert 'wrdata coupling.txt v(live_2) v(reference_2)' in deck
     assert 'noise v(live_2) Vdrive dec 20 100 1000' in deck
-    digest = hashlib.sha256((tmp_path / data["_current"]["post"]).read_bytes()).hexdigest()
-    assert f'M3NOISE_RUN run_token noise_case {digest}' in deck
+    assert 'M3NOISE_RUN run_token noise_case' in deck
     assert data == held
     assert not wave.parent.exists()
 

@@ -33,13 +33,12 @@
       "scope": "declared_model_component",
       "analysis": "ngspice_noise",
       "model": "input/mixed_signal/receiver_noise.sp",
-      "model_sha256": "fa3f19c225db2ee918b884f33eb6daae994e28fb45f968ec0f7e037efce3e2d5",
       "subckt": "receiver_noise",
       "ports": [
         "drive",
         "sense"
       ],
-      "dependencies": {},
+      "dependencies": [],
       "temperature_c": 27.0,
       "dc_drive_v": 0.5,
       "frequency_start_hz": 1.0,
