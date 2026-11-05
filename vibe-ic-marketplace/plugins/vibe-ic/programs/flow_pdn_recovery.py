@@ -180,12 +180,22 @@ def plan_recovery(project: Path, route: dict, summary: dict) -> RecoveryPlan | N
         return None
 
 
+def _derived_aggregate_failure(row):
+    return (row.get("tool_kind") == "aggregate" and row.get("status") == "FAIL"
+            and row.get("tool_ran") and row.get("tool_exit_code") == 0
+            and not row.get("native_steps") and bool(row.get("metrics"))
+            and all(item.get("metric") == "non_passing_steps" and item.get("operator") == "=="
+                    and item.get("limit") == 0 and item.get("status") == "FAIL"
+                    for item in row["metrics"]))
+
+
 def _plan_recovery(project: Path, route: dict, summary: dict) -> RecoveryPlan | None:
     if any((project / "work/flow/pdn_attempts").glob("*/pdn_recovery.json")):
         return None
     if route.get("delivery_target") not in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}:
         return None
-    blockers = [row for row in summary.get("steps", []) if row["status"] != "PASS"]
+    blockers = [row for row in summary.get("steps", []) if row["status"] != "PASS"
+                and not _derived_aggregate_failure(row)]
     if (len(blockers) != 1 or blockers[0]["name"] != "candidate_electromigration"
             or blockers[0]["status"] != "FAIL" or not blockers[0].get("tool_ran")
             or summary.get("pending_steps") or not summary.get("completed_at")

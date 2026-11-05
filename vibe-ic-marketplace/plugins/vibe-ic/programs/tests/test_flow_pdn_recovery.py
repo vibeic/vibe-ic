@@ -98,6 +98,76 @@ def test_other_blocking_step_prevents_recovery_without_reading_native_files(tmp_
     assert plan_recovery(tmp_path, {"delivery_target": "ip_hardmacro"}, summary) is None
 
 
+def _aggregate_flow(tmp_path, monkeypatch, extra_status=None):
+    from copy import deepcopy
+    import sys
+    import flow_engine
+    from _hostpaths import require_repo
+    from test_flow_engine import command_row
+    table = json.loads(require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow", "steps.json").read_text())
+    original = {row["name"]: row for row in table["steps"]}
+    metrics = tmp_path / "native_em.json"
+    metrics.write_text(json.dumps({"em_violations": 1, "em_worst_utilization_pct": 101}))
+    em = deepcopy(original["candidate_electromigration"])
+    em["when"] = "always"
+    em["tool"] = {"kind": "command", "command": [sys.executable, "-c",
+        "import pathlib,sys; pathlib.Path(sys.argv[2]).write_text(pathlib.Path(sys.argv[1]).read_text())",
+        str(metrics), "{step}/metrics.json"]}
+    rows = [command_row("die_floorplan_and_macros"), em]
+    if extra_status:
+        rows.append(command_row("independent_check", 1 if extra_status == "FAIL" else 0,
+                                inputs=["missing.v"] if extra_status == "NOT_MEASURED" else ()))
+    rows.extend(deepcopy(original[name]) for name in ("signoff_aggregation", "compliance_and_final_adoption"))
+    path = tmp_path / "steps.json"
+    path.write_text(json.dumps({**table, "steps": rows}))
+    monkeypatch.setattr(flow_engine, "TABLE", path)
+    route = {"entry_step": rows[0]["name"], "verify_through": rows[-1]["name"],
+             "delivery_target": "ip_hardmacro", "input_contract": "structured"}
+    return flow_engine, route, metrics
+
+
+@pytest.mark.parametrize("extra_status", [None, "FAIL", "NOT_MEASURED"])
+def test_actual_aggregates_do_not_hide_sole_em_or_other_independent_blockers(tmp_path, monkeypatch, extra_status):
+    import flow_pdn_recovery
+    engine, route, _ = _aggregate_flow(tmp_path, monkeypatch, extra_status)
+    summary = engine.run(tmp_path, route=route)
+    assert [row["status"] for row in summary["steps"]][-2:] == ["FAIL", "FAIL"]
+    config_file = tmp_path / "steps/power_grid/openroad_generatepdn/config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(json.dumps({"VDD_NETS": ["power"], "GND_NETS": ["ground"],
+                                       "TECH_LEFS": {}, "DEFAULT_CORNER": "typical"}))
+    reached = []
+    monkeypatch.setattr(flow_pdn_recovery, "matching", lambda *args: reached.append(args) or [])
+    assert plan_recovery(tmp_path, route, summary) is None
+    assert len(reached) == (0 if extra_status else 1)
+
+
+@pytest.mark.parametrize("defect", ["additional_check", "tool_error", "missing_measurement"])
+def test_aggregate_independent_checks_and_tool_errors_still_block_recovery(tmp_path, monkeypatch, defect):
+    import flow_pdn_recovery
+    engine, route, _ = _aggregate_flow(tmp_path, monkeypatch)
+    summary = engine.run(tmp_path, route=route)
+    aggregate = summary["steps"][-1]
+    if defect == "additional_check":
+        aggregate["metrics"].append({"metric": "independent_errors", "status": "FAIL", "operator": "==", "limit": 0})
+    elif defect == "tool_error":
+        aggregate["tool_exit_code"] = 1
+    else:
+        aggregate["status"] = "NOT_MEASURED"
+    monkeypatch.setattr(flow_pdn_recovery, "matching", lambda *args: pytest.fail("Independent defect reached native planning"))
+    assert plan_recovery(tmp_path, route, summary) is None
+
+
+def test_actual_floorplan_replay_recomputes_derived_aggregate_verdicts(tmp_path, monkeypatch):
+    engine, route, metrics = _aggregate_flow(tmp_path, monkeypatch)
+    first = engine.run(tmp_path, route=route)
+    assert [row["status"] for row in first["steps"]] == ["PASS", "FAIL", "FAIL", "FAIL"]
+    metrics.write_text(json.dumps({"em_violations": 0, "em_worst_utilization_pct": 90}))
+    final = engine.run(tmp_path, route=route, from_name="die_floorplan_and_macros")
+    assert [row["status"] for row in final["steps"]] == ["PASS"] * 4
+    assert [row["native_metrics"]["non_passing_steps"] for row in final["steps"][-2:]] == [0, 0]
+
+
 def test_public_entry_performs_one_replay_even_when_second_em_fails(tmp_path, monkeypatch):
     import sys
     import flow_engine
