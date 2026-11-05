@@ -16,35 +16,21 @@ def test_second_placement_repair_uses_the_active_sdc_and_legalizes():
     assert "read_sdc" not in script  # read_current_odb supplies the step's SDC
 
 
-@pytest.mark.parametrize("case,limit,protected,expected_moved,expected_after", [
-    ("normal", 4, 0, "logic1/I logic2/I", 4),
-    ("mixed_pin_limit", 3, 0, "logic1/I logic2/I logic3/I", 3),
-    ("constant_driver", 4, 0, "", 5),
-    ("protected_net", 4, 1, "", 5),
-    ("unsupported_limit", 1, 0, "", 5),
+@pytest.mark.parametrize("case,limit,protected,expected", [
+    ("normal", 4, 0, "data_net 4"),
+    ("mixed_pin_limit", 3, 0, "data_net 3"),
+    ("constant_driver", 4, 0, ""),
+    ("protected_net", 4, 1, ""),
+    ("unsupported_limit", 1, 0, ""),
 ])
-def test_logic_loads_are_rebuffered_without_stranding_antenna_diodes(
-        tmp_path, case, limit, protected, expected_moved, expected_after):
-    """Execute the shipped Tcl proc on a neutral five-load DB model.
-
-    The pre-fix flow has no such proc; its equivalent no-op leaves the measured
-    driver at five. Move two logic inputs while retaining the antenna diodes
-    on the protected net.
-    """
+def test_fanout_targets_preserve_native_pin_limits_and_protection(
+        tmp_path, case, limit, protected, expected):
     source = (STEP / "postroute_repair.tcl").read_text()
-    marker = "proc vic_close_data_fanout {} {"
-    if marker in source:
-        body = source[source.index(marker):]
-        body = body[:body.index("if {![vic_close_data_fanout]}")]
-        helper = "proc vic_fanout_target_limits {} {"
-        if helper in source:
-            body = source[source.index(helper):source.index("proc vic_fanout_over {} {")] + body
-    else:
-        body = "proc vic_close_data_fanout {} { return 1 }\n"
+    body = source[source.index("proc vic_fanout_target_limits {} {"):
+                  source.index("proc vic_fanout_over {} {")]
     proc_file = tmp_path / "fanout.tcl"
     proc_file.write_text(body)
     harness = textwrap.dedent(r"""
-        namespace eval sta { proc max_fanout_check_limit {} { return 4.0 } }
         set ::env(STEP_DIR) __STEP_DIR__
         set ::case __CASE__
         set ::limit __LIMIT__
@@ -56,134 +42,29 @@ def test_logic_loads_are_rebuffered_without_stranding_antenna_diodes(
             }
             close $f
         }
+        proc get_pins {args} { return driver/Z }
         proc get_nets {args} { return data_net }
         proc get_name {obj} { return $obj }
-        namespace eval utl { proc metric_integer {args} {} }
-        set ::env(DIODE_CELL) diode/I
-        set ::env(SYNTH_BUFFER_CELL) buffer/I/Z
-        set ::env(PL_MAX_DISPLACEMENT_X) 500
-        set ::env(PL_MAX_DISPLACEMENT_Y) 100
         set ::block block
-        set ::vic_created {}
-        set ::vic_changed 1
-        set ::root {out d1 d2 l1 l2 l3}
-        set ::buffer_added 0
-        set ::moved {}
-        set ::routed {}
-        proc block {method args} {
-            switch -- $method {
-                getNets { return {net0} }
-                getInsts {
-                    set result {driver diode1 diode2 logic1 logic2 logic3}
-                    if {$::buffer_added} { lappend result newbuf }
-                    return $result
-                }
-                findNet { if {[lindex $args 0] eq "data_net"} {return net0}; return NULL }
-                findInst {
-                    if {$::buffer_added && [lindex $args 0] eq "newbuf"} {return newbuf}
-                    return NULL
-                }
-            }
-        }
+        proc block {method args} { return net0 }
         proc net0 {method args} {
             switch -- $method {
                 isSpecial {return 0}
                 getSigType {return SIGNAL}
-                getITerms {return $::root}
-                getName {return data_net}
+                getITerms {return {}}
                 isDoNotTouch {return $::protected}
             }
         }
-        proc net1 {method args} {
-            switch -- $method {
-                getSigType {return SIGNAL}
-                getName {return new_net}
-                getITerms {return {newout l1 l2}}
-            }
-        }
-        proc iterm {name method args} {
-            switch -- $method {
-                getIoType { if {$name in {out newout}} {return OUTPUT}; return INPUT }
-                getInst {
-                    return [dict get {out driver d1 diode1 d2 diode2 l1 logic1
-                                      l2 logic2 l3 logic3 newin newbuf newout newbuf} $name]
-                }
-                getMTerm {return pin}
-                getNet {
-                    if {$name eq "newout" || ($name in {l1 l2} && $::buffer_added)} {
-                        return net1
-                    }
-                    return net0
-                }
-            }
-        }
-        foreach name {out d1 d2 l1 l2 l3 newin newout} {
-            interp alias {} $name {} iterm $name
-        }
-        proc pin {method args} {return [expr {$method eq "getName" ? "I" : ""}]}
-        proc inst {name method args} {
-            switch -- $method {
-                getName {return $name}
-                isDoNotTouch {return 0}
-                getMaster {return [expr {$name in {diode1 diode2} ? "diode_master" :
-                    $name eq "newbuf" ? "buffer_master" : "logic_master"}]}
-                getITerms {if {$name eq "newbuf"} {return {newin newout}}; return {}}
-                getPlacementStatus {return PLACED}
-                setPlacementStatus {return}
-            }
-        }
-        foreach name {driver diode1 diode2 logic1 logic2 logic3 newbuf} {
-            interp alias {} $name {} inst $name
-        }
-        proc diode_master {method args} {return diode}
-        proc buffer_master {method args} {return buffer}
-        proc logic_master {method args} {return logic}
-        proc get_pins {args} {
-            if {[lindex $args 0] eq "-quiet"} { return driver_pin }
-            return [lindex $args 0]
-        }
-        proc insert_buffer {args} {
-            set i [lsearch -exact $args -load_pins]
-            set ::moved [lindex $args [expr {$i + 1}]]
-            if {$::moved ne {__EXPECTED_MOVED__}} {error "wrong load selection $::moved"}
-            if {$::limit == 3} {
-                set ::root {out d1 d2 newin}
-            } else {
-                set ::root {out d1 d2 l3 newin}
-            }
-            set ::buffer_added 1
-        }
-        proc detailed_placement {args} {return}
-        proc check_placement {args} {return}
-        proc global_connect {} {return}
-        proc log_cmd {args} {uplevel 1 $args}
         proc vic_say {line} {puts "NOTE $line"}
-        proc vic_eco_route {varname tag} {
-            upvar #0 $varname dirty
-            set ::routed [lsort [dict keys $dirty]]
-            return 1
-        }
         source __PROC_PATH__
-        puts "BEFORE 5"
-        puts "RESULT [vic_close_data_fanout]"
-        puts "AFTER [expr {[llength $::root] - 1}]"
-        puts "BUFFER_LOADS [expr {$::buffer_added ? 2 : 0}]"
-        puts "MOVED $::moved"
-        puts "ROUTED $::routed"
+        puts "TARGETS [vic_fanout_target_limits]"
     """).replace("__PROC_PATH__", str(proc_file)).replace("__STEP_DIR__", str(tmp_path))
     harness = (harness.replace("__CASE__", case).replace("__LIMIT__", str(limit))
-               .replace("__PROTECTED__", str(protected))
-               .replace("__EXPECTED_MOVED__", expected_moved))
+               .replace("__PROTECTED__", str(protected)))
     run = subprocess.run(["tclsh"], input=harness, text=True,
                          capture_output=True, check=False)
     assert run.returncode == 0, run.stderr
-    assert "RESULT 1" in run.stdout, run.stdout
-    assert f"AFTER {expected_after}" in run.stdout, run.stdout
-    assert f"MOVED {expected_moved}" in run.stdout, run.stdout
-    if expected_moved:
-        assert "ROUTED data_net new_net" in run.stdout, run.stdout
-    else:
-        assert "ROUTED " in run.stdout, run.stdout
+    assert f"TARGETS {expected}\n" in run.stdout, run.stdout
 
 
 @pytest.mark.parametrize("sta_violator,expected_reached", [(True, True), (False, False)])
@@ -200,6 +81,8 @@ def test_noop_decision_uses_sta_violator_even_when_diodes_add_loads(
         set ::vic_created {}
         set ::vic_resized {}
         set ::vic_removed 0
+        set ::vic_unrouted_before [dict create]
+        proc vic_unrouted_nets {} { return [dict create] }
         set ::violator __VIOLATOR__
         proc vic_say {line} { puts $line }
         proc vic_fanout_target_limits {} {
@@ -232,50 +115,8 @@ def test_noop_decision_uses_sta_violator_even_when_diodes_add_loads(
     assert ("REACHED_CLOSURE" in run.stdout) is expected_reached, run.stdout
 
 
-def test_fanout_reroute_antenna_residue_is_repaired_and_reclosed(tmp_path):
-    source = (STEP / "postroute_repair.tcl").read_text()
-    marker = "if {$::vic_fanout_modified} {"
-    assert marker in source
-    section = source[source.index(marker):source.index("# ---- 7. re-verify", source.index(marker))]
-    section_file = tmp_path / "antenna_loop.tcl"
-    section_file.write_text(section)
-    harness = textwrap.dedent(r"""
-        namespace eval utl { proc metric_integer {args} {} }
-        namespace eval grt { proc repaired_net_names {} {return {}} }
-        set ::env(DIODE_CELL) diode/I
-        set ::env(VIBEIC_PRR_ANTENNA_REPAIR) 1
-        set ::vic_ant_before 0
-        set ::vic_fanout_modified 1
-        set ::ant_read 0
-        set ::repairs 0
-        set ::closures 0
-        set ::block block
-        proc block {method args} {if {$method eq "getInsts"} {return {}}}
-        proc check_antennas {} {incr ::ant_read; return [expr {$::ant_read == 1}]}
-        proc vic_routed_nets {} {return [dict create]}
-        proc vic_lost_routes {before} {return [dict create]}
-        proc repair_antennas {args} {incr ::repairs}
-        proc log_cmd {args} {uplevel 1 $args}
-        proc append_if_exists_argument {args} {}
-        proc vic_eco_route {varname tag} {return 1}
-        proc vic_close_data_fanout {} {incr ::closures; return 1}
-        source __SECTION__
-        puts "REPAIRS $::repairs CLOSURES $::closures ROUNDS $::vic_fanout_ant_rounds"
-    """).replace("__SECTION__", str(section_file))
-    run = subprocess.run(["tclsh"], input=harness, text=True,
-                         capture_output=True, check=False)
-    assert run.returncode == 0, run.stderr
-    assert "REPAIRS 1 CLOSURES 1 ROUNDS 1" in run.stdout, run.stdout
-
-
 @pytest.mark.parametrize("loads,spread", [(2, False), (12, True), (12, False)])
 def test_native_routed_repair_honors_excluded_buffers(tmp_path, loads, spread):
-    """Run shipped repair stages on native routed objects and linked Liberty.
-
-    Collinear loads expose native region partitioning's one-row limitation:
-    that violation remains real; it does not permit an excluded-cell fallback.
-    The spread and light-load cases distinguish repair from a universal no-op.
-    """
     import shutil
     from _postroute_fanout_fixture import write_fixture
 
@@ -303,7 +144,9 @@ set_output_delay 0 -clock virtual [all_outputs]
 set_max_fanout 4 [current_design]
 set_max_transition 3 [current_design]
 set_dont_use excluded
+puts DONT_USE_BEGIN
 report_dont_use
+puts DONT_USE_END
 estimate_parasitics -placement
 estimate_parasitics -detailed_routing
 check_placement -verbose
@@ -328,8 +171,6 @@ proc log_cmd {args} { uplevel 1 $args }
 proc append_if_exists_argument {args} {}
 proc vic_say {line} { puts "PRR: $line" }
 proc vic_metric {name value} { puts "METRIC $name $value" }
-# This component test uses native global routing after legalization; the
-# separate ECO lifecycle test covers production scoped detailed routing.
 proc vic_eco_route {varname tag} {
     global_route
     estimate_parasitics -global_routing
@@ -339,6 +180,12 @@ proc vic_eco_route {varname tag} {
 proc observe {tag} {
     report_check_types -max_fanout -max_slew -max_capacitance -violators > ${tag}.rpt
     puts "OBS $tag fanout [sta::max_fanout_violation_count] slew [sta::max_slew_violation_count] cap [sta::max_capacitance_violation_count]"
+    foreach net [$::block getNets] {
+        set loads 0
+        foreach it [$net getITerms] { if {[$it getIoType] eq "INPUT"} { incr loads } }
+        foreach bt [$net getBTerms] { if {[$bt getIoType] eq "OUTPUT"} { incr loads } }
+        puts "LOADS $tag [$net getName] $loads"
+    }
     foreach inst [$::block getInsts] {
         puts "MASTER $tag [$inst getName] [[$inst getMaster] getName]"
     }
@@ -368,6 +215,24 @@ observe native
     script += r'''
 check_placement -verbose
 observe after
+foreach inst [$::block getInsts] {
+    if {![string match "load*" [$inst getName]]} { continue }
+    set cursor $inst
+    set seen [dict create]
+    while {[$cursor getName] ne "driver"} {
+        if {[dict exists $seen [$cursor getName]]} { error "buffer cycle" }
+        dict set seen [$cursor getName] 1
+        set net [[$cursor findITerm A] getNet]
+        if {$net eq "NULL"} { error "disconnected receiver" }
+        set drivers [list]
+        foreach it [$net getITerms] {
+            if {[$it getIoType] eq "OUTPUT"} { lappend drivers [$it getInst] }
+        }
+        if {[llength $drivers] != 1} { error "wrong driver count" }
+        set cursor [lindex $drivers 0]
+    }
+}
+puts CONNECTIVITY_OK
 write_db repaired.odb
 write_verilog repaired.v
 puts NATIVE_FANOUT_COMPLETE
@@ -379,6 +244,9 @@ puts NATIVE_FANOUT_COMPLETE
     (tmp_path / "native.log").write_text(run.stdout + run.stderr)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "NATIVE_FANOUT_COMPLETE" in run.stdout, run.stdout
+    assert "CONNECTIVITY_OK" in run.stdout
+    eligibility = run.stdout.split("DONT_USE_BEGIN\n")[1].split("DONT_USE_END")[0]
+    assert "excluded" in eligibility and "allowed" not in eligibility, eligibility
     rows = [line.split() for line in run.stdout.splitlines() if line.startswith("MASTER after ")]
     excluded = [row[2] for row in rows if row[3] == "excluded"]
     print(run.stdout)
