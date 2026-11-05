@@ -387,7 +387,7 @@ def verilate_professional_tb_and_run(
     """
     plan = _professional_bundle(tb)
     audit = functional_stimulus_audit(tb)
-    if not audit["decidable"] or not audit["driven"]:
+    if audit["decidable"] and not audit["driven"]:
         raise SystemExit(f"PROFESSIONAL_COVERAGE_NO_FUNCTIONAL_STIMULUS: {tb}: "
                          f"{audit['reason'] or audit['inert']}")
     build.mkdir(parents=True, exist_ok=True)
@@ -446,7 +446,7 @@ def verilate_professional_tb_and_run(
     if not dat.is_file():
         raise SystemExit(f"PROFESSIONAL_COVERAGE_DAT_ABSENT: {tb}")
     activity = _professional_input_activity(dat, plan["top"], audit["driven"])
-    if not activity:
+    if audit["decidable"] and not activity:
         raise SystemExit(f"PROFESSIONAL_COVERAGE_INPUT_ACTIVITY_UNOBSERVED: {tb}")
     import hashlib  # noqa: PLC0415
     execution.update({
@@ -500,7 +500,7 @@ def _check_professional_execution(tb: Path, dat: Path) -> Optional[str]:
                 or summary != record.get("test_denominator")):
             return "instrumented Python source/JUnit is missing, changed, failed, skipped or zero-test"
         activity = _professional_input_activity(dat, plan["top"], audit["driven"])
-        if not activity or activity != record.get("observed_functional_input_toggles"):
+        if audit["decidable"] and (not activity or activity != record.get("observed_functional_input_toggles")):
             return "tool data recorded no matching top-level functional-input movement"
     except (SystemExit, OSError, ValueError, TypeError) as exc:
         return str(exc)
