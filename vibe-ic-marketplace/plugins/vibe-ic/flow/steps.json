@@ -235,12 +235,10 @@
     {
       "name": "submission_and_implementation_interface",
       "title": "Submission and implementation interface",
-      "when": "False",
+      "when": "physical",
       "tool": {
         "kind": "adapter",
-        "program": "phase1_one_shot_runner.py",
-        "function": "_run_step_0_5ic",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "physical_declarations"
       },
       "checks": [],
       "legacy_id": {
@@ -249,41 +247,39 @@
           "0.5ic"
         ]
       },
-      "applicability_reason": "No native engineering tool or checks remain. _run_step_0_5ic performs old submission/template admission and is not an available native OwnerSession tool. Documents and unchanged Router own the implementation interface."
+      "applicability_reason": "Physical delivery evaluates supplied operator templates and declarations; document-only input needs no operator-absence answer."
     },
     {
       "name": "pdk_library_deck_and_tool_use_qualification",
       "title": "PDK library deck and tool-use qualification",
-      "when": "False",
+      "when": "technology_specific",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_technology_qualification.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "technology"
       },
       "checks": [],
       "legacy_id": {
         "registry": "D03",
         "native": []
       },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "applicability_reason": "Resolve the declared technology with LibreLane and report its installed PDK revision before RTL."
     },
     {
       "name": "functional_safety_plan_and_tool_confidence",
       "title": "Functional safety plan and tool confidence",
-      "when": "False",
+      "when": "requires_functional_safety",
       "tool": {
         "kind": "adapter",
         "program": null,
         "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "gap": "Functional safety plan and tool-confidence program is not available; selected row is NOT_MEASURED."
       },
       "checks": [],
       "legacy_id": {
         "registry": "D04",
         "native": []
       },
-      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+      "applicability_reason": "Functional safety is declared by the design; no safety-plan tool is implemented, so the selected row is NOT_MEASURED."
     },
     {
       "name": "power_intent_and_domain_rules",

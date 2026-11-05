@@ -135,8 +135,9 @@ def design_features(project: Path, route: dict, table: dict) -> dict:
                     hard_ip=target == "ip_hardmacro", rtl_only=target == "rtl")
     if "requires_cts" not in explicit:
         features["requires_cts"] = bool(
-        read_json(docs / "L8_TIMING_WAVEFORM.json").get("clock_domains")
-        or read_json(docs / "L8_RTL_CONSTANTS.json").get("clock_domains"))
+            (features["ic"] or features["hard_ip"] or features.get("assembly_only"))
+            and (read_json(docs / "L8_TIMING_WAVEFORM.json").get("clock_domains")
+                 or read_json(docs / "L8_RTL_CONSTANTS.json").get("clock_domains")))
     pending = dict(table.get("predicates", {}))
     for _ in range(len(pending) + 1):
         for key, expression in pending.items():
@@ -734,6 +735,9 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         nonlocal summary
         rows = [read_json(step_root / name / "result.json") for name in sorted(results, key=positions.get)]
         summary = {"route": route, "selected": len(selected), "selected_names": [row["name"] for row in selected],
+                   "not_selected": [{"name": row["name"], "condition": row["when"],
+                       "features": {node.id: features[node.id] for node in ast.walk(ast.parse(row["when"], mode="eval")) if isinstance(node, ast.Name)},
+                       "reason": row.get("applicability_reason")} for row in table["steps"] if row["name"] not in selected_names],
                    "run": len(rows), "steps": rows,
                    **{key: sum(item["status"] == value for item in rows)
                       for key, value in (("pass", "PASS"), ("fail", "FAIL"), ("not_measured", "NOT_MEASURED"))},
