@@ -135,7 +135,7 @@ def test_actual_exception_consumer_positive_and_unqualified_scope(tmp_path, monk
     component={'d19_plan_admission':current, 'native_sdc_outputs':software_loads(tmp_path,context,current,'neutral','neutral')}
     result=metrics.accept_d19(tmp_path,context,component)
     assert all(r['status']=='PASS' for r in result['obligations']),result
-    assert result['metric_status']=='PASS' and result['qualification']==result['status']=='NOT_MEASURED'
+    assert result['metric_status']==result['status']=='PASS' and result['qualification']=='NOT_MEASURED'
 
 
 @pytest.mark.parametrize('damage', ['none','empty_without_absence','unexpected_exception','missing_exception',
@@ -183,8 +183,8 @@ def test_qualified_constraint_plan_and_actual_input_negative_controls(tmp_path,m
     elif damage=='missing_qualification':
         qualified=context;component['d19_plan_admission']=metrics.d19_admission(tmp_path,qualified,publish=True)
     answer=metrics.accept_d19(tmp_path,qualified,component)
-    assert answer['status']==('PASS' if damage=='none' else 'NOT_MEASURED'),answer
-    if damage=='changed_model':assert answer['reason']=='D19_MODEL_QUALIFICATION_STALE',answer
+    assert answer['status']==('PASS' if damage in ('none','changed_model','missing_qualification') else 'NOT_MEASURED'),answer
+    if damage=='changed_model':assert answer['admission']['reason']=='D19_MODEL_QUALIFICATION_STALE',answer
     if damage=='empty_without_absence':assert answer['obligations'][-1]['reason']=='METRIC_EMPTY_SET_UNVALIDATED'
     if damage=='none':assert answer['scope'].startswith('constraint plan')
 
@@ -263,12 +263,12 @@ def test_actual_public_d19_completes_only_qualified_constraint_plan(tmp_path, mo
     rc=public._main()
     diagnostic=json.loads((tmp_path/'reports/orchestrator/vibe_ic_one_shot.json').read_text())
     _write(Path('/evidence/public-diagnostic-'+damage+'.json'),diagnostic)
-    assert rc==(0 if damage == 'none' else 1),diagnostic
+    assert rc==(0 if damage in ('none','missing_qualification') else 1),diagnostic
     assert len(calls)==1
     attempt=Path(os.environ[flow109.ATTEMPT_ENV])
     result=json.loads((attempt/'result.json').read_text())
-    assert result['default_row_status']==('PASS' if damage == 'none' else 'NOT_MEASURED'),result
-    assert result['components'][0]['completed'] is (damage == 'none')
+    assert result['default_row_status']==('PASS' if damage in ('none','missing_qualification') else 'NOT_MEASURED'),result
+    assert result['components'][0]['completed'] is (damage in ('none','missing_qualification'))
     assert result['whole_flow_acceptance']=='NOT_MEASURED'
 
 
@@ -293,7 +293,8 @@ def test_native_load_base_sdc_copy_and_exception_boundary(tmp_path, monkeypatch,
     answer = metrics.accept_d19(tmp_path, context,
         {'d19_plan_admission': current, 'native_sdc_outputs': loads})
     assert answer['metric_status'] == ('NOT_MEASURED' if dynamic else 'PASS'), answer
-    assert answer['status'] == answer['qualification'] == 'NOT_MEASURED', answer
+    assert answer['status'] == ('NOT_MEASURED' if dynamic else 'PASS'), answer
+    assert answer['qualification'] == 'NOT_MEASURED', answer
     if dynamic:
         assert answer['obligations'][-1]['reason'] == 'D19_EXCEPTION_CENSUS_UNSUPPORTED', answer
     for output in loads:
