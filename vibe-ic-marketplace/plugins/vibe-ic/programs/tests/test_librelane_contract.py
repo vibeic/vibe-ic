@@ -672,6 +672,75 @@ def test_emit_declared_values_and_sources(tmp_path):
     assert all(k in provenance for k in result)
 
 
+@pytest.mark.parametrize('rows,expected,reverse_value', [
+    ([('SYNTH_MAX_FANOUT', '8', None, 'L9_constraints.md')], 8, None),
+    ([('MAX_FANOUT_CONSTRAINT', '12', None, 'L1_limits.md'),
+      ('SYNTH_MAX_FANOUT', '8', 'processA*', 'L9_constraints.md')], 8, 9),
+    ([('MAX_FANOUT_CONSTRAINT', '12', None, 'L1_limits.md'),
+      ('SYNTH_MAX_FANOUT', '8', 'processB*', 'L9_constraints.md')], 12, None),
+    ([('SYNTH_MAX_FANOUT', '8', None, 'L1_limits.md'),
+      ('MAX_FANOUT_CONSTRAINT', '12', 'processA*', 'L9_constraints.md')], 12, None),
+    ([('SYNTH_MAX_FANOUT', '8', None, 'L1_limits.md'),
+      ('MAX_FANOUT_CONSTRAINT', '12', None, 'L9_constraints.md')], 12, None),
+    ([('SYNTH_MAX_FANOUT', '8', None, 'L9_constraints.md'),
+      ('MAX_FANOUT_CONSTRAINT', '8', None, 'L9_constraints.md')], 8, None),
+    ([('MAX_FANOUT_CONSTRAINT', '8', None, 'L9_constraints.md')], 8, None),
+    ([('SYNTH_MAX_FANOUT', '', None, 'L9_constraints.md')], None, None),
+    ([('SYNTH_MAX_FANOUT', '工具預設', None, 'L9_constraints.md')], None, None),
+    ([('SYNTH_MAX_FANOUT', 'not_determined', None, 'L9_constraints.md')], None, None),
+    ([('SYNTH_MAX_FANOUT', 'not-a-number', None, 'L9_constraints.md')], None, None),
+    ([], None, None),
+])
+def test_fanout_alias_uses_existing_native_setting_priority_and_defaults(tmp_path, rows, expected, reverse_value):
+    project = design(tmp_path)
+    path = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    doc = json.loads(path.read_text())
+    doc['fields']['constraint_declarations'] = [
+        {'token': token, 'value': value, 'scope': scope, 'source': source, 'line': 45}
+        for token, value, scope, source in rows]
+    put(path, doc)
+    emitted = contract.emit_config(project, 'processA', project / 'native.json')
+    put(project / 'observed-fanout.json', {'declared': rows,
+        'observed': emitted.get('MAX_FANOUT_CONSTRAINT'), 'expected': expected})
+    assert emitted.get('MAX_FANOUT_CONSTRAINT') == expected, emitted
+    assert 'SYNTH_MAX_FANOUT' not in emitted
+    provenance = json.loads((project / 'native.provenance.json').read_text())
+    if expected is not None:
+        assert emitted['CTS_SINK_CLUSTERING_SIZE'] == expected
+        assert provenance['MAX_FANOUT_CONSTRAINT'].startswith('L19_CONSTRAINTS_PDK.constraint_declarations:')
+        assert provenance['MAX_FANOUT_CONSTRAINT'].endswith(':45')
+    else:
+        assert 'MAX_FANOUT_CONSTRAINT' not in provenance
+    if reverse_value is not None:
+        doc['fields']['constraint_declarations'][-1]['value'] = str(reverse_value)
+        put(path, doc)
+        reverse = contract.emit_config(project, 'processA', project / 'reverse.json')
+        assert reverse['MAX_FANOUT_CONSTRAINT'] == reverse_value != expected
+        doc['fields']['constraint_declarations'][-1]['value'] = rows[-1][1]
+        put(path, doc)
+        restored = contract.emit_config(project, 'processA', project / 'restored.json')
+        assert restored['MAX_FANOUT_CONSTRAINT'] == expected
+        put(project / 'source-only-reverse.json', {'healthy': emitted['MAX_FANOUT_CONSTRAINT'],
+            'reverse': reverse['MAX_FANOUT_CONSTRAINT'], 'restored': restored['MAX_FANOUT_CONSTRAINT']})
+
+
+@pytest.mark.parametrize('tokens', [
+    ('SYNTH_MAX_FANOUT', 'MAX_FANOUT_CONSTRAINT'),
+    ('SYNTH_MAX_FANOUT', 'SYNTH_MAX_FANOUT'),
+    ('MAX_FANOUT_CONSTRAINT', 'MAX_FANOUT_CONSTRAINT'),
+])
+def test_fanout_alias_preserves_same_priority_conflict_refusal(tmp_path, tokens):
+    project = design(tmp_path)
+    path = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    doc = json.loads(path.read_text())
+    doc['fields']['constraint_declarations'] = [
+        {'token': token, 'value': value, 'source': 'L9_constraints.md', 'line': line}
+        for token, value, line in zip(tokens, ('8', '12'), (45, 46))]
+    put(path, doc)
+    with pytest.raises(contract.Refusal, match='LL_CONSTRAINT_CONFLICT: MAX_FANOUT_CONSTRAINT'):
+        contract.emit_config(project, 'processA', project / 'native.json')
+
+
 def test_invalid_declared_pad_spacing_is_refused(tmp_path):
     p = design(tmp_path)
     pads = p / 'phase3/stage3/pnr/pad_assignment.json'

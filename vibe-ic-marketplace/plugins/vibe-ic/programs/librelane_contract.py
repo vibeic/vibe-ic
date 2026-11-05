@@ -1492,6 +1492,7 @@ def _declared_flow_settings(l19: dict, pdk: str) -> tuple[dict, dict]:
     chosen: dict[str, list[tuple[int, Any, str]]] = {}
     for row in declarations:
         key = row.get('token')
+        key = {'SYNTH_MAX_FANOUT': 'MAX_FANOUT_CONSTRAINT'}.get(key, key)
         if key not in supported:
             continue
         scope = row.get('scope')
