@@ -149,6 +149,19 @@ def test_declared_grid_offsets_override_derived_ring_offsets(project):
     assert config["PDN_HOFFSET"] == 11
 
 
+def test_implementation_pdn_widths_reach_native_configuration(project):
+    output = project / "plugin_output"
+    output.mkdir()
+    (output / "declaration.json").write_text(json.dumps({
+        "PDN_VWIDTH": 3.2, "PDN_HWIDTH": 3.2,
+    }))
+    config = build_config(project, route="ic")
+    assert config["PDN_VWIDTH"] == 3.2
+    assert config["PDN_HWIDTH"] == 3.2
+    assert "PDN_VPITCH" not in config
+    assert config["CLOCK_PERIOD"] == 17.5
+
+
 def test_original_prompt_recovers_lost_pdk_and_invalid_top(project):
     (project / "input").mkdir()
     (project / "input/phase1_prompt.md").write_text(
