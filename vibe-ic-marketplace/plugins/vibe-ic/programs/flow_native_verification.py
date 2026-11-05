@@ -78,10 +78,15 @@ def reset_script(script, boundary):
 
 def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
+    from sdf_gate_sim import netlist_used_cells, verilog_model_closure
+    from lec_post_layout_check import _LIB_CELL_RE
 
     project, directory = Path(project), Path(directory)
     top, netlist = config.get("DESIGN_NAME"), state.get("nl") if state is not None else None
     rtl = [Path(p) if Path(p).is_absolute() else project / p for p in config.get("VERILOG_FILES") or []]
+    if not top or not netlist or not Path(netlist).is_file() or not rtl or any(not path.is_file() for path in rtl):
+        return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
+    used = set().union(*(netlist_used_cells(path.read_text()) for path in [*rtl, Path(netlist)]))
     corner = config.get("DEFAULT_CORNER", "")
     liberty, external_liberty = [], []
     for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
@@ -90,13 +95,14 @@ def eqy(project, directory, tool, commands, *, state, config):
                   if isinstance(libraries, dict) else [libraries])
         for paths in groups:
             values = [str(path) for path in (paths if isinstance(paths, (list, tuple)) else [paths])]
+            if key in {"PAD_LIBS", "EXTRA_LIBS"}:
+                values = [path for path in values if not Path(path).is_file()
+                          or used.intersection(_LIB_CELL_RE.findall(Path(path).read_text()))]
             liberty.extend(values)
             if key in {"PAD_LIBS", "EXTRA_LIBS"}:
                 external_liberty.extend(values)
     liberty = list(dict.fromkeys(liberty))
-    if (not top or not netlist or not Path(netlist).is_file() or not rtl
-            or any(not path.is_file() for path in rtl) or not liberty
-            or any(not Path(path).is_file() for path in liberty)):
+    if not liberty or any(not Path(path).is_file() for path in liberty):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
     declared = [Path(path) if Path(path).is_absolute() else project / path
                 for key in ("PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS")
@@ -108,9 +114,16 @@ def eqy(project, directory, tool, commands, *, state, config):
         declared.extend(sorted((Path(library).parent.parent / "verilog").glob("*.v")))
     models = []
     if declared:
-        from sdf_gate_sim import netlist_used_cells, verilog_model_closure
-        used = netlist_used_cells("\n".join(path.read_text() for path in [*rtl, Path(netlist)]))
-        models = list(map(Path, verilog_model_closure(declared, used)["files"]))
+        from pdk_udp_synth_shim_gen import _strip_specials
+        for index, path in enumerate(map(Path, verilog_model_closure(declared, used)["files"])):
+            source = path.read_text()
+            prepared = _strip_specials(source)
+            if prepared != source:
+                output = directory / f"model_{index + 1}" / path.name
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(prepared)
+                path = output
+            models.append(path)
     script = directory / "equivalence.eqy"
     script.write_text(reset_script(eqy_script(top, rtl, Path(netlist), liberty[0],
         synthesis=config, views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models),

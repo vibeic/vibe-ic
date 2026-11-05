@@ -105,7 +105,7 @@ def test_actual_eqy_detects_unequal_logic(tmp_path, different):
     assert not (tmp_path / "result.json").exists()
 
 
-@pytest.mark.parametrize("model_key", ["PAD_LIBS", "EXTRA_LIBS", "PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS", "LIBERTY_SIBLING"])
+@pytest.mark.parametrize("model_key", ["PAD_LIBS", "EXTRA_LIBS", "PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS", "LIBERTY_SIBLING", "SIMULATION_DIRECTIVES"])
 @pytest.mark.parametrize("different", [False, True])
 def test_eqy_preserves_chip_ports_and_declared_external_logic(tmp_path, model_key, different):
     if not shutil.which("eqy"):
@@ -141,7 +141,9 @@ def test_eqy_preserves_chip_ports_and_declared_external_logic(tmp_path, model_ke
                            "(* blackbox *) module PADGND(output GND); endmodule\n")
         model.write_text("module PADIN(input PAD,output Y); assign Y=PAD; endmodule\n"
                          "module PADGND(output GND); assign GND=0; endmodule\n")
-        config[model_key] = [str(declared)]
+        if model_key == "SIMULATION_DIRECTIVES":
+            model.write_text("`suppress_faults\n`enable_portfaults\n`delay_mode_path\n" + model.read_text())
+        config["PAD_VERILOG_MODELS" if model_key == "SIMULATION_DIRECTIVES" else model_key] = [str(declared)]
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
     assert result["metrics"].get("unproved_equivalence") == int(different), result
     assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
@@ -162,6 +164,26 @@ def test_eqy_missing_external_model_stays_unmeasured(tmp_path):
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
     assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
     assert not result["metrics"]
+
+
+def test_eqy_core_uses_real_pdk_defaults_without_unused_io_models(tmp_path):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    pytest.importorskip("librelane")
+    from librelane.flows import Flow
+    gold = tmp_path / "gold.v"
+    gold.write_text("module unit(input a, output y); assign y=a; endmodule\n")
+    flow = Flow.factory.get("Classic")({"DESIGN_NAME": "unit", "PDK": "sky130A",
+        "VERILOG_FILES": [str(gold)]}, design_dir=str(tmp_path))
+    config = flow.config.to_raw_dict()
+    assert config["PAD_LIBS"], "The real optional PDK IO defaults must be present in this control"
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gold)}, config=config)
+    assert result["native_steps"][0]["status"] == "PASS", result
+    assert result["metrics"]["unproved_equivalence"] == 0
+    script = (tmp_path / "equivalence.eqy").read_text()
+    for paths in config["PAD_LIBS"].values():
+        for path in paths:
+            assert str(path) not in script
 
 
 def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
