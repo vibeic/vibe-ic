@@ -58,3 +58,31 @@ def simulation(project, directory, tool):
         "Power-aware RTL simulation covers the assertions in the supplied benches; no implemented supply or timing signoff.")
     result["native_steps"] = steps
     return result
+
+
+def implemented(project, directory, *, state, config):
+    from flow_chip_inputs import _tcl_word
+    from flow_native_adapters import Commands
+    from l_doc_consumer_contract import load_l_doc, l_doc_fields
+
+    commands = Commands(directory)
+    database = (state or {}).get("odb")
+    _, document = load_l_doc(project, "L21")
+    top = (config or {}).get("DESIGN_NAME")
+    upf = project / (l_doc_fields(document).get("upf_path") or f"phase2/stage2/constraints/{top}.upf")
+    if not database or not Path(database).is_file() or not upf.is_file():
+        return commands.result(detail="Implemented power intent needs the current native ODB and UPF.")
+    script, report = directory / "power_intent.tcl", directory / "native.upf"
+    script.write_text(f"read_db {_tcl_word(database)}\nread_upf -file {_tcl_word(upf)}\n"
+                      f"write_upf {_tcl_word(report)}\n")
+    process = commands.run(["openroad", "-no_init", "-exit", script])
+    output = process.stdout + process.stderr if process else ""
+    unsupported = next((command for command in ("upf_version", "set_design_top", "create_supply_net")
+                        if 'invalid command name "' + command + '"' in output), None)
+    status = ("NOT_MEASURED" if process is None or unsupported else "FAIL" if process.returncode else "PASS")
+    result = commands.result(reports=[script, upf, *([report] if report.is_file() else [])],
+        detail=(f"OpenROAD read_upf does not implement {unsupported}. " if unsupported else "")
+        + "Native UPF reading does not measure always-on supply errors, power-sequence behavior or multivoltage timing.")
+    result["native_steps"] = [{"name": "OpenROAD.read_upf", "ran": process is not None,
+                               "exit_code": process.returncode if process else None, "status": status}]
+    return result

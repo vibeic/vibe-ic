@@ -4409,6 +4409,10 @@
     "power_aware_state_transitions": {
       "kind": "adapter",
       "adapter": "power_simulation"
+    },
+    "implemented_power_intent_consistency": {
+      "kind": "adapter",
+      "adapter": "implemented_power_intent"
     }
   },
   "report_check_readers": {
