@@ -65,7 +65,8 @@ def test_native_lint_synthesis_floorplan(tmp_path):
         "FLOW_ENGINE_PROGRAMS", str(Path(__file__).resolve().parents[1]))))
 
 
-def test_missing_metadata_preserves_a_valid_native_database(tmp_path):
+@pytest.mark.parametrize("lint_errors", [None, 0, 2])
+def test_missing_metadata_preserves_a_valid_native_database(tmp_path, lint_errors):
     if importlib.util.find_spec("librelane") is None:
         pytest.skip("LibreLane runtime is required")
     import flow_engine as engine
@@ -85,12 +86,24 @@ def test_missing_metadata_preserves_a_valid_native_database(tmp_path):
     chain.initialize()
     odb = tmp_path / "valid-input.odb"
     odb.touch()
-    chain.state = State({DesignFormat.ODB: NativePath(str(odb))}, metrics={"upstream": 1})
+    metrics = {"upstream": 1}
+    if lint_errors is not None:
+        metrics["design__lint_error__count"] = lint_errors
+    chain.state = State({DesignFormat.ODB: NativePath(str(odb))}, metrics=metrics)
     output = tmp_path / "step"
     output.mkdir()
-    result = chain.execute(output, {"steps": ["Odb.SetPowerConnections"]})
-    assert result.native_steps[0]["missing_inputs"] == ["json_h"]
-    assert not result.ran
+    result = chain.execute(output, {"steps": ["Odb.SetPowerConnections"] +
+        (["Checker.LintErrors"] if lint_errors is not None else [])})
+    assert "missing required input 'json_h'" in result.native_steps[0]["detail"]
+    assert result.native_steps[0]["status"] == "NOT_MEASURED"
+    assert result.native_steps[0]["exit_code"] is None
+    assert (output / "odb_setpowerconnections/state_in.json").is_file()
+    if lint_errors is None:
+        assert not result.ran
+    else:
+        assert result.native_steps[1]["ran"]
+        assert result.native_steps[1]["status"] == ("FAIL" if lint_errors else "PASS")
+        assert result.metrics["design__lint_error__count"] == lint_errors
     assert chain.state.get_by_df(DesignFormat.ODB) == str(odb)
     assert chain.state.metrics["upstream"] == 1
 

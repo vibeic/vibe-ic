@@ -371,7 +371,6 @@ class NativeChain:
         from librelane.steps import Step, StepError, StepException
         for module in tool.get("imports", []):
             importlib.import_module(module)
-        producer_unavailable = False
         for name in tool.get("steps", []):
             step_class = Step.factory.get(name)
             if step_class is None:
@@ -394,25 +393,9 @@ class NativeChain:
 
             step = ObservedStep(self.owner.config, self.state)
             metric_name = getattr(step, "metric_name", None)
-            if (metric_name and producer_unavailable and not any(
-                    key == metric_name or key.startswith(metric_name + "__corner:") for key in result.metrics)):
-                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
-                                            "status": "NOT_MEASURED", "missing_inputs": [metric_name]})
-                continue
             if metric_name:
                 result.metrics.update({key: value for key, value in self.state.metrics.items()
                                        if key == metric_name or key.startswith(metric_name + "__corner:")})
-            missing = [item.id for item in step.inputs
-                       if not item.optional and self.state.get_by_df(item) is None]
-            if missing:
-                producer_unavailable = True
-                result.detail += f" {name} missing input: {missing}."
-                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
-                                            "missing_inputs": missing})
-                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs
-                                                                    if item not in step.inputs},
-                                              metrics=self.state.metrics)
-                continue
             destination = directory / name.lower().replace(".", "_")
             started = time.perf_counter()
             code, ran, detail = 0, True, ""
@@ -425,16 +408,15 @@ class NativeChain:
                     self.state = step.start(toolbox=self.toolbox, step_dir=str(destination))
                 finally:
                     os.chdir(working_directory)
+            except (StepException, FileNotFoundError) as exc:
+                code, ran, detail = None, False, str(exc)
+                status = "NOT_MEASURED"
             except StepError as exc:
                 underlying = getattr(exc, "underlying_error", None)
                 code = getattr(underlying, "returncode", 1) or 1
                 detail = str(exc)
                 status = "NOT_MEASURED" if "NOT_MEASURED" in detail else "FAIL"
-            except (StepException, FileNotFoundError) as exc:
-                code, ran, detail = None, False, str(exc)
-                status = "NOT_MEASURED"
             if code or not ran:
-                producer_unavailable = True
                 self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs
                                                                     if item not in step.inputs},
                                               metrics=self.state.metrics)
