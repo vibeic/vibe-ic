@@ -3256,6 +3256,14 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
             if re.search(r"[()#@]", expression):
                 return False, False
             literal = _parse_hdl_int(expression)
+            sized = _SIZED_LITERAL_RE.fullmatch(expression.strip())
+            bits = int(sized[1]) if sized else None
+            if literal is not None and bits:
+                literal %= 1 << bits
+                literal -= (1 << bits) if sized[2] and literal >> (bits - 1) else 0
+            width = min(_rtl_declared_widths(outside).get(signal.lower(), 0), *(p.width for p in ports
+                        if p.direction == "output" or roles.get(p.name.lower()) == signal.lower()))
+            literal = literal % (1 << width) if literal is not None and width > 0 and bits != 0 else None
             if driven.get(signal.lower(), (None, None))[1] != literal:
                 driven[signal.lower()] = (time, literal)
             if signal.lower() == clock:
@@ -3278,29 +3286,23 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
                 value = _parse_hdl_int(check.group(2))
                 if count > 0 and time > edge_time and len(observed) == 1 and value is not None:
                     checked.setdefault(observed[0], {})[count] = value
-                    samples.setdefault(observed[0], []).append(
-                        (count, time, edge_time, value, dict(driven)))
+                    samples.setdefault(observed[0], []).append((count, time, edge_time, value, dict(driven)))
         elif system:
             if system.group(1).lower() == "finish":
                 if reset_checks is not None:
-                    rtl_code = _HDL.strip_hdl_comments_and_strings(rtl_text)
-                    module = re.search(rf"\bmodule\s+{re.escape(top)}\b(.*?)\bendmodule", rtl_code, re.S)
-                    names = [roles.get(p.name.lower()) for p in ports]
-                    inputs = {roles[p.name.lower()] for p in ports
-                              if p.direction == "input" and p.name.lower() in roles} - {clock}
-                    unique = None not in names and len(set(names)) == len(names)
-                    safe = unique and not any(_tb_has_other_clock_driver(
-                        rtl_text, tb_code, scope, net, context=drivers) for net in inputs)
-                    safe = (safe and module and len(outputs) == 1
-                            and len(re.findall(r"\balways(?:_ff)?\b", module[1])) == 1
+                    module = re.search(rf"\bmodule\s+{re.escape(top)}\b(.*?)\bendmodule", _HDL.strip_hdl_comments_and_strings(rtl_text), re.S)
+                    inputs = {roles.get(p.name.lower()) for p in ports if p.direction == "input"} - {clock, None}
+                    safe = len(ports) == len({roles.get(p.name.lower()) for p in ports} - {None}) and not any(
+                        _tb_has_other_clock_driver(rtl_text, tb_code, scope, net, context=drivers) for net in inputs)
+                    safe = (safe and module and len(outputs) == len(re.findall(r"\balways(?:_ff)?\b", module[1])) == 1
                             and not re.search(r"\b(?:generate|task|function)\b|\bif\b(?=[\s\S]*\balways)", module[1]))
                     pattern = (rf"\balways(?:_ff)?\s*@\(\s*(?:posedge|negedge)\s+{re.escape(formal[0])}\s*\)"
                                rf"\s*(?:begin\s*)?if\s*\(([^)]+)\)\s*(?:begin\s*)?(\w+)\s*<=\s*({_HDL_INT})\s*;"
                                r"\s*(?:end\s*)?else\s*(?:begin\s*)?\2\s*<=\s*(\w+)\s*;")
                     for match in re.finditer(pattern, module[1] if module and safe else "", re.I):
                         control, polarity = _SRC._classify_polarity(match[1])
-                        local, output = roles.get((control or "").lower()), roles.get(match[2].lower())
-                        data = roles.get(match[4].lower())
+                        local, output, data = (roles.get(name.lower())
+                                               for name in (control or "", match[2], match[4]))
                         if (local not in inputs or output not in outputs or data not in inputs - {local}
                                 or not any(p.name == control and p.width == 1 for p in ports)
                                 or len(_assigned_expressions(module[1], match[2])) != 2
@@ -3308,9 +3310,8 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
                             continue
                         reset_checks.add("supported")
                         active_value = int(polarity == "active-high")
-                        observations = samples.get(output, [])
                         a = b = c = None
-                        for d in observations:
+                        for d in samples.get(output, []):
                             ctrl, datum = d[4].get(local, (None, None)), d[4].get(data, (None, None))
                             if ctrl[1] == 1-active_value and d[3] != 0:
                                 if c and d[0] > c[0] and c[1] <= ctrl[0] < d[2]:
@@ -3528,8 +3529,7 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
                 and not _rtl_reset_ports(rtl_text, tb_text) and "supported" in reset_checks):
             _, polarity = _detect_reset_mode_polarity(it.evidence)
             it.covered = polarity in reset_checks if polarity else bool(reset_checks - {"supported"})
-            it.coverage_note = ("bound synchronous clear, between-edge retention and recovery checks"
-                                if it.covered else "no bound synchronous clear/retention/recovery witness")
+            it.coverage_note = f"{'' if it.covered else 'no '}bound synchronous clear/retention/recovery witness"
             continue
         if it.kind == "initial_state":
             it.covered = initial_observed
