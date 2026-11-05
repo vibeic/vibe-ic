@@ -4033,8 +4033,8 @@ steps:
     programs:
       - lec_equivalence_check
     required_outputs:
-      - "reports/lec.rpt"
-      - "reports/lec.json"
+      - "reports/lec.rpt OR reports/lec_arms.json"
+      - "reports/lec.json OR reports/lec_eqy.json"
     gate:
       program_exit_zero: "lec_equivalence_check . --json reports/lec_equivalence_check.json"
     blocks_on: [12]
