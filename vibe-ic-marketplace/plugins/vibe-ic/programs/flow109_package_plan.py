@@ -2,7 +2,7 @@
 """D06 Default adapter for the existing pad/package-interface producers.
 
 This adapter runs the source-owned ``pad_assignment_gen`` front door and then
-checks the current ``io_pad_chip_top_gen`` record.  It never substitutes the
+produces a missing ``io_pad_chip_top_gen`` record before checking it. It never substitutes the
 post-assembly packaging intake check for pre-tapeout planning.  Missing owner
 load, escape, or test-access facts remain NOT_MEASURED. BLOCKING: only the
 source-bound bare-die functional interface can complete this row; physical
@@ -718,6 +718,21 @@ def execute(project: Path, context: Mapping) -> dict:
                              str(producer.get("reason")))
 
         io_path = project / IO_REPORT
+        if not io_path.is_file():
+            from design_one_shot_runner import _phase2_pdk_config
+            from phase3_one_shot_runner import step_io_pad_chip_top_gen
+            from librelane_contract import Refusal
+            try:
+                io_pdk = _phase2_pdk_config(project, pdk)
+            except Refusal as exc:
+                raise D06Refusal("D06_PAD_PDK_UNRESOLVED", str(exc)) from exc
+            generated = step_io_pad_chip_top_gen(project, pdk=io_pdk)
+            record["checks"].append({"check": "io_pad_chip_top_gen_producer",
+                                      "status": generated.status,
+                                      "detail": generated.note})
+            if generated.status != "PASS":
+                raise D06Refusal("D06_PAD_PIN_PRODUCER_REFUSED", generated.note,
+                                 failed=generated.status == "FAIL")
         io = _read(io_path)
         record["inputs"].append(_record(project, io_path))
         if io.get("program") != "io_pad_chip_top_gen" or io.get("verdict") != "WROTE":
