@@ -48,7 +48,7 @@ def _parse_native_cvc_report(text: str) -> Dict[str, Any]:
             "note": f"native cvc_rv completed with {total} electrical error(s)"}
 
 
-def _native_cvc_category(project: Path, top: str, pdk: PdkConfig,
+def _native_cvc_category(project: Path, top: str, pdk: Any,
                          image: Optional[str], *, extracted_netlist: Optional[Path] = None,
                          adopted_netlist: Optional[Path] = None, pdk_dir: Optional[str] = None,
                          library: Optional[str] = None, power_nets=None,

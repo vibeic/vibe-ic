@@ -85,7 +85,8 @@ def _m03(project, context, manifest, inputs, attempt):
                     pdk_source="native tool configuration")
     if native.get("verdict") == "FAIL":
         raise NativeError("M03_NATIVE_MERGE_FAIL", str(native), status="FAIL")
-    if native.get("verdict") != "PASS":
+    merged = project / "phase3/mixed_signal/top_merged.gds"
+    if not native.get("merge_provenance") or not merged.is_file():
         raise NativeError("M03_NATIVE_MERGE_NOT_MEASURED", str(native))
     gate = ip_check.audit(project)
     write_json(attempt / "macro_view_consumer.json", gate)
@@ -93,7 +94,9 @@ def _m03(project, context, manifest, inputs, attempt):
         raise NativeError("M03_MACRO_VIEW_CONSUMER_FAIL", str(gate), status="FAIL")
     if gate.get("verdict") not in ("PASS", "PASS_WITH_REVIEW") or not gate.get("macros"):
         raise NativeError("M03_MACRO_VIEW_CONSUMER_UNMEASURED", str(gate))
-    return {"subject_top": top, "native_merge": native, "macro_view_consumer": gate}
+    return {"subject_top": top, "native_merge": native, "macro_view_consumer": gate,
+            "physical_lvs_endpoint": "PASS" if native.get("verdict") == "PASS" else "NOT_MEASURED",
+            "scope": "actual macro instance merge; physical LVS remains endpoint-distinct"}
 
 
 def execute(project, context):
