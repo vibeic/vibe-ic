@@ -435,6 +435,9 @@ def consume_default_row_completion(project, context, component):
                 or raw.get("flow109_acceptance") != "NOT_MEASURED"):
             raise Refusal("D45_COMPLETION_RECEIPT_INVALID", "schema/step/context/scope mismatch")
 
+        if raw.get("component_status") == "NOT_MEASURED":
+            return {**base, "reason": raw.get("reason") or "D45_COMPLETION_NOT_MEASURED",
+                    "detail": raw.get("detail", "native component did not pass")}
         if raw.get("source_sha256") != operation_sources():
             raise Refusal("D45_COMPLETION_SOURCE_STALE", "operation source closure changed")
         inputs = raw.get("input_sha256")
