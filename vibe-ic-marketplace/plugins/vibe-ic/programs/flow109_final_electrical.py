@@ -143,61 +143,76 @@ def _native_ir_em(project, native, odb, sdc, spefs, sta_folder, corners, folder)
         "corners": {},
     }
     for corner in sorted(c for c in corners if c.startswith("max_")):
-        volts = re.search(r"(\d+)v(\d+)$", corner)
-        if volts is None:
-            raise ElectricalError("D70_CORNER_VOLTAGE_UNREADABLE", corner)
-        voltage = float(f"{volts.group(1)}.{volts.group(2)}")
-        libs = [
-            lib
-            for key in ("LIB", "PAD_LIBS")
-            if config.get(key)
-            for lib in config[key].get(ir_tool._pattern_for(corner, config[key]), [])
-        ]
-        vsrc = (
-            ir_tool.write_vsrc(
-                sources, {net: voltage if net in vdd else 0.0 for net in sources}, folder / corner
-            )
-            if sources
-            else {}
-        )
-        tcl = [f"read_liberty {lib}" for lib in libs] + [
-            f"read_db {odb}",
-            f"read_sdc {sdc}",
-            f"read_spef {spefs['max']}",
-            "set_propagated_clock [all_clocks]",
-            "report_power",
-        ]
-        tcl += [
-            f"set_pdnsim_net_voltage -net {net} -voltage {voltage if net in vdd else 0}"
-            for net in vdd + gnd
-        ]
-        for net in vdd + gnd:
-            source = f" -vsrc {vsrc[net]}" if net in vsrc else ""
-            tcl += [
-                f'puts "=== PSM_NET {net} ==="',
-                f"analyze_power_grid -net {net}{source}",
-                f"check_current_density -net {net} -em_limits_file {limits} "
-                f"-em_report {folder}/em_{corner}_{net}.csv{source} -allow_reuse",
+        try:
+            volts = re.search(r"(\d+)v(\d+)$", corner)
+            if volts is None:
+                raise ElectricalError("D70_CORNER_VOLTAGE_UNREADABLE", corner)
+            voltage = float(f"{volts.group(1)}.{volts.group(2)}")
+            libs = [
+                lib
+                for key in ("LIB", "PAD_LIBS")
+                if config.get(key)
+                for lib in config[key].get(ir_tool._pattern_for(corner, config[key]), [])
             ]
-        script, log = folder / f"ir_em_{corner}.tcl", folder / f"ir_em_{corner}.log"
-        script.write_text("\n".join(tcl) + "\nexit\n")
-        rc = ir_tool._run_openroad(project, native["image"], script, log, mounts)
-        nets = judge_ir_em(log.read_text(errors="replace"), vdd + gnd)
-        if rc:
-            nets = {
-                net: {
-                    **row,
-                    "ir_status": "NOT_MEASURED" if row["ir_status"] == "PASS" else row["ir_status"],
-                    "em_status": "NOT_MEASURED" if row["em_status"] == "PASS" else row["em_status"],
+            vsrc = (
+                ir_tool.write_vsrc(
+                    sources,
+                    {net: voltage if net in vdd else 0.0 for net in sources},
+                    folder / corner,
+                )
+                if sources
+                else {}
+            )
+            tcl = [f"read_liberty {lib}" for lib in libs] + [
+                f"read_db {odb}",
+                f"read_sdc {sdc}",
+                f"read_spef {spefs['max']}",
+                "set_propagated_clock [all_clocks]",
+                "report_power",
+            ]
+            tcl += [
+                f"set_pdnsim_net_voltage -net {net} -voltage {voltage if net in vdd else 0}"
+                for net in vdd + gnd
+            ]
+            for net in vdd + gnd:
+                source = f" -vsrc {vsrc[net]}" if net in vsrc else ""
+                tcl += [
+                    f'puts "=== PSM_NET {net} ==="',
+                    f"analyze_power_grid -net {net}{source}",
+                    f"check_current_density -net {net} -em_limits_file {limits} "
+                    f"-em_report {folder}/em_{corner}_{net}.csv{source} -allow_reuse",
+                ]
+            script, log = folder / f"ir_em_{corner}.tcl", folder / f"ir_em_{corner}.log"
+            script.write_text("\n".join(tcl) + "\nexit\n")
+            rc = ir_tool._run_openroad(project, native["image"], script, log, mounts)
+            nets = judge_ir_em(log.read_text(errors="replace"), vdd + gnd)
+            if rc:
+                nets = {
+                    net: {
+                        **row,
+                        "ir_status": (
+                            "NOT_MEASURED" if row["ir_status"] == "PASS" else row["ir_status"]
+                        ),
+                        "em_status": (
+                            "NOT_MEASURED" if row["em_status"] == "PASS" else row["em_status"]
+                        ),
+                    }
+                    for net, row in nets.items()
                 }
-                for net, row in nets.items()
+            result["corners"][corner] = {
+                "rc": rc,
+                "voltage_v": voltage,
+                "log": _record(project, log),
+                "nets": nets,
             }
-        result["corners"][corner] = {
-            "rc": rc,
-            "voltage_v": voltage,
-            "log": _record(project, log),
-            "nets": nets,
-        }
+        except (OSError, ValueError, KeyError, TypeError, Refusal) as exc:
+            result["corners"][corner] = {
+                "detail": str(exc),
+                "nets": {
+                    net: {"ir_status": "NOT_MEASURED", "em_status": "NOT_MEASURED"}
+                    for net in vdd + gnd
+                },
+            }
     rows = [row for corner in result["corners"].values() for row in corner["nets"].values()]
     result.update(
         ir_status=_roll_up(row["ir_status"] for row in rows),
@@ -209,44 +224,50 @@ def _native_ir_em(project, native, odb, sdc, spefs, sta_folder, corners, folder)
 def _scan_timing(project, groups, native, state):
     statuses, modes = [], {}
     for group in groups:
-        mode = group["mode"]
+        mode = group.get("mode")
         if mode not in ("shift", "capture"):
-            raise ValueError("Scan timing mode must be shift or capture")
-        corners = sorted({row["corner"] for row in group["scenarios"]})
-        libraries = [str(_bound(project, p)) for p in group["libraries"]]
-        sdc = _bound(project, group["sdc"])
-        scope = "scan-final-" + mode + "-" + uuid.uuid4().hex
-        overlay = {
-            "SIGNOFF_SDC_FILE": (str(sdc), "native mode SDC"),
-            "STA_CORNERS": (corners, "design mode corners"),
-            "CELL_LIBS": ({c: libraries for c in corners}, "mode timing libraries"),
-            "DEFAULT_CORNER": (corners[0], "first selected mode corner"),
-        }
-        run = signoff.run(
-            project,
-            native["image"],
-            Path(native["pdk_root"]),
-            native["pdk"],
-            routed_def=_bound(project, state["def"]),
-            routed_odb=_bound(project, state["odb"]),
-            netlist=_bound(project, state["nl"]),
-            sdc=sdc,
-            extract=False,
-            time=True,
-            direct_spefs={k: _bound(project, v) for k, v in state["spef"].items()},
-            lane=scope,
-            config_folder=scope + "-config",
-            config_overlay=overlay,
-        )
-        measured = signoff.corner_timing(Path(run["sta"]))
-        judged = signoff.judge_timing(measured)
-        status = judged["verdict"]
-        if set(measured) != set(corners) and status != "FAIL":
-            status = "NOT_MEASURED"
-        statuses.append(status)
-        modes.setdefault(mode, []).append(
-            {"corners": measured, "judgment": judged, "status": status, "folder": run["sta"]}
-        )
+            statuses.append("NOT_MEASURED")
+            continue
+        try:
+            corners = sorted({row["corner"] for row in group["scenarios"]})
+            libraries = [str(_bound(project, p)) for p in group["libraries"]]
+            sdc = _bound(project, group["sdc"])
+            scope = "scan-final-" + mode + "-" + uuid.uuid4().hex
+            overlay = {
+                "SIGNOFF_SDC_FILE": (str(sdc), "native mode SDC"),
+                "STA_CORNERS": (corners, "design mode corners"),
+                "CELL_LIBS": ({c: libraries for c in corners}, "mode timing libraries"),
+                "DEFAULT_CORNER": (corners[0], "first selected mode corner"),
+            }
+            run = signoff.run(
+                project,
+                native["image"],
+                Path(native["pdk_root"]),
+                native["pdk"],
+                routed_def=_bound(project, state["def"]),
+                routed_odb=_bound(project, state["odb"]),
+                netlist=_bound(project, state["nl"]),
+                sdc=sdc,
+                extract=False,
+                time=True,
+                direct_spefs={k: _bound(project, v) for k, v in state["spef"].items()},
+                lane=scope,
+                config_folder=scope + "-config",
+                config_overlay=overlay,
+            )
+            measured = signoff.corner_timing(Path(run["sta"]))
+            judged = signoff.judge_timing(measured)
+            status = judged["verdict"]
+            if set(measured) != set(corners) and status != "FAIL":
+                status = "NOT_MEASURED"
+            statuses.append(status)
+            modes.setdefault(mode, []).append(
+                {"corners": measured, "judgment": judged, "status": status, "folder": run["sta"]}
+            )
+        except (OSError, ValueError, KeyError, TypeError, Refusal) as exc:
+            status = "FAIL" if getattr(exc, "code", None) == "LL_STEP_FAILED" else "NOT_MEASURED"
+            statuses.append(status)
+            modes.setdefault(mode, []).append({"status": status, "detail": str(exc)})
     if set(modes) != {"shift", "capture"}:
         statuses.append("NOT_MEASURED")
     return {"status": _roll_up(statuses), "modes": modes}
@@ -262,6 +283,7 @@ def execute(project, context):
     attempt = project / "reports/phase3/final-electrical" / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
     result = {"component_status": "NOT_MEASURED", "native_started": False}
+    statuses = []
     try:
         required = _required_corner_population(context["required_corners"])
         views = signoff_inputs(project, "odb", "def", "netlist", "sdc")
@@ -297,13 +319,14 @@ def execute(project, context):
         folder = Path(run["sta"])
         corners = signoff.corner_timing(folder)
         timing = signoff.judge_timing(corners)
+        statuses.append(timing["verdict"])
         timed = _load(folder / "state_out.json")
         sdfs = postroute.corner_sdfs(timed)
         population = "PASS" if required == set(corners) == set(sdfs) else "NOT_MEASURED"
         ir_em = _native_ir_em(
             project, native, views["odb"], views["sdc"], spefs, folder, corners, attempt / "ir_em"
         )
-        statuses = [timing["verdict"], population, ir_em["ir_status"], ir_em["em_status"]]
+        statuses.extend([population, ir_em["ir_status"], ir_em["em_status"]])
         if context.get("requires_scan"):
             scan = _scan_timing(project, context.get("scan_groups", []), native, timed)
             result["scan_timing"] = scan
@@ -322,12 +345,16 @@ def execute(project, context):
         )
     except Refusal as exc:
         result.update(
-            component_status="FAIL" if exc.code == "LL_STEP_FAILED" else "NOT_MEASURED",
+            component_status=(
+                "FAIL" if exc.code == "LL_STEP_FAILED" or "FAIL" in statuses else "NOT_MEASURED"
+            ),
             reason=exc.code,
             detail=str(exc),
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        result.update(detail=str(exc))
+        result.update(
+            component_status="FAIL" if "FAIL" in statuses else "NOT_MEASURED", detail=str(exc)
+        )
     write_json(attempt / "result.json", result)
     return result
 

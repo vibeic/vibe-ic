@@ -100,7 +100,7 @@ def _known_async_pairs(project: Path):
     return pairs, evidence
 
 
-def audit(project: Path, *, sdc_path: Optional[Path]) -> dict:
+def audit(project: Path, *, sdc_path: Optional[Path] = None) -> dict:
     explicit = sdc_path is not None
     sdcs = [Path(sdc_path)] if explicit else _sdc_files(project)
     if not sdcs:
