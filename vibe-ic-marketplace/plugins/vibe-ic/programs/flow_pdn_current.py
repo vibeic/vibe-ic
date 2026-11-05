@@ -93,7 +93,8 @@ def coherent_geometry(config, widths, tech, parallel_length_um=0, explicit=()):
         if layer is None:
             raise ValueError(f"PDN routing layer is absent from technology: {layer_name}")
         size = round(width * units)
-        length = math.ceil(parallel_length_um * units)
+        # Before a Classic floorplan exists, bound PRL by OpenDB's signed coordinate range.
+        length = math.ceil(parallel_length_um * units) if parallel_length_um is not None else 2**31 - 1
         return max(layer.getSpacing(size, length), layer.findTwSpacing(size, size, length)) / units
 
     def at_least(key, value):
@@ -127,11 +128,16 @@ def coherent_geometry(config, widths, tech, parallel_length_um=0, explicit=()):
 
 def current_settings(project, config, parallel_length_um=0):
     base = project / "work/flow/pdn_cfg.tcl"
-    if Path(str(config.get("PDN_CFG", ""))).resolve() != base.resolve():
+    script = config.get("PDN_CFG")
+    if script is not None and Path(str(script)).resolve() != base.resolve():
         return {}
     power = project / "steps/pre_layout_timing/result.json"
     if not power.is_file():
         return {}
+    config = dict(config)
+    for supply in ("VDD", "GND"):
+        if config.get(f"{supply}_NETS") is None:
+            config[f"{supply}_NETS"] = [config[f"{supply}_PIN"]]
     current, samples = estimated_current(config, json.loads(power.read_text()).get("native_metrics", {}))
     lefs = matching(config["TECH_LEFS"], config["DEFAULT_CORNER"])
     if len(lefs) != 1:
@@ -161,7 +167,7 @@ def current_settings(project, config, parallel_length_um=0):
 
 
 def needs_estimate(route, from_name, table):
-    if route["delivery_target"] not in {"gds", "shippable_gds", "foundry_handoff"}:
+    if route["delivery_target"] not in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}:
         return False
     from flow_engine import aliases
     positions = {name: index for index, row in enumerate(table["steps"])
