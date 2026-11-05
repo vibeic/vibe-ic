@@ -1281,7 +1281,6 @@ def generate(project: Path, out_dir: Optional[Path] = None, *,
     expert_sha256 = (hashlib.sha256(expert_tb.encode()).hexdigest()
                      if expert_tb is not None else None)
     if shape.get('reference_refusal') and expert_tb is None:
-        out.mkdir(parents=True, exist_ok=True)
         return {'status': 'INCOMPLETE', 'reason': shape['reference_refusal'],
                 'ic_class': ic_class, 'fallback_skill': 'testbench-gen',
                 'out_dir': str(out), 'reference_model_tier': 'hook_unfilled',

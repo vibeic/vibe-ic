@@ -46,6 +46,9 @@ def generate(registry, native):
                     profiles.append({"when": condition, "tool": replacement})
                 if name in native.get("report_rows", {}):
                     tool = {"kind": "native_report", "from": native["report_rows"][name]}
+                    readers = native.get("report_check_readers", {}).get(name)
+                    if readers:
+                        tool["check_readers"] = readers
                     if name in native.get("report_scopes", {}):
                         tool["scope"] = native["report_scopes"][name]
             profiles.append({"when": profile["select_when"], "tool": tool})

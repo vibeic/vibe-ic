@@ -209,6 +209,7 @@ def simulation(project, directory, tool, commands):
             "reason": generated.get("reason") or "Native functional verification has not completed."}, indent=2) + "\n")
         handoff = generated.get("reference_model_handoff")
         if handoff:
+            Path(handoff["artifact_path"]).parent.mkdir(parents=True, exist_ok=True)
             return commands.result(reports=[producer_report], detail=
                 "The existing professional testbench producer requires its reference model: "
                 + json.dumps(handoff))
@@ -283,7 +284,8 @@ def simulation(project, directory, tool, commands):
         merged = directory / "coverage.dat"
         completed = commands.run(["verilator_coverage", "--write", merged, *dats])
         if completed is not None and not completed.returncode and merged.is_file():
-            parsed = coverage.parse_coverage_dat(str(merged))
+            parsed = (coverage.parse_coverage_dat(str(merged)) if len(dats) == 1
+                      else coverage.union_coverage_dats(list(map(str, dats))))
             line_map, info = coverage.lcov_line_union([str(merged)], str(directory), exec_fn=invoke)
             if line_map is not None:
                 parsed["line_union"] = line_map

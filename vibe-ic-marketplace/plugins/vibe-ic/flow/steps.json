@@ -3640,7 +3640,10 @@
             "when": "otherwise",
             "tool": {
               "kind": "native_report",
-              "from": "post_route_timing_repair"
+              "from": "post_route_timing_repair",
+              "check_readers": [
+                "flow_config.declared_power_checks"
+              ]
             }
           }
         ]
