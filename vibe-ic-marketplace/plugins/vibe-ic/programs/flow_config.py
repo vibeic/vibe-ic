@@ -272,12 +272,18 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--set", action="append", default=[], metavar="KEY=JSON",
                         help="Record an implementation setting in the existing declaration.")
+    parser.add_argument("--unset", action="append", default=[], metavar="KEY",
+                        help="Remove an implementation setting from the existing declaration.")
     args = parser.parse_args()
     previous = None
-    if args.set:
+    if args.set or args.unset:
         declaration = args.project.resolve() / "plugin_output/declaration.json"
         previous = declaration.read_bytes() if declaration.exists() else None
         choices = _load(declaration)
+        for key in args.unset:
+            if not implementation_setting(key):
+                parser.error(f"Unsupported implementation setting: {key}")
+            choices.pop(key, None)
         for item in args.set:
             key, separator, raw = item.partition("=")
             if not separator or not implementation_setting(key):
@@ -291,7 +297,7 @@ def main() -> int:
     try:
         output = write_config(args.project, route=args.route, output=args.output)
     except Exception:
-        if args.set:
+        if args.set or args.unset:
             if previous is None:
                 declaration.unlink()
             else:
