@@ -1222,12 +1222,18 @@ def _is_radix2_div(desc: str, mod: Optional[str], ports: set) -> bool:
     if not need.issubset(ports):
         return False
     directions = {p: "out" if p in {"result", "res_valid"} else "in" for p in need}
-    if _port_directions(desc) != directions:
+    declared = {}
+    for record in _source_port_records(desc):
+        declared.setdefault(record["name"], record["direction"])
+    if declared != directions:
         return False
     if any(_port_width(desc, p) != w for p, w in
            (("dividend", 8), ("divisor", 8), ("result", 16))):
         return False
-    if not _has_any(desc, "radix-2", "radix 2"):
+    if any(_port_width(desc, p) not in (None, 1) for p in need - {"dividend", "divisor", "result"}):
+        return False
+    if not (_has_any(desc, "radix-2", "radix 2")
+            and _has_any(desc, "signed or unsigned", "signed and unsigned")):
         return False
     return True
 
@@ -3971,19 +3977,20 @@ def _contract_shape(desc_text: str) -> Optional[str]:
 def _radix2_idle_admission(desc_text: str) -> bool:
     """An explicit restriction on this request, not another signal's busy state."""
     request = r"(?:new\s+)?(?:requests?|operands|opn_valid)"
+    subject = r"\b" + request + r"\s+(?:(?:are|is|must|should|be|not|never|ever)\s+)*"
     busy = r"(?:busy|loading|computing)"
     for clause in re.split(r"[.;]", re.sub(r"\s+", " ", desc_text.lower())):
-        if re.search(r"\b(?:no|not|never)\s+" + request + r"\b", clause):
-            continue
-        subject = r"\b" + request + r"\s+(?:(?:are|is|must be)\s+)?"
-        if (re.search(subject + r"(?:(?:accepted|captured)\s+only|"
-                      r"only\s+(?:accepted|captured))\s+"
-                      r"(?:when|while)\s+(?:idle|not\s+busy)\b", clause)
-                or re.search(subject + r"(?:ignored|rejected|not\s+accepted)\s+"
-                             r"(?:when|while|during)\s+" + busy + r"\b", clause)
-                or re.search(r"(?<!not )(?<!never )\b(?:ignore|reject)\s+" + request
-                             + r"\s+(?:when|while|during)\s+" + busy + r"\b", clause)):
+        idle = re.search(subject + r"(?P<admit>(?:accepted|captured)\s+only|"
+                         r"only\s+(?:accepted|captured))\s+"
+                         r"(?:when|while)\s+(?:idle|not\s+busy)\b", clause)
+        if idle and not is_denied(clause[:idle.start("admit")]):
             return True
+        for pattern in (subject + r"(?P<verb>accepted|captured|ignored|rejected)\s+",
+                        r"\b(?P<verb>accept|capture|ignore|reject)\s+" + request + r"\s+"):
+            for match in re.finditer(pattern + r"(?:when|while|during)\s+" + busy + r"\b", clause):
+                denied = bool(is_denied(clause[:match.start("verb")]))
+                if denied == match.group("verb").startswith(("accept", "captur")):
+                    return True
     return False
 
 
@@ -3996,7 +4003,8 @@ def emit_rtl(shape: str, desc_text: str = "") -> str:
     composed from the handshake/acceptance contract stated by `desc_text`, which
     is therefore required.
     """
-    if shape == "radix2_signed_divider" and desc_text:
+    if shape == "radix2_signed_divider" and desc_text and _is_radix2_div(
+            desc_text, module_name_of(desc_text), _port_tokens(desc_text) - _NOISE):
         rtl = _TPL_RADIX2
         if _radix2_idle_admission(desc_text):
             rtl = rtl.replace("if (opn_valid && !res_valid)",

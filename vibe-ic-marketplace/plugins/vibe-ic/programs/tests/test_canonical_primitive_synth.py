@@ -218,16 +218,18 @@ def test_radix_request_existing_protocol_native(tmp_path, scenario):
     ("Requests are accepted only when idle.", True),
     ("Requests are ignored while busy.", True),
     ("Requests are not accepted while busy.", True),
+    ("Requests must not be accepted while busy.", True),
     ("Requests are only accepted when not busy.", True),
     ("Ignore requests while busy.", True),
     ("Requests are accepted\nonly when idle.", True),
     ("Requests are not ignored while busy.", False),
     ("No requests are ignored while busy.", False),
     ("Do not ignore requests while busy.", False),
+    ("Do not ever ignore requests while busy.", False),
     ("The status monitor is busy while requests are accepted.", False),
-], ids=["only_idle", "ignore_busy", "not_accept_busy", "only_not_busy",
+], ids=["only_idle", "ignore_busy", "not_accept_busy", "must_not_be_accepted", "only_not_busy",
         "ignore_requests_busy", "wrapped_idle", "not_ignore_busy",
-        "no_ignored_requests", "do_not_ignore", "other_busy_signal"])
+        "no_ignored_requests", "do_not_ignore", "do_not_ever_ignore", "other_busy_signal"])
 def test_radix_request_busy_restriction_is_source_bound_native(tmp_path, protocol, serialized):
     desc = _request_admission_desc(protocol=protocol)
     if serialized:
@@ -262,7 +264,7 @@ def test_radix_request_admission_lesson_reaches_digest(tmp_path):
 
 
 @pytest.mark.parametrize("change", ["missing_ready", "other_algorithm", "wrong_width",
-                                    "wrong_direction", "extra_port"])
+                                    "wrong_direction", "extra_port", "vector_control"])
 def test_radix_request_renamed_shape_requires_complete_interface_and_algorithm(change):
     desc = _request_admission_desc("independent_arithmetic_unit")
     if change == "missing_ready":
@@ -274,8 +276,10 @@ def test_radix_request_renamed_shape_requires_complete_interface_and_algorithm(c
     elif change == "wrong_direction":
         desc = desc.replace("divisor: 8-bit nonzero denominator.\n", "")
         desc = desc.replace("Output ports:\n", "Output ports:\ndivisor: 8-bit denominator.\n")
-    else:
+    elif change == "extra_port":
         desc = desc.replace("Input ports:\n", "Input ports:\nextra_mode: mode input.\n")
+    else:
+        desc = desc.replace("sign: signed", "sign: 2-bit signed")
     assert rcs.detect_shape(desc) is None
 
 # spec-dir (relative to RTLLM) -> (expected_shape, expected_module)
@@ -1591,7 +1595,7 @@ def test_unsigned_divider_native_oracle_latency_reset_back_to_back_and_reverse()
         pytest.skip("NOT_MEASURED: iverilog/vvp unavailable in canonical image")
     desc = _INLINE_POS["unsigned_iterative_restoring_divider"]
     rtl = rcs.emit_rtl("unsigned_iterative_restoring_divider", desc)
-    work = Path(tempfile.mkdtemp(prefix="issue2851-native-", dir="/tmp"))
+    work = Path(tempfile.mkdtemp(prefix="issue2851-native-"))
     try:
         vectors_by_width = {
             width: _native_divider_vectors(width)
@@ -1620,7 +1624,7 @@ def _native_width_gap_case(width, include_restore_reverse=True):
     desc = _INLINE_POS["unsigned_iterative_restoring_divider"]
     rtl = rcs.emit_rtl("unsigned_iterative_restoring_divider", desc)
     vectors = _native_divider_vectors(width, exhaustive=True)
-    work = Path(tempfile.mkdtemp(prefix=f"issue2851-native-w{width}-", dir="/tmp"))
+    work = Path(tempfile.mkdtemp(prefix=f"issue2851-native-w{width}-"))
     try:
         run = _run_native_divider_case(work, rtl, width, vectors)
         assert run.returncode == 0, run.stdout + run.stderr
