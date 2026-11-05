@@ -1699,7 +1699,8 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
                 raise MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'EQY and adopted synthesis libraries differ')
             script = Path(cfg['EQY_SCRIPT'])
             if script.read_text() != native.eqy_script(
-                    synthesis['DESIGN_NAME'], rtl, mapped, next(iter(proof_libraries))):
+                    synthesis['DESIGN_NAME'], rtl, mapped, next(iter(proof_libraries)),
+                    synthesis=synthesis):
                 raise MetricRefusal('D25_NATIVE_CONFIGURATION_UNBOUND', 'EQY script differs')
             with tempfile.TemporaryDirectory() as temporary:
                 observed = native.judge_eqy(folder, Path(temporary) / 'lec_eqy.json')

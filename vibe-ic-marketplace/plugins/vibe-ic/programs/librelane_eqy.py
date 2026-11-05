@@ -69,7 +69,8 @@ STEP = "Yosys.EQY"
 _EQY_STATUSES = ("PASS", "FAIL", "UNKNOWN", "ERROR", "TIMEOUT")
 
 
-def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str) -> str:
+def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
+               *, synthesis: Optional[dict] = None) -> str:
     from lec_run import (fsm_encfile_beside_netlist, fsm_signal_names,
                          _equiv_splitnets)
     encoding = fsm_encfile_beside_netlist(str(netlist))
@@ -77,9 +78,20 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str) -> str:
     gold_prep = ([f"hierarchy -top {top}", "proc", "opt -nosdff -nodffe", "fsm"]
                  if states else [])
     split = _equiv_splitnets(encoding, states).replace("splitnets -ports", "splitnets", 1)
+    if synthesis is not None:
+        from rtl_transitive_cone import topological_package_first
+        from _rtl_include_hub import macro_headers_first
+        rtl = macro_headers_first(topological_package_first(rtl))
     gold = " ".join(str(p) for p in rtl)
+    read = f"read_verilog -formal -sv {gold}"
+    if synthesis is not None:
+        defines = " ".join('-D' + str(d) for d in synthesis.get('VERILOG_DEFINES') or [])
+        includes = " ".join('-I ' + str(p) for p in sorted({p.parent for p in rtl}))
+        frontend = (f"read_slang --single-unit --top {top}"
+                    if synthesis.get('USE_SLANG') else 'read_verilog -sv')
+        read = f"{frontend} {defines} {includes} {gold}"
     return "\n".join([
-        "[gold]", f"read_verilog -formal -sv {gold}", *gold_prep, "",
+        "[gold]", read, *gold_prep, "",
         "[gate]", f"read_liberty -ignore_miss_func {liberty}",
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
@@ -204,7 +216,10 @@ def run_eqy(project: Path, image: str, pdk: str, top: str, rtl: list[Path],
     if len(match) != 1:
         raise Refusal("LL_EQY_LIBERTY_UNRESOLVED", f"{corner}: {match}")
     script = root / f"{top}.eqy"
-    script.write_text(eqy_script(top, rtl, netlist.resolve(), str(match[0])))
+    import synth_handoff_netlist_check as handoff
+    synthesis = _load(Path(handoff.bound_handoff(project)['native']).parent / 'config.json')
+    script.write_text(eqy_script(top, rtl, netlist.resolve(), str(match[0]),
+                                synthesis=synthesis))
     config["EQY_SCRIPT"] = str(script)
     write_json(raw, config)
     write_json(root / "eqy.provenance.json", {
