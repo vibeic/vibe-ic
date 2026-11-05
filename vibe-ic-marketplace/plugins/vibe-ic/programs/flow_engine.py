@@ -20,7 +20,6 @@ import sys
 import time
 from typing import Any
 
-from flow_adapter_jobs import AdapterJobs
 from flow_engine_timing import timing_summary
 
 HERE = Path(__file__).resolve().parent
@@ -801,8 +800,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         and positions[row["name"]] > positions[to_name]
         and choose_tool(row["tool"], features)["kind"] == "aggregate"
         and (step_root / row["name"] / "result.json").is_file()]
-    jobs = AdapterJobs(project, route)
-    pending, deferred, summary = {}, [], {}
+    deferred, summary = [], {}
 
     def write_summary():
         nonlocal summary
@@ -816,8 +814,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                    "run": len(rows), "steps": rows,
                    **{key: sum(item["status"] == value for item in rows)
                       for key, value in (("pass", "PASS"), ("fail", "FAIL"), ("not_measured", "NOT_MEASURED"))},
-                   "pending_steps": [row["name"] for row in selected if row["name"] not in results],
-                   "background_pending": jobs.pending}
+                   }
         summary.update(timing_summary(summary))
         write_json(project / "reports/flow_engine.json", summary)
         return summary
@@ -869,124 +866,100 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                 context.update(config=chain.config, elapsed=context["elapsed"] + time.perf_counter() - beginning)
                 publish(context, native)
 
-    def completed_job(packet):
-        context = pending.pop(packet["name"])
-        context["config"] = packet["config"]
-        context["elapsed"] += packet["wall_seconds"]
-        publish(context, ToolResult(**packet["native"]))
-
-    completed = False
-    try:
-        for row in [*selected, *replayed_aggregates]:
-            for packet in jobs.collect():
-                completed_job(packet)
-            ready_reports()
-            beginning = time.perf_counter()
-            preparation = ToolResult()
-            if restore_directory is not None:
-                if chain.prepare() is None:
-                    chain.restore(restore_directory)
-                preparation = chain.preparation_result()
-                restore_directory = None
-            directory = step_root / row["name"]
-            tool = tools.get(row["name"]) or choose_tool(row["tool"], features)
-            kind = tool["kind"]
-            saved = read_json(directory / "result.json")
-            refresh_author = tool.get("function") == "step_rtl_gen"
-            if refresh_author:
-                keep_author_failure(directory)
-            extra_tool_seconds = 0.0
-            retained = bool(saved.get("tool_ran") and (
-                kind in {"librelane", "command", "snapshot"}
-                or kind == "adapter" and (
-                    tool.get("adapter") and tool["adapter"] not in {"physical_declarations", "macro_views", "ip_release_docs"}
-                    and any(isinstance(value, (int, float))
-                                                 for value in saved.get("native_metrics", {}).values())
-                    or tool.get("function") == "doc_extract"
-                    and any(item.get("ran") for item in saved.get("native_steps", [])))))
-            if retained:
-                native = ToolResult(True, saved["tool_exit_code"], saved.get("native_metrics", {}),
-                                    saved.get("reports", []), saved["tool_seconds"], saved.get("detail", ""),
-                                    saved.get("native_steps", []))
-                for item in native.native_steps:
-                    if "NOT_MEASURED" in item.get("detail", ""):
-                        item["status"] = "NOT_MEASURED"
-                if kind == "librelane":
-                    error = chain.prepare()
-                    initialized = chain.preparation_result()
-                    native.tool_seconds += initialized.tool_seconds
-                    extra_tool_seconds += initialized.tool_seconds
-                    native.native_steps.extend(initialized.native_steps)
-                    native.reports.extend(initialized.reports)
-                    if initialized.exit_code:
-                        native.exit_code = initialized.exit_code
-                    if error is None:
-                        chain.restore(directory)
-                    completed_steps = {item["name"] for item in native.native_steps}
-                    additional = [name for name in tool["steps"] if name not in completed_steps]
-                    if additional and error is None:
-                        added = chain.execute(directory, {**tool, "steps": additional})
-                        native.metrics.update(added.metrics)
-                        native.native_steps.extend(added.native_steps)
-                        native.reports = added.reports
-                        native.tool_seconds += added.tool_seconds
-                        extra_tool_seconds += added.tool_seconds
-                        if added.exit_code:
-                            native.exit_code = added.exit_code
-            else:
-                if directory.exists() and row["name"] in selected_names and row["name"] not in prepared and not refresh_author:
-                    shutil.rmtree(directory)
-                directory.mkdir(exist_ok=True)
-            context = {"row": row, "tool": tool, "saved": saved, "retained": retained,
-                       "extra_tool_seconds": extra_tool_seconds, "preparation": preparation,
-                       "config": chain.config,
-                       "elapsed": time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]}
-            if not retained and kind in {"aggregate", "native_report"}:
-                if kind == "aggregate" or tool["from"] in selected_names and tool["from"] not in results:
-                    deferred.append(context)
-                    continue
-            if not retained and tool.get("parallel"):
-                jobs.submit(row["name"], directory, tool, state=chain.state, config=chain.config)
-                context["elapsed"] = time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]
-                pending[row["name"]] = context
-                write_summary()
+    for row in [*selected, *replayed_aggregates]:
+        ready_reports()
+        beginning = time.perf_counter()
+        preparation = ToolResult()
+        if restore_directory is not None:
+            if chain.prepare() is None:
+                chain.restore(restore_directory)
+            preparation = chain.preparation_result()
+            restore_directory = None
+        directory = step_root / row["name"]
+        tool = tools.get(row["name"]) or choose_tool(row["tool"], features)
+        kind = tool["kind"]
+        saved = read_json(directory / "result.json")
+        refresh_author = tool.get("function") == "step_rtl_gen"
+        if refresh_author:
+            keep_author_failure(directory)
+        extra_tool_seconds = 0.0
+        retained = bool(saved.get("tool_ran") and (
+            kind in {"librelane", "command", "snapshot"}
+            or kind == "adapter" and (
+                tool.get("adapter") and tool["adapter"] not in {"physical_declarations", "macro_views", "ip_release_docs"}
+                and any(isinstance(value, (int, float))
+                                             for value in saved.get("native_metrics", {}).values())
+                or tool.get("function") == "doc_extract"
+                and any(item.get("ran") for item in saved.get("native_steps", [])))))
+        if retained:
+            native = ToolResult(True, saved["tool_exit_code"], saved.get("native_metrics", {}),
+                                saved.get("reports", []), saved["tool_seconds"], saved.get("detail", ""),
+                                saved.get("native_steps", []))
+            for item in native.native_steps:
+                if "NOT_MEASURED" in item.get("detail", ""):
+                    item["status"] = "NOT_MEASURED"
+            if kind == "librelane":
+                error = chain.prepare()
+                initialized = chain.preparation_result()
+                native.tool_seconds += initialized.tool_seconds
+                extra_tool_seconds += initialized.tool_seconds
+                native.native_steps.extend(initialized.native_steps)
+                native.reports.extend(initialized.reports)
+                if initialized.exit_code:
+                    native.exit_code = initialized.exit_code
+                if error is None:
+                    chain.restore(directory)
+                completed_steps = {item["name"] for item in native.native_steps}
+                additional = [name for name in tool["steps"] if name not in completed_steps]
+                if additional and error is None:
+                    added = chain.execute(directory, {**tool, "steps": additional})
+                    native.metrics.update(added.metrics)
+                    native.native_steps.extend(added.native_steps)
+                    native.reports = added.reports
+                    native.tool_seconds += added.tool_seconds
+                    extra_tool_seconds += added.tool_seconds
+                    if added.exit_code:
+                        native.exit_code = added.exit_code
+        else:
+            if directory.exists() and row["name"] in selected_names and row["name"] not in prepared and not refresh_author:
+                shutil.rmtree(directory)
+            directory.mkdir(exist_ok=True)
+        context = {"row": row, "tool": tool, "saved": saved, "retained": retained,
+                   "extra_tool_seconds": extra_tool_seconds, "preparation": preparation,
+                   "config": chain.config,
+                   "elapsed": time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]}
+        if not retained and kind in {"aggregate", "native_report"}:
+            if kind == "aggregate" or tool["from"] in selected_names and tool["from"] not in results:
+                deferred.append(context)
                 continue
-            if retained:
-                pass
-            elif row["name"] in prepared:
-                native = prepared[row["name"]][0]
-            elif tool.get("function") == "step_rtl_gen":
-                native = ToolResult(**owner_session.result(directory, "rtl_gen"))
-            elif tool.get("function") == "rtl_validate":
-                native = ToolResult(**owner_session.result(directory, "rtl_validate"))
-            elif kind == "command":
-                native = command_tool(project, directory, tool)
-            elif kind == "librelane":
-                native = chain.execute(directory, tool)
-            elif kind == "snapshot":
-                native = chain.snapshot(directory, tool)
-            elif kind == "native_report":
-                context["previous"] = previous_result(tool)
-                native = reused_report(tool, context["previous"])
-            elif kind == "adapter" and tool.get("adapter"):
-                from flow_native_adapters import execute
-                native = ToolResult(**execute(project, directory, tool, route, state=chain.state, config=chain.config))
-            elif kind == "adapter" and tool.get("function") == "doc_extract":
-                native = ToolResult(**owner_session.result(directory, "phase1"))
-            else:
-                native = ToolResult(detail=tool.get("gap", "Native adapter is not available"))
-            context.update(config=chain.config, elapsed=time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1])
-            publish(context, native)
-        ready_reports()
-        write_summary()
-        for packet in jobs.drain():
-            completed_job(packet)
-            ready_reports()
-        ready_reports()
-        completed = True
-        return write_summary()
-    finally:
-        jobs.close(cancel=not completed)
+        if retained:
+            pass
+        elif row["name"] in prepared:
+            native = prepared[row["name"]][0]
+        elif tool.get("function") == "step_rtl_gen":
+            native = ToolResult(**owner_session.result(directory, "rtl_gen"))
+        elif tool.get("function") == "rtl_validate":
+            native = ToolResult(**owner_session.result(directory, "rtl_validate"))
+        elif kind == "command":
+            native = command_tool(project, directory, tool)
+        elif kind == "librelane":
+            native = chain.execute(directory, tool)
+        elif kind == "snapshot":
+            native = chain.snapshot(directory, tool)
+        elif kind == "native_report":
+            context["previous"] = previous_result(tool)
+            native = reused_report(tool, context["previous"])
+        elif kind == "adapter" and tool.get("adapter"):
+            from flow_native_adapters import execute
+            native = ToolResult(**execute(project, directory, tool, route, state=chain.state, config=chain.config))
+        elif kind == "adapter" and tool.get("function") == "doc_extract":
+            native = ToolResult(**owner_session.result(directory, "phase1"))
+        else:
+            native = ToolResult(detail=tool.get("gap", "Native adapter is not available"))
+        context.update(config=chain.config, elapsed=time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1])
+        publish(context, native)
+    ready_reports()
+    return write_summary()
 
 
 def record_review(project: Path, name: str, seconds: float, finding: str | None = None) -> None:

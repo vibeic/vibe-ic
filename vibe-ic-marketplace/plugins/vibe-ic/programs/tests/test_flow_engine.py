@@ -58,7 +58,6 @@ def test_failed_step_does_not_block_independent_tool(tmp_path):
 @pytest.mark.parametrize("errors,status", [(0, "PASS"), (1, "FAIL")])
 def test_manufacturability_runs_its_own_screen_before_aggregation(
         tmp_path, monkeypatch, errors, status, physical_step_table):
-    import flow_adapter_jobs
 
     routed = tmp_path / "captured.def"
     routed.write_text("""VERSION 5.8 ;
@@ -70,18 +69,11 @@ NETS 1 ;
 - signal ( inst A ) + ROUTED met1 ( 0 0 ) cut ( 1 0 ) ;
 END NETS
 """)
-    worker = tmp_path / "screen_worker.py"
-    worker.write_text(f"import sys; sys.path.insert(0, {str(engine.HERE)!r})\n" + """
-import pickle
-from pathlib import Path
-import dfm_screen_check
-payload = pickle.load(sys.stdin.buffer)
-native = dfm_screen_check.execute(payload['project'], payload['directory'],
-    payload['tool'], payload['route'], state={'def': payload['tool']['routed_def']}, config={})
-Path(sys.argv[1]).write_bytes(pickle.dumps({'native': native}))
-""")
-    monkeypatch.setattr(flow_adapter_jobs, '_worker_command',
-                        lambda output: [sys.executable, str(worker), str(output)])
+    initialize = engine.NativeChain.__init__
+    def configured(chain, *args, **kwargs):
+        initialize(chain, *args, **kwargs)
+        chain.state = {"def": str(routed)}
+    monkeypatch.setattr(engine.NativeChain, "__init__", configured)
     names = {"design_for_manufacturability", "final_electrical_analysis", "signoff_aggregation"}
     rows = [deepcopy(row) for row in physical_step_table["steps"] if row["name"] in names]
     measurement = command_row("final_electrical_analysis", errors)
@@ -244,6 +236,19 @@ def test_report_only_row_reuses_its_producer_verdict(tmp_path, code, inputs, sta
     reader.update(tool={"kind": "native_report", "from": "producer"}, checks=[])
     result = execute(tmp_path, [producer, reader])
     assert [row["status"] for row in result["steps"]] == [status, status]
+
+
+@pytest.mark.parametrize("errors", [0, 1])
+def test_later_producer_report_is_read_before_its_aggregate(tmp_path, errors):
+    reader = command_row("reader")
+    reader.update(tool={"kind": "native_report", "from": "producer"}, checks=[])
+    aggregate = command_row("summary")
+    aggregate.update(tool={"kind": "aggregate"}, checks=[
+        {"metric": "non_passing_steps", "operator": "==", "limit": 0}])
+    result = execute(tmp_path, [reader, aggregate, command_row("producer", value=errors)])
+    rows = {row["name"]: row for row in result["steps"]}
+    assert rows["reader"]["status"] == rows["producer"]["status"] == ("FAIL" if errors else "PASS")
+    assert rows["summary"]["native_metrics"]["non_passing_steps"] == errors
 
 
 @pytest.mark.parametrize("declared,status", [(False, "PASS"), (True, "FAIL")])

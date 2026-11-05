@@ -381,7 +381,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_specifications"
       },
       "checks": [],
@@ -399,7 +398,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_model_qualification"
       },
       "checks": [],
@@ -417,7 +415,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "mixed_signal_interface_contract"
       },
       "checks": [
@@ -452,7 +449,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_testability_and_trim_plan"
       },
       "checks": [
@@ -484,7 +480,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_topology"
       },
       "checks": [
@@ -518,7 +513,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_netlist_and_sizing"
       },
       "checks": [
@@ -553,7 +547,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_measurement_testbench"
       },
       "checks": [
@@ -612,7 +605,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_pre_layout_nominal_performance"
       },
       "checks": [
@@ -805,8 +797,7 @@
           "_cdc_netlist.normalization_script",
           "_cdc_netlist.load",
           "_cdc_netlist.judge"
-        ],
-        "parallel": true
+        ]
       },
       "checks": [
         {
@@ -841,8 +832,7 @@
           "verilator_coverage_measure.parse_coverage_dat",
           "verilator_coverage_measure.scope_totals",
           "_sim_results_bridge.parse_junit"
-        ],
-        "parallel": true
+        ]
       },
       "checks": [
         {
@@ -945,8 +935,7 @@
         "native_commands": [
           "sby --dumptasks INPUT",
           "sby -f -d OUTPUT INPUT TASK"
-        ],
-        "parallel": true
+        ]
       },
       "checks": [
         {
@@ -1138,7 +1127,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "pre_layout_mixed_signal_verification"
       },
       "checks": [
@@ -1188,7 +1176,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_pre_layout_pvt_and_operating_range"
       },
       "checks": [
@@ -1224,7 +1211,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_pre_layout_statistics"
       },
       "checks": [
@@ -1258,7 +1244,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "calibration_algorithm_verification"
       },
       "checks": [
@@ -1525,8 +1510,7 @@
         "kind": "adapter",
         "adapter": "eqy",
         "program": "flow_native_verification.py",
-        "metric": "unproved_equivalence",
-        "parallel": true
+        "metric": "unproved_equivalence"
       },
       "checks": [
         {
@@ -1757,7 +1741,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_layout"
       },
       "checks": [
@@ -1791,7 +1774,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_block_physical_verification"
       },
       "checks": [
@@ -1861,7 +1843,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_parasitic_extraction"
       },
       "checks": [
@@ -1895,7 +1876,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_post_layout_performance"
       },
       "checks": [
@@ -1946,7 +1926,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_post_layout_statistics"
       },
       "checks": [
@@ -1995,7 +1974,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_reliability"
       },
       "checks": [
@@ -2046,7 +2024,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_characterized_views"
       },
       "checks": [
@@ -2081,7 +2058,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "analog_macro_integration"
       },
       "checks": [
@@ -2118,8 +2094,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "die_floorplan_and_macros",
-              "parallel": true
+              "step": "die_floorplan_and_macros"
             }
           },
           {
@@ -2196,8 +2171,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "io_pad_ring_and_power_distribution",
-              "parallel": true
+              "step": "io_pad_ring_and_power_distribution"
             }
           },
           {
@@ -2240,7 +2214,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "mixed_signal_power_domains"
       },
       "checks": [
@@ -2797,7 +2770,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_top_interconnect_pads_and_power"
       },
       "checks": [
@@ -2908,8 +2880,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "routed_candidate_physical_checks",
-              "parallel": true
+              "step": "routed_candidate_physical_checks"
             }
           },
           {
@@ -3007,8 +2978,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "antenna_checks",
-              "parallel": true
+              "step": "antenna_checks"
             }
           },
           {
@@ -3087,8 +3057,7 @@
         "kind": "adapter",
         "adapter": "eqy",
         "program": "flow_native_verification.py",
-        "metric": "final_lec_unproved",
-        "parallel": true
+        "metric": "final_lec_unproved"
       },
       "checks": [
         {
@@ -3115,8 +3084,7 @@
       "tool": {
         "kind": "adapter",
         "adapter": "implemented_cdc",
-        "program": "flow_native_adapters.py",
-        "parallel": true
+        "program": "flow_native_adapters.py"
       },
       "checks": [
         {
@@ -3205,8 +3173,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "candidate_parasitic_extraction",
-              "parallel": true
+              "step": "candidate_parasitic_extraction"
             }
           },
           {
@@ -3265,8 +3232,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "candidate_signal_integrity",
-              "parallel": true
+              "step": "candidate_signal_integrity"
             }
           },
           {
@@ -3499,8 +3465,7 @@
               "line": 2751
             }
           }
-        ],
-        "parallel": true
+        ]
       },
       "checks": [
         {
@@ -3534,8 +3499,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "post_layout_spice_correlation",
-              "parallel": true
+              "step": "post_layout_spice_correlation"
             }
           },
           {
@@ -3615,8 +3579,7 @@
       "when": "physical",
       "tool": {
         "kind": "adapter",
-        "adapter": "functional_activity",
-        "parallel": true
+        "adapter": "functional_activity"
       },
       "checks": [],
       "legacy_id": {
@@ -3637,8 +3600,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "candidate_power_analysis",
-              "parallel": true
+              "step": "candidate_power_analysis"
             }
           },
           {
@@ -3705,8 +3667,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "candidate_ir_drop",
-              "parallel": true
+              "step": "candidate_ir_drop"
             }
           },
           {
@@ -3730,8 +3691,7 @@
                 "flow_ir_corners",
                 "librelane_plugins.librelane_plugin_vibeic.ir_drop"
               ],
-              "adapter": "ir_drop",
-              "parallel": true
+              "adapter": "ir_drop"
             }
           },
           {
@@ -3743,7 +3703,6 @@
                 "Vibeic.TransientIR"
               ],
               "adapter": "ir_drop",
-              "parallel": true,
               "imports": [
                 "librelane_plugins.librelane_plugin_vibeic.ir_drop"
               ]
@@ -3783,8 +3742,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "candidate_electromigration",
-              "parallel": true
+              "step": "candidate_electromigration"
             }
           },
           {
@@ -3937,7 +3895,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "substrate_and_supply_coupling"
       },
       "checks": [
@@ -3969,7 +3926,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "candidate_mixed_signal_scenarios"
       },
       "checks": [
@@ -4009,8 +3965,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "stream_out",
-              "parallel": true
+              "step": "stream_out"
             }
           },
           {
@@ -4102,7 +4057,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "complete_top_level_layout_assembly"
       },
       "checks": [],
@@ -4495,8 +4449,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "final_geometry_rc_and_pex",
-              "parallel": true
+              "step": "final_geometry_rc_and_pex"
             }
           },
           {
@@ -4552,8 +4505,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "step": "final_electrical_analysis",
-              "parallel": true
+              "step": "final_electrical_analysis"
             }
           },
           {
@@ -4723,8 +4675,7 @@
       "tool": {
         "kind": "adapter",
         "adapter": "dfm",
-        "program": "dfm_screen_check.py",
-        "parallel": true
+        "program": "dfm_screen_check.py"
       },
       "checks": [],
       "legacy_id": {
@@ -4799,8 +4750,7 @@
             }
           }
         ],
-        "corners": "all",
-        "parallel": true
+        "corners": "all"
       },
       "checks": [
         {
@@ -4826,7 +4776,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "final_geometry_mixed_signal_scenarios"
       },
       "checks": [
@@ -4960,7 +4909,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "parallel": true,
         "step": "analog_block_signoff"
       },
       "checks": [
@@ -4998,7 +4946,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "parallel": true,
         "step": "mixed_signal_signoff"
       },
       "checks": [],
@@ -5087,8 +5034,7 @@
       "when": "package_interface",
       "tool": {
         "kind": "adapter",
-        "adapter": "package_readiness",
-        "parallel": true
+        "adapter": "package_readiness"
       },
       "checks": [
         {
@@ -5206,7 +5152,6 @@
       "tool": {
         "kind": "adapter",
         "adapter": "ip_release_docs",
-        "parallel": true,
         "destination": "phase3/stage4/hardmacro",
         "formats": {
           "lef": ".lef",
@@ -5245,8 +5190,7 @@
       "tool": {
         "kind": "adapter",
         "adapter": "tapeout_precheck",
-        "program": "tapeout_precheck.py",
-        "parallel": true
+        "program": "tapeout_precheck.py"
       },
       "checks": [
         {
