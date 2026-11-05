@@ -814,9 +814,14 @@
         "unit": "percent",
         "source": {
           "file": "programs/verilator_coverage_measure.py",
-          "line": 2766
+          "line": 2774
         },
-        "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+        "limit_note": "Original Step4 checker floor. A stricter applicable design-declared target must also be enforced. This is distinct from benchmark_verify_report line floor 90 and D13 document-bound comparison.",
+        "caller_source": {
+          "file": "flow/phase1_phase2_phase3.yaml",
+          "line": 2576,
+          "note": "Actual old Step4 check caller supplies no threshold overrides."
+        }
       },
       {
         "metric": "coverage_toggle_pct",
@@ -825,9 +830,14 @@
         "unit": "percent",
         "source": {
           "file": "programs/verilator_coverage_measure.py",
-          "line": 2767
+          "line": 2775
         },
-        "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+        "limit_note": "Original Step4 checker floor. A stricter applicable design-declared target must also be enforced. This is distinct from benchmark_verify_report line floor 90 and D13 document-bound comparison.",
+        "caller_source": {
+          "file": "flow/phase1_phase2_phase3.yaml",
+          "line": 2576,
+          "note": "Actual old Step4 check caller supplies no threshold overrides."
+        }
       },
       {
         "metric": "coverage_branch_pct",
@@ -836,9 +846,14 @@
         "unit": "percent",
         "source": {
           "file": "programs/verilator_coverage_measure.py",
-          "line": 2768
+          "line": 2776
         },
-        "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+        "limit_note": "Original Step4 checker floor. A stricter applicable design-declared target must also be enforced. This is distinct from benchmark_verify_report line floor 90 and D13 document-bound comparison.",
+        "caller_source": {
+          "file": "flow/phase1_phase2_phase3.yaml",
+          "line": 2576,
+          "note": "Actual old Step4 check caller supplies no threshold overrides."
+        }
       }
     ],
     "formal_verification": [
@@ -2001,7 +2016,7 @@
       {
         "old_name": "coverage_targets",
         "class": "T",
-        "reason": "Ruling 208 has not accepted the duplicate classification. Verify actual old-step callers and published SPM coverage limits; enforce stricter declared targets. Existing numeric checks are unchanged pending that verification."
+        "reason": "Actual Step4 callers enforce line 70, toggle 60, branch 70; benchmark reporting independently enforces line 90. Flow109 D13 compares exact native counts against per-category declared bounds and keeps informational target applicability. Direct L-document bound comparison remains unwired; use stricter applicable targets and require real measurements. Published SPM reports show 100/98.48/100 but contain no numeric declared bounds. See COVERAGE_LIMITS.md."
       }
     ],
     "formal_verification": [
@@ -2436,8 +2451,8 @@
       },
       {
         "old_name": "pad_access_spacing",
-        "class": "T",
-        "reason": "Native engineering tool report for io pad ring and power distribution; wire the report/input adapter without population emitters or requirement traces."
+        "class": "D",
+        "reason": "PDK pad spacing defects are already checked by final native DRC against unchanged deck rules; native PadRing rejects invalid geometry."
       }
     ],
     "mixed_signal_power_domains": [
@@ -2539,9 +2554,27 @@
     "clock_tree_synthesis": [
       {
         "old_name": "clock_tree_sink_coverage",
-        "class": "T",
-        "reason": "OpenROAD CTS native clock-net loads and connected sink counts. Wire only this native report; both sides must come from the tool.",
-        "native_population": "OpenROAD CTS native clock-net loads and connected sink counts"
+        "class": "R",
+        "reason": "OpenROAD CTS reports sink counts but no independent numeric coverage bound is declared. Report the native CTS counts. Actual missing/unconstrained clocks remain covered by native STA diagnostics.",
+        "native_population": "OpenROAD CTS native clock-net loads and connected sink counts",
+        "native_metrics": [],
+        "native_report_numbers": [
+          {
+            "metric": "Total number of sinks",
+            "report": "openroad_cts/openroad-cts.log",
+            "pattern": "Total number of sinks: (\\d+)\\."
+          },
+          {
+            "metric": "Total number of sinks after clustering",
+            "report": "openroad_cts/openroad-cts.log",
+            "pattern": "Total number of sinks after clustering: (\\d+)\\."
+          },
+          {
+            "metric": "Number of sinks covered",
+            "report": "openroad_cts/openroad-cts.log",
+            "pattern": "Number of sinks covered: (\\d+)\\."
+          }
+        ]
       },
       {
         "old_name": "clock_skew_insertion_drv",
@@ -2642,8 +2675,8 @@
       },
       {
         "old_name": "route__wirelength__max",
-        "class": "N",
-        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "class": "R",
+        "reason": "The native WIRE_LENGTH_THRESHOLD is null on the current run. Report route__wirelength__max without inventing a bound. If the tool configuration or a document declares a bound, compare the same native value against that original bound.",
         "native_metrics": [
           "route__wirelength__max"
         ]
@@ -2732,9 +2765,13 @@
     "candidate_parasitic_extraction": [
       {
         "old_name": "candidate_parasitic_coverage",
-        "class": "T",
-        "reason": "OpenSTA report_parasitic_annotation annotated and unannotated native nets. Wire only this native report; both sides must come from the tool.",
-        "native_population": "OpenSTA report_parasitic_annotation annotated and unannotated native nets"
+        "class": "R",
+        "reason": "Report the native annotation count; no additional declaration supplies a numeric coverage bound here. Final extraction annotation and final STA remain engineering checks.",
+        "native_population": "OpenSTA report_parasitic_annotation annotated and unannotated native nets",
+        "native_metrics": [
+          "timing__unannotated_net__count",
+          "timing__unannotated_net_filtered__count"
+        ]
       },
       {
         "old_name": "si_applicability_evidence",
@@ -2837,8 +2874,14 @@
       },
       {
         "old_name": "per_mode_rail_average_peak_power",
-        "class": "T",
-        "reason": "Native engineering tool report for candidate power analysis; wire the report/input adapter without population emitters or requirement traces."
+        "class": "R",
+        "reason": "Report native power numbers. No undeclared power budget is invented; compare a document-declared power bound when present.",
+        "native_metrics": [
+          "power__total",
+          "power__internal__total",
+          "power__leakage__total",
+          "power__switching__total"
+        ]
       }
     ],
     "candidate_ir_drop": [
@@ -2857,8 +2900,8 @@
       },
       {
         "old_name": "static_dynamic_ir_limits",
-        "class": "T",
-        "reason": "OpenROAD PDNSim static and dynamic IR native analysis; wire the report/input adapter without population emitters or requirement traces."
+        "class": "D",
+        "reason": "Native ir__drop__worst__pct already holds the original 5.0 percent IR limit in this row. Do not add an abstract second IR gate. A separately declared dynamic mission still requires its native analysis."
       }
     ],
     "candidate_electromigration": [
@@ -3416,18 +3459,20 @@
     "mixed_signal_signoff": {
       "when": "False",
       "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+    },
+    "submission_and_implementation_interface": {
+      "when": "False",
+      "reason": "No native engineering tool or checks remain. _run_step_0_5ic performs old submission/template admission and is not an available native OwnerSession tool. Documents and unchanged Router own the implementation interface."
     }
   },
   "classification_decision": {
     "ruling": 208,
-    "resolved": "All 13 R lines and P lines accepted subject to the explicit conditions. ip_endpoint_views and release_required_items reversed to N.",
+    "resolved": "Ruling 208 R/P decisions are resolved. Coverage caller audit preserves actual Step4 floors 70/60/70 and the separate benchmark line floor 90; direct document-bound coverage comparison remains engineering work (T), not a request for a new limit. See COVERAGE_LIMITS.md.",
     "conditions": [
       "Analog signoff reads every declared L-document spec and its SPICE number directly. A missing number is NOT_MEASURED; comparator remains T until wired.",
       "R native numbers remain visible in results; declared bounds are compared when present.",
       "Density D applies only when the native density metric measures the same final GDS as final physical verification."
     ],
-    "unresolved": [
-      "Coverage only. Determine the old step caller limits and the published SPM thresholds, then apply the stricter declared target. The previous coverage_targets D is suspended as T; no numeric limit is changed by this delta."
-    ]
+    "unresolved": []
   }
 }

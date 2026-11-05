@@ -156,6 +156,11 @@ def classify_checks(table, native):
                 observations.append({"metric": check["metric"], "native_metrics": names,
                                      "source": check["source"], "reason": fact["reason"],
                                      "declared_limit_from": check.get("limit_from", {})})
+                for key in ("operator", "limit", "limit_config", "when"):
+                    if key in check:
+                        observations[-1][key] = check[key]
+                if fact.get("native_report_numbers"):
+                    observations[-1]["native_report_numbers"] = fact["native_report_numbers"]
             elif category == "P":
                 dropped.append({"step": row["name"], "old_name": check["metric"],
                                 "class": category, "what_still_protects": fact["reason"]})
@@ -211,12 +216,14 @@ def main():
             requests = [r for r in classifications if r["class"] in {"R", "P"}]
             fields = ["step", "old_name", "class", "new_native_name_or_reason"]
             decision = native.get("classification_decision")
-            if decision:
+            if decision and decision["unresolved"]:
                 (args.reports / "DECISION-REQUEST.md").write_text(
                     f"# Ruling {decision['ruling']} classification decisions\n\n"
                     + decision["resolved"] + "\n\n"
                     + "\n\n".join(decision["conditions"]) + "\n\n"
                     + "\n\n".join("UNRESOLVED: " + item for item in decision["unresolved"]) + "\n")
+            elif decision:
+                (args.reports / "DECISION-REQUEST.md").unlink(missing_ok=True)
             else:
                 (args.reports / "DECISION-REQUEST.md").write_text(
                     "# Ruling 207 R/P classification for owner review\n\n"
