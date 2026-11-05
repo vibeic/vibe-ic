@@ -89,13 +89,13 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     reads = [f"read_verilog -lib -nooverwrite -sv {defines} {includes} " + _word(path) for path in models]
     reads += ["read_liberty -lib -nooverwrite -ignore_miss_func -ignore_miss_dir " + _word(path)
               for path in pads["liberty"]]
-    views, reports = {}, []
+    views, reports, outputs, disconnected_ports = {}, [], {}, {}
     for side, source in (("gold", gold.replace("[gold]", "")), ("gate", gate)):
         path = directory / f"{side}_pads.ys"
         path.write_text("\n".join(reads) + "\n" + source + "\n"
             + f"hierarchy -check -top {top}\nproc\nflatten\n"
             + f"write_json {_word(directory / (side + '.before-normalization.json'))}\n"
-            + f"select -set terminals {top}/i:* {top}/o:* %i\n"
+            + f"select -set terminals {top}/i:* {top}/o:* %u\n"
             + "\n".join(f"expose -evert {top}/t:{master}"
                          for master in sorted(pads["types"])) + "\n"
             + f"select -set pad_terminals {top}/i:* {top}/o:* %i @terminals %d\n"
@@ -122,14 +122,22 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
                         and name not in connected_ports]
         pad_terminals = {bit for cell in module["cells"].values() if cell["type"] in pads["types"]
                          for pin, bits in cell["connections"].items()
-                         if cell["port_directions"].get(pin) == "inout" for bit in bits}
+                         for bit in bits}
         package_inputs = {bit for port in module["ports"].values() if port["direction"] in {"input", "inout"}
                           for bit in port["bits"]}
         package_outputs = [f"{top}/{name}" for name, port in module["ports"].items()
                            if port["direction"] == "output" and port["bits"]
                            and all(type(bit) is int and bit in pad_terminals
                                    and bit not in core_connections and bit not in package_inputs for bit in port["bits"])]
-        projection = []
+        outputs[side], disconnected_ports[side] = set(package_outputs), disconnected
+        reports.extend([directory / f"{side}.before-normalization.json", core / f"{side}.json"])
+
+    package_outputs = sorted(outputs["gold"] & outputs["gate"])
+    for side, module in views.items():
+        preserved_outputs = [f"{top}/{name}" for name, port in module["ports"].items()
+                             if port["direction"] == "output" and f"{top}/{name}" not in package_outputs]
+        disconnected = disconnected_ports[side]
+        projection = ["expose " + " ".join(preserved_outputs)] if preserved_outputs else []
         if package_outputs:
             projection.extend(["expose -input " + " ".join(package_outputs),
                                "delete -output " + " ".join(package_outputs)])
@@ -146,7 +154,6 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
             reports.append(path)
             if completed is None or completed.returncode:
                 return None, None, reports, "Pad-free core elaboration did not complete."
-        reports.extend([directory / f"{side}.before-normalization.json", core / f"{side}.json"])
 
     def wrapper(module):
         instances = {name: cell for name, cell in module["cells"].items()
@@ -199,6 +206,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
 
 def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
+    from lec_run import DEFAULT_YOSYS_TIMEOUT_S
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
     from lec_post_layout_check import _LIB_CELL_RE
     from flow_chip_inputs import _paths
@@ -267,7 +275,8 @@ def eqy(project, directory, tool, commands, *, state, config):
     pad_types -= physical
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
-        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models)
+        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models,
+        timeout=DEFAULT_YOSYS_TIMEOUT_S)
     if physical:
         removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
         source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)

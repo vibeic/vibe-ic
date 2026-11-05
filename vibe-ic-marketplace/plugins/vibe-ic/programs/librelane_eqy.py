@@ -72,7 +72,8 @@ _EQY_STATUSES = ("PASS", "FAIL", "UNKNOWN", "ERROR", "TIMEOUT")
 def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
                *, synthesis: Optional[dict] = None, views: Optional[Path] = None,
                liberty_files: Optional[list[Path]] = None,
-               model_verilog: Optional[list[Path]] = None) -> str:
+               model_verilog: Optional[list[Path]] = None,
+               timeout: Optional[int] = None) -> str:
     from lec_run import (fsm_encfile_beside_netlist, fsm_signal_names,
                          _equiv_splitnets)
     encoding = fsm_encfile_beside_netlist(str(netlist))
@@ -102,6 +103,7 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         includes = " ".join('-I ' + str(p) for p in sorted({p.parent for p in model_verilog}))
         gate_models = [f"read_verilog -formal -sv -overwrite {defines} {includes} "
                        + " ".join(map(str, model_verilog))]
+    budget = [f"timeout {timeout}"] if timeout is not None else []
     return "\n".join([
         "[gold]", read, *(libraries if synthesis is not None else []), *gold_prep, "",
         "[gate]", *libraries, *gate_models,
@@ -116,8 +118,8 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         "gate-nomatch /^_[0-9]+_$/", "",
         "[collect *]", "group *", "",
         "[partition *]", "amend *", "",
-        "[strategy sat]", "use sat", "depth 5", "",
-        "[strategy pdr]", "use sby", "engine abc pdr -rfi", ""])
+        "[strategy sat]", "use sat", "depth 5", *budget, "",
+        "[strategy pdr]", "use sby", "engine abc pdr -rfi", *budget, ""])
 
 
 def partition_status(scratch: Path) -> Optional[dict[str, dict[str, str]]]:
