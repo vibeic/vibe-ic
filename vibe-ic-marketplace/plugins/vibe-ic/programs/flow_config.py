@@ -234,11 +234,23 @@ def resolve_rtl_inputs(project: Path | str) -> tuple[list[Path], str]:
     return _resolve_rtl_inputs(Path(project).resolve(), {})
 
 
+def declared_clocks(project: Path, pdk: str) -> list[dict]:
+    docs = project / "phase1/generated_docs"
+    clocks = [clock for clock in _load(docs / "L8_TIMING_WAVEFORM.json").get("clock_domains", [])
+              if (clock.get("domain_kind") == "primary" or clock.get("role") in {"primary", "master"})
+              and clock.get("pdk_scoped_target") in {None, pdk}]
+    return clocks or _load(docs / "L8_RTL_CONSTANTS.json").get("clock_domains", [])
+
+
+def clock_period_ns(clock: dict):
+    return (float(clock["period_ns"]) if clock.get("period_ns") is not None else
+            1000 / float(clock["freq_mhz"]) if clock.get("freq_mhz") else None)
+
+
 def build_config(project: Path | str, *, route: str | None = None, pdk: str | None = None) -> dict[str, Any]:
     """Read L documents and produced RTL; route is supplied by the Router caller."""
     project = Path(project).resolve()
     docs = project / "phase1/generated_docs"
-    l8 = _load(docs / "L8_TIMING_WAVEFORM.json")
     l19 = _load(docs / "L19_CONSTRAINTS_PDK.json")
     fields = l19.get("fields", {})
     pdk = pdk or fields.get("pdk_target") or l19.get("pdk_target")
@@ -272,12 +284,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
             config[key] = fields[field]
     if "DIE_AREA" in config:
         config["FP_SIZING"] = "absolute"
-    clocks = [clock for clock in l8.get("clock_domains", [])
-              if (clock.get("domain_kind") == "primary"
-                  or clock.get("role") in {"primary", "master"})
-              and clock.get("pdk_scoped_target") in {None, pdk}]
-    if not clocks:
-        clocks = _load(docs / "L8_RTL_CONSTANTS.json").get("clock_domains", [])
+    clocks = declared_clocks(project, pdk)
     if not clocks:
         from phase1_doc_one_shot_runner import _v638_comportable_interface_harvest
 
@@ -290,9 +297,9 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     if clocks:
         ports = [clock.get("source_pin") or clock.get("name") for clock in clocks]
         config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
-        period = fields.get("clock_target", {}).get("period_ns") or clocks[0].get("period_ns")
-        if period is None and clocks[0].get("freq_mhz"):
-            period = 1000 / clocks[0]["freq_mhz"]
+        periods = [value for clock in clocks if (value := clock_period_ns(clock)) is not None]
+        override = fields.get("clock_target", {}).get("period_ns") if len(clocks) == 1 else None
+        period = override or (min(periods) if periods else None)
         if period is not None:
             config["CLOCK_PERIOD"] = period
     if "CLOCK_PERIOD" not in config:

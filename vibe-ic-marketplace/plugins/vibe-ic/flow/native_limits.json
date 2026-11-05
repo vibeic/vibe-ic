@@ -4361,6 +4361,10 @@
         "nl": ".v"
       },
       "metric": "release_required_items"
+    },
+    "clock_planning": {
+      "kind": "native_report",
+      "from": "clock_tree_synthesis"
     }
   },
   "report_check_readers": {
