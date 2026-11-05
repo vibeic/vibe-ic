@@ -56029,6 +56029,9 @@ def gen_l10_test_cases(project: Path,
     # command-driven IC has opcode_synthesis_enabled -> no skip reason -> its
     # pre_wake_false cases are still emitted and still FAIL without a TB.
     _no_wake_protocol = bool(l3.get("opcode_synthesis_skipped_reason"))
+    l1 = _try_load_l_doc(project, 'L1_DATASHEET') or {}
+    cpu_isa = (_v1_6_331_provisional_class_path(project, extracted) == 'processor_cpu'
+               and bool(l1.get('isa_base') or l1.get('isa_extensions')))
     for op in opcodes[:24]:
         if not isinstance(op, dict) or op.get("hex") == "__TODO__":
             continue
@@ -56047,9 +56050,13 @@ def gen_l10_test_cases(project: Path,
             continue
         cases.append({
             "name": f"send_{op.get('name', 'OP').lower()}_happy",
-            "kind": "happy_path",
-            "stimulus": f"host sends {op_hex}",
-            "expected": "DUT replies per response_payload_template",
+            "kind": "functional_vector" if cpu_isa else "happy_path",
+            "stimulus": (f"Execute legal {op.get('name', op_hex)} instructions through the declared "
+                         "instruction interface with independently specified initial architectural state"
+                         if cpu_isa else f"host sends {op_hex}"),
+            "expected": ("Compare the applicable architectural register, PC, memory and CSR effects "
+                         "against the source ISA semantics and check for unintended side effects"
+                         if cpu_isa else "DUT replies per response_payload_template"),
             "opcode_hex": op_hex,
             "evidence": "L3.opcodes",
         })
