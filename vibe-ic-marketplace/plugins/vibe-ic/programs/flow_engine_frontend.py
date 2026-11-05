@@ -419,6 +419,14 @@ def run_public(args):
         if forwarded.get("from_name"):
             forwarded["from_name"] = "die_floorplan_and_macros"
     summary = flow_engine.run(project, route=route, **forwarded)
+    from flow_pdn_recovery import plan_recovery, apply_plan, finish_replay
+    recovery = plan_recovery(project, route, summary)
+    if recovery is not None:
+        first = summary
+        archive = apply_plan(project, route, first, recovery)
+        summary = flow_engine.run(project, route=route,
+            **{**forwarded, "from_name": "die_floorplan_and_macros"})
+        summary = finish_replay(project, first, summary, archive)
     if original_common is not None:
         summary["common_wall_seconds"] = time.perf_counter() - original_common
         flow_engine.write_json(project / "reports/flow_engine.json", summary)
