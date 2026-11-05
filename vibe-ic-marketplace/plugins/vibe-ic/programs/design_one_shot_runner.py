@@ -25878,6 +25878,21 @@ def step_d14_formal_read(project: Path, context: Mapping[str, Any]) -> StepResul
             'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False})
 
 
+def _formal_refresh_needed(project: Path, results: Path):
+    if not results.is_file():
+        return True, None
+    try:
+        import formal_proof_evidence_check as evidence
+        import formal_property_run as producer
+        retained = json.loads(results.read_text())
+        if evidence.proof_source_staleness(project, results.parent, retained):
+            return True, None
+        reason = producer.incomplete_program_refresh_reason(retained)
+        return bool(reason), reason
+    except (OSError, ValueError, TypeError):
+        return True, None
+
+
 def _publish_d14_owner(project: Path, context: Mapping[str, Any], *, invocation_context=None) -> int:
     """Publish only the fresh D14 read in this attempt, preserving original formal proof/cover outputs."""
     import flow109
@@ -25887,18 +25902,24 @@ def _publish_d14_owner(project: Path, context: Mapping[str, Any], *, invocation_
         print('REFUSED: D14_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
         return 2
     formal = _pl.formal_dir(project)
-    if not (formal / 'results.json').is_file():
+    refresh, refresh_reason = _formal_refresh_needed(project, formal / 'results.json')
+    if refresh:
+        if (formal / 'results.json').is_file():
+            history = formal.parent / 'formal_history' / f'pre_refresh_{time.time_ns()}'
+            shutil.copytree(formal, history)
         import formal_harness_gen as generator
         import formal_property_run as producer
         import p0_tool_frontend_check as frontend
         generated = generator.generate(project=project, top=frontend._top(project))
         if generated.get('verdict') == 'EMITTED':
             producer.run(project, harness=Path(generated['harness_path']),
-                rtl=[Path(path) for path in generated['rtl_files']], top=generated['top'])
+                rtl=[Path(path) for path in generated['rtl_files']], top=generated['top'],
+                continuation_refresh_reason=refresh_reason)
     row = step_d14_formal_read(project, context)
     summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
         'declared_window': {'entry_step': '4', 'exit_step': '5', 'dispatched_step_ids': ['5']},
-        'bounded_disclosures': ['current qualified formal proof/cover read; no native replay; whole flow unmeasured']}
+        'bounded_disclosures': [('native formal producer refreshed; original proof results read; whole flow unmeasured'
+                                 if refresh else 'retained formal outputs read; whole flow unmeasured')]}
     out = attempt / 'phase2_one_shot.json'
     _write_phase2_report(out, summary, project, invocation_context=invocation_context)
     reread = metrics.accept_d14(project, context)
@@ -26562,21 +26583,8 @@ def step_emit_phase2_manifests(project: Path,
     # A counterexample is evidence. Deleting it and replacing it with a skip was
     # the false-green defect, so this block never unlinks results.json.
     _formal_results = formal_dir / "results.json"
-    _refresh_formal = emit_formal and not _formal_results.is_file()
-    _formal_refresh_reason = None
-    if emit_formal and not _refresh_formal:
-        try:
-            import formal_proof_evidence_check as _formal_evidence
-            _retained_formal = json.loads(_formal_results.read_text())
-            _refresh_formal = bool(_formal_evidence.proof_source_staleness(
-                project, formal_dir, _retained_formal))
-            if not _refresh_formal:
-                import formal_property_run as _fpr
-                _formal_refresh_reason = _fpr.incomplete_program_refresh_reason(
-                    _retained_formal)
-                _refresh_formal = bool(_formal_refresh_reason)
-        except (OSError, ValueError, TypeError):
-            _refresh_formal = True
+    _refresh_formal, _formal_refresh_reason = (
+        _formal_refresh_needed(project, _formal_results) if emit_formal else (False, None))
     if emit_formal and _refresh_formal:
         formal_dir.mkdir(parents=True, exist_ok=True)
         try:
