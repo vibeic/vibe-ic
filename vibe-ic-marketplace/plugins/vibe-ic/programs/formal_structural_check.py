@@ -123,12 +123,18 @@ YOSYS_PASSES = ("proc; flatten; opt_expr; opt_clean; opt_dff; opt_clean")
 
 
 def yosys_script(rtl_files: List[str], top: str, netlist: str,
-                 simdef: str = "", passes: str = "") -> str:
+                 simdef: str = "", passes: str = "", *, slang: bool = False) -> str:
     """The DUT read EXACTLY as the chip's synthesis reads it (R-0915-157):
     `_chip_synth_read.chip_read_lines` — `read_verilog -sv [-DSIMULATION ]` per
     file. No `-formal`, no proof define: the facts are about the chip."""
     import _chip_synth_read as _csr
     reads = "; ".join(_csr.chip_read_lines([Path(f) for f in rtl_files], simdef))
+    if slang:
+        from rtl_transitive_cone import topological_package_first
+        from _rtl_include_hub import macro_headers_first
+        files = macro_headers_first(topological_package_first([Path(f) for f in rtl_files]))
+        includes = " ".join('-I ' + str(p) for p in sorted({p.parent for p in files}))
+        reads = f"read_slang --single-unit --top {top} {simdef}{includes} " + " ".join(map(str, files))
     return (f"{reads}; hierarchy -top {top}; "
             f"{passes or YOSYS_PASSES}; write_json {netlist}")
 
@@ -2778,6 +2784,18 @@ def run_yosys(rtl_files: List[Path], top: str, work_dir: Path,
         rc, log = p.returncode, (p.stdout or "") + (p.stderr or "")
     except FileNotFoundError as exc:
         rc, log = 127, f"[formal_structural_check] {exc}\n"
+    import synth_frontend as frontend
+    retry, reason = frontend.decide_synth_frontend(
+        rtl_files, rc, netlist.is_file(), log,
+        rtl_text_blob=frontend.read_text_blob(rtl_files))
+    if retry and rc != 127:
+        _aa.write_text(ys.with_suffix('.read_verilog.ys'), script.replace('; ', '\n') + '\n')
+        _aa.write_text(work_dir / f"formal_structural_check{tag}.read_verilog.log", log)
+        script = yosys_script([str(Path(f).resolve()) for f in rtl_files], top,
+                             str(netlist.resolve()), simdef, passes, slang=True)
+        _aa.write_text(ys, script.replace('; ', '\n') + '\n')
+        p = subprocess.run(argv, capture_output=True, text=True)
+        rc, log = p.returncode, f"[SV frontend retry] {reason}\n" + (p.stdout or "") + (p.stderr or "")
     _aa.write_text(work_dir / f"formal_structural_check{tag}.log", log)
     return rc, log, netlist
 
