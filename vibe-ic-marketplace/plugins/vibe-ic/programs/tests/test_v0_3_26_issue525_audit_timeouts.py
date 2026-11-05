@@ -133,7 +133,7 @@ def test_gate_stall_message_says_not_a_verdict(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(FCC._watchdog, "run_host_supervised", _stalled_result)
     ok, msg = FCC._check_program_exit_zero(
-        tmp_path, "marketplace_version_sync_check .")
+        tmp_path, "plugin_version_prose_sync_check .")
     assert ok is False
     assert "STALLED" in msg and "NOT a verdict" in msg
     assert _pl.GATE_TIMEOUT_ENV in msg
@@ -158,7 +158,7 @@ def test_gate_budget_honors_env(tmp_path, monkeypatch):
     monkeypatch.setenv(_pl.GATE_TIMEOUT_ENV, "77")
     monkeypatch.setattr(FCC._watchdog, "run_host_supervised", capture)
     FCC._check_program_exit_zero(
-        tmp_path, "marketplace_version_sync_check .")
+        tmp_path, "plugin_version_prose_sync_check .")
     assert seen["stall_grace_s"] == 77
 
 

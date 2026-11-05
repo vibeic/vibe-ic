@@ -36,10 +36,6 @@ def trials():
                "objective_status": (obj or {}).get("status", "ABSENT"),
                "objective_um2": (obj or {}).get("value"),
                "objective_reason": (obj or {}).get("reason")}
-        a = load(d / "assembly.json")
-        if a:
-            rec["feasibility_verdict"] = a["feasibility_verdict"]
-            rec["axes"] = a["axes"]
         pw = load(d / "diag" / "power_postroute_records.json")
         if pw:
             t = [r for r in pw["metrics"] if r["metric"] == "power.total_w"
@@ -104,7 +100,7 @@ def main():
         json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
     print(f"{'trial':6s} {'rtl_variant':14s} {'synth':9s} {'util':5s} {'spare':5s} "
-          f"{'objective':>10s} {'synth_area':>10s} {'power_W':>10s}  feas")
+          f"{'objective':>10s} {'synth_area':>10s} {'power_W':>10s}")
     for k, v in sorted(t.items(), key=lambda kv: (kv[1]["objective_um2"] is None,
                                                   kv[1]["objective_um2"] or 0)):
         o = v["objective_um2"]
@@ -112,8 +108,7 @@ def main():
               f"{v['placement_density']:5s} {v['spare_cell_density']:5s} "
               f"{(f'{o:.0f}' if o is not None else 'NOT_MEAS'):>10s} "
               f"{(f'{v.get(chr(115)+chr(121)+chr(110)+chr(116)+chr(104)+chr(95)+chr(97)+chr(114)+chr(101)+chr(97)+chr(95)+chr(117)+chr(109)+chr(50)):.1f}' if v.get('synth_area_um2') else '-'):>10s} "
-              f"{(f'{v[chr(112)+chr(111)+chr(119)+chr(101)+chr(114)+chr(95)+chr(112)+chr(111)+chr(115)+chr(116)+chr(114)+chr(111)+chr(117)+chr(116)+chr(101)+chr(95)+chr(119)]:.6f}' if v.get('power_postroute_w') else '-'):>10s}  "
-              f"{v.get('feasibility_verdict','-')}")
+              f"{(f'{v[chr(112)+chr(111)+chr(119)+chr(101)+chr(114)+chr(95)+chr(112)+chr(111)+chr(115)+chr(116)+chr(114)+chr(111)+chr(117)+chr(116)+chr(101)+chr(95)+chr(119)]:.6f}' if v.get('power_postroute_w') else '-'):>10s}")
     print()
     print("equivalence:")
     for k, v in sorted(equivalence().items()):

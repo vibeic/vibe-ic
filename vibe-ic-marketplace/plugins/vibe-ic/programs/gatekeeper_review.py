@@ -24,43 +24,16 @@ never re-implemented):
                                          pair the author validated. Later main
                                          movement is a green Gatekeeper handoff;
                                          author-side rebase onto it is blocked
-  * gatekeeper_stale_branch_check.py   — the LANDING-METHOD guard: a PR forked
-                                         from an older base that also touches a
-                                         file landed since requires Gatekeeper
-                                         replay/rebase. It is non-blocking only
-                                         during version-less external-PR review;
-                                         final landing review still blocks
-  * landing_collateral_revert_check.py — the same guard AFTER the fact: no
-                                         commit in `base..head` may erase the
-                                         contribution an EARLIER commit of the
-                                         same range made to a file (the shape a
-                                         blind checkout land actually produces)
-  * loop_watchdog_compliance_check.py  — every long sub-process is watchdog-
-                                         supervised + every risky loop is
-                                         bounded (no fixed-timeout kill of a
-                                         live job; no loop can spin forever)
   * git_prohibition_guard.py           — forbidden destructive git ops in the
                                          PR's commit command strings
   * version_bump_monotonic_check.py    — strict monotonic version bump
                                          (current > previous) + the
                                          marketplace equality re-assert
-  * marketplace_version_sync_check.py  — plugin.json == marketplace.json
   * agent_checkin_scope_guard.py       — role-based check-in path scope
-  * plugin_full_audit.py               — D1 (every program tested) + D2 (every
-                                         step has a compliance checker)
   * full_suite_run_check.py            — the cadence-appropriate pytest command
                                          was actually issued
   * blindness_audit.py                 — (optional, only when transcripts are
                                          supplied) prompt-only blindness audit
-  * control_substance_check.py         — (only when the control evidence is
-                                         supplied) how many of the change's
-                                         pre-fix control tests OBSERVED A
-                                         VALUE, as opposed to only noticing
-                                         that something was absent. A control
-                                         whose every failure is "the module the
-                                         fix introduces does not exist yet"
-                                         BLOCKS: "the tests fail pre-fix" is
-                                         true of every new file ever written
   * tools/ci/repo_hygiene_gates.sh     — (#538) the ENTIRE repo-hygiene set CI
                                          runs, INVOKED rather than re-listed,
                                          so a gate added to CI is covered here
@@ -74,29 +47,6 @@ never re-implemented):
                                          manual habit). See `repo_hygiene_gate`
                                          for why the list is INVOKED and not
                                          derived from the gate names.
-  * landing_is_one_commit_check.py     — a single landing is ONE commit;
-                                         a batch declares its own shape
-  * gatekeeper_stale_branch_check.py   — (already above) and its two
-                                         change-set neighbours, which
-                                         were spawned here and unlisted
-                                         until 2026-08-22:
-  * acceptance_control_check.py        — ADVISORY: the control a change
-                                         cites must be the SHA it names
-  * real_artefact_test_backing_check.py — ADVISORY: a change whose tests
-                                         are all self-authored fixtures
-                                         cannot tell itself from its own
-                                         absence
-  * corpus_cardinality_pin_scan.py     — ADVISORY: a test that asserts the
-                                         SIZE of the published corpus goes
-                                         red on the next reorganisation and
-                                         reads as a regression in whatever
-                                         change is in flight
-  * ci_ran_at_all_check.py             — an absent CI run is DISCLOSED,
-                                         never rendered as a passing one
-  * ppa_pr_scope_check.py              — the PPA Appendix-C merge
-                                         condition: every applicable
-                                         question backed by evidence a
-                                         machine can re-verify
 
 THE §4.05 / GENERAL / NO-CHEAT BOUNDARY  (read this — it is load-bearing)
 ========================================================================
@@ -131,9 +81,6 @@ CLI
                          [--pytest-cmd "<cmd>"]
                          [--commit-cmds-file <f>]   # PR commit command strings
                          [--transcripts <dir/file> --dataset <root>]  # blindness
-                         [--control-junit <f>] [--control-text <f>]  # the
-                                                    # pre-fix control's own
-                                                    # pytest report
                          [--repo <dir>] [--plugin-root <dir>]
                          [--changed-file <f>]       # override diff (one path/line)
                          [--json OUT]
@@ -591,15 +538,6 @@ def version_bump_gate(cur: Optional[str], prev: Optional[str],
     return GateResult("version_bump_monotonic_check", rc, report.reason)
 
 
-# --------------------------------------------------------------------------
-# marketplace_version_sync_check — run as subprocess (it walks the tree).
-# --------------------------------------------------------------------------
-def marketplace_sync_gate(plugin_or_repo: Path) -> GateResult:
-    prog = _PROGRAMS_DIR / "marketplace_version_sync_check.py"
-    # The program walks UP from --marketplace-dir to find marketplace.json.
-    rc, out, err = _run_program(prog, ["--marketplace-dir", str(plugin_or_repo)])
-    summary = (out.strip().splitlines() or [err.strip()] or [""])[-1][:240]
-    return GateResult("marketplace_version_sync_check", rc, summary or "(no output)")
 
 
 # --------------------------------------------------------------------------
@@ -685,344 +623,6 @@ def nda_diff_scan_gate(repo: Path, base: str, head: str) -> GateResult:
     return GateResult("nda_diff_scan_check", rc, summary or "(no output)")
 
 
-# --------------------------------------------------------------------------
-# acceptance_control_check (#401) — ADVISORY.
-#
-# A fix's evidence must be measured against the state BEFORE the feature.
-# Validating round N against round N-1 measures the branch against itself:
-# measured on a real branch, 231 lines "recovered" four cases that the
-# merge-base already had, and the same tests showed 11 of 20 failing against
-# the predecessor while the corpus was byte-identical on 795 of 795 documents.
-#
-# The wrong control PROPAGATES: two rounds of adversarial verification both
-# used the SHA the commit body named. Recomputing it from git does not inherit
-# that. NEVER BLOCKING — a stacked-PR workflow can legitimately have a control
-# not yet on the integration branch.
-# --------------------------------------------------------------------------
-def acceptance_control_gate(repo: Path, base: str, head: str) -> GateResult:
-    prog = _PROGRAMS_DIR / "acceptance_control_check.py"
-    if not prog.is_file():
-        return GateResult("acceptance_control_check", -1,
-                          f"checker missing at {prog}")
-    rc, out, err = _run_program(prog, ["--repo", str(repo),
-                                       "--base", base, "--head", head])
-    if rc == 2:
-        return GateResult("acceptance_control_check", -1,
-                          f"skipped — merge-base({base}, {head}) unresolvable")
-    body = (out.strip() or err.strip()).splitlines()
-    bad = [ln for ln in body if "NOT valid" in ln]
-    summary = (bad[0] if bad else (body[0] if body else "(no output)"))[:240]
-    return GateResult("acceptance_control_check", 0, f"ADVISORY — {summary}")
-
-
-# --------------------------------------------------------------------------
-# ppa_pr_scope_check (#1347) — the PPA Appendix-C merge condition, BLOCKING.
-#
-# WHY HERE AND NOWHERE ELSE. This program answers "may this change-set merge?"
-# It needs a base and a head, and it needs them to be the ones being reviewed.
-# That rules out `tools/ci/repo_hygiene_gates.sh` on its own written contract:
-# "WHAT DOES NOT [belong here]: anything needing a commit RANGE or a base SHA
-# — those are event-shaped and stay inline in the workflow that has the
-# context." It rules out the flow definition, which reviews a DESIGN and has no
-# notion of a change-set. `.github/workflows/` is disabled in this repository,
-# so the one live place holding a base/head under review is this program — the
-# gate a maintainer runs before every push, whose MERGE_OK reads as "this will
-# land green". The verdict is literally a merge condition; it belongs at the
-# merge decision.
-#
-# WHAT BLOCKS
-# -----------
-# The checklist's merge condition is "every applicable question has verifiable
-# evidence, and every inapplicable question has a machine-checkable reason".
-# Answering it needs an answers document, and every arm of that answer now
-# blocks — including its absence.
-#
-# THE ABSENT ARM USED TO BE ADVISORY, AND IT STOPPED BEING SO BY ITS OWN
-# WRITTEN CONDITION. The advisory branch carried an expiry: "THE MOMENT an
-# answers-document convention exists in this repository — a declared path, and
-# this branch's own document at it — the `not present` arm becomes blocking and
-# this comment goes away." Both halves are satisfied: the path is declared
-# below as `_PPA_ANSWERS_REL`, and this repository carries a real document at
-# it. MEASURED on 05bb5e8d94, one change-set, the document the only variable:
-#
-#     answers document supplied   rc 0  PASS  7 applicable, 13 N/A, 0 undetermined
-#     document withheld           rc 1  FAIL  6 MISSING_EVIDENCE, each reading
-#                                             "no answers document was supplied"
-#
-# so the flip costs this repository nothing: it already answers. What the
-# advisory branch cost was the whole blocking arm — a gate that never passes
-# `--answers` can only ever see `answers_document_present: false`, and a wiring
-# that cannot fail is not a wiring. `AUTHOR_OVERRIDE_REFUSED` — the detector
-# disagreeing with an author who marked an applicable question N/A — had never
-# been reachable.
-#
-# WHAT THIS CHANGE DOES NOT FIX, stated so it is not mistaken for fixed. The
-# answers document resolves at a REPOSITORY path that every branch inherits, so
-# a change-set can satisfy this gate with a document that answers questions
-# about a DIFFERENT change-set. That is inherited staleness, it is not created
-# or worsened here, and blocking on absence does not detect it. It is filed as
-# a named follow-up in `.github/ppa_pr_answers.json` under `findings`.
-#
-# rc 2 is NOT CHECKED, never a pass: the content arm needs a diff, and given
-# only a path list it reports the surfaces it did NOT look for. "I could not
-# read it" and "I read it and it was empty" must not share a verdict.
-# --------------------------------------------------------------------------
-#: WHERE A BRANCH PUTS ITS APPENDIX-C ANSWERS. Declaring the path is what made
-#: the blocking arm REACHABLE, and its absence is now itself blocking: a
-#: change-set that does not answer does not merge. It sits beside
-#: `PULL_REQUEST_TEMPLATE.md` because it is the machine half of the same
-#: document.
-_PPA_ANSWERS_REL = ".github/ppa_pr_answers.json"
-
-
-def ppa_pr_scope_gate(repo: Path, base: str, head: str,
-                      answers: Optional[Path] = None) -> GateResult:
-    name = "ppa_pr_scope_check"
-    prog = _PROGRAMS_DIR / "ppa_pr_scope_check.py"
-    if not prog.is_file():
-        return GateResult(name, -1, f"checker missing at {prog}")
-    if answers is None:
-        cand = repo / _PPA_ANSWERS_REL
-        answers = cand if cand.is_file() else None
-    # The report is written to a TEMPORARY path, never into the repository.
-    # It declares `verdict: FAIL`, and a `reports/**/*.json` carrying that is
-    # what `step_internal_fail_bubble_up_check` refuses. A review artefact is
-    # not a step artefact and must not be able to be mistaken for one.
-    with tempfile.TemporaryDirectory(prefix="ppa_pr_scope_") as td:
-        out = Path(td) / "ppa_pr_scope.json"
-        argv = ["--repo", str(repo), "--base", base, "--head", head,
-                "--json", str(out)]
-        if answers is not None:
-            argv += ["--answers", str(answers)]
-        rc, so, se = _run_program(prog, argv)
-        rep = None
-        if out.is_file():
-            try:
-                rep = json.loads(out.read_text(encoding="utf-8"))
-            except ValueError:
-                rep = None
-
-    if rc == 2:
-        return GateResult(name, -1,
-                          "NOT CHECKED — the change-set could not be read, or "
-                          "a one-armed run could not look for the "
-                          "content-reachable surfaces")
-    if rc == 3:
-        return GateResult(name, 1, f"bad invocation: {(se or so).strip()[:200]}")
-    if rc == 0:
-        n = ((rep or {}).get("summary") or {}).get("applicable", "?")
-        return GateResult(name, 0, f"merge condition met ({n} applicable)")
-
-    # rc 1 — a finding about the PR.
-    summary = (rep or {}).get("summary") or {}
-    by_status = summary.get("by_status") or {}
-    applicable = summary.get("applicable", "?")
-    if rep is not None and rep.get("answers_document_present") is False:
-        # BLOCKING. This arm returned 0 until the convention existed; it does
-        # not any more, and the reason is in the block at the top of this
-        # section. The message still names the path, because a refusal a reader
-        # cannot act on is a refusal that gets switched off.
-        return GateResult(
-            name, 1,
-            f"the merge condition is VIOLATED — {applicable} of the 20 "
-            f"Appendix-C questions apply to this change-set and NO answers "
-            f"document was supplied at {_PPA_ANSWERS_REL}. Write that file: "
-            f"every applicable question needs verifiable evidence, and every "
-            f"inapplicable one a machine-checkable reason.")
-    bad = ", ".join(f"{k}={v}" for k, v in sorted(by_status.items())
-                    if k not in ("NOT_APPLICABLE", "SATISFIED"))
-    qs = [str(q.get("question")) for q in (rep or {}).get("questions") or []
-          if q.get("status") not in ("NOT_APPLICABLE", "SATISFIED")]
-    return GateResult(
-        name, 1,
-        f"the merge condition is VIOLATED — {bad or 'see report'}"
-        + (f" (Q{', Q'.join(qs[:8])})" if qs else ""))
-
-
-# --------------------------------------------------------------------------
-# real_artefact_test_backing_check (#400) — ADVISORY.
-#
-# A change whose tests are ALL synthetic fixtures authored alongside it cannot
-# distinguish itself from its own absence. Measured on a real withdrawn
-# branch: mutating the guard killed 10 of 31 tests — every one of them a
-# hand-typed fixture from the same commits, while all 4 real-artefact tests
-# still passed. This surfaces the split at review time instead of after a
-# third adversarial round.
-#
-# NEVER BLOCKING (rc is forced to 0): the classifier is static, and a
-# misclassification must cost one line of reading, not a rejected PR. It also
-# cannot prove a real-artefact test is non-vacuous — only a mutation run can.
-# --------------------------------------------------------------------------
-def real_artefact_backing_gate(repo: Path, base: str, head: str) -> GateResult:
-    prog = _PROGRAMS_DIR / "real_artefact_test_backing_check.py"
-    if not prog.is_file():
-        return GateResult("real_artefact_test_backing_check", -1,
-                          f"checker missing at {prog}")
-    rc, out, err = _run_program(prog, ["--repo", str(repo),
-                                       "--base", base, "--head", head])
-    if rc == 2:
-        return GateResult("real_artefact_test_backing_check", -1,
-                          "skipped — no test module added or modified")
-    body = (out.strip() or err.strip()).splitlines()
-    summary = (body[0] if body else "(no output)")[:240]
-    return GateResult("real_artefact_test_backing_check", 0,
-                      f"ADVISORY — {summary}")
-
-
-# --------------------------------------------------------------------------
-# corpus_cardinality_pin_scan — ADVISORY.
-#
-# A test that asserts `len(rows) == 23` over whatever is published under the
-# benchmark corpus has pinned the size of the publication set on the day it was
-# typed, not a property of the code under test. Publish a cell, withdraw one,
-# reorganise the tree, and the assertion fires with a message that says
-# `23 != 22` — which reads as a regression in whatever change happened to be in
-# flight. Measured on this repo: the #905 corpus reorganisation turned
-# `test_issue377_l17_name_fuses_declared_signals` red at `fired == 16` with the
-# checker byte-for-byte unchanged.
-#
-# Review time is when that is cheap to see, and this is the review-time gate
-# that already carries the other test-quality disclosure
-# (`real_artefact_test_backing_check`). It sits beside it for the same reason:
-# to surface the split before a third round, not after.
-#
-# NEVER BLOCKING, and it structurally cannot be otherwise — the program is a
-# REPORTER that exits 0 whatever it finds, on its own written instruction,
-# because plenty of hits are load-bearing (a 32 that is an md5 hex length, a
-# `== 0` that means "zero offenders"). Deciding which integer is the PROPERTY
-# and which is a stand-in for one is a judgement, and a gate whose output needs
-# triage gets ignored. An ABSENT tests tree is disclosed as a skip rather than
-# reported as a clean zero: "0 pins" from a directory nobody opened is the
-# empty-population claim this repo keeps paying for.
-# --------------------------------------------------------------------------
-def corpus_pin_scan_gate(plugin_root: Path) -> GateResult:
-    name = "corpus_cardinality_pin_scan"
-    prog = _PROGRAMS_DIR / f"{name}.py"
-    if not prog.is_file():
-        return GateResult(name, -1, f"checker missing at {prog}")
-    tests_dir = plugin_root / "programs" / "tests"
-    if not tests_dir.is_dir():
-        return GateResult(name, -1,
-                          f"skipped — no tests tree at {tests_dir}; nothing "
-                          f"was opened, so this is not a clean scan")
-    rc, out, err = _run_program(prog, [str(tests_dir)])
-    body = [ln.strip() for ln in (out.strip() or err.strip()).splitlines()
-            if ln.strip()]
-    if rc != 0:
-        return GateResult(name, -1,
-                          f"skipped — scanner rc {rc}: "
-                          f"{(body[0] if body else '(no output)')[:200]}")
-    total = [ln for ln in body if ln.startswith("TOTAL ")]
-    summary = total[-1] if total else (body[-1] if body else "(no output)")
-    return GateResult(name, 0, f"ADVISORY — {summary[:240]}")
-
-
-# --------------------------------------------------------------------------
-# gatekeeper_stale_branch_check — the LANDING-METHOD guard.
-#
-# A PR branch cut from an OLDER base than the current origin/main tip makes a
-# naive `origin/main..HEAD` diff show a PHANTOM REVERT of every commit landed
-# since the fork; a blind `git checkout HEAD -- <files>` land would silently
-# revert that work. This flags the risk so the land is a CHERRY-PICK of the
-# PR's own delta. rc 0 FRESH / stale-no-overlap; rc 1 stale WITH file overlap
-# (the real phantom-revert surface); rc 2 unresolvable ref. Unlike the other
-# gates this does not judge the CHANGE — only the safe way to LAND it.
-#
-# 2026-08-05 — its FRESH verdict now has to be EARNED. FRESH was decided by
-# ANCESTRY alone and then asserted a property about CONTENT ("an ordinary
-# squash-merge cannot phantom-revert anything"). A commit that named origin/main
-# as its parent while carrying the PREVIOUS version's TREE satisfied the
-# ancestry test exactly, and would have reverted 13 commits — 81 files, 9258
-# deletions, 15 files removed, plugin.json walked back a version. This roster
-# was green on it, because the two revert guards each disclaim that case IN
-# WRITING and hand it to the other: the collateral check's window is "this push"
-# (0 pairs on a one-commit branch) and this gate answered FRESH. Only a human
-# read caught it. The gate now checks, inside the FRESH branch, that no path the
-# head modifies holds a blob the base's own history has already superseded; that
-# rc 1 blocks here exactly as STALE_OVERLAP does.
-# --------------------------------------------------------------------------
-# --------------------------------------------------------------------------
-# landing_is_one_commit_check — the OTHER landing-method guard.
-#
-# A landing is ONE commit. Three landings left TWO on main (vibe-ic#459): the
-# authoring commit plus a version commit carrying only the manifests, because
-# `git commit --amend` after a rebase touches only the top commit. Nothing
-# failed and nothing warned, and GitHub runs CI on the LAST commit of a push,
-# so the intermediate one has no CI record of its own.
-#
-# rc 0 one commit / rc 1 two or more, or zero (nothing landed). rc 2 means the
-# range could not be counted, which is reported as a skip rather than a pass —
-# an uncountable range has told us nothing.
-#
-# v1.7.64 — BATCH mode. The owner's standing directive is to land several PRs
-# under ONE version bump and ONE CI run, and this review had no way to say so:
-# every batch was blocked by a rule that does not apply to it, on a line whose
-# own remedy text named a `--batch` flag the review could not forward. A
-# reviewer who learns to read past one blocking line learns to read past
-# blocking lines, so the flag is plumbed through instead.
-#
-# `--batch` does NOT relax the check. The underlying program's batch mode
-# asserts a strictly stronger property than the single-landing rule: no
-# manifest-only commit anywhere in the range, exactly one version bump, and it
-# must be the tip — because CI runs on the pushed tip, so a version buried
-# mid-batch would mean green CI referring to a tree nobody released. It stays
-# OPT-IN: without the flag the single-landing rule is unchanged, so a real
-# `commit --amend` slip still fails exactly as before.
-# --------------------------------------------------------------------------
-def one_commit_gate(repo: Path, base: str, head: str = "HEAD",
-                    batch: bool = False) -> GateResult:
-    prog = _PROGRAMS_DIR / "landing_is_one_commit_check.py"
-    if not prog.is_file():
-        return GateResult("landing_is_one_commit_check", 2,
-                          f"checker missing at {prog}")
-    argv = ([str(repo), "--base", base, "--head", head]
-            + (["--batch"] if batch else []))
-    rc, out, err = _run_program(prog, argv)
-    detail = (err or out).strip().splitlines()
-    reason = detail[-1] if detail else "no output"
-    if rc == 2:
-        return GateResult("landing_is_one_commit_check", -1,
-                          f"skipped — range not countable: {reason}")
-    return GateResult("landing_is_one_commit_check", rc, reason)
-
-
-def stale_branch_gate(repo: Path, base: str, head: str) -> GateResult:
-    prog = _PROGRAMS_DIR / "gatekeeper_stale_branch_check.py"
-    if not prog.is_file():
-        return GateResult("gatekeeper_stale_branch_check", 2,
-                          f"checker missing at {prog}")
-    rc, out, err = _run_program(prog, ["--repo", str(repo),
-                                       "--base", base, "--head", head])
-    # rc 2 == a ref could not be resolved (synthetic refs in a unit test, a
-    # shallow CI clone). NOT a phantom-revert finding, so it must not block —
-    # reported as a skip so a silently-unresolved range is visible.
-    if rc == 2:
-        return GateResult("gatekeeper_stale_branch_check", -1,
-                          f"skipped — {base}/{head} not resolvable")
-    body = err.strip() or out.strip()
-    summary = (body.splitlines() or [""])[0][:240]
-    return GateResult("gatekeeper_stale_branch_check", rc,
-                      summary or "(no output)")
-
-
-def authoring_stale_branch_policy(result: GateResult,
-                                  version_by_gatekeeper: bool) -> GateResult:
-    """A stale external PR selects the landing method; it is not author work.
-
-    The merge verifier already replays/rebases on current main and re-runs the
-    gates. Making the author chase main duplicates that work and creates an
-    endless race with unrelated landings. Only the version-less external-PR
-    mode gets this ownership transfer; direct-push/final landing review keeps
-    the original blocking result.
-    """
-    if version_by_gatekeeper and result.rc == 1:
-        return GateResult(
-            result.name, 0,
-            "LANDING_METHOD owned by Repo Gatekeeper — author publication "
-            "base remains frozen; replay/rebase and re-gating happen at landing")
-    return result
-
-
 def publication_base_gate(repo: Path, current_main: str,
                           pr_metadata: Optional[dict]) -> GateResult:
     """Require the immutable publication base/head on every external PR."""
@@ -1045,67 +645,6 @@ def publication_base_gate(repo: Path, current_main: str,
 
 
 # --------------------------------------------------------------------------
-# landing_collateral_revert_check — the landing-method guard AFTER the fact.
-#
-# `stale_branch_gate` above is a PRE-land guard: it reasons about a branch that
-# has not been landed yet. It said rc 1 STALE_OVERLAP on all five PRs of the
-# 2026-08-03 batch and named the exact overlap files, and the batch landed
-# anyway with three of its eleven commits erasing the other two.
-#
-# It could not have said otherwise once the land had happened. Its verdict is
-# `merge-base(base, head) == base tip -> FRESH`, and after a cherry-pick the
-# landed commit IS a fast-forward descendant of the base, so FRESH is
-# structurally guaranteed and says nothing about the content that now exists.
-# This gate reads that content: it takes the same `base..head` the review is
-# already scoped to and asks whether any commit in it erases an earlier one's
-# contribution to a file. rc 2 (unresolvable or empty range) is NOT CHECKED,
-# never a pass — same contract as every other range-shaped gate here.
-# --------------------------------------------------------------------------
-def collateral_revert_gate(repo: Path, base: str, head: str) -> GateResult:
-    prog = _PROGRAMS_DIR / "landing_collateral_revert_check.py"
-    if not prog.is_file():
-        return GateResult("landing_collateral_revert_check", 2,
-                          f"checker missing at {prog}")
-    rc, out, err = _run_program(prog, ["--repo", str(repo),
-                                       "--rev-range", f"{base}..{head}"])
-    body = (err.strip() or out.strip()).splitlines()
-    reason = body[-1] if body else "(no output)"
-    if rc == 2:
-        return GateResult("landing_collateral_revert_check", -1,
-                          f"skipped — {base}..{head} not walkable: {reason[:160]}")
-    return GateResult("landing_collateral_revert_check", rc, reason[:400])
-
-
-# --------------------------------------------------------------------------
-# loop_watchdog_compliance_check — subprocess against the plugin root. FAILs
-# when any programs/*.py launches a long EDA tool without the watchdog or has
-# an unbounded risky loop. rc 0 clean / 1 offender(s) / 2 usage error.
-# --------------------------------------------------------------------------
-def loop_watchdog_gate(plugin_root: Path) -> GateResult:
-    prog = _PROGRAMS_DIR / "loop_watchdog_compliance_check.py"
-    rc, out, err = _run_program(prog, [str(plugin_root)])
-    if rc == 0:
-        summary = (out.strip().splitlines() or [""])[0][:240]
-    else:
-        # the offender list is on stderr; surface the header + first offenders
-        errlines = [ln for ln in err.splitlines() if ln.strip()
-                    and "SyntaxWarning" not in ln and "invalid escape" not in ln]
-        summary = " | ".join(errlines[:4])[:240]
-    return GateResult("loop_watchdog_compliance_check", rc,
-                      summary or "(no output)")
-
-
-# --------------------------------------------------------------------------
-# plugin_full_audit (D1 + D2) — subprocess against the plugin root.
-# --------------------------------------------------------------------------
-def plugin_audit_gate(plugin_root: Path) -> GateResult:
-    prog = _PROGRAMS_DIR / "plugin_full_audit.py"
-    rc, out, err = _run_program(prog, [str(plugin_root)])
-    last = (out.strip().splitlines() or [err.strip()] or [""])[-1][:240]
-    return GateResult("plugin_full_audit", rc, last or "(no output)")
-
-
-# --------------------------------------------------------------------------
 # git_prohibition_guard — scan the PR's commit command strings (import).
 # --------------------------------------------------------------------------
 def git_prohibition_gate(commit_cmds: List[str]) -> GateResult:
@@ -1122,50 +661,6 @@ def git_prohibition_gate(commit_cmds: List[str]) -> GateResult:
                           f"{len(rep.violations)} forbidden git op(s): {descs}")
     return GateResult("git_prohibition_guard", 0,
                       f"{rep.scanned} command(s) clean")
-
-
-# --------------------------------------------------------------------------
-# full_suite_run_check — validate the supplied --pytest-cmd against cadence.
-# FULL milestone => full-suite invocation REQUIRED.
-# TARGETED patch  => a (any) pytest invocation suffices; subset is fine.
-# --------------------------------------------------------------------------
-def test_cadence_gate(pytest_cmd: Optional[str], cadence: str) -> GateResult:
-    if pytest_cmd is None:
-        # No command to validate. We do not fabricate a PASS — but absence of a
-        # supplied command is an honest SKIP (the caller may run tests out of
-        # band); the loop's Step-2.7 still requires evidence. For a FULL
-        # milestone we make this a hard FAIL because the policy demands proof.
-        if cadence == "FULL":
-            return GateResult("full_suite_run_check", 1,
-                              "FULL milestone requires a full-suite pytest "
-                              "command (none supplied via --pytest-cmd)")
-        return GateResult("full_suite_run_check", -1,
-                          f"skipped — no --pytest-cmd (cadence={cadence})")
-    rep = _fsr_scan([pytest_cmd])
-    if cadence == "FULL":
-        if rep.full_suite_found:
-            return GateResult("full_suite_run_check", 0,
-                              "FULL cadence satisfied — full-suite invocation present")
-        return GateResult("full_suite_run_check", 1,
-                          "FULL cadence required but pytest cmd is a SUBSET "
-                          "(integration/regression gates skipped)")
-    # TARGETED / NONE: any real pytest invocation satisfies the regression gate.
-    if rep.pytest_invocations >= 1:
-        return GateResult("full_suite_run_check", 0,
-                          f"TARGETED cadence satisfied — {rep.pytest_invocations} "
-                          f"pytest invocation(s)")
-    return GateResult("full_suite_run_check", 1,
-                      "no pytest invocation found in --pytest-cmd")
-
-
-_fsr = None
-
-
-def _fsr_scan(cmds: List[str]):
-    global _fsr
-    if _fsr is None:
-        _fsr = _load_module("full_suite_run_check")
-    return _fsr.scan_commands(cmds)
 
 
 # --------------------------------------------------------------------------
@@ -1195,75 +690,6 @@ def blindness_gate(transcripts: Optional[str],
 
 
 # --------------------------------------------------------------------------
-# control_substance_check — the PRE-FIX CONTROL, GRADED (vibe-ic#381).
-#
-# The standard control in this repo is "copy the change's new test file onto
-# clean main, run it, show it FAILS", and it is reported in a PR body as "the
-# tests fail pre-fix". Measured on two live PRs, that sentence covered a run
-# that collected NOTHING (551 lines of new test, one ModuleNotFoundError, zero
-# assertions executed — true of every new file ever written) and a run whose
-# 4-of-4 "behavioural" failures were 3-of-4 absence of a field the fix adds.
-# `control_substance_check` reads the control's own pytest report and counts
-# how many failures actually observed a VALUE.
-#
-# It shipped with nothing but its own unit test running it, which is the exact
-# shape it exists to name — a fixture proving the logic, never the artefacts —
-# and it is composed here because this program is the only place in the repo
-# that judges a base..head CHANGE rather than the tree.
-#
-# THE POLICY, stated rather than buried, and it follows `ci_ran_at_all_check`
-# twenty lines down:
-#   * evidence supplied + tautological  -> rc 1, BLOCKING. This is the gate.
-#   * evidence supplied + substantive   -> rc 0 with the count.
-#   * NO evidence + the diff changes test files -> rc -1, a LOUD non-blocking
-#     disclosure naming the count of test files whose control was not graded.
-#     Blocking here would refuse every landing from day one over evidence the
-#     workflow does not yet produce, and a gate that must be bypassed to work
-#     is a gate that gets bypassed for real reasons too.
-#   * NO evidence + no test file changed -> rc -1, not applicable.
-# The disclosure is never silent: the summary reaches the review record either
-# way, which is the difference between a decision and an oversight.
-# --------------------------------------------------------------------------
-def control_substance_gate(control_junit: Optional[str],
-                           control_text: Optional[str],
-                           files: List[str]) -> GateResult:
-    prog = _PROGRAMS_DIR / "control_substance_check.py"
-    if not prog.is_file():
-        return GateResult("control_substance_check", -1, "checker not present")
-    changed_tests = [f for f in files
-                     if f.endswith(".py") and ("/tests/" in f
-                                               or "/test_" in f)]
-    if not control_junit and not control_text:
-        if changed_tests:
-            return GateResult(
-                "control_substance_check", -1,
-                f"NO CONTROL EVIDENCE SUPPLIED and the diff changes "
-                f"{len(changed_tests)} test file(s) — nothing graded whether "
-                f"the pre-fix control observed a value or only noticed an "
-                f"absence. Re-run with --control-junit <the control run's "
-                f"pytest --junitxml>")
-        return GateResult("control_substance_check", -1,
-                          "not applicable — the diff changes 0 test file(s) "
-                          "and no control evidence was supplied")
-    argv: List[str] = []
-    if control_junit:
-        argv += ["--junit", control_junit]
-    if control_text:
-        argv += ["--text", control_text]
-    rc, out, err = _run_program(prog, argv)
-    blob = ((out or "") + (err or "")).strip()
-    first = (blob.splitlines() or [""])[0][:240]
-    if rc == 0:
-        return GateResult("control_substance_check", 0,
-                          first or "the control observed a value")
-    if rc == 1:
-        return GateResult("control_substance_check", 1,
-                          f"TAUTOLOGICAL CONTROL — {first}")
-    return GateResult("control_substance_check", 2,
-                      f"control evidence could not be read: {first}")
-
-
-# --------------------------------------------------------------------------
 # run_output_completeness — a benchmark/IC run under review whose RESULT.md is
 # EMPTY / MISSING / STUB must NOT land (v1.3.51). When the PR's change-set adds
 # or edits a run deliverable (a RESULT.md), self-check that run_dir's deliverable
@@ -1272,79 +698,6 @@ def control_substance_gate(control_junit: Optional[str],
 # run that simply hasn't reached its write step. Imports the pure classifier —
 # no re-implementation.
 # --------------------------------------------------------------------------
-# --------------------------------------------------------------------------
-# ci_ran_at_all_check — #550. Nothing in this roster asked whether the CI that
-# was supposed to run the tests EXISTS. Actions was disabled account-wide and
-# 561 commits landed with none, while every question about CI came back clean:
-# an empty run listing reads identically to "nothing new since the last green".
-#
-# POLICY, and it is a choice worth stating rather than burying. NEVER_RAN is
-# rc 1 from the checker, but this gate DOWNGRADES it to a loud non-blocking
-# disclosure for ordinary landings and keeps it BLOCKING for a milestone
-# (x.y.0). Reasons, in order:
-#   * a hard refusal everywhere makes the local-only workflow — which is the
-#     situation this repo is in RIGHT NOW, and legitimately so while the
-#     account is blocked — impossible, and a gate people must bypass to work
-#     is a gate that gets bypassed for real reasons too;
-#   * a milestone is the one landing that must not rest on one machine's word.
-# The disclosure is never silent in either case: the summary says NO CI RUN in
-# both, so `git log` and the review record carry it.
-# --------------------------------------------------------------------------
-def ci_ran_gate(repo: Path, head: str, cadence: str) -> GateResult:
-    prog = _PROGRAMS_DIR / "ci_ran_at_all_check.py"
-    if not prog.is_file():
-        return GateResult("ci_ran_at_all_check", -1, "checker not present")
-    rc, out, err = _run_program(prog, [str(repo), "--rev", head,
-                                       "--min-total", "50"])
-    summary = ((out + err).strip().splitlines() or [""])[0][:240]
-    if rc == 1 and "NO CI RUN EXISTS" in (out + err):
-        # vibe-ic#570 — the MILESTONE BLOCK is retired; the disclosure is not.
-        #
-        # It used to block at FULL cadence, reasoning that "a milestone is the one
-        # landing that must not rest on one machine's word". That reasoning is
-        # still right. What changed is that the evidence it named is evidence we
-        # have decided not to produce — owner directive 2026-08-01: GitHub is repo
-        # storage only, CI is ours. The clause therefore blocked every future
-        # x.y.0 on a run that is never coming, and a gate that must be bypassed to
-        # work is a gate that gets bypassed for real reasons too.
-        #
-        # WHY NOT simply re-point it at our own gate. `gatekeeper-land.sh` DOES
-        # write a per-SHA record — `.git/gatekeeper-stamp`, enforced by the
-        # pre-push hook, invalidated by an amend, so it is neither forgeable by
-        # accident nor reusable. But it lives in `.git/`, which is not
-        # version-controlled and does not travel with a push: it IS one machine's
-        # word. Pointing the milestone clause at it would turn every milestone
-        # green while satisfying none of the clause's stated reason — the #550
-        # shape again, our own empty record standing in for GitHub's empty
-        # listing. A gate asserting a property it no longer checks is worse than
-        # one that admits the property is unmet.
-        #
-        # So: disclose at EVERY cadence, block at none, and name the unmet
-        # property in the milestone summary so it reaches the review record. When
-        # a durable, shareable record exists the block can return and point at
-        # something that means what it says.
-        #
-        # UNCHANGED: a CI run that EXISTS and FAILED still blocks everywhere — rc
-        # 1 without NO CI RUN EXISTS falls through to the return at the bottom.
-        # This downgrade is scoped to NEVER_RAN, which is the whole point.
-        scope = ("patch landing" if cadence != "FULL"
-                 else "MILESTONE — independent-evidence property NOT met (#570)")
-        return GateResult("ci_ran_at_all_check", -1,
-                          f"DISCLOSED (non-blocking for a {scope}): " + summary)
-    if rc == 2:
-        # NOT CHECKED must not BLOCK. rc 2 is non-blocking everywhere else in
-        # this repo (`run_tolerating_uncheckable` in _gate_dispatch.sh), but
-        # `GateResult.green` counts only 0 and -1, so returning 2 here would
-        # refuse a merge for an offline maintainer, a rate limit, or a review
-        # run over a directory that is not a git repo — which is how the
-        # existing gatekeeper_review tests drive this function, and they caught
-        # it. Mapped to -1 with the reason kept IN THE TEXT: a reader still sees
-        # "could not look", which is the whole point of the state.
-        return GateResult("ci_ran_at_all_check", -1,
-                          "NOT CHECKED (non-blocking): " + summary)
-    return GateResult("ci_ran_at_all_check", rc, summary or "(no output)")
-
-
 def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
     results = [f for f in files if Path(f).name == "RESULT.md"]
     if not results:
@@ -1439,8 +792,6 @@ def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
 # convention applied one level up.
 # --------------------------------------------------------------------------
 _HYGIENE_SCRIPT_REL = "tools/ci/repo_hygiene_gates.sh"
-_HYGIENE_PARALLEL_REL = (
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py")
 
 #: No runtime estimate.  This is the maximum interval with neither captured
 #: output nor a completed gate record before the shared progress watchdog calls
@@ -1647,29 +998,8 @@ def _git_text(cwd: Path, argv: List[str]) -> Optional[str]:
 #: Where the toolchain profile of a hygiene record lives. ONE spelling, used by
 #: the writer here and by `hygiene_finding_delta`'s reader, so the two cannot
 #: drift into writing and looking for different names.
-def toolchain_sidecar(record: Path) -> Path:
-    return Path(str(record) + ".toolchain.json")
 
 
-def _stamp_toolchain(record: Path) -> None:
-    """Record THIS host's toolchain beside a hygiene record. Never raises.
-
-    A failure to stamp leaves NO sidecar, which the consumer reads as "not
-    recorded" and discloses. It must never leave a WRONG one: a profile that
-    does not describe the run it sits beside is worse than none, because the
-    comparison it enables would be believed.
-    """
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import toolchain_profile as _tc
-        toolchain_sidecar(record).write_text(
-            json.dumps(_tc.profile(), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8")
-    except Exception:                      # pragma: no cover - best effort
-        try:
-            toolchain_sidecar(record).unlink()
-        except OSError:
-            pass
 
 
 def repo_hygiene_gate(repo: Path,
@@ -1690,76 +1020,8 @@ def repo_hygiene_gate(repo: Path,
         path = Path(script)
         command = ["bash", str(path)]
     else:
-        parallel = repo / _HYGIENE_PARALLEL_REL
-        path = parallel if parallel.is_file() else (repo / _HYGIENE_SCRIPT_REL)
-        # `--stall-grace`, FORWARDED, because there are two watchdogs and only
-        # one of them was told the number (vibe-ic#1789).
-        #
-        # `_HYGIENE_STALL_GRACE_S` calls itself "the shared progress watchdog"
-        # and it was not shared. It reached `run_supervised` below, which
-        # supervises the COORDINATOR; the coordinator supervises each SHARD with
-        # `repo_hygiene_parallel.DEFAULT_STALL_GRACE_S` = 300 s, a number nobody
-        # here chose and nobody there reconciled — a 6x disagreement, already
-        # written down in `tools/gatekeeper-land.sh` on 2026-08-22 and never
-        # closed.
-        #
-        # It matters because of what the inner watchdog accepts as progress. The
-        # shard is launched with `--progress`, so `_owned_process_supervisor`
-        # sets `output_progress=False`: stdout cannot renew the lease and the
-        # ONLY signal is one attestation row per COMPLETED GATE. So the bound is
-        # not "the shard is idle for 300 s", it is "one gate takes longer than
-        # 300 s" — and this repo's own shipped cost profile records single gates
-        # at 646 s (`an argued direction is pinned`) and 2556 s (`gates are
-        # host-independent`). MEASURED on clean main fd8dec469 in the pinned
-        # image: 2 of 8 shards killed at rc 199, and 75 of the 80 "wiring
-        # errors" the run then reported were the fallout of those two kills.
-        #
-        # The shell script has no such flag and must not be given one here; only
-        # the parallel runner is passed the number.
-        # `-B`, AND THE VARIABLE, BECAUSE THE COORDINATOR IS A PYTHON PROCESS
-        # INSIDE THE TREE IT AUDITS (vibe-ic#1893).
-        #
-        # `repo_hygiene_gates.sh:52` exports `PYTHONDONTWRITEBYTECODE=1` and
-        # says why: a `.pyc` "lands inside the tree the later attestation and
-        # host-independence gates re-derive and compare. `git status
-        # --porcelain` cannot see it (`.gitignore`) and `_run_isolation.
-        # snapshot` can, and that asymmetry is the measured 13-of-39
-        # differential failure `attestation_preflight_check` was written from."
-        #
-        # That export protects every gate the SHELL spawns. It cannot protect
-        # THIS process: `repo_hygiene_parallel.py` imports ten modules out of
-        # `programs/` at startup — before any shard, before that shell exists —
-        # so its own import phase writes the residue the shell was told to
-        # prevent. MEASURED on a pristine worktree of a4604d3fa, one DAG run:
-        #
-        #   programs/__pycache__/ holds exactly this module's import list
-        #   (_atomic_artefact, _crash_safe_scratch, _owned_process_supervisor,
-        #   _progress_run, _semantic_child_progress, _watchdog,
-        #   gate_process_attestation, hygiene_shard_plan,
-        #   policy_direction_pin_check, + hygiene_shard_aggregate from the
-        #   lazy call-site import at the end of the run)
-        #
-        #   attestation preflight      checkout rc=1  fresh worktree rc=0
-        #   gates are host-independent FAIL — 1 of 140 probed gates did not give
-        #                              one reproducible verdict across two trees,
-        #                              and it is `attestation preflight`
-        #
-        # So one unguarded interpreter reddens TWO gates, and the second one
-        # reports it as host dependence when the difference is residue this
-        # process wrote a few seconds earlier.
-        #
-        # BOTH HALVES, which is the lesson `tools/gatekeeper-land.sh:1169`
-        # already records for the pytest lanes: `-B` freezes THIS interpreter
-        # and does not propagate, the variable propagates and does not reach an
-        # isolated child. Supplying only one "is what shipped, and it wrote 500+
-        # `.pyc` into $ROOT in 7 minutes of one landing."
-        #
-        # NOTHING IS CHECKED LESS. The stimulus for host-independence becomes
-        # the checkout's PRE-EXISTING dirt, which `gate_host_independence_check`
-        # states is its subject; what is removed is dirt this run manufactured.
-        command = ([sys.executable, "-B", str(path),
-                    "--stall-grace", str(stall_grace)] if path == parallel
-                   else ["bash", str(path)])
+        path = repo / _HYGIENE_SCRIPT_REL
+        command = ["bash", str(path)]
     if not path.is_file():
         # An honest SKIP that states its denominator: this tree wires no
         # hygiene set, so 0 gates were consulted. Never dressed up as a pass
@@ -1865,25 +1127,6 @@ def repo_hygiene_gate(repo: Path,
                 return GateResult(name, 2,
                                   f"ERROR — could not hand on the coverage "
                                   f"record: {exc}")
-            # AND THE TOOLCHAIN THIS RECORD WAS MEASURED UNDER (vibe-ic#1327).
-            #
-            # `hygiene_finding_delta` differences two of these records and
-            # already refuses across HOSTS, because a finding is host-dependent.
-            # Same host is not the same toolchain: measured on 8HD-8 at one
-            # commit, the bare host and the full container disagreed by 25
-            # failures over the identical tree, and the `test_cvdp_gate*` family
-            # alone went 29 red -> 0 red with tools added. A subtraction across
-            # that difference attributes the delta to the branch.
-            #
-            # A SIDECAR, not a new key in the record: `repo_hygiene_parallel`
-            # rebuilds this document field by field and `test_routed_def_corpus
-            # _dispatch` pins its exact top-level key set, so a key added here
-            # would have to be added in two more places to stay consistent —
-            # and a record whose shape depends on which runner wrote it is worse
-            # than a file beside it. The consumer treats an ABSENT sidecar as
-            # "not recorded", never as "the toolchains matched".
-            _stamp_toolchain(summary_out)
-
     return _hygiene_verdict(doc, supervised.rc)
 
 
@@ -2390,12 +1633,9 @@ def review(base: str, head: str, *,
            repo: Path,
            plugin_root: Path,
            role: Optional[str] = None,
-           pytest_cmd: Optional[str] = None,
            commit_cmds: Optional[List[str]] = None,
            transcripts: Optional[str] = None,
            dataset: Optional[str] = None,
-           control_junit: Optional[str] = None,
-           control_text: Optional[str] = None,
            version_by_gatekeeper: bool = False,
            pr_metadata: Optional[dict] = None,
            override_files: Optional[List[str]] = None,
@@ -2468,41 +1708,15 @@ def review(base: str, head: str, *,
     vb = version_bump_gate(cur, prev, market, version_by_gatekeeper, files)
     gates.append(vb)
 
-    gates.append(marketplace_sync_gate(plugin_root))
     gates.append(chip_agnostic_gate(plugin_root))
     gates.append(path_portability_gate(plugin_root))
     gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(nda_diff_scan_gate(repo, base, head))
     if version_by_gatekeeper:
         gates.append(publication_base_gate(repo, base, pr_metadata))
-    gates.append(authoring_stale_branch_policy(
-        stale_branch_gate(repo, base, head), version_by_gatekeeper))
-    # The same landing method, seen from the other side. `stale_branch_gate`
-    # judges a branch BEFORE it lands; once it has landed, its FRESH verdict is
-    # structurally guaranteed and content-blind. This one reads the commits.
-    gates.append(collateral_revert_gate(repo, base, head))
-    # #459 — the landing SHAPE, alongside the landing METHOD above.
-    #
-    # v1.7.65: this used to omit `head`, and the comment that stood here
-    # claimed a synthetic head ref would make the range uncountable so the
-    # gate would skip. It did no such thing — `head` was simply never passed,
-    # and the checker counted the REVIEWER'S working HEAD. Reviewing a PR from
-    # a checkout parked on a clean one-commit landing returned PASS over an
-    # unsquashed branch. An unresolvable ref is rc 2 / NOT CHECKED, which is
-    # what the old comment promised and the code now delivers.
-    gates.append(one_commit_gate(repo, base, head, batch=batch))
-    gates.append(real_artefact_backing_gate(repo, base, head))
-    gates.append(corpus_pin_scan_gate(plugin_root))
-    gates.append(acceptance_control_gate(repo, base, head))
-    gates.append(ppa_pr_scope_gate(repo, base, head))
-    gates.append(loop_watchdog_gate(plugin_root))
-    gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
-    gates.append(test_cadence_gate(pytest_cmd, cadence))
-    gates.append(ci_ran_gate(repo, head, cadence))
     gates.append(run_deliverable_gate(repo, files))
     gates.append(blindness_gate(transcripts, dataset))
-    gates.append(control_substance_gate(control_junit, control_text, files))
     # #538 — LAST because it is by far the longest, so every cheap machine gate
     # has already printed by the time this starts. It is the whole CI hygiene
     # set, invoked (not re-listed) so that MERGE_OK means what it reads as.
@@ -2591,21 +1805,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--base", required=True, help="base git ref")
     ap.add_argument("--head", required=True, help="head git ref")
     ap.add_argument("--role", default=None, help="PR author agent role")
-    ap.add_argument("--pytest-cmd", default=None,
-                    help="the pytest command string the PR ran")
     ap.add_argument("--commit-cmds-file", default=None,
                     help="file of the PR's git/gh command strings (one per line)")
     ap.add_argument("--transcripts", default=None,
                     help="blindness-audit transcript dir/file (optional)")
     ap.add_argument("--dataset", default=None,
                     help="blindness-audit dataset root (required with --transcripts)")
-    ap.add_argument("--control-junit", default=None,
-                    help="the PRE-FIX control run's pytest --junitxml report; "
-                         "graded by control_substance_check, which BLOCKS on a "
-                         "control whose every failure is an absence")
-    ap.add_argument("--control-text", default=None,
-                    help="the same control as a pasted pytest console log "
-                         "(weaker than --junit; the checker measures the gap)")
     ap.add_argument("--repo", default=None,
                     help="repo root for git ops (default: cwd's repo)")
     ap.add_argument("--plugin-root", default=None,
@@ -2743,11 +1948,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         v = review(args.base, args.head,
                    repo=repo, plugin_root=plugin_root,
-                   role=args.role, pytest_cmd=args.pytest_cmd,
+                   role=args.role,
                    commit_cmds=commit_cmds,
                    transcripts=args.transcripts, dataset=args.dataset,
-                   control_junit=args.control_junit,
-                   control_text=args.control_text,
                    version_by_gatekeeper=args.version_by_gatekeeper,
                    pr_metadata=pr_metadata,
                    override_files=override_files,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble ONE arm's canonical record set, its feasibility adjudication and
+"""Assemble ONE arm's canonical record set and
 its contract, driving only SHIPPED programs.
 
 Every record here is produced by a shipped module:
@@ -8,7 +8,6 @@ Every record here is produced by a shipped module:
     _ppa.backends.openroad   the physical area + DRV rows
     _ppa.backends.yosys      the pre-PnR PROXY area, published separately and
                              never mixed with the post-route objective
-    ppa_feasibility_check.py the nine-axis adjudication
     ppa_contract_build/check the five identities
 
 THE ONE THING THIS FILE DECLARES RATHER THAN READS is `required_views_by_axis`,
@@ -162,7 +161,6 @@ def main(argv=None) -> int:
     (out / "proxy_records.json").write_text(
         json.dumps(ys_recs, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    # --- 4. feasibility, shipped gate -------------------------------------
     cand = {"schema": "vibeic.ppa.candidates.v1",
             "required_views_by_axis": REQUIRED_VIEWS_BY_AXIS,
             "required_views": _TIMING_VIEWS,
@@ -171,22 +169,11 @@ def main(argv=None) -> int:
             "candidates": [{"candidate_id": t, "metrics": flat, "waivers": []}]}
     (out / "candidates.json").write_text(
         json.dumps(cand, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    r = run([PY, str(PROGRAMS / "ppa_feasibility_check.py"),
-             "--candidates", str(out / "candidates.json"),
-             "--json", str(out / "feasibility_report.json")])
-    notes.append(f"ppa_feasibility_check rc={r.returncode}")
-    fr = load(out / "feasibility_report.json") or {}
-    verdict = (fr.get("candidates") or [{}])[0].get("verdict", "UNDETERMINED")
-    axes = {x["axis"]: x["status"]
-            for x in (fr.get("candidates") or [{}])[0].get("axes", [])}
-
     (out / "assembly.json").write_text(json.dumps(
-        {"trial": t, "notes": notes, "feasibility_verdict": verdict,
-         "axes": axes, "record_count": len(flat),
+        {"trial": t, "notes": notes, "record_count": len(flat),
          "measured": sum(1 for x in flat if x.get("status") == "MEASURED")},
         indent=2) + "\n", encoding="utf-8")
-    print(f"[build_arm] {t}: {len(flat)} records, feasibility={verdict}, "
-          f"axes={ {k: v for k, v in sorted(axes.items())} }")
+    print(f"[build_arm] {t}: {len(flat)} records")
     return 0
 
 

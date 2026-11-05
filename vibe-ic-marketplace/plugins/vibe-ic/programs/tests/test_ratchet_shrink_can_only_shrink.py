@@ -140,7 +140,7 @@ def _run(program, *args):
 
 #: (program, register key, the JSON document shape that program writes)
 _GATES = [
-    ("gate_is_wired_check.py", "unwired"),
+
     ("prose_polarity_consulted_check.py", "known"),
 ]
 

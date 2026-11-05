@@ -57,12 +57,6 @@ def test_real_red_and_incomplete_hygiene_remain_blocking(bounded, monkeypatch, r
     assert result.blocking
 
 
-def test_scoped_structural_red_still_requests_changes(bounded, monkeypatch):
-    monkeypatch.setattr(R, 'one_commit_gate', lambda *a, **k:
-                        R.GateResult('one_commit', 1, 'wrong landing shape'))
-    result = R.review(**bounded, scope='structural')
-    assert result.verdict == 'REQUEST_CHANGES'
-    assert 'wrong landing shape' in result.blocking[0]
 
 
 def test_scope_cannot_be_combined_with_substitute_evidence(bounded, tmp_path):

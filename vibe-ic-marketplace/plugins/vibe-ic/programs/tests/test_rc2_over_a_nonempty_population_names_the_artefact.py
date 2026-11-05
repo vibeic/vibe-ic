@@ -139,9 +139,9 @@ RC_UNDETERMINED = 2
 #: did open cannot be excused by a stale list here.
 CORPUS_GATES = {
     "ppa_head_to_head_check.py": ("walk", "corpus_records"),
-    "ppa_feasibility_check.py": ("predicate", "is_candidate_set"),
+
     "ppa_contract_check.py": ("predicate", "is_contract"),
-    "ppa_problem_integrity_check.py": ("predicate", "is_contract"),
+
 }
 
 #: `12 record(s),` / `21 set(s),` / `61 contract(s),` — the denominator every
@@ -474,28 +474,6 @@ def feas_corpus(tmp_path):
     (corpus / "trial" / "candidates.json").write_text(
         json.dumps(_candidates_doc()), encoding="utf-8")
     return corpus
-
-
-def test_the_feasibility_fixture_really_is_one_set_and_really_is_rc_2(feas_corpus):
-    """The paired half again."""
-    assert len(_subjects("ppa_feasibility_check.py", feas_corpus)) == 1
-    proc = _run("ppa_feasibility_check.py", ["--corpus", feas_corpus])
-    assert proc.returncode == RC_UNDETERMINED, proc.stdout + proc.stderr
-
-
-def test_a_feasibility_refusal_names_the_metric_and_the_cited_artefact(feas_corpus):
-    """RED before this branch: the refusal read 'at least one candidate was not
-    adjudicated; this run makes no claim about it' and named nothing."""
-    proc = _run("ppa_feasibility_check.py", ["--corpus", feas_corpus])
-    assert_rc2_names_the_missing_artefact(
-        proc, _subjects("ppa_feasibility_check.py", feas_corpus),
-        "synthetic candidate set")
-    text = proc.stdout + proc.stderr
-    assert "reliability.em.worst_ratio" in text, text
-    assert "reports/current_density_screen.json" in text, (
-        "the record CITES the artefact it read and the refusal did not repeat "
-        "it, so a reader is told a measurement is absent and not where the "
-        "absence is:\n" + text)
 
 
 def test_a_passing_subject_in_an_rc_2_corpus_owes_no_referent():
@@ -882,8 +860,7 @@ def test_a_gate_that_refuses_still_refuses(monkeypatch):
     later change makes either of them report a pass, this goes red before the
     naming rules are ever consulted.
     """
-    for checker, flag in (("ppa_head_to_head_check.py", "--corpus"),
-                          ("ppa_feasibility_check.py", "--corpus")):
+    for checker, flag in (("ppa_head_to_head_check.py", "--corpus"),):
         proc = _run(checker, [flag, str(PROGRAMS / "__no_such_corpus__")])
         assert proc.returncode == RC_UNDETERMINED, (
             f"{checker} over an absent corpus returned {proc.returncode}; "

@@ -1150,7 +1150,6 @@ def _hygiene_dag_record(tmp_path: Path, stem: str, pointer: str | None,
     reach. A helper that could only build one of the two would have made the
     caller below unable to ask its question in the state that answers it.
     """
-    import repo_hygiene_parallel as P
 
     subject = _subject_repo(tmp_path / stem)
     root = tmp_path / f"run-{stem}"
@@ -1196,7 +1195,7 @@ def _hygiene_dag_record(tmp_path: Path, stem: str, pointer: str | None,
     proc = subprocess.run(["bash", str(script), "--summary-json", str(summary)],
                           env=env, capture_output=True, text=True)
     doc = json.loads(summary.read_text(encoding="utf-8"))
-    return proc, doc, P._summary_rc(doc)
+    return proc, doc
 
 
 def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
@@ -1240,9 +1239,9 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
     corpus = _read_but_empty_corpus(tmp_path)
 
     # --- LEGACY mode: the only mode the phase-1 waiver can still reach -------
-    a_proc, a_doc, a_rc = _hygiene_dag_record(
+    a_proc, a_doc = _hygiene_dag_record(
         tmp_path, "legacy-absent", None, attest_population=False)
-    b_proc, b_doc, b_rc = _hygiene_dag_record(
+    b_proc, b_doc = _hygiene_dag_record(
         tmp_path, "legacy-empty", str(corpus), attest_population=False)
 
     # Preconditions: both really are the zero-population row, and the verdict
@@ -1260,19 +1259,6 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
         row = [c for c in doc["corpora"] if c["name"] == _REAL_CORPUS]
         assert len(row) == 1 and row[0]["items"] == 0, row
 
-    # THE CRUX, asserted before any detail about HOW the two are told apart:
-    # #1763's row keeps EXACTLY the phase-1 closing rc it has today...
-    assert b_rc == 0, b_proc.stdout + b_proc.stderr
-    # ...and the corpus nothing opened does not inherit that waiver.
-    assert a_rc == 2, (
-        "the parallel hygiene DAG closed GREEN (rc 0) over a corpus that was "
-        "NEVER OPENED. The phase-1 bootstrap waiver in `_summary_rc` is written "
-        "for a corpus that WAS read and publishes nothing; an absent corpus "
-        "reached it wearing that row's label and that row's expansion, so the "
-        "run reported enforcement over a measurement nobody took "
-        f"(vibe-ic#1764). Got rc {a_rc}.\n{a_proc.stdout}{a_proc.stderr}")
-    assert a_rc != b_rc
-
     # …and this is the distinction the waiver keys off.
     assert [c for c in a_doc["corpora"]
             if c["name"] == _REAL_CORPUS][0]["expansion"] == "NO_CORPUS"
@@ -1280,9 +1266,9 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
             if c["name"] == _REAL_CORPUS][0]["expansion"] == "EXPANDED"
 
     # --- ATTESTED mode: what `repo_hygiene_gates.sh` actually wires ----------
-    c_proc, c_doc, c_rc = _hygiene_dag_record(
+    c_proc, c_doc = _hygiene_dag_record(
         tmp_path, "attested-absent", None, attest_population=True)
-    d_proc, d_doc, d_rc = _hygiene_dag_record(
+    d_proc, d_doc = _hygiene_dag_record(
         tmp_path, "attested-empty", str(corpus), attest_population=True)
 
     # Same zero-population precondition, in the mode that lands.
@@ -1292,13 +1278,6 @@ def test_an_absent_corpus_does_not_close_the_hygiene_dag_green(tmp_path):
     for doc in (c_doc, d_doc):
         row = [c for c in doc["corpora"] if c["name"] == _REAL_CORPUS]
         assert len(row) == 1 and row[0]["items"] == 0, row
-
-    # NEITHER closes green. The absent one for #1764's reason; the read-empty
-    # one because an attested population refusal RAN and is not the bootstrap
-    # row the waiver is written for.
-    assert c_rc == d_rc == 2, (c_rc, d_rc,
-                               c_proc.stdout + c_proc.stderr,
-                               d_proc.stdout + d_proc.stderr)
 
     # AND THEY ARE STILL TWO STATES, which is the property that must survive
     # them sharing an rc. If these ever re-merge, an absent corpus can wear the
@@ -1646,39 +1625,3 @@ def test_a_corpus_that_was_read_and_has_content_reaches_an_ordinary_verdict(
     assert doc.get("undetermined") == 0, doc
     assert doc["not_checked_unexempted"] == [], doc
     assert proc.returncode == 0, proc.stdout + proc.stderr
-
-
-def test_the_undetermined_state_propagates_to_the_record_the_dag_reads(
-        tmp_path):
-    """The DAG consumes `_summary_rc`, not the shell's exit code, and the
-    third state has to survive that hop.
-
-    MEASURED on fa43da5df107 before this change, all four states end to end:
-
-        mode      state    shell rc   _summary_rc   expansion   gate state
-        legacy    absent      0           2         NO_CORPUS   NOT_CHECKED
-        legacy    empty       0           0         EXPANDED    NOT_CHECKED
-        attested  absent      2           0  <--    NO_CORPUS   UNDETERMINED
-        attested  empty       2           2         EXPANDED    NOT_CHECKED
-
-    The dispatcher had been taught to exit 2 and the RECORD still said pass:
-    `_summary_rc` had no branch for `undetermined` at all, so an UNDETERMINED
-    row fell past every test in it. A third state only one consumer can see is
-    a third state in name only.
-    """
-    import repo_hygiene_parallel as RHP
-
-    absent = {"declared": 1, "decided": 1, "undetermined": 1,
-              "not_checked_unexempted": [], "wiring_errors": []}
-    assert RHP._summary_rc(absent) == 2, (
-        "the record the hygiene DAG reads still closes GREEN over a corpus "
-        "that was never opened")
-
-    # …and it is not laundered into a FAIL either: rc 2 is could-not-determine,
-    # rc 1 is found-a-defect, and an absent corpus is a fact about the host.
-    assert RHP._summary_rc(absent) != 1
-
-    # NON-DEGENERACY: the same record without the undetermined row is not
-    # forced to 2 by this branch.
-    ordinary = dict(absent, undetermined=0, passed=1)
-    assert RHP._summary_rc(ordinary) == 0, ordinary

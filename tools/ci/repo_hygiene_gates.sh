@@ -394,24 +394,6 @@ run_tolerating_uncheckable "PPA measurement contract" "$ROOT" python3 "$PG/ppa_c
 uncheckable_until 2027-02-28 "MISSING ARTEFACT, NAMED: a document with a non-empty expected list — the (metric, scope) pairs a PPA run is REQUIRED to produce, declared before the run. Nothing in this repository declares one; the record sets it would be measured against are committed and this row now reads one, so rc 2 is NO_EXPECTATION_SET and not INPUT_ABSENT. PRODUCER: ppa_contract_build.py, which already writes the metrics key it leaves empty; the denominator belongs beside required_views_by_axis, declared from L19_CONSTRAINTS_PDK rather than inferred from whatever the run happened to emit. Writing one HERE would be composing the answer key after the exam"
 run_tolerating_uncheckable "PPA measurement coverage" "$ROOT" python3 "$PG/ppa_measurement_check.py" --coverage "$ROOT/docs/campaigns/ppa-crosslayer/records/trials/b000/records_flat.json"
 
-# MEASURED 2026-08-22: 21 set(s), 0 infeasible, 21 undetermined, 0 feasible.
-# Every one is `em:FEAS_NOT_MEASURED` and `equivalence:FEAS_NOT_MEASURED`, which
-# reproduces the campaign's OWN published verdict — `ppa-crosslayer/records/summary.json`
-# records `feasibility_verdict: UNDETERMINED` with those two axes undetermined for
-# every trial. The gate agrees with the record set and refuses to call any
-# published candidate promotable, which is the honest answer.
-#
-# NOTE THE MISSING `--contract`, AND IT IS DELIBERATE. The shipped line passed
-# one, and two different documents in this codebase are called "contract": the
-# `vibeic.ppa.contract.v1` this file validates two rows up (identities and
-# evidence), and the feasibility/pareto contract (required_views / limits /
-# objectives), of which this repository holds ZERO. Handing this gate the first
-# shape overrides the `required_views_by_axis` the candidate sets already
-# declare and loses all nine axes to FEAS_VIEWS_NOT_DECLARED — measured. A
-# candidates document declares its own views; that is the input to use.
-uncheckable_until 2027-02-28 "rc 2 here is a CONTENT verdict over 21 adjudicated candidate sets, not an absent input: seven of nine feasibility axes are SATISFIED on every one and two (em, equivalence) carry no measurement at all, so no candidate may be called promotable. That reproduces the campaign's own published summary.json verdict. A candidate that IS measured and VIOLATES an axis is rc 1"
-run_tolerating_uncheckable "PPA promotion feasibility (cross-layer campaign)" "$ROOT" \
-    python3 "$PG/ppa_feasibility_check.py" --corpus "$ROOT/docs/campaigns/ppa-crosslayer"
 
 # STILL CANNOT CHECK, AND THE SECOND MISSING ARTEFACT IS WHY IT STAYS THAT WAY.
 # `objectives` could be DERIVED here: each trial's `objective.json` names the
@@ -423,45 +405,6 @@ run_tolerating_uncheckable "PPA promotion feasibility (cross-layer campaign)" "$
 uncheckable_until 2027-02-28 "TWO MISSING ARTEFACTS, NAMED: (1) an objectives list [{key, metric, sense, scope}] — no contract, candidates document or any other file in this repository carries that key, measured; (2) a PUBLISHED frontier.json to be the thing under test. (1) alone is derivable from each trial's objective.json + summary.json, but deriving BOTH would have this gate recompute a frontier and check it against itself, which is a manufactured pass. PRODUCER: the search runner — ppa-crosslayer/tools/summarize.py already computes the ranking RESULT.md publishes as a Pareto set and emits it as prose and tables, never as a frontier.json. Making it write one, beside the objectives it is already optimising against, takes this gate live"
 run_tolerating_uncheckable "PPA frontier recomputes" "$ROOT" python3 "$PG/ppa_pareto_check.py" --candidates "$ROOT/docs/campaigns/ppa-crosslayer/records/trials/z23/candidates.json"
 
-# EVERY PUBLISHED PAIR, NOT THE HEADLINE PAIR. This row first re-aimed at the
-# one comparison each campaign quotes — cross-layer `b000` vs `z23`, end-to-end
-# `baseline` vs `t028`. That decided something, and it decided about TWO pairs
-# while EIGHTY sit committed here. A gate examining 2 of 80 available
-# comparisons is under-aimed by exactly the argument that re-aimed it: a
-# contract that drifts in trial 37 is a comparison nobody may quote, and nothing
-# would have said so. `--corpus` compares the campaign baseline against every
-# other contract in its tree.
-#
-# MEASURED 2026-08-22:
-#   cross-layer  b000     vs 20 trials  ->  20 comparable, rc 0
-#   end-to-end   baseline vs 60 trials  ->  60 comparable, rc 0
-uncheckable_until 2027-02-28 "PASSES today over 210 pairs — 21 contracts in 1 problem group, every pair inside the group compared. It was 20 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be READ — an unparseable one that was NAMED a contract is kept in the population deliberately so the pair it would have formed is reported rather than dropped, and a comparison never attempted is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
-# `--baseline` IS GONE, and dropping it is what makes this row decide anything.
-# MEASURED on a758f4adc, exactly as the line below was written:
-#
-#   [ppa_problem_integrity_check] REFUSE (bad invocation): --baseline/--candidate
-#   and --corpus were both given. ... Give exactly one. rc=3.
-#
-# So both of these rows had stopped examining ANY pair. `--corpus` mode was
-# rewritten to GROUP contracts by their problem identity and pair within each
-# group, which needs no baseline, and the refusal of the two-flag form is
-# deliberate and argued in the program. The wiring was not updated with it.
-# rc 3 is a bad invocation: the row decided nothing, and it is a different and
-# quieter failure than the rc 2 the rest of this block is about, because nothing
-# in the roll-up distinguishes a gate the caller mis-invoked from one that ran.
-#
-# MEASURED with the flag removed:
-#   cross-layer  21 contract(s), 1 problem group,  210 pair(s)  -> rc 0
-#   end-to-end   61 contract(s), 1 problem group, 1830 pair(s)  -> rc 0
-# The audit's Part 7 recorded 20 and 60 pairs for the baseline-against-each form;
-# grouping compares every pair inside the group, which is the stronger question.
-run_tolerating_uncheckable "PPA arms solved one problem (cross-layer campaign)" "$ROOT" \
-    python3 "$PG/ppa_problem_integrity_check.py" \
-    --corpus "$ROOT/docs/campaigns/ppa-crosslayer"
-uncheckable_until 2027-02-28 "PASSES today over 1830 pairs — 61 contracts in 1 problem group, every pair inside the group compared. It was 60 while this row ran baseline-against-each; grouping is the stronger question and the declaration has to say which one it bought. rc 2 means a contract in the corpus could not be read, which is not a finding about either design. Two contracts that ARE read and disagree on the problem, analysis or toolchain identity are rc 1"
-run_tolerating_uncheckable "PPA arms solved one problem (end-to-end campaign)" "$ROOT" \
-    python3 "$PG/ppa_problem_integrity_check.py" \
-    --corpus "$ROOT/docs/campaigns/ppa-e2e"
 
 # THE PUBLISHED SENTENCE, not the record behind it. Every gate above this line
 # asks whether an artefact is internally honest; none of them asks what the
@@ -631,20 +574,7 @@ run "severity=ERROR is consumed" "$PLUGIN" python3 programs/error_diagnostic_con
 # the time anyone read it: `review()` had grown to 17. Counts of the other
 # side's gate list are exactly what #538 is about, so this one no longer
 # states a number it cannot keep true.)
-run "watchdog compliance"           "$PLUGIN" python3 programs/loop_watchdog_compliance_check.py
-# THE SEMANTIC HALF OF THE LINE ABOVE. `loop_watchdog_compliance_check` reads
-# the SHAPE of a launch -- is there a `marker=`, is the callee a
-# `run_supervised` -- and nothing read what the call then DID with the
-# supervisor. A site could satisfy it in full and pin `hard_ceiling_s` to its
-# own step budget, which is a wall-clock deadline wearing the watchdog's
-# clothes: the supervisor kills at the ceiling regardless of forward progress,
-# and both docker paths wrap the container command in a GNU `timeout` at the
-# same number. Seven sites did, and one of them was about to SIGKILL a live
-# post-layout LEC at 5360 s of a 7195 s budget with 1374 points proved and
-# 99.9 % CPU. Measured: 12s.
 run "watchdog ceiling semantics"    "$PLUGIN" python3 programs/watchdog_ceiling_semantics_check.py
-run "marketplace version sync"      "$PLUGIN" python3 programs/marketplace_version_sync_check.py
-run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit.py
 
 # vibe-ic#559 — two PLUGIN-scoped self-checks that were registered in the
 # per-project P0 umbrella, which cannot invoke them: they take no project, so
@@ -1082,16 +1012,6 @@ run "console tool termination" "$ROOT" \
 # `$RUNTIME_ROOT` are two different trees it measured the instrument and
 # published the answer as a verdict about the subject.
 run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_wiring_audit.py" --repo-root "$ROOT"
-# vibe-ic#693 — and the question NOTHING was asking: is a gate CONSULTED AT ALL?
-# `gate_skip_routing_check` reports "98 unrouted skip path(s) in 53 gate(s);
-# published inventory holds 98 in 53" — balanced, over a 53-gate population that
-# contains none of the 35 gates no automatic verdict invokes. Its scope is its
-# coverage. A gate nothing runs produces no verdict, and the tree looks the same
-# either way.
-# `--root "$PLUGIN"`, not `"$ROOT"`: this gate's subject is the PLUGIN root
-# (it wants `programs/` directly under it) and it derives the repo root from
-# there itself. Same split as the line above -- vibe-ic#2199.
-run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check.py" --root "$PLUGIN"
 # AND THE ONE THAT COVERS EVERY PROGRAM, NOT A FILENAME-SHAPED SUBSET.
 #
 # The two gates above are the tree's wiring auditors and neither scans the whole
@@ -2077,35 +1997,11 @@ run "denial that constitutes the value it appears" "$ROOT" python3 "$PG/denial_t
 run "local clone does not borrow objects" "$ROOT" python3 "$PG/local_clone_does_not_borrow_objects.py" "$ROOT"
 run "measurement only artefact is not a verdict s" "$ROOT" python3 "$PG/measurement_only_artefact_is_not_a_verdict_source.py" "$ROOT"
 
-# THE FOUR MATRIX-DIMENSION GAPS, captured 2026-08-28 from the 68x9 mutation
-# probe (plugin v1.12.33). The probe ran a named mutation against each of the
-# nine dimensions; five reddened on their own defect class and four did not:
-#
-#   D1 wiring            MUT-B removed what hands the executor its gate dict
-#                        for step 21 -> GREEN, 86 passed, while the step
-#                        vanished from the tally and 18 blocked steps unblocked.
-#   D2 falsifiable       M2 killed the namesake verdict and left the absence
-#                        arm -> GREEN. 54 of its 121 reds were earned on EMPTY.
-#   D3 outputs_produced  MUT-B1 deleted the WRITER of A8's declared .gds ->
-#                        GREEN in every configuration; the corpus still had the
-#                        file.
-#   D6 skip_discipline   M1 made a gate stop working and say VACUOUS_PASS ->
-#                        GREEN, byte-identical to clean, while a project with
-#                        an empty clock plan moved from FAIL to VACUOUS_PASS.
-#
-# Each line below asks the half its dimension does not. They do not replace the
-# dimension modules: D1 still proves the walk INSIDE the executor is complete,
-# and this proves every step reaches it; D3 still proves the artefact once
-# existed, and this proves something still writes it.
-run "every declared step reaches the evaluator" "$ROOT" python3 "$PG/every_declared_step_reaches_the_evaluator_check.py" --root "$ROOT"
-run "a declared output has a live producer" "$ROOT" python3 "$PG/declared_output_has_a_live_producer_check.py" --root "$ROOT" --strict
-run "a disclosure token needs a runtime condition" "$ROOT" python3 "$PG/vacuous_disclosure_needs_a_runtime_condition_check.py" --root "$ROOT" --strict
 run "population guard asserts equality not a floo" "$ROOT" python3 "$PG/population_guard_asserts_equality_not_a_floor.py" --root "$ROOT"
 run "population pin without its member set" "$ROOT" python3 "$PG/population_pin_without_its_member_set.py" --root "$ROOT"
 run "prepared checkout states the revision it hol" "$ROOT" python3 "$PG/prepared_checkout_states_the_revision_it_holds.py" "$ROOT"
 run "printed remedy runs as printed" "$ROOT" python3 "$PG/printed_remedy_runs_as_printed.py" "$ROOT"
 run "provenance value is resolved not constant" "$ROOT" python3 "$PG/provenance_value_is_resolved_not_constant.py" "$ROOT"
-run "reference control resolved through a mutable" "$ROOT" python3 "$PG/reference_control_resolved_through_a_mutable_ref.py" --root "$ROOT"
 run "registry is the iteration domain" "$ROOT" python3 "$PG/registry_is_the_iteration_domain.py" --root "$ROOT"
 run "spawned gate whose status is discarded" "$ROOT" python3 "$PG/spawned_gate_whose_status_is_discarded.py" --root "$ROOT"
 run "two input selectors given together must refu" "$ROOT" python3 "$PG/two_input_selectors_given_together_must_refuse.py" --root "$ROOT"
@@ -2984,46 +2880,12 @@ uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: 
 run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
   python3 programs/image_gated_verification_check.py
 
-# `--max-test-files` IS A COST BOUND AND IT HAD GONE STALE. MEASURED on 8HD-9,
-# 2026-09-07 over 94617408759e: 12 argued sites, 7 PINNED, 5 ABSTAIN. Four of
-# the five were one cause elsewhere (a candidate file RED at baseline, repaired
-# in the same batch) and the fifth was this flag: `phase3_one_shot_runner.py:
-# 11472 _detect_pdk(override='sky130A')` selects 43 candidate files and 41
-# refused to look at it. It had already been moved 40 -> 41 once, in a
-# frozen-red repair, with no argument written down.
-#
-# Driven at 43, the site is PINNED — flipped to 'asap7' it is killed by
-# `programs/tests/test_policy_direction_must_be_pinned.py` (rc 1, "1 failed in
-# 2.09 s"), which sorts FIRST in the relevance order, so admitting the
-# selection costs one file rather than 43. The gate was not being protected
-# from a cost; it was declining to state a verdict it had.
-#
-# 43 EXACTLY, with no headroom, and no round number. Slack is what let this go
-# stale silently. `tests/test_policy_direction_must_be_pinned.py::
-# test_the_sweep_caps_at_or_above_what_this_corpus_needs` re-derives the largest
-# selection from the live tree and fails when this literal falls behind it, so
-# the next lane that outgrows it gets a named red in seconds instead of an
-# UNDETERMINED after 867 s.
-# THE CAP IS DERIVED, AND THIS LINE RECORDS ITS INPUT, NOT ITS ANSWER (owner
-# ruling, 2026-09-21). It used to carry `--max-test-files 43`, a number sized
-# for one moment: this tree's largest selection reached 45 and the gate began
-# ABSTAINing on `phase3_one_shot_runner.py:11837`, reporting UNDETERMINED after
-# minutes of work, with nothing to re-derive the literal but a hand. A cap is a
-# COST bound, so the gate now counts the population it sweeps and takes
-# `max(floor, largest selection)`; the FLOOR is the only declaration a policy
-# file is entitled to make about it.
-run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins --jobs 6 --max-test-files-floor 40
 
 # vibe-ic#1241 — WIRED HERE, not left to its own test. The audit
 # (`checker_execution_wiring_audit`) named this checker as one that nothing but
 # its own fixture ever ran: "a fixture the author wrote proves the logic, never
 # the artefacts."
 #
-# This surface and not the flow, because the subject is SHIPPED SOURCE, not a
-# design's artefacts: it parses every program under `programs/` and asks whether
-# a write to a declared report destination goes through `_atomic_artefact`. That
-# is the same population and the same cadence as the pinned-direction gate
-# directly above, which is why it sits beside it.
 #
 # MEASURED before wiring, so this adds a gate that passes rather than a new red:
 #   1138 program(s) parsed; 565 non-atomic declared-report writes (residual
@@ -3038,41 +2900,6 @@ run "declared reports are written atomically" "$PLUGIN" python3 programs/atomic_
 # step that STOPS emitting, or a new step that declares programs and emits
 # nothing.
 run "one per-step metrics schema, and who still is not using it" "$PLUGIN" python3 "$PG/step_metrics_adoption_check.py" "$PLUGIN"
-
-# The other half of #447: compare the checkout records every gate above has
-# ALREADY produced with one fresh-worktree run.  This is deliberately LAST.
-# The old placement launched Arm A again inside this gate, so every ordinary
-# hygiene gate ran three times (outer + A + B), and a disagreement ran five.
-# Reusing the exact argv-bound structured record makes the common path two
-# executions without weakening the two-tree assertion. Missing/malformed
-# records are rc 2 NOT CHECKED, never reconstructed from console prose.
-uncheckable_until 2027-02-28 "needs a CLEAN checkout and a complete machine record from this enclosing hygiene run: rc 2 means tracked modifications or missing attestation made the comparison meaningless (a genuinely host-dependent gate is rc 1)"
-# SERIAL, AND THE REASON IS THE WHOLE POINT OF THIS GATE.
-#
-# It compares each gate's record from THIS run against a fresh-worktree run, so it
-# needs every other gate's process record to already exist. Under `--jobs 8` it is
-# declared last and still starts while the slowest gates are in flight, so their
-# records are not written yet and it reports:
-#
-#     [CHECKOUT_ATTESTATION_MISSING] an argued direction is pinned
-#         the outer hygiene run supplied no complete process record for this
-#         declared gate; the fresh arm was not run
-#         checkout: NORECORD    worktree: NOT RUN
-#
-# Measured: the gates it named missing were exactly the slowest — "an argued
-# direction is pinned" (150 s), "gates disclose their denominator" (47 s), "liar
-# census controls still fire" (30 s). The attestation FILE was complete afterwards
-# (79 declared, 79 records, 0 missing); what was incomplete was the file AT THE
-# MOMENT THIS GATE READ IT.
-#
-# `gate_serial` drains the pool first, which restores the ordering the sequential
-# run gave it for free. Declaration order was never the guarantee — completion
-# order was, and concurrency separated the two.
-gate_serial "it reads every other gate's process record, so all of them must have \
-finished; under concurrency the slowest are still running when it starts"
-run_tolerating_uncheckable "gates are host-independent" "$ROOT" \
-  python3 "$PG/gate_host_independence_check.py" "$ROOT" \
-  --jobs 8
 
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.

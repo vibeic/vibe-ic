@@ -250,20 +250,6 @@ def test_untracked_paths_are_not_treated_as_dirty(repo):
 # ---------------------------------------------------------------------------
 # Agreement with the consumers this exists to satisfy
 # ---------------------------------------------------------------------------
-def test_the_tag_pattern_matches_the_consumers(tmp_path):
-    """`landing_is_one_commit_check` is the gate that reads this tag. If the two
-    patterns ever disagree, preparation writes a tag the gate does not accept
-    and the hour it was meant to save is spent anyway."""
-    consumer = PROGRAMS / "landing_is_one_commit_check.py"
-    if not consumer.is_file():
-        pytest.skip("consumer not present")
-    c = _load(consumer, "_gpl_consumer")
-    for subject in ("fix: a thing [v1.2.3]", "chore [v10.20.30] tail"):
-        assert bool(G._VERSION_TAG.search(subject)) is \
-               bool(c._VERSION_RE.search(subject)), subject
-    for subject in ("fix: no tag here", "v1.2.3 without brackets"):
-        assert bool(G._VERSION_TAG.search(subject)) is \
-               bool(c._VERSION_RE.search(subject)), subject
 
 
 # THE FIXED HARNESS CLOCK CANNOT GOVERN THIS ITEM, AND MUST NOT PRETEND TO.

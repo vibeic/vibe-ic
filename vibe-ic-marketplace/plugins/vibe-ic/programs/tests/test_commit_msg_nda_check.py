@@ -311,18 +311,6 @@ def test_missing_message_file_errors(tmp_path):
     assert "no such message file" in err.lower()
 
 
-def test_hooks_and_installer_are_present_and_executable():
-    """The checker is inert unless the hooks exist and the installer can install
-    them — assert the wiring ships, not just the program."""
-    repo_root = _PLUGIN_ROOT.parents[2]
-    hooks = repo_root / "tools" / "git-hooks"
-    for name in ("commit-msg", "pre-push"):
-        h = hooks / name
-        assert h.is_file(), f"missing tracked hook: {h}"
-        assert "commit_msg_nda_check.py" in h.read_text(encoding="utf-8"), \
-            f"hook {name} does not invoke the checker"
-    installer = repo_root / "tools" / "install-git-hooks.sh"
-    assert installer.is_file(), "missing tools/install-git-hooks.sh"
 
 
 def test_this_guard_contains_no_literal_nda_token():

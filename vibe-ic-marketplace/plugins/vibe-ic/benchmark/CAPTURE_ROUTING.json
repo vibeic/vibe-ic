@@ -4,13 +4,17 @@
     "phase2.latch_intent": {
       "description": "Make an explicitly requested storage element visible to the native RTL content checker through its typed SystemVerilog construct.",
       "bucket_A_program": "programs/comb_advanced_synth.py",
-      "bucket_A_related": ["programs/sequential_waveform_synth.py"],
+      "bucket_A_related": [
+        "programs/sequential_waveform_synth.py"
+      ],
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "benchmark.reference_model_handoff": {
       "description": "Producer advisory for the existing persistent reference-model input; ordinary native verification and independent review remain the boundary.",
       "bucket_A_program": "programs/professional_tb_gen.py",
-      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_A_related": [
+        "programs/design_one_shot_runner.py"
+      ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "benchmark.review_correction": {
@@ -102,7 +106,10 @@
     "phase2.required_site_results": {
       "description": "Producer-owned required gate results and current RTL binding; capture routing only, not a new gate.",
       "bucket_A_program": "programs/design_one_shot_runner.py",
-      "bucket_A_related": ["programs/flow_phase_attribution.py", "programs/benchmark_dispatch.py"],
+      "bucket_A_related": [
+        "programs/flow_phase_attribution.py",
+        "programs/benchmark_dispatch.py"
+      ],
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     },
     "phase2.sdc_gen": {
@@ -149,7 +156,9 @@
     "phase2.rtl_repair.public_port_metadata": {
       "description": "Source-bound native public-header port metadata in the existing structural repair contract; capture routing only, not a new gate.",
       "bucket_A_program": "programs/rtl_repair_contract.py",
-      "bucket_A_related": ["programs/benchmark_dispatch.py"],
+      "bucket_A_related": [
+        "programs/benchmark_dispatch.py"
+      ],
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "phase2.rtl_gen.public_port_order": {
@@ -172,13 +181,17 @@
     "phase2.rtl_gen.word_message_framing": {
       "description": "Capture subtype for source-bound fixed-length word framing; does not add a flow step or acceptance gate.",
       "bucket_A_program": "programs/serial_protocol_fsm_synth.py",
-      "bucket_A_related": ["programs/spec_artifact_registry.py"],
+      "bucket_A_related": [
+        "programs/spec_artifact_registry.py"
+      ],
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "phase2.sim.multi_output_waveform": {
       "description": "Capture subtype for source-bound valid-qualified multi-output waveform replay; does not add a flow step or acceptance gate.",
       "bucket_A_program": "programs/waveform_table_conformance_check.py",
-      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_A_related": [
+        "programs/design_one_shot_runner.py"
+      ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "phase2.rtl_gen.serial_parallel_multiplier": {
@@ -269,7 +282,9 @@
     "phase2.full_stack_tb.closed_form_arithmetic": {
       "description": "Closed-form arithmetic model extraction and test generation; capture routing only, not a new flow step.",
       "bucket_A_program": "programs/arith_oracle_tb_gen.py",
-      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_A_related": [
+        "programs/design_one_shot_runner.py"
+      ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "phase2.l10_unit_tb.testbench_gen.run_unit_tbs": {
@@ -550,10 +565,6 @@
       "bucket_A_program": "programs/_atomic_artefact.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
-    "ppa.feasibility": {
-      "bucket_A_program": "programs/ppa_feasibility_check.py",
-      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
-    },
     "ppa.head_to_head": {
       "bucket_A_program": "programs/ppa_head_to_head_check.py",
       "bucket_B_skill_file": "skills/ppa-benchmark/SKILL.md"
@@ -562,17 +573,14 @@
       "bucket_A_program": "programs/ppa_search_run.py",
       "bucket_B_skill_file": "skills/ppa-optimize/SKILL.md"
     },
-
     "repo.host_independence": {
       "bucket_A_program": "programs/gate_host_independence_check.py",
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     },
-
     "repo.test_population": {
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
       "bucket_B_skill_file": "skills/full-test-audit/SKILL.md"
     },
-
     "phase3.lec_post_layout": {
       "bucket_A_program": "programs/lec_post_layout_check.py",
       "bucket_B_skill_file": "skills/equivalence-check/SKILL.md"
@@ -589,13 +597,8 @@
       "bucket_A_program": "programs/_ppa/cli_exit.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
-
     "ppa.schema_coverage": {
       "bucket_A_program": "programs/_ppa/schema_validation.py",
-      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
-    },
-    "ppa.problem_identity": {
-      "bucket_A_program": "programs/ppa_problem_integrity_check.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
     "phase3.reference_flow_ingest": {
@@ -626,12 +629,9 @@
     "benchmark.residual_triage": {
       "description": "Source-bound residual population and shared absorption validation; capture routing only.",
       "bucket_A_program": "programs/triage_record_check.py",
-      "bucket_A_related": ["programs/benchmark_triage_absorption_audit.py"],
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
-    "benchmark.aggregate_verdict": {
-      "description": "Aggregating many per-subject exit codes into one verdict for a corpus run",
-      "bucket_A_program": "programs/benchmark_run_manifest.py",
+      "bucket_A_related": [
+        "programs/benchmark_triage_absorption_audit.py"
+      ],
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "flow.artefact_write_ownership": {
@@ -668,45 +668,6 @@
       "description": "Landing a document one lane owns, when another lane owns a document of the same kind",
       "bucket_A_program": "programs/enhancement_emit.py",
       "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
-    },
-    "flow.matrix_d1_wiring": {
-      "description": "The 68x9 matrix's wiring dimension: does something real parse and execute each declared gate",
-      "bucket_A_program": "programs/every_declared_step_reaches_the_evaluator_check.py",
-      "bucket_A_related": [
-        "programs/flow_gate_grid.py",
-        "programs/tests/test_matrix_d1_wiring.py",
-        "programs/tests/flow_matrix/cells.py"
-      ],
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
-
-    "flow.matrix_d3_outputs_produced": {
-      "description": "The 68x9 matrix's outputs dimension: are declared required_outputs genuinely written by a run",
-      "bucket_A_program": "programs/declared_output_has_a_live_producer_check.py",
-      "bucket_A_related": [
-        "programs/flow_gate_grid.py",
-        "programs/tests/test_matrix_d3_outputs_produced.py"
-      ],
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
-    "flow.matrix_d6_skip_discipline": {
-      "description": "The 68x9 matrix's skip dimension: is a skip conditioned on a runtime fact and reported at a non-PASS tier",
-      "bucket_A_program": "programs/vacuous_disclosure_needs_a_runtime_condition_check.py",
-      "bucket_A_related": [
-        "programs/flow_gate_grid.py",
-        "programs/tests/test_matrix_d6_skip_discipline.py",
-        "programs/gate_skip_routing_check.py"
-      ],
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
-    "publish.figure_agreement": {
-      "description": "A published page stating one named figure twice, with two different values",
-      "bucket_A_program": "programs/page_states_one_figure_twice_check.py",
-      "bucket_A_related": [
-        "programs/ppa_page_claim_check.py",
-        "programs/derived_corpus_figure_check.py"
-      ],
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "phase3.librelane_flow": {
       "description": "The LibreLane adapter path: the per-step LibreLane arms the default chip path runs today (steps 15, 15.5ic, 17-21, 32) and the planned whole-flow `--librelane` mode (docs/librelane_flow.md, not shipped). A recovery about how vibe-ic invokes LibreLane, resolves its config or image, bridges state, or reads its results belongs in the contract; a recovery about a sign-off verdict on LibreLane's output belongs in the step's own vibe-ic gate, which is kept.",

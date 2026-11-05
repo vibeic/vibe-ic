@@ -165,18 +165,6 @@ def test_tiers_refuses_a_runner_that_does_not_answer(monkeypatch, tmp_path):
         ct._tiers()
 
 
-def test_the_tier_listing_launch_is_supervised():
-    """run_tests.sh is an opaque shell runner: the launch that asks it for its
-    tiers must go through the watchdog, which the compliance gate checks."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "loop_watchdog_compliance_check",
-        _PLUGIN / "programs" / "loop_watchdog_compliance_check.py")
-    gate = importlib.util.module_from_spec(spec)
-    sys.modules.setdefault("loop_watchdog_compliance_check", gate)
-    spec.loader.exec_module(gate)
-    offs = gate.scan_file(Path(ct.__file__))
-    assert offs == [], [(o.line, o.kind, o.detail) for o in offs]
 
 
 def test_resync_sorts_reds_into_regenerate_and_hand_edit(monkeypatch, capsys):

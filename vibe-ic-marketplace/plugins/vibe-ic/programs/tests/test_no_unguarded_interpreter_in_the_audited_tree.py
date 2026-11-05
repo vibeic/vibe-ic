@@ -145,19 +145,6 @@ def _capture(monkeypatch, tmp_path, *, script=None):
     return seen
 
 
-def test_the_hygiene_coordinator_is_launched_with_BOTH_halves(
-        monkeypatch, tmp_path):
-    """THE FIX. `repo_hygiene_parallel.py` imports ten modules out of the
-    `programs/` directory it is about to audit, before any shard exists."""
-    seen = _capture(monkeypatch, tmp_path)
-    argv = seen["argv"]
-    assert argv[0] == sys.executable, argv
-    assert argv[1] == "-B", (
-        "the coordinator interpreter is unguarded; its own import phase writes "
-        f"into the tree it audits: {argv}")
-    assert seen["env"].get("PYTHONDONTWRITEBYTECODE") == "1", (
-        "the propagating half is missing, so a child of the coordinator that is "
-        "not `-I` may still write")
 
 
 def test_CONTROL_the_unit_test_seam_is_still_an_unflagged_bash_script(

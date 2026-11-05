@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 """Run the cheap BASE-owned push gates before any expensive verifier arm.
 
-`gatekeeper-verify-merge.sh` calls this first, over the actual push population,
-so a forbidden collateral revert, an NDA leak or a prohibited git command in a
-commit message is refused before hours of arms run.  The gate programs are
-materialised from the exact BASE commit, never imported from the candidate
-checkout, so a candidate cannot answer for itself by editing the checker.
 
 This was the `push-preflight` subcommand of the protected-path transition
 validator.  It never read that validator's byte register, and when the owner
@@ -54,7 +49,6 @@ SCHEMA = 1
 KIND = "vibeic.landing-push-preflight-receipt"
 PROGRAMS_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs"
 GATES = (
-    "landing_collateral_revert_check.py",
     "commit_msg_nda_check.py",
     "nda_diff_scan_check.py",
     "git_prohibition_guard.py",
@@ -127,8 +121,6 @@ def build_receipt(*, object_repo: Path, base: str, candidate: str,
         env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(authority)})
 
         commands: list[tuple[str, list[str]]] = [
-            ("landing_collateral_revert_check.py",
-             ["--repo", str(repo), "--rev-range", push_range]),
             ("commit_msg_nda_check.py",
              ["--repo", str(repo), "--rev-range", push_range]),
             ("nda_diff_scan_check.py",

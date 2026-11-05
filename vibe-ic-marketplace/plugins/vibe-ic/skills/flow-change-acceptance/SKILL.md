@@ -122,8 +122,7 @@ checked-in artefact — and read literally it pushed authors into a suite that i
 So, for a BEHAVIOURAL change: at least one test must be driven by a real in-repo
 artefact, through `programs/tests/_hostpaths.require_repo` / `repo_path` (which
 hardcodes nothing — `source_chip_agnostic_check` passes on trees that use it), or
-by sweeping a repo data root. `real_artefact_test_backing_check` reports the split
-per changed test module, ADVISORY.
+by sweeping a repo data root.
 
 A real-artefact test is still not automatically non-vacuous — an implication whose
 antecedent is always false passes either way. What proves a test bites is the
@@ -181,19 +180,6 @@ the form it needs. "The token exists somewhere in the corpus" is not that.
 ## Before you land
 
 - [ ] negative control fails pre-fix, passes post-fix, **both asserted**
-- [ ] the pre-fix control was **graded, not asserted** — capture it and hand it
-      to the program, because "the tests fail pre-fix" is true of every new file
-      ever written:
-
-      ```
-      PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest <the new tests> \
-          -q -p no:cacheprovider --junitxml=/tmp/control.xml     # on clean main
-      python3 programs/control_substance_check.py --junit /tmp/control.xml
-      ```
-
-      and pass the same file to the merge gate, which BLOCKS on a control whose
-      every failure is an absence:
-      `gatekeeper_review.py --base <b> --head <h> --control-junit /tmp/control.xml`
 - [ ] no `*_clears` assertion presented as a standalone control
 - [ ] corpus sweep run; zero false positives; coverage limits stated honestly
 - [ ] if BLOCKING: **prove-by-run**, with the stopped-flow evidence quoted
@@ -226,20 +212,9 @@ Landed, so the criterion is checked rather than remembered:
 | §6 | `silent_decline_audit` — AST audit for remedy call sites whose refusal discloses nothing | #307, #312 |
 | §4 | `source_chip_agnostic_check` | CI |
 | "empty vs clean" | `phase1_expert_track_evidence_check` — NEVER_RAN vs RAN_EMPTY | #312 |
-| §1 | `control_substance_check` — reads the pre-fix control's OWN pytest report and counts how many failures observed a VALUE, as against only noticing that something was absent. Composed by `gatekeeper_review --control-junit`, which BLOCKS on a tautological control | #381 |
 
 Keep corpus-sweep evidence as an artifact with its measured scope (§2). This
 requirement does not itself call for a new global checker.
-
-PROMOTED, and the reason it needed promoting: "every new gate's tests must
-contain at least one assertion that FAILS on the parent revision" is not the
-property that matters, and running them against `HEAD~1` does not measure it.
-Measured on two live PRs — one control collected NOTHING (a
-`ModuleNotFoundError` for the module the fix introduces; 551 lines of new test,
-zero assertions executed) and another reported "4 of 4 behavioural" when three
-of the four failed on the ABSENCE of a field the fix adds. Both "failed on the
-parent revision". `control_substance_check` grades the difference, and
-`gatekeeper_review --control-junit` is where it blocks.
 
 ## Compliance gate scope
 

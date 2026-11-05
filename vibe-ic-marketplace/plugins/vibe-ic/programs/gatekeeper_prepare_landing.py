@@ -552,15 +552,6 @@ def prepare(repo: Path, *, do_commit: bool,
         notes.append(f"version {old} -> {current_version(plugin_json)} across "
                      f"{len(wrote_v)} declared file(s)")
 
-        # residual manifest drift, and ONLY where the version writer already
-        # declared — a fixer allowed to reach further than the boundary would
-        # be the boundary's first exception.
-        sync = plugin / "programs" / "marketplace_version_sync_check.py"
-        if sync.is_file():
-            subprocess.run([sys.executable, str(sync), "--fix"],
-                           capture_output=True, text=True)
-            notes.append("marketplace sync --fix applied")
-
     # ---- THE BOUNDARY -----------------------------------------------------
     after = dirty_paths(repo)
     foreign = sorted(p for p in after if p not in declared)

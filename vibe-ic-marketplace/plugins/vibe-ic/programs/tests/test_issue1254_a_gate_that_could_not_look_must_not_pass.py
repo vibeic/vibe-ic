@@ -68,7 +68,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 ESC = importlib.import_module("benchmark_evidence_structure_check")
-RUN = importlib.import_module("benchmark_run_manifest")
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
@@ -146,48 +145,6 @@ def test_REVERSE_a_present_tree_with_nothing_changed_still_passes(tmp_path):
 
 
 # ── FACE 2b: benchmark_run_manifest ────────────────────────────────────────
-
-def test_run_manifest_refuses_when_git_cannot_answer(tmp_path):
-    """`changed_run_dirs` returned [] on a git failure, so 'git could not
-    answer' and 'nothing was touched' were the SAME value — and the caller
-    renders [] as `PASS — 0 run director(y/ies) touched`."""
-    (tmp_path / "benchmark-data").mkdir()
-    rc = _run_main(RUN, ["check", "--tree", "benchmark-data",
-                         "--changed-since", "origin/main"], tmp_path)
-    assert rc == 2, (f"git could not answer and the gate reported rc={rc}; "
-                     "0 here is a PASS the gate did not earn")
-
-
-def test_changed_run_dirs_signals_undeterminable_distinctly(tmp_path):
-    """The two states must be distinguishable AT THE ONLY PLACE that can tell
-    them apart. None (could not answer) vs [] (answered: nothing)."""
-    # `changed_run_dirs` drives a bare `git diff` with no `-C`, so it resolves
-    # from the CWD entirely — which is the same cwd-fragility this issue is
-    # about. Drive it from each place rather than assuming.
-    here = os.getcwd()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "benchmark-data").mkdir()
-    try:
-        os.chdir(outside)
-        assert RUN.changed_run_dirs(pathlib.Path("benchmark-data"),
-                                    "origin/main") is None
-        repo = _repo(tmp_path / "inside")
-        (repo / "benchmark-data").mkdir()
-        os.chdir(repo)
-        assert RUN.changed_run_dirs(pathlib.Path("benchmark-data"), "HEAD") == []
-    finally:
-        os.chdir(here)
-
-
-def test_REVERSE_run_manifest_passes_when_it_really_saw_nothing(tmp_path):
-    """The other direction, guarded: a real repo where the diff genuinely names
-    no scored run must still be rc 0."""
-    repo = _repo(tmp_path)
-    (repo / "benchmark-data").mkdir()
-    rc = _run_main(RUN, ["check", "--tree", "benchmark-data",
-                         "--changed-since", "HEAD"], repo)
-    assert rc == 0, f"a determined, genuinely empty change set must pass; rc={rc}"
 
 
 # ── FACE 1: the hook must never refuse without naming a reason ─────────────

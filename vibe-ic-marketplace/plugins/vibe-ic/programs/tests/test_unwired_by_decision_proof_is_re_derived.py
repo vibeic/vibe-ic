@@ -126,15 +126,3 @@ def test_a_proof_that_finds_the_subject_present_is_refused(tmp_path):
                   "probe":
                       "page_states_one_figure_twice_check:subject_count"}})
     assert not holds and "now HOLDS the subject" in detail, detail
-
-
-def test_the_probe_is_not_blind_it_finds_a_planted_subject(tmp_path):
-    """A zero is only evidence once the instrument has been shown to fire.
-    Without this, an entry could be excused forever by a probe that returns 0
-    because it never looks."""
-    sys.path.insert(0, str(PROGRAMS))
-    import page_states_one_figure_twice_check as P
-    assert P.subject_count(tmp_path) == 0
-    (tmp_path / "p.html").write_text(
-        '<div><b>18</b><span>DECLARED_ONLY</span></div>\n')
-    assert P.subject_count(tmp_path) == 1

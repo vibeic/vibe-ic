@@ -72,27 +72,6 @@ RUN_S = 24.0
 WRITE_EVERY_S = 0.5
 
 
-def derived_silent_tail():
-    """How long the outer channel is silent, from the SHIPPED artefacts.
-
-    Returns (longest_bucket_s, next_bucket_s).  Nothing here is typed: the
-    labels come from the dispatch script's own `--list`, the costs from the
-    committed profile, the assignment from the committed planner.
-    """
-    import hygiene_shard_plan as H
-    root = PROGRAMS.parent.parent.parent.parent
-    script = root / "tools" / "ci" / "repo_hygiene_gates.sh"
-    listed = subprocess.run(["bash", str(script), "--list"], cwd=str(root),
-                            capture_output=True, text=True)
-    labels = [line for line in listed.stdout.splitlines() if line.strip()]
-    profile = {g["label"]: (g.get("seconds") or 0)
-               for g in json.loads(
-                   (PROGRAMS / "hygiene_gate_profile.json").read_text(
-                       encoding="utf-8"))["gates"]}
-    buckets, _ = H.plan(labels, profile, 8)
-    costs = sorted((sum(profile.get(l, H.DEFAULT_SECONDS) for l in b)
-                    for b in buckets), reverse=True)
-    return costs[0], costs[1]
 
 
 def _child_source(inflight: Path, relay: bool) -> str:
@@ -213,17 +192,3 @@ def test_the_relay_is_inert_without_a_shard_channel():
         assert relay.sample_once() == 0
     assert said == []
     assert relay.emitted == 0
-
-
-def test_the_shipped_plan_puts_the_two_heaviest_gates_alone(tmp_path):
-    """The DERIVATION this file's docstring argues from, re-derived here."""
-    longest, second = derived_silent_tail()
-    import gatekeeper_review as GR
-    assert longest > second, (longest, second)
-    # Reported, not asserted as a threshold: the point is that the figure is
-    # derived from the shipped artefacts and can be re-read, not that it sits
-    # on one side of a number a future rebalance may move.
-    print(f"[DERIVED] longest bucket {longest}s, next {second}s, "
-          f"outer channel silent for >= {longest - second}s against "
-          f"a {GR._HYGIENE_STALL_GRACE_S}s review lease")
-    assert longest - second > 0

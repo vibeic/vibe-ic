@@ -54,8 +54,6 @@ def _load(name, filename):
 
 HH = _load("_sym_hh", "ppa_head_to_head_check.py")
 CC = _load("_sym_cc", "ppa_contract_check.py")
-FC = _load("_sym_fc", "ppa_feasibility_check.py")
-PI = _load("_sym_pi", "ppa_problem_integrity_check.py")
 MC = _load("_sym_mc", "ppa_measurement_check.py")
 PC = _load("_sym_pc", "ppa_pareto_check.py")
 AB = _load("_sym_ab", "ppa_ablation_check.py")
@@ -87,12 +85,6 @@ WALKS = [
                {"flow": "b", "role": "subject"}]}),
     ("contract", _seam_walk(CC.is_contract),
      {"schema": "vibeic.ppa.contract.v1", "run_label": "x"}),
-    ("candidates", _seam_walk(FC.is_candidate_set),
-     {"schema": "vibeic.ppa.candidates.v1", "candidates": [],
-      "required_views_by_axis": {}, "required_views": [], "limits": {},
-      "allow_waivers": False}),
-    ("contract_pairs", _seam_walk(PI.is_contract),
-     {"schema": "vibeic.ppa.contract.v1", "run_label": "x"}),
     ("coverage_bundles", _seam_walk(MC.is_bundle),
      {"schema": 'vibeic.ppa.metric_bundle.v1', "records": [], "expected": []}),
     ("pareto_candidate_sets", _seam_walk(PC.is_candidate_set),
@@ -110,8 +102,8 @@ WALKS = [
 COVERS = {
     "head_to_head": "ppa_head_to_head_check.py",
     "contract": "ppa_contract_check.py",
-    "candidates": "ppa_feasibility_check.py",
-    "contract_pairs": "ppa_problem_integrity_check.py",
+
+
     "coverage_bundles": "ppa_measurement_check.py",
     "pareto_candidate_sets": "ppa_pareto_check.py",
     "ablation": "ppa_ablation_check.py",

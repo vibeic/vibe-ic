@@ -273,7 +273,7 @@ def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
     the stamp it cannot withhold one."""
     emit = land_sh.index("--emit-fingerprint")
     expect = land_sh.index("--expect-fingerprint")
-    last_suite = land_sh.rindex("plugin_full_audit.py")
+    last_suite = land_sh.rindex("lane_emit_window")
     stamp = _stamp_write(land_sh).start()
     assert emit < last_suite, "the fingerprint is taken after the suites ran"
     assert last_suite < expect, (
