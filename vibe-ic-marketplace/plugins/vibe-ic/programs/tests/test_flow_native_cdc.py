@@ -144,7 +144,8 @@ def test_implemented_cdc_does_not_stub_connected_unknown_storage(tmp_path):
     ("alias", 0), ("latched", 0), ("opposite_phase", 1),
     ("other_latch_clock", 1), ("raw_gate", 1), ("independent", 1),
 ])
-def test_rtl_cdc_clock_ancestry_uses_native_latch_phase(tmp_path, kind, unresolved):
+@pytest.mark.parametrize("suffix", [".v", ".sv"])
+def test_rtl_cdc_clock_ancestry_uses_native_latch_phase(tmp_path, kind, unresolved, suffix):
     if not shutil.which("yosys"):
         pytest.skip("Native Yosys is required")
     import _cdc_netlist as native
@@ -156,7 +157,9 @@ def test_rtl_cdc_clock_ancestry_uses_native_latch_phase(tmp_path, kind, unresolv
         "raw_gate": "assign clocked=clk_i & enable_i;",
         "independent": "assign clocked=other_i;",
     }[kind]
-    rtl = tmp_path / "unit.v"
+    rtl = tmp_path / ("unit" + suffix)
+    if suffix == ".sv":
+        gate = gate.replace(" & ", " && ")
     rtl.write_text("module leaf(input clk,d,output reg q); always @(posedge clk) q<=d; endmodule\n"
                    "module unit(input clk_i,other_i,enable_i,d,output q,r); wire clocked; "
                    + gate + " leaf launch(.clk(clocked),.d(d),.q(q)); "
