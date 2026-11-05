@@ -1,61 +1,46 @@
+"""The early package row reads documents without starting the native chain."""
+import copy
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip('librelane')
-from librelane.common import Toolbox
-from librelane.flows import Flow
-from librelane.state import State
-
 import flow_engine as engine
-import io_pad_chip_top_gen as io
-import pad_assignment_gen as assignment
+import io_pad_chip_top_gen
+import pad_assignment_gen
 
 
-@pytest.mark.parametrize('io_code,assignment_code,expected', [
-    (0, 0, 'PASS'), (1, 0, 'FAIL'), (2, 0, 'NOT_MEASURED'), (0, 1, 'FAIL')])
-def test_selected_interface_step_runs_native_producers_and_keeps_their_verdicts(
-        tmp_path, monkeypatch, io_code, assignment_code, expected):
+@pytest.mark.parametrize('code,expected', [(0, 'PASS'), (1, 'FAIL'), (2, 'NOT_MEASURED')])
+def test_document_plan_runs_without_native_chain_or_rtl(tmp_path, monkeypatch, code, expected):
+    docs = tmp_path / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L19_CONSTRAINTS_PDK.json').write_text(json.dumps({'fields': {'pdk_target': 'GF180MCUD'}}))
+    monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(tmp_path / 'pdk'))
     calls = []
-    rtl = tmp_path / 'unit.v'
-    rtl.write_text('module unit(input clk, input d, output q); assign q=d; endmodule\n')
-    owner = Flow.factory.get('Classic')({'DESIGN_NAME': 'unit', 'PDK': 'sky130A',
-        'VERILOG_FILES': [str(rtl)], 'CLOCK_PORT': 'clk'}, design_dir=str(tmp_path))
 
-    def io_run(argv):
-        calls.append('io')
-        output = tmp_path / 'reports/phase3/io_pad_chip_top.json'
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps({'program': 'io_pad_chip_top_gen',
-            'verdict': 'WROTE' if io_code == 0 else 'REFUSE' if io_code == 1 else 'NOT_AVAILABLE',
-            'pad_instances': {'u_clock': {}, 'u_data': {}, 'u_output': {}},
-            'rule': 'native producer result'}))
-        return io_code
+    def forbidden(*args, **kwargs):
+        raise AssertionError('The document plan cannot initialize the native chain or generate IO RTL')
 
-    def assign(argv):
-        calls.append('assignment')
+    def assignment(argv):
+        calls.append(argv)
         output = Path(argv[argv.index('--json') + 1])
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps({'program': 'pad_assignment_gen',
-            'verdict': 'WROTE' if assignment_code == 0 else 'REFUSE',
-            'questions_answered': 8, 'questions_unanswered': [], 'reason': 'native producer result'}))
-        return assignment_code
+        output.write_text(json.dumps({'verdict': 'WROTE' if code == 0 else 'REFUSE' if code == 1 else 'NOT_ASKED',
+            'reason': 'native assignment result', 'questions_answered': 8 if code == 0 else 3,
+            'questions_unanswered': [] if code == 0 else ['physical placement']}))
+        return code
 
-    monkeypatch.setattr(io, 'main', io_run)
-    monkeypatch.setattr(assignment, 'main', assign)
-    chain = engine.NativeChain(tmp_path, {'delivery_target': 'gds'})
-    chain.owner = SimpleNamespace(config=owner.config, gating_config_vars={})
-    chain.config = owner.config.to_raw_dict()
-    chain.state = State()
-    chain.toolbox = Toolbox(str(tmp_path / 'tool_tmp'))
-    row = next(row for row in engine.read_json(engine.TABLE)['steps']
-               if row['name'] == 'package_load_and_test_interface_feasibility')
-    (tmp_path / 'step').mkdir()
-    result = chain.execute(tmp_path / 'step', row['tool'])
-    assert calls == (['io', 'assignment'] if io_code == 0 else ['io'])
-    assert engine.evaluate(result, []) == expected
-    if expected == 'PASS':
-        assert result.metrics['package_interface__pad__count'] == 3
-        assert result.metrics['package_interface__unanswered__count'] == 0
+    monkeypatch.setattr(engine.NativeChain, 'initialize', forbidden)
+    monkeypatch.setattr(io_pad_chip_top_gen, 'main', forbidden)
+    monkeypatch.setattr(pad_assignment_gen, 'main', assignment)
+    table = copy.deepcopy(engine.read_json(engine.TABLE))
+    row = next(row for row in table['steps'] if row['name'] == 'package_load_and_test_interface_feasibility')
+    route = {'entry_step': row['name'], 'verify_through': row['name'], 'delivery_target': 'gds',
+             'input_contract': 'structured'}
+    result = engine.run(tmp_path, table=table, route=route,
+                        from_name=row['name'], to_name=row['name'])
+    assert len(calls) == 1
+    assert calls[0][calls[0].index('--pdk') + 1] == 'gf180mcuD'
+    assert calls[0][calls[0].index('--pdk-root') + 1] == str(tmp_path / 'pdk')
+    assert result['steps'][0]['status'] == expected
+    assert not (tmp_path / 'phase2/stage1/rtl').exists()
+    assert not (tmp_path / 'reports/phase3/io_pad_chip_top.json').exists()

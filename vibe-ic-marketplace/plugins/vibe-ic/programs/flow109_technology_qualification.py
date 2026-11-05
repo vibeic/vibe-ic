@@ -37,27 +37,35 @@ def _resolve(config_path: Path, pdk_root: Path, *, pdk: str, project: Path):
                   design_dir=str(project)).config
 
 
+def documented_pdk(project: Path):
+    from flow_config import _load, _input_docs
+    docs = project / "phase1/generated_docs"
+    l19 = _load(docs / "L19_CONSTRAINTS_PDK.json")
+    pdk = l19.get("fields", {}).get("pdk_target") or l19.get("pdk_target")
+    if not pdk:
+        from parametric_spec_extractor import extract_pdk_target
+        for text in _input_docs(project).values():
+            target = extract_pdk_target(text)
+            if target:
+                pdk = target["pdk"]
+                break
+    registered = _load(Path(__file__).with_name("pdk_registry.json")).get("pdks", [])
+    return next((row["name"] for row in registered if row["name"].casefold() == str(pdk).strip().casefold()),
+                str(pdk).strip() if pdk else pdk)
+
+
 def execute(project: Path, directory: Path) -> dict:
     project, directory = Path(project).resolve(), Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     started, reports, metrics = False, [], {}
     before = time.perf_counter()
     try:
-        from flow_config import _load, _input_docs
+        from flow_config import _load
         docs = project / "phase1/generated_docs"
         l19 = _load(docs / "L19_CONSTRAINTS_PDK.json")
-        pdk = l19.get("fields", {}).get("pdk_target") or l19.get("pdk_target")
-        if not pdk:
-            from parametric_spec_extractor import extract_pdk_target
-            for text in _input_docs(project).values():
-                target = extract_pdk_target(text)
-                if target:
-                    pdk = target["pdk"]
-                    break
+        pdk = documented_pdk(project)
         if not pdk:
             return {"ran": False, "exit_code": None, "detail": "No PDK declared in design documents."}
-        registered = _load(Path(__file__).with_name("pdk_registry.json")).get("pdks", [])
-        pdk = next((row["name"] for row in registered if row["name"].casefold() == str(pdk).strip().casefold()), str(pdk).strip())
         import librelane_contract as native
         config_path = project / "phase3/librelane/config.json"
         if not config_path.exists():
