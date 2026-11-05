@@ -3144,6 +3144,11 @@ def resolve_image(project: Path | None = None, *, record: bool = True) -> str:
         return provider
     if declared or os.environ.get('VIBEIC_LIBRELANE_IMAGE'):
         return str(declared or os.environ['VIBEIC_LIBRELANE_IMAGE'])
+    if _ce.no_container_route():
+        attested = local_image_attestation(declared)
+        if record and project is not None and (project / 'phase3').is_dir():
+            write_json(project / 'phase3/librelane_image.provenance.json', attested)
+        return attested['image']
     import _eda_pin
     try:
         return _eda_pin.image_reference()
