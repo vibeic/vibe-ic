@@ -48,6 +48,11 @@ def _simulate(tmp_path, rtl, body):
     ("Decode the current counter value before incrementing; output is low on the counter wrap edge.", "current"),
     ("After each counter wraps to 0, its output starts a high interval on that clock edge.", "wrap"),
     ("On each edge decode the next counter value after incrementing. After each counter wraps to 0, its output starts a high interval on that clock edge.", "next"),
+    ("Each counter uses post-increment syntax for its own update.", "current"),
+    ("Each counter uses post-increment syntax for its own update on each edge.", "current"),
+    ("Each counter uses post-increment counter syntax for its own update on each edge, and the divider output keeps its defined phase.", "current"),
+    ("Each registered divider output decodes the next counter value on the same edge as its counter update.", "next"),
+    ("Each registered divider output decodes the post-increment counter value on the same edge as its counter update.", "next"),
 ])
 def test_registered_divider_reads_current_value_except_explicit_edge(tmp_path, relation, phase):
     rtl = synth.emit_rtl("odd_clock_divider", _odd_description(relation))

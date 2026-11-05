@@ -1040,7 +1040,11 @@ def _odd_declared_phase(desc: str) -> Optional[str]:
         r"\bwrap\w*[^.\n]*\bto\s+0\b[^.\n]*\bhigh\b", desc, re.I))
     current_decode = bool(re.search(
         r"\bcurrent\s+counter\s+value\b|\bpre[- ]increment", desc, re.I))
-    next_decode = bool(re.search(r"\bnext\s+counter\s+value\b|\bpost[- ]increment", desc, re.I))
+    next_decode = any(
+        re.search(r"\b(?:decode\w*|read\w*)\s+(?:the\s+)?"
+                  r"(?:next\s+counter\s+value|post[- ]increment\s+counter(?:\s+value)?)\b", clause, re.I)
+        and re.search(r"\bsame[- ]edge\b|\bon\s+(?:each|that)\s+(?:clock\s+)?edge\b", clause, re.I)
+        for clause in re.split(r"[.\n]", desc))
     low_at_wrap = bool(re.search(
         r"\blow\b[^.\n]*\bwrap\b|\bwrap\b[^.\n]*\blow\b", desc, re.I))
     if (high_at_wrap and (current_decode or low_at_wrap)) or (next_decode and (current_decode or low_at_wrap)):

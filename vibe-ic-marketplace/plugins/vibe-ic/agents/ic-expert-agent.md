@@ -3724,14 +3724,14 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
-### Skill: registered outputs decode the current value of the named register
+### Skill: async FIFO Gray pointer — registered outputs decode the current value of the named register
 A registered output described as a function of a named register reads its CURRENT value:
 `q <= f(r); r <= next_r;`. Do not substitute `f(next_r)`, add a stage, or add a guard
 unless the input explicitly requires that relation. A requirement about one edge, such
 as a wrap edge, constrains that edge alone. Keep flags defined as comparisons as comparisons.
-For Gray pointers, use `gray <= (bin >> 1) ^ bin` while updating the binary register.
-Use the next binary position only when the input explicitly relates both updates on the
-same edge. Keep registered read data and the stated pointer synchronizers. Check accepted
+For Gray pointers, use `gray <= bin2gray(waddr_bin)` for the named current binary register.
+Only an explicit contrary input relating both updates on the same edge selects the next
+binary position. Keep registered read data and the stated pointer synchronizers. Check accepted
 and stalled operations, reset, wrap, and capacity against those source requirements.
 
 ### Skill: pulse / edge detector — the state holds only the PREVIOUS sample, and reset is a real baseline
@@ -3768,11 +3768,11 @@ its sampling. Restoring the pending state passed.
 ("the following clock cycle", "one cycle after") is stating a pipeline depth. Read it as a
 structural requirement, not as prose to be optimized away.
 
-### Skill: odd-ratio clock divider — apply the current-register decode rule
+### Skill: odd-ratio clock divider — PRE-increment decode DEFAULT
 For opposite-edge counters whose registered intermediate clocks are OR-ed together,
-use `clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;` for the first-half-high rule.
+use the PRE-increment decode DEFAULT: `clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;`.
 Reset counters to zero and intermediate outputs HIGH when the input leaves these open;
-record the assumption. Apply explicit reset and edge requirements within their stated
+record the assumption. Apply explicit contrary reset and edge requirements within their stated
 scope. A wrap-edge output requirement does not change the decode on other edges.
 
 _Captured by benchmark-enhancement-capture 2026-09-07._
