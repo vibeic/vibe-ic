@@ -296,3 +296,38 @@ def test_resume_accounts_preparation_before_a_non_native_interval(tmp_path, monk
     assert first["wall_seconds"] >= first["tool_seconds"]
     assert first["program_seconds"] + first["tool_seconds"] == pytest.approx(first["wall_seconds"])
     assert not later["native_steps"]
+
+
+@pytest.mark.parametrize("filters", [None, [], [""]])
+def test_empty_corner_filter_keeps_native_numbers_and_original_limit(filters):
+    check = {"metric": "slew__corner:*", "operator": "<=", "limit": 0,
+             "corner_config": "CORNERS"}
+    metrics = {"slew__corner:nom_ss": 0, "slew__corner:max_ss": 1}
+    observed = engine.measure([check], metrics, {"CORNERS": filters}, {"always": True})
+    assert [(item["metric"], item["status"]) for item in observed] == [
+        ("slew__corner:nom_ss", "PASS"), ("slew__corner:max_ss", "FAIL")]
+    assert engine.evaluate(engine.ToolResult(True, 0), observed) == "FAIL"
+    selected = engine.measure([check], metrics, {"CORNERS": ["nom_*"]}, {"always": True})
+    assert [item["metric"] for item in selected] == ["slew__corner:nom_ss"]
+
+
+def test_report_reuse_cannot_hide_failed_resume_preparation(tmp_path, monkeypatch):
+    import subprocess
+    import time
+    previous, reused = command_row("previous"), command_row("reused")
+    reused.update(tool={"kind": "native_report", "from": "previous"}, checks=[])
+    execute(tmp_path, [previous, reused])
+    (tmp_path / "steps/previous/state_out.json").write_text("{}")
+    def initialize(chain):
+        started = time.perf_counter()
+        process = subprocess.run([sys.executable, "-c", "raise SystemExit(3)"])
+        chain.observe_preparation({"name": "test-sizing-tool", "ran": True,
+            "exit_code": process.returncode, "status": "FAIL",
+            "tool_seconds": time.perf_counter() - started,
+            "reports": str(tmp_path / "sizing")})
+        raise ValueError("preparation failed")
+    monkeypatch.setattr(engine.NativeChain, "initialize", initialize)
+    result = execute(tmp_path, [previous, reused], from_name="reused")["steps"][0]
+    assert result["status"] == "FAIL"
+    assert result["tool_exit_code"] == 3
+    assert result["tool_seconds"] > 0

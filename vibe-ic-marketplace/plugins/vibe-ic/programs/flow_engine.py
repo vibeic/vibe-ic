@@ -463,8 +463,8 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
             limit = document_value(project, check["limit_from"])
         matches = {name: value for name, value in metrics.items()
                    if fnmatch.fnmatchcase(name, check["metric"])}
-        if check.get("corner_config") and config.get(check["corner_config"]) is not None:
-            corners = config[check["corner_config"]]
+        corners = [corner for corner in config.get(check.get("corner_config"), []) or [] if corner]
+        if corners:
             matches = {key: value for key, value in matches.items()
                        if any(fnmatch.fnmatchcase(key.split("__corner:")[-1], corner)
                               for corner in corners)}
@@ -713,9 +713,11 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             checks = [*checks, *declared_electrical_checks(project)]
         observed = measure(checks, native.metrics, chain.config, features, project)
         elapsed = time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]
-        result = {"name": row["name"], "title": row["title"],
-                  "status": (previous.get("status", "NOT_MEASURED")
-                             if kind == "native_report" and not observed else evaluate(native, observed)),
+        status = evaluate(native, observed)
+        if (kind == "native_report" and not observed
+                and (not preparation.native_steps or evaluate(preparation, []) == "PASS")):
+            status = previous.get("status", "NOT_MEASURED")
+        result = {"name": row["name"], "title": row["title"], "status": status,
                   "tool_ran": native.ran,
                   "tool_exit_code": native.exit_code, "metrics": observed,
                   "native_metrics": native.metrics, "native_steps": native.native_steps,
