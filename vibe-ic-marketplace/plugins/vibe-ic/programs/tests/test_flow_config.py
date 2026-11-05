@@ -212,16 +212,19 @@ def test_implementation_pdn_widths_reach_native_configuration(project):
     assert config["CLOCK_PERIOD"] == 17.5
 
 
-def test_cli_records_supported_pdn_choice(project):
+@pytest.mark.parametrize(("key", "value"), [
+    ("PDN_VWIDTH", 2.4), ("RUN_POST_GRT_DESIGN_REPAIR", True),
+])
+def test_cli_records_supported_implementation_choice(project, key, value):
     output = project / "config.json"
     result = subprocess.run([
         sys.executable, str(Path(__file__).resolve().parents[1] / "flow_config.py"),
-        "--project", str(project), "--set", "PDN_VWIDTH=2.4", "--output", str(output),
+        "--project", str(project), "--set", f"{key}={json.dumps(value)}", "--output", str(output),
     ], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(output.read_text())["PDN_VWIDTH"] == 2.4
+    assert json.loads(output.read_text())[key] == value
     assert json.loads((project / "plugin_output/declaration.json").read_text()) == {
-        "PDN_VWIDTH": 2.4}
+        key: value}
 
 
 def test_original_prompt_recovers_lost_pdk_and_invalid_top(project):
