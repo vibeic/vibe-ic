@@ -12,6 +12,79 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from flow_config import build_config, declared_power_checks, resolve_rtl_inputs, write_config
 
 
+def test_native_delay_defaults_preserve_buffers_and_user_exclusions(tmp_path):
+    pytest.importorskip("librelane")
+    from librelane.common import Toolbox
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    cells = ["neutral__dlya_1", "sg13g2_dlygate4sd3_1", "delayx1",
+             "neutral__buf_1", "neutral__buf_4"]
+    text = "library (neutral) {\n" + "".join(
+        f' cell ("{cell}") {{\n  area : 1;\n }}\n' for cell in cells) + "}\n"
+    liberty = tmp_path / "neutral.lib"
+    liberty.write_text(text)
+    config = Config({"DEFAULT_CORNER": "nominal", "LIB": {"nom*": [str(liberty)]},
+                     "EXTRA_EXCLUDED_CELLS": ["user_choice*"]})
+    toolbox = Toolbox(str(tmp_path / "tool_tmp"))
+
+    updated = native_defaults(config)
+
+    assert updated["EXTRA_EXCLUDED_CELLS"] == ["user_choice*", "*dly*", "*delay*"]
+    assert config["EXTRA_EXCLUDED_CELLS"] == ["user_choice*"]
+    assert native_defaults(updated)["EXTRA_EXCLUDED_CELLS"] == updated["EXTRA_EXCLUDED_CELLS"]
+    filtered, = toolbox.remove_cells_from_lib(
+        frozenset([str(liberty)]), frozenset(updated["EXTRA_EXCLUDED_CELLS"]))
+    result = Path(filtered).read_text()
+    for cell in cells[:3]:
+        assert f'cell ("{cell}")' not in result
+    for cell in cells[3:]:
+        assert f'cell ("{cell}")' in result
+
+
+@pytest.mark.parametrize("existing", [None, ["*dly*", "user_choice*"]])
+def test_native_delay_defaults_need_no_library_scan(existing):
+    pytest.importorskip("librelane")
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    config = Config({"EXTRA_EXCLUDED_CELLS": existing})
+
+    expected = list(dict.fromkeys([*(existing or []), "*dly*", "*delay*"]))
+    assert native_defaults(config)["EXTRA_EXCLUDED_CELLS"] == expected
+    assert config["EXTRA_EXCLUDED_CELLS"] == existing
+
+
+@pytest.mark.parametrize("pdk,gf180", [("gf180mcuD", True), ("GF180MCUA", True),
+                                      ("sky130A", False), (None, False)])
+def test_native_platform_defaults_exclude_weak_cells_only_for_gf180(tmp_path, pdk, gf180):
+    pytest.importorskip("librelane")
+    from librelane.common import Toolbox
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    weak = ["neutral__buf_1", "neutral__and2_1", "neutral__dff_1"]
+    strong = ["neutral__buf_2", "neutral__and2_2", "neutral__dff_2"]
+    liberty = tmp_path / "neutral.lib"
+    liberty.write_text("library (neutral) {\n" + "".join(
+        f' cell ("{cell}") {{\n  area : 1;\n }}\n' for cell in weak + strong) + "}\n")
+    config = Config({"PDK": pdk, "EXTRA_EXCLUDED_CELLS": ["user_choice*"]})
+
+    updated = native_defaults(config)
+
+    expected = ["user_choice*", "*dly*", "*delay*", *(["*_1"] if gf180 else [])]
+    assert updated["EXTRA_EXCLUDED_CELLS"] == expected
+    assert native_defaults(updated)["EXTRA_EXCLUDED_CELLS"] == expected
+    assert config["EXTRA_EXCLUDED_CELLS"] == ["user_choice*"]
+    filtered, = Toolbox(str(tmp_path / "tool_tmp")).remove_cells_from_lib(
+        frozenset([str(liberty)]), frozenset(expected))
+    result = Path(filtered).read_text()
+    for cell in weak:
+        assert (f'cell ("{cell}")' not in result) == gf180
+    for cell in strong:
+        assert f'cell ("{cell}")' in result
+
+
 @pytest.fixture
 def project(tmp_path):
     docs = tmp_path / "phase1/generated_docs"
