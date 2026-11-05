@@ -160,7 +160,8 @@ def select_steps(table: dict, route: dict, features: dict,
             raise ValueError(f"Router boundary has no unique table address: {value}")
         return matches[0]
     start, end = find(str(route["entry_step"])), find(str(route["verify_through"]))
-    closed = set(route.get("verify_closed_steps", [])) if route.get("input_contract") == "original" else set()
+    physical_delivery = route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}
+    closed = set(route.get("verify_closed_steps", [])) if not physical_delivery else set()
     if closed:
         indices = [i for i, row in enumerate(rows) if closed.intersection(aliases(row))]
         if indices:
@@ -237,7 +238,7 @@ class NativeChain:
         path = directory / "state_out.json"
         if path.is_file():
             restored = State.load(read_json(path))
-            self.state = State(restored, metrics={**dict(self.state.metrics), **dict(restored.metrics)})
+            self.state = restored
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
         try:
@@ -430,8 +431,8 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
             limit = document_value(project, check["limit_from"])
         matches = {name: value for name, value in metrics.items()
                    if fnmatch.fnmatchcase(name, check["metric"])}
-        if check.get("corner_config") and config.get(check["corner_config"]) is not None:
-            corners = config[check["corner_config"]]
+        corners = [corner for corner in config.get(check.get("corner_config"), []) or [] if corner]
+        if corners:
             matches = {key: value for key, value in matches.items()
                        if any(fnmatch.fnmatchcase(key.split("__corner:")[-1], corner)
                               for corner in corners)}

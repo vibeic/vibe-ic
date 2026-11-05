@@ -76,6 +76,110 @@ def reset_script(script, boundary):
     return script
 
 
+def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
+    from flow109_netlist_cdc import _word
+
+    core = directory / "core"
+    core.mkdir()
+    gold, remainder = script.split("[gate]", 1)
+    gate, preparation = remainder.split("[script]", 1)
+    defines = " ".join("-D" + str(value) for value in pads["defines"])
+    includes = " ".join("-I " + _word(path) for path in pads["include_dirs"])
+    reads = [f"read_verilog -lib -nooverwrite -sv {defines} {includes} " + _word(path) for path in models]
+    reads += ["read_liberty -lib -nooverwrite -ignore_miss_func -ignore_miss_dir " + _word(path)
+              for path in pads["liberty"]]
+    views, reports = {}, []
+    for side, source in (("gold", gold.replace("[gold]", "")), ("gate", gate)):
+        path = directory / f"{side}_pads.ys"
+        path.write_text("\n".join(reads) + "\n" + source + "\n"
+            + f"hierarchy -check -top {top}\nproc\nflatten\n"
+            + f"write_json {_word(directory / (side + '.before-normalization.json'))}\n"
+            + f"select -set terminals {top}/i:* {top}/o:* %i\n"
+            + "\n".join(f"expose -evert {top}/t:{master}"
+                         for master in sorted(pads["types"])) + "\n"
+            + f"select -set pad_terminals {top}/i:* {top}/o:* %i @terminals %d\n"
+            + "delete -output @terminals\ndelete -input @pad_terminals\n"
+            + f"write_json {_word(core / (side + '.json'))}\n"
+            + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")
+        completed = commands.run(["yosys", "-s", path])
+        reports.append(path)
+        if completed is None or completed.returncode:
+            return None, None, reports, "Pad-boundary elaboration did not complete."
+        views[side] = json.loads((directory / f"{side}.before-normalization.json").read_text())["modules"][top]
+        module = views[side]
+        connected = {bit for port in module["ports"].values() for bit in port["bits"]}
+        connected.update(bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
+                         for bits in cell["connections"].values() for bit in bits)
+        connected_ports = {f"{instance}.{pin}" for instance, cell in module["cells"].items()
+                           if cell["type"] in pads["types"] for pin, bits in cell["connections"].items()
+                           if bits and (cell["port_directions"].get(pin) == "input"
+                                        or connected.intersection(bits) or set(bits).intersection({"0", "1"}))}
+        exposed = json.loads((core / f"{side}.json").read_text())["modules"][top]
+        disconnected = [f"{top}/{name}" for name, port in exposed["ports"].items()
+                        if port["direction"] == "output" and name not in module["ports"]
+                        and name not in connected_ports]
+        if disconnected:
+            path = directory / f"{side}_core.ys"
+            path.write_text(f"read_json {_word(core / (side + '.json'))}\n"
+                + "delete -port " + " ".join(disconnected) + "\n"
+                + f"hierarchy -top {top}\nclean -purge\n"
+                + f"write_json {_word(core / (side + '.json'))}\n"
+                + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")
+            completed = commands.run(["yosys", "-s", path])
+            reports.append(path)
+            if completed is None or completed.returncode:
+                return None, None, reports, "Pad-free core elaboration did not complete."
+        reports.extend([directory / f"{side}.before-normalization.json", core / f"{side}.json"])
+
+    def wrapper(module):
+        instances = {name: cell for name, cell in module["cells"].items()
+                     if cell["type"] in pads["types"]}
+        nets = {}
+        for name, port in module["ports"].items():
+            for index, bit in enumerate(port["bits"]):
+                nets.setdefault(bit, []).append(f"port:{name}:{index}")
+        for name, cell in instances.items():
+            for pin, bits in cell["connections"].items():
+                for index, bit in enumerate(bits):
+                    nets.setdefault(bit, []).append(f"pad:{name}:{pin}:{index}")
+        return {"instances": {name: {key: cell[key] for key in ("type", "parameters", "port_directions")}
+                              for name, cell in instances.items()},
+                "connections": sorted(sorted(labels + (["constant:" + bit] if isinstance(bit, str) else []))
+                                      for bit, labels in nets.items())}
+
+    signatures = {side: wrapper(module) for side, module in views.items()}
+    differences = [key for key in signatures["gold"] if signatures["gold"][key] != signatures["gate"][key]]
+    report = directory / "wrapper.json"
+    report.write_text(json.dumps({"views": signatures, "differences": differences,
+        "scope": "Pad instances, types and terminal connectivity. Core-side behavior is proved by pad-free EQY."},
+        indent=2) + "\n")
+    reports.append(report)
+    if boundary:
+        module = json.loads((core / "gold.json").read_text())["modules"][top]
+        gold = views["gold"]
+        consumers = {bit for cell in gold["cells"].values() if cell["type"] not in pads["types"]
+                     for pin, bits in cell["connections"].items()
+                     if cell["port_directions"].get(pin) == "input" for bit in bits}
+        rebound = []
+        for name, sense in boundary:
+            terminal = set(gold["ports"].get(name, {}).get("bits", []))
+            ports = []
+            for instance, cell in gold["cells"].items():
+                if cell["type"] not in pads["types"] or not any(
+                        terminal.intersection(bits) and cell["port_directions"].get(pin) in {"input", "inout"}
+                        for pin, bits in cell["connections"].items()):
+                    continue
+                ports.extend(f"{instance}.{pin}" for pin, bits in cell["connections"].items()
+                             if cell["port_directions"].get(pin) == "output" and consumers.intersection(bits)
+                             and module["ports"].get(f"{instance}.{pin}", {}).get("direction") == "input")
+            rebound.append((ports[0] if len(ports) == 1 else name, sense))
+        boundary = tuple(rebound)
+    prepared = (f"[gold]\nread_verilog -formal -sv {_word(core / 'gold.v')}\n"
+                f"[gate]\nread_verilog -formal -sv -icells {_word(core / 'gate.v')}\n"
+                "[script]" + preparation.replace(str(directory) + "/", str(core) + "/"))
+    return reset_script(prepared, boundary), len(differences), reports, "Pads are black boxes on both sides."
+
+
 def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
@@ -88,7 +192,7 @@ def eqy(project, directory, tool, commands, *, state, config):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
     used = set().union(*(netlist_used_cells(path.read_text()) for path in [*rtl, Path(netlist)]))
     corner = config.get("DEFAULT_CORNER", "")
-    liberty, external_liberty = [], []
+    liberty, external_liberty, pad_liberty = [], [], []
     for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
         libraries = config.get(key) or []
         groups = ([paths for pattern, paths in libraries.items() if fnmatch.fnmatchcase(corner, pattern)]
@@ -98,16 +202,20 @@ def eqy(project, directory, tool, commands, *, state, config):
             if key in {"PAD_LIBS", "EXTRA_LIBS"}:
                 values = [path for path in values if not Path(path).is_file()
                           or used.intersection(_LIB_CELL_RE.findall(Path(path).read_text()))]
-            liberty.extend(values)
-            if key in {"PAD_LIBS", "EXTRA_LIBS"}:
+            if key == "PAD_LIBS":
+                pad_liberty.extend(values)
+            else:
+                liberty.extend(values)
+            if key == "EXTRA_LIBS":
                 external_liberty.extend(values)
     liberty = list(dict.fromkeys(liberty))
     if not liberty or any(not Path(path).is_file() for path in liberty):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
+    pad_models = [Path(path) if Path(path).is_absolute() else project / path
+                  for path in config.get("PAD_VERILOG_MODELS") or []]
     declared = [Path(path) if Path(path).is_absolute() else project / path
-                for key in ("PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS")
-                for path in config.get(key) or []]
-    missing = [str(path) for path in declared if not path.is_file()]
+                for path in config.get("EXTRA_VERILOG_MODELS") or []]
+    missing = [str(path) for path in [*declared, *pad_models, *map(Path, pad_liberty)] if not path.is_file()]
     if missing:
         return commands.result(detail="EQY declared pad/extra models are unavailable: " + ", ".join(missing))
     for library in external_liberty:
@@ -124,10 +232,31 @@ def eqy(project, directory, tool, commands, *, state, config):
                 output.write_text(prepared)
                 path = output
             models.append(path)
+    pad_types = set().union(*(_LIB_CELL_RE.findall(Path(path).read_text()) for path in pad_liberty))
+    from lec_post_layout_check import _NETLIST_MODULE_RE
+    pad_types.update(match["name"] for path in pad_models
+                     for match in _NETLIST_MODULE_RE.finditer(path.read_text()))
+    pad_types &= used
     script = directory / "equivalence.eqy"
-    script.write_text(reset_script(eqy_script(top, rtl, Path(netlist), liberty[0],
-        synthesis=config, views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models),
-        reset_boundary(project)))
+    source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
+        views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models)
+    wrapper_count, wrapper_reports, wrapper_detail = None, [], ""
+    if pad_types:
+        from pdk_udp_synth_shim_gen import _strip_specials
+        prepared_models = []
+        for index, path in enumerate(pad_models):
+            prepared = directory / f"pad_model_{index + 1}.v"
+            prepared.write_text(_strip_specials(path.read_text()))
+            prepared_models.append(prepared)
+        source, wrapper_count, wrapper_reports, wrapper_detail = eqy_pad_views(directory, top, source,
+            {"liberty": pad_liberty, "types": pad_types, "defines": config.get("VERILOG_DEFINES") or [],
+             "include_dirs": sorted({path.parent for path in pad_models})},
+            prepared_models, commands, reset_boundary(project))
+        if source is None:
+            return commands.result(reports=wrapper_reports, detail=wrapper_detail)
+    else:
+        source = reset_script(source, reset_boundary(project))
+    script.write_text(source)
     completed = commands.run(["eqy", "-j", "8", "-f", "-d", directory / "scratch", script])
     if completed is None:
         return commands.result(reports=[script], detail="The native EQY executable is unavailable.")
@@ -143,12 +272,17 @@ def eqy(project, directory, tool, commands, *, state, config):
             detail += " Native yosys-witness cannot execute: its /usr/bin/env shebang interpreter is absent."
         reports.extend(logs)
     metrics = {}
-    if count is not None:
+    if count is not None or wrapper_count:
         metrics = dict.fromkeys({"unproved_equivalence", "final_lec_unproved",
-                                tool.get("metric", "unproved_equivalence")}, count)
-    result = commands.result(metrics, [script, *reports], detail)
-    result["native_steps"] = [{"name": "Yosys.EQY", "ran": True,
+                                tool.get("metric", "unproved_equivalence")}, count or wrapper_count or 0)
+    if wrapper_count:
+        wrapper_detail += f" Native wrapper views disagree in {wrapper_count} connection/instance field(s)."
+    result = commands.result(metrics, [script, *reports, *wrapper_reports], (detail + " " + wrapper_detail).strip())
+    result["native_steps"] = [{"name": "Yosys.EQY.Core" if pad_types else "Yosys.EQY", "ran": True,
                                "exit_code": completed.returncode, "status": status}]
+    if wrapper_count is not None:
+        result["native_steps"].append({"name": "Yosys.Wrapper", "ran": True,
+            "exit_code": 0, "status": "FAIL" if wrapper_count else "PASS"})
     return result
 
 
@@ -253,6 +387,8 @@ def gls(project, directory, tool, commands, *, state, config):
     if not top or not netlist or not Path(netlist).is_file() or not sdfs:
         return commands.result(detail="GLS needs the declared top, native State netlist and corner SDF files.")
     sdfs = sdfs if isinstance(sdfs, dict) else {"default": sdfs}
+    native_sdfs = [Path(path) for path in sdfs.values() if path]
+    sdc = state.get("sdc") or config.get("SIGNOFF_SDC_FILE") or config.get("PNR_SDC_FILE")
     requested = tool.get("corners")
     if requested == "all":
         selected = list(sdfs)
@@ -341,8 +477,85 @@ def gls(project, directory, tool, commands, *, state, config):
                 total = functional["tests"] if functional else None
                 reports.extend([shim, makefile, work / "results.xml"])
             else:
+                import arith_oracle_tb_gen as arithmetic
                 tb_text = native.strip_comments(bench.read_text())
-                module, instance = native._TB_MODULE_RE.search(tb_text), native._tb_dut_instance(tb_text, top)
+                module = native._TB_MODULE_RE.search(tb_text)
+                plan = arithmetic._scenario_header(bench)
+                manifest = bench.parent / "arith_oracle_manifest.json"
+                sample = json.loads(manifest.read_text()) if manifest.is_file() else {}
+                generated = (sample.get("topology") == "serial_parallel"
+                             and project / sample.get("tb", "") == bench)
+                try:
+                    if module and (plan or generated):
+                        from _specrtl_common import parse_rtl_ports
+                        _, ports = parse_rtl_ports(text, top)
+                        inout_ports = {port.name for port in ports if port.direction == "inout"}
+                        if not sdc:
+                            raise ValueError("The generated arithmetic bench needs the native timing SDC.")
+                        if plan:
+                            spec = plan["spec"]
+                        else:
+                            from professional_tb_gen import _detect_ic_class
+                            spec, why = arithmetic.extract_serial_arith_spec(project, _detect_ic_class(project))
+                            if spec is None:
+                                raise ValueError(why)
+                        logical_top = spec["top"]
+                        binding = ({"dut_module": top, "rebound": top != logical_top, "port_map": {}}
+                                   if not (project / native.CHIP_TOP_RECORD_REL).is_file()
+                                   else native.declared_dut_binding(project, logical_top, text))
+                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                        clock = binding["port_map"].get(spec["clk"], spec["clk"]) if binding.get("port_map") else spec["clk"]
+                        period = clocks["clocks_s"][clock] / 1e-9
+                        folder = Path(sdf).parent.parent
+                        if plan and (project / native.CHIP_TOP_RECORD_REL).is_file() and binding["rebound"]:
+                            _, observation = native._bound_arithmetic_case(project,
+                                {"path": bench, "text": tb_text, "module": module[1]}, logical_top,
+                                binding, closure["files"], netlist=Path(netlist), sdc=Path(sdc),
+                                sdfs=native_sdfs, sta_step_dir=folder, existing_plan=plan)
+                            plan["observation"] = observation
+                        else:
+                            timed_plan = plan or {"spec": spec, "observation": {"clock_period_ns": period}}
+                            deadline = native._postlayout_output_deadline(project, timed_plan, binding,
+                                Path(netlist), Path(sdc), native_sdfs, sta_step_dir=folder)
+                            observation = {**timed_plan["observation"], "top": top,
+                                "sample_offset_ns": deadline["sample_offset_ns"], "postlayout_deadline": deadline}
+                            if plan:
+                                plan["observation"] = observation
+                                if plan.get("reset_observation") and top != logical_top:
+                                    sources = [Path(p) if Path(p).is_absolute() else project / p
+                                               for p in config.get("VERILOG_FILES") or []]
+                                    cores = [name for source in sources
+                                             for name, (master, _) in native._instances(
+                                                 native.strip_comments(source.read_text())).items()
+                                             if master == logical_top]
+                                    if len(cores) != 1:
+                                        raise ValueError("The arithmetic reset observer needs the declared core instance.")
+                                    observation["reset_state_targets"] = arithmetic.mapped_reset_state_targets(
+                                        plan, text, cores[0])
+                        port_map = binding.get("port_map") or {}
+                        spec = json.loads(json.dumps(spec))
+                        for key in ("parallel", "serial_in", "serial_out", "clk", "rst"):
+                            spec[key] = port_map.get(spec[key], spec[key])
+                        for port in spec["ports"]:
+                            port["name"] = port_map.get(port["name"], port["name"])
+                        if plan:
+                            plan["spec"] = spec
+                            tb_text = arithmetic.emit_arithmetic_scenario_module(module[1], plan,
+                                dut_module=top, inout_ports=inout_ports)
+                        else:
+                            tb_text = arithmetic.emit_serial_oracle_module(module[1], spec,
+                                arithmetic.select_operand_pairs(spec, "mixed"), dut_module=top,
+                                clock_period_ns=period, sample_offset_ns=observation["sample_offset_ns"],
+                                inout_ports=inout_ports)
+                        row["observation"] = observation
+                    instance = native._tb_dut_instance(tb_text, top)
+                    if sdc and instance and not (plan or generated):
+                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                        tb_text, row["clock"] = native.bind_bench_clock(tb_text, instance, clocks)
+                except (OSError, ValueError, KeyError) as exc:
+                    row["detail"] = str(exc)
+                    rows.append(row)
+                    continue
                 if not module or not instance:
                     row["detail"] = "The testbench does not instantiate the native netlist top."
                     rows.append(row)

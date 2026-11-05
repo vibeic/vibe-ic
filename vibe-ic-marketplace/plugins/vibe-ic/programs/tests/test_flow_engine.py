@@ -85,12 +85,13 @@ def test_router_window_remains_bounded(tmp_path):
         engine.run(tmp_path, table={"steps": rows}, route=decision, to_name="floorplan")
 
 
-def test_debug_entry_runs_the_router_declared_prerequisite_closure(tmp_path):
+@pytest.mark.parametrize("input_contract", ["original", "structured"])
+def test_debug_entry_runs_the_router_declared_prerequisite_closure(tmp_path, input_contract):
     rows = [command_row(name) for name in ("requirements", "author", "lint", "unselected", "simulation", "floorplan")]
     for row, native in zip(rows, ("D1", "1", "2", "3", "4", "15")):
         row["legacy_id"] = {"registry": "", "native": [native]}
     route = {"task_nature": "debug", "entry_step": "4", "verify_through": "4",
-             "delivery_target": "rtl", "input_contract": "original",
+             "delivery_target": "rtl", "input_contract": input_contract,
              "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
     report = engine.run(tmp_path, table={"steps": rows}, route=route)
     assert [row["name"] for row in report["steps"]] == ["requirements", "author", "lint", "simulation"]
@@ -296,3 +297,76 @@ def test_from_does_not_restore_an_invalidated_later_state(tmp_path, monkeypatch)
     execute(tmp_path, rows, from_name="first", to_name="first")
     execute(tmp_path, rows, from_name="last")
     assert restored == ["first"]
+
+
+@pytest.mark.parametrize("declared,status", [(False, "PASS"), (True, "FAIL")])
+def test_coverage_observes_numbers_and_enforces_declared_targets(tmp_path, declared, status):
+    table = engine.read_json(engine.TABLE)
+    row = next(row for row in table["steps"] if row["name"] == "functional_simulation_and_coverage")
+    numbers = {"assertion_failures": 0, "coverage_line_pct": 75,
+               "coverage_toggle_pct": 65, "coverage_branch_pct": 80}
+    if declared:
+        docs = tmp_path / "phase1/generated_docs"
+        docs.mkdir(parents=True)
+        (docs / "L7.json").write_text(json.dumps({
+            "coverage_targets": {"coverage_line_pct": {"min": 90}}}))
+    features = engine.design_features(tmp_path, {"delivery_target": "rtl"}, table)
+    native = engine.ToolResult(True, 0, numbers)
+    observations, declared_checks = engine.report_observations(
+        row, tmp_path, native, {}, features, tmp_path)
+    measurements = engine.measure([*row["checks"], *declared_checks], numbers,
+                                  {}, features, tmp_path)
+    assert engine.evaluate(native, measurements) == status
+    coverage = next(item for item in observations if item["metric"] == "coverage_targets")
+    assert coverage["values"] == {key: value for key, value in numbers.items() if key.startswith("coverage_")}
+    assert [(item["metric"], item["limit"]) for item in row["checks"]
+            if item["metric"].startswith("coverage_")] == [
+                ("coverage_line_pct", 70), ("coverage_toggle_pct", 60), ("coverage_branch_pct", 70)]
+
+
+@pytest.mark.parametrize("filters", [None, [], [""]])
+def test_empty_corner_filter_keeps_native_numbers_and_original_limit(filters):
+    check = {"metric": "slew__corner:*", "operator": "<=", "limit": 0,
+             "corner_config": "CORNERS"}
+    metrics = {"slew__corner:nom_ss": 0, "slew__corner:max_ss": 1}
+    observed = engine.measure([check], metrics, {"CORNERS": filters}, {"always": True})
+    assert [(item["metric"], item["status"]) for item in observed] == [
+        ("slew__corner:nom_ss", "PASS"), ("slew__corner:max_ss", "FAIL")]
+    assert engine.evaluate(engine.ToolResult(True, 0), observed) == "FAIL"
+    selected = engine.measure([check], metrics, {"CORNERS": ["nom_*"]}, {"always": True})
+    assert [item["metric"] for item in selected] == ["slew__corner:nom_ss"]
+
+
+@pytest.mark.parametrize("target,nature,entry,exit_step,count", [
+    ("rtl", "debug", "4", "4", 4),
+    ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 39),
+    ("shippable_gds", "spec_generation", "D1", "37.5ic", 41),
+])
+def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
+        tmp_path, target, nature, entry, exit_step, count):
+    import task_nature_route as router
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        {"domain_kind": "primary", "source_pin": "clk", "period_ns": 20}]}))
+    route = router.route_decision_receipt(
+        "Debug a synchronous counter." if nature == "debug" else
+        "Build a synchronous counter from the design documents.",
+        nature=nature, delivery_target=target)
+    route = {**route, "input_contract": "structured"}
+    assert (route["entry_step"], route["verify_through"]) == (entry, exit_step)
+    table = engine.read_json(engine.TABLE)
+    features = engine.design_features(tmp_path, route, table)
+    selected = engine.select_steps(table, route, features, None, None)
+    assert len(selected) == count
+    names = {row["name"] for row in selected}
+    if target == "rtl":
+        assert names == {"requirements_and_delivery_route", "rtl_authoring",
+                         "rtl_validation_and_lint", "functional_simulation_and_coverage"}
+    else:
+        assert {"formal_verification", "functional_simulation_and_coverage",
+                "implemented_netlist_cdc_and_rdc", "final_geometry_rc_and_pex",
+                "final_electrical_analysis", "final_sdf_gate_level_replay"} <= names
+        assert selected[0]["name"] == "requirements_and_delivery_route"
+        assert selected[-1]["name"] == ("ip_release_views_and_documentation"
+                                          if target == "ip_hardmacro" else "compliance_and_final_adoption")
