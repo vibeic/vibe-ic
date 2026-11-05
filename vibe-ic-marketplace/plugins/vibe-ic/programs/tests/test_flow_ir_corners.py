@@ -11,16 +11,20 @@ import flow_ir_corners as ir
 
 
 def test_generated_table_selects_corner_report_only_for_ic():
-    from flow_steps_generate import ROOT, generate
+    from flow_steps_generate import ROOT, classify_checks, generate
 
     native = json.loads((ROOT / "flow/native_limits.json").read_text())
     registry = json.loads((ROOT / "flow/flow109.json").read_text())
     table, _, _ = generate(registry, native)
+    classify_checks(table, native)
     row = next(row for row in table["steps"] if row["name"] == "candidate_ir_drop")
     profiles = {entry["when"]: entry["tool"] for entry in row["tool"]["profiles"]}
-    assert profiles["ic"]["steps"] == ["VibeIC.IRDropCorners"]
-    assert profiles["ic"]["imports"] == ["flow_ir_corners"]
-    assert profiles["otherwise"]["steps"] == ["OpenROAD.IRDropReport"]
+    assert profiles["ic"]["steps"] == ["VibeIC.IRDropCorners", "Vibeic.TransientIR"]
+    assert profiles["otherwise"]["steps"] == ["OpenROAD.IRDropReport", "Vibeic.TransientIR"]
+    for condition in ("ic", "otherwise"):
+        assert profiles[condition]["adapter"] == "ir_drop"
+        assert profiles[condition]["parallel"] is True
+        assert "librelane_plugins.librelane_plugin_vibeic.ir_drop" in profiles[condition]["imports"]
     check = next(check for check in row["checks"] if check["metric"] == "ir__drop__worst__pct")
     assert (check["operator"], check["limit"]) == ("<=", 5.0)
 

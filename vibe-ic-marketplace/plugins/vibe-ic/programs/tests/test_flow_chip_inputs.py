@@ -400,6 +400,21 @@ def test_nonconverging_current_geometry_stops_with_plain_error(inputs, monkeypat
     assert len(calls) == 9
 
 
+def test_chip_forwards_generated_clock_wire_budget(inputs, monkeypatch):
+    import flow_clock_geometry
+    project, config, native, _, _ = inputs
+    observed = []
+
+    def settings(resolved):
+        observed.append(resolved)
+        return {"CTS_CLK_MAX_WIRE_LENGTH": 120}
+
+    monkeypatch.setattr(flow_clock_geometry, "clock_settings", settings)
+    result = chip.prepare(project, config)
+    assert observed == [native]
+    assert result["CTS_CLK_MAX_WIRE_LENGTH"] == 120
+
+
 def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
     project, config, native, _, _ = inputs
     native.update(CLOCK_UNCERTAINTY_CONSTRAINT=0.25, CLOCK_TRANSITION_CONSTRAINT=0.15,

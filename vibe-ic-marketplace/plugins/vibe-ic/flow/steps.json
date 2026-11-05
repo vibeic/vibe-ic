@@ -3696,9 +3696,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "adapter": "analog",
-              "native_step": "D57",
-              "parallel": true
+              "program": "analog_bound_measurements.py",
+              "function": "source-bound native voltage capture",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
           {
@@ -3713,21 +3713,31 @@
           {
             "when": "ic",
             "tool": {
-              "kind": "librelane",
+              "kind": "adapter",
               "steps": [
-                "VibeIC.IRDropCorners"
+                "VibeIC.IRDropCorners",
+                "Vibeic.TransientIR"
               ],
               "imports": [
-                "flow_ir_corners"
-              ]
+                "flow_ir_corners",
+                "librelane_plugins.librelane_plugin_vibeic.ir_drop"
+              ],
+              "adapter": "ir_drop",
+              "parallel": true
             }
           },
           {
             "when": "otherwise",
             "tool": {
-              "kind": "librelane",
+              "kind": "adapter",
               "steps": [
-                "OpenROAD.IRDropReport"
+                "OpenROAD.IRDropReport",
+                "Vibeic.TransientIR"
+              ],
+              "adapter": "ir_drop",
+              "parallel": true,
+              "imports": [
+                "librelane_plugins.librelane_plugin_vibeic.ir_drop"
               ]
             }
           }
@@ -4720,9 +4730,10 @@
       "title": "Design for manufacturability",
       "when": "physical",
       "tool": {
-        "kind": "native_report",
-        "from": "final_electrical_analysis",
-        "scope": "Native summary is emitted after the final native checkers, following Classic and Chip."
+        "kind": "adapter",
+        "adapter": "dfm",
+        "program": "dfm_screen_check.py",
+        "parallel": true
       },
       "checks": [],
       "legacy_id": {

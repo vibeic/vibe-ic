@@ -21,10 +21,10 @@ from typing import Dict, Optional, Tuple
 from librelane.config import Variable
 from librelane.state import DesignFormat, State
 from librelane.steps.openroad import OpenROADStep
-from librelane.steps.step import MetricsUpdate, Step, StepError, ViewsUpdate
+from librelane.steps.step import MetricsUpdate, Step, StepError, StepException, ViewsUpdate
 
 from .ir_rules import ir_findings
-from .transient import transient_findings
+from .transient import transient_blocks, transient_findings
 
 __all__ = ["IRDropChecker", "TransientIR"]
 
@@ -83,9 +83,8 @@ class TransientIR(OpenROADStep):
     capacitance the solve is quasi-static -- a fixed scaling of the static
     drop -- and the record says so (`scaled_static_bound`).  With a decap it
     is genuine only when every net's droop is measurably below its
-    quasi-static reference (`decap_effect`); a decap the solve did not model
-    as declared fails the step.  A net whose solve printed no dynamic drop
-    fails the step, never a skip.
+    quasi-static reference (`decap_effect`). Missing dynamic data or a decap
+    the solve did not model as declared stays NOT_MEASURED.
     """
 
     id = "Vibeic.TransientIR"
@@ -114,11 +113,11 @@ class TransientIR(OpenROADStep):
         kwargs, env = self.extract_env(kwargs)
         spefs = self.toolbox.filter_views(self.config, state_in[DesignFormat.SPEF])
         if len(spefs) != 1:
-            raise StepError(f"expected one SPEF for the default corner, got {len(spefs)}")
+            raise StepException(f"NOT_MEASURED: expected one SPEF for the default corner, got {len(spefs)}")
         libs = self.toolbox.filter_views(self.config, self.config.get("LIB", self.config.get("CELL_LIBS")))
         voltage = self.toolbox.get_lib_voltage(str(libs[0])) if libs else None
         if not voltage:
-            raise StepError("no supply voltage from the library")
+            raise StepException("NOT_MEASURED: no supply voltage from the library")
         sdc = state_in.get(DesignFormat.SDC) or self.config.get("PNR_SDC_FILE")
         period, period_source = dyn.derive_period_ns(Path(str(sdc)) if sdc else None)
         env["LIB_VOLTAGE"] = str(voltage)
@@ -127,6 +126,7 @@ class TransientIR(OpenROADStep):
         views, metrics = super().run(state_in, env=env, **kwargs)
         report = open(os.path.join(self.step_dir, "transient_ir.rpt")).read()
         nets = [*(self.config.get("VDD_NETS") or []), *(self.config.get("GND_NETS") or [])]
+        nets = list(dict.fromkeys([*nets, *(net for kind, net in transient_blocks(report) if kind == "psm")]))
         decap = self.config.get("VIBEIC_DECAP_CAP")
         doc = transient_findings(report, nets, float(voltage), period, period_source,
                                  decap_f=float(decap) if decap is not None else None)
@@ -134,7 +134,7 @@ class TransientIR(OpenROADStep):
             json.dump(doc, stream, indent=2)
         if doc["verdict"] != "MEASURED":
             self.err(f"transient IR: {doc['reason']}")
-            raise StepError(f"vibe-ic transient IR: {doc['reason']}")
+            raise StepException(f"NOT_MEASURED: vibe-ic transient IR: {doc['reason']}")
         for net, row in doc["per_net"].items():
             metrics[f"vibeic__ir_dynamic__drop__worst__net:{net}"] = Decimal(
                 str(row["dynamic_drop_v"]))

@@ -748,6 +748,12 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         import importlib
         native = importlib.import_module("flow_native_" + tool["adapter"])
         return native.execute(project, work, tool, commands, state=state, config=config or {})
+    if tool.get("adapter") == "dfm":
+        from dfm_screen_check import execute as dfm
+        return dfm(project, work, tool, route, state=state, config=config)
+    if tool.get("adapter") == "ir_drop":
+        from flow_ir_corners import execute as ir_drop
+        return ir_drop(project, work, tool, route, state=state, config=config)
     if tool.get("adapter") == "tapeout_precheck":
         import tapeout_precheck
         if state is None or not state.get("gds"):

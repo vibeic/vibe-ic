@@ -180,8 +180,10 @@ def classify_checks(table, native):
             row["applicability_reason"] = selection["reason"]
     steps = table["steps"]
     for row in reversed(steps.copy()):
-        if row["tool"]["kind"] == "native_report":
-            producer = next(item for item in steps if item["name"] == row["tool"]["from"])
+        source = (row["tool"]["from"] if row["tool"]["kind"] == "native_report"
+                  else native.get("report_rows", {}).get(row["name"]))
+        if source:
+            producer = next(item for item in steps if item["name"] == source)
             if steps.index(row) < steps.index(producer):
                 steps.remove(row)
                 steps.insert(steps.index(producer) + 1, row)

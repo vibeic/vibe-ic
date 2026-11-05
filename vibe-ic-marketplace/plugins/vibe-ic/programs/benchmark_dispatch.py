@@ -6694,7 +6694,8 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
 
     A Program re-entry keeps its PROGRAM origin. It may consume the existing
     supplied-RTL collection contract only with a current receipt and explicit
-    Step 2 -> 2 argv. Native FAIL stays a measured failure for the unchanged
+    Step-2 entry. Native keeps its declared exit; legacy requires Step 2 -> 2.
+    FAIL stays a measured failure for the unchanged
     required-gate ledger; unavailable/blocked validation supplies no authority.
     """
     if result.get("candidate_origin") in {"AI_BACKUP", "AI_REPAIR"}:
@@ -6711,11 +6712,14 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
     argv = invocation.get("argv") or []
     if len(argv) < 3 or Path(argv[1]).name != "vibe_ic_one_shot_runner.py":
         return False
+    from flow_engine_frontend import selected_engine
     for option in ("--entry-step", "--exit-step"):
         if argv.count(option) != 1 or any(arg.startswith(option + "=") for arg in argv):
             return False
         index = argv.index(option)
-        if index + 1 >= len(argv) or argv[index + 1] not in {"2", "D11"}:
+        if index + 1 >= len(argv) or (
+                (option == "--entry-step" or selected_engine([]) != "native")
+                and argv[index + 1] not in {"2", "D11"}):
             return False
     if _runner_reentry_reason(task, result) is not None:
         return False

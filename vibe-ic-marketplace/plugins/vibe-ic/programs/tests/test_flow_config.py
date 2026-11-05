@@ -417,6 +417,7 @@ def test_implementation_pdn_widths_reach_native_configuration(project):
 
 
 @pytest.mark.parametrize(("key", "value"), [
+    ("SYNTH_STRATEGY", "DELAY 4"),
     ("PDN_VWIDTH", 2.4), ("RUN_POST_GRT_DESIGN_REPAIR", True),
     ("GRT_DESIGN_REPAIR_MAX_CAP_PCT", 30), ("GRT_DESIGN_REPAIR_MAX_SLEW_PCT", 30),
     ("EXTRA_EXCLUDED_CELLS", ["delay_weak*"]),
@@ -550,6 +551,30 @@ def test_hardmacro_sizes_native_defaults_after_current_estimate(project, monkeyp
     power.parent.mkdir(parents=True)
     power.write_text("{}")
     result = build_native_config(project, route="ip")
-    assert result["PDN_VWIDTH"] == 2.4
+    assert result["PDN_VWIDTH"] == Decimal("2.4")
     assert "PDN_RAIL_WIDTH" not in result
     assert seen == [(project.resolve(), native, 80 if extent_key else None)]
+
+
+@pytest.mark.parametrize("vertical,horizontal,legal", [(76.8, 76.59, True), (76.801, 76.59, False)])
+def test_native_pdn_actuator_roundtrip_keeps_decimal_grid_exact(project, monkeypatch, vertical, horizontal, legal):
+    pytest.importorskip("librelane")
+    pytest.importorskip("odb")
+    from librelane.flows import Flow
+    import flow_config
+    (project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
+        json.dumps({"fields": {"pdk_target": "gf180mcuD"}}))
+    power = project / "steps/pre_layout_timing/result.json"
+    power.parent.mkdir(parents=True)
+    power.write_text("{}")
+    monkeypatch.setattr(sys, "argv", ["flow_config.py", "--project", str(project), "--route", "ip",
+        "--set", f"PDN_VPITCH={vertical}", "--set", f"PDN_HPITCH={horizontal}"])
+    assert flow_config.main() == 0
+    if not legal:
+        with pytest.raises(ValueError, match="manufacturing grid"):
+            flow_config.build_native_config(project, route="ip")
+        return
+    native = flow_config.build_native_config(project, route="ip")
+    owner = Flow.factory.get("Classic")(native, design_dir=str(project))
+    assert owner.config["PDN_VPITCH"] == Decimal(str(vertical))
+    assert owner.config["PDN_HPITCH"] == Decimal(str(horizontal))

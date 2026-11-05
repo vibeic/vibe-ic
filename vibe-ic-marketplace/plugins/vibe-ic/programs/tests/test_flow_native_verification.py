@@ -244,6 +244,22 @@ def test_missing_proof_inputs_do_not_launch(tmp_path):
     assert result["metrics"] == {}
 
 
+def test_eqy_default_strategies_have_no_runtime_cutoff(tmp_path, monkeypatch):
+    gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
+    gold.write_text("module unit(input a, output y); assign y=a; endmodule\n")
+    gate.write_text(gold.read_text())
+    liberty.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]}}
+    commands = Commands(tmp_path)
+    monkeypatch.setattr(commands, "run", lambda argv: None)
+    eqy(tmp_path, tmp_path, {}, commands, state={"nl": str(gate)}, config=config)
+    script = (tmp_path / "equivalence.eqy").read_text()
+    assert "timeout" not in script
+    assert "[strategy sat]\nuse sat\ndepth 5\n" in script
+    assert "[strategy pdr]\nuse sby\nengine abc pdr -rfi\n" in script
+
+
 def reset_docs(project):
     docs = project / "phase1/generated_docs"
     docs.mkdir(parents=True)
@@ -356,9 +372,15 @@ def test_actual_eqy_undecided_strategy_is_not_a_design_failure(tmp_path):
 def test_actual_eqy_native_strategy_timeout_is_unmeasured(tmp_path, monkeypatch):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
-    import lec_run
+    import librelane_eqy
 
-    monkeypatch.setattr(lec_run, "DEFAULT_YOSYS_TIMEOUT_S", 1)
+    original_script = librelane_eqy.eqy_script
+
+    def timed_script(*args, **kwargs):
+        kwargs["timeout"] = 1
+        return original_script(*args, **kwargs)
+
+    monkeypatch.setattr(librelane_eqy, "eqy_script", timed_script)
     gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
     gold.write_text("module unit(input [19:0] a,b,output [39:0] y); assign y=a*b; endmodule\n")
     gate.write_text("module unit(input [19:0] a,b,output reg [39:0] y); integer i; "
