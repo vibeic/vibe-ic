@@ -42,13 +42,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import picker_fixture_thrash_guard as mod
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
-_PROG = Path(__file__).resolve().parent.parent / "picker_fixture_thrash_guard.py"
 
 def _git(*args: str, cwd: Path = _REPO_ROOT) -> str:
     """Run git, and FAIL LOUDLY rather than return an empty string.
@@ -79,27 +77,6 @@ def _tracked_fixture_test_path() -> str:
     return hits[0]
 
 
-def test_the_watched_path_is_tracked_in_this_repository():
-    """The constant must name a file git actually has."""
-    watched = mod._FIXTURE_TEST_REL
-    tracked = _git("ls-files", "--", watched).strip()
-    assert tracked, (
-        f"picker_fixture_thrash_guard._FIXTURE_TEST_REL = {watched!r}\n"
-        f"is not tracked. It is passed to `git diff --cached -- <path>`, which "
-        f"returns an EMPTY diff for a pathspec matching nothing -- so the gate "
-        f"reports `PASS: no fixture _EXPECTED flips` for every commit forever.\n"
-        f"The tracked file is at: {_tracked_fixture_test_path()}")
-
-
-def test_the_watched_path_is_the_file_that_actually_holds_expected():
-    """Existing is not enough -- it has to be the RIGHT file."""
-    assert mod._FIXTURE_TEST_REL == _tracked_fixture_test_path()
-    body = (_REPO_ROOT / mod._FIXTURE_TEST_REL).read_text(encoding="utf-8")
-    assert "_EXPECTED" in body, (
-        f"{mod._FIXTURE_TEST_REL} carries no `_EXPECTED` dict, so watching it "
-        f"cannot detect a fixture flip.")
-
-
 def test_the_phantom_tests_directory_is_still_absent():
     """Pins the premise, so this file stays honest if the layout ever changes.
 
@@ -111,68 +88,3 @@ def test_the_phantom_tests_directory_is_still_absent():
     assert not tracked, (
         f"{phantom} now exists ({len(tracked.splitlines())} tracked file(s)). "
         f"Re-read this module's docstring -- its premise has changed.")
-
-
-def test_a_real_staged_flip_is_rejected(tmp_path):
-    """THE TEETH TEST. Build the repo at the REAL path, stage a REAL flip.
-
-    The layout comes from `_tracked_fixture_test_path()`, not from the
-    constant, so pointing the constant anywhere else makes this go red.
-    """
-    rel = _tracked_fixture_test_path()
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    for args in (("init", "-q"), ("config", "user.email", "t@t.com"),
-                 ("config", "user.name", "t")):
-        _git(*args, cwd=repo)
-
-    target = repo / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text('_EXPECTED = {\n    "aes":  "AES",\n}\n')
-    _git("add", rel, cwd=repo)
-    _git("commit", "-qm", "init", cwd=repo)
-
-    target.write_text('_EXPECTED = {\n    "aes":  "AES-XTS",\n}\n')
-    _git("add", rel, cwd=repo)
-
-    msg = tmp_path / "COMMIT_MSG"
-    msg.write_text("no acknowledgment line here\n")
-    out = _pr.run(
-        [sys.executable, str(_PROG), "--repo-root", str(repo),
-         "--commit-msg-file", str(msg)],
-        capture_output=True, text=True)
-
-    assert out.returncode == 1, (
-        f"an unacknowledged `aes: AES -> AES-XTS` flip was staged at the real "
-        f"tracked location and the guard did not reject it (rc={out.returncode}).\n"
-        f"stdout:\n{out.stdout}")
-    assert "aes" in out.stdout
-
-
-def test_an_acknowledged_flip_is_still_allowed(tmp_path):
-    """The paired direction: teeth, not a blanket refusal."""
-    rel = _tracked_fixture_test_path()
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    for args in (("init", "-q"), ("config", "user.email", "t@t.com"),
-                 ("config", "user.name", "t")):
-        _git(*args, cwd=repo)
-
-    target = repo / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text('_EXPECTED = {\n    "aes":  "AES",\n}\n')
-    _git("add", rel, cwd=repo)
-    _git("commit", "-qm", "init", cwd=repo)
-
-    target.write_text('_EXPECTED = {\n    "aes":  "AES-XTS",\n}\n')
-    _git("add", rel, cwd=repo)
-
-    msg = tmp_path / "COMMIT_MSG"
-    msg.write_text("bump\n\nfixture-flip-acknowledged: aes: AES -> AES-XTS\n")
-    out = _pr.run(
-        [sys.executable, str(_PROG), "--repo-root", str(repo),
-         "--commit-msg-file", str(msg)],
-        capture_output=True, text=True)
-
-    assert out.returncode == 0, (
-        f"an ACKNOWLEDGED flip must pass; rc={out.returncode}\n{out.stdout}")

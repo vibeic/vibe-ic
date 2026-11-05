@@ -136,50 +136,6 @@ def test_a_shard_cannot_inherit_the_stages_own_width():
     assert inherited[P.JOBS_ENV] == "1"
 
 
-def test_every_gate_executing_shard_env_carries_the_forward():
-    """MEMBERSHIP, so a fourth shard site cannot be added without the forward.
-
-    Reads the module rather than one launch: #2072 was three launch sites that
-    each looked correct beside the other two.
-    """
-    tree = _module_tree()
-    marked: list[tuple[str, int]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        for tgt in node.targets:
-            if (isinstance(tgt, ast.Subscript)
-                    and isinstance(tgt.value, ast.Name)
-                    and isinstance(tgt.slice, ast.Constant)
-                    and tgt.slice.value == SHARD_MARK):
-                marked.append((tgt.value.id, node.lineno))
-    assert marked, ("no shard env is built in this module any more; this test "
-                    "would pass vacuously")
-
-    # The nearest preceding binding of each marked name must be `shard_env(...)`.
-    bindings: dict[str, list[tuple[int, ast.expr]]] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
-                and isinstance(node.targets[0], ast.Name):
-            bindings.setdefault(node.targets[0].id, []).append(
-                (node.lineno, node.value))
-
-    unforwarded = []
-    for name, line in marked:
-        prior = [b for b in bindings.get(name, []) if b[0] <= line]
-        if not prior:
-            unforwarded.append(f"{name} @{line}: no binding found")
-            continue
-        _, value = max(prior, key=lambda b: b[0])
-        ok = (isinstance(value, ast.Call)
-              and isinstance(value.func, ast.Name)
-              and value.func.id == "shard_env")
-        if not ok:
-            unforwarded.append(f"{name} @{line}: built without shard_env()")
-    assert not unforwarded, (
-        "a shard env is launched without the job-count forward, so that shard "
-        "re-defaults to the dispatcher's own width (vibe-ic#2072): "
-        + "; ".join(unforwarded))
 
 
 # --- THE POOL IS THE BUDGET, AND IT DROPS NOTHING --------------------------

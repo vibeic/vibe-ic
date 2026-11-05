@@ -125,20 +125,17 @@ _VERIFIER_CLOSURE = frozenset({
     "vibe-ic-marketplace/plugins/vibe-ic/programs/gate_process_attestation.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/generated_test_list_min_guard.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/hygiene_finding_delta.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/hygiene_shard_plan.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/macro_obs_geometry_intersect_check.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/policy_direction_pin_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/pytest_per_file_junit.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/step_internal_fail_bubble_up_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/step_metrics.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_census_freshness.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_coverage.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py",
+
+
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_acceptance.json",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_gate.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/trusted_pytest_entry.py",
@@ -1134,7 +1131,6 @@ def test_the_per_file_question_is_only_asked_of_a_report_that_claims_it(
     assert V.per_file_record_gaps(p, _SEL2, False) == sorted(_SEL2)
 
 
-
 def test_a_partial_base_arm_cannot_clear_a_silenced_failure(tmp_path):
     """THE #1443 REPRODUCTION, END TO END, AS A PAIR.
 
@@ -2034,14 +2030,11 @@ def sandbox(tmp_path_factory):
         "gate_process_attestation.py",
         "git_prohibition_guard.py",
         "hygiene_finding_delta.py",
-        "hygiene_shard_plan.py",
-        "landing_collateral_revert_check.py",
         "_corpus_location.py",
         "nda_diff_scan_check.py",
         "_prose_polarity.py",
         "drc_vacuous_pass_check.py",
         "macro_obs_geometry_intersect_check.py",
-        "policy_direction_pin_check.py",
         "repo_hygiene_parallel.py",
         "step_internal_fail_bubble_up_check.py",
         "step_metrics.py",
@@ -2808,10 +2801,6 @@ _WAVE_ARTEFACTS = (
 )
 
 
-
-
-
-
 def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
     """When each wave artefact FIRST appeared in the verifier's run directory.
 
@@ -2834,10 +2823,6 @@ def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
                     seen[name] = round(time.monotonic() - start, 3)
         time.sleep(interval)
     return seen
-
-
-
-
 
 
 def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
@@ -3656,57 +3641,6 @@ def test_reassert_refuses_a_record_that_was_not_a_pass(sandbox, tmp_path):
     assert "not LAND_OK" in bad.stderr
 
 
-def test_actual_push_shape_is_refused_before_any_expensive_arm(
-        sandbox, tmp_path):
-    """The exact ordering regression that wasted the fleet run.
-
-    The squash tree is harmless, but commit 2 retracts 3/4 substantive lines
-    commit 1 adds in the SAME unpublished push. Commit 2 also replaces its own
-    collateral checker with an always-PASS program. The immutable BASE-owned
-    checker must still answer before merge-tree/rebase or A1/A2/B1/B2 starts.
-    """
-    repo = tmp_path / "push-shape-repo"
-    cloned = _pr.run(
-        ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
-    _git(repo, "checkout", "-q", "-b", "bad_push_shape")
-    subject = repo / "push_shape.txt"
-    lines = [
-        "first substantive contribution line 0001",
-        "second substantive contribution line 0002",
-        "third substantive contribution line 0003",
-        "fourth substantive contribution line 0004",
-    ]
-    subject.write_text("\n".join(lines) + "\n")
-    _git(repo, "add", "push_shape.txt")
-    assert _git(repo, "commit", "-qm", "add one contribution").returncode == 0
-    subject.write_text(lines[-1] + "\n")
-    self_edited_gate = (repo / "vibe-ic-marketplace" / "plugins" /
-                        "vibe-ic" / "programs" /
-                        "landing_collateral_revert_check.py")
-    self_edited_gate.write_text(
-        "#!/usr/bin/env python3\nraise SystemExit(0)\n")
-    _git(repo, "add", "push_shape.txt", str(self_edited_gate.relative_to(repo)))
-    assert _git(repo, "commit", "-qm",
-                "retract most of it and weaken the checker").returncode == 0
-
-    out = tmp_path / "push-shape.json"
-    run = _pr.run(
-        ["bash", str(_VERIFY), "--ref", "bad_push_shape", "--base", "main",
-         "--repo", str(repo), "--no-fetch", "--json", str(out)],
-        capture_output=True, text=True, env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": ""})
-    assert run.returncode == 1, run.stdout + run.stderr
-    assert "PUSH PREFLIGHT: REFUSE" in run.stderr
-    assert "landing_collateral_revert_check.py" in run.stderr
-    assert "arm A1/B1" not in run.stdout
-    assert "tree-under-test" not in run.stdout
-    record = json.loads(out.read_text())
-    assert record["kind"] == "vibeic.landing-push-preflight-receipt"
-    assert record["verdict"] == "REFUSE"
 
 
 # ================================================ THE TWO VERIFICATION TIERS

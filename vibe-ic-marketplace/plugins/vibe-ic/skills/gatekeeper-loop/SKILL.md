@@ -102,7 +102,7 @@ This is the load-bearing idea, and it mirrors the rest of the plugin's
 
 | Layer | What it is | How it runs | Who/what decides |
 |-------|------------|-------------|------------------|
-| **Machine gates** | The **required status checks** — the full deterministic gate set (`gatekeeper_review.py`: the plugin test suite the CI way, `source_chip_agnostic_check.py`, `marketplace_version_sync_check.py`, `version_bump_monotonic_check.py`, `git_prohibition_guard.py`, `full_suite_run_check.py`, the per-step compliance checkers, …) | DETERMINISTICALLY, cadence-aware (see §Cadence) | a PROGRAM exit code — no LLM |
+| **Machine gates** | The **required status checks** — the full deterministic gate set (`gatekeeper_review.py`: the plugin test suite the CI way, `source_chip_agnostic_check.py`, `version_bump_monotonic_check.py`, `git_prohibition_guard.py`, `full_suite_run_check.py`, the per-step compliance checkers, …) | DETERMINISTICALLY, cadence-aware (see §Cadence) | a PROGRAM exit code — no LLM |
 | **The one agent gate** | **Step-2.7 adversarial review** — the *irreducible* judgement: General-not-overfit / §4.05 no-leak / root-cause-not-bypass | the gatekeeper agent reads the diff and tries to BREAK it | an LLM, but ONLY blocks on a **reproducible HIGH** |
 
 Everything that **can** reduce to a program **is** a machine gate; the
@@ -611,7 +611,6 @@ fully programmable; only Step 2.7 is genuine LLM judgment):
   `programs/landing_merge_verdict.py --service-ready`
 - Forbidden git/gh ops (rules 1-2): `programs/git_prohibition_guard.py`
 - Chip-AGNOSTIC source scan (rule 4): `programs/source_chip_agnostic_check.py`
-- Version equality (one-version-per-push): `programs/marketplace_version_sync_check.py`
 - Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
 - Gatekeeper version ASSIGNMENT at merge (the gatekeeper's sole right —
   next monotonic version → plugin.json + marketplace.json):

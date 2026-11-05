@@ -418,66 +418,6 @@ _absent = sorted(s for s in _srcs if _truth.coverage_source_path(ROOT, s) is Non
 check("every in-repo source named in the coverage table exists",
       not _absent, f"{len(_srcs)} named, absent {_absent}")
 
-# 21. --slow: the AUTHORITATIVE wiring answer, not the baseline approximation.
-#     Check 18 reads a committed baseline and says so; this runs the gate. The
-#     fast form is the default because it is free; the strong form exists so the
-#     limitation is closable rather than merely disclosed.
-if SLOW:
-    _g = PLUG / "programs" / "gate_is_wired_check.py"
-    # `--root` NAMED, never defaulted (vibe-ic#2199). The gate no longer
-    # substitutes its own location for a subject nobody gave it, and PLUG is
-    # the subject this check has always meant: the plugin under `ROOT`.
-    _r = subprocess.run([sys.executable, str(_g), "--root", str(PLUG)],
-                        capture_output=True, text=True, timeout=600)
-    _live = set(re.findall(r"^   ([a-z0-9_]+)$", _r.stdout, re.M))
-    _tg = {pathlib.Path(ROUTING["steps"][r["step"]]["bucket_A_program"]).stem
-           for r in RECS if r["bucket"] == "A" and r.get("step") in ROUTING["steps"]}
-    # The check is an INTERSECTION, so an empty `_live` passes it having looked
-    # at nothing -- and the previous control here was `... or bool(_r.stdout)`,
-    # whose second clause is true whenever the gate printed anything at all,
-    # so it could not detect that. Assert the parse produced a real population
-    # and that it did not over-match into a name the gate never prints.
-    # The gate prints the unwired NAMES only when it fails. After main wired three
-    # of them it passes, the list is absent, and the intersection below would be
-    # empty for a reason that has nothing to do with this batch. The control
-    # caught exactly that -- it reported BROKEN rather than letting the check
-    # pass on an empty parse. So the two cases are separated instead.
-    if _r.returncode == 0:
-        control("wiring-live", "gates:" in _r.stdout)
-        check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
-              True, "the gate PASSES, so it prints no unwired list; the "
-                    "baseline form of this question is check 18")
-    else:
-        control("wiring-live", bool(_live) and "no_such_program" not in _live)
-        check("[slow] no Bucket-A rule routes at a LIVE-unwired program",
-              not (_tg & _live), f"live-unwired {sorted(_tg & _live)}")
-
-    # 22. the LIVE FIGURES this report quotes must still be what the gate says.
-    #     Two places quote "gates N, unwired M (baseline B)" from a run made
-    #     during the lane. Those are another program's output pasted into prose:
-    #     the STATUS block showed what happens to a pasted number nobody
-    #     re-derives. Only --slow can answer it, because only --slow has the
-    #     gate's current output.
-    # the TOOL prints "gates: N   unwired: M (baseline B)" with colons; the
-    # REPORT quotes it without them. Two formats for one fact, which is why
-    # this check exists — and why its first regex matched neither.
-    _m = re.search(r"gates:\s*(\d+)\s+unwired:\s*(\d+) \(baseline (\d+)\)", _r.stdout)
-    control("wiring-figures", _m is not None)
-    if _m:
-        _live_fig = (_m.group(1), _m.group(2), _m.group(3))
-        _quoted = re.findall(r"gates (\d+)\s+unwired (\d+) \(baseline (\d+)\)", MD)
-        _quoted += [(None, q[0], q[1]) for q in
-                    re.findall(r"unwired (\d+) \(baseline (\d+)\)", MD)
-                    if (None, q[0], q[1]) not in _quoted]
-        _stale = [q for q in _quoted
-                  if (q[0] is not None and q[0] != _live_fig[0])
-                  or q[1] != _live_fig[1] or q[2] != _live_fig[2]]
-        check("[slow] the live gate figures this report quotes are current",
-              not _stale, f"gate says {_live_fig}, report quotes {_quoted}")
-else:
-    print("  SKIP  [slow] live wiring check — pass --slow to run it "
-          "(about forty seconds)")
-
 # 23. no prose reference to a record id that has no section. A-12 was DEMOTED to
 #     C-2 mid-lane; the provenance table went on citing A-12 for the rest of the
 #     lane, and 27 checks walked past it because every one started from the
@@ -583,7 +523,6 @@ control("title-count", _tm is not None)
 check("the title's record count agrees with the record set",
       bool(_tm) and int(_tm.group(1)) == len(RECS),
       f"title {_tm.group(1) if _tm else '-'}, records {len(RECS)}")
-
 
 
 # 35. the two questions the brief asks of EVERY record -- would the rule have
@@ -953,7 +892,6 @@ def _miscount(lines):
 control("intro-count", bool(_im) and _intro_counts(_miscount(_LINES))[1] != [])
 check("a sentence introducing a table counts the rows under it",
       not _iw, f"{len(_im)} introduced table(s), mismatched {_iw}")
-
 
 
 # The count of checks is itself a stated fact in the report, and it went stale

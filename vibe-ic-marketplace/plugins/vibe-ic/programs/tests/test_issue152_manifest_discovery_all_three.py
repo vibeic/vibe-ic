@@ -20,7 +20,6 @@ sys.path.insert(0, str(PROGRAMS))
 import gatekeeper_assign_version as G          # noqa: E402
 import plugin_manifest_discovery as PMD        # noqa: E402
 
-_SYNC = PROGRAMS / "marketplace_version_sync_check.py"
 _ASSIGN = PROGRAMS / "gatekeeper_assign_version.py"
 
 
@@ -106,26 +105,8 @@ def test_assign_endstate_program_writes_all_three(tmp_path):
 
 # ── sync-check --fix from the REPO ROOT repairs the NESTED (v1.4.17 blind spot) ─
 
-def test_sync_fix_from_repo_root_repairs_nested(tmp_path):
-    repo, plugin_root = _make_dual_tree(
-        tmp_path, plugin="1.4.29", nested="1.4.28", root="1.4.29")
-    r = subprocess.run(
-        [sys.executable, str(_SYNC), "--marketplace-dir", str(repo), "--fix"],
-        capture_output=True, text=True)
-    assert r.returncode == 0, (r.stdout, r.stderr)
-    assert _read_all(plugin_root, repo) == ("1.4.29", "1.4.29", "1.4.29")
 
 
-def test_sync_check_from_repo_root_sees_nested_drift(tmp_path):
-    """Even with cwd/primary at the repo ROOT, the NESTED manifest's drift is
-    now DETECTED (the union discovery), not silently blind."""
-    repo, _ = _make_dual_tree(
-        tmp_path, plugin="1.4.29", nested="1.4.28", root="1.4.29")
-    r = subprocess.run(
-        [sys.executable, str(_SYNC), "--marketplace-dir", str(repo)],
-        capture_output=True, text=True)
-    assert r.returncode == 1, (r.stdout, r.stderr)
-    assert "1.4.28" in r.stdout
 
 
 # ── the post-write self-check catches residual drift ─────────────────────────

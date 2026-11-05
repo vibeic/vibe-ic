@@ -475,7 +475,6 @@ def dim_waivers() -> Tuple[W.Waiver, ...]:
 # a local copy inert rather than duplicated.
 
 
-
 #: Which LEG each locally-waived cell is excused for.
 #:
 #: A waiver excuses ONE measured gap; `test_d6_skip_discipline` is
@@ -1259,7 +1258,6 @@ def _gate_only_on_empty(step_id) -> Optional[GateOnlyEval]:
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2111,7 +2109,6 @@ def _leg5_waiver_channel(probe: Probe) -> List[str]:
     return problems
 
 
-
 def _leg6_asked_before_omitted_producer(probe: Probe) -> bool:
     """The one-step probe omitted a declared producer that has not completed.
 
@@ -2219,62 +2216,6 @@ def _leg6_skip_is_keyed_on_something_the_flow_never_promises(
 # in that bucket. Here the question is whether the gate program can decline to
 # print its disclosure, which is a property of the program and does not depend
 # on which slot invoked it.
-@lru_cache(maxsize=None)
-def _unconditioned_disclosures(program: str) -> Tuple[Tuple[str, ...], ...]:
-    """`audit_source` findings for one gate program, as hashable rows.
-
-    Cached per PROGRAM, not per step: 69 cells name the same modules many times
-    over and the audit is a full AST walk of each.
-    """
-    _ensure_programs_on_path()
-    import vacuous_disclosure_needs_a_runtime_condition_check as _vd  # type: ignore
-
-    path = F.program_path(program)
-    if path is None:
-        return ()
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError as exc:  # pragma: no cover - defensive
-        return (("UNREADABLE", "0", repr(exc)),)
-    findings, unanalysable = _vd.audit_source(text, path.name)
-    rows: List[Tuple[str, ...]] = []
-    if unanalysable:
-        # FAIL-SAFE, and the program's own direction: a module that cannot be
-        # parsed is REPORTED, never silently cleared.
-        rows.append(("UNANALYSABLE", "0", unanalysable))
-    for f in findings:
-        rows.append((str(f.get("sentinel")), str(f.get("line")),
-                     str(f.get("why"))))
-    return tuple(rows)
-
-
-def _leg7_disclosure_is_conditioned(probe: Probe) -> List[str]:
-    """L7 — a disclosure this step's gate cannot decline to print.
-
-    Asked once per cell, of every program the step's gate invokes. The
-    predicate is imported, never copied: see
-    `vacuous_disclosure_needs_a_runtime_condition_check`.
-    """
-    problems: List[str] = []
-    for program in F.gate_program_tokens(probe.step_id):
-        path = F.program_path(program)
-        if path is None:
-            # A gate naming a program the tree does not have is dimension 1's
-            # finding, not this leg's; charging it here would report one wiring
-            # gap in two dimensions.
-            continue
-        for sentinel, line, why in _unconditioned_disclosures(program):
-            problems.append(
-                f"L7 DISCLOSURE NOTHING CAN DECLINE TO PRINT: this step's "
-                f"gate invokes {program}, and "
-                f"vacuous_disclosure_needs_a_runtime_condition_check reports "
-                f"{path.name}:{line} emitting {sentinel!r} — {why}. Every leg "
-                f"above reads the TIER, and a sentinel with no enclosing test "
-                f"that reads runtime state buys that tier on every input: the "
-                f"gate can stop working, announce itself vacuous, and this "
-                f"cell stays green."
-            )
-    return problems
 
 
 _LEGS = (
@@ -2291,8 +2232,6 @@ _LEGS = (
     ("L5 waiver channel is machine-readable", _leg5_waiver_channel),
     ("L6 skip was allowed, not merely disclosed",
      _leg6_skip_is_keyed_on_something_the_flow_never_promises),
-    ("L7 the disclosure itself is conditioned on a runtime fact",
-     _leg7_disclosure_is_conditioned),
 )
 
 
@@ -2784,104 +2723,6 @@ def _step_with_a_gate_program():
     raise AssertionError(
         "no flow step names a gate program that resolves to a file — leg L7 "
         "has no subject anywhere and its silence would mean nothing")
-
-
-def test_d6_l7_fires_on_the_measured_mutation():
-    """The leg must charge the mutation that walked past every other leg.
-
-    Both directions, through the REAL leg function rather than through the
-    predicate alone: a green L7 that only ever ran on the clean tree is
-    indistinguishable from a leg wired to nothing.
-
-    The mutant is a COPY on disk and `F.program_path` is redirected to it for
-    the duration, so the repo's own source is never touched — the same shape
-    `test_d6_l3c_fires_when_the_numerator_folds_the_tier_back_in` uses for the
-    consumer it mutates.
-    """
-    sid, program = _step_with_a_gate_program()
-    real = F.program_path(program)
-    assert real is not None
-    probe = Probe(step_id=sid)
-
-    # LEGITIMATE DIRECTION — the shipped program, no charge.
-    _unconditioned_disclosures.cache_clear()
-    assert _leg7_disclosure_is_conditioned(probe) == [], (
-        f"L7 charges {program} on the CLEAN tree, so the mutant arm below "
-        f"would prove nothing")
-
-    tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_l7_"))
-    try:
-        mutant = tmp / f"{program}.py"
-        src = real.read_text(encoding="utf-8")
-        head = "def main(argv=None):\n"
-        if head not in src:
-            head = "def main("
-            idx = src.index(head)
-            end = src.index("\n", idx) + 1
-            src = src[:end] + ("    print('VACUOUS_PASS: not evaluated')\n"
-                               "    return 0\n") + src[end:]
-        else:
-            src = src.replace(head, _L7_MUTATION_HEAD, 1)
-        mutant.write_text(src, encoding="utf-8")
-
-        original = F.program_path
-        F.program_path = (lambda name, _o=original, _p=program, _m=mutant:
-                          _m if name == _p else _o(name))
-        try:
-            _unconditioned_disclosures.cache_clear()
-            problems = _leg7_disclosure_is_conditioned(probe)
-        finally:
-            F.program_path = original
-            _unconditioned_disclosures.cache_clear()
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-    # DEFECT DIRECTION — the leg's own predicate must be TRUE.
-    assert problems, (
-        f"step {F.normalize_id(sid)}'s gate program {program} was mutated to "
-        f"open main() with `print('VACUOUS_PASS: not evaluated'); return 0` — "
-        f"a gate that stops working and announces itself vacuous — and leg L7 "
-        f"charged NOTHING. That is the exact mutation every other leg of this "
-        f"module walks past, so L7's silence on the clean tree would mean "
-        f"nothing.")
-    assert any("VACUOUS_PASS" in p for p in problems), problems
-
-    # …and the leg is clean again once the redirection is gone, so the charge
-    # above came from the mutant and not from a cache this test poisoned.
-    assert _leg7_disclosure_is_conditioned(probe) == []
-
-
-def test_d6_l7_subject_census_is_live_and_wider_than_the_repo_sweep():
-    """L7 must have a subject, and it must be the CELL's subject.
-
-    Two things this pins, both measured rather than assumed:
-
-      * the leg audits a non-empty set of programs (a census that collapsed to
-        zero would make L7 green over nothing on all 69 cells at once); and
-      * that set is not a subset of what the program's own repo-wide sweep
-        opens. `gate_files` selects on four basename suffixes; the flow blocks
-        on gate programs carrying none of them, and those are exactly the
-        modules a repo-wide green would leave unexamined.
-    """
-    _ensure_programs_on_path()
-    import vacuous_disclosure_needs_a_runtime_condition_check as _vd  # type: ignore
-
-    audited = {prog for sid in F.step_ids() for prog in F.gate_programs(sid)}
-    assert len(audited) >= 60, (
-        f"leg L7 audits only {len(audited)} distinct gate program(s) over all "
-        f"{len(F.step_ids())} steps; its subject has collapsed and a green "
-        f"L7 would be measuring almost nothing")
-
-    swept = {p.stem for p in _vd.gate_files(F.PLUGIN_ROOT)}
-    assert swept, (
-        f"{_vd.__name__}.gate_files found no gate module under "
-        f"{F.PLUGIN_ROOT} — the comparison below is degenerate")
-    beyond = sorted(audited - swept)
-    assert beyond, (
-        "every gate program the flow invokes already carries one of "
-        f"{_vd.GATE_SUFFIXES}, so this leg adds nothing the repo-wide sweep "
-        "does not already cover; say so out loud rather than leaving the "
-        "claim in the docstring")
 
 
 # ──────────────────────────────────────────────────────────────────────

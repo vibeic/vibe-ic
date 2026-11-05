@@ -50,18 +50,7 @@ TOOL_DIRS = (REPO / "docs" / "campaigns" / "ppa-crosslayer", REPO / "docs" / "ca
 #: propagate after all is refused as stale by `test_the_ledger_has_no_stale_
 #: entries` -- so this list cannot quietly become a parking space.
 TOLERATED = {
-    "analyze.py": (
-        "it collects rc into a `fails` list and reports that list; the rc "
-        "reaches a verdict by a different route than `return`"),
-    "readjudicate.py": (
-        "it raises SystemExit on a non-zero producer rc, and records the "
-        "second invocation's code as `_exit_code_observed` in its report"),
-    "build_arm.py": (
-        "it is a BUILDER, not a publisher of a comparison: it reads the "
-        "feasibility report it just produced and writes the adjudication "
-        "forward as data -- `feasibility_verdict` and the per-axis statuses "
-        "land in assembly.json, so a downstream reader gets the real verdict "
-        "rather than an exit code that hid it"),
+
 }
 
 _CHECKER = "_check.py"

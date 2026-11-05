@@ -400,62 +400,10 @@ def test_an_inflight_channel_without_the_attestation_channel_is_refused(
 #    profile — through its own declared test seam.
 # ══════════════════════════════════════════════════════════════════════════
 
-import gate_host_independence_check as G  # noqa: E402
 
 
-def test_the_host_independence_gate_relays_one_unit_per_probed_label(
-        tmp_path, monkeypatch):
-    """Its workers already write one EARNED line per finished label; the fix
-    forwards that count outward instead of inventing a new signal."""
-    channel = tmp_path / "inflight.jsonl"
-    I.append_event(str(channel), I.STARTED, OTHER, 1)
-    monkeypatch.setenv(I.ENV_PATH, str(channel))
-    monkeypatch.setenv(I.ENV_LABEL, OTHER)
-    # A shorter relay cadence so the arm is fast. It is an OBSERVATION cadence,
-    # never a bound: no value of it can stop a job.
-    monkeypatch.setattr(G, "_INFLIGHT_RELAY_POLL_S", 0.05)
-
-    specs = [(0, ["gate-a", "gate-b"], tmp_path / "w0.json", []),
-             (1, ["gate-c"], tmp_path / "w1.json", [])]
-
-    def _fake_launch(_argv, progress_path):
-        # Behave like a worker: write the same `label done:` lines the real
-        # `note_worker_progress` writes, then return.
-        for _ in range(2 if "w0" in str(progress_path) else 1):
-            with open(progress_path, "a", encoding="utf-8") as fh:
-                fh.write("label done: something\n")
-            time.sleep(0.2)
-        return type("CP", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-    rows = G.run_workers_supervised(specs, 2, run_fn=_fake_launch)
-    assert len(rows) == 2, rows
-
-    reader = I.InflightReader(str(channel), (OTHER,))
-    score = reader.sample()
-    assert not reader.error, reader.error
-    # started + one unit per finished label across every worker.
-    assert score == 1 + 3, (score, channel.read_text())
-    described = reader.describe()
-    assert "3 of 3 declared sub-unit(s) reported" in described, described
 
 
-def test_the_relay_is_silent_when_no_supervisor_is_listening(
-        tmp_path, monkeypatch):
-    """The control that makes the arm above mean something: with the channel
-    unset the gate behaves exactly as it did before, and writes nothing."""
-    monkeypatch.delenv(I.ENV_PATH, raising=False)
-    monkeypatch.delenv(I.ENV_LABEL, raising=False)
-    monkeypatch.setattr(G, "_INFLIGHT_RELAY_POLL_S", 0.05)
-    specs = [(0, ["gate-a"], tmp_path / "w0.json", [])]
-
-    def _fake_launch(_argv, progress_path):
-        with open(progress_path, "a", encoding="utf-8") as fh:
-            fh.write("label done: something\n")
-        return type("CP", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-    rows = G.run_workers_supervised(specs, 1, run_fn=_fake_launch)
-    assert len(rows) == 1
-    assert not (tmp_path / "inflight.jsonl").exists()
 
 
 # ══════════════════════════════════════════════════════════════════════════

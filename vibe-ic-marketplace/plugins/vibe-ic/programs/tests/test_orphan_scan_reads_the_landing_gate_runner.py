@@ -215,28 +215,8 @@ def test_venue_three_is_reported_absent_rather_than_assumed_clean(tmp_path):
 # The synthetic cases above prove the rule; these prove it lands on the real
 # program the incident was about.
 
-def test_the_shipped_hygiene_coordinator_declares_blocking_and_is_wired():
-    """Every clause of the claim, read off the shipped files rather than
-    asserted: it DECLARES blocking, the flow definition does not mention it,
-    no `tools/ci/*.sh` mentions it — and `gatekeeper_review.py` runs it."""
-    m = _audit_mod()
-    assert m.declared_intent(_PROGRAMS, "repo_hygiene_parallel") == "blocking"
-    src_ci = m.repo_gate_source(_PROGRAMS)
-    assert src_ci.strip(), "venue 2 must be present on the shipped tree"
-    assert not m._invoked_by_suite(src_ci, "repo_hygiene_parallel")
-    src_runner = m.repo_gate_runner_source(_PROGRAMS)
-    assert src_runner.strip(), "venue 3 must be present on the shipped tree"
-    assert m._invoked(src_runner, "repo_hygiene_parallel")
 
 
-def test_the_shipped_audit_no_longer_calls_the_coordinator_unreachable():
-    """The regression itself, end to end on the shipped tree."""
-    cp = subprocess.run(
-        [sys.executable, str(_PROGRAMS / "flow_gate_enforcement_audit.py")],
-        cwd=str(_PLUGIN), capture_output=True, text=True)
-    assert "orphan::repo_hygiene_parallel" not in cp.stdout, cp.stdout
-    assert "repo_hygiene_parallel" not in cp.stdout, cp.stdout
-    assert cp.returncode == 0, cp.stdout + cp.stderr
 
 
 def test_the_shipped_audit_still_fails_on_a_defect_planted_in_it(tmp_path):

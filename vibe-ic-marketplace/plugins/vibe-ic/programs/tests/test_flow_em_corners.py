@@ -75,10 +75,11 @@ def test_generator_keeps_ic_em_selected_with_original_limits(tmp_path):
     assert choose_tool(row["tool"], features)["steps"] == ["VibeIC.EMCorners"]
     assert {(c["metric"], c["operator"], c["limit"]) for c in row["checks"]} == {
         ("em_violations", "==", 0), ("em_worst_utilization_pct", "<=", 100)}
-    assert design_features(tmp_path, {"delivery_target": "ip_hardmacro"}, table)["requires_em"] is False
+    assert design_features(tmp_path, {"delivery_target": "ip_hardmacro"}, table)["requires_em"] is True
 
 
-def test_native_tcl_loads_serialized_environment_and_forwards_supply_sources(tmp_path, monkeypatch):
+@pytest.mark.parametrize("supplies", [(["PWR"], ["GND"]), (None, None)])
+def test_native_tcl_loads_serialized_environment_and_forwards_supply_sources(tmp_path, monkeypatch, supplies):
     lef = tmp_path / "nominal.lef"
     lef.write_text("native technology")
     native_script = tmp_path / "native_ir.tcl"
@@ -111,7 +112,8 @@ proc check_current_density {args} {
     monkeypatch.setattr(em.IRDropReport, "run", run_native)
     step = object.__new__(em.CurrentDensityReport)
     step.step_dir = str(tmp_path)
-    step.config = {"PDK": "fixture", "TECH_LEFS": {}, "VDD_NETS": ["PWR"], "GND_NETS": ["GND"]}
+    step.config = {"PDK": "fixture", "TECH_LEFS": {}, "VDD_NETS": supplies[0], "GND_NETS": supplies[1],
+                   "VDD_PIN": "PWR", "GND_PIN": "GND"}
     step.toolbox = SimpleNamespace(filter_views=lambda *args, **kwargs: [lef])
     metrics = step.run(object(), env={})[1]
     assert metrics["em_violations"] == 0

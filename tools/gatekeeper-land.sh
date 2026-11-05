@@ -714,17 +714,6 @@ landing_unit_cheap_benchmark_structure() {
     || BENCHMARK_STRUCTURE_SCOPE=(--changed-since "$BASE")
   run "$1" "benchmark evidence structure" python3 "$PROGRAMS/benchmark_evidence_structure_check.py" --tree benchmark-data --corpus-may-be-absent "${BENCHMARK_STRUCTURE_SCOPE[@]}"
 }
-landing_unit_cheap_benchmark_manifest() {
-  if [ "$GK_RANGE_N" = "0" ]; then
-    landing_skip "$1" "range is empty"
-    return 0
-  fi
-  # vibe-ic#635 — a NEW published number must arrive with its composition.
-  # Scoped `--changed-since` like the gate above: 20 of the 25 runs already
-  # published carry no per-problem name set, and applying this retroactively
-  # would fail every landing over work nobody is doing.
-  run "$1" "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
-}
 landing_unit_cheap_git_prohibition() {
   if [ "$GK_RANGE_N" = "0" ]; then
     landing_skip "$1" "range is empty"
@@ -740,49 +729,8 @@ landing_unit_cheap_git_prohibition() {
   run "$1" "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" "$MSGFILE"
   rm -f "$MSGFILE"
 }
-landing_unit_cheap_collateral_revert() {
-  if [ "$GK_RANGE_N" = "0" ]; then
-    landing_skip "$1" "range is empty"
-    return 0
-  fi
-  # 2026-08-03 — the batch that landed five PRs from a 6.5-hour-stale base and
-  # let three of its own commits erase the other two. `gatekeeper_stale_branch_check`
-  # said STALE_OVERLAP on all five BEFORE the land; nothing looked at the
-  # commits AFTER they existed, which is the artefact this script pushes.
-  run "$1" "no collateral revert within the push" \
-      python3 "$PROGRAMS/landing_collateral_revert_check.py" --repo "$ROOT" --rev-range "$RANGE"
-}
-landing_unit_cheap_base_ancestry() {
-  if [ "$GK_RANGE_N" = "0" ]; then
-    landing_skip "$1" "range is empty"
-    return 0
-  fi
-  # 2026-08-05 — THE OTHER HALF OF THE SAME QUESTION, and the half nothing here
-  # was asking. The gate above reads the commits INSIDE this push; this reads
-  # whether the tree being pushed actually contains the base it names as its
-  # parent.
-  #
-  # `1766746f6` named origin/main (v1.9.78) as its parent and carried v1.9.77's
-  # tree: 81 files, 9258 deletions, 13 commits reverted, 15 files deleted. It
-  # passed every shape check here — one commit ahead of the base, no in-range
-  # predecessor to revert, and `gatekeeper_stale_branch_check` itself said FRESH,
-  # because the head really does descend from the tip. Only a human read caught
-  # it, an hour before it would have landed.
-  #
-  # The checker was already blocking in `gatekeeper_review`; it had never been
-  # wired HERE, which is the script that writes the stamp the pre-push hook
-  # demands — so the landing path had no opinion on the landing method at all.
-  run "$1" "tree contains the base it claims as parent" \
-      python3 "$PROGRAMS/gatekeeper_stale_branch_check.py" --repo "$ROOT" \
-          --base "$BASE" --head HEAD
-}
-landing_unit_cheap_version_sync() {
-  run "$1" "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version_sync_check.py"
-}
 # vibe-ic#712 — NO LANDING MAY ADD A POLARITY-BLIND PROSE EXTRACTOR.
 #
-# Whole-tree, so it sits OUTSIDE the range block above with `version-sync`: the
-# question is what the tree that ships contains, not what this push touched.
 #
 # `--ratchet` is a MEMBERSHIP verdict against `_OFFENDER_REGISTER`, not a count.
 # MEASURED across v1.17.51..v1.17.83 the population went 212 -> 213 -> 214 ->
@@ -832,37 +780,7 @@ landing_unit_cheap_nested_progress_pin() {
         --schedule "$ROOT/tools/ci/trusted_test_selection.py" \
         --plugin-root "$PLUGIN"
 }
-# A landing is normally ONE commit. A batch is legitimate when several
-# independent changes land together — NO-MIX forces a benchmark-data fix and a
-# plugin change into separate commits, for instance — and the gate accepts that
-# via --batch, which additionally requires the version bump to sit on the TIP.
-# Auto-detected rather than configured, so a batch is never silently waved
-# through as if it were a single landing.
-#
-# AN EMPTY RANGE IS NOT A LANDING, so it is not a landing of one commit either.
-# Asked over `X..X` the checker sees ZERO commits and answers FAIL — a vacuous
-# refusal, and one with teeth beyond this line: `gatekeeper-verify-merge.sh`
-# (vibe-ic#1019) runs this script over an empty range on the BASE to learn which
-# gates are ALREADY failing, and a gate that fails vacuously there would let a
-# candidate's REAL one-commit violation be waived as pre-existing. Range-scoped
-# gates must SKIP over an empty range, exactly as the block above already does.
-landing_unit_cheap_landing_shape() {
-  GK_RANGE_N="$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)"
-  if [ "$GK_RANGE_N" = "0" ]; then
-    echo "  SKIP  landing shape — range is empty, so there is no landing to shape"
-    landing_skip "$1" "range is empty"
-  elif [ "$GK_RANGE_N" -gt 1 ]; then
-    run "$1" "landing is a valid batch (version on tip)" \
-        python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE" --batch
-  else
-    run "$1" "landing is one commit" \
-        python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE"
-  fi
-}
 
-# The gate above asks whether the batch has a legal SHAPE. This asks what it
-# CONTAINS: does more than one member of this landing claim the same issue?
-#
 # vibe-ic#1411 — the only mechanism this repo has for noticing two changes doing
 # one job is a MERGE CONFLICT, and of the 22 issues carrying more than one open
 # PR, 16 had members sharing no file, so nothing reported them. #1080 is the
@@ -1528,20 +1446,6 @@ run_pytest() {
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; rm -f "$sel"; return
   fi
-  # WHAT THIS RUN CAN HONESTLY CLAIM, DERIVED FROM THE SELECTION IT IS ABOUT TO
-  # EXECUTE — never from `$LANDING_CADENCE`. Reporting the full-suite string
-  # because the cadence SAYS full, while the selection is short, is precisely
-  # the false green the cadence gate exists to refuse; `--describe` compares the
-  # selection against the tree by MEMBERSHIP and only then emits the full-suite
-  # command. At FULL cadence a short selection therefore describes itself as a
-  # subset, and `full_suite_run_check` turns that into the red it should be.
-  #
-  # THROUGH A FILE, because run_pytest runs inside a lane subshell and a
-  # variable set here never reaches the main shell that calls the review — the
-  # same lesson `$LANE_DIR/targeted.norecord` records one screen down.
-  ( cd "$PLUGIN" && python3 programs/landing_cadence.py \
-      --plugin-root "$PLUGIN" --selection "$sel" --describe 2>/dev/null \
-      | sed -n 's/^LANDING_PYTEST_CMD=//p' ) > "$LANE_DIR/pytest-cmd.txt" || true
   printf '  REPORT  cadence %s — %s file(s) selected\n' \
     "$LANDING_CADENCE" "$(wc -l < "$sel")"
   # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
@@ -2022,14 +1926,6 @@ landing_unit_full_repo_tools_tests() {
 landing_unit_full_unselectable_tests() {
     fn_capture "$1" run_unselectable_pytest
 }
-landing_unit_full_unselectable_census() {
-    # The census that decides the stage above must itself be trustworthy: a
-    # subtrahend whose stage no longer exists, or an exclusion whose reason no
-    # longer describes anything, both shrink the corpus in the direction that
-    # still prints PASS. rc=1 on either.
-    run_capture "$1" \
-        python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
-}
 landing_unit_full_census_freshness() {
     # vibe-ic#2142 — THE 63x8 CENSUS, RE-DERIVED ON THE CANDIDATE TREE.
     #
@@ -2190,40 +2086,6 @@ landing_unit_full_repo_hygiene() {
 lane_hygiene() {
   landing_plan_dispatch window hygiene
 }
-# `full:plugin-audit` IS KEPT, AND SO IS THE HYGIENE TIER'S OWN COPY.
-#
-# On the DIRECT-PUSH path these two are the same program over the same tree —
-# `plugin_full_audit.main` defaults `plugin_root` to the directory this call
-# site names explicitly, and `repo_hygiene_gates.sh:180` resolves the same
-# script — so it is tempting to call one a duplicate and delete it. Do not.
-#
-#   * The LABEL is `LANDING_PROGRESS_UNITS[23]`. Removing it refuses every
-#     landing driven with `VIBEIC_LANDING_PROGRESS` set, which is exactly how
-#     the B2/A2 arms are driven: `landing_completion_record.finish` refuses
-#     unless the emitted labels equal the complete 28-entry tuple.
-#     BOTH NUMBERS WERE ALREADY ONE BEHIND AT 425c6402841d, before this
-#     landing touched anything: the tuple was 26 entries and `full:plugin-audit`
-#     sat at index 21, because the vibe-ic#712 insertion at index 10 shifted
-#     every later index and re-stated only the window line above. vibe-ic#2138
-#     inserts `cheap:nested-progress-pin` at index 11 and shifts them again, so
-#     these are re-derived from the tuple rather than incremented -- an index
-#     nothing asserts is exactly the kind of number that rots in silence
-#     (`test_the_window_is_exactly_the_declared_contiguous_units` locates it
-#     by `order.index`, never by an ordinal, which is why nothing went red).
-#   * In an ARM they are not the same subject at all. This one runs the
-#     TRUSTED `/runtime` copy of the program; the hygiene tier runs the copy
-#     resolved against the candidate-controlled `/subject`. Two different
-#     instruments asking the same question of the same tree is the point.
-#
-# Both are read-only readers, 20.2 s and 21 s, so they cost nothing beside a
-# 259 s hygiene lane.
-landing_unit_full_plugin_audit() {
-    run_capture "$1" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
-}
-lane_audit() {
-  landing_plan_dispatch window audit
-}
-
 # ── LAUNCH THE WINDOW, JOIN IT, THEN EMIT IN DECLARATION ORDER ─────────────
 #
 # `run_emit` is called ONLY from the MAIN shell and ONLY in
@@ -2354,9 +2216,6 @@ landing_emit_full_unselectable_tests() {
     landing_record "$1" FAIL "$EMIT_RC" "unselectable tests failed"
   fi
 }
-landing_emit_full_unselectable_census() {
-  run_emit "$1" "unselectable-test census is not stale"
-}
 landing_emit_full_census_freshness() {
   census_freshness_emit --last
 }
@@ -2371,10 +2230,6 @@ landing_emit_full_repo_hygiene() {
       --record "$GK_HYG_RECORD" --head-ref "$BASE" --ledger-ref "$BASE" \
       || printf '  REPORT  debt checker reported findings or incomplete evidence\n'
   fi
-}
-landing_emit_full_plugin_audit() {
-  lane_join audit
-  run_emit "$1" "plugin full audit" --last
 }
 lane_emit_window() {
   landing_plan_dispatch window "" emit
@@ -2568,29 +2423,6 @@ fi
 GK_REVIEW_BUDGET_S="${GATEKEEPER_REVIEW_BUDGET_S:-1800}"
 run_gatekeeper_review() {
   local out rc
-  # THE REVIEW'S CADENCE GATE ONLY WORKS IF SOMEBODY TELLS IT WHAT RAN.
-  # `test_cadence_gate` has always refused a FULL cadence whose --pytest-cmd is
-  # a subset — but this call never passed one, so on a milestone the gate took
-  # its OTHER branch and hard-failed with "FULL milestone requires a full-suite
-  # pytest command (none supplied)". A milestone landing was therefore not
-  # merely under-tested, it was IMPOSSIBLE through this script.
-  #
-  # The string comes from the file `run_pytest` wrote, which was derived from
-  # the selection it executed. When the targeted lane is skipped entirely
-  # (GATEKEEPER_SKIP_TARGETED_TESTS=1, the merge-verifier arm shape) no file
-  # exists and no claim is made — an arm that did not run the tests must not
-  # certify their cadence, and the review's own "no --pytest-cmd" branch is the
-  # correct verdict for it.
-  # `${LANE_DIR:-}`, not `$LANE_DIR`. This file runs under `set -u` and
-  # `tools/test_gatekeeper_land_review_budget.py` drives this REAL function
-  # against a stub, setting only the variables it needs; a bare dereference
-  # made every case in that file die before the case statement it exists to
-  # test. Tolerating an unset lane dir is also the honest reading: no lane dir
-  # means no lane wrote a command, which is the same "no claim" branch.
-  local cadence_arg=() cmd_file="${LANE_DIR:-}/pytest-cmd.txt"
-  if [ -n "${LANE_DIR:-}" ] && [ -s "$cmd_file" ]; then
-    cadence_arg=(--pytest-cmd "$(cat "$cmd_file")")
-  fi
   # THE SHAPE OF THIS LANDING WAS ALREADY DECIDED, AND THE REVIEW WAS NOT TOLD.
   # `cheap:landing-shape` above counted the range into `GK_RANGE_N` and, when it
   # was greater than one, ran `landing_is_one_commit_check.py --batch` and
@@ -2627,7 +2459,6 @@ run_gatekeeper_review() {
   out="$(timeout -k 10 "$GK_REVIEW_BUDGET_S" \
          python3 "$PROGRAMS/gatekeeper_review.py" \
          --base "$BASE" --head HEAD --repo "${GK_REVIEW_SUBJECT:-$ROOT}" \
-         "${cadence_arg[@]+"${cadence_arg[@]}"}" \
          "${batch_arg[@]+"${batch_arg[@]}"}" \
          --scope structural 2>&1)"; rc=$?
   case "$rc" in

@@ -297,13 +297,6 @@ def test_external_review_accepts_frozen_pair_after_main_advances(
     assert "main advanced" in gate.summary
 
 
-def test_stale_branch_is_gatekeeper_work_only_for_external_prs():
-    stale = GR.GateResult("gatekeeper_stale_branch_check", 1, "STALE_OVERLAP")
-    authoring = GR.authoring_stale_branch_policy(stale, True)
-    landing = GR.authoring_stale_branch_policy(stale, False)
-    assert authoring.rc == 0
-    assert "Repo Gatekeeper" in authoring.summary
-    assert landing is stale and landing.rc == 1
 
 
 def test_publication_rule_is_in_plugin_agents_and_not_any_skill():

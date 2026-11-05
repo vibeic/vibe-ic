@@ -6,7 +6,7 @@
       "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['paths'] and ['tree'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
     },
     {
-      "key": "vibe-ic-marketplace/plugins/vibe-ic/programs/benchmark_run_manifest.py::run_dir::tree",
+
       "reason": "Pre-existing on the tree this rule shipped with: the parser offers ['run_dir'] and ['tree'] as independent options, so given both one silently shadows the other and the caller is told a verdict about an input they did not name. Closes by putting the two in one add_mutually_exclusive_group(), or by deciding the case explicitly the way step_internal_fail_bubble_up_check.py:1253 does. Not repaired here: refusing an invocation that is accepted today is a behaviour change for every caller of that program."
     },
     {

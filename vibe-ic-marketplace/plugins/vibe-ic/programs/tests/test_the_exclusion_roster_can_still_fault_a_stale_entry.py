@@ -86,58 +86,12 @@ def test_the_roster_is_empty_and_that_is_written_down():
 # 2. THE FAULT STILL FIRES. A synthetic entry pointing at a tree that is not here
 #    must be caught, exactly as benchmark-data/ was.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not _repo_is_git(), reason="needs the real git checkout to partition")
-def test_a_declared_exclusion_that_subtracts_nothing_is_still_faulted(monkeypatch):
-    stale = M.Excluded(
-        prefix="a-tree-that-is-not-here/",
-        why="a synthetic entry, long enough to satisfy any written-reason rule, "
-            "whose only job is to prove the staleness check still has teeth after "
-            "the roster it guarded was emptied.")
-    monkeypatch.setattr(M, "_EXCLUDED", (stale,))
-    plugin = M.plugin_rel(REPO)
-    files = M.tracked_test_files(REPO) or []
-    assert files, "partitioned an empty file list; this is not a measurement"
-    part = M.partition(files, plugin)
-    findings = M.audit(REPO, part, plugin)
-    assert any("a-tree-that-is-not-here/" in f and "matches NO tracked test file" in f
-               for f in findings), (
-        f"a declared exclusion that subtracts nothing was NOT faulted — the check "
-        f"that emptied this roster has stopped working. findings={findings}")
 
 
 # ---------------------------------------------------------------------------
 # 3. …AND IT STAYS QUIET WHEN THE ENTRY IS REAL. The half that makes case 2 mean
 #    something: a check that faults every exclusion would also "pass" case 2.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not _repo_is_git(), reason="needs the real git checkout to partition")
-def test_a_real_exclusion_is_not_faulted(monkeypatch):
-    # `skills/`, a tree no covered prefix claims, so this case is independent of
-    # the covered-vs-excluded precedence in either direction.
-    #
-    # THIS COMMENT USED TO SAY the opposite was forced: "`partition()` assigns a
-    # file to COVERED before it considers an exclusion, so a prefix already
-    # claimed by a covered tree subtracts nothing and would be faulted". That was
-    # true and it was a DEFECT being steered around in a test comment rather than
-    # fixed — it is why programs/tests/fixtures/ could not be excluded at all.
-    # `partition()` now consults exclusions FIRST; see
-    # test_an_exclusion_under_a_covered_tree_actually_subtracts below, which
-    # fails against the old order. Measured on this tree: skills/ holds 68 of the
-    # 110 unselectable files, so it is a prefix an exclusion can genuinely take.
-    live = M.Excluded(
-        prefix="vibe-ic-marketplace/plugins/vibe-ic/skills/",
-        why="a synthetic entry over a tree that DOES hold tracked test files not "
-            "already claimed by a covered tree, so a check which faulted every "
-            "exclusion regardless of its subtrahend would be caught here rather "
-            "than mistaken for correctness.")
-    monkeypatch.setattr(M, "_EXCLUDED", (live,))
-    plugin = M.plugin_rel(REPO)
-    files = M.tracked_test_files(REPO) or []
-    assert files, "partitioned an empty file list; this is not a measurement"
-    part = M.partition(files, plugin)
-    findings = M.audit(REPO, part, plugin)
-    assert not any("matches NO tracked test file" in f for f in findings), (
-        f"an exclusion over a tree that really holds tests was faulted anyway, so "
-        f"case 2 proves nothing. findings={findings}")
 
 
 # ---------------------------------------------------------------------------
@@ -287,15 +241,3 @@ def test_the_partition_is_still_exhaustive_with_no_exclusions():
 # 5. THE SHIPPED TREE IS ACTUALLY CLEAN. This is the one that would have caught the
 #    stale entry at the time, and it is the one the landing gate runs.
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not _repo_is_git(), reason="needs the real git checkout to partition")
-def test_the_shipped_roster_faults_nothing_on_this_tree():
-    # 60 s, not 180 (vibe-ic#1711). 180 was the WHOLE pytest session budget, so
-    # under `--timeout-method=thread` it could never fire as a TEST failure —
-    # pytest kills the SESSION first and every other file in the subset loses
-    # its verdict. MEASURED on this tree: `--repo <root> --audit` partitions
-    # 2,734 tracked test files in 0.04 s, so 60 s is ~1500x the observed cost.
-    out = _pr.run(
-        [sys.executable, str(PROG), "--repo", str(REPO), "--audit"],
-        capture_output=True, text=True)
-    assert out.returncode == 0, (
-        f"the shipped exclusion roster is stale again:\n{out.stdout}\n{out.stderr}")

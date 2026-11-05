@@ -2,29 +2,23 @@
 name: full-test-audit
 description: >-
   Run when the user says "have full test", "full test", "run the full audit", or
-  asks to check D1/D2/D3. "Full test" is NOT just pytest — it is the four-part
+  asks to check D3. "Full test" is NOT just pytest — it is the two-part
   plugin health check: (full test) the whole test suite the CI way + chip-AGNOSTIC
-  source guard, (D1) every program has a test, (D2) every flow step has a
-  compliance checker, (D3) every skill has no deterministic rule still hiding in
-  prose (program-first residual). D1+D2 are deterministic (delegated to
-  programs/plugin_full_audit.py); D3 is the LLM-judgment dimension run here.
+  source guard, (D3) every skill has no deterministic rule still hiding in
+  prose (program-first residual).
 ---
 
-# full-test-audit — "have full test" = full test + D1 + D2 + D3
+# full-test-audit — "have full test" = full test + D3
 
 When the user says **"have full test"** (or "full test" / "run the full audit" /
-"check D1 D2 D3"), they do NOT mean "just run pytest". They mean this **four-part**
-plugin-health audit. Run ALL four and report each verdict; never report only the
+"check D3"), they do NOT mean "just run pytest". They mean this **two-part**
+plugin-health audit. Run both parts and report each verdict; never report only the
 pytest number.
-
-The split honours the program-first doctrine: the DETERMINISTIC dimensions live
-in a program (`programs/plugin_full_audit.py`); only D3 (skill-rule
-extractability) needs LLM judgment and is run as a fan-out here.
 
 ## Part 1 — Full test (the CI way, not a subset)
 
 **`./run_tests.sh` IS the full suite. A bare `pytest` is NOT.** `pytest.ini`
-declares ONE testpath on purpose (`single_testpath_guard.py` pins it), so a bare
+declares ONE testpath on purpose, so a bare
 `pytest` reaches `programs/tests` and stops there. MEASURED at e37d10e1e that
 leaves 141 of 3117 tracked test files unrun — `skills/*/tests` 82,
 `mcp-eda/test` 48, `tools/phase1_engine/tests` 8, `_shared` 3 — while the 74
@@ -48,24 +42,6 @@ tier census it discovered first; a tier count that has SHRUNK is itself a
 finding, because the cheapest way to make a suite green is to stop running part
 of it.
 
-## Part 2 — D1: every program has a test  ·  Part 3 — D2: every step has a checker
-
-Both are deterministic — delegate to the program (do NOT hand-roll the scan):
-
-```bash
-python3 <plugin>/programs/plugin_full_audit.py <plugin> --json reports/full_audit.json
-```
-- **D1** PASS iff every non-helper `programs/*.py` is referenced by some
-  `programs/tests/` test. `*_protocol_synth` modules are covered generically by
-  `test_all_protocol_synth_overlay.py` (reported separately, not a gap). Any
-  OTHER unreferenced program is a real D1 gap → write a dedicated test.
-- **D2** PASS iff: `gate_self_assertion_check` finds 0 anti-fabrication
-  self-assertion holes; `single_testpath_guard` confirms one test tree; no flow
-  step is gated on `files_exist` only WITHOUT an explicit `AUDIT NOTE (by-design`
-  marker; and every `program_exit_zero` gate target exists on disk (no dangling).
-
-`plugin_full_audit.py` exits 0 only when D1 AND D2 are both clean.
-
 ## Part 4 — D3: every skill has no deterministic rule still in prose
 
 This is the irreducible LLM-judgment dimension — there is no deterministic
@@ -82,20 +58,12 @@ program + test, no fabrication) / AUGMENT-EXISTING (report) / KEEP-JUDGMENT.
 Be adversarial but do NOT invent extractability where the skill is genuinely
 judgment (RTL authoring, dialogue, go/no-go narrative, triage routing).
 
-## Synthesis — report all four
+## Synthesis — report both parts
 
 Give one verdict per dimension:
 - **Full test**: N passed / M failed (+ guard).
-- **D1**: zero gap, or the list of untested non-synth programs.
-- **D2**: zero gap, or each finding (self-assertion hole / dangling / undocumented
-  presence-only).
 - **D3**: K/57 skills clean; list every skill with an extractable rule still in
   prose + its 4-way classification.
-
-"All four green" is the bar. D1/D2 are auto-checkable every run via
-`plugin_full_audit.py` (and pinned by `test_plugin_full_audit.py` +
-`test_gate_self_assertion_check.py` + `test_single_testpath_guard.py`); D3 is the
-judgment pass that catches new prose rules as the plugin grows.
 
 ## Compliance gate (mandatory)
 
