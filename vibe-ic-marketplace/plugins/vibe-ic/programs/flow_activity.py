@@ -122,7 +122,8 @@ def execute(project, directory, tool, route, *, state=None, config=None):
             lines += ["set core_scope " + _word(core_scope),
                 "foreach name [dict keys $core_activity] {",
                 "  lassign [dict get $core_activity $name] density duty",
-                '  set pins [concat [get_pins -quiet "$core_scope/$name"] [get_pins -of_objects [get_nets -quiet "$core_scope/$name"]]]',
+                '  set targets [list "$core_scope/$name" "$core_scope.$name"]',
+                '  set pins [concat [get_pins -quiet $targets] [get_pins -of_objects [get_nets -quiet $targets]]]',
                 "  set_power_activity -pins $pins -density [expr {$density * [sta::time_ui_sta 1.0]}] -duty $duty",
                 "}"]
         else:
@@ -141,7 +142,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         parsed = parse_power_report(text)
         annotated = parsed["activity"]["annotated_pin_activities"]
         if core_scope and annotated:
-            annotated = len(re.findall(r"^\s*user\s+" + re.escape(core_scope) + r"/\S+", text, re.M))
+            annotated = len(re.findall(r"^\s*user\s+" + re.escape(core_scope) + r"[/.]\S+", text, re.M))
         total = parsed.get("total_row")
         if not annotated or total is None:
             return result("NOT_MEASURED", "OpenSTA left no annotated activity or power Total row.", reports=reports)
