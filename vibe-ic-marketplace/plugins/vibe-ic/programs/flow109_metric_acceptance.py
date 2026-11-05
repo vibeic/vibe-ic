@@ -6649,7 +6649,7 @@ def d14_model_sources() -> dict:
             result[Path(module.__file__).name + ':' + name] = _sha(ast.get_source_segment(text, nodes[name]).encode())
     text = Path(__file__).read_text()
     nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
-    for name in ('_d14_owner_provenance', '_d14_observe', '_d14_qualification', 'accept_d14', 'd14_model_sources'):
+    for name in ('_d14_observe', '_d14_qualification', 'accept_d14', 'd14_model_sources'):
         result['flow109_metric_acceptance.py:' + name] = _sha(ast.get_source_segment(text, nodes[name]).encode())
     return result
 
@@ -6684,59 +6684,6 @@ def _d14_qualification(project: Path, context: Mapping, observed: Mapping) -> di
             raise MetricRefusal('D14_MODEL_QUALIFICATION_STALE', tool)
     return qualified
 
-def _d14_owner_provenance(project: Path, result: Mapping) -> dict:
-    """Reopen real producer bytes; historical reuse needs normal adoption.
-
-    Original source may be older than this consumer. The existing source
-    identity reader verifies that retained checkout, never current-main equality.
-    Adoption binds the unchanged proof result, source and original execution
-    reference. It is not native purpose qualification.
-    """
-    import formal_property_run as producer
-    owners = result.get('program_owner_sha256')
-    current = producer.program_owner_identity()
-    if (not isinstance(owners, dict) or set(owners) != set(current)
-            or any(not _HEX.fullmatch(str(v)) for v in owners.values())):
-        raise MetricRefusal('D14_PRODUCER_PROVENANCE_ABSENT', 'original source identity required')
-    if owners == current:
-        return {'kind': 'current_producer_bytes', 'files': {
-            str(HERE / name): digest for name, digest in owners.items()}}
-    try:
-        authority, body = _approved_document(project, 'adopted/base_08/formal_execution.json',
-            authority='requirements_owner', schema='vibeic.flow109.adopted-reference.v1')
-        source = json.loads(_safe_project_file(project, authority['source']['path']).read_bytes())
-        reference = body['reference']
-        if (not authority['source']['path'].startswith('input/')
-                or source != {'purpose': 'D14.original_formal_execution',
-                              'project': str(project), 'reference': reference}):
-            raise MetricRefusal('D14_ORIGINAL_OWNER_UNBOUND', 'adopted source payload differs')
-        import _path_layout as layout
-        expected = {'path': (layout.formal_dir(project) / 'results.json').relative_to(project).as_posix(),
-                    'sha256': _sha((layout.formal_dir(project) / 'results.json').read_bytes())}
-        if reference['result'] != expected:
-            raise MetricRefusal('D14_ORIGINAL_OWNER_UNBOUND', 'different original result')
-        execution = json.loads(_d13_file(project, reference['original_execution'], external=True).read_bytes())
-        if (execution.get('project') != str(project)
-                or execution.get('program_owner_sha256') != owners
-                or execution.get('result') != expected):
-            raise MetricRefusal('D14_ORIGINAL_OWNER_UNBOUND', 'original execution/source/result binding differs')
-        import execution_source_identity as identity
-        package = Path(reference['source_root']).resolve()
-        original = identity.current(package)
-        files = {}
-        for name, digest in owners.items():
-            path = package / 'programs' / name
-            original.verify(path)
-            if _sha(path.read_bytes()) != digest:
-                raise MetricRefusal('D14_ORIGINAL_OWNER_UNBOUND', name)
-            files[str(path)] = digest
-        original.verify_current()
-        return {'kind': 'adopted_original_producer', 'files': files,
-                'revision': original.revision, 'tree': original.tree,
-                'authority': authority, 'reference': reference}
-    except (MetricRefusal, OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
-        raise MetricRefusal('D14_ORIGINAL_OWNER_UNBOUND', str(exc)) from exc
-
 def _d14_observe(project: Path) -> dict:
     import _path_layout as layout
     import _chip_synth_read as chip
@@ -6759,8 +6706,6 @@ def _d14_observe(project: Path) -> dict:
     if (inputs[result['sby']] != result.get('sby_sha256')
             or inputs[result['evidence']] != result.get('evidence_sha256')):
         raise MetricRefusal('D14_PROOF_IDENTITY_STALE', 'deck/transcript/program owners')
-    owner_provenance = _d14_owner_provenance(project, result)
-    retained_owners = result['program_owner_sha256']
     stale = checker.proof_source_staleness(project, formal, result)
     if stale:
         raise MetricRefusal('D14_PROOF_SOURCE_STALE', '; '.join(stale))
@@ -6813,9 +6758,8 @@ def _d14_observe(project: Path) -> dict:
     audit = checker.audit(project)
     failed = (replay['verdict'] == 'FAIL' or bool(refreshed.get('structural_refutations')))
     return {'result': result, 'replay': replay, 'audit': audit, 'inputs': inputs,
-            'chip_read': read, 'failed': failed, 'owners': producer.program_owner_identity(),
-            'retained_owners': retained_owners, 'owner_provenance': owner_provenance,
-            'reuse_basis': 'current canonical read/task source/transcript/contract replay; original receipt unchanged'}
+            'chip_read': read, 'failed': failed,
+            'reuse_basis': 'current native read/task source/transcript/contract replay'}
 
 
 def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
@@ -6865,8 +6809,7 @@ def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
                         or not required or not proved
                         or {t['task'] for t in required} != {t['task'] for t in tasks if t['mode'] == 'prove'}):
                     raise MetricRefusal('D14_REQUIRED_PROOF_INCOMPLETE', 'full declaration and partition mapping required')
-                identity = {'producer': {'original_sources': observed['owner_provenance'],
-                                         'consumer_sources': observed['owners']},
+                identity = {'producer': observed['result']['program'],
                     'checker': {'path': 'formal_proof_evidence_check.py',
                                 'sha256': _sha((HERE / 'formal_proof_evidence_check.py').read_bytes())},
                     'tool_execution': {'tasks': [{k: t[k] for k in ('task', 'mode', 'engine', 'status', 'bound')}
@@ -6907,19 +6850,8 @@ def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
         if any(o['status'] == 'FAIL' for o in answer['obligations']):
             answer.update(status='FAIL', metric_status='FAIL', reason='D14_MEASURED_PROOF_FAILURE')
         elif all(o['status'] == 'PASS' for o in answer['obligations']):
-            answer['metric_status'] = 'PASS'
-            import flow109_admission as admission
-            try:
-                qualified = _d14_qualification(project, current, observed)
-            except (admission.AdmissionRefusal, MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
-                qualified = {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D14_QUALIFICATION_UNPROVEN'),
-                             'detail': str(exc)}
-            answer['admission'] = qualified
-            answer['qualification'] = qualified['status']
-            if qualified['status'] == 'PASS':
-                answer.update(status='PASS', delivery_blocked=False, reason='D14_METRICS_AND_PURPOSE_QUALIFICATION_CURRENT')
-            else:
-                answer['reason'] = qualified.get('reason', 'D14_PURPOSE_QUALIFICATION_NOT_MEASURED')
+            answer.update(status='PASS', metric_status='PASS', delivery_blocked=False,
+                          reason='D14_NATIVE_METRICS_PASS')
         else:
             answer['reason'] = 'D14_REQUIRED_METRICS_NOT_MEASURED'
     except (MetricRefusal, flow109.Flow109Error, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:

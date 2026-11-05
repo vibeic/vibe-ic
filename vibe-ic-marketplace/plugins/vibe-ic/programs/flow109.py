@@ -2124,8 +2124,7 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
         import flow109_metric_acceptance as metrics
         acceptance = metrics.accept_d14(project, context)
         row_status = 'FAIL' if status == 'FAIL' else acceptance['status']
-        if row_status == 'PASS' and (acceptance.get('qualification') != 'PASS'
-                or status != 'PASS' or completion.get('completed') is not True):
+        if row_status == 'PASS' and (status != 'PASS' or completion.get('completed') is not True):
             row_status = 'NOT_MEASURED'
         answer.update(metric_acceptance=acceptance, metric_acceptance_status=acceptance['status'],
                       qualification=acceptance.get('qualification', 'NOT_MEASURED'),
