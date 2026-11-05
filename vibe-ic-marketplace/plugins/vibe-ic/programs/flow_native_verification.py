@@ -106,6 +106,30 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
         if completed is None or completed.returncode:
             return None, None, reports, "Pad-boundary elaboration did not complete."
         views[side] = json.loads((directory / f"{side}.before-normalization.json").read_text())["modules"][top]
+        module = views[side]
+        connected = {bit for port in module["ports"].values() for bit in port["bits"]}
+        connected.update(bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
+                         for bits in cell["connections"].values() for bit in bits)
+        connected.update(bit for wire in module["netnames"].values() if wire["attributes"].get("hdlname")
+                         for bit in wire["bits"])
+        connected_ports = {f"{instance}.{pin}" for instance, cell in module["cells"].items()
+                           if cell["type"] in pads["types"] for pin, bits in cell["connections"].items()
+                           if connected.intersection(bits) or set(bits).intersection({"0", "1"})}
+        exposed = json.loads((core / f"{side}.json").read_text())["modules"][top]
+        disconnected = [f"{top}/{name}" for name, port in exposed["ports"].items()
+                        if port["direction"] == "output" and name not in module["ports"]
+                        and name not in connected_ports]
+        if disconnected:
+            path = directory / f"{side}_core.ys"
+            path.write_text(f"read_json {_word(core / (side + '.json'))}\n"
+                + "delete -port " + " ".join(disconnected) + "\n"
+                + f"hierarchy -top {top}\nclean -purge\n"
+                + f"write_json {_word(core / (side + '.json'))}\n"
+                + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")
+            completed = commands.run(["yosys", "-s", path])
+            reports.append(path)
+            if completed is None or completed.returncode:
+                return None, None, reports, "Pad-free core elaboration did not complete."
         reports.extend([directory / f"{side}.before-normalization.json", core / f"{side}.json"])
 
     def wrapper(module):
@@ -133,12 +157,22 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
     reports.append(report)
     if boundary:
         module = json.loads((core / "gold.json").read_text())["modules"][top]
+        gold = views["gold"]
+        consumers = {bit for cell in gold["cells"].values() if cell["type"] not in pads["types"]
+                     for pin, bits in cell["connections"].items()
+                     if cell["port_directions"].get(pin) == "input" for bit in bits}
         rebound = []
         for name, sense in boundary:
-            aliases = [wire["bits"] for alias, wire in module["netnames"].items()
-                       if alias.endswith("." + name)]
-            ports = [port for port, item in module["ports"].items()
-                     if item["direction"] == "input" and item["bits"] in aliases]
+            terminal = set(gold["ports"].get(name, {}).get("bits", []))
+            ports = []
+            for instance, cell in gold["cells"].items():
+                if cell["type"] not in pads["types"] or not any(
+                        terminal.intersection(bits) and cell["port_directions"].get(pin) in {"input", "inout"}
+                        for pin, bits in cell["connections"].items()):
+                    continue
+                ports.extend(f"{instance}.{pin}" for pin, bits in cell["connections"].items()
+                             if cell["port_directions"].get(pin) == "output" and consumers.intersection(bits)
+                             and module["ports"].get(f"{instance}.{pin}", {}).get("direction") == "input")
             rebound.append((ports[0] if len(ports) == 1 else name, sense))
         boundary = tuple(rebound)
     prepared = (f"[gold]\nread_verilog -formal -sv {_word(core / 'gold.v')}\n"
