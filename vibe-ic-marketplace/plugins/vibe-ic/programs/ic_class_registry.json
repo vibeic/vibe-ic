@@ -90,7 +90,7 @@
       ],
       "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
-      "verification_track": "aid_protocol",
+      "verification_track": "generic_full_stack",
       "command_protocol_applicable": true,
       "analog_applicable": true,
       "half_duplex_bus": true,
