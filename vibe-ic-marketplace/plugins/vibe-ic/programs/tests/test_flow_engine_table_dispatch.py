@@ -48,7 +48,7 @@ def test_every_table_tool_dispatches_or_reports_unmeasured_reason(tmp_path, monk
 
     monkeypatch.setattr(adapters, "execute", adapter)
     neutral = {"name": row["name"], "title": row["title"], "when": "always", "legacy_id": {},
-               "tool": {**deepcopy(tool), "parallel": False}, "checks": []}
+               "tool": deepcopy(tool), "checks": []}
     route = {"entry_step": row["name"], "verify_through": row["name"],
              "delivery_target": "rtl", "input_contract": "structured"}
     result = engine.run(tmp_path, table={"steps": [neutral]}, route=route)["steps"][0]
