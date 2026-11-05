@@ -87,6 +87,22 @@ def test_missing_executable_does_not_claim_a_tool_ran(tmp_path, monkeypatch):
     assert commands.result()["ran"] is False
 
 
+def test_native_state_branch_preserves_exit_code_and_tool_results(tmp_path, monkeypatch):
+    project = project_at(tmp_path)
+    output = tmp_path / 'output'
+    output.mkdir()
+    native = {'name': 'Magic.RCX', 'ran': True, 'exit_code': 17, 'status': 'FAIL'}
+    monkeypatch.setattr(analog, '_branch', lambda *args: {
+        'status': 'FAIL', 'detail': 'native extraction failed', 'native_ran': True,
+        'exit_code': 17, 'native_steps': [native], 'tool_seconds': 2.5,
+        'metrics': {'native_errors': 3}})
+    result = analog.execute(project, output, {'step': 'candidate_parasitic_extraction'}, Commands(output))
+    assert result['exit_code'] == 17
+    assert native in result['native_steps']
+    assert result['metrics']['native_errors'] == 3
+    assert result['tool_seconds'] == 2.5
+
+
 def test_a03_preserves_exact_native_unsupported_reason(tmp_path):
     project = project_at(tmp_path)
     output = tmp_path / "output"

@@ -35,10 +35,16 @@ def test_mixed_top_comes_from_documents_before_rtl_exists(tmp_path):
     assert mixed._top(tmp_path, {}, {}) == "unit"
 
 
-def test_interface_audit_is_documentary(tmp_path):
+@pytest.mark.parametrize('declaration', ['block_list', 'L5'])
+def test_interface_audit_is_documentary(tmp_path, declaration):
     root = tmp_path / "phase3/analog"
     (root / "block").mkdir(parents=True)
-    (root / "analog_block_list.json").write_text('{"blocks":[{"name":"block"}]}')
+    if declaration == 'block_list':
+        (root / "analog_block_list.json").write_text('{"blocks":[{"name":"block"}]}')
+    else:
+        docs = tmp_path / 'phase1/generated_docs'
+        docs.mkdir(parents=True)
+        (docs / 'L5_ADI_SPEC.json').write_text('{"analog_blocks":[{"name":"block"}]}')
     (root / "block/interface.json").write_text('{"pins":[{"name":"a","direction":"input","type":"analog","voltage_domain":"1.8V"}]}')
     result = invoke(tmp_path, "M01")
     assert result["ran"] and result["metrics"]["interface_errors"] == 0

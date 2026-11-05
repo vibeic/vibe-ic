@@ -307,9 +307,10 @@ def execute(project, directory, tool, commands, *, state=None, config=None, rout
                 status = result.get("status", "NOT_MEASURED")
                 if not ran and status == "PASS":
                     status = "NOT_MEASURED"
+                native_steps.extend(result.get("native_steps", []))
                 native_steps.append({"name": f"{step}.{block_name}", "ran": ran, "status": status,
-                                     "exit_code": next((r["exit_code"] for r in commands.records[before:]
-                                                        if r["exit_code"]), 0) if ran else None,
+                                     "exit_code": result.get("exit_code", next((r["exit_code"]
+                                         for r in commands.records[before:] if r["exit_code"]), 0)) if ran else None,
                                      "reused": result.get("reused_native", False),
                                      "reason": result.get("detail", "")})
                 reports.extend(result.get("outputs") or [])
@@ -336,9 +337,11 @@ def execute(project, directory, tool, commands, *, state=None, config=None, rout
     write_json(report, {"step": step, "blocks": rows})
     result = commands.result(metrics, [report, *reports], "; ".join(row.get("reason", "") for row in native_steps))
     result["native_steps"] = native_steps
+    result["tool_seconds"] += sum(row.get("tool_seconds", 0) for row in rows if row.get("native_steps"))
     result["ran"] = any(row["ran"] for row in native_steps)
     if not result["ran"]:
         result["exit_code"] = None
     elif result["exit_code"] is None:
         result["exit_code"] = 0
+    result["exit_code"] = next((row["exit_code"] for row in native_steps if row.get("exit_code")), result["exit_code"])
     return result

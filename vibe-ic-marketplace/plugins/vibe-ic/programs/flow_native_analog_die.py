@@ -55,9 +55,10 @@ def _native(project, directory, tool, route, state, config):
     chain.state, chain.config = state, dict(config)
     chain.toolbox = Toolbox(str(directory / "tool_tmp"))
     result = chain.execute(directory, tool)
-    return _result(result.detail or "Native physical result against the unchanged row limits.",
+    return {**_result(result.detail or "Native physical result against the unchanged row limits.",
                    metrics=result.metrics, reports=result.reports, ran=result.ran,
-                   status=evaluate(result, []))
+                   status=evaluate(result, [])), "exit_code": result.exit_code,
+            "native_steps": result.native_steps, "tool_seconds": result.tool_seconds}
 
 
 def _power(project):
@@ -96,7 +97,8 @@ def execute(name, project, directory, run, *, state=None, config=None, route=Non
                 "imports": ["flow_ir_corners", "librelane_plugins.librelane_plugin_vibeic.ir_drop"]}
         result = ir(project, directory, tool, route, state=state, config=config)
         from flow_engine import ToolResult, evaluate
-        return _result(result.get("detail", "Native IR report"), metrics=result.get("metrics"),
+        return {**_result(result.get("detail", "Native IR report"), metrics=result.get("metrics"),
                        reports=result.get("reports", []), ran=result.get("ran", False),
-                       status=evaluate(ToolResult(**result), []))
+                       status=evaluate(ToolResult(**result), [])), "exit_code": result.get("exit_code"),
+                "native_steps": result.get("native_steps", []), "tool_seconds": result.get("tool_seconds", 0)}
     return _native(project, directory, NATIVE[name], route, state, config)
