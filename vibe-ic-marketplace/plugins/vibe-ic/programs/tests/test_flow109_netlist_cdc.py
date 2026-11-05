@@ -199,6 +199,41 @@ def test_current_native_failure_remains_failed_default_row(tmp_path):
     assert completion["reason"] == "D45_EXCEPTION_INCONSISTENT"
 
 
+@pytest.mark.parametrize("failure,reason", [
+    ("absent", "D45_INPUT_ABSENT"),
+    ("stale", "D45_INPUT_STALE_OR_MISSING"),
+])
+def test_preparation_refusal_keeps_its_reason_at_completion(tmp_path, failure, reason):
+    if failure == "stale":
+        _case(tmp_path)
+        (tmp_path / "adopted/current.v").write_text("module changed; endmodule\n")
+    context = _context()
+    component = d45.execute(tmp_path, context)
+    assert component["native_started"] is False
+    assert component["component_status"] == "NOT_MEASURED"
+    assert component["reason"] == reason
+    completion = d45.consume_default_row_completion(tmp_path, context, component)
+    assert completion["default_row_status"] == "NOT_MEASURED"
+    assert completion["completed"] is False
+    assert completion["reason"] == reason, completion
+    assert completion["detail"] == component["detail"]
+
+
+def test_native_pass_still_requires_current_operation_sources(tmp_path, monkeypatch):
+    _case(tmp_path)
+    context = _context()
+    component = d45.execute(tmp_path, context)
+    assert component["native_started"] is True
+    assert component["component_status"] == "PASS"
+    changed = dict(d45.operation_sources())
+    changed["flow109_netlist_cdc.py"] = "0" * 64
+    monkeypatch.setattr(d45, "operation_sources", lambda: changed)
+    completion = d45.consume_default_row_completion(tmp_path, context, component)
+    assert completion["default_row_status"] == "NOT_MEASURED"
+    assert completion["completed"] is False
+    assert completion["reason"] == "D45_COMPLETION_SOURCE_STALE"
+
+
 def test_unjustified_current_sdc_exception_is_a_real_refusal(tmp_path):
     _case(tmp_path, inconsistent=True)
     result = d45.execute(tmp_path, _context())
