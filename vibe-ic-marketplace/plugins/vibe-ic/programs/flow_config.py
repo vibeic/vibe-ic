@@ -35,12 +35,20 @@ def implementation_setting(key: str) -> bool:
 
 
 def native_defaults(config):
-    """Exclude delay-cell families through LibreLane's native wildcard setting."""
+    """Apply native cell exclusions and bounded CTS characterization defaults."""
     excluded = [*(config.get("EXTRA_EXCLUDED_CELLS") or []), "*dly*", "*delay*"]
     if str(config.get("PDK", "")).lower().startswith("gf180mcu"):
         # OpenROAD-flow-scripts flow/platforms/gf180/config.mk sets DONT_USE_CELLS = *_1.
         excluded.append("*_1")
-    return config.copy(EXTRA_EXCLUDED_CELLS=list(dict.fromkeys(excluded)))
+    changes = {"EXTRA_EXCLUDED_CELLS": list(dict.fromkeys(excluded))}
+    caps = [value for value in (config.get("MAX_CAPACITANCE_CONSTRAINT"),
+                               config.get("CTS_MAX_CAP")) if value is not None]
+    slews = [value for value in (config.get("MAX_TRANSITION_CONSTRAINT"),
+                                config.get("CTS_MAX_SLEW")) if value is not None]
+    # CTS resets both characterization axes when either axis is unspecified.
+    if caps and slews:
+        changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
+    return config.copy(**changes)
 
 
 def _load(path: Path) -> dict[str, Any]:
