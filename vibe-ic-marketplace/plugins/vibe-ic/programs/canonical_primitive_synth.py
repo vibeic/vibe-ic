@@ -1215,14 +1215,25 @@ def _is_traffic_light(desc: str, mod: Optional[str], ports: set) -> bool:
 
 
 def _is_radix2_div(desc: str, mod: Optional[str], ports: set) -> bool:
-    if mod != "radix2_div":
+    if not mod:
         return False
     need = {"clk", "rst", "sign", "dividend", "divisor", "opn_valid",
-            "res_valid", "result"}
+            "res_ready", "res_valid", "result"}
     if not need.issubset(ports):
         return False
-    if not _has_any(desc, "radix-2", "radix 2", "signed or unsigned",
-                    "signed and unsigned"):
+    directions = {p: "out" if p in {"result", "res_valid"} else "in" for p in need}
+    declared = {}
+    for record in _source_port_records(desc):
+        declared.setdefault(record["name"], record["direction"])
+    if declared != directions:
+        return False
+    if any(_port_width(desc, p) != w for p, w in
+           (("dividend", 8), ("divisor", 8), ("result", 16))):
+        return False
+    if any(_port_width(desc, p) not in (None, 1) for p in need - {"dividend", "divisor", "result"}):
+        return False
+    if not (_has_any(desc, "radix-2", "radix 2")
+            and _has_any(desc, "signed or unsigned", "signed and unsigned")):
         return False
     return True
 
@@ -1939,12 +1950,14 @@ module radix2_div (
             if (res_valid && res_ready)
                 res_valid <= 1'b0;
 
-            if (!start_cnt && !loading && opn_valid && !res_valid) begin
+            if (opn_valid && !res_valid) begin
                 // Accept request: latch raw operands. Compute happens next cycle
                 // from the registered values (no combinational race on abs()).
                 dividend_r <= dividend;
                 divisor_r  <= divisor;
                 sign_r     <= sign;
+                start_cnt  <= 1'b0;
+                cnt        <= 9'd0;
                 loading    <= 1'b1;
             end else if (loading) begin
                 // Initialize the division from the latched, now-stable operands.
@@ -3961,6 +3974,27 @@ def _contract_shape(desc_text: str) -> Optional[str]:
     return None
 
 
+def _radix2_idle_admission(desc_text: str) -> bool:
+    """An explicit restriction on this request, not another signal's busy state."""
+    request = r"(?:new\s+)?(?:requests?|operands|opn_valid)"
+    subject = r"\b(?:no\s+)?" + request + r"\s+(?:(?:are|is|must|should|be|not|never|ever)\s+)*"
+    busy = r"(?:busy|loading|computing)"
+    for clause in re.split(r"[.;]", re.sub(r"\s+", " ", desc_text.lower())):
+        idle = re.search(subject + r"(?P<admit>(?:accepted|captured)\s+only|"
+                         r"only\s+(?:accepted|captured))\s+"
+                         r"(?:when|while)\s+(?:idle|not\s+busy)\b", clause)
+        if idle and not is_denied(clause[idle.start():idle.start("admit")]):
+            return True
+        for pattern in (subject + r"(?P<verb>accepted|captured|ignored|rejected)\s+",
+                        r"\b(?:(?:do|must|should|not|never|ever)\s+)*"
+                        r"(?P<verb>accept|capture|ignore|reject)\s+" + request + r"\s+"):
+            for match in re.finditer(pattern + r"(?:when|while|during)\s+" + busy + r"\b", clause):
+                denied = bool(is_denied(clause[match.start():match.start("verb")]))
+                if denied == match.group("verb").startswith(("accept", "captur")):
+                    return True
+    return False
+
+
 def emit_rtl(shape: str, desc_text: str = "") -> str:
     """RTL for a shape key.
 
@@ -3970,6 +4004,14 @@ def emit_rtl(shape: str, desc_text: str = "") -> str:
     composed from the handshake/acceptance contract stated by `desc_text`, which
     is therefore required.
     """
+    if shape == "radix2_signed_divider" and desc_text and _is_radix2_div(
+            desc_text, module_name_of(desc_text), _port_tokens(desc_text) - _NOISE):
+        rtl = _TPL_RADIX2
+        if _radix2_idle_admission(desc_text):
+            rtl = rtl.replace("if (opn_valid && !res_valid)",
+                              "if (!start_cnt && !loading && opn_valid && !res_valid)")
+        return re.sub(r"(?m)^module\s+\w+",
+                      "module " + (module_name_of(desc_text) or "radix2_div"), rtl, count=1)
     if shape == "odd_clock_divider" and desc_text:
         contract = _odd_clock_contract(desc_text)
         if contract is not None:
@@ -4023,6 +4065,9 @@ def emit_rtl(shape: str, desc_text: str = "") -> str:
 
 
 def module_of_shape(shape: str, desc_text: str = "") -> str:
+    if shape == "radix2_signed_divider" and desc_text and _is_radix2_div(
+            desc_text, module_name_of(desc_text), _port_tokens(desc_text) - _NOISE):
+        return module_name_of(desc_text) or _SHAPE_MODULE[shape]
     if shape == "odd_clock_divider" and desc_text:
         contract = _odd_clock_contract(desc_text)
         if contract is not None:
