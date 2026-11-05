@@ -268,12 +268,17 @@ def simulation(project, directory, tool, commands):
     silicon_files = files
     files, include_dirs = simulation_sources(project, files, top, benches)
     reports, dats, assertions, native_steps = [], [], [], []
+    frontend_failures = set()
+    coverage_run = None
 
     def invoke(argv, cwd):
+        nonlocal coverage_run
         if argv[0] == "verilator":
             argv = [argv[0], *["-I" + str(path) for path in include_dirs
                               if "-I" + str(path) not in argv], *argv[1:]]
         completed = commands.run(argv, cwd)
+        if len(argv) == 1:
+            coverage_run = completed
         return ((completed.returncode, completed.stdout, completed.stderr) if completed is not None
                 else (127, "", "Native executable is absent."))
 
@@ -281,15 +286,25 @@ def simulation(project, directory, tool, commands):
         run = directory / f"testbench_{index + 1}"
         run.mkdir()
         failures = None
+        coverage_run = None
+        simulator = "Icarus"
+        frontend_record = len(commands.records)
         if tb.suffix == ".py":
             if not top or not shutil.which("cocotb-config"):
                 return commands.result(reports=reports, detail="Cocotb and the declared top are required.")
             functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus", include_dirs)
             report = run / "functional/results.xml"
             summary = parse_junit(report)
+            elaborated = (run / "functional/build/sim.vvp").is_file()
             if summary and summary["tests"] > 0 and not summary["skipped"]:
                 failures = summary["failures"] + summary["errors"]
             completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator", include_dirs)
+            fallback = parse_junit(run / "coverage/results.xml")
+            if not elaborated and fallback and fallback["tests"] > 0:
+                simulator, functional = "Verilator", completed
+                failures = (fallback["failures"] + fallback["errors"]
+                            if not fallback["skipped"] else None)
+                frontend_failures.add(frontend_record)
             data = run / "coverage/coverage.dat"
             if report.is_file():
                 reports.append(report)
@@ -301,6 +316,7 @@ def simulation(project, directory, tool, commands):
             executable = run / "functional.vvp"
             compiled = commands.run(["iverilog", "-g2012", "-s", coverage._tb_top_module(tb),
                 "-o", executable, *["-I" + str(path) for path in include_dirs], *files, tb])
+            elaborated = compiled is not None and compiled.returncode == 0
             functional = (commands.run(["vvp", executable], cwd=tb.parent)
                           if compiled is not None and compiled.returncode == 0 else compiled)
             if functional is not None and compiled is not None and compiled.returncode == 0:
@@ -316,10 +332,18 @@ def simulation(project, directory, tool, commands):
                 completed = True
             except SystemExit:
                 completed = None
+            if not elaborated and coverage_run is not None:
+                simulator, functional = "Verilator", coverage_run
+                frontend_failures.add(frontend_record)
+                parsed = parse_l10_case_stdout(functional.stdout + functional.stderr)
+                if parsed["verdict"] is None:
+                    parsed = parse_sim_stdout(functional.stdout + functional.stderr)
+                if parsed["verdict"] is not None and parsed["total"] > 0:
+                    failures = parsed["total"] - parsed["passed"]
         if failures is not None:
             assertions.append(failures)
         native_steps.extend([
-            {"name": "Icarus.Functional", "ran": functional is not None,
+            {"name": simulator + ".Functional", "ran": functional is not None,
              "exit_code": functional.returncode if functional is not None else None,
              "status": ("FAIL" if functional.returncode or failures
                         else "PASS" if failures == 0 else "NOT_MEASURED") if functional is not None else "NOT_MEASURED"},
@@ -329,7 +353,8 @@ def simulation(project, directory, tool, commands):
                        else "NOT_MEASURED"}])
         reports.extend(dats[-1:])
     metrics = {}
-    if commands.records and not any(r["exit_code"] for r in commands.records):
+    if commands.records and not any(r["exit_code"] for i, r in enumerate(commands.records)
+                                   if i not in frontend_failures):
         metrics["simulation_exit_code"] = 0
     if len(assertions) == len(benches):
         metrics["assertion_failures"] = sum(assertions)
@@ -350,6 +375,9 @@ def simulation(project, directory, tool, commands):
                         metrics[f"coverage_{category}_pct"] = 100.0 * counts["covered"] / counts["total"]
             reports.append(merged)
     result = commands.result(metrics, reports)
+    result["exit_code"] = next((r["exit_code"] for i, r in enumerate(commands.records)
+                                if i not in frontend_failures and r["exit_code"]),
+                               0 if commands.records else None)
     result["native_steps"] = native_steps
     return result
 

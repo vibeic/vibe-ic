@@ -51,6 +51,7 @@ def test_missing_command_does_not_publish_a_run(tmp_path):
     assert commands.run([tmp_path / "missing_executable"]) is None
     assert commands.records == []
     assert not (tmp_path / "command_1.log").exists()
+    assert commands.result()["ran"] is False
 
 
 @pytest.mark.parametrize("language,outcome,status", [
@@ -95,7 +96,6 @@ def test_functional_simulation_uses_a_frontend_that_elaborates_the_source(
     logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
                      if str(path).endswith(".log"))
     assert "syntax error" in logs
-    assert commands.result()["ran"] is False
 
 
 @pytest.mark.parametrize("outcome,status", [("pass", "PASS"), ("fail", "FAIL"), ("skip", "NOT_MEASURED")])
