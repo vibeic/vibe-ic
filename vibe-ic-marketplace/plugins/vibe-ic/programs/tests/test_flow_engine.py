@@ -658,3 +658,32 @@ def test_strict_power_ceiling_rejects_decimal_and_float_equality(tmp_path, milli
     measured = engine.measure(checks, {"power__total__corner:nom_tt": watts}, {}, {"always": True})
     assert measured[0]["status"] == "FAIL"
     assert engine.evaluate(engine.ToolResult(True, 0), measured) == "FAIL"
+
+
+def test_view_snapshot_cannot_replace_the_ip_document_program(tmp_path, monkeypatch):
+    import flow_native_adapters
+
+    name = 'ip_release_views_and_documentation'
+    directory = tmp_path / 'steps' / name
+    monkeypatch.setattr(engine.NativeChain, 'snapshot', lambda *args:
+                        engine.ToolResult(True, 0, {'design__instance__count': 1}))
+    snapshot = {'name': name, 'title': 'IP release views and documentation',
+                'when': 'always', 'legacy_id': {}, 'checks': [],
+                'tool': {'kind': 'snapshot', 'destination': 'exported', 'formats': {}}}
+    assert execute(tmp_path, [snapshot])['steps'][0]['status'] == 'PASS'
+    calls = []
+
+    def produce(project, step, tool, route, **kwargs):
+        calls.append(tool['adapter'])
+        (step / 'IP_DATASHEET.md').write_text('Current native interface.')
+        return {'ran': True, 'exit_code': 0, 'metrics': {'release_documents': 6},
+                'reports': [str(step / 'IP_DATASHEET.md')]}
+
+    monkeypatch.setattr(flow_native_adapters, 'execute', produce)
+    row = {'name': name, 'title': 'IP release views and documentation',
+           'when': 'always', 'legacy_id': {}, 'checks': [],
+           'tool': {'kind': 'adapter', 'adapter': 'ip_release_docs'}}
+    report = execute(tmp_path, [row])
+    assert calls == ['ip_release_docs']
+    assert (directory / 'IP_DATASHEET.md').is_file()
+    assert report['steps'][0]['native_metrics']['release_documents'] == 6
