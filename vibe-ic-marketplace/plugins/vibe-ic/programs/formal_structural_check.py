@@ -489,7 +489,7 @@ def _reset_map(mod: dict, port_bit: int) -> Dict[str, list]:
         elif "SRST" in hit or "ARST" in hit:
             pin = "SRST" if "SRST" in hit else "ARST"
             family = _SYNC_RESET_FFS if pin == "SRST" else {"$adff", "$adffe"}
-            if c.get("type") not in family or len(_bits(c, pin)) != 1:
+            if c.get("type") not in family or len((c.get("connections") or {}).get(pin) or []) != 1:
                 out["opaque"].append({"cell": n, "type": c.get("type")})
                 continue
             par = _parity(drivers, _bits(c, pin)[0], port_bit) if _bits(c, pin) else None
