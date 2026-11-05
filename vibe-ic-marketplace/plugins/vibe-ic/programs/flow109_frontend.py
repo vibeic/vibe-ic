@@ -478,6 +478,8 @@ def prepare(project, context):
     if context.get('requested_step') == 'D22' and context['runtime_tool_uses'] is None:
         import p0_tool_frontend_check as frontend
         import librelane_contract as contract
+        if contract.selected_mode(project, '9') != 'librelane':
+            raise AdmissionRefusal('D22_ROUTE_UNSUPPORTED', 'native mapped synthesis requires LibreLane')
         pdk, _ = contract.phase2_pdk(project)
         return {'manifest': {'top': frontend._top(project), 'pdk': pdk},
                 'sources': {}, 'inputs': {}, 'dft_intent': None}
@@ -598,7 +600,7 @@ def _execute_d22(project, context):
             record['native_started'] = bool(active['operations'])
         record['producer'] = asdict(result)
         publication = (_canonical_publication(project, publication_started_at)
-                       if result.status == 'PASS' else None)
+                       if result.status == 'PASS' and context['runtime_tool_uses'] is not None else None)
         if publication is not None:
             record['canonical_publication'] = {
                 'folder': publication['folder'], 'status': publication['status'],
@@ -617,7 +619,7 @@ def _execute_d22(project, context):
         if result.status == 'FAIL':
             record.update(component_status='FAIL', reason='D22_EXISTING_PRODUCER_FAILED')
         elif result.status == 'PASS':
-            status = publication['status']
+            status = publication['status'] if publication is not None else result.status
             record.update(component_status=status, default_row_status=status,
                           completed=status == 'PASS',
                           reason=('D22_EXISTING_CANONICAL_CONSUMER_' + status))
