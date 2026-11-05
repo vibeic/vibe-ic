@@ -281,9 +281,10 @@ def test_retained_physical_report_needs_an_explicit_rerun(tmp_path):
     execute.assert_called_once()
 
 
-def test_debug_closure_runs_only_owner_backed_dependencies(tmp_path):
+@pytest.mark.parametrize("input_contract", ["original", "structured"])
+def test_debug_closure_runs_only_owner_backed_dependencies(tmp_path, input_contract):
     route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
-             "input_contract": "original", "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
+             "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
     report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
     def publish(command, **kwargs):
         assert command[command.index("--entry-step") + 1] == "1"
@@ -312,9 +313,10 @@ def test_debug_closure_runs_only_owner_backed_dependencies(tmp_path):
     assert not (tmp_path / "reports/orchestrator/phase1_one_shot.json").exists()
 
 
-def test_debug_resume_keeps_ai_canonical_rtl_and_lints_only(tmp_path):
+@pytest.mark.parametrize("input_contract", ["original", "structured"])
+def test_debug_resume_keeps_ai_canonical_rtl_and_lints_only(tmp_path, input_contract):
     route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
-             "input_contract": "original", "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
+             "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
     rtl = tmp_path / "phase2/stage1/rtl/unit.v"
     rtl.parent.mkdir(parents=True)
     rtl.write_text("module unit(input a,output y); assign y=~a; endmodule\n")
