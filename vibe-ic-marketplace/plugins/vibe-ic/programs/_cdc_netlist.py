@@ -171,7 +171,7 @@ def source_binding(project: Path, top: Optional[str],
         raise Refusal("CDC_NETLIST_PARTIAL_SOURCES",
                       "native read must cover the current RTL source population")
     # L9 may name the IP core while the caller explicitly selects its wrapper.
-    declared = _top(project)
+    declared = _top(project, include_runtime=False)
     deps = set(files)
     deps.update(p.resolve() for p in sources.rtl_source_files(
         project, exts=("*.vh", "*.svh")))

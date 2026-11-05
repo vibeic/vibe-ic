@@ -620,3 +620,26 @@ def test_explicit_wrapper_top_can_bind_when_l9_names_the_core(tmp_path):
     assert model.top == "chip_top"
     options = binding["input"]["options"]
     assert (options["requested_top"], options["declared_top"]) == ("chip_top", "aes_core")
+
+
+def test_source_binding_does_not_promote_transient_runner_top(tmp_path, monkeypatch):
+    """A runner top override must not change the declared-input fingerprint."""
+    import _cdc_netlist as cn
+    import execution_policy as execution
+
+    rtl = tmp_path / "phase2/stage1/rtl/wrapper.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module aes; endmodule\nmodule chip_top; aes u_aes(); endmodule\n")
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(
+        json.dumps({"top_module": "aes"}))
+    monkeypatch.setattr(execution, "_ordinary_runtime", {
+        "project": tmp_path.resolve(), "parameters": {"top": "chip_top"}})
+
+    during_run = cn.source_binding(tmp_path, "chip_top")
+    monkeypatch.setattr(execution, "_ordinary_runtime", None)
+    after_run = cn.source_binding(tmp_path, "chip_top")
+
+    assert during_run == after_run
+    assert during_run["options"]["declared_top"] == "aes"
