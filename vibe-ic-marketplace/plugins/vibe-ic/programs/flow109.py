@@ -2855,7 +2855,10 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
                 coverage = json.loads((project / 'reports/phase2/coverage/coverage_verilator.json').read_text())
                 targets = json.loads((project / 'requirements/base_07/coverage_targets.json').read_text())
                 measurements['coverage'] = coverage['totals']
-                if set(coverage['scope_files']) != {str(p) for p in sources.rtl_source_files(project)}:
+                from verilator_coverage_measure import _cov_project_root
+                root = _cov_project_root(coverage)
+                if (root is None or {Path(p).relative_to(root) for p in coverage['scope_files']}
+                        != {p.relative_to(project) for p in sources.rtl_source_files(project)}):
                     status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
                 for category, limits in targets['limits'].items():
                     observed = coverage['totals'][category]
