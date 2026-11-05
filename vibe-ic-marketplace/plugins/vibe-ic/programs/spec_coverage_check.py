@@ -3261,8 +3261,8 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str,
             if literal is not None and bits:
                 literal %= 1 << bits
                 literal -= (1 << bits) if sized[2] and literal >> (bits - 1) else 0
-            width = min(_rtl_declared_widths(outside).get(signal.lower(), 0), *(p.width for p in ports
-                        if p.direction == "output" or roles.get(p.name.lower()) == signal.lower()))
+            width = min([_rtl_declared_widths(outside).get(signal.lower(), 0)] + [p.width for p in ports
+                        if p.direction == "output" or roles.get(p.name.lower()) == signal.lower()])
             literal = literal % (1 << width) if literal is not None and width > 0 and bits != 0 else None
             if driven.get(signal.lower(), (None, None))[1] != literal:
                 driven[signal.lower()] = (time, literal)
