@@ -4413,6 +4413,10 @@
     "implemented_power_intent_consistency": {
       "kind": "adapter",
       "adapter": "implemented_power_intent"
+    },
+    "system_and_software_scenarios": {
+      "kind": "adapter",
+      "adapter": "system_scenarios"
     }
   },
   "report_check_readers": {

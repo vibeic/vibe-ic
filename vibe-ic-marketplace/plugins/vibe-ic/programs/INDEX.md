@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1477
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1477)
+- **Total programs (excluding helpers / shims):** 1478
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1478)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1468 |
+| `any` | 1469 |
 
 ## Alphabetical listing
 
@@ -569,6 +569,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_step_executor_coverage_check` | any | — | "every step has an executor that runs it". |
 | `flow_step_output_content_check` | any | — | Content check for flow step outputs; refusal exits nonzero. |
 | `flow_steps_generate` | any | — | One-time migration of the old registry into the editable native step table. |
+| `flow_system_scenarios` | any | — | Run produced full-stack HDL scenarios through the existing Icarus helper. |
 | `fmeda_coverage_check` | any | — | independent anti-fabrication gate over the FMEDA diagnostic-coverage report emitted by `fmeda_fault_injection_coverage.py`. |
 | `fmeda_fault_injection_coverage` | any | — | REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p... |
 | `fork_downgrade_visibility_check` | any | — | Every abort our EDA fork downgrades to a warning must still be visible to the flow. |
@@ -1549,7 +1550,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1468 programs)
+### `any` (1469 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2090,6 +2091,7 @@ _(no programs in this group)_
 - `flow_step_executor_coverage_check` — "every step has an executor that runs it".
 - `flow_step_output_content_check` — Content check for flow step outputs; refusal exits nonzero.
 - `flow_steps_generate` — One-time migration of the old registry into the editable native step table.
+- `flow_system_scenarios` — Run produced full-stack HDL scenarios through the existing Icarus helper.
 - `fmeda_coverage_check` — independent anti-fabrication gate over the FMEDA diagnostic-coverage report emitted by `fmeda_fault_injection_coverage.py`.
 - `fmeda_fault_injection_coverage` — REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p...
 - `fork_downgrade_visibility_check` — Every abort our EDA fork downgrades to a warning must still be visible to the flow.

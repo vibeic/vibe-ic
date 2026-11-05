@@ -1615,12 +1615,14 @@ def generate(project: Path, container: Optional[str] = None,
 
 
 def _run_case(name: str, path: Path, sources: List[Path], wd: Path,
-              disp: Callable, container: Optional[str], project: Path
+              disp: Callable, container: Optional[str], project: Path,
+              *, include_dirs: Tuple[Path, ...] = ()
               ) -> Dict[str, Any]:
     """Build and run one case testbench; the transcript scored, nothing else."""
     wd.mkdir(parents=True, exist_ok=True)
     vvp = wd / f"{name}.vvp"
     argv = ([SIMULATOR, "-g2012", "-s", name, "-o", str(vvp)]
+            + ["-I" + str(directory) for directory in include_dirs]
             + [str(s) for s in sources] + [str(path)])
     brc, blog = disp(argv, wd, container, SIMULATOR, BUILD_TIMEOUT_S)
     (wd / "build.log").write_text(" ".join(argv) + "\n\n" + (blog or ""))
@@ -1637,7 +1639,7 @@ def _run_case(name: str, path: Path, sources: List[Path], wd: Path,
     run_log.write_text(rlog or "")
     score = score_transcript(name, rrc, rlog or "")
     out.update(run_log=_rel(project, run_log),
-               run_log_sha256=sha256_file(run_log), run_rc=rrc,
+               run_rc=rrc,
                state=score["state"], checks=score["checks"],
                reason=score["message"])
     return out
