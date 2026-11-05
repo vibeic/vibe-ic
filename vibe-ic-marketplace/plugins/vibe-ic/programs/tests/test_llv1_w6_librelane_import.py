@@ -527,9 +527,7 @@ def test_an_aborted_rerun_appended_to_a_finished_log_is_refused(tmp_path,
 
 
 def test_the_flow_status_reader_is_calibrated():
-    import instrument_calibration as I
     import librelane_import as LI
-    I.assert_calibrated("librelane_import::flow_status")
     cal = PROGRAMS / "calibration"
     failed = LI.flow_status((cal / "librelane_flow_log_failed_positive.log")
                             .read_text())

@@ -13,7 +13,6 @@ import sdf_gate_sim as sg
 
 def _route(monkeypatch, local):
     monkeypatch.setattr(sg._ce, "no_container_route", lambda: local)
-    monkeypatch.setattr(sg._instrument_calibration, "assert_calibrated", lambda *a: None)
 
 
 def test_local_model_read_uses_actual_file_bytes(monkeypatch, tmp_path):

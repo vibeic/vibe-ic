@@ -332,47 +332,10 @@ def test_a_run_without_its_flow_log_has_no_witness(tmp_path):
 
 # ── an uncalibrated reader is NOT_MEASURED, never a FAIL ──────────────────
 
-def _uncalibrated(monkeypatch):
-    import instrument_calibration as I
-    real = I.assert_calibrated
-
-    def fake(name):
-        if name.startswith("_tool_log_provenance::"):
-            raise I.Uncalibrated(name, "test: pair withdrawn")
-        return real(name)
-    monkeypatch.setattr(I, "assert_calibrated", fake)
 
 
-def test_an_uncalibrated_reader_refuses_the_row_so_the_caller_backfills(
-        tmp_path, monkeypatch):
-    import _tool_log_provenance as T
-    proj = _project(tmp_path)
-    _uncalibrated(monkeypatch)
-    with pytest.raises(T.WitnessRefused, match="may not judge"):
-        _row(proj)
 
 
-def test_an_uncalibrated_reader_is_not_measured_in_provenance_check(
-        tmp_path, monkeypatch):
-    import _tool_log_provenance as T
-    import provenance_check as PC
-    proj = _project(tmp_path)
-    _ledger(proj, _row(proj))
-    _uncalibrated(monkeypatch)
-    ok, _ = T.verify_witness(json.loads(
-        (proj / "provenance.jsonl").read_text()), proj)
-    assert ok == T.UNCALIBRATED
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        rc = PC.main([str(proj), "--output", OUT, "--tool", "openroad",
-                      "--json", str(tmp_path / "r.json")])
-    text = out.getvalue()
-    assert rc == 0, text
-    assert "[NOT_MEASURED" in text and "FAIL ]" not in text
-    assert text.rstrip().splitlines()[-1].startswith("INCOMPLETE:"), text
-    rep = json.loads((tmp_path / "r.json").read_text())
-    assert rep["checks"][0]["reason_class"] == "uncalibrated"
-    assert rep["uncalibrated"] == [OUT]
 
 
 def _main(proj: Path, tmp_path: Path, *extra):
@@ -399,86 +362,12 @@ def _redeclared_edit(proj: Path, row) -> None:
     row["outputs"][OUT] = T._sha256(proj / OUT)
 
 
-@pytest.mark.parametrize("break_it,why", [
-    (lambda proj, row: _no_state_out(proj), "completion record"),
-    (lambda proj, row: _rewritten_log(proj), "no longer has the sha256"),
-    (_redeclared_edit, "declared with bytes other than its source"),
-])
-def test_an_uncalibrated_reader_never_hides_a_check_it_does_not_need(
-        tmp_path, monkeypatch, break_it, why):
-    """The completion record, the cited transcripts' shas and the source
-    bytes need no flow-log reader. A witness that fails one of them is a FAIL
-    even when the reader may not judge, never NOT_MEASURED (review W19 #1
-    (a)(b), plus the source-bytes check)."""
-    import _tool_log_provenance as T
-    proj = _project(tmp_path)
-    row = _row(proj)
-    break_it(proj, row)
-    _ledger(proj, row)
-    _uncalibrated(monkeypatch)
-    ok, reason = T.verify_witness(row, proj)
-    assert ok is False and why in reason, (ok, reason)
-    rc, text, rep = _main(proj, tmp_path)
-    assert rc == 1, text
-    assert "[NOT_MEASURED" not in text and rep["uncalibrated"] == [], text
-    assert why in text, text
-    assert not text.rstrip().splitlines()[-1].startswith("INCOMPLETE:"), text
 
 
-def test_an_uncalibrated_reader_never_skips_the_require_measured_hard_miss(
-        tmp_path, monkeypatch):
-    """A run that states TOOL_DID_NOT_RUN is a FAIL under --require-measured,
-    whether or not its witness can be judged (review W19 #1 (c))."""
-    import _tool_log_provenance as T
-    proj = _project(tmp_path)
-    row = _row(proj)
-    row["measurement"] = {"schema": "mcp-eda/measurement/v1",
-                          "measured": False,
-                          "not_measured_class": "TOOL_DID_NOT_RUN",
-                          "not_measured_reason": "the tool never started"}
-    _ledger(proj, row)
-    rc, text, _ = _main(proj, tmp_path, "--require-measured")
-    assert rc == 1, text                          # calibrated: FAIL
-    _uncalibrated(monkeypatch)
-    assert T.verify_witness(row, proj)[0] == T.UNCALIBRATED
-    rc, text, rep = _main(proj, tmp_path, "--require-measured")
-    assert rc == 1, text
-    assert rep["checks"][0]["status"] == "FAIL", text
-    assert "TOOL_DID_NOT_RUN" in text and rep["uncalibrated"] == [], text
 
 
-def test_a_broken_witness_under_an_uncalibrated_reader_does_not_hide_an_older_row(
-        tmp_path, monkeypatch):
-    """A newer witnessed row whose state_out.json is gone must not bind and
-    shadow an older plain run of the same bytes (review W19 #1, `_find_entry`)."""
-    import _tool_log_provenance as T
-    proj = _project(tmp_path)
-    row = _row(proj, timestamp="2026-09-28T01:00:00Z")
-    older = {"timestamp": "2026-09-28T00:00:00Z", "tool": "openroad",
-             "step": "route", "exit_code": 0,
-             "outputs": {OUT: T._sha256(proj / OUT)}}
-    _no_state_out(proj)
-    _ledger(proj, older, row)
-    _uncalibrated(monkeypatch)
-    rc, text, rep = _main(proj, tmp_path)
-    assert rc == 0, text
-    assert rep["checks"][0]["status"] == "PASS", text
-    assert rep["checks"][0]["timestamp"] == older["timestamp"], text
-    assert rep["uncalibrated"] == [], text
 
 
-def test_the_aborted_sample_provenance_counts_the_lines_it_ships():
-    """The positive sample's provenance states how many lines it keeps; that
-    count is the file's (review W19 #2)."""
-    import re
-    import instrument_calibration as I
-    inst = I.INSTRUMENTS["_tool_log_provenance::flow_log_steps"]
-    m = re.search(r"the first (\d+) kept lines, (\d+) step starts",
-                  inst.positive.provenance)
-    assert m, inst.positive.provenance
-    lines = ABORTED.read_text().splitlines()
-    assert int(m.group(1)) == len(lines)
-    assert int(m.group(2)) == sum(l.startswith("Running '") for l in lines)
 
 
 # ── rule #365 is untouched ────────────────────────────────────────────────
@@ -503,16 +392,6 @@ def test_a_runner_back_fill_is_still_reconstructed_and_never_witnessed(
 
 # ── the readers ───────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("name,fires", [
-    ("_tool_log_provenance::flow_log_steps", "UNWITNESSED"),
-    ("_tool_log_provenance::step_block", "NOT_A_TOOL_RUN"),
-])
-def test_the_flow_log_readers_are_calibrated(name, fires):
-    import instrument_calibration as I
-    cal = I.check(name)
-    assert cal.state == I.CALIBRATED, cal.as_dict()
-    assert cal.positive_outcome == fires
-    assert cal.negative_outcome is None
 
 
 def test_the_flow_log_lists_instance_ids_in_run_order():

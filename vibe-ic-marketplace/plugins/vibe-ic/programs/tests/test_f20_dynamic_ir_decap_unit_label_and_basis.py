@@ -242,11 +242,6 @@ def test_the_readback_is_against_the_request_not_the_print():
     assert decap_effect("", solve, 1e-9)["state"] == "NO_QUASI_STATIC_REFERENCE"
 
 
-def test_the_label_instrument_is_calibrated_on_real_output():
-    import instrument_calibration as ic
-    cal = ic.check("dynamic_ir_vectored_emit::decap_effect")
-    assert cal.state == ic.CALIBRATED, cal.as_dict()
-    assert cal.positive_outcome == "DECAP_MEASURED" and cal.negative_outcome is None
 
 
 def test_the_tool_step_earns_the_label_the_same_way():

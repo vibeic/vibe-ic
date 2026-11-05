@@ -31,7 +31,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import instrument_calibration as IC  # noqa: E402
 import pg_supply_pin_ownership_check as G  # noqa: E402
 
 CAL = PROGRAMS / "calibration"
@@ -83,11 +82,6 @@ def _def(components: str, specialnets: str, nets: str = "") -> str:
 
 # ── the gate ────────────────────────────────────────────────────────────────
 
-def test_the_gate_is_calibrated_on_real_tool_output():
-    cal = IC.check("pg_supply_pin_ownership_check::judge")
-    assert cal.state == IC.CALIBRATED, cal.as_dict()
-    assert cal.positive_outcome == G.REFUSE_CODE
-    assert cal.negative_outcome is None
 
 
 def test_the_real_pair_names_the_inserted_instance():

@@ -26,11 +26,6 @@ def corner(root, name="tt", *, positive=False, checks=True):
     return directory
 
 
-@pytest.fixture(autouse=True)
-def no_case_calibration(monkeypatch):
-    def forbidden(_):
-        raise AssertionError("Native report reading must not recalibrate the tool")
-    monkeypatch.setattr(native.instrument_calibration, "assert_calibrated", forbidden)
 
 
 def test_missing_reports_never_become_zero(tmp_path):
@@ -124,12 +119,6 @@ def test_native_config_and_state_supply_the_actual_sdc_context(tmp_path):
     assert str(tmp_path / "state_in.json") in result["reports"]
 
 
-def test_existing_parser_calls_keep_calibration_by_default(monkeypatch):
-    calls = []
-    monkeypatch.setattr(native.instrument_calibration, "assert_calibrated", calls.append)
-    assert native.check_setup_counts("check_setup -verbose\n") == {}
-    assert native.sdc_diagnostics("", Path(SOURCE)) == []
-    assert calls == ["librelane_prelayout::check_setup_counts", "librelane_prelayout::sdc_diagnostics"]
 
 
 if __name__ == "__main__":

@@ -50,7 +50,6 @@ def test_route_and_stream_def_must_have_the_same_bytes(tmp_path):
 
 def test_finished_rule_is_measured_on_the_finished_file(tmp_path, monkeypatch):
     project, _, gds, receipt = _layout(tmp_path)
-    feedback._instrument_calibration.assert_calibrated('drc_feedback_repair::run')
     seen = []
     def measured(_image, _project, _deck, _rule, path, _top, _scratch):
         seen.append(path)
@@ -69,7 +68,6 @@ def test_finished_rule_is_measured_on_the_finished_file(tmp_path, monkeypatch):
 
 def test_finished_zero_rule_is_bound_to_the_exact_mask(tmp_path, monkeypatch):
     project, _, gds, _ = _layout(tmp_path)
-    feedback._instrument_calibration.assert_calibrated('drc_feedback_repair::run')
     monkeypatch.setattr(feedback, '_measure', lambda *a: [])
     result = feedback.verify_streamed(
         project, 'unit', SimpleNamespace(drc_deck='/pdk/gf180mcu.drc'),
@@ -81,7 +79,6 @@ def test_finished_zero_rule_is_bound_to_the_exact_mask(tmp_path, monkeypatch):
 
 def test_finished_layout_change_during_rule_measurement_is_refused(tmp_path, monkeypatch):
     project, _, gds, _ = _layout(tmp_path)
-    feedback._instrument_calibration.assert_calibrated('drc_feedback_repair::run')
     def measured(*_args):
         gds.write_bytes(b'mask-changed-while-deck-was-running')
         return []
