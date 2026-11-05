@@ -119,9 +119,17 @@ def case(project, step):
         (folder / 'scratch/partition.list').write_text('neutral neutral.q : q\n')
         ref = lambda p: {'path': p.relative_to(project).as_posix(),
                          'sha256': flow109._file_digest(p)}
+        library = project / 'models/cells.lib'
+        library.parent.mkdir()
+        library.write_text('library(neutral) {}\n')
+        model = library.with_suffix('.v')
+        model.write_text('module buffer(input d, output q); assign q=d; endmodule\n')
+        put(project / 'phase3/librelane/02-yosys-synthesis/config.json', {
+            'LIB': {'*': [str(library)]}, 'CELL_VERILOG_MODELS': [str(model)]})
         put(project / 'reports/lec_eqy_execution.json', {
             'native_directory': 'native/eqy',
-            'subject': {'rtl': [ref(rtl)], 'gate_netlist': ref(netlist)}})
+            'subject': {'rtl': [ref(rtl)], 'gate_netlist': ref(netlist),
+                        'liberty': ref(library), 'models': [ref(model)]}})
     else:
         sdc = project / 'phase2/stage2/constraints/neutral.sdc'
         sdc.parent.mkdir(parents=True)
