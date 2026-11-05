@@ -417,6 +417,7 @@ def test_implementation_pdn_widths_reach_native_configuration(project):
 
 
 @pytest.mark.parametrize(("key", "value"), [
+    ("SYNTH_STRATEGY", "DELAY 4"),
     ("PDN_VWIDTH", 2.4), ("RUN_POST_GRT_DESIGN_REPAIR", True),
     ("GRT_DESIGN_REPAIR_MAX_CAP_PCT", 30), ("GRT_DESIGN_REPAIR_MAX_SLEW_PCT", 30),
     ("EXTRA_EXCLUDED_CELLS", ["delay_weak*"]),
