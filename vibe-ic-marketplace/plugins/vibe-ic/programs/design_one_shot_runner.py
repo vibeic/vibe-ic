@@ -14786,7 +14786,7 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
             raise
         image = _ll.resolve_image(project)
         l9 = _rcvar_l9_top_ports(project)
-        top = l9[0] if l9 else None
+        top = top_name or (l9[0] if l9 else None)
         rtl = silicon_rtl_selection(_pl.rtl_dir(project))
         config_dir.mkdir(parents=True, exist_ok=True)
         _ll.emit_lint_config(project, str(pdk), config_dir / "lint_config.json",
