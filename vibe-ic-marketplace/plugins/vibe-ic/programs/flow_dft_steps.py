@@ -30,19 +30,22 @@ def scan_intent(project):
     return chain, reset
 
 
-def serial_bench(top, ports, chain, reset, bits, period):
+def serial_bench(top, ports, chain, reset, bits, period, supplies=None):
     from flow_chip_inputs import _identifier
 
+    supplies = supplies or {}
     groups = {}
     for name, direction in ports.items():
         match = re.fullmatch(r"(.+)\[(\d+)\]", name)
         base, index = (match[1], int(match[2])) if match else (name, None)
-        groups.setdefault(base, {"direction": direction, "bits": []})["bits"].append(index)
+        group = groups.setdefault(base, {"direction": direction, "bits": [], "supplied": False})
+        group["bits"].append(index)
+        group["supplied"] |= name in supplies
     declarations, connections = [], []
     for name, group in groups.items():
         indices = group["bits"]
         width = "" if indices == [None] else f"[{max(indices)}:{min(indices)}] "
-        kind = "reg" if group["direction"] == "INPUT" else "wire"
+        kind = "reg" if group["direction"] == "INPUT" and not group["supplied"] else "wire"
         declarations.append(f"{kind} {width}{_identifier(name)}" + ("=0;" if kind == "reg" else ";"))
         connections.append(f".{_identifier(name)}({_identifier(name)})")
 
@@ -53,6 +56,7 @@ def serial_bench(top, ports, chain, reset, bits, period):
     clock, enable, source, output = (expression(chain[key]) for key in
                                      ("clock", "scan_enable", "scan_in", "scan_out"))
     return ("`timescale 1ns/1ps\nmodule tb;\n" + "\n".join(declarations)
+        + "\n" + "\n".join(f"assign {expression(name)}=1'b{level};" for name, level in supplies.items())
         + f"\n{_identifier(top)} dut({','.join(connections)});\n"
         + f"reg [{bits-1}:0] expected; integer i,p,errors=0,checked=0;reg bit_in;\n"
         + f"task pulse;begin #{period/2};{clock}=1;#{period/2};{clock}=0;end endtask\n"
@@ -69,6 +73,7 @@ def serial_bench(top, ports, chain, reset, bits, period):
 
 def replay(step, state, metric):
     import odb
+    from testbench_gen import _parse_ports
 
     chain, reset = scan_intent(step.config["DESIGN_DIR"])
     database = odb.dbDatabase.create()
@@ -78,16 +83,22 @@ def replay(step, state, metric):
     native_chains = list(dft.getScanChains()) if dft else []
     bits = sum(cell.getBits() for item in native_chains for part in item.getScanPartitions()
                for group in part.getScanLists() for cell in group.getScanInsts())
-    ports = {port.getName(): port.getIoType() for port in block.getBTerms()}
+    declared = {name for _, _, name in _parse_ports(Path(state[DesignFormat.NETLIST]).read_text(),
+                                                    step.config["DESIGN_NAME"])}
+    supplies = {port.getName(): int(port.getSigType() == "POWER")
+                for port in block.getBTerms() if port.getSigType() in ("POWER", "GROUND")
+                and re.sub(r"\[\d+\]$", "", port.getName()) in declared}
+    ports = {port.getName(): port.getIoType() for port in block.getBTerms()
+             if port.getSigType() not in ("POWER", "GROUND") or port.getName() in supplies}
     endpoints = [chain[key] for key in ("scan_in", "scan_out", "scan_enable", "clock")]
     if not bits or any(name not in ports for name in [*endpoints, reset["signal"]]):
         raise StepException("NOT_MEASURED: native scan chain or documented endpoint is missing")
-    if any(direction not in ("INPUT", "OUTPUT") for direction in ports.values()):
+    if any(direction not in ("INPUT", "OUTPUT") and name not in supplies for name, direction in ports.items()):
         raise StepException("NOT_MEASURED: native serial replay has no bidirectional-port stimulus")
     folder = Path(step.step_dir)
     bench = folder / "scan_tb.v"
     bench.write_text(serial_bench(step.config["DESIGN_NAME"], ports, chain, reset,
-                                  bits, float(step.config["CLOCK_PERIOD"])))
+                                  bits, float(step.config["CLOCK_PERIOD"]), supplies))
     models = [Path(str(path)) for path in step.config.get("CELL_VERILOG_MODELS") or []]
     primitives = [path.parent / "primitives.v" for path in models if (path.parent / "primitives.v").is_file()]
     models = list(dict.fromkeys([*primitives, *models]))

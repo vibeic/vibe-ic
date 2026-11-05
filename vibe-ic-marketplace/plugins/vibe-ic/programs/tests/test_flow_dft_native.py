@@ -2,6 +2,8 @@
 import json
 import shutil
 import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -71,3 +73,59 @@ def test_serial_bench_measures_the_actual_chain(tmp_path, fault):
     assert (run.returncode == 0) == (fault == "healthy"), run.stdout + run.stderr
     if fault == "healthy":
         assert "SCAN_FLUSH checked=32 errors=0" in run.stdout
+
+
+@pytest.mark.parametrize("signal_inout", [False, True])
+@pytest.mark.parametrize("supply_ports", [False, True])
+def test_supply_inouts_replay_while_signal_inout_is_unmeasured(tmp_path, monkeypatch, signal_inout, supply_ports):
+    if not all(shutil.which(tool) for tool in ("iverilog", "vvp")):
+        pytest.skip("Native Icarus is required")
+    from flow_dft_steps import replay
+    from librelane.state import DesignFormat
+    from librelane.steps import StepException
+
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L20_DFT_SCAN_TOPOLOGY.json").write_text(json.dumps({
+        "scan_chains": [{"clock": "clk", "scan_in": "sin", "scan_out": "q[0]", "scan_enable": "shift"}],
+        "test_mode": {"reset": {"signal": "rst", "shift_value": 0}}}))
+    models, netlist = tmp_path / "scan_cell.v", tmp_path / "routed.v"
+    supply_inputs = ",VDD,VSS" if supply_ports else ""
+    power_condition = "VDD===1'b1 && VSS===1'b0 && " if supply_ports else ""
+    models.write_text(f"module scan_cell(input clk,shift,sin{supply_inputs},output reg q);"
+        f"always @(posedge clk) if({power_condition}shift) q<=sin; endmodule\n")
+    signal_port = ",inout data_pad" if signal_inout else ""
+    supply_port = ",inout VDD,VSS" if supply_ports else ""
+    netlist.write_text(f"module core(input clk,rst,sin,shift{supply_port},output[3:0]q{signal_port});"
+        f"scan_cell b3(clk,shift,sin{supply_inputs},q[3]);scan_cell b2(clk,shift,q[3]{supply_inputs},q[2]);"
+        f"scan_cell b1(clk,shift,q[2]{supply_inputs},q[1]);scan_cell b0(clk,shift,q[1]{supply_inputs},q[0]);endmodule\n")
+    port_types = {name: ("INPUT", "SIGNAL") for name in ("clk", "rst", "sin", "shift")}
+    port_types.update({f"q[{bit}]": ("OUTPUT", "SIGNAL") for bit in range(4)})
+    port_types.update(VDD=("INOUT", "POWER"), VSS=("INOUT", "GROUND"))
+    if signal_inout:
+        port_types["data_pad"] = ("INOUT", "SIGNAL")
+    ports = [SimpleNamespace(getName=lambda name=name: name, getIoType=lambda direction=direction: direction,
+                             getSigType=lambda kind=kind: kind) for name, (direction, kind) in port_types.items()]
+    cell = SimpleNamespace(getBits=lambda: 4)
+    scan_list = SimpleNamespace(getScanInsts=lambda: [cell])
+    partition = SimpleNamespace(getScanLists=lambda: [scan_list])
+    chain = SimpleNamespace(getScanPartitions=lambda: [partition])
+    block = SimpleNamespace(getBTerms=lambda: ports,
+        getDft=lambda: SimpleNamespace(getScanChains=lambda: [chain]))
+    database = SimpleNamespace(getChip=lambda: SimpleNamespace(getBlock=lambda: block))
+    monkeypatch.setitem(sys.modules, "odb", SimpleNamespace(
+        dbDatabase=SimpleNamespace(create=lambda: database), read_db=lambda *args: None))
+    step = SimpleNamespace(step_dir=str(tmp_path), config={"DESIGN_DIR": str(tmp_path),
+        "DESIGN_NAME": "core", "CLOCK_PERIOD": 20, "CELL_VERILOG_MODELS": [str(models)]})
+    state = {DesignFormat.ODB: tmp_path / "routed.odb", DesignFormat.NETLIST: netlist}
+    if signal_inout:
+        with pytest.raises(StepException, match="bidirectional"):
+            replay(step, state, "scan_flush_errors")
+    else:
+        metrics = replay(step, state, "scan_flush_errors")
+        assert metrics["scan_flush_errors"] == 0 and metrics["dft__scan__checked_edges"] == 32
+        bench = (tmp_path / "scan_tb.v").read_text()
+        if supply_ports:
+            assert "assign VDD=1'b1;" in bench and "assign VSS=1'b0;" in bench
+        else:
+            assert ".VDD(" not in bench and ".VSS(" not in bench
