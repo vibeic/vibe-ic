@@ -71,7 +71,7 @@ def run_owner(project, route, directory, kind):
                    "--exit-step", str(route["verify_through"]),
                    "--rtl-input", route.get("input_contract", "structured"),
                    "--skip-hardware", "--skip-analog", "--skip-phase3",
-                   "--execution-mode", "default"]
+                   "--execution-mode", "default", "--engine", "native"]
         directory.mkdir(parents=True, exist_ok=True)
         environment = {**os.environ, "VIBEIC_FLOW_ENGINE": "legacy"}
         started = time.monotonic()

@@ -28369,6 +28369,9 @@ def main() -> int:
     _line_buffer_own_stream()
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
+    from flow_engine_frontend import selected_engine
+    p.add_argument("--engine", choices=("legacy", "native"), default=selected_engine(),
+                   help="Run native owner tools without legacy interstep admission.")
     p.add_argument("--pdk", default="auto",
                    help="Select a PDK declared by the design, including its secondary targets.")
     p.add_argument("--skip-hardware", action="store_true")
@@ -28447,6 +28450,7 @@ def main() -> int:
     import execution_policy as _execution
     _execution.add_arguments(p)
     args = p.parse_args()
+    _native_engine = args.engine == "native"
     if bool(args.area_receipt) != bool(args.area_run_manifest):
         p.error("--area-receipt and --area-run-manifest must be supplied together")
     _execution.configure(args)
@@ -28466,7 +28470,8 @@ def main() -> int:
                 raise ValueError(f"ORIGINAL_TOP_CONFLICT: --top-name {args.top_name} conflicts with original {source_top}")
             if source_top:
                 args.top_name = source_top
-        _activate_runtime_program_tree(project)
+        if not _native_engine:
+            _activate_runtime_program_tree(project)
     except Exception as exc:
         print(f"REFUSED: runtime program tree: {exc}", file=sys.stderr)
         return 2
@@ -28716,8 +28721,13 @@ def main() -> int:
                 _adm = {'admitted': False, 'reason': str(exc)}
         else:
             _entry_staged = step_reused_ip_consume(project, args.top_name)
-            _adm = _spf.entry_admission(project, "design_one_shot_runner",
-                                        str(args.entry_step))
+            if _native_engine:
+                site = _spf.site_for_step("design_one_shot_runner", str(args.entry_step))
+                _adm = {"admitted": site is not None, "site": site,
+                        "reason": "No owner dispatch site for the selected entry."}
+            else:
+                _adm = _spf.entry_admission(project, "design_one_shot_runner",
+                                            str(args.entry_step))
         if not _adm["admitted"]:
             print(f"REFUSED: cannot enter at step {args.entry_step!r} — "
                   f"{_adm['reason']}", file=sys.stderr)
@@ -28725,24 +28735,25 @@ def main() -> int:
                 print(f"  absent: {_m}", file=sys.stderr)
             return 2
         _entry_site = _adm["site"]
-        try:
-            import datetime as _dtm             # noqa: PLC0415
-            import run_entry_manifest as _rem   # noqa: PLC0415
-            _man = _rem.build(project, str(args.entry_step),
-                              "design_one_shot_runner", _entry_site,
-                              list(sys.argv[1:]),
-                              _dtm.datetime.utcnow().isoformat() + "Z")
-            _bad = _rem.validate(_man)
-            if _bad:
-                print("REFUSED: the run-entry manifest does not validate: "
-                      + "; ".join(_bad), file=sys.stderr)
+        if not _native_engine:
+            try:
+                import datetime as _dtm             # noqa: PLC0415
+                import run_entry_manifest as _rem   # noqa: PLC0415
+                _man = _rem.build(project, str(args.entry_step),
+                                  "design_one_shot_runner", _entry_site,
+                                  list(sys.argv[1:]),
+                                  _dtm.datetime.utcnow().isoformat() + "Z")
+                _bad = _rem.validate(_man)
+                if _bad:
+                    print("REFUSED: the run-entry manifest does not validate: "
+                          + "; ".join(_bad), file=sys.stderr)
+                    return 2
+                _rem.write(project, _man)
+            except ImportError as _exc:
+                print(f"REFUSED: --entry-step needs run_entry_manifest ({_exc}); "
+                      "refusing to enter mid-flow without recording that it "
+                      "happened", file=sys.stderr)
                 return 2
-            _rem.write(project, _man)
-        except ImportError as _exc:
-            print(f"REFUSED: --entry-step needs run_entry_manifest ({_exc}); "
-                  "refusing to enter mid-flow without recording that it "
-                  "happened", file=sys.stderr)
-            return 2
 
     # DECIDED HERE, not at parse time: `_exit_pruned` and `_entry_site` are the
     # run's real dispatch signals and neither exists until the two blocks above
@@ -28876,6 +28887,12 @@ def main() -> int:
     # the retry actually left behind.
     _redispatch: Dict[str, Callable[[], List[StepResult]]] = {}
 
+    def _owner_dispatch(project, runner, site, refusal_factory, fn, *args, **kwargs):
+        if _native_engine:
+            return fn(*args, **{key: value for key, value in kwargs.items()
+                              if not key.startswith("_preflight_")})
+        return _spf.gate(project, runner, site, refusal_factory, fn, *args, **kwargs)
+
     def _dispatch_site(site: str,
                        thunk: Callable[[], List[StepResult]]
                        ) -> List[StepResult]:
@@ -28983,7 +29000,7 @@ def main() -> int:
     elif _after_exit("rtl_gen"):
         plan.append(_exit_sentinel("rtl_gen"))
     else:
-        plan.append(_spf.gate(
+        plan.append(_owner_dispatch(
             project, "design_one_shot_runner", "rtl_gen",
             _preflight_refusal("rtl_gen"),
             step_rtl_gen, project, ic_class, _preflight_canonical_acceptance=True))
@@ -29063,7 +29080,7 @@ def main() -> int:
     elif _after_exit("rtl_validate"):
         plan.append(_exit_sentinel("rtl_validate"))
     else:
-        _dispatch_site("rtl_validate", lambda: [_spf.gate(
+        _dispatch_site("rtl_validate", lambda: [_owner_dispatch(
             project, "design_one_shot_runner", "rtl_validate",
             _preflight_refusal("rtl_validate"),
             step_determinism_gates, project, args.top_name)])
@@ -29165,7 +29182,7 @@ def main() -> int:
         # professional cocotb path below) sits past the declared exit.
         plan.append(_exit_sentinel("sim"))
     else:
-        _sim_rows = _dispatch_site("sim", lambda: [_spf.gate(
+        _sim_rows = _dispatch_site("sim", lambda: [_owner_dispatch(
             project, "design_one_shot_runner", "sim",
             _preflight_refusal("sim"),
             step_full_stack_tb_gen, project, args.top_name)])
@@ -29531,7 +29548,7 @@ def main() -> int:
     elif _after_exit("asic_sdc"):
         plan.append(_exit_sentinel("asic_sdc"))
     else:
-        plan.append(_spf.gate(
+        plan.append(_owner_dispatch(
             project, "design_one_shot_runner", "asic_sdc",
             _preflight_refusal("asic_sdc"),
             step_asic_sdc, project, args.top_name, args.container, ic_class,
@@ -29567,7 +29584,7 @@ def main() -> int:
     elif _after_exit("yosys_synth"):
         plan.append(_exit_sentinel("yosys_synth"))
     else:
-        plan.append(_spf.gate(
+        plan.append(_owner_dispatch(
             project, "design_one_shot_runner", "yosys_synth",
             _preflight_refusal("yosys_synth"),
             step_yosys_synth, project, args.top_name, args.container, ic_class,
@@ -29771,7 +29788,7 @@ def main() -> int:
         # steps past its own deliverable.
         plan.append(_exit_sentinel("dft_lec_chain"))
     else:
-        _dft_chain = _spf.gate(
+        _dft_chain = _owner_dispatch(
             project, "design_one_shot_runner", "dft_lec_chain",
             lambda detail, extras: [_preflight_refusal("dft_lec_chain")(
                 detail, extras)],
@@ -29799,7 +29816,7 @@ def main() -> int:
                     Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
                 if _candidate_context.get('requested_step') == 'D30':
                     _handoff_context = _candidate_context
-            _handoff = _spf.gate(
+            _handoff = _owner_dispatch(
                 project, 'design_one_shot_runner', 'synthesis_handoff',
                 _preflight_refusal('synthesis_handoff'),
                 step_synthesis_handoff, project, plan=plan,

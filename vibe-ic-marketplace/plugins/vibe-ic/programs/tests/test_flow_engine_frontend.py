@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import flow_engine_frontend as frontend
+import pytest
 
 
 def test_native_phase1_calls_document_owner_without_submission_admission(tmp_path):
@@ -44,3 +45,34 @@ def test_public_native_entry_forwards_the_selected_bounded_window(tmp_path):
     assert observed == [(tmp_path.resolve(), {"route": {
         "entry_step": "1", "verify_through": "2", "input_contract": "original",
         "delivery_target": "rtl"}})]
+
+
+def test_native_rtl_owner_reaches_generator_without_parse_track(tmp_path, monkeypatch):
+    import design_one_shot_runner as owner
+
+    class GeneratorReached(Exception):
+        pass
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("legacy admission reached")
+
+    def generate(*args, **kwargs):
+        raise GeneratorReached
+
+    monkeypatch.setattr(sys, "argv", ["design_one_shot_runner.py", str(tmp_path),
+        "--entry-step", "1", "--exit-step", "2", "--engine", "native",
+        "--skip-phase3", "--skip-hardware", "--skip-analog"])
+    monkeypatch.setattr(owner._pl, "select_rtl_input", lambda *args: None)
+    monkeypatch.setattr(owner, "_bootstrap_execution_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(owner, "_activate_runtime_program_tree", forbidden)
+    monkeypatch.setattr(owner._spf, "entry_admission", forbidden)
+    monkeypatch.setattr(owner._spf, "gate", forbidden)
+    monkeypatch.setattr(owner._runner_lock, "acquire_or_reenter",
+                        lambda *args: SimpleNamespace(release=lambda: None))
+    monkeypatch.setattr(owner, "step_reused_ip_consume", lambda *args: None)
+    monkeypatch.setattr(owner, "step_rig_topology_skeleton",
+                        lambda *args: owner.StepResult("topology", "PASS", 0, ""))
+    monkeypatch.setattr(owner, "detect_ic_class", lambda *args: ("generic", {}))
+    monkeypatch.setattr(owner, "step_rtl_gen", generate)
+    with pytest.raises(GeneratorReached):
+        owner.main()
