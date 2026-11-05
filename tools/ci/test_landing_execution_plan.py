@@ -32,7 +32,7 @@ C = load('_cx_completion', ROOT / 'tools/ci/landing_completion_record.py')
 # Frozen pre-repair executable population, including #2176. This is a control
 # against dropping requirements, not production authority.
 REQUIRED = tuple(('cheap:' + x) for x in (
-    'nda-content', 'version', 'agent-scope', 'benchmark-structure',
+    'nda-messages', 'nda-content', 'version', 'agent-scope', 'benchmark-structure',
     'git-prohibition',
     'prose-polarity', 'nested-progress-pin',
     'competing-claims-report', 'worktree-clean', 'scratch-report', 'hygiene-ratchet')) + tuple(
@@ -141,9 +141,9 @@ def test_real_dispatch_capture_emit_and_append_share_one_plan(tmp_path):
 
 
 @pytest.mark.parametrize('mutation', [
-    'landing_unit_cheap_nda_content() { :; }',
-    'landing_unit_cheap_nda_content() { landing_record "$1" PASS 0 x; landing_record "$1" PASS 0 x; }',
-    'landing_unit_cheap_nda_content() { landing_record foreign PASS 0 x; }',
+    'landing_unit_cheap_nda_messages() { :; }',
+    'landing_unit_cheap_nda_messages() { landing_record "$1" PASS 0 x; landing_record "$1" PASS 0 x; }',
+    'landing_unit_cheap_nda_messages() { landing_record foreign PASS 0 x; }',
     'unset -f landing_unit_full_repo_hygiene',
 ])
 def test_missing_duplicate_unexpected_or_missing_handler_stops_parent(tmp_path, mutation):

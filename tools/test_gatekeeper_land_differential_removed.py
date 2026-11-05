@@ -201,6 +201,7 @@ def test_no_live_code_still_routes_anyone_to_the_removed_flag():
 # stamp block's own message, which a stub cannot produce.
 _HOOK_PROGRAMS = (
     "agent_checkin_scope_guard.py", "branch_version_bump_guard.py",
+    "commit_msg_nda_check.py",
     "git_prohibition_guard.py",
     "nda_diff_scan_check.py",
     "version_bump_monotonic_check.py",

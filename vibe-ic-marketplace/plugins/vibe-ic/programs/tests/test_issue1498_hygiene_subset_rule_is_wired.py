@@ -67,7 +67,7 @@ SHA = "c" * 40
 _HOST = "host-a"
 
 _GOOD_LOG = """=== gatekeeper landing gates — base=origin/main ===
-  PASS  NDA — added content/paths
+  PASS  NDA — commit messages
   PASS  targeted tests (21 file(s))
   PASS  repo hygiene gates
 === ALL GATES PASS — stamped %s ===
@@ -76,7 +76,7 @@ _GOOD_LOG = """=== gatekeeper landing gates — base=origin/main ===
 # THE SHAPE THIS ISSUE IS ABOUT: the hygiene suite is red on BOTH arms, so the
 # per-label differential excuses it and only the finding delta can see inside.
 _RED_HYGIENE_LOG = """=== gatekeeper landing gates — base=origin/main ===
-  PASS  NDA — added content/paths
+  PASS  NDA — commit messages
   PASS  targeted tests (21 file(s))
   FAIL  repo hygiene gates
 === FAILURES ABOVE — stamp removed; the pre-push hook will refuse ===
@@ -357,8 +357,8 @@ def test_the_delta_only_ever_adds_refusals():
     only safe if the worst a wrong CLEAN can do is leave the tier as coarse as
     it already was. Here a gate that PASSED on the base fails on the candidate:
     the per-label rule refuses, and a CLEAN finding delta must not clear it."""
-    log = _RED_HYGIENE_LOG.replace("  PASS  NDA — added content/paths",
-                                   "  FAIL  NDA — added content/paths")
+    log = _RED_HYGIENE_LOG.replace("  PASS  NDA — commit messages",
+                                   "  FAIL  NDA — commit messages")
     clean = {"status": "CLEAN", "introduced": [], "carried": [], "cleared": [],
              "no_verdict_either_side": [], "empty_corpora": [],
              "base_findings": 0, "candidate_findings": 0, "declared": 4}

@@ -153,6 +153,19 @@ jobs:
         run: |
           bash tools/ci/repo_hygiene_gates.sh
 
+      # The source guard above scans FILES only. A commit whose MESSAGE names
+      # the commercial foundry / SKU / process therefore passed every gate — and
+      # one really did land on main after the full-history NDA rewrite. A commit
+      # message is permanent and publicly mirrored, so scan the landing range.
+      # The checker's output is MASKED (token ROLE, never the literal), so this
+      # step's log is safe.
+      - name: NDA guard — commit MESSAGES in this PR
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.base.outputs.sha }}"
+          python3 "$PROGRAMS/commit_msg_nda_check.py" \
+            --repo "$GITHUB_WORKSPACE" --rev-range "${BASE}..HEAD"
+
       # The step above scans the commit TEXT only. The same token is equally
       # permanent when it arrives as added CONTENT or as an added PATH, and
       # the path carrier is live: local run directories on this fleet carry a

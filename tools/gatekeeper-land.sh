@@ -639,6 +639,18 @@ echo "--- cheap tier (also enforced by the pre-push hook) ---"
 # An empty range means nothing new is being landed; the NDA checkers correctly
 # refuse an empty scan, so the no-op is skipped rather than reported as a pass.
 GK_RANGE_N="$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)"
+landing_unit_cheap_nda_messages() {
+  if [ "$GK_RANGE_N" = "0" ]; then
+    landing_skip "$1" "range is empty"
+    return 0
+  fi
+  if [ -n "${VIBEIC_NDA_HOST_RESULT:-}" ]; then
+    run "$1" "NDA — trusted host commit messages" python3 "$RUNTIME_ROOT/tools/ci/trusted_nda_host.py" \
+      check-unit --repo "$ROOT" --base "$BASE" --guard commit_msg_nda_check.py
+    return
+  fi
+  run "$1" "NDA — commit messages"   python3 "$PROGRAMS/commit_msg_nda_check.py" --repo "$ROOT" --rev-range "$RANGE"
+}
 landing_unit_cheap_nda_content() {
   if [ "$GK_RANGE_N" = "0" ]; then
     landing_skip "$1" "range is empty"
