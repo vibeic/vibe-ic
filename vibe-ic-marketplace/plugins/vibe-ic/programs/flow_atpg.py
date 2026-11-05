@@ -189,3 +189,38 @@ def small_delay(project, directory, *, config):
             "native_steps": [{"name": "sdd_atpg_run", "ran": True, "exit_code": code, "status": status}],
             "detail": "Native descriptive SDD grade; optional absent DT1 context is not regenerated. "
                       + "; ".join(data.get("reasons", []))}
+
+
+def final_patterns(project, directory, *, state, config):
+    from flow_native_adapters import Commands
+    from librelane.state import DesignFormat
+    from librelane.steps import StepError, StepException
+    from librelane_plugins.librelane_plugin_vibeic import TestPatternReplay
+
+    config, state = config or {}, state or {}
+    manifest = Path(config.get("VIBEIC_PATTERN_MANIFEST") or project / "phase2/stage2/dft/pattern_replay.json")
+    if not manifest.is_absolute():
+        manifest = project / manifest
+    if not manifest.is_file() or not state.get("nl"):
+        return Commands(directory).result(detail="Final pattern replay needs native pattern/testbench input and the implementation netlist; a scan-flush bench is not manufacturing-pattern replay.")
+    step = SimpleNamespace(id=TestPatternReplay.id, step_dir=str(directory),
+        config={"VIBEIC_PATTERN_MANIFEST": str(manifest)}, _run=TestPatternReplay._run)
+    started = time.perf_counter()
+    metrics, code, status, detail = {}, 0, "PASS", ""
+    try:
+        _, metrics = TestPatternReplay.run(step, {DesignFormat.NETLIST: state["nl"]})
+    except (StepException, FileNotFoundError) as exc:
+        code, status, detail = None, "NOT_MEASURED", str(exc)
+    except StepError as exc:
+        code, status, detail = 1, "FAIL", str(exc)
+    report = directory / "pattern_replay_results.json"
+    if report.is_file():
+        data = json.loads(report.read_text())
+        if data.get("good_machine_errors") is not None:
+            metrics["final_pattern_good_machine_errors"] = data["good_machine_errors"]
+    ran = report.is_file()
+    return {"ran": ran, "exit_code": code, "metrics": metrics,
+            "reports": [str(manifest), *map(str, directory.rglob("*.json")), *map(str, directory.rglob("*.log"))],
+            "tool_seconds": time.perf_counter() - started,
+            "native_steps": [{"name": TestPatternReplay.id, "ran": ran, "exit_code": code, "status": status}],
+            "detail": detail + " Native pattern-bench results only; export roundtrip errors have no native measurement."}
