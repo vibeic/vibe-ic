@@ -1469,11 +1469,51 @@ def _evidence_summary(project: Path) -> dict:
     }
 
 
+def _professional_functional_result(project: Path):
+    union = _srb.professional_tb_union(project)
+    pro = _srb.find_professional_tb_pass(project)
+    if pro:
+        _nm = _srb.union_disclosure(union)
+        # R-0915-87(2) — the same guard, at the same height. This route reads
+        # the professional suite's own transcript, which on r27 is the file
+        # with the ten green rows.
+        _refusal = _oracle_execution_refusal(project, ";".join(pro["rel_paths"]))
+        if _refusal:
+            return 1, (
+                "INCOMPLETE: the professional-TB result slot cannot supersede "
+                f"the {CAP_CPU_FUNCTIONAL_ORACLE} capability record — "
+                f"{_refusal}. No waiver is granted and Step 4 is NOT a "
+                "functional PASS." + _acceptance_disclosure(project))
+        _nm_input = _not_measured_on_input(
+            project, f"every case that could run executed and passed "
+                     f"({';'.join(pro['rel_paths'])})")
+        if _nm_input:
+            return _nm_input
+        return 0, (
+            "PASS: functional verification ACHIEVED by the professional-TB "
+            "result slot (producer: "
+            + (", ".join(pro.get("suite_names") or []) or "unnamed suite")
+            + f") — {';'.join(pro['rel_paths'])}: tests="
+            f"{pro['tests']} passed={pro['passed']} failures={pro['failures']} "
+            f"errors={pro['errors']} over {len(pro['rel_paths'])} sibling "
+            f"suite(s). The connectivity-PASS capability record "
+            f"({CAP_CPU_FUNCTIONAL_ORACLE}) is "
+            "SUPERSEDED by this real functional PASS; Step 4 is a genuine "
+            "functional simulation PASS, not WAIVED-DEFERRED."
+            + (f" [{_nm}]" if _nm else "")
+            + _acceptance_disclosure(project))
+
+    return None
+
+
 def _evaluate(project: Path) -> "tuple[int, str]":
     """Return (exit_code, message)."""
     sim_dir = _pl.sim_dir(project)
     results = sim_dir / "results.xml"
     if not results.is_file():
+        professional = _professional_functional_result(project)
+        if professional is not None:
+            return professional
         return 2, ("VACUOUS_PASS: no phase2/stage1/sim/results.xml — "
                    "cpu_functional_oracle_waiver_check has nothing to assess.")
     try:
@@ -1587,38 +1627,10 @@ def _evaluate(project: Path) -> "tuple[int, str]":
     # step aside (rc=0). This remains chip-AGNOSTIC and anti-fabrication-safe:
     # a missing, failing, or vacuous professional result returns None and the
     # blocking INCOMPLETE verdict below remains in force.
+    professional = _professional_functional_result(project)
+    if professional is not None:
+        return professional
     union = _srb.professional_tb_union(project)
-    pro = _srb.find_professional_tb_pass(project)
-    if pro:
-        _nm = _srb.union_disclosure(union)
-        # R-0915-87(2) — the same guard, at the same height. This route reads
-        # the professional suite's own transcript, which on r27 is the file
-        # with the ten green rows.
-        _refusal = _oracle_execution_refusal(project, ";".join(pro["rel_paths"]))
-        if _refusal:
-            return 1, (
-                "INCOMPLETE: the professional-TB result slot cannot supersede "
-                f"the {CAP_CPU_FUNCTIONAL_ORACLE} capability record — "
-                f"{_refusal}. No waiver is granted and Step 4 is NOT a "
-                "functional PASS." + _acceptance_disclosure(project))
-        _nm_input = _not_measured_on_input(
-            project, f"every case that could run executed and passed "
-                     f"({';'.join(pro['rel_paths'])})")
-        if _nm_input:
-            return _nm_input
-        return 0, (
-            "PASS: functional verification ACHIEVED by the professional-TB "
-            "result slot (producer: "
-            + (", ".join(pro.get("suite_names") or []) or "unnamed suite")
-            + f") — {';'.join(pro['rel_paths'])}: tests="
-            f"{pro['tests']} passed={pro['passed']} failures={pro['failures']} "
-            f"errors={pro['errors']} over {len(pro['rel_paths'])} sibling "
-            f"suite(s). The connectivity-PASS capability record "
-            f"({CAP_CPU_FUNCTIONAL_ORACLE}) is "
-            "SUPERSEDED by this real functional PASS; Step 4 is a genuine "
-            "functional simulation PASS, not WAIVED-DEFERRED."
-            + (f" [{_nm}]" if _nm else "")
-            + _acceptance_disclosure(project))
 
     denom = _evidence_summary(project)["declared_denominator"]
     # A functional transcript that EXISTS and did not pass is not the same fact
