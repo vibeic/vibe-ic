@@ -85,13 +85,16 @@ def eqy(project, directory, tool, commands, *, state, config):
     liberty = list(dict.fromkeys(str(path) for pattern, paths in libraries.items()
         if fnmatch.fnmatchcase(corner, pattern)
         for path in (paths if isinstance(paths, (list, tuple)) else [paths])))
+    pad_liberty = list(dict.fromkeys(Path(path) for pattern, paths in (config.get("PAD_LIBS") or {}).items()
+        if fnmatch.fnmatchcase(corner, pattern)
+        for path in (paths if isinstance(paths, (list, tuple)) else [paths])))
     if (not top or not netlist or not Path(netlist).is_file() or not rtl
             or any(not path.is_file() for path in rtl) or not liberty
-            or any(not Path(path).is_file() for path in liberty)):
+            or any(not Path(path).is_file() for path in [*liberty, *pad_liberty])):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
     script = directory / "equivalence.eqy"
     script.write_text(reset_script(eqy_script(top, rtl, Path(netlist), " ".join(liberty),
-                                 synthesis=config, views=directory), reset_boundary(project)))
+                                 synthesis=config, views=directory, pad_liberty=pad_liberty), reset_boundary(project)))
     completed = commands.run(["eqy", "-j", "8", "-f", "-d", directory / "scratch", script])
     if completed is None:
         return commands.result(reports=[script], detail="The native EQY executable is unavailable.")

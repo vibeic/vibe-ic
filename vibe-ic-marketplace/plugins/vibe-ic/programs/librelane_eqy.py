@@ -55,7 +55,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _atomic_artefact import write_json  # noqa: E402
@@ -70,7 +70,8 @@ _EQY_STATUSES = ("PASS", "FAIL", "UNKNOWN", "ERROR", "TIMEOUT")
 
 
 def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
-               *, synthesis: Optional[dict] = None, views: Optional[Path] = None) -> str:
+               *, synthesis: Optional[dict] = None, views: Optional[Path] = None,
+               pad_liberty: Sequence[Path] = ()) -> str:
     from lec_run import (fsm_encfile_beside_netlist, fsm_signal_names,
                          _equiv_splitnets)
     encoding = fsm_encfile_beside_netlist(str(netlist))
@@ -90,9 +91,10 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         frontend = (f"read_slang --single-unit --top {top}"
                     if synthesis.get('USE_SLANG') else 'read_verilog -sv')
         read = f"{frontend} {defines} {includes} {gold}"
+    pad_models = [f"read_liberty -lib -ignore_miss_dir {path}" for path in pad_liberty]
     return "\n".join([
-        "[gold]", read, *([f"read_liberty -ignore_miss_func {liberty}"] if synthesis is not None else []), *gold_prep, "",
-        "[gate]", f"read_liberty -ignore_miss_func {liberty}",
+        "[gold]", *pad_models, read, *([f"read_liberty -ignore_miss_func {liberty}"] if synthesis is not None else []), *gold_prep, "",
+        "[gate]", *pad_models, f"read_liberty -ignore_miss_func {liberty}",
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
         "memory", *(["[gold]", f"write_json {views}/gold.before-normalization.json",

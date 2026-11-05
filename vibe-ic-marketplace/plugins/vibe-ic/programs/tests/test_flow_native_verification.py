@@ -104,6 +104,66 @@ def test_actual_eqy_detects_unequal_logic(tmp_path, different):
     assert not (tmp_path / "result.json").exists()
 
 
+@pytest.mark.parametrize("different", [False, True])
+def test_actual_eqy_reads_corner_pad_models_with_vector_controls(tmp_path, different):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    gold, gate, liberty, pad = [tmp_path / name for name in
+                                ("gold.v", "gate.v", "cells.lib", "pads.lib")]
+    source = ("module unit(input a, b, input [1:0] mode, output y);\n"
+              "wire received; neutral_pad u_pad(.PAD(a), .MODE(mode), .Y(received));\n"
+              "assign y=received ^ b; endmodule\n")
+    gold.write_text(source)
+    gate.write_text(source.replace("received ^ b", "received & b") if different else source)
+    liberty.write_text("library(neutral) {}\n")
+    pad.write_text("""library (neutral_pads) {
+ type (control_pair) {
+  base_type : array;
+  data_type : bit;
+  bit_width : 2;
+  bit_from : 1;
+  bit_to : 0;
+  downto : true;
+ }
+ cell (neutral_pad) {
+  pin (PAD) { direction : input; }
+  bus (MODE) { bus_type : control_pair; direction : input; }
+  pin (Y) { direction : output; function : "PAD"; }
+ }
+}
+""")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]},
+              "PAD_LIBS": {"typ*": [str(pad)], "slow": [str(tmp_path / "unused.lib")]}}
+    class ReadInputs(Commands):
+        def run(self, argv, cwd=None):
+            sections = Path(argv[-1]).read_text().split("[script]", 1)[0]
+            self.source_codes = {}
+            for arm in ("gold", "gate"):
+                source = sections.split(f"[{arm}]\n", 1)[1].split("\n[", 1)[0]
+                script = "; ".join(source.strip().splitlines()) + "; hierarchy -check -top unit"
+                completed = super().run(["yosys", "-Q", "-T", "-p", script], cwd=cwd)
+                self.source_codes[arm] = completed.returncode
+            return completed
+
+    commands = ReadInputs(tmp_path)
+    result = eqy(tmp_path, tmp_path, {}, commands, state={"nl": str(gate)}, config=config)
+    assert commands.source_codes == {"gold": 0, "gate": 0}, result
+    assert result["metrics"] == {}
+
+
+def test_missing_selected_pad_model_does_not_launch_eqy(tmp_path):
+    source, liberty = tmp_path / "design.v", tmp_path / "cells.lib"
+    source.write_text("module unit; endmodule\n")
+    liberty.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(source)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]},
+              "PAD_LIBS": {"typical": [str(tmp_path / "missing.lib")]}}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(source)}, config=config)
+    assert result["ran"] is False
+    assert result["metrics"] == {}
+
+
 def test_xor_reuses_native_state_number(tmp_path):
     state = SimpleNamespace(metrics={"design__xor_difference__count": 3})
     commands = Commands(tmp_path)
