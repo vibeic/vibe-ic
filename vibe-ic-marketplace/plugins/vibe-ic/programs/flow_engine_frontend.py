@@ -162,30 +162,48 @@ def finish_frontend(project, plan, args, ic_class, evidence):
 class OwnerSession:
     """One selected owner invocation shared by all its native result readers."""
 
-    def __init__(self, project, route):
+    def __init__(self, project, route, force=False):
         self.project, self.route = Path(project).resolve(), route
+        self.force = force
         self.executed = False
+        self.phase1_executed = False
         self.log = None
 
-    def result(self, directory, kind):
+    def result(self, directory, kind, *, rerun=False):
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        if kind != "phase1" and self.route["delivery_target"] == "rtl" and not self.executed:
+        rerun = rerun or self.force
+        name = "phase1_one_shot.json" if kind == "phase1" else "phase2_one_shot.json"
+        path = self.project / "reports/orchestrator" / name
+        bounded = self.route["delivery_target"] == "rtl"
+        command = None
+        if kind == "phase1" and not self.phase1_executed and (rerun or not path.is_file()):
+            from task_nature_route import delivery_route_for_target
+            command = [sys.executable, str(Path(__file__).with_name("phase1_one_shot_runner.py")),
+                       str(self.project), "--route", delivery_route_for_target(self.route["delivery_target"]),
+                       "--mode", "docs", "--execution-mode", "default", "--engine", "native"]
+            self.phase1_executed = True
+        elif kind != "phase1" and not self.executed and (bounded or rerun or not path.is_file()):
+            if bounded:
+                first, last = self.route["entry_step"], self.route["verify_through"]
+            else:
+                table = json.loads((Path(__file__).parents[1] / "flow/steps.json").read_text())
+                author = next(row for row in table["steps"] if row["tool"].get("function") == "step_rtl_gen")
+                first = last = author["legacy_id"]["native"][0]
             command = [sys.executable, str(Path(__file__).with_name("design_one_shot_runner.py")),
-                       str(self.project), "--entry-step", str(self.route["entry_step"]),
-                       "--exit-step", str(self.route["verify_through"]),
+                       str(self.project), "--entry-step", str(first), "--exit-step", str(last),
                        "--rtl-input", self.route.get("input_contract", "structured"),
                        "--skip-hardware", "--skip-analog", "--skip-phase3",
                        "--execution-mode", "default", "--engine", "native"]
-            for output in ("reports/orchestrator/phase2_one_shot.json", "reports/phase2/lint/native_lint.json"):
-                (self.project / output).unlink(missing_ok=True)
+            self.executed = True
+        if command is not None:
+            path.unlink(missing_ok=True)
+            if kind != "phase1":
+                (self.project / "reports/phase2/lint/native_lint.json").unlink(missing_ok=True)
             self.log = directory / "owner.log"
             with self.log.open("w") as log:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
                     env={**os.environ, "VIBEIC_FLOW_ENGINE": "legacy"}, check=False)
-            self.executed = True
-        name = "phase1_one_shot.json" if kind == "phase1" else "phase2_one_shot.json"
-        path = self.project / "reports/orchestrator" / name
         report = json.loads(path.read_text()) if path.is_file() else {}
         rows = report.get("steps", [])
         if kind == "phase1":
@@ -224,8 +242,8 @@ class OwnerSession:
                 "detail": "Existing owner report; native verdicts remain in its steps."}
 
 
-def run_owner(project, route, directory, kind):
-    return OwnerSession(project, route).result(directory, kind)
+def run_owner(project, route, directory, kind, *, rerun=False):
+    return OwnerSession(project, route).result(directory, kind, rerun=rerun)
 
 
 def native_diagnostics(process, argv, project, require_phase2=True):

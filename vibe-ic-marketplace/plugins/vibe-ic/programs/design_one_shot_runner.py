@@ -29063,6 +29063,12 @@ def main() -> int:
     else:
         plan.append(step_catalog_synth_safe_params(project))
 
+    if _native_engine and _after_exit("rtl_validate"):
+        from flow_engine_frontend import finish_frontend
+        result = finish_frontend(project, plan, args, ic_class, evidence)
+        _lock.release()
+        return result
+
     # Structural DETERMINISM gates — the SAME gates the benchmark emit path
     # applies (shape_b_sample_export.guard_export checks C/D: clock-divider
     # phase-form + spec worked-example oracle), promoted into the production

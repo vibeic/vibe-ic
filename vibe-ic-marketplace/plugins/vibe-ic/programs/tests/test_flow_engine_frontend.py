@@ -138,3 +138,68 @@ def test_failed_owner_invocation_cannot_reuse_the_previous_report(tmp_path):
         result = frontend.OwnerSession(tmp_path, selected).result(tmp_path / "steps/lint", "rtl_validate")
     assert not result["ran"]
     assert result["metrics"] == {}
+
+
+def test_fresh_physical_project_invokes_the_document_owner(tmp_path):
+    selected = {"entry_step": "definition", "verify_through": "release",
+                "input_contract": "structured", "delivery_target": "ip_hardmacro"}
+    report = tmp_path / "reports/orchestrator/phase1_one_shot.json"
+
+    def publish(command, **kwargs):
+        report.parent.mkdir(parents=True)
+        report.write_text(json.dumps({"steps": [
+            {"name": "phase1_ingest_render", "status": "PASS"}]}))
+        assert Path(command[1]).name == "phase1_one_shot_runner.py"
+        assert command[command.index("--route") + 1] == "ip"
+        assert command[command.index("--mode") + 1] == "docs"
+        assert "--pdk" not in command
+        return SimpleNamespace(returncode=0)
+
+    with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
+        observed = frontend.OwnerSession(tmp_path, selected).result(tmp_path / "steps/definition", "phase1")
+    execute.assert_called_once()
+    assert observed["metrics"]["phase1_ingest_render"] == "PASS"
+
+
+def test_fresh_physical_author_uses_only_the_table_author_window(tmp_path, monkeypatch):
+    selected = {"entry_step": "definition", "verify_through": "release",
+                "input_contract": "structured", "delivery_target": "ip_hardmacro"}
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    original_read = Path.read_text
+    table_path = Path(frontend.__file__).parents[1] / "flow/steps.json"
+    table = {"steps": [{"tool": {"function": "step_rtl_gen"},
+                        "legacy_id": {"native": ["author-address"]}}]}
+
+    def read(path, *args, **kwargs):
+        return json.dumps(table) if path == table_path else original_read(path, *args, **kwargs)
+
+    def publish(command, **kwargs):
+        report.parent.mkdir(parents=True)
+        report.write_text(json.dumps({"steps": [
+            {"name": "rtl_gen", "status": "PASS_WITH_WAIVERS",
+             "extras": {"fallback_skill": "spec-to-rtl"}}]}))
+        assert Path(command[1]).name == "design_one_shot_runner.py"
+        assert command[command.index("--entry-step") + 1] == "author-address"
+        assert command[command.index("--exit-step") + 1] == "author-address"
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
+        observed = frontend.OwnerSession(tmp_path, selected).result(tmp_path / "steps/author", "rtl_gen")
+    execute.assert_called_once()
+    assert observed["native_steps"][0]["status"] == "PASS_WITH_WAIVERS"
+    assert not observed["native_steps"][0]["ran"]
+
+
+def test_retained_physical_report_needs_an_explicit_rerun(tmp_path):
+    selected = {"entry_step": "definition", "verify_through": "release",
+                "input_contract": "structured", "delivery_target": "ip_hardmacro"}
+    report = tmp_path / "reports/orchestrator/phase1_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"steps": [{"name": "phase1_ingest_render", "status": "PASS"}]}))
+    with patch.object(frontend.subprocess, "run", side_effect=AssertionError("retained owner reran")):
+        retained = frontend.OwnerSession(tmp_path, selected).result(tmp_path / "steps/definition", "phase1")
+    assert retained["metrics"]["phase1_ingest_render"] == "PASS"
+    with patch.object(frontend.subprocess, "run", return_value=SimpleNamespace(returncode=2)) as execute:
+        frontend.OwnerSession(tmp_path, selected, force=True).result(tmp_path / "steps/definition", "phase1")
+    execute.assert_called_once()
