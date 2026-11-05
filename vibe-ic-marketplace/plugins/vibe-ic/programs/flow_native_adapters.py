@@ -8,6 +8,7 @@ import selectors
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -567,7 +568,83 @@ def formal(project, directory, tool, commands):
     return result
 
 
-ADAPTERS = {"cdc": cdc, "simulation": simulation, "formal": formal}
+def macro_views(project, directory, tool, commands):
+    """Use the existing pre-netlist macro integration component's own verdict."""
+    from ip_integration_check import audit
+    started = time.perf_counter()
+    report = audit(project)
+    path = directory / "macro_views.json"
+    path.write_text(json.dumps(report, indent=2) + "\n")
+    ran = report["rc"] != 2
+    return {"ran": ran, "exit_code": report["rc"] if ran else None,
+            "metrics": {"macro_count": len(report.get("macros", {}))} if ran else {},
+            "reports": [str(path)], "tool_seconds": time.perf_counter() - started,
+            "detail": report.get("reason", "Existing macro view-set integration audit; native PV and STA remain separate.")}
+
+
+def technology(project, directory, tool, commands):
+    from flow109_technology_qualification import execute
+    return execute(project, directory)
+
+
+def physical_declarations(project, directory, tool, commands, route):
+    """Evaluate physical declarations; conflicting IC/IP claims fail the row."""
+    import _tapeout_declaration as declaration
+    from flow_engine import read_json
+
+    answers = read_json(project / "input/step_0_5ic_answers.json")
+    operator = answers.get("operator_template") or {}
+    if not operator:
+        for path in sorted((project / "phase1/generated_docs").glob("L*.json")):
+            doc = read_json(path)
+            operator = doc.get("operator_template") or doc.get("fields", {}).get("operator_template") or {}
+            if operator:
+                break
+    try:
+        if (declaration.bought_slot_hardmacro(project)
+                or route["delivery_target"] == "ip_hardmacro" and any(
+                    isinstance(operator.get(key), str) and operator[key].strip() for key in ("path", "slot"))):
+            raise declaration.DeliveryRouteContradiction(declaration.BOUGHT_SLOT_HARDMACRO_MESSAGE)
+        die_owed = declaration.die_outputs_owed(project)
+        pads_owed = declaration.requests_pad_ring(project)
+    except declaration.DeliveryRouteContradiction as exc:
+        return {"ran": True, "exit_code": 1, "detail": str(exc)}
+    if route["delivery_target"] == "ip_hardmacro":
+        return {"ran": True, "exit_code": 0,
+                "metrics": {"slot_owed": False, "pad_ring_owed": False, "die_outputs_owed": False},
+                "detail": "Pure hard IP owes no shuttle slot, pad ring or die outputs."}
+    slots = sorted((project / declaration.SLOTS_REL).glob("*.yaml")) + sorted(
+        (project / declaration.SLOTS_REL).glob("*.yml"))
+    template = operator.get("path")
+    if not template and not slots:
+        return {"ran": True, "exit_code": 0,
+                "metrics": {"operator_template_present": False, "slot_files": 0,
+                            "die_outputs_owed": die_owed, "pad_ring_owed": pads_owed},
+                "detail": "No operator template or slots supplied; generate die and pads from design documents and the PDK."}
+    ingest = [sys.executable, str(Path(__file__).with_name("submission_template_ingest.py")), str(project)]
+    if template:
+        path = Path(template)
+        ingest += ["--template", str(path if path.is_absolute() else project / path)]
+    if operator.get("slot"):
+        ingest += ["--slot", str(operator["slot"])]
+    completed = commands.run(ingest)
+    if completed is None or completed.returncode:
+        return commands.result(detail="Operator template ingestion did not complete.")
+    source = project / "input/step_0_5ic_answers.json"
+    if operator and operator != answers.get("operator_template"):
+        source = directory / "declarations.json"
+        source.write_text(json.dumps({**answers, "operator_template": operator}) + "\n")
+    argv = [sys.executable, str(Path(__file__).with_name("tapeout_declaration_gen.py")), str(project)]
+    if source.is_file():
+        argv += ["--answers", str(source)]
+    commands.run(argv)
+    return commands.result({"operator_template_present": bool(template), "slot_files": len(list(
+        (project / declaration.SLOTS_REL).glob("*.yaml")))},
+        [project / "reports/phase1/submission_template.json", project / declaration.REPORT_REL],
+        "Supplied operator template and declarations evaluated; unanswered declarations do not require manual answers.")
+
+
+ADAPTERS = {"cdc": cdc, "simulation": simulation, "formal": formal, "technology": technology, "macro_views": macro_views}
 
 
 def declared_electrical_checks(project):
@@ -659,6 +736,27 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") == "tapeout_precheck":
+        import tapeout_precheck
+        if state is None or not state.get("gds"):
+            return commands.result(detail="Tapeout precheck needs the final GDS in native State.")
+        started = time.perf_counter()
+        result = tapeout_precheck.execute(project, gds=state.get("gds"),
+                                          config=config or {}, directory=work)
+        code = result.get("exit_code")
+        metrics = result.get("measurement") or {}
+        return {"ran": code is not None, "exit_code": code, "metrics": metrics,
+                "reports": [str(path) for path in work.rglob("*") if path.is_file()],
+                "tool_seconds": time.perf_counter() - started,
+                "detail": result.get("reason", ""),
+                "native_steps": [{"name": "KLayout tapeout precheck", "ran": code is not None,
+                                  "exit_code": code, "status": result["verdict"],
+                                  "checks": result.get("checks", [])}]}
+    if tool.get("adapter") == "physical_declarations":
+        return physical_declarations(project, work, tool, commands, route)
+    if tool.get("adapter") == "functional_activity":
+        from flow_activity import execute as activity
+        return activity(project, work, tool, route, state=state, config=config)
     if tool.get("adapter") in {"eqy", "xor", "gls"}:
         import flow_native_verification
         return getattr(flow_native_verification, tool["adapter"])(

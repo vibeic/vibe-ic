@@ -409,7 +409,19 @@ def run_public(args):
         forwarded["from_name"] = args.from_name
     if getattr(args, "pdk", "auto") != "auto":
         forwarded["pdk"] = args.pdk
+    from flow_pdn_current import needs_estimate
+    original_common = None
+    if (route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}
+            and needs_estimate(route, forwarded.get("from_name"), json.loads(flow_engine.TABLE.read_text()))):
+        estimate = flow_engine.run(project, route=route, to_name="pre_layout_timing", **forwarded)
+        if estimate.get("common_wall_seconds") is not None:
+            original_common = time.perf_counter() - estimate["common_wall_seconds"]
+        if forwarded.get("from_name"):
+            forwarded["from_name"] = "die_floorplan_and_macros"
     summary = flow_engine.run(project, route=route, **forwarded)
+    if original_common is not None:
+        summary["common_wall_seconds"] = time.perf_counter() - original_common
+        flow_engine.write_json(project / "reports/flow_engine.json", summary)
     return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
 
 

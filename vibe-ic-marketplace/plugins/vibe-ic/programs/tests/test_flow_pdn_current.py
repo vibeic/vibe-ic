@@ -1,13 +1,10 @@
 import json
 import gzip
 from pathlib import Path
-import shutil
-import subprocess
-import sys
 
 import pytest
 
-from flow_pdn_current import attach, estimated_current, sized_widths
+from flow_pdn_current import coherent_geometry, current_settings, estimated_current, needs_estimate, sized_widths
 
 
 LEF = """MANUFACTURINGGRID 0.005 ;
@@ -69,49 +66,96 @@ def test_current_is_maximum_matched_corner_power_over_voltage(tmp_path, compress
 
 def test_custom_pdn_script_keeps_its_control(tmp_path):
     native = {"PDN_CFG": str(tmp_path / "custom.tcl")}
-    attach(tmp_path, native, tmp_path, native["PDN_CFG"])
-    assert native["PDN_CFG"] == str(tmp_path / "custom.tcl")
+    assert current_settings(tmp_path, native) == {}
 
 
-def test_runtime_cli_reads_native_power_and_reports_a_numeric_floor(tmp_path):
+@pytest.mark.parametrize("current, vertical, horizontal, voffset, hoffset", [
+    (.001793, 2.68, 1.6, 7.34, 7.),
+    (.006871, 10.26, 4.59, 11.13, 8.495),
+])
+@pytest.mark.parametrize("default_supplies", [False, True])
+def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertical, horizontal, voffset, hoffset, default_supplies):
+    pytest.importorskip("odb")
     native = config()
     library, tech = tmp_path / "corner.lib", tmp_path / "technology.lef"
     library.write_text("library (corner) { nom_voltage : 5; }")
-    tech.write_text(LEF)
-    native.update(LIB={"nom_*": [str(library)]}, TECH_LEFS={"nom_*": str(tech)},
-                  DEFAULT_CORNER="nom_corner", VDD_NETS=["supply"], GND_NETS=["ground"])
-    path = tmp_path / "native.json"
-    path.write_text(json.dumps(native))
-    result = tmp_path / "steps/pre_layout_timing/result.json"
-    result.parent.mkdir(parents=True)
-    result.write_text(json.dumps({"native_metrics": {"power__total__corner:nom_corner": .008965}}))
-    program = Path(__file__).resolve().parents[1] / "flow_pdn_current.py"
-    process = subprocess.run([sys.executable, program, "--project", tmp_path, "--config", path],
-                             capture_output=True, text=True, check=True)
-    assert "PDN_VWIDTH 2.68" in process.stdout
-    report = json.loads((tmp_path / "work/flow/chip/pdn_sizing.json").read_text())
-    assert report["estimated_current_a"] == pytest.approx(.001793)
+    text = "VERSION 5.8 ;\nUNITS\n DATABASE MICRONS 2000 ;\nEND UNITS\n" + LEF
+    text = text.replace(" TYPE ROUTING ;", " TYPE ROUTING ;\n DIRECTION VERTICAL ;\n PITCH 1 ;\n SPACING 0.28 ;")
+    text = text.replace(" WIDTH 0.28 ;", " WIDTH 0.28 ;\n SPACING 0.30 RANGE 10.005 999 ;")
+    tech.write_text(text + "\nEND LIBRARY\n")
+    native.update(PDK="technology", LIB={"nom_*": [str(library)]}, TECH_LEFS={"nom_*": str(tech)},
+                  DEFAULT_CORNER="nom_corner", VDD_NETS=["supply"], GND_NETS=["ground"],
+                  PDN_CFG=str(tmp_path / "work/flow/pdn_cfg.tcl"), PDN_CORE_RING=True,
+                  PDN_VPITCH=4, PDN_HPITCH=4, PDN_VSPACING=1.7, PDN_HSPACING=1.7,
+                  PDN_VOFFSET=6.8, PDN_HOFFSET=7, PDN_CORE_RING_VSPACING=1.7, PDN_CORE_RING_HSPACING=1.7)
+    power = tmp_path / "steps/pre_layout_timing/result.json"
+    power.parent.mkdir(parents=True)
+    power.write_text(json.dumps({"native_metrics": {"power__total__corner:nom_corner": current * 5}}))
+    if default_supplies:
+        native.update(VDD_NETS=None, GND_NETS=None, VDD_PIN="supply", GND_PIN="ground", PDN_CFG=None)
+    values = current_settings(tmp_path, native)
+    assert values["PDN_VWIDTH"] == vertical
+    assert values["PDN_CORE_RING_VWIDTH"] == vertical
+    assert values["PDN_HWIDTH"] == horizontal
+    assert values["PDN_VOFFSET"] == voffset
+    assert values["PDN_HOFFSET"] == hoffset
+    assert values["PDN_VPITCH"] >= 2 * (vertical + values["PDN_VSPACING"]) - 1e-12
+    assert values["PDN_HPITCH"] >= 2 * (horizontal + values["PDN_HSPACING"]) - 1e-12
+    assert not (tmp_path / "work/flow/chip/pdn_current.tcl").exists()
 
-    step = tmp_path / "native step"
-    step.mkdir()
-    (step / "config.json").write_text(json.dumps(native))
-    environment = step / "_env.tcl"
-    environment.write_text("set ::env(PDN_VWIDTH) 1.6\nset ::env(PDN_CORE_RING_VWIDTH) 1.6\n")
-    base = tmp_path / "work/flow/pdn_cfg.tcl"
-    base.write_text('source $::env(_TCL_ENV_IN)\n'
-                    'puts [list actual $::env(PDN_VWIDTH) $::env(PDN_CORE_RING_VWIDTH)]\n')
-    native["PDN_CFG"] = str(base)
-    attach(tmp_path, native, base.parent, str(base))
-    driver = step / "probe.tcl"
-    driver.write_text('set ::env(STEP_DIR) [lindex $argv 0]\n'
-                      'set ::env(_TCL_ENV_IN) [lindex $argv 1]\n'
-                      'namespace eval utl {proc metric_float {args} {}}\n'
-                      'source [lindex $argv 2]\n')
-    tclsh = shutil.which("tclsh")
-    if not tclsh:
-        pytest.skip("native Tcl interpreter unavailable")
-    for _ in range(2):
-        process = subprocess.run([tclsh, driver, step, environment, native["PDN_CFG"]],
-                                 capture_output=True, text=True, check=True)
-        assert "actual 2.68 2.68" in process.stdout
-    assert environment.read_text().startswith("set ::env(PDN_VWIDTH) 1.6\n")
+
+def test_estimate_window_covers_physical_deliveries_before_geometry():
+    from flow_engine import TABLE
+    table = json.loads(TABLE.read_text())
+    route = {"delivery_target": "shippable_gds", "entry_step": "requirements_and_delivery_route",
+             "verify_through": "compliance_and_final_adoption"}
+    assert needs_estimate(route, None, table)
+    assert needs_estimate(route, "synthesis", table)
+    assert not needs_estimate(route, "die_floorplan_and_macros", table)
+    assert needs_estimate({**route, "delivery_target": "ip_hardmacro"}, None, table)
+    assert not needs_estimate({**route, "verify_through": "pre_layout_timing"}, None, table)
+
+
+def test_native_parallel_run_length_rules_and_explicit_geometry(tmp_path):
+    odb = pytest.importorskip("odb")
+    text = "VERSION 5.8 ;\nUNITS\n DATABASE MICRONS 2000 ;\nEND UNITS\nMANUFACTURINGGRID 0.005 ;\n"
+    for layer, direction in (("vertical", "VERTICAL"), ("horizontal", "HORIZONTAL")):
+        text += f"""LAYER {layer}
+ TYPE ROUTING ;
+ DIRECTION {direction} ;
+ PITCH 1 ;
+ WIDTH 0.28 ;
+ SPACINGTABLE PARALLELRUNLENGTH 0 10 100
+ WIDTH 0 0.28 0.5 2.0
+ WIDTH 10 0.3 1.0 3.0 ;
+END {layer}
+"""
+    path = tmp_path / "rules.lef"
+    path.write_text(text + "END LIBRARY\n")
+    database = odb.dbDatabase.create()
+    try:
+        odb.read_lef(database, str(path))
+        native = config()
+        native.update(PDN_VERTICAL_LAYER="vertical", PDN_HORIZONTAL_LAYER="horizontal",
+            VDD_NETS=["power"], GND_NETS=["ground"], PDN_CORE_RING=True,
+            PDN_VSPACING=1.7, PDN_HSPACING=1.7, PDN_VPITCH=153.6, PDN_HPITCH=153.6,
+            PDN_VOFFSET=7, PDN_HOFFSET=7, PDN_CORE_RING_VSPACING=1.7, PDN_CORE_RING_HSPACING=1.7)
+        widths = {key: 10.26 for key in ("PDN_VWIDTH", "PDN_HWIDTH", "PDN_CORE_RING_VWIDTH", "PDN_CORE_RING_HWIDTH")}
+        values = coherent_geometry(native, widths, database.getTech(), 200)
+        assert values["PDN_VSPACING"] == 3
+        assert values["PDN_CORE_RING_VSPACING"] == 3
+        known = coherent_geometry(native, widths, database.getTech(), 80, {"PDN_VSPACING"})
+        assert known["PDN_VSPACING"] == 1.7
+        bound = coherent_geometry(native, widths, database.getTech(), None)
+        assert bound["PDN_VSPACING"] == 3
+        assert bound["PDN_CORE_RING_VSPACING"] == 3
+        with pytest.raises(ValueError, match="Declared PDN_VSPACING"):
+            coherent_geometry(native, widths, database.getTech(), 200, {"PDN_VSPACING"})
+        native["PDN_VSPACING"] = 3.0015
+        with pytest.raises(ValueError, match="manufacturing grid"):
+            coherent_geometry(native, widths, database.getTech(), 200, {"PDN_VSPACING"})
+        native["PDN_VSPACING"] = 3
+        values = coherent_geometry(native, widths, database.getTech(), 200, {"PDN_VSPACING", "PDN_VOFFSET"})
+        assert values["PDN_VOFFSET"] == 7
+    finally:
+        odb.dbDatabase.destroy(database)
