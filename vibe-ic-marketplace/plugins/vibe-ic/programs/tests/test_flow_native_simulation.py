@@ -336,3 +336,62 @@ def test_cocotb_closure_carries_supplied_header_directories(tmp_path, different)
     assert result["metrics"]["assertion_failures"] == (1 if different else 0)
     if not different:
         assert result["native_steps"][1]["status"] == "PASS", result
+
+
+@pytest.mark.parametrize("different", [False, True])
+@pytest.mark.parametrize("header_layout", ["unique", "mirrored", "selected_parent"])
+def test_macro_closure_uses_only_selected_provider(tmp_path, different, header_layout):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "verilator", "verilator_coverage")):
+        pytest.skip("Native Icarus and Verilator tools are required")
+    staged = tmp_path / "phase2/stage1/rtl"
+    vendor = tmp_path / "input/vendor_rtl"
+    staged.mkdir(parents=True)
+    vendor.mkdir(parents=True)
+    rtl, shadow = (vendor, staged) if header_layout == "selected_parent" else (staged, vendor)
+    dut = rtl / "silicon_unit.v"
+    dut.write_text('`include "helper_defs.vh"\n'
+                   "module silicon_unit(input a, output z); `DRIVE_HELPER endmodule\n")
+    (rtl / "helper_defs.vh").write_text("`define DRIVE_HELPER selected_helper u(a,z);\n")
+    helper = rtl / "selected_helper.v"
+    helper.write_text("module selected_helper(input a, output z); "
+                      f"assign z={'a' if different else '~a'}; endmodule\n")
+    (shadow / ("shadow_defs.vh" if header_layout == "unique" else "helper_defs.vh")).write_text(
+        "`define DRIVE_HELPER unrelated_helper u(a,z);\n")
+    (shadow / "unrelated_helper.v").write_text(
+        "module unrelated_helper(input a, output z); assign z = ; endmodule\n")
+    tb = tmp_path / "tb_unit.v"
+    tb.write_text("module tb_unit; reg a; wire z; integer passed=0; silicon_unit dut(a,z); "
+                  "initial begin a=0; #1; if(z===1'b1) passed=passed+1; "
+                  "a=1; #1; if(z===1'b0) passed=passed+1; "
+                  "$display(\"ORACLE_TB_DONE pass=%0d/2\",passed); $finish; end endmodule\n")
+    result = execute(tmp_path, tmp_path / "output", {
+        "adapter": "simulation", "rtl": [str(dut), str(helper)], "top": "silicon_unit",
+        "testbenches": [str(tb)]}, {})
+    assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
+    assert result["metrics"]["assertion_failures"] == (2 if different else 0)
+    assert result["native_steps"][1]["status"] == "PASS", result
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_macro_closure_keeps_distinct_relative_headers(tmp_path, different):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "verilator", "verilator_coverage")):
+        pytest.skip("Native Icarus and Verilator tools are required")
+    rtl = tmp_path / "phase2/stage1/rtl"
+    for name in ("left", "right"):
+        (rtl / name).mkdir(parents=True)
+    (rtl / "left/signal_defs.vh").write_text("`define LEFT_VALUE a\n")
+    (rtl / "right/signal_defs.vh").write_text(f"`define RIGHT_VALUE 1'b{0 if different else 1}\n")
+    dut = rtl / "silicon_unit.v"
+    dut.write_text('`include "left/signal_defs.vh"\n`include "right/signal_defs.vh"\n'
+                   "module silicon_unit(input a, output z); assign z=`LEFT_VALUE^`RIGHT_VALUE; endmodule\n")
+    tb = tmp_path / "tb_unit.v"
+    tb.write_text("module tb_unit; reg a; wire z; integer passed=0; silicon_unit dut(a,z); "
+                  "initial begin a=0; #1; if(z===1'b1) passed=passed+1; "
+                  "a=1; #1; if(z===1'b0) passed=passed+1; "
+                  "$display(\"ORACLE_TB_DONE pass=%0d/2\",passed); $finish; end endmodule\n")
+    result = execute(tmp_path, tmp_path / "output", {
+        "adapter": "simulation", "rtl": [str(dut)], "top": "silicon_unit",
+        "testbenches": [str(tb)]}, {})
+    assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
+    assert result["metrics"]["assertion_failures"] == (2 if different else 0)
+    assert result["native_steps"][1]["status"] == "PASS", result
