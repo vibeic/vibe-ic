@@ -287,9 +287,7 @@
       "when": "has_power_intent",
       "tool": {
         "kind": "adapter",
-        "program": "l21_to_upf_emit.py",
-        "function": "main",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "power_intent"
       },
       "checks": [
         {

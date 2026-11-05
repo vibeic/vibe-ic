@@ -1,39 +1,11 @@
 #!/usr/bin/env python3
-"""l21_to_upf_emit.py — render L21 power intent into an IEEE-1801 UPF
-handoff artifact (flow v2.3.1, external review R1).
+"""Render documented power domains and strategies into UPF.
 
 ENFORCEMENT: advisory
 
-The line above is a DECLARATION, in the anchored form `flow_gate_enforcement_
-audit.declared_intent` reads. This program is wired into the flow as an
-`advisory_program_exit_zero` clause: it RUNS on every project that reaches its
-step, its findings are printed, and its exit code cannot deny the step its PASS
-tier. That is deliberate — it was wired to make a real check reachable, not to
-block a landing on debt it did not create — and the declaration says so where
-the audit looks. Without it, "wired where it cannot block" and "nobody decided"
-are the same record, and the reliable way to stay clean is to say nothing.
-L21_POWER_INTENT.json has modelled power domains / isolation /
-level-shifters since v0.1.51, and `upf_syntax_check.py` has existed to
-validate UPF — but nothing ever EMITTED a UPF file, so the checker had
-no input and the power intent never left the JSON. This renderer
-closes that loop:
-
-  * one `create_power_domain` + supply net/port + `set_domain_supply_net`
-    per L21 power_domain;
-  * `set_retention` when the domain declares retention;
-  * `set_isolation` / `set_level_shifter` per L21 entry;
-  * output: `phase2/stage2/constraints/<top>.upf` (Step 7 deliverable),
-    self-validated via the existing upf_syntax_check.
-
-HONESTY: this is a HANDOFF artifact — the open-source tools (Yosys /
-OpenROAD) do not consume UPF; the structural verification of the
-intent stays with the M2 gates (power_domain_crossing /
-level_shifter_required / isolation_cell_required). The UPF carries a
-header note saying exactly that.
-
-Exit codes: 0 emitted (+ self-check PASS), 1 self-check FAIL,
-2 no L21 / no power domains declared (vacuous — nothing to render).
-chip-AGNOSTIC: renders the L21 JSON structure verbatim.
+Emission and the existing syntax check do not measure power-state legality,
+isolation behavior, retention or implemented supply connectivity.
+Exit 0 emits UPF, 1 reports syntax errors, and 2 reports missing intent data.
 """
 from __future__ import annotations
 
@@ -53,15 +25,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 
 def _l21(project: Path):
-    for cand in (project / "phase1" / "generated_docs" /
-                 "L21_POWER_INTENT.json",):
-        if cand.is_file():
-            try:
-                d = json.loads(cand.read_text(errors="replace"))
-            except (OSError, ValueError):
-                return None, None
-            return d.get("fields", d), str(cand.relative_to(project))
-    return None, None
+    from l_doc_consumer_contract import load_l_doc, l_doc_fields
+
+    path, document = load_l_doc(project, "L21")
+    return (l_doc_fields(document), str(path.relative_to(project))) if document else (None, None)
 
 
 def render_upf(fields: dict, top: str, source_rel: str) -> str:
@@ -69,9 +36,7 @@ def render_upf(fields: dict, top: str, source_rel: str) -> str:
                if isinstance(d, dict) and d.get("name")]
     lines = [
         "# IEEE-1801 UPF — rendered from L21_POWER_INTENT by",
-        "# l21_to_upf_emit (flow v2.3.1). HANDOFF ARTIFACT: the open-source",
-        "# implementation tools (Yosys/OpenROAD) do not consume UPF;",
-        "# structural power-intent verification lives in the M2 gates.",
+        "# l21_to_upf_emit. Emission alone does not verify power behavior.",
         f"# source: {source_rel}",
         "upf_version 2.1",
         f"set_design_top {top}",
@@ -100,8 +65,10 @@ def render_upf(fields: dict, top: str, source_rel: str) -> str:
             missing.append(name)
             continue
         supply = str(_s)
+        elements = d.get("elements")
+        scope = "-elements {" + " ".join(elements) + "}" if elements else "-include_scope"
         lines += [
-            f"create_power_domain PD_{name} -include_scope",
+            f"create_power_domain PD_{name} {scope}",
             f"create_supply_net {supply} -domain PD_{name}",
             f"create_supply_net VSS -domain PD_{name} -reuse",
             f"create_supply_port {supply}_port -domain PD_{name}",
@@ -173,7 +140,15 @@ def main(argv=None) -> int:
     out_dir = project / "phase2" / "stage2" / "constraints"
     out_dir.mkdir(parents=True, exist_ok=True)
     upf_path = out_dir / f"{args.top}.upf"
-    upf_path.write_text(render_upf(fields, args.top, src))
+    try:
+        upf_path.write_text(render_upf(fields, args.top, src))
+    except ValueError as exc:
+        rep = {"program": "l21_to_upf_emit", "verdict": "NOT_MEASURED", "reason": str(exc)}
+        if args.json:
+            Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.json).write_text(json.dumps(rep, indent=2))
+        print(json.dumps(rep, indent=2))
+        return 2
 
     # self-validate with the EXISTING checker (closes its no-input loop)
     try:
@@ -188,8 +163,7 @@ def main(argv=None) -> int:
         "upf": str(upf_path.relative_to(project)),
         "domains": len(fields.get("power_domains") or []),
         "self_check": "upf_syntax_check rc=%d" % rc,
-        "note": ("handoff artifact — open-source tools do not consume "
-                 "UPF; M2 gates own structural verification"),
+        "note": "UPF emission only; power behavior requires native simulation and implementation analysis.",
     }
     out = json.dumps(rep, indent=2, ensure_ascii=False)
     if args.json:

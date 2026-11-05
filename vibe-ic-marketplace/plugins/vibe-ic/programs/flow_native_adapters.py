@@ -744,6 +744,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") == "power_intent":
+        from flow_power import intent
+        return intent(project, work, tool)
     if tool.get("adapter") == "transition_atpg":
         from flow_atpg import transition
         return transition(project, work, state=state, config=config)

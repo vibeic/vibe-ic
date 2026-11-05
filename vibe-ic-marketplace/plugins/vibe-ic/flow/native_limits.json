@@ -4401,6 +4401,10 @@
     "final_test_patterns_and_test_activity": {
       "kind": "adapter",
       "adapter": "final_atpg"
+    },
+    "power_intent_and_domain_rules": {
+      "kind": "adapter",
+      "adapter": "power_intent"
     }
   },
   "report_check_readers": {
