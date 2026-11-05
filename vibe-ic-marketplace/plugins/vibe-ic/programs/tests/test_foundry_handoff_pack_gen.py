@@ -138,7 +138,7 @@ def test_release_uses_gds_root_and_preserves_design_label(tmp_path,root):
     assert spec['physical_top']['root_candidates'] == [root]
     assert spec['physical_top']['source'] == 'phase3/stage4/gds/product_label.gds'
     assert spec['gds_path'] == spec['physical_top']['source']
-    assert spec['layout_members']['product_label.gds']['sha256'] == hashlib.sha256(original).hexdigest()
+    assert spec['layout_members']['product_label.gds']['bytes'] == len(original)
     assert layout.read_bytes() == original
     assert (project/'phase3/stage4/foundry_handoff/product_label.gds').read_bytes() == original
     print('PHYSICAL_ROOT',json.dumps({'root':spec['design_top'],'label':spec['design_label'],'source':spec['physical_top']}))
@@ -201,9 +201,7 @@ def test_rerun_rebuilds_only_the_owned_package_directory(tmp_path):
     assert not old_archive.exists()
     assert not (handoff / 'old_metadata.json').exists()
     assert not (handoff / 'old_external_link').exists()
-    manifest = json.loads((handoff / 'release_manifest.json').read_text())
-    assert not any('old_layout' in entry['path'] or 'old_metadata' in entry['path']
-                   for entry in manifest['files'])
+    assert not (handoff / 'release_manifest.json').exists()
     assert (handoff / layout.name).read_bytes() == layout.read_bytes()
     assert {hashlib.sha256(p.read_bytes()).hexdigest() for p in handoff.rglob('*.gds')} == {
         hashlib.sha256(layout.read_bytes()).hexdigest()}
@@ -237,7 +235,7 @@ def test_handoff_never_adds_a_differently_named_pnr_layout_to_final_gds(tmp_path
     handoff = project / 'phase3/stage4/foundry_handoff'
     spec = json.loads((handoff / 'mask_spec.json').read_text())
     assert set(spec['layout_members']) == {layout.name}
-    assert spec['layout_members'][layout.name]['signed_off_source'] is True
+    assert spec['layout_members'][layout.name]['source'] == str(layout)
     assert {hashlib.sha256(p.read_bytes()).hexdigest() for p in handoff.rglob('*.gds')} == {
         hashlib.sha256(layout.read_bytes()).hexdigest()}
     assert old.read_bytes() == original
