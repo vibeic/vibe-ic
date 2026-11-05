@@ -703,7 +703,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
     restore_directory = None
     if from_name:
         first = positions[from_name]
-        for row in table["steps"][first - 1:]:
+        last = positions[to_name] if to_name else len(table["steps"])
+        for row in table["steps"][first - 1:last]:
             if row["tool"].get("function") == "step_rtl_gen":
                 keep_author_failure(step_root / row["name"])
             for name in ("result.json", "state_out.json"):
@@ -719,6 +720,10 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                 and "Verilator.Lint" in tool.get("steps", [])):
             tools[name] = {"kind": "adapter", "function": "rtl_validate"}
     selected_names = set(tools)
+    replayed_aggregates = [row for row in complete_selection if from_name and to_name
+        and positions[row["name"]] > positions[to_name]
+        and choose_tool(row["tool"], features)["kind"] == "aggregate"
+        and (step_root / row["name"] / "result.json").is_file()]
     common_names = {name for name, tool in tools.items()
                     if tool.get("timing_group", "librelane" if tool["kind"] == "librelane" else "other") == "librelane"}
     jobs = AdapterJobs(project, route)
@@ -759,7 +764,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             result.update(native_common_started_at=common_started_at,
                           native_common_completed_at=common_completed_at)
         write_json(step_root / row["name"] / "result.json", result)
-        results[row["name"]] = result
+        if row["name"] in selected_names:
+            results[row["name"]] = result
         print(f"第 {positions[row['name']]} 步 {row['title']}: {result['status']}", flush=True)
         write_summary()
 
@@ -807,7 +813,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
 
     completed = False
     try:
-        for row in selected:
+        for row in [*selected, *replayed_aggregates]:
             for packet in jobs.collect():
                 completed_job(packet)
             ready_reports()
@@ -819,7 +825,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                 preparation = chain.preparation_result()
                 restore_directory = None
             directory = step_root / row["name"]
-            tool = tools[row["name"]]
+            tool = tools.get(row["name"]) or choose_tool(row["tool"], features)
             kind = tool["kind"]
             saved = read_json(directory / "result.json")
             refresh_author = tool.get("function") == "step_rtl_gen"
@@ -863,7 +869,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                         if added.exit_code:
                             native.exit_code = added.exit_code
             else:
-                if directory.exists() and row["name"] not in prepared and not refresh_author:
+                if directory.exists() and row["name"] in selected_names and row["name"] not in prepared and not refresh_author:
                     shutil.rmtree(directory)
                 directory.mkdir(exist_ok=True)
             context = {"row": row, "tool": tool, "saved": saved, "retained": retained,
