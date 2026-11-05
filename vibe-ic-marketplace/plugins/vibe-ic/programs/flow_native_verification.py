@@ -55,7 +55,7 @@ def reset_boundary(project):
                         if name and edge in {"posedge", "negedge"}:
                             clocks.add((name, edge))
                     for row in _records(container, "resets", "reset_domains"):
-                        name, polarity = row.get("name"), row.get("polarity")
+                        name, polarity = row.get("source_pin") or row.get("name"), row.get("polarity")
                         if name and polarity in {"active_low", "active_high"}:
                             resets.add((name, polarity))
     if len(clocks) != 1 or len(resets) != 1:
@@ -108,9 +108,10 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
             return None, None, reports, "Pad-boundary elaboration did not complete."
         views[side] = json.loads((directory / f"{side}.before-normalization.json").read_text())["modules"][top]
         module = views[side]
+        core_connections = {bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
+                            for bits in cell["connections"].values() for bit in bits}
         connected = {bit for port in module["ports"].values() for bit in port["bits"]}
-        connected.update(bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
-                         for bits in cell["connections"].values() for bit in bits)
+        connected.update(core_connections)
         connected_ports = {f"{instance}.{pin}" for instance, cell in module["cells"].items()
                            if cell["type"] in pads["types"] for pin, bits in cell["connections"].items()
                            if bits and (cell["port_directions"].get(pin) == "input"
@@ -119,10 +120,25 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
         disconnected = [f"{top}/{name}" for name, port in exposed["ports"].items()
                         if port["direction"] == "output" and name not in module["ports"]
                         and name not in connected_ports]
+        pad_terminals = {bit for cell in module["cells"].values() if cell["type"] in pads["types"]
+                         for pin, bits in cell["connections"].items()
+                         if cell["port_directions"].get(pin) == "inout" for bit in bits}
+        package_inputs = {bit for port in module["ports"].values() if port["direction"] in {"input", "inout"}
+                          for bit in port["bits"]}
+        package_outputs = [f"{top}/{name}" for name, port in module["ports"].items()
+                           if port["direction"] == "output" and port["bits"]
+                           and all(type(bit) is int and bit in pad_terminals
+                                   and bit not in core_connections and bit not in package_inputs for bit in port["bits"])]
+        projection = []
+        if package_outputs:
+            projection.extend(["expose -input " + " ".join(package_outputs),
+                               "delete -output " + " ".join(package_outputs)])
         if disconnected:
+            projection.append("delete -port " + " ".join(disconnected))
+        if projection:
             path = directory / f"{side}_core.ys"
             path.write_text(f"read_json {_word(core / (side + '.json'))}\n"
-                + "delete -port " + " ".join(disconnected) + "\n"
+                + "\n".join(projection) + "\n"
                 + f"hierarchy -top {top}\nclean -purge\n"
                 + f"write_json {_word(core / (side + '.json'))}\n"
                 + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")

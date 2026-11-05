@@ -187,11 +187,32 @@ def test_ambiguous_reset_declarations_do_not_invent_a_boundary(tmp_path):
     assert reset_boundary(tmp_path) is None
 
 
+def test_reset_domain_alias_does_not_merge_distinct_source_pins(tmp_path):
+    reset_docs(tmp_path)
+    docs = tmp_path / "phase1/generated_docs"
+    path = docs / "L8_TIMING_WAVEFORM.json"
+    document = json.loads(path.read_text())
+    document["clock_and_reset_waveform"]["resets"][0].update(name="reset_domain", source_pin="rst_n")
+    path.write_text(json.dumps(document))
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"reset_domains": [
+        {"name": "reset_domain", "source_pin": "other_reset", "polarity": "active_low"}]}))
+    assert reset_boundary(tmp_path) is None
+
+
 @pytest.mark.parametrize("different", [False, True])
-def test_actual_eqy_uses_documented_reset_state(tmp_path, different):
+@pytest.mark.parametrize("domain_alias", [False, True])
+def test_actual_eqy_uses_documented_reset_state(tmp_path, different, domain_alias):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
     reset_docs(tmp_path)
+    if domain_alias:
+        docs = tmp_path / "phase1/generated_docs"
+        path = docs / "L8_TIMING_WAVEFORM.json"
+        document = json.loads(path.read_text())
+        document["clock_and_reset_waveform"]["resets"][0].update(name="reset_domain", source_pin="rst_n")
+        path.write_text(json.dumps(document))
+        (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"reset_domains": [
+            {"name": "rst_n", "source_pin": "rst_n", "polarity": "active_low"}]}))
     gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
     gold.write_text("module unit(input clk, rst_n, a, output reg q);\n"
                    "always @(posedge clk) if(!rst_n) q<=1; else q<=a; endmodule\n")
@@ -336,8 +357,10 @@ def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("change", ["none", "unused_models", "renamed_core_ports", "open_pad_pins", "unknown_core",
-    "inline_unknown_core", "inline_z_core", "inline_undriven_core", "core", "core_pin", "terminal", "instance", "type"])
-def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
+    "inline_unknown_core", "inline_z_core", "inline_undriven_core", "core", "core_pin", "terminal", "instance", "type",
+    "direct_output", "direct_bad_output", "direct_unknown_output"])
+@pytest.mark.parametrize("package_output", [False, True])
+def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, package_output):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
     reset_docs(tmp_path)
@@ -351,6 +374,10 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
     wrapper = ("module unit(inout clk,rst_n,a,q);\nwire ic,ir,ia,oq;\n"
                "INPAD pclk(.PAD(clk),.Y(ic));\nINPAD prst(.PAD(rst_n),.Y(ir));\n"
                "INPAD pa(.PAD(a),.Y(ia));\nOUTPAD pq(.A(oq),.PAD(q));\n")
+    if package_output:
+        wrapper = wrapper.replace("inout clk,rst_n,a,q", "input clk,rst_n,a,output q")
+    if change in {"direct_output", "direct_bad_output", "direct_unknown_output"}:
+        wrapper = wrapper.replace(");", ",output monitor);", 1)
     gold.write_text(wrapper + "core u_core(.clk(ic),.rst_n(ir),.a(ia),.q(oq));\nendmodule\n")
     if change == "renamed_core_ports":
         core.write_text(core.read_text().replace("clk", "core_clk").replace("rst_n", "core_rst_n"))
@@ -365,6 +392,11 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
     elif change == "type":
         implemented = implemented.replace("INPAD pa(", "INPAD_ALT pa(")
     gate.write_text(implemented)
+    if change in {"direct_output", "direct_bad_output", "direct_unknown_output"}:
+        gold_value = "1'bx" if change == "direct_unknown_output" else "oq"
+        gate_value = "~oq" if change == "direct_bad_output" else gold_value
+        gold.write_text(gold.read_text().replace("endmodule", f"assign monitor={gold_value};\nendmodule"))
+        gate.write_text(gate.read_text().replace("endmodule", f"assign monitor={gate_value};\nendmodule"))
     if change == "unknown_core":
         core.write_text("module core(input clk,rst_n,a,output q); assign q=1'bx; endmodule\n")
         gate.write_text(wrapper + "assign oq=1'bx;\nendmodule\n")
@@ -389,13 +421,13 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
               "PAD_VERILOG_MODELS": [str(pads)]}
     result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
     rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
-    assert rows.get("Yosys.Wrapper") == ("FAIL" if change in {"terminal", "instance", "type"} else "PASS"), result
-    if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin"}:
-        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin"} else "PASS"), result
-    if change in {"unknown_core", "inline_unknown_core", "inline_z_core", "inline_undriven_core"}:
+    assert rows.get("Yosys.Wrapper") == ("FAIL" if change in {"terminal", "instance", "type", "direct_bad_output"} else "PASS"), result
+    if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin", "direct_output", "direct_bad_output"}:
+        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin", "direct_bad_output"} else "PASS"), result
+    if change in {"unknown_core", "inline_unknown_core", "inline_z_core", "inline_undriven_core", "direct_unknown_output"}:
         assert rows.get("Yosys.EQY.Core") == "NOT_MEASURED", result
         assert not result["metrics"], result
-    elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins"}:
+    elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "direct_output"}:
         assert result["metrics"]["unproved_equivalence"] == 0, result
     else:
         assert result["metrics"].get("unproved_equivalence", 0) > 0, result
