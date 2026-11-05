@@ -618,7 +618,8 @@ def gls(project, directory, tool, commands, *, state, config):
                             count = emit_unit_tbs(project, top=top, report=producer, out_dir=output,
                                 scaffold=False, case_stated=True, case_ids=[bench.stem], dut_ports=surface)
                             rebound = output / (bench.stem + ".v")
-                            if count != 1 or not rebound.is_file():
+                            if (count != 1 or not rebound.is_file()
+                                    or producer.get("known_answer_vector_unbound")):
                                 raise ValueError("The native chip-port case producer could not ground the declared case: "
                                                  + json.dumps(producer))
                             tb_text = native.strip_comments(rebound.read_text())

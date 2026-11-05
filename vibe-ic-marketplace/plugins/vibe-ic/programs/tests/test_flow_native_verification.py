@@ -862,6 +862,53 @@ def test_gls_regenerates_declared_vectors_on_native_chip_ports(tmp_path, differe
                for path in directory.glob("corner_*/annotated_tb.v"))
 
 
+def test_gls_keeps_typed_vector_refusal_instead_of_boot_fallback(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    from testbench_gen import emit_unit_tbs
+
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config, benches = declared_vector_chip_fixture(project)
+    rtl = project / "phase2/stage1/rtl/core_unit.v"
+    rtl.write_text("module core_unit(input clk,rst_n,input [7:0] message,"
+                   "output [7:0] digest,ciphertext,output req_o); "
+                   "assign digest=message; assign ciphertext=1; assign req_o=1; endmodule\n")
+    l10 = project / "phase1/generated_docs/L10_TEST_CASES.json"
+    document = json.loads(l10.read_text())
+    document["test_cases"][0].update(
+        stimulus="reset release, first bus access within 2 cycles",
+        expected="first bus access within 2 cycles")
+    document["test_cases"][0]["expected_outputs"]["ciphertext"] = "01"
+    l10.write_text(json.dumps(document))
+    assert emit_unit_tbs(project, top="core_unit", scaffold=False, case_stated=True) == 4
+    bench = benches[0]
+    original = {path: path.read_bytes() for path in benches}
+    assert "EXPECTED_DIGEST" in bench.read_text() and "EXPECTED_CIPHERTEXT" in bench.read_text()
+    for different in (False, True):
+        source, executable = directory / f"core_{different}.v", directory / f"core_{different}.vvp"
+        source.write_text(rtl.read_text().replace("assign digest=message", "assign digest=8'hff")
+                          if different else rtl.read_text())
+        compiled = subprocess.run(["iverilog", "-g2012", "-s", bench.stem, "-o", str(executable),
+                                   str(bench), str(source)], capture_output=True, text=True)
+        assert compiled.returncode == 0, compiled.stderr
+        completed = subprocess.run(["vvp", str(executable)], capture_output=True, text=True)
+        assert bool(completed.returncode) is different, (completed.stdout, completed.stderr)
+    netlist = Path(state["nl"])
+    netlist.write_text("module chip_unit(input clk,rst_n,input [7:0] message,"
+        "output [7:0] digest,output req_o);\nwire delayed_clk; wire [7:0] raw=8'hff; "
+        "clock_cell clock_input(.a(clk),.y(delayed_clk)); assign req_o=1;\n"
+        + "\n".join(f"delay_cell gate{bit}(.a(raw[{bit}]),.y(digest[{bit}]));" for bit in range(8))
+        + "\nendmodule\n")
+    result = gls(project, directory, {"testbenches": [str(bench)]},
+                 Commands(directory), state=state, config=config)
+    row = result["native_steps"][0]
+    assert row["status"] == "NOT_MEASURED" and not row["ran"], result
+    assert "ciphertext" in row["detail"], result
+    assert "gls_failures" not in result["metrics"], result
+    assert {path: path.read_bytes() for path in benches} == original
+
+
 @pytest.mark.parametrize("source", ["authored", "delivered", "input_delivered", "unbound", "unknown_case"])
 def test_gls_does_not_replace_unavailable_core_checks(tmp_path, source):
     if not shutil.which("iverilog") or not shutil.which("vvp"):
