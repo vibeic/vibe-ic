@@ -41,7 +41,22 @@ def test_native_sizing_reports_failed_yosys_run_to_observer(tmp_path, native_inp
     assert any(Path(run["reports"]).glob("*.log"))
     sizing = json.loads((tmp_path / "work/flow/chip/sizing.json").read_text())
     assert sizing == {"runs": [{"name": run["name"], "tool_seconds": run["tool_seconds"]}],
+                      "top": "unit", "state_out": str(Path(run["reports"]).parent / "yosys_synthesis/state_out.json"),
                       "tool_seconds": run["tool_seconds"]}
+
+
+def test_native_sizing_records_the_core_state_for_activity(tmp_path, native_inputs):
+    Path(native_inputs["VERILOG_FILES"][0]).write_text(
+        "module unit(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n")
+    destination = tmp_path / "sizing"
+    destination.mkdir()
+
+    chip._native_core(tmp_path, native_inputs, destination)
+
+    sizing = json.loads((destination / "sizing.json").read_text())
+    state = json.loads(Path(sizing["state_out"]).read_text())
+    assert sizing["top"] == "unit"
+    assert Path(state["nl"]).is_file()
 
 
 @pytest.mark.parametrize("failure", [None, "missing_input", "tool_failure"])
