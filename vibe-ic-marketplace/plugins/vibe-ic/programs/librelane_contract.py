@@ -4283,8 +4283,6 @@ def resolve_step_config(project: Path, image: str, source: Path, output: Path,
     # probe the exact argv with a stand-in runner before creating that file;
     # in either case there is no step-specific plugin to mount yet.
     step_id = _load(source).get('meta', {}).get('step', '') if source.is_file() else ''
-    from flow109_frontend import require_librelane_launch
-    require_librelane_launch(project, step_id, configuration=True)
     result = run_container([docker, 'run', *_dmem.docker_memory_flags(), '--rm', *volumes,
                             *_plugin_args([step_id]),
                             '--entrypoint', 'python3', image, '-c', script],
@@ -4476,47 +4474,7 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
               lane: str | None = None, pdk_root: str | None = None,
               namespace: str | None = None,
               openroad_init: list[str] | None = None) -> list[Path]:
-    """Run pinned per-step snapshots. Step directories retain both inputs and outputs.
-
-    ``openroad_init``: extra Tcl lines for the OpenROAD init file every
-    OpenROAD step reads (joins each step's fingerprint).
-
-    ``pdk_root``: the PDK root as the step container sees it (normally
-    `PDK_GUEST_ROOT`, bound from the run's resolved root). It is REQUIRED:
-    without it LibreLane's CLI takes `--pdk-root` from the image's own
-    `PDK_ROOT` at import, a value nothing in the run stated. Each step folder
-    records it, with the host mounts beneath it, in `pdk_root.json`.
-    """
-    if not pdk_root or not str(pdk_root).startswith('/'):
-        raise Refusal('LL_PDK_ROOT_UNSTATED',
-                      f'{[s[0] for s in steps]}: pdk_root={pdk_root!r}; the run '
-                      f'must state the PDK root its step containers read, or '
-                      f'LibreLane defaults to the image\'s PDK_ROOT')
-    mismatch = _provider_route_mismatch(image, project)
-    if mismatch is not None:
-        raise mismatch
-    provider = _provider_for_image(image)
-    local = provider is not None or _provider_route(project)
-    root = str(pdk_root).rstrip('/') or '/'
-    pdk_record = {'cli_pdk_root': str(pdk_root),
-                  'mounts_under_it': [[str(host.resolve()), guest]
-                                      for host, guest in mounts or []
-                                      if guest == root or guest.startswith(root + '/')],
-                  'stated_by': 'run_chain(pdk_root=...)'}
-    if provider is not None:
-        pdk_record['provider'] = provider.as_record()
-    if local:
-        pdk_root = _ce.localise_mounted_paths(str(pdk_root),
-            [(guest, str(host.resolve())) for host, guest in mounts or []])
-        logical_mounts = pdk_record['mounts_under_it']
-        pdk_record.update(cli_pdk_root=pdk_root, requested_pdk_root=root,
-            execution_route='LOCAL', requested_mounts=logical_mounts,
-            mounts_under_it=[[host, _ce.localise_mounted_paths(guest,
-                [(g, str(h.resolve())) for h, g in mounts or []])]
-                for host, guest in logical_mounts])
-    capability = image_capability(image, docker)
-    outputs = []
-    previous: Path | None = None
+    """Run configured native LibreLane steps, carrying each output State forward."""
     if lane is not None and (not lane or '/' in lane or lane in ('.', '..')):
         raise Refusal('LL_INVALID_LANE', str(lane))
     if namespace and (Path(namespace).is_absolute() or
@@ -4529,226 +4487,42 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
         base /= lane
     if namespace:
         base /= namespace
-    import drv_stage_receipts as _drv_stages
-    drv_probe = (_drv_stages.probe_lines()
-                 if _drv_stages.chain_needs_probe(s for s, _, _ in steps) else None)
-    home = openroad_home(base / '.openroad_home', capability, openroad_init,
-                         drv_probe=drv_probe)
+    capability = image_capability(image, docker)
+    home = openroad_home(base / '.openroad_home', capability, openroad_init)
+    if pdk_root and (_provider_for_image(image) is not None or _provider_route(project)):
+        pdk_root = _ce.localise_mounted_paths(str(pdk_root),
+            [(guest, str(host.resolve())) for host, guest in mounts or []])
+    outputs = []
+    previous: Path | None = None
     for index, (step_id, config, initial_state) in enumerate(steps, 1):
-        name = f'{index:02d}-{step_id.lower().replace(".", "-")}'
-        folder = base / name
+        folder = base / f'{index:02d}-{step_id.lower().replace(".", "-")}'
         state_path = previous or initial_state
-        state = _load(state_path)
-        _check_state(state, step_id=step_id)
-        if _load(config).get('meta', {}).get('step') != step_id:
-            raise Refusal('LL_STEP_CONFIG_MISMATCH', step_id)
-        # A step's DECLARED outputs are not a promise (KLayout.StreamOut
-        # declares `gds` and writes only `klayout_gds`), so the views the next
-        # step declares it consumes are checked on the state it actually gets.
-        if views_path(config).is_file():
-            declared = _load(views_path(config)).get('inputs') or []
-            missing = [view for view in declared if not state.get(view)]
-            if missing:
-                raise Refusal('LL_STATE_MISSING', f'{step_id}: {missing}')
-        fingerprint = {'image': str(image), 'config': digest(config), 'state': digest(state_path),
-                       'state_files': {str(path): digest(path) for path in _walk_paths(
-                           {k: v for k, v in state.items() if k != 'metrics'})},
-                       # Files the step config names (SDC, EQY script, PDN Tcl…)
-                       # are inputs too: an edited deck must re-run the step.
-                       'config_files': config_file_hashes(_load(config), mounts or []),
-                       'step': step_id}
-        from flow109_frontend import synthesis_fingerprint
-        admitted_synthesis = synthesis_fingerprint(project)
-        if admitted_synthesis is not None:
-            fingerprint['flow109_synthesis'] = admitted_synthesis
-        if step_id == 'Yosys.Synthesis':
-            declared_synthesis = synthesis_levers(project)
-            if declared_synthesis is not None:
-                # Bind raw author authority at the actual native invocation,
-                # independently of its effective value in the resolved config.
-                fingerprint['synthesis_levers'] = declared_synthesis
-        if provider is not None:
-            fingerprint['local_provider'] = provider.as_record()
-        if lane in ('37.3-magic', '37.3-compare'):
-            fingerprint['config_files'] = _current_config_material(
-                _load(config), mounts or [])
-        if step_id == 'KLayout.Density':
-            image_files = config.with_name('KLayout.Density.image_files.json')
-            if image_files.is_file():
-                owned = _load(image_files)
-                if owned.get('image') != image or not isinstance(owned.get('sha256'), dict) \
-                        or any(not re.fullmatch('[0-9a-f]{64}', str(sha))
-                               for sha in owned['sha256'].values()):
-                    raise Refusal('LL_DENSITY_IMAGE_INPUT_UNBOUND', str(image_files))
-                fingerprint['image_files'] = owned
-                fingerprint['image_files_sha256'] = digest(image_files)
-        if step_id == 'OpenROAD.STAPostPNR':
-            fingerprint['liberty_files'] = _sta_liberty_input_hashes(
-                _load(config), project, mounts or [])
-        if step_id == 'OpenROAD.RCX':
-            fingerprint['rcx_pdk_files'] = _rcx_pdk_input_hashes(
-                _load(config), project, mounts or [])
-            if not fingerprint['rcx_pdk_files'] or any(
-                    value is None for value in fingerprint['rcx_pdk_files'].values()):
-                unreadable = [path for path, value in fingerprint['rcx_pdk_files'].items()
-                              if value is None]
-                raise Refusal('LL_RCX_PDK_INPUT_UNREADABLE',
-                              f'{config}: {unreadable or "no declared RCX inputs"}')
-        if home:
-            fingerprint['openroad_aliases'] = (capability or {}).get('openroad_aliases') or {}
-        if step_id.startswith(PLUGIN_STEP_PREFIX):
-            fingerprint['plugin'] = _plugin_digests(step_id)
-        if openroad_init:
-            fingerprint['openroad_init'] = list(openroad_init)
-        if drv_probe:
-            fingerprint['drv_stage_probe'] = _drv_stages.probe_digest()
-        receipt = folder / 'vibeic_receipt.json'
-        # A folder is reused only if it was run under THIS stated root: one
-        # from before the root was recorded (the CLI then took the image's
-        # PDK_ROOT) or under another root/mount is archived and re-run. The
-        # fingerprint itself is unchanged, so no other step re-runs for it.
-        try:
-            retained = validate_step_receipt(folder, step_id) if receipt.exists() else None
-        except Refusal:
-            retained = None
-        if (retained is not None and step_id == 'Yosys.Synthesis'
-                and _drv_stages.native_abc_script(folder, retained) is None):
-            # Old/partial synthesis caches cannot recreate an executed script
-            # from the recipe or log. Preserve them and run the real producer.
-            retained = None
-        if (retained is not None
-                and _step_input_identity(retained['input']) == _step_input_identity(fingerprint)
-                and (folder / 'state_out.json').exists()
-                and (folder / 'pdk_root.json').is_file()
-                and _load(folder / 'pdk_root.json') == pdk_record):
-            if lane == '37.3-compare' and step_id == 'KLayout.XOR':
-                check_xor_report(folder, _load(receipt))
-            if step_id == 'OpenROAD.RCX':
-                validate_rcx_receipt(folder)
-            _check_state(_load(folder / 'state_out.json'), outputs=True)
-            previous = folder / 'state_out.json'
-            outputs.append(folder)
-            _drv_stages.record_step(project, step_id, folder, reused=True)
-            continue
         if folder.exists():
             archive = base / 'attempts'
             archive.mkdir(parents=True, exist_ok=True)
             number = 1
-            while (archive / f'{name}-{number:04d}').exists():
+            while (archive / f'{folder.name}-{number:04d}').exists():
                 number += 1
-            shutil.move(str(folder), str(archive / f'{name}-{number:04d}'))
+            shutil.move(str(folder), str(archive / f'{folder.name}-{number:04d}'))
         folder.mkdir(parents=True, exist_ok=True)
-        write_json(folder / 'input_fingerprint.json', fingerprint)
-        write_json(folder / 'pdk_root.json', pdk_record)
         volume_args = ['-v', f'{project.resolve()}:{project.resolve()}']
-        # LibreLane's Yosys ABC path already emits the exact temporary script
-        # with ``-showtmp``.  Keep that tool-owned temp directory on the
-        # existing same-path project mount so the receipt owner can copy the
-        # script named by invocation.log after the container returns.  This is
-        # capture/persistence only; it does not enable ABC buffering.
-        abc_tmp = None
-        if step_id == 'Yosys.Synthesis':
-            abc_tmp = folder / 'vibeic_abc_tmp'
-            abc_tmp.mkdir(parents=True, exist_ok=True)
-            volume_args += ['--workdir', str(folder.resolve())]
         for host, guest in mounts or []:
             volume_args += ['-v', f'{host.resolve()}:{guest}:ro']
         if home:
             volume_args += ['-e', f'HOME={home.resolve()}']
-        if abc_tmp is not None:
-            volume_args += ['-e', f'TMPDIR={abc_tmp.resolve()}']
         volume_args += _plugin_args([step_id])
         cmd = [docker, 'run', *_dmem.docker_memory_flags(), '--rm', *volume_args,
                '--entrypoint', 'python3', image,
                '-m', 'librelane.steps', 'run', '--id', step_id, '-c', str(config),
-               '-i', str(state_path), '-o', str(folder), '--pdk-root', str(pdk_root)]
-        from flow109_frontend import require_librelane_launch
-        require_librelane_launch(project, step_id)
-        try:
-            completed = run_container(cmd, supervised=True,
-                                      log=folder / 'invocation.log')
-        except Refusal as exc:
-            if exc.code != 'LL_TOOL_STALLED':
-                raise
-            partial = folder / 'state_out.json'
-            moved = folder / 'state_out.stalled.json'
-            if partial.is_file():
-                partial.replace(moved)
-            write_json(folder / 'vibeic_stalled.json', {
-                'verdict': 'NOT_MEASURED', 'reason_class': 'stalled',
-                'step': step_id, 'detail': str(exc),
-                'partial_state': str(moved) if moved.is_file() else None,
-                'invocation_log': str(folder / 'invocation.log')})
-            raise Refusal(exc.code, f'{step_id}: {exc}; '
-                          f'evidence={folder / "vibeic_stalled.json"}') from exc
+               '-i', str(state_path), '-o', str(folder)]
+        if pdk_root:
+            cmd += ['--pdk-root', str(pdk_root)]
+        completed = run_container(cmd, supervised=True, log=folder / 'invocation.log')
         (folder / 'invocation.log').write_text(completed.stdout + '\n' + completed.stderr)
         if completed.returncode or not (folder / 'state_out.json').exists():
             raise Refusal('LL_STEP_FAILED', f'{step_id}: rc={completed.returncode}; {folder / "invocation.log"}')
-        if step_id == 'Yosys.Synthesis':
-            # Use the existing receipt owner and the actual tool log.  A
-            # missing or guest-only path remains absent and therefore keeps
-            # the downstream synth receipt NOT_VERIFIED/FAIL.
-            _drv_stages.keep_abc_script(
-                project, folder, (folder / 'invocation.log').read_text(errors='replace'))
-        out_state = _load(folder / 'state_out.json')
-        _check_state(out_state, outputs=True)
-        if step_id == 'OpenROAD.STAPostPNR' and fingerprint['liberty_files'] != \
-                _sta_liberty_input_hashes(_load(config), project, mounts or []):
-            raise Refusal('LL_STA_LIBERTY_CHANGED_DURING_RUN', str(folder))
-        if step_id == 'OpenROAD.RCX' and fingerprint['rcx_pdk_files'] != \
-                _rcx_pdk_input_hashes(_load(config), project, mounts or []):
-            raise Refusal('LL_RCX_PDK_CHANGED_DURING_RUN', str(folder))
-        if step_id == 'OpenROAD.RCX':
-            try:
-                inputs_unchanged = (fingerprint['state'] == digest(state_path) and
-                    fingerprint['config'] == digest(config) and
-                    all(digest(Path(path)) == recorded
-                        for path, recorded in fingerprint['state_files'].items()))
-            except OSError:
-                inputs_unchanged = False
-            if not inputs_unchanged:
-                raise Refusal('LL_RCX_OUTPUT_UNBOUND',
-                              f'{folder}: extraction input bytes changed during execution')
-        hashes = {'state_out.json': digest(folder / 'state_out.json'),
-                  'invocation.log': digest(folder / 'invocation.log')}
-        for path in _walk_paths({k: v for k, v in out_state.items() if k != 'metrics'}):
-            if path.is_relative_to(folder):
-                hashes[str(path.relative_to(folder))] = digest(path)
-        for path in folder.rglob('*'):
-            if path.is_file() and path.name.endswith(('.json', '.rpt')) and path.name not in ('vibeic_receipt.json',):
-                hashes[str(path.relative_to(folder))] = digest(path)
-            if step_id in ('OpenROAD.STAPrePNR', 'OpenROAD.STAPostPNR') \
-                    and path.is_file() and path.name == 'sta.log':
-                hashes[str(path.relative_to(folder))] = digest(path)
-        if step_id == 'OpenROAD.DetailedRouting':
-            report = _detailed_route_drc_output(folder, out_state)
-            hashes[str(report.relative_to(folder))] = digest(report)
-        # LibreLane's Yosys step records the exact native invocation in
-        # COMMANDS.  Bind that journal alongside invocation.log so a consumer
-        # cannot substitute a mutable wrapper command after the run.  Older
-        # receipts remain deliberately unmeasured; new synthesis receipts
-        # carry the real command bytes automatically at this existing seam.
-        if step_id == 'Vibeic.PostMapRepair':
-            for name in ('COMMANDS', 'statistics.ys', 'statistics.log'):
-                path = folder / name
-                if not path.is_file() or not path.stat().st_size:
-                    raise Refusal('LL_POSTMAP_EXECUTION_MISSING', str(path))
-                hashes[name] = digest(path)
-        if step_id == 'Yosys.Synthesis':
-            commands = folder / 'COMMANDS'
-            if commands.is_file() and commands.stat().st_size:
-                hashes['COMMANDS'] = digest(commands)
-            for path in (folder / _drv_stages.PROBE_DIR / 'synth').glob('*'):
-                if path.is_file():
-                    hashes[str(path.relative_to(folder))] = digest(path)
-        record = {'input': fingerprint, 'sha256': hashes}
-        if lane == '37.3-compare' and step_id == 'KLayout.XOR':
-            record = bind_xor_report(folder, record)
-        write_json(receipt, record)
         previous = folder / 'state_out.json'
         outputs.append(folder)
-        # DRV standard section 1: the stage's receipt, bound to this run.
-        _drv_stages.record_step(project, step_id, folder)
     return outputs
 
 
@@ -4760,9 +4534,6 @@ _STA_CELL_LIBRARY_RE = re.compile(
 
 def _state_step_id(folder: Path) -> str | None:
     """The LibreLane step that wrote `folder`, from its own records."""
-    receipt = folder / 'vibeic_receipt.json'
-    if receipt.is_file():
-        return _load(receipt).get('input', {}).get('step')
     config = folder / 'config.json'
     if config.is_file():
         return _load(config).get('meta', {}).get('step')
@@ -4860,17 +4631,12 @@ def judge_step(folder: Path, required_metrics: list[str], output: Path,
             rows[key]['status'] = 'FAIL'
             verdict = 'FAIL'
     result = {'verdict': verdict, 'metrics': rows, 'scope': scope or {},
-              'source': str(folder / 'state_out.json'),
-              'sha256': {'state_out.json': digest(folder / 'state_out.json')}}
-    for name in ('metrics.json',):
-        if (folder / name).exists():
-            result['sha256'][name] = digest(folder / name)
+              'source': str(folder / 'state_out.json')}
     reports = {}
     for name in required_reports or []:
         path = folder / name
         if path.is_file():
-            reports[name] = {'status': 'PRESENT', 'sha256': digest(path)}
-            result['sha256'][name] = reports[name]['sha256']
+            reports[name] = {'status': 'PRESENT', 'path': str(path)}
         else:
             reports[name] = {'status': 'NOT_MEASURED'}
             if result['verdict'] != 'FAIL':
