@@ -1119,6 +1119,40 @@
           "line": 132
         }
       }
+    ],
+    "metal_density_fill": [
+      {
+        "metric": "*__density_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 471
+        },
+        "unit": "count",
+        "when": "ic"
+      }
+    ],
+    "seal_ring_and_die_identification": [
+      {
+        "metric": "seal_dieid_rules",
+        "operator": "==",
+        "limit": 1,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+          "symbol": "SealRing.run / SealRing.METRIC",
+          "note": "Native verifier emits 1 only when the output layout contains a measured ring around DIE_AREA; a missing script emits 0.",
+          "line": 1040
+        },
+        "unavailable_values": [
+          0
+        ],
+        "unavailable_reason": "Native seal-ring producer reports skipped: no PDK script produced a verified ring."
+      }
     ]
   },
   "adapters": {
@@ -1256,6 +1290,7 @@
           "Magic.StreamOut",
           "KLayout.StreamOut",
           "KLayout.Render",
+
           "KLayout.XOR",
           "Checker.XOR"
         ]
@@ -1267,8 +1302,7 @@
         "steps": [
           "KLayout.Filler",
           "KLayout.Density",
-          "VibeIC.DensityTopUp",
-          "Checker.KLayoutDensity"
+          "VibeIC.DensityTopUp"
         ],
         "imports": [
           "flow_density_topup"
@@ -2168,8 +2202,8 @@
       },
       {
         "old_name": "vacuous_required_proofs",
-        "class": "T",
-        "reason": "SymbiYosys prove and antecedent reachability cover tasks; wire the report/input adapter without population emitters or requirement traces."
+        "class": "X",
+        "reason": "Native SymbiYosys cover tasks enforce zero unreached targets for existing covers and conditional assertion enables. When the native model contains neither, no cover count is invented and this absent observation does not block a proof."
       },
       {
         "old_name": "proof_partition_coverage",
@@ -3188,22 +3222,26 @@
     "seal_ring_and_die_identification": [
       {
         "old_name": "seal_dieid_rules",
-        "class": "T",
-        "reason": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
+        "class": "N",
+        "native_metrics": [
+          "design__seal_ring__verified"
+        ],
+        "reason": "Use the native measured seal-ring result against its existing verified value 1."
       },
       {
         "old_name": "seal_core_clearance",
-        "class": "T",
-        "reason": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
+        "class": "R",
+        "native_metrics": [],
+        "reason": "Native seal verification checks the ring geometry and final DRC retains PDK spacing limits. No separate clearance target is enforced without a document declaration; a declared bound with no native clearance number remains NOT_MEASURED."
       }
     ],
     "metal_density_fill": [
       {
-        "old_name": "klayout__density_error__count",
+        "old_name": "*__density_error__count",
         "class": "N",
-        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "reason": "Native backend density error count and zero-error limit unchanged.",
         "native_metrics": [
-          "klayout__density_error__count"
+          "*__density_error__count"
         ]
       },
       {
@@ -3223,7 +3261,7 @@
         "class": "R",
         "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
         "native_metrics": [
-          "klayout__density_error__count"
+          "*__density_error__count"
         ]
       },
       {

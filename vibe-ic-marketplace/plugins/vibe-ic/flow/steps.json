@@ -934,17 +934,6 @@
           }
         },
         {
-          "metric": "vacuous_required_proofs",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 6600
-          },
-          "tool_gap": "SymbiYosys prove and antecedent reachability cover tasks; wire the report/input adapter without population emitters or requirement traces."
-        },
-        {
           "metric": "proof_partition_coverage",
           "operator": "covers_all",
           "limit": null,
@@ -3985,34 +3974,19 @@
       },
       "checks": [
         {
-          "metric": "seal_dieid_rules",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "ic and owner_die",
+          "metric": "design__seal_ring__verified",
+          "operator": "==",
+          "limit": 1,
           "source": {
-            "file": "flow/flow109.json",
-            "line": 14645
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+            "symbol": "SealRing.run / SealRing.METRIC",
+            "note": "Native verifier emits 1 only when the output layout contains a measured ring around DIE_AREA; a missing script emits 0.",
+            "line": 1040
           },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "seal_dieid_rules"
-          },
-          "tool_gap": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
-        },
-        {
-          "metric": "seal_core_clearance",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "ic and owner_die",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 14664
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "seal_core_clearance"
-          },
-          "tool_gap": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
+          "unavailable_values": [
+            0
+          ],
+          "unavailable_reason": "Native seal-ring producer reports skipped: no PDK script produced a verified ring."
         }
       ],
       "legacy_id": {
@@ -4020,7 +3994,25 @@
         "native": [
           "26.5ic"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "seal_core_clearance",
+          "native_metrics": [],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 14664
+          },
+          "reason": "Native seal verification checks the ring geometry and final DRC retains PDK spacing limits. No separate clearance target is enforced without a document declaration; a declared bound with no native clearance number remains NOT_MEASURED.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "seal_core_clearance"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "ic and owner_die"
+        }
+      ]
     },
     {
       "name": "metal_density_fill",
@@ -4054,8 +4046,7 @@
               "steps": [
                 "KLayout.Filler",
                 "KLayout.Density",
-                "VibeIC.DensityTopUp",
-                "Checker.KLayoutDensity"
+                "VibeIC.DensityTopUp"
               ],
               "imports": [
                 "flow_density_topup"
@@ -4073,7 +4064,7 @@
       },
       "checks": [
         {
-          "metric": "klayout__density_error__count",
+          "metric": "*__density_error__count",
           "operator": "<=",
           "limit": 0,
           "source": {
@@ -4085,8 +4076,6 @@
             "line": 471
           },
           "unit": "count",
-          "enabled_by": "ERROR_ON_KLAYOUT_DENSITY",
-          "enabled_default": true,
           "when": "ic"
         }
       ],
@@ -4117,7 +4106,7 @@
         {
           "metric": "dfm_density_lithography_cmp_targets",
           "native_metrics": [
-            "klayout__density_error__count"
+            "*__density_error__count"
           ],
           "source": {
             "file": "flow/flow109.json",

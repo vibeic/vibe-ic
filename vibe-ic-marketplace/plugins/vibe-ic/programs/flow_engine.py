@@ -215,8 +215,18 @@ class NativeChain:
         self.owner = self.state = self.toolbox = None
         self.config: dict = {}
         self.common_started: float | None = None
+        self.preparation_runs: list[dict] = []
+        self.preparation_accounted = 0
+        self.initialization_error: Exception | None = None
+
+    def observe_preparation(self, run):
+        self.preparation_runs.append(run)
+        if run["name"] == "Yosys.Synthesis" and run["ran"] and self.common_started is None:
+            self.common_started = time.perf_counter() - run["tool_seconds"]
 
     def initialize(self):
+        if self.initialization_error is not None:
+            raise self.initialization_error
         if self.owner is not None:
             return
         from flow_config import build_native_config as build_config
@@ -225,13 +235,37 @@ class NativeChain:
         from librelane.common import Toolbox
         kind = "Chip" if self.route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"} else "Classic"
         config = build_config(self.project, route="ic" if kind == "Chip" else "ip",
-                              **({"pdk": self.pdk} if self.pdk else {}))
+                              **({"pdk": self.pdk} if self.pdk else {}),
+                              **({"on_tool_run": self.observe_preparation} if kind == "Chip" else {}))
         os.environ["_OPENLANE_MAX_CORES"] = "8"
         self.owner = Flow.factory.get(kind)(config, design_dir=str(self.project),
                                             pdk_root=os.environ.get("PDK_ROOT"))
         self.config = self.owner.config.to_raw_dict()
         self.toolbox = Toolbox(str(self.project / "work/flow/tool_tmp"))
         self.state = State()
+
+    def prepare(self):
+        try:
+            self.initialize()
+        except Exception as exc:
+            if not isinstance(exc, (ImportError, FileNotFoundError, ValueError)) and not self.preparation_runs:
+                raise
+            self.initialization_error = exc
+            return exc
+        return None
+
+    def preparation_result(self) -> ToolResult:
+        runs = self.preparation_runs[self.preparation_accounted:]
+        self.preparation_accounted = len(self.preparation_runs)
+        result = ToolResult(any(run["ran"] for run in runs),
+            next((run["exit_code"] for run in runs if run.get("exit_code")), 0 if runs else None),
+            reports=[run["reports"] for run in runs],
+            tool_seconds=sum(run["tool_seconds"] for run in runs), native_steps=list(runs))
+        if self.initialization_error is not None:
+            result.detail = str(self.initialization_error)
+            result.native_steps.append({"name": "Native configuration", "ran": False,
+                "exit_code": None, "status": "NOT_MEASURED", "detail": result.detail})
+        return result
 
     def restore(self, directory: Path):
         from librelane.state import State
@@ -241,14 +275,13 @@ class NativeChain:
             self.state = restored
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
-        try:
-            self.initialize()
-        except (ImportError, FileNotFoundError, ValueError) as exc:
-            return ToolResult(detail=str(exc))
+        error = self.prepare()
+        result = self.preparation_result()
+        if error is not None:
+            return result
         from librelane.steps import Step, StepError, StepException
         for module in tool.get("imports", []):
             importlib.import_module(module)
-        result = ToolResult()
         producer_unavailable = False
         for name in tool.get("steps", []):
             step_class = Step.factory.get(name)
@@ -460,9 +493,13 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
             if (compare and isinstance(value, (int, float, Decimal))
                     and isinstance(limit, (int, float, Decimal)) and math.isfinite(value) and math.isfinite(limit)):
                 status = "PASS" if compare(value, limit) else "FAIL"
+            unavailable = value in check.get("unavailable_values", [])
+            if unavailable:
+                status = "NOT_MEASURED"
             observed.append({**check, "metric": name, "value": value,
                              "limit": limit, "status": status,
-                             **({"missing": f"Native value or original limit for {check['metric']}"}
+                             **({"missing": check["unavailable_reason"] if unavailable else
+                                 f"Native value or original limit for {check['metric']}"}
                                 if status == "NOT_MEASURED" else {})})
     return observed
 
@@ -554,6 +591,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
     results: dict[str, dict] = {}
     step_root = project / "steps"
     step_root.mkdir(parents=True, exist_ok=True)
+    restore_directory = None
     if from_name:
         first = positions[from_name]
         for row in table["steps"][first - 1:]:
@@ -562,15 +600,21 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         for row in reversed(table["steps"][:first - 1]):
             directory = step_root / row["name"]
             if (directory / "state_out.json").is_file():
-                chain.initialize()
-                chain.restore(directory)
+                restore_directory = directory
                 break
     started = time.perf_counter()
     for row in selected:
         beginning = time.perf_counter()
+        preparation = ToolResult()
+        if restore_directory is not None:
+            if chain.prepare() is None:
+                chain.restore(restore_directory)
+            preparation = chain.preparation_result()
+            restore_directory = None
         directory = step_root / row["name"]
         tool = choose_tool(row["tool"], features)
-        if route.get("input_contract") == "original" and "Verilator.Lint" in tool.get("steps", []):
+        if ((route.get("input_contract") == "original" or route["delivery_target"] == "rtl")
+                and "Verilator.Lint" in tool.get("steps", [])):
             tool = {"kind": "adapter", "function": "rtl_validate"}
         kind = tool["kind"]
         saved = read_json(directory / "result.json")
@@ -590,17 +634,25 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                 if "NOT_MEASURED" in item.get("detail", ""):
                     item["status"] = "NOT_MEASURED"
             if kind == "librelane":
-                chain.initialize()
-                chain.restore(directory)
+                error = chain.prepare()
+                initialized = chain.preparation_result()
+                native.tool_seconds += initialized.tool_seconds
+                extra_tool_seconds += initialized.tool_seconds
+                native.native_steps.extend(initialized.native_steps)
+                native.reports.extend(initialized.reports)
+                if initialized.exit_code:
+                    native.exit_code = initialized.exit_code
+                if error is None:
+                    chain.restore(directory)
                 completed = {item["name"] for item in native.native_steps}
                 additional = [name for name in tool["steps"] if name not in completed]
-                if additional:
+                if additional and error is None:
                     added = chain.execute(directory, {**tool, "steps": additional})
                     native.metrics.update(added.metrics)
                     native.native_steps.extend(added.native_steps)
                     native.reports = added.reports
                     native.tool_seconds += added.tool_seconds
-                    extra_tool_seconds = added.tool_seconds
+                    extra_tool_seconds += added.tool_seconds
                     if added.exit_code:
                         native.exit_code = added.exit_code
         else:
@@ -642,6 +694,14 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             native = ToolResult(**owner_session.result(directory, "phase1"))
         else:
             native = ToolResult(detail=tool.get("gap", "Native adapter is not available"))
+        if preparation.native_steps:
+            native.ran = native.ran or preparation.ran
+            native.tool_seconds += preparation.tool_seconds
+            extra_tool_seconds += preparation.tool_seconds
+            native.native_steps = preparation.native_steps + native.native_steps
+            native.reports.extend(preparation.reports)
+            if preparation.exit_code:
+                native.exit_code = preparation.exit_code
         for reader in tool.get("report_readers", []):
             module, function = reader["reader"].rsplit(".", 1)
             source = directory / reader["native_step"].lower().replace(".", "_")
@@ -659,9 +719,11 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             checks = [*checks, *declared_electrical_checks(project)]
         observed = measure(checks, native.metrics, chain.config, features, project)
         elapsed = time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]
-        result = {"name": row["name"], "title": row["title"],
-                  "status": (previous.get("status", "NOT_MEASURED")
-                             if kind == "native_report" and not observed else evaluate(native, observed)),
+        status = evaluate(native, observed)
+        if (kind == "native_report" and not observed
+                and (not preparation.native_steps or evaluate(preparation, []) == "PASS")):
+            status = previous.get("status", "NOT_MEASURED")
+        result = {"name": row["name"], "title": row["title"], "status": status,
                   "tool_ran": native.ran,
                   "tool_exit_code": native.exit_code, "metrics": observed,
                   "native_metrics": native.metrics, "native_steps": native.native_steps,

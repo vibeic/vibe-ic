@@ -8,6 +8,87 @@ import pytest
 import flow_chip_inputs as chip
 
 
+@pytest.fixture
+def native_inputs(tmp_path):
+    pytest.importorskip("librelane")
+    pdk_root = os.environ.get("PDK_ROOT")
+    if not pdk_root or not (Path(pdk_root) / "sky130A").is_dir():
+        pytest.skip("native Chip preparation requires the installed sky130A PDK")
+    rtl = _write(tmp_path / "broken.v", "module unit(input clk); invalid syntax; endmodule\n")
+    return {"DESIGN_NAME": "unit", "PDK": "sky130A", "VERILOG_FILES": [str(rtl)],
+            "CLOCK_PORT": "clk", "CLOCK_PERIOD": 10}
+
+
+def test_native_sizing_reports_failed_yosys_run_to_observer(tmp_path, native_inputs):
+    from librelane.steps import StepError
+
+    runs = []
+    cwd = Path.cwd()
+
+    with pytest.raises(StepError) as caught:
+        chip.prepare(tmp_path, native_inputs, on_tool_run=runs.append)
+
+    assert Path.cwd() == cwd
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["name"] == "Yosys.JsonHeader"
+    assert run["ran"] is True
+    assert run["status"] == "FAIL"
+    assert run["exit_code"] == caught.value.underlying_error.returncode
+    assert run["exit_code"] != 0
+    assert run["tool_seconds"] > 0
+    assert Path(run["reports"]).is_dir()
+    assert any(Path(run["reports"]).glob("*.log"))
+    sizing = json.loads((tmp_path / "work/flow/chip/sizing.json").read_text())
+    assert sizing == {"runs": [{"name": run["name"], "tool_seconds": run["tool_seconds"]}],
+                      "tool_seconds": run["tool_seconds"]}
+
+
+@pytest.mark.parametrize("failure", [None, "missing_input", "tool_failure"])
+def test_native_sizing_observer_keeps_completed_runs_on_later_failure(
+        tmp_path, native_inputs, monkeypatch, failure):
+    import subprocess
+    from librelane.state import DesignFormat, State
+    from librelane.steps import Step, StepError, StepException
+
+    header = _write(tmp_path / "header.json", json.dumps({"modules": {"unit": {"ports": {}}}}))
+    error = (StepException("missing required input") if failure == "missing_input" else
+             StepError("native tool failed", underlying_error=subprocess.CalledProcessError(7, "yosys")))
+
+    def start(self, **kwargs):
+        if self.id == "Yosys.Synthesis" and failure:
+            raise error
+        return State({DesignFormat.JSON_HEADER: str(header)},
+                     metrics={"design__instance__area": 1})
+
+    monkeypatch.setattr(Step, "start", start)
+    destination = tmp_path / "sizing"
+    destination.mkdir()
+    runs = []
+    cwd = Path.cwd()
+    if failure:
+        with pytest.raises(type(error)) as caught:
+            chip._native_core(tmp_path, native_inputs, destination, on_tool_run=runs.append)
+        assert caught.value is error
+    else:
+        _, ports, area, sizing_runs = chip._native_core(
+            tmp_path, native_inputs, destination, on_tool_run=runs.append)
+        assert ports == []
+        assert area == 1
+        assert sizing_runs == [{"name": run["name"], "tool_seconds": run["tool_seconds"]}
+                               for run in runs]
+
+    assert Path.cwd() == cwd
+    assert [run["name"] for run in runs] == ["Yosys.JsonHeader", "Yosys.Synthesis"]
+    assert runs[0]["status"] == "PASS"
+    assert runs[0]["exit_code"] == 0
+    assert runs[0]["ran"] is True
+    assert runs[1]["status"] == {None: "PASS", "missing_input": "NOT_MEASURED",
+                                  "tool_failure": "FAIL"}[failure]
+    assert runs[1]["exit_code"] == {None: 0, "missing_input": None, "tool_failure": 7}[failure]
+    assert runs[1]["ran"] is (failure != "missing_input")
+
+
 def test_native_pathlike_config_values_are_single_paths():
     class NativePath(os.PathLike):
         def __fspath__(self):
@@ -327,7 +408,10 @@ def test_pad_edges_follow_the_native_linked_corner(inputs, tmp_path, linked, max
     native["PAD_LIBS"] = {"*": paths}
     result = chip.prepare(project, config)
     script = tmp_path / "read.sdc.tcl"
-    script.write_text('''proc get_ports args {return PORTS}
+    script.write_text('''namespace eval sta {proc top_instance {} {return INSTANCE}}
+proc INSTANCE method {return CELL}
+proc CELL {method name} {return PORT}
+proc get_ports args {return PORTS}
 proc get_clocks args {return CLOCKS}
 proc create_clock args {}
 proc set_units args {}
@@ -375,7 +459,8 @@ def test_ring_layers_equal_to_mesh_layers_use_native_connection_once(inputs):
     ("lower_contact", "outer_vertical", "outer_horizontal", "ring_vertical"),
 ])
 @pytest.mark.parametrize("existing", [False, True])
-def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical, horizontal, ring, existing):
+@pytest.mark.parametrize("owned", [False, True])
+def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical, horizontal, ring, existing, owned):
     project, config, native, _, _ = inputs
     native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=True,
                   PDN_VERTICAL_LAYER=vertical, PDN_HORIZONTAL_LAYER=horizontal,
@@ -397,10 +482,16 @@ def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical
     reverse = f"add_pdn_connect -grid stdcell_grid -layers {{{target} {access}}}"
     if existing:
         original += reverse + "\n"
-    pdn = _write(project / "input/pdn.tcl", original)
+    pdn = _write(project / ("work/flow/pdn_cfg.tcl" if owned else "input/pdn.tcl"), original)
     config["PDN_CFG"] = native["PDN_CFG"] = str(pdn)
     result = chip.prepare(project, config)
     generated = Path(result["PDN_CFG"]).read_text()
+    if owned:
+        assert "--config [file join $::env(STEP_DIR) config.json]" in generated
+        assert "pdn__requested_width__um__variable:" in generated
+        selected = project / "work/flow/chip/pdn_cfg.tcl"
+        assert "source " + str(selected) in generated
+        generated = selected.read_text()
     command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {target}}}"
     assert generated.count(command) + generated.count(reverse) == 1
     assert "signal_access" not in generated
@@ -480,6 +571,43 @@ def test_multiple_clock_delays_are_additive(inputs):
     assert "set_output_delay 4.8 -clock core_clock_1 -add_delay" in text
 
 
+@pytest.mark.parametrize("existing_sdc", [False, True])
+@pytest.mark.parametrize("clock", ["clk", "-quiet", "wild*", "wild?"])
+def test_native_sta_constrains_literal_bus_ports(inputs, tmp_path, existing_sdc, clock):
+    import shutil
+    import subprocess
+
+    sta = shutil.which("sta")
+    if not sta:
+        pytest.skip("Native OpenSTA is required")
+    project, config, _, ports, _ = inputs
+    config["CLOCK_PORT"] = clock
+    ports = [{**ports[0], "name": clock}, *ports[1:-1],
+             {**ports[-1], "width": 2, "msb": 1, "indexed": True}]
+    netlist = _write(tmp_path / "ports.v", "module ports(clk,\\-quiet ,\\wild* ,\\wild? ,wild_one,wild_two,reset,data,result,spare_data);\n"
+        "input clk,\\-quiet ,\\wild* ,\\wild? ,wild_one,wild_two,reset; input [5:2] data,spare_data; output [1:0] result;\n"
+        "assign result = data[3:2]; endmodule\n")
+    if existing_sdc:
+        import re
+
+        config["PNR_SDC_FILE"] = str(_write(tmp_path / "original.sdc",
+            "create_clock -name core_clock_0 -period 24 [get_ports -regexp {^" + re.escape(clock) + "$}]\n"
+            "set_input_delay 4.8 -clock core_clock_0 [all_inputs -no_clocks]\n"
+            "set_output_delay 4.8 -clock core_clock_0 [all_outputs]\n"))
+    sdc = chip._sdc(project, config, ports)
+    queries = [line[line.index("[get_ports"):] for line in sdc.splitlines()
+               if "[get_ports" in line]
+    script = _write(tmp_path / "ports.tcl", f"read_verilog {{{netlist}}}\nlink_design ports\n"
+        + "\n".join(f'foreach port {query} {{puts "COLLECTED=[get_full_name $port]"}}'
+                    for query in queries) + "\nexit\n")
+    result = subprocess.run([sta, "-exit", str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    selected = {line.removeprefix("COLLECTED=") for line in result.stdout.splitlines()
+                if line.startswith("COLLECTED=")}
+    assert selected == {clock, "reset", "data[5]", "data[4]", "data[3]", "data[2]",
+                        "result[1]", "result[0]"}, result.stdout + result.stderr
+
+
 def test_impossible_declared_geometry_is_refused(inputs):
     project, config, native, _, _ = inputs
     native["DIE_AREA"] = [0, 0, 50, 50]
@@ -515,7 +643,7 @@ set_false_path -from [all_inputs -no_clocks] -to [all_outputs]
     assert "create_clock -period 99 [get_ports clk]" in sdc
     assert "set_input_delay 99 -clock clk" in sdc
     assert "set_clock_uncertainty 0.25" in sdc
-    assert "set_false_path -from [get_ports -regexp" in sdc
+    assert "set_false_path -from [get_ports [list" in sdc
     assert "all_inputs" not in sdc and "all_outputs" not in sdc
 
 
