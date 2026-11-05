@@ -43,6 +43,7 @@ def phase1_main(argv=None):
     import phase1_one_shot_runner as owner
     if args.pdk:
         forwarded += ["--pdk", args.pdk]
+    forwarded += ["--engine", "native"]
     start = time.monotonic()
     code = owner._run_docs_mode(project, args.ic_name, forwarded)
     status = {0: "PASS", 1: "FAIL"}.get(code, "NOT_MEASURED")

@@ -736,6 +736,12 @@ def _gate_families(sentence: str) -> Tuple[str, ...]:
         raw, term = match.group(0), match.group(0).lower()
         if term == "nand" and re.match(r"\s+flash\b", sentence[match.end():], re.I):
             continue
+        if term == "nor" and not raw.isupper() and (
+                re.search(r"\bneither\b", re.split(r"[;,:]", sentence[:match.start()])[-1], re.I)
+                or re.match(r"\s+(?:(?:is|are|was|were|do|does|did|have|has|had|can|could|will|would)\s+)?"
+                            r"(?:there|any|the|a|an|these|those|such|they|it|we)\b",
+                            sentence[match.end():], re.I)):
+            continue
         named_operator = raw.isupper() and re.match(
             r"\s*(?:$|[.!?;:)]|(?:is|are)\s+(?:allowed|permitted|required)\b)",
             sentence[match.end():], re.I)
