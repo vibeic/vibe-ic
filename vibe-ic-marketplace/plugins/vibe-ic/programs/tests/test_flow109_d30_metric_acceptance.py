@@ -405,7 +405,8 @@ def test_d30_actual_structural_reader_observes_complete_single_clock_population(
 
 
 @pytest.mark.parametrize('damage', ['power_intent', 'stale_view', 'zero_state', 'unknown_cell',
-                                    'asynchronous_input', 'foreign_original', 'real_multiple_clocks'])
+    'asynchronous_input', 'foreign_original', 'real_multiple_clocks', 'ambiguous_state', 'asynchronous_reset',
+    'unreadable_view', 'missing_view'])
 def test_d30_missing_structural_or_power_population_never_becomes_empty(tmp_path, monkeypatch, damage):
     context, doc, record, roles = _graph_change_case(tmp_path, monkeypatch)
     p = tmp_path / doc['derivation']['gate']['files'][0]['path']
@@ -417,12 +418,23 @@ def test_d30_missing_structural_or_power_population_never_becomes_empty(tmp_path
         roles['input_domains']['d']['role'] = 'asynchronous_data'
     elif damage == 'foreign_original':
         roles['subject']['input']['files'][0]['sha256'] = '0' * 64
+    elif damage == 'missing_view':
+        doc['derivation']['gate']['files'] = [];_write(record, doc)
+    elif damage == 'unreadable_view':
+        p.write_text('not JSON\n');doc['derivation']['gate']['files'] = [_ref(tmp_path, p)];_write(record, doc)
     else:
         view = json.loads(p.read_text())
         if damage == 'zero_state':
             view['modules']['neutral']['cells'] = {}
         elif damage == 'unknown_cell':
             view['modules']['neutral']['cells']['state']['type'] = 'unknown_storage'
+        elif damage == 'ambiguous_state':
+            view['modules']['neutral']['cells']['other'] = view['modules']['neutral']['cells']['state']
+        elif damage == 'asynchronous_reset':
+            cell = view['modules']['neutral']['cells']['state']
+            cell['type'] = '$adff';cell['connections']['ARST'] = [3]
+            cell['parameters'].update(ARST_POLARITY=1, ARST_VALUE=0)
+            cell['port_directions']['ARST'] = 'input'
         else:
             from programs.tests._hostpaths import require_repo
             fixture = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
@@ -432,5 +444,95 @@ def test_d30_missing_structural_or_power_population_never_becomes_empty(tmp_path
             view = json.loads(fixture.read_text());view['modules']['neutral'] = view['modules'].pop(next(iter(view['modules'])))
         _write(p, view);doc['derivation']['gate']['files'] = [_ref(tmp_path, p)];_write(record, doc)
     observed = metrics.d30_consumed_changes(tmp_path, context)
+    _write(tmp_path / 'observed-change-census.json', observed)
     assert observed['status'] == 'NOT_MEASURED', observed
     assert observed.get('reason')
+
+
+@pytest.mark.parametrize('damage', [None, 'asynchronous_reset', 'extra_clock', 'wrong_role',
+    'missing_declared_port', 'missing_view', 'stale_view', 'missing_rtl', 'power_intent', 'foreign_original'])
+def test_d30_canonical_eqy_uses_original_native_graphs(tmp_path, monkeypatch, damage):
+    """Real EQY and D25/D30 readers; only synthesis/role authority is doubled."""
+    import inspect
+    import shutil
+    import subprocess
+    import librelane_eqy as eqy
+    import synth_handoff_netlist_check as handoff
+    if not shutil.which('eqy') or not shutil.which('yosys'):
+        pytest.skip('native EQY and Yosys required')
+    context, _, _, roles = _graph_change_case(tmp_path, monkeypatch)
+    rtl = tmp_path / 'phase2/stage1/rtl/neutral.v';rtl.parent.mkdir(parents=True)
+    roles['subject']['input']['rtl_files'] = [rtl.relative_to(tmp_path).as_posix()]
+    declaration = 'input clk,rst,d, output reg q'
+    event = 'posedge clk or posedge rst' if damage == 'asynchronous_reset' else 'posedge clk'
+    body = f'always @({event}) begin if (rst) q <= 0; else q <= d; end'
+    if damage == 'extra_clock':
+        declaration += ', input clk2, output reg q2'
+        body += ' always @(posedge clk2) q2 <= d;'
+    text = f'module neutral({declaration}); {body} endmodule\n'
+    rtl.write_text(text)
+    mapped = tmp_path / 'mapped.v';mapped.write_text(text)
+    library = tmp_path / 'neutral.lib';library.write_text('library(neutral) {}\n')
+    roles['subject']['input']['files'] = [_ref(tmp_path, rtl)]
+    if damage == 'foreign_original':
+        foreign = tmp_path / 'input/foreign.v';foreign.write_text(text)
+        roles['subject']['input'] = {'rtl_files': [foreign.relative_to(tmp_path).as_posix()],
+                                   'files': [_ref(tmp_path, foreign)]}
+    inputs = roles['input_domains']
+    inputs['rst'] = {'role': 'synchronous_reset', 'clock': 'clk'}
+    if damage == 'extra_clock': inputs['clk2'] = {'role': 'clock', 'clock': 'clk2'}
+    if damage == 'wrong_role': inputs['d']['role'] = 'asynchronous_data'
+    if damage == 'missing_declared_port': inputs['declared_missing'] = {'role': 'inactive', 'clock': 'clk'}
+    if damage == 'power_intent': context['features']['has_power_intent'] = True
+    root = tmp_path / 'phase3/librelane/lec-eqy-config';root.mkdir(parents=True)
+    folder = tmp_path / 'phase3/librelane/lec_eqy/01-yosys-eqy';folder.mkdir(parents=True)
+    synthesis = {'DESIGN_NAME': 'neutral', 'PDK': 'neutral', 'CELL_LIBS': {'*': [str(library)]}}
+    synth_dir = tmp_path / 'synthetic-synthesis';_write(synth_dir / 'config.json', synthesis)
+    monkeypatch.setattr(handoff, 'bound_handoff', lambda *_: {'verdict': 'PASS',
+        'mapped': str(mapped), 'native': str(synth_dir / 'mapped.v'),
+        'consumed_config_files': {str(library): {'path': str(library), 'sha256': _sha(library)}}})
+    # Current native script emits these views itself; predecessor is exercised
+    # without a missing-keyword failure so its actual census refusal is seen.
+    kwargs = {'synthesis': synthesis}
+    if 'views' in inspect.signature(eqy.eqy_script).parameters: kwargs['views'] = folder
+    script = root / 'neutral.eqy'
+    script.write_text(eqy.eqy_script('neutral', [rtl], mapped, str(library), **kwargs))
+    run = subprocess.run(['eqy', '-j', '1', '-d', str(folder / 'scratch'), str(script)],
+                         cwd=folder, capture_output=True, text=True, timeout=60)
+    (folder / 'invocation.log').write_text(run.stdout + run.stderr)
+    proof = eqy.judge_eqy(folder, tmp_path / 'reports/lec_eqy.json')
+    assert run.returncode == 0 and proof['verdict'] == 'PASS', run.stdout + run.stderr
+    cfg = {**synthesis, 'VERILOG_FILES': [str(rtl)], 'EQY_SCRIPT': str(script),
+           'DEFAULT_CORNER': 'neutral'}
+    _write(root / 'eqy.resolved.json', cfg);_write(root / 'state_in.json', {'nl': str(mapped)})
+    _write(folder / 'config.json', cfg);_write(folder / 'state_out.json', {'nl': str(mapped)})
+    _write(folder / 'state_in.json', {'nl': str(mapped)})
+    _write(folder / 'pdk_root.json', {'cli_pdk_root': '/pdk', 'mounts_under_it': [],
+                                   'stated_by': 'run_chain(pdk_root=...)'})
+    if damage == 'missing_view':
+        view = (folder / 'gate.before-normalization.json' if 'views' in kwargs else folder / 'scratch/gate.il')
+        if view.exists(): view.unlink()
+    fp = {'step': 'Yosys.EQY', 'config': _sha(root / 'eqy.resolved.json'),
+          'state': _sha(root / 'state_in.json'), 'state_files': {str(mapped): _sha(mapped)},
+          'config_files': native.config_file_hashes(cfg, [])}
+    _write(folder / 'input_fingerprint.json', fp)
+    # Transport boundary for this isolated fixture, capturing actual native
+    # outputs. No proof status/partition/graph is authored or patched here.
+    _write(folder / 'vibeic_receipt.json', {'input': fp, 'sha256': {
+        p.relative_to(folder).as_posix(): _sha(p) for p in folder.rglob('*') if p.is_file()}})
+    if damage == 'stale_view':
+        view = (folder / 'gate.before-normalization.json' if 'views' in kwargs else folder / 'scratch/gate.il')
+        if view.exists(): view.write_text('{}\n')
+    if damage == 'missing_rtl': rtl.unlink()
+    accepted = metrics.accept_d25(tmp_path, flow109.execution_context(
+        flow109.resolve_plan(context['features']), 'D25', 'D25'))
+    if damage not in ('stale_view', 'missing_rtl'):
+        assert accepted['status'] == 'PASS', json.dumps(accepted, indent=2)
+    observed = metrics.d30_consumed_changes(tmp_path, context)
+    _write(tmp_path / 'observed-change-census.json', observed)
+    if damage is None:
+        assert observed['status'] == 'MEASURED' and observed['value'] == [], observed
+        assert observed['population']['gold']['q_bits'] == observed['population']['gate']['q_bits'] == 1
+    else:
+        assert observed['status'] == 'NOT_MEASURED', observed
+        assert observed.get('reason')

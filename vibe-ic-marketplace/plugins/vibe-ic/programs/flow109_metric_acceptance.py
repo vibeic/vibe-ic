@@ -1701,7 +1701,7 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
             script = Path(cfg['EQY_SCRIPT'])
             if script.read_text() != native.eqy_script(
                     synthesis['DESIGN_NAME'], rtl, mapped, next(iter(proof_libraries)),
-                    synthesis=synthesis):
+                    synthesis=synthesis, views=folder):
                 raise MetricRefusal('D25_NATIVE_CONFIGURATION_UNBOUND', 'EQY script differs')
             with tempfile.TemporaryDirectory() as temporary:
                 observed = native.judge_eqy(folder, Path(temporary) / 'lec_eqy.json')
@@ -2040,7 +2040,6 @@ def d30_consumed_changes(project: Path, context: Mapping[str, Any]) -> dict:
     import _cdc_netlist as graph
     import librelane_eqy as lec
     import flow109
-    import shlex, subprocess, tempfile
     project = Path(project).resolve()
     try:
         if context.get('features', {}).get('has_power_intent') is not False:
@@ -2063,14 +2062,13 @@ def d30_consumed_changes(project: Path, context: Mapping[str, Any]) -> dict:
             execution = native_ref(folder / 'vibeic_receipt.json')
             refs = [execution, native_ref(folder / 'config.json'), native_ref(folder / 'state_in.json')]
             consumed = {str(project / r['path']): r['sha256'] for r in refs + subject['rtl'] + [subject['gate_netlist']]}
-            views = {side: native_ref(folder / 'scratch' / (side + '.il')) for side in ('gold', 'gate')}
-            with tempfile.TemporaryDirectory() as tmp:
-                for side, view in views.items():
-                    converted = Path(tmp) / (side + '.json')
-                    subprocess.run(['yosys', '-Q', '-T', '-p',
-                        f'read_rtlil {shlex.quote(str(project / view["path"]))}; write_json {shlex.quote(str(converted))}'],
-                        check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                    views[side] = (view, graph.load(converted, top=cfg['DESIGN_NAME']))
+            receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
+            views = {}
+            for side in ('gold', 'gate'):
+                path = folder / (side + '.before-normalization.json')
+                view = {'path': path.relative_to(project).as_posix(), 'sha256': receipt['sha256'][path.name]}
+                path = _d30_file(project, view, side + ' original native JSON')
+                views[side] = (view, graph.load(path, top=cfg['DESIGN_NAME']))
         else:
             prepared = _d25_inputs(project)
             original = lec.d25_reopen(project, prepared, {'resolved_row': row})
@@ -2087,7 +2085,7 @@ def d30_consumed_changes(project: Path, context: Mapping[str, Any]) -> dict:
         source_input = source.get('subject', {}).get('input', {})
         source_rtl = {r['path']: r['sha256'] for r in source_input['files']
                       if r['path'] in source_input.get('rtl_files', [])} if source_input else {}
-        if not generic and source_rtl != original_rtl:
+        if source_rtl != original_rtl:
             raise MetricRefusal('D30_CHANGE_INPUT_STALE', 'original RTL and input-role subjects differ')
         for ref in refs + [authority]:
             path = _d30_file(project, {k: ref[k] for k in ('path', 'sha256')}, 'change source')
@@ -2142,8 +2140,7 @@ def d30_consumed_changes(project: Path, context: Mapping[str, Any]) -> dict:
             'subject': subject, 'has_power_intent': False,
             'consumed_inputs': consumed, 'execution_record': execution,
             'scope': 'no register clock/reset-domain crossing changes in complete single-clock synchronous views; no authored power-intent changes; no physical power/timing qualification'}
-    except (graph.Refusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError,
-            subprocess.CalledProcessError) as exc:
+    except (graph.Refusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D30_CHANGE_POPULATION_UNMEASURED'),
                 'detail': str(exc)}
 

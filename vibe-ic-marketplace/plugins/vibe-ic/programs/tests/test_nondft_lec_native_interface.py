@@ -198,7 +198,9 @@ def test_consumer_reopens_empty_transport_without_claiming_proof(subject, damage
         cfg['CELL_LIBS'] = {'*': [selected]}
         Path(cfg['EQY_SCRIPT']).write_text(EQY.eqy_script('top', [rtl],
             project / 'phase2/stage2/synth/top_synth.v', selected,
-            **({'synthesis': synthesis} if 'synthesis' in inspect.signature(EQY.eqy_script).parameters else {})))
+            **({'synthesis': synthesis} if 'synthesis' in inspect.signature(EQY.eqy_script).parameters else {}),
+            **({'views': project / 'phase3/librelane/lec_eqy/01-yosys-eqy'}
+               if 'views' in inspect.signature(EQY.eqy_script).parameters else {})))
         put(config, cfg)
     folder = project / 'phase3/librelane/lec_eqy/01-yosys-eqy'
     folder.mkdir(parents=True)
@@ -260,7 +262,9 @@ def test_generic_eqy_library_binding_uses_verified_consumed_paths(
     Path(cfg['EQY_SCRIPT']).write_text(EQY.eqy_script('top', [rtl],
         project / 'phase2/stage2/synth/top_synth.v', proof,
         **({'synthesis': json.loads((project / 'phase3/librelane/02-yosys-synthesis/config.json').read_text())}
-           if 'synthesis' in inspect.signature(EQY.eqy_script).parameters else {})))
+           if 'synthesis' in inspect.signature(EQY.eqy_script).parameters else {}),
+        **({'views': project / 'phase3/librelane/lec_eqy/01-yosys-eqy'}
+           if 'views' in inspect.signature(EQY.eqy_script).parameters else {})))
     put(config, cfg)
     folder = project / 'phase3/librelane/lec_eqy/01-yosys-eqy'
     receipt_path = folder / 'vibeic_receipt.json'

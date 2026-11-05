@@ -70,7 +70,7 @@ _EQY_STATUSES = ("PASS", "FAIL", "UNKNOWN", "ERROR", "TIMEOUT")
 
 
 def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
-               *, synthesis: Optional[dict] = None) -> str:
+               *, synthesis: Optional[dict] = None, views: Optional[Path] = None) -> str:
     from lec_run import (fsm_encfile_beside_netlist, fsm_signal_names,
                          _equiv_splitnets)
     encoding = fsm_encfile_beside_netlist(str(netlist))
@@ -95,7 +95,10 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         "[gate]", f"read_liberty -ignore_miss_func {liberty}",
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
-        "memory", "async2sync", "setundef -init -zero", split.rstrip(),
+        "memory", *(["[gold]", f"write_json {views}/gold.before-normalization.json",
+                      "[gate]", f"write_json {views}/gate.before-normalization.json", "[script]"]
+                    if views is not None else []),
+        "async2sync", "setundef -init -zero", split.rstrip(),
         observable_matchpoint_names(top).rstrip(), "",
         "[match *]", "gold-nomatch /^_[0-9]+_$/",
         "gate-nomatch /^_[0-9]+_$/", "",
@@ -216,10 +219,11 @@ def run_eqy(project: Path, image: str, pdk: str, top: str, rtl: list[Path],
     if len(match) != 1:
         raise Refusal("LL_EQY_LIBERTY_UNRESOLVED", f"{corner}: {match}")
     script = root / f"{top}.eqy"
+    folder = project / "phase3/librelane" / namespace / "01-yosys-eqy"
     import synth_handoff_netlist_check as handoff
     synthesis = _load(Path(handoff.bound_handoff(project)['native']).parent / 'config.json')
     script.write_text(eqy_script(top, rtl, netlist.resolve(), str(match[0]),
-                                synthesis=synthesis))
+                                synthesis=synthesis, views=folder))
     config["EQY_SCRIPT"] = str(script)
     write_json(raw, config)
     write_json(root / "eqy.provenance.json", {
@@ -231,7 +235,6 @@ def run_eqy(project: Path, image: str, pdk: str, top: str, rtl: list[Path],
                                       mounts=mounts, pdk_root=pdk_root)
     state = root / "state_in.json"
     write_json(state, {"nl": str(netlist.resolve())})
-    folder = project / "phase3/librelane" / namespace / "01-yosys-eqy"
     try:
         run_chain(project, image, [(STEP, step_config, state)], mounts=mounts,
                   pdk_root=pdk_root, namespace=namespace)
