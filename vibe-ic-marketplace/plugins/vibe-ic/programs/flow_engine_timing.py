@@ -85,13 +85,6 @@ def timing_summary(report):
                       if "common_step_names" in report else report.get("common_tools_complete"))
     complete = bool(tools_complete and report.get("timing_scope", "full_router_window") == "full_router_window" and elapsed is not None
                     and not pending and not missing_timing)
-    budget = _number(report.get("budget_seconds"))
-    status = "NOT_MEASURED"
-    if budget is not None and elapsed is not None:
-        if elapsed > budget:
-            status = "OVER_BUDGET"
-        elif complete:
-            status = "IN_BUDGET"
     invocation_start = _number(report.get("started_at"))
     invocation_end = _number(report.get("completed_at"))
     all_reviews = [_number(row.get("reviewed_at")) for row in rows]
@@ -112,12 +105,11 @@ def timing_summary(report):
         "wall_seconds": wall,
         "common_wall_seconds": elapsed,
         "common_native_wall_seconds": max(0, native_end - start) if start is not None and native_end is not None else None,
-        "common_budget_completed_at": end,
+        "common_completed_at": end if end is not None else _number(report.get("common_completed_at")),
         "common_reviews_pending": pending,
         "common_tools_complete": bool(tools_complete),
         "common_timing_unmeasured_steps": missing_timing,
         "common_timing_complete": complete,
-        "runtime_status": status,
         "timing_groups": groups,
         "other_execution_wall_seconds": groups["other"]["execution_wall_seconds"],
         "other_wall_span_seconds": groups["other"]["wall_span_seconds"],

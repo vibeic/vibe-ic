@@ -1338,7 +1338,10 @@
           "8"
         ]
       },
-      "applicability_reason": "SDC validation runs with native pre-layout STA, where the synthesis netlist exists; duplicate pre-netlist wrapper removed."
+      "applicability_reason": "SDC validation runs with native pre-layout STA, where the synthesis netlist exists; duplicate pre-netlist wrapper removed.",
+      "merged_into": [
+        "pre_layout_timing"
+      ]
     },
     {
       "name": "soft_ip_synthesis_and_constraints",
@@ -1734,7 +1737,12 @@
           "14"
         ]
       },
-      "applicability_reason": "Merged into Synthesis (native netlist diagnostics), Netlist equivalence (proof), and Pre-layout timing (SDC and timing checks). LibreLane State carries their netlist directly to Die floorplan and macros; the old change ledger is removed."
+      "applicability_reason": "Merged into Synthesis (native netlist diagnostics), Netlist equivalence (proof), and Pre-layout timing (SDC and timing checks). LibreLane State carries their netlist directly to Die floorplan and macros; the old change ledger is removed.",
+      "merged_into": [
+        "synthesis",
+        "netlist_equivalence",
+        "pre_layout_timing"
+      ]
     },
     {
       "name": "analog_layout",
