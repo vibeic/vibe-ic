@@ -101,3 +101,11 @@ def test_no_semantic_evidence_preserves_canonical_fallback(tmp_path, monkeypatch
     assert res["verdict"] == "FAIL"
     assert res["dataset_defect_reason"] == "suspected_defective_golden"
     assert res["canonical_evidence"] == "canonical mismatch 4/4"
+
+
+def test_actual_core_does_not_promote_buggy_source_to_normative_evidence(tmp_path):
+    from test_semantic_spec_floor_check import MUX_BUG_PROMPT, GOLD_MUX_INVERTED
+
+    (tmp_path / "Case_prompt.txt").write_text(MUX_BUG_PROMPT)
+    (tmp_path / "Case_ref.sv").write_text(GOLD_MUX_INVERTED)
+    assert S._semantic_prompt_oracle_evidence("Case", tmp_path, LAYOUT) is None
