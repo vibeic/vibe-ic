@@ -283,10 +283,58 @@ def require_binding(project: Path, path: Path, nl: "Netlist") -> dict:
     return rec
 
 
+
+def _liberty_group(text: str, brace: int) -> tuple[str, int]:
+    """The body of the group whose ``{`` is at ``brace``, with nested groups blanked."""
+    depth, top = 0, []
+    for index in range(brace, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(top), index
+        elif depth == 1:
+            top.append(char)
+    raise ValueError("Unterminated Liberty group")
+
+
+def liberty_pin_roles(text: str) -> dict[str, dict[str, dict]]:
+    """``cell -> pin -> {direction, clock, is_pad}`` from each pin's own attributes.
+
+    Only a pin group's top-level attributes count; timing and power subgroups
+    are blanked so their keywords cannot be read as the pin's.
+    """
+    import re
+    roles = {}
+    for cell in re.finditer(r'\bcell\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', text):
+        _, end = _liberty_group(text, cell.end() - 1)
+        block, pins = text[cell.end() - 1:end + 1], {}
+        for pin in re.finditer(r'\bpin\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', block):
+            body, pin_end = _liberty_group(block, pin.end() - 1)
+            pin_block, arcs = block[pin.end():pin_end], []
+            for timing in re.finditer(r'\btiming\s*\([^)]*\)\s*\{', pin_block):
+                arc, _ = _liberty_group(pin_block, timing.end() - 1)
+                fields = [re.search(r'\b' + key + r'\s*:\s*"?([\w$]+)', arc)
+                          for key in ("related_pin", "timing_sense")]
+                arcs.append(tuple(f.group(1) if f else None for f in fields))
+            direction = re.search(r'\bdirection\s*:\s*"?(\w+)', body)
+            pins[pin.group(1)] = {
+                "direction": direction.group(1) if direction else None,
+                "clock": bool(re.search(r'\bclock\s*:\s*"?true', body)),
+                "is_pad": bool(re.search(r'\bis_pad\s*:\s*"?true', body)),
+                "timing_arcs": arcs,
+                **{key: bool(re.search(r"\b" + key + r'\s*:\s*"?true', body))
+                   for key in ("clock_gate_clock_pin", "clock_gate_out_pin")}}
+        roles[cell.group(1)] = pins
+    return roles
+
+
+
 def _load_clock_gates(project: Path, nl: "Netlist") -> None:
     """Use the native JsonHeader library configuration for clock-only ancestry."""
     import fnmatch
-    from flow109_clock_plan import liberty_pin_roles
     config = project / "phase3/librelane/step2/header_resolved.json"
     nl.clock_parents.clear()
     if not config.is_file():
