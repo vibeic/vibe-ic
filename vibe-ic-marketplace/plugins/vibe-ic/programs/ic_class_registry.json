@@ -83,15 +83,12 @@
       "class_tree_node": "analog-mixed-ic",
       "class_tree_node_status": "mapped_template_missing",
       "class_tree_node_basis": "analog_applicable plus a digital OTP-read control path is precisely the node's 'has analog front end' plus a digital side. The node exists but is childless AND template-less, so this mapping is INERT: a template-less node falls back to generic-ic in phase1_quality_parity_check and to any-ic in layer_extension_presence_check, measurably identical to not mapping at all.",
-      "description": "Mixed-signal IC with OTP-driven configuration. Digital control logic + OTP read sequence — partial overlap with aid_class. v1.6.142 (#52) routes through MAIN_FSM_SPEC_COMPLIANT so the dispatcher consumes L3.opcodes (per-opcode case-arms + L3-enumerated silent-reject arms); BASELINE spam-responder produces silent DUT for chips with opcodes outside the AID-convention default reply path.",
+      "description": "Generic mixed-signal IC with OTP-driven configuration; the IC Expert authors digital control and OTP sequencing from the declared sources.",
       "synonyms": [
         "mixed_otp",
         "otp_chip"
       ],
-      "rtl_gen": "aid_class_rtl_gen.py",
-      "rtl_gen_args": [
-        "--spec-compliance"
-      ],
+      "rtl_gen": null,
       "fallback_skill": "spec-to-rtl",
       "verification_track": "aid_protocol",
       "command_protocol_applicable": true,
