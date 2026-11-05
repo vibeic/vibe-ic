@@ -128,6 +128,30 @@ def test_public_entry_retains_the_existing_router_closure(tmp_path, monkeypatch)
     assert execute.call_args.kwargs["route"] == route
 
 
+@pytest.mark.parametrize("selected,target", [("ic", "shippable_gds"), ("ip", "ip_hardmacro")])
+def test_public_native_delivery_flag_overrides_document_wording(tmp_path, monkeypatch, selected, target):
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    (docs / "requirements.md").write_text("Generate a digital IP block with a clock and data ports.")
+    observed = []
+    engine = SimpleNamespace(
+        design_text=lambda project: (docs / "requirements.md").read_text(),
+        run=lambda project, **kwargs: observed.append(kwargs["route"]) or {})
+    monkeypatch.setitem(sys.modules, "flow_engine", engine)
+    args = SimpleNamespace(project=tmp_path, entry_step=None, exit_step=None,
+                           rtl_input="structured", delivery_target=None, route=selected, pdk="auto")
+    assert frontend.run_public(args) == 0
+    assert observed[0]["delivery_target"] == target
+
+
+def test_native_owner_forwards_explicit_pdk_to_document_extraction(tmp_path):
+    route = {"delivery_target": "shippable_gds", "pdk": "process_variant"}
+    with patch.object(frontend.subprocess, "run") as execute:
+        frontend.OwnerSession(tmp_path, route).result(tmp_path / "step", "phase1")
+    command = execute.call_args.args[0]
+    assert command[command.index("--pdk") + 1] == "process_variant"
+
+
 def test_failed_owner_invocation_cannot_reuse_the_previous_report(tmp_path):
     report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
     report.parent.mkdir(parents=True)
