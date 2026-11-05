@@ -8,6 +8,87 @@ import pytest
 import flow_chip_inputs as chip
 
 
+@pytest.fixture
+def native_inputs(tmp_path):
+    pytest.importorskip("librelane")
+    pdk_root = os.environ.get("PDK_ROOT")
+    if not pdk_root or not (Path(pdk_root) / "sky130A").is_dir():
+        pytest.skip("native Chip preparation requires the installed sky130A PDK")
+    rtl = _write(tmp_path / "broken.v", "module unit(input clk); invalid syntax; endmodule\n")
+    return {"DESIGN_NAME": "unit", "PDK": "sky130A", "VERILOG_FILES": [str(rtl)],
+            "CLOCK_PORT": "clk", "CLOCK_PERIOD": 10}
+
+
+def test_native_sizing_reports_failed_yosys_run_to_observer(tmp_path, native_inputs):
+    from librelane.steps import StepError
+
+    runs = []
+    cwd = Path.cwd()
+
+    with pytest.raises(StepError) as caught:
+        chip.prepare(tmp_path, native_inputs, on_tool_run=runs.append)
+
+    assert Path.cwd() == cwd
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["name"] == "Yosys.JsonHeader"
+    assert run["ran"] is True
+    assert run["status"] == "FAIL"
+    assert run["exit_code"] == caught.value.underlying_error.returncode
+    assert run["exit_code"] != 0
+    assert run["tool_seconds"] > 0
+    assert Path(run["reports"]).is_dir()
+    assert any(Path(run["reports"]).glob("*.log"))
+    sizing = json.loads((tmp_path / "work/flow/chip/sizing.json").read_text())
+    assert sizing == {"runs": [{"name": run["name"], "tool_seconds": run["tool_seconds"]}],
+                      "tool_seconds": run["tool_seconds"]}
+
+
+@pytest.mark.parametrize("failure", [None, "missing_input", "tool_failure"])
+def test_native_sizing_observer_keeps_completed_runs_on_later_failure(
+        tmp_path, native_inputs, monkeypatch, failure):
+    import subprocess
+    from librelane.state import DesignFormat, State
+    from librelane.steps import Step, StepError, StepException
+
+    header = _write(tmp_path / "header.json", json.dumps({"modules": {"unit": {"ports": {}}}}))
+    error = (StepException("missing required input") if failure == "missing_input" else
+             StepError("native tool failed", underlying_error=subprocess.CalledProcessError(7, "yosys")))
+
+    def start(self, **kwargs):
+        if self.id == "Yosys.Synthesis" and failure:
+            raise error
+        return State({DesignFormat.JSON_HEADER: str(header)},
+                     metrics={"design__instance__area": 1})
+
+    monkeypatch.setattr(Step, "start", start)
+    destination = tmp_path / "sizing"
+    destination.mkdir()
+    runs = []
+    cwd = Path.cwd()
+    if failure:
+        with pytest.raises(type(error)) as caught:
+            chip._native_core(tmp_path, native_inputs, destination, on_tool_run=runs.append)
+        assert caught.value is error
+    else:
+        _, ports, area, sizing_runs = chip._native_core(
+            tmp_path, native_inputs, destination, on_tool_run=runs.append)
+        assert ports == []
+        assert area == 1
+        assert sizing_runs == [{"name": run["name"], "tool_seconds": run["tool_seconds"]}
+                               for run in runs]
+
+    assert Path.cwd() == cwd
+    assert [run["name"] for run in runs] == ["Yosys.JsonHeader", "Yosys.Synthesis"]
+    assert runs[0]["status"] == "PASS"
+    assert runs[0]["exit_code"] == 0
+    assert runs[0]["ran"] is True
+    assert runs[1]["status"] == {None: "PASS", "missing_input": "NOT_MEASURED",
+                                  "tool_failure": "FAIL"}[failure]
+    assert runs[1]["exit_code"] == {None: 0, "missing_input": None, "tool_failure": 7}[failure]
+    assert runs[1]["ran"] is (failure != "missing_input")
+
+
 def test_native_pathlike_config_values_are_single_paths():
     class NativePath(os.PathLike):
         def __fspath__(self):
