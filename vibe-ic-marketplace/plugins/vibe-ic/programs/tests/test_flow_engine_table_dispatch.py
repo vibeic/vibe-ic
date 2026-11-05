@@ -41,7 +41,8 @@ def test_every_table_tool_dispatches_or_reports_unmeasured_reason(tmp_path, monk
 
     def adapter(project, directory, selected, route, **kwargs):
         if selected.get("adapter") in {*adapters.ADAPTERS, "eqy", "xor", "gls", "implemented_cdc",
-                                       "ir_drop", "tapeout_precheck", "physical_declarations", "functional_activity"}:
+                                       "ir_drop", "tapeout_precheck", "physical_declarations", "functional_activity",
+                                       "analog", "mixed"}:
             return vars(executed())
         return native_adapter(project, directory, selected, route, **kwargs)
 

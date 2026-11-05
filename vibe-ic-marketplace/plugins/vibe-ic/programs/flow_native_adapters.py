@@ -19,14 +19,19 @@ class Commands:
         self.records = []
         self.seconds = 0.0
 
-    def run(self, argv, cwd=None):
+    def run(self, argv, cwd=None, *, input_text=None):
         started = time.perf_counter()
         argv = list(map(str, argv))
         log = self.directory / f"command_{len(self.records) + 1}.log"
+        input_stream = tempfile.TemporaryFile() if input_text is not None else None
         try:
+            if input_stream is not None:
+                input_stream.write(input_text.encode())
+                input_stream.seek(0)
             with log.open("wb") as output:
                 with subprocess.Popen(argv, cwd=cwd or self.directory, stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE, text=True) as process, selectors.DefaultSelector() as selector:
+                                      stderr=subprocess.PIPE, stdin=input_stream,
+                                      text=True) as process, selectors.DefaultSelector() as selector:
                     captured = {process.stdout: bytearray(), process.stderr: bytearray()}
                     for pipe in captured:
                         selector.register(pipe, selectors.EVENT_READ)
@@ -45,6 +50,9 @@ class Commands:
         except FileNotFoundError:
             log.unlink(missing_ok=True)
             return None
+        finally:
+            if input_stream is not None:
+                input_stream.close()
         self.seconds += time.perf_counter() - started
         self.records.append({"command": argv, "exit_code": completed.returncode,
                              "log": str(log)})
@@ -736,6 +744,10 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") in {"analog", "mixed"}:
+        import importlib
+        native = importlib.import_module("flow_native_" + tool["adapter"])
+        return native.execute(project, work, tool, commands, state=state, config=config or {}, route=route)
     if tool.get("adapter") == "ip_release_docs":
         from ip_release_docs_gen import execute as release_docs
         return release_docs(project, work, tool, route, state=state, config=config)

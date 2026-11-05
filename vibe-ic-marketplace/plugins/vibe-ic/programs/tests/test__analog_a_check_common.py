@@ -38,6 +38,15 @@ def test_load_block_list_missing_returns_none(tmp_path):
     assert c.load_block_list(tmp_path) is None
 
 
+def test_load_block_list_reads_declared_document_without_a_second_list(tmp_path):
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L5_ADI_SPEC.json").write_text(json.dumps({
+        "analog_blocks": [{"name": "unit"}]}))
+    assert c.load_block_list(tmp_path) == ["unit"]
+    assert c.block_list_path(tmp_path) is None
+
+
 def test_load_block_list_string_list(tmp_path):
     d = _block_dir(tmp_path)
     (d / "analog_block_list.json").write_text(

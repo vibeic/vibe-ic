@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1473
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1473)
+- **Total programs (excluding helpers / shims):** 1476
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1476)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1464 |
+| `any` | 1467 |
 
 ## Alphabetical listing
 
@@ -551,6 +551,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_ic_checks` | any | — | flow_ic_checks |
 | `flow_ir_corners` | any | — | flow_ir_corners |
 | `flow_native_adapters` | any | — | flow_native_adapters |
+| `flow_native_analog` | any | — | Connect the native analog producers to the current flow's command runner. |
+| `flow_native_analog_die` | any | — | Connect analog physical rows to native State and earlier tool products. |
+| `flow_native_mixed` | any | — | Connect mixed-signal rows to their existing producers. |
 | `flow_native_timing` | any | — | Read OpenSTA's existing reports for the native flow selector. |
 | `flow_native_verification` | any | — | flow_native_verification |
 | `flow_output_substance` | any | — | did the run actually produce this output, or only a file? |
@@ -1545,7 +1548,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1464 programs)
+### `any` (1467 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2068,6 +2071,9 @@ _(no programs in this group)_
 - `flow_ic_checks` — flow_ic_checks
 - `flow_ir_corners` — flow_ir_corners
 - `flow_native_adapters` — flow_native_adapters
+- `flow_native_analog` — Connect the native analog producers to the current flow's command runner.
+- `flow_native_analog_die` — Connect analog physical rows to native State and earlier tool products.
+- `flow_native_mixed` — Connect mixed-signal rows to their existing producers.
 - `flow_native_timing` — Read OpenSTA's existing reports for the native flow selector.
 - `flow_native_verification` — flow_native_verification
 - `flow_output_substance` — did the run actually produce this output, or only a file?

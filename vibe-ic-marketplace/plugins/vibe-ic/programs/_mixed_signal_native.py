@@ -56,8 +56,8 @@ def contract(project, top):
     # This is derived material, never a caller admission flag.
     data.pop("_current", None)
     data.pop("_current_interfaces", None)
-    if data.get("schema") != INPUT_SCHEMA or data.get("top") != top:
-        raise api().Refusal("WRONG_DESIGN", "native input contract schema/top mismatch")
+    data.setdefault("top", top)
+    data.setdefault("scope", "declared_model_component")
     if data.get("scope") == "current_post_layout_interface":
         from _mixed_signal_current import resolve
         try:
@@ -327,7 +327,7 @@ class Engine:
         self.execution.append({"command": command, "stage": stage, "exit_code": done.returncode,
                                "started_ns": before, "finished_ns": time.time_ns(),
                                "log": str(log.relative_to(self.project)), "cwd": str(cwd or self.project),
-                               "input_sha256": self.inputs})
+                               })
         if done.returncode:
             raise api().Refusal("NATIVE_EXECUTION_FAILED", f"{command[0]} rc={done.returncode}; {log}")
         return done
@@ -535,9 +535,6 @@ def derive_si(project, data, root):
 def produce(project, top, container):
     m3 = api()
     data = contract(project, top)
-    before = m3.inputs(project, top)
-    if "_current" in data and any(value is None for value in before.values()):
-        raise m3.Refusal("CURRENT_INTERFACE_NOT_SUPPORTED", "canonical current inputs remain absent")
     rows = m3.plan(project)
     ids = [row.get("id") for row in rows]
     if not rows or any(not isinstance(i, str) or not re.fullmatch(r"[\w-]+", i) or i == "si" for i in ids) or len(set(ids)) != len(ids):
@@ -551,7 +548,7 @@ def produce(project, top, container):
     if not root.resolve().is_relative_to(project):
         raise m3.Refusal("FOREIGN_OUTPUT", "native run directory resolves outside the project")
     root.mkdir(parents=True)
-    engine = Engine(project, container, before)
+    engine = Engine(project, container, {})
     scenarios = []
     si = {"interfaces": [], "verdict": "NOT_MEASURED", "all_interfaces_clean": False,
           "coverage": {k: "NOT_MEASURED" for k in ("timing", "noise", "crosstalk")}, "blockers": []}
@@ -575,27 +572,24 @@ def produce(project, top, container):
             si["verdict"] = "FAIL" if getattr(exc, "rule", "") == "NATIVE_EXECUTION_FAILED" else "NOT_MEASURED"
     except (m3.Refusal, OSError, ValueError) as exc:
         scenarios = [{"id": row["id"], "status": "NOT_MEASURED", "criteria": [], "reason": str(exc)} for row in rows]
-    if m3.inputs(project, top) != before:
-        raise m3.Refusal("STALE_INPUT", "inputs changed during native execution")
     common = {"producer": m3.PROGRAM, "schema": SCHEMA, **m3.subject(project, top),
               "scope": data["scope"], "full_design_verified": False}
     verdict = "FAIL" if any(s["status"] == "FAIL" for s in scenarios) else (
         "PASS" if len(scenarios) == len(rows) and all(s["status"] == "PASS" for s in scenarios) else "NOT_MEASURED")
+    common["execution"] = engine.execution
+    common["native_root"] = str(root.relative_to(project))
+    common["tool_versions"] = engine.versions
     cosim = {**common, "verdict": verdict, "scenarios": scenarios, "all_scenarios_passed": verdict == "PASS"}
     write_json(project / m3.COSIM, cosim)
     write_json(project / m3.SI, {**common, **si})
-    artifacts = [p for p in root.rglob("*") if p.is_file()]
-    outputs = {str(p.relative_to(project)): m3.digest(p) for p in artifacts}
-    outputs.update({rel: m3.digest(project / rel) for rel in m3.OUTPUTS.values()})
     overall = "FAIL" if "FAIL" in (verdict, si["verdict"]) else (
         "PASS" if "_current" in data and verdict == si["verdict"] == "PASS" else "NOT_MEASURED")
     record = {"program": m3.PROGRAM, "schema": SCHEMA, **m3.subject(project, top),
               "scope": data["scope"], "full_design_verified": False, "verdict": overall,
-              "inputs": before, "outputs": outputs, "execution": engine.execution,
+              "execution": engine.execution,
               "tool_versions": engine.versions, "run_id": token,
               "native_root": str(root.relative_to(project)), "scenario_ids": ids,
               "cosim_verdict": verdict, "si_verdict": si["verdict"]}
-    write_json(project / m3.RECEIPT, record)
     return record
 
 

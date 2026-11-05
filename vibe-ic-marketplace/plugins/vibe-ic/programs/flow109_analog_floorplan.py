@@ -59,16 +59,15 @@ def box(value):
 
 
 def bound_file(project, ref):
-    if not isinstance(ref, dict) or not isinstance(ref.get("path"), str):
-        raise Refusal("D31_INPUT_ABSENT: bound file reference required")
-    rel = Path(ref["path"])
+    value = ref.get("path") if isinstance(ref, dict) else ref
+    if not isinstance(value, str):
+        raise Refusal("D31_INPUT_ABSENT: native input file path required")
+    rel = Path(value)
     if rel.is_absolute() or ".." in rel.parts:
         raise Refusal("D31_INPUT_FOREIGN: project-local input required")
     path = project / rel
     if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
         raise Refusal("D31_INPUT_ABSENT: " + str(rel))
-    if sha(path) != ref.get("sha256"):
-        raise Refusal("D31_INPUT_STALE: " + str(rel))
     return path
 
 
@@ -132,7 +131,6 @@ def load_inputs(project):
     plan, bounds = documents
     def consume(ref):
         path = bound_file(project, ref)
-        files[path] = ref["sha256"]
         return path
     inventory = read(consume(plan.get("macro_inventory")))
     expected = inventory.get("instances")

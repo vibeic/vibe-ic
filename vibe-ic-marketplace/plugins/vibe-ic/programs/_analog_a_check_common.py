@@ -90,18 +90,19 @@ def block_list_path(project: Path) -> Optional[Path]:
 
 
 def load_block_list(project: Path) -> Optional[List[str]]:
-    """Return list of declared analog block names, or None when no
-    analog block list exists at ANY candidate root. Empty list when a
-    file exists but declares no blocks.
-    """
+    """Read declared block names from an existing block list or the L5 document."""
     path = block_list_path(project)
+    key = "blocks"
     if path is None:
-        return None
+        path = project / "phase1/generated_docs/L5_ADI_SPEC.json"
+        if not path.is_file():
+            return None
+        key = "analog_blocks"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return []
-    blocks = data.get("blocks") if isinstance(data, dict) else data
+    blocks = data.get(key) if isinstance(data, dict) else data
     if not isinstance(blocks, list):
         return []
     out: List[str] = []

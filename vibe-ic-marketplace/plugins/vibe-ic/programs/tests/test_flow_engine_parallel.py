@@ -63,7 +63,14 @@ def run(project, rows):
     return engine.run(project, table={'steps': rows}, route=route)
 
 
-@pytest.mark.parametrize('name', ['netlist_equivalence', 'final_adopted_netlist_equivalence', 'functional_activity_and_external_loads'])
+@pytest.mark.parametrize('name', [
+    'netlist_equivalence', 'final_adopted_netlist_equivalence', 'functional_activity_and_external_loads',
+    'analog_pre_layout_nominal_performance', 'analog_pre_layout_pvt_and_operating_range',
+    'analog_pre_layout_statistics', 'calibration_algorithm_verification',
+    'analog_post_layout_performance', 'analog_post_layout_statistics',
+    'pre_layout_mixed_signal_verification', 'candidate_mixed_signal_scenarios',
+    'final_geometry_mixed_signal_scenarios',
+])
 def test_actual_background_tools_leave_physical_export_free(tmp_path, worker, name):
     source = next(item for item in engine.read_json(engine.TABLE)['steps'] if item['name'] == name)
     tool = {**source['tool'], 'hold': True}

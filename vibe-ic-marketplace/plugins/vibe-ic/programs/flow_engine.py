@@ -551,6 +551,12 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
         enabled = check.get("enabled_by")
         if enabled and not config.get(enabled, check.get("enabled_default", True)):
             continue
+        if check.get("limit_from", {}).get("kind") == "declared_analog_specs":
+            from flow_native_analog import declared_spec_checks
+            specs = declared_spec_checks(project, config=config, metrics=metrics)
+            if specs:
+                observed.extend({**check, **item} for item in specs)
+                continue
         limit = check.get("limit")
         if check.get("limit_config"):
             limit = config.get(check["limit_config"])

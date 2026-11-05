@@ -128,16 +128,29 @@ def test_a02_native_model_consumer_needs_no_qualification_registry(tmp_path):
     assert not (project / 'input/flow109/A02.json').exists()
 
 
-@pytest.mark.parametrize('native', [
-    'Fatal error: unknown subckt device_alpha\ndrain_current = 1.25e-4\n',
-    'drain_current = nan\n',
-    'normal simulator banner but no measured value\n',
+def test_a02_missing_smoke_does_not_require_an_export_receipt(tmp_path, monkeypatch):
+    import pdk_analog_completeness_check as inventory
+    project, declared = _project(tmp_path)
+    def unused_export(*args, **kwargs):
+        raise AssertionError('model measurement does not consume an exported inventory')
+    monkeypatch.setattr(inventory, 'bounded_inventory', unused_export)
+    commands = Commands()
+    result = front.run_step('A02', project, declared, {}, commands)
+    assert result['status'] == 'NOT_MEASURED'
+    assert result['detail'].startswith('A02_MODEL_SMOKE_DECKS_ABSENT:')
+    assert commands.calls == []
+
+
+@pytest.mark.parametrize('native,status', [
+    ('Fatal error: unknown subckt device_alpha\ndrain_current = 1.25e-4\n', 'FAIL'),
+    ('drain_current = nan\n', 'NOT_MEASURED'),
+    ('normal simulator banner but no measured value\n', 'NOT_MEASURED'),
 ])
-def test_a02_success_exit_cannot_hide_native_error_or_absent_measurement(tmp_path, native):
+def test_a02_success_exit_cannot_hide_native_error_or_absent_measurement(tmp_path, native, status):
     project, declared, smoke = _smoke_project(tmp_path)
     result = front.run_step('A02', project, declared,
                             {'config': {'model_smokes': [smoke]}}, Commands(native=native))
-    assert result['status'] == 'FAIL', result
+    assert result['status'] == status, result
     assert result['detail'].startswith('A02_')
 
 
