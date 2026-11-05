@@ -8,7 +8,39 @@ from types import SimpleNamespace
 import pytest
 
 from flow_native_adapters import Commands
+from flow_native_adapters import formal
 from flow_native_verification import eqy, eqy_partitions, reset_boundary, xor
+
+
+@pytest.mark.parametrize("reset_value", [0, 1])
+def test_native_formal_binds_retained_internal_state(tmp_path, reset_value):
+    if not shutil.which("sby"):
+        pytest.skip("Native SymbiYosys is required")
+    from formal_property_run import emit_invariant_sby
+
+    root = tmp_path / "phase2/stage1/formal"
+    root.mkdir(parents=True)
+    rtl = root / "unit.v"
+    rtl.write_text("module unit(input clk, rst, a, output wire q); reg state; "
+                   f"always @(posedge clk) if(rst) state <= 1'b{reset_value}; "
+                   "else state <= a; assign q = state; endmodule\n")
+    harness = root / "proof.sv"
+    harness.write_text("module proof(input clk);\n"
+                       "(* anyseq *) reg rst, a; wire q; unit dut(clk,rst,a,q);\n"
+                       "// @observe observed = dut.state\n"
+                       "(* keep *) wire observed;\n"
+                       "reg valid=0; reg reset_q=0;\n"
+                       "always @(posedge clk) begin valid<=1; reset_q<=rst;\n"
+                       "if(valid && reset_q) assert(observed == 0); end\n"
+                       "endmodule\n")
+    task = root / "proof.sby"
+    task.write_text(emit_invariant_sby([str(rtl)], str(harness), "proof", [], []))
+    output = tmp_path / "output"
+    output.mkdir()
+    result = formal(tmp_path, output, {}, Commands(output))
+    assert result["metrics"].get("unproved_required_properties") == reset_value, result
+    assert [row["status"] for row in result["native_steps"]] == [
+        "FAIL" if reset_value else "PASS"] * 2, result
 
 
 def partition(tmp_path, name, word, flags=""):

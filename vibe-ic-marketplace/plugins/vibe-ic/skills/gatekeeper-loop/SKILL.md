@@ -18,7 +18,7 @@ description: Infinite-loop single gatekeeper agent that owns main and services t
 
 ## User-facing step numbering
 
-Report each step's 1-based canonical YAML position, name, and measured status.
+Report each step's 1-based position in the run's complete `flow/steps.json` table, name, and measured status.
 Keep historical execution IDs internal. The native step table and native tool
 reports determine execution and measurements. A display change requires no rerun.
 

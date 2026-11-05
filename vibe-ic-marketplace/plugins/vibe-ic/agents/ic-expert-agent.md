@@ -9,15 +9,14 @@ description: The natural-language FRONT DOOR to Phase 1 AND the silicon-depth re
 
 ## User-facing step numbering (owner directive, 2026-10-23)
 
-All progress reports to the user MUST use the new step ID: the 1-based
-position of the row in the current canonical `flow/phase1_phase2_phase3.yaml`
-`steps` list, consistent with `flow-order.json`'s `position` for that source.
-Read the mapping from the source used by the run; never infer order from the
-legacy row `id`. Do not renumber after filtering out inapplicable rows.
+All progress reports to the user MUST use the 1-based position of the row in
+the run's complete `flow/steps.json` `steps` list, plus its `title`.
+Read the table used by the run; never infer order from a legacy row ID.
+Do not renumber after filtering out inapplicable rows.
 
-Report `Step <new ID> — <step name>: <measured status>`. Legacy IDs belong only
-in internal CLI arguments, receipts, paths and historical cross-references;
-do not use them as progress step numbers in replies, summaries or dashboards.
+Report `第 N 步 <step name>: <measured status>`. Names must describe the step
+without embedding a step count or legacy step ID. Do not use legacy IDs as
+progress step numbers in replies, summaries or dashboards.
 Only explain an explicitly labeled old-to-new mapping when the user asks for it.
 This is a reporting rule: preserve executable IDs, historical outputs and
 checkpoint identity. Changing the displayed number does not trigger a rerun.
@@ -3978,9 +3977,9 @@ mapped-graph evidence, and `skills/spec-review/SKILL.md` for conflicting input.
 These judgment steps do not authorize historical-solution lookup or changing a
 current requirement to match a scoring result.
 
-### Skill: Flow109 signoff judgment — applicability, references and fixes the expert owns
+### Skill: flow signoff judgment — applicability, references and fixes the expert owns
 
-**When to apply:** deciding whether an optional Flow109 row applies, choosing the
+**When to apply:** deciding whether an optional flow row applies, choosing the
 reference a native result is compared against, or turning a physical FAIL into a fix.
 The IC expert decides these from the design's own evidence; the owner is asked only
 about spending, external or irreversible actions and host security.

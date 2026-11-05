@@ -16,7 +16,7 @@ component freezes the exact topology artifacts under
 `adopted/analog_topology/topology_freeze.json`.
 
 This is a bounded A04 component result. Performance, statistical/PVT
-coverage, G1-G9, full Flow 109 qualification and benchmark PASS remain
+coverage, G1-G9, full flow qualification and benchmark PASS remain
 `NOT_MEASURED`.
 
 ## Structured allocations

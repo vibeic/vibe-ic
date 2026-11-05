@@ -18,4 +18,4 @@ After each tool finishes, read its native report and `<project>/steps/<step-name
 
 If the Program requests `spec-to-rtl`, complete the declared AI handoff from the visible documents, then rerun this public entry. For lint, synthesis, timing, DRC, LVS, IR-drop, analog, or FPGA problems, use the corresponding expert skill and fix the design, local tool fork, or plugin. Keep numeric limits unchanged.
 
-Report the step name and its 1-based canonical YAML position. Historical execution IDs remain internal. Save run results outside the plugin repository.
+Report the step name and its 1-based position in the run's complete `flow/steps.json` table. Historical execution IDs remain internal. Save run results outside the plugin repository.

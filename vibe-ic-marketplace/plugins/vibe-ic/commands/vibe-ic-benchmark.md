@@ -139,7 +139,7 @@ not VerilogEval, RTLLM, or CVDP evaluation results.
 
 | Shape | Author | Scorer | Example benchmarks |
 |---|---|---|---|
-| **A** | Flow109 public-entry window through `vibe_ic_one_shot_runner.py` | `benchmark-verify` skill (six pillars) | benchmark_clean ICs (spm, sha256, subservient, u_hawaii_adc) |
+| **A** | flow public-entry window through `vibe_ic_one_shot_runner.py` | `benchmark-verify` skill (six pillars) | benchmark_clean ICs (spm, sha256, subservient, u_hawaii_adc) |
 | **B** | general `benchmark_dispatch --solve` → `task_nature_route` → `vibe_ic_one_shot_runner` | `benchmark/score_iverilog_tb.py` | RTLLM |
 | **C** | the same general solve path; shape affects only scorer-facing packaging | `benchmark/score_iverilog_tb.py` | VerilogEval-v2, VerilogEval-Human |
 | **C (CVDP nonagentic)** | the same general solve path; CVDP JSONL is a thin I/O adapter only | official `run_benchmark.py` via `benchmark/score_cvdp_open.py` | CVDP open nonagentic tracks |

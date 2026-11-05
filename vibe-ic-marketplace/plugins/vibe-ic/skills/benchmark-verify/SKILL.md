@@ -84,7 +84,7 @@ confirm it PASSES against the generated RTL.
 ### Pillar 2 — selected native step outputs vs open-source reference  ▸ gate: **every applicable selected row PASS**
 Read `flow/steps.json` and the exact run's selected `steps/<step-name>/result.json`
 results. Compare every selected applicable native tool output with the reference's
-corresponding output. Report the step's canonical YAML position and name.
+corresponding output. Report the step's position in the run's complete `flow/steps.json` table and name.
 Unselected and inapplicable steps do not count as PASS. Compare engineering
 meaning rather than requiring identical bytes.
 
@@ -151,7 +151,7 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
 ## Procedure (run for each benchmark IC)
 1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
 2. **Pillar 2:** dispatch comparisons only for the stable IDs selected by the
-   exact Flow109 plan/request, keeping tool runs bounded. Write
+   exact flow plan/request, keeping tool runs bounded. Write
    `cross_check/steps/<step-name>.md` with the current registry position as
    display metadata. Run REAL tools in `vibeic-eda`; close gaps.
 3. **Pillar 1:** build `reports/functional_coverage.json` from the L-doc requirements; close-loop to 100%.
@@ -167,20 +167,20 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
        --ref <open_source_reference_dir>
    ```
    It emits `<project>/BENCHMARK_VERIFICATION_REPORT.md` with the 6-pillar gate summary +
-   the complete selected-applicable Flow109 row comparison table. The table must
+   the complete selected-applicable flow row comparison table. The table must
    identify every row by stable ID and current position and must not treat position
    as execution authority. The gate remains non-PASS until every selected applicable
    row is represented and every pillar passes.
 8. **Close the loop** on any failing/pending gate, then re-aggregate. The benchmark IC is
    **DONE only when the report's OVERALL is PRODUCTION-READY** (functional 100% · every
-   selected applicable Flow109 stable ID PASS · code line >= 90% · FPGA PASS · analog
+   selected applicable flow stable ID PASS · code line >= 90% · FPGA PASS · analog
    converged-or-N/A · Design-for-ECO ready-or-N/A) —
    with honest, evidence-backed results and source provenance tagged.
 
 ## Acceptance
 A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.md` shows:
 - Functional Coverage **100%**, and
-- Every selected applicable Flow109 row = PASS, identified by its stable ID and
+- Every selected applicable flow row = PASS, identified by its stable ID and
   current position (no GAP/PENDING/FAIL/unexplained NO-TOOL); unselected or
   inapplicable rows are disclosed and never counted as PASS, and
 - Code line coverage **>= 90%**, and
@@ -200,7 +200,7 @@ Anything short of that is **NOT complete** — keep working (closed-loop), do no
 `benchmark_clean/spm/` is a report-shape example only: retain its RTL provenance,
 functional equivalence evidence, and signed-off DRC/LVS/STA evidence where their
 hashes remain current. For Pillar 2, derive the exact selected stable IDs from
-the current Flow109 plan/request, record each current registry position for
+the current flow plan/request, record each current registry position for
 display, and write one comparison per selected applicable row under
 `benchmark_clean/spm/cross_check/flow109/`. Historical fixed-count tables are
 not current acceptance authority.

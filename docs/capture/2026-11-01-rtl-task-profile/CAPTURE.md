@@ -2,7 +2,7 @@
 
 ## Result
 
-Bucket A, AUGMENT-EXISTING: the general Flow109 front door now selects the
+Bucket A, AUGMENT-EXISTING: the general flow front door now selects the
 registry's named `RTL-only` profile for a bounded, source-compatible RTL task.
 The thin dispatcher uses the same resolver. A clear RTL request can proceed
 without a user-authored feature file or an IC/IP confirmation question.
@@ -48,7 +48,7 @@ Independent review exposed a second-call edge: first invocation reached the
 owner, while the second identical flagless invocation asked IC/IP again.
 That observed value was captured as a separate RED (1/1 substantive). Reuse now
 requires equality to the shipped profile and revalidates current sources and
-the window. It creates the normal source-bound Flow109 request each time;
+the window. It creates the normal source-bound flow request each time;
 there is no new state sidecar or reused execution/acceptance authority.
 
 A second review control showed that a complete explicit manifest incorrectly

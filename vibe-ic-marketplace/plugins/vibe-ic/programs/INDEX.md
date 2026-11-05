@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1529
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1529)
+- **Total programs (excluding helpers / shims):** 1530
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1530)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1520 |
+| `any` | 1521 |
 
 ## Alphabetical listing
 
@@ -554,6 +554,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_declared_producer_run` | any | — | run the producers the FLOW already declares, so the RUN writes the documents it is supposed to write. |
 | `flow_density_topup` | any | — | flow_density_topup |
 | `flow_dependency_graph_check` | any | — | recompute the flow-gate's dependency dimension. |
+| `flow_em_corners` | any | — | flow_em_corners |
 | `flow_engine` | any | — | Run the Router-selected window of the native step table. |
 | `flow_engine_frontend` | any | — | flow_engine_frontend |
 | `flow_engine_report` | any | — | Render measured engine results and an integration guide for exported views. |
@@ -1601,7 +1602,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1520 programs)
+### `any` (1521 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2127,6 +2128,7 @@ _(no programs in this group)_
 - `flow_declared_producer_run` — run the producers the FLOW already declares, so the RUN writes the documents it is supposed to write.
 - `flow_density_topup` — flow_density_topup
 - `flow_dependency_graph_check` — recompute the flow-gate's dependency dimension.
+- `flow_em_corners` — flow_em_corners
 - `flow_engine` — Run the Router-selected window of the native step table.
 - `flow_engine_frontend` — flow_engine_frontend
 - `flow_engine_report` — Render measured engine results and an integration guide for exported views.
