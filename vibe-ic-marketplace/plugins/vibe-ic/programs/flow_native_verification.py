@@ -222,10 +222,12 @@ def gls(project, directory, tool, commands, *, state, config):
     closure = native.verilog_model_closure(declared, used)
     model_text = "\n".join(Path(path).read_text() for path in closure["files"])
     stubs = native.missing_empty_cell_stubs(text, used, model_text)
+    empty_instances = set(native.missing_empty_cell_stubs(text, used, ""))
     unresolved = sorted(set(closure["unresolved"]) - set(stubs))
-    if unresolved or closure["blackboxed"] or closure["clashes"]:
+    blackboxed = sorted(set(closure["blackboxed"]) - empty_instances)
+    if unresolved or blackboxed or closure["clashes"]:
         return commands.result(detail=f"GLS cell models incomplete: unresolved={unresolved}, "
-            f"blackboxed={closure['blackboxed']}, clashes={closure['clashes']}.")
+            f"blackboxed={blackboxed}, clashes={closure['clashes']}.")
     stub_file = directory / "physical_cells.v"
     stub_file.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
     rows, reports = [], [stub_file]
