@@ -216,6 +216,9 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
         assumptions.append("CLOCK_PORT is undeclared; timing is NOT_MEASURED.")
     if route in {"ic", "DIE"}:
         config.update(_chip_pdn(project, pdk))
+    implementation = _load(project / "plugin_output/declaration.json")
+    if "RUN_POST_GRT_RESIZER_TIMING" in implementation:
+        config["RUN_POST_GRT_RESIZER_TIMING"] = implementation["RUN_POST_GRT_RESIZER_TIMING"]
     config.update(_settings(fields, pdk))
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
