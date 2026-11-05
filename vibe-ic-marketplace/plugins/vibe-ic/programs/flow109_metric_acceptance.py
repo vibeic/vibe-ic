@@ -3045,19 +3045,26 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
         if native.returncode or not target.is_file():
             raise MetricRefusal('D09_NATIVE_WITNESS_UNAVAILABLE', native.stdout + native.stderr)
         raw = target.read_bytes(); graph = json.loads(raw)
+        interface_spec = Path(td) / 'interface.json'
+        interface_spec.write_text(json.dumps(dict(l9, ports=l9.get('top_ports', []))))
+        conformance = Path(td) / 'port_conformance.json'
+        checked = frontend._invoke('python3', [str(HERE / 'spec_conformance_check.py'),
+            *paths, '--spec', str(interface_spec),
+            '--top', top, '--tool-ports', str(target), '--json', str(conformance)], project, None)
+        if checked.returncode not in (0, 1) or not conformance.is_file():
+            raise MetricRefusal('D09_L9_INTERFACE_POPULATION_MISSING', checked.stdout + checked.stderr)
+        interface = bool(l9.get('top_ports')) == bool(graph['modules'][top]['ports']) and not any(f['severity'] == 'ERROR' and
+            (f['rule'].startswith(('port-', 'top-module-', 'selected-interface-'))
+             or f['rule'] in ('zero-output-ports', 'spec-interface-empty-but-declared'))
+            for f in json.loads(conformance.read_text()))
     if not publish and json.loads(bound(native_rel)) != graph:
         raise MetricRefusal('D09_NATIVE_WITNESS_STALE', 'native replay differs')
     module = graph['modules'][top]
-    actual_ports = {name: [port['direction'], len(port['bits'])] for name, port in module['ports'].items()}
     ports = l9.get('top_ports'); parameters = l9.get('parameters')
     if (not isinstance(ports, list) or not isinstance(parameters, list)
             or len({p.get('name') for p in ports}) != len(ports)
             or len({p.get('name') for p in parameters}) != len(parameters)):
         raise MetricRefusal('D09_L9_INTERFACE_POPULATION_MISSING', 'complete ports/parameters required')
-    declared = {p['name']: [p['direction'], p['width']] for p in ports}
-    if any(type(p.get('width')) is not int or p['width'] < 1
-           or p.get('direction') not in ('input','output','inout') for p in ports):
-        raise MetricRefusal('D09_L9_INTERFACE_POPULATION_MISSING', 'typed port population required')
     # Keep the ordinary L9 default field; unknown parameter expressions are
     # not silently coerced. Empty populations are proved by the native IR.
     raw_parameters = module.get('parameter_default_values', {})
@@ -3070,7 +3077,7 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
         if isinstance(value,bool) or not re.fullmatch('[0-9]+',str(value)):
             raise MetricRefusal('D09_NATIVE_PARAMETER_UNSUPPORTED', 'explicit integer default required')
         declared_parameters[parameter['name']] = int(value)
-    interface = declared == actual_ports and declared_parameters == actual_parameters
+    interface = interface and declared_parameters == actual_parameters
     mapped, missing, required, trace = [], [], [], []
     by_id = {e['id']: e for e in expectations}
     import phase1_expert_parse_track as track

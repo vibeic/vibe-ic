@@ -21,7 +21,7 @@ def put(root, rel, body):
     return path
 
 
-def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, deferred=None, mixed=False, debug=None):
+def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, deferred=None, mixed=False, debug=None, interface=None):
     # Exact original two-module D15 carrier, including its genuine empty
     # parameter and clock/reset populations. Not a serial benchmark fixture.
     assert hashlib.sha256(RTL.encode()).hexdigest() == '931ac7bddbfa37b3a7d3c98942387b068b389e295dad1664468facee015b5be9'
@@ -31,6 +31,10 @@ def case(root, monkeypatch, *, unknown=False, authored=False, damage=None, defer
                    'integer fd; initial fd=$fopen("debug.log","w"); end endgenerate endmodule\n')
     put(root,'phase2/stage1/rtl/unit.sv' if authored else 'input/rtl/unit.sv',source)
     ports=[{'name':n,'direction':d,'width':w} for n,d,w in [('on','input',1),('iso','input',1),('y','output',8)]]
+    if interface == 'optional':
+        ports.append({'name':'optional_status','direction':'input','optional':True})
+    elif interface == 'chosen_width':
+        ports[-1]['width'] = None
     put(root,'phase1/generated_docs/L9_INTEGRATION_SPEC.json',{'top_module':'unit','top_ports':ports,'parameters':[]})
     put(root,'input/spec.md','q initializes to A5. u_state.q connects to y. Interface is on,iso,y with no parameters.')
     facts=[{'constant':{'module':'cell_keep','port':'q','bits':['1','0','1','0','0','1','0','1']}},
@@ -268,3 +272,11 @@ def test_false_explicit_structural_witness_stays_owned_and_unmeasured(tmp_path,m
     assert status=='NOT_MEASURED' and detail=='D09_REQUIRED_MAPPING_MISSING: '+missing
     assert result['missing_items']==[missing] and missing in result['required_rtl_items']
     assert result['responsibility_register']==[]
+
+
+@pytest.mark.parametrize('interface', ['optional', 'chosen_width'])
+def test_author_uses_canonical_optional_and_unspecified_port_contract(tmp_path, monkeypatch, interface):
+    owned = case(tmp_path, monkeypatch, authored='catalog-glue-author', interface=interface)
+    status, _, detail = consume(owned)
+    assert status == 'PASS', detail
+    assert owned[1]['d09_owned_metrics']['declared_ports_parameters'] == 'PASS'
