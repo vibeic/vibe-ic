@@ -4337,13 +4337,8 @@
       }
     },
     "package_load_and_test_interface_feasibility": {
-      "kind": "librelane",
-      "imports": [
-        "flow_package_interface"
-      ],
-      "steps": [
-        "VibeIC.PackageInterface"
-      ]
+      "kind": "native_report",
+      "from": "die_floorplan_and_macros"
     },
     "final_perc_esd_and_latch_up": {
       "kind": "librelane",
