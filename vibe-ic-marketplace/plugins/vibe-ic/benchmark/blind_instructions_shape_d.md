@@ -29,7 +29,7 @@ outputs, scorer assets, or their paths. Official scoring is coordinator-owned.
 **CROSS-PROBLEM PROHIBITION (ORGANIC-20260605-blindness-rule-cross-problem-refs).**
 This rule binds for the whole dataset, including close-loop/repair agents.
 Do not read other problems' inputs, harnesses, reference solutions or prior
-outputs. Dataset build files and hidden Makefiles/docker-compose files are
+outputs. Dataset BUILD files and hidden Makefiles/docker-compose files are
 scorer authority, not solver inputs. Do not self-run a scoring harness or query
 a verdict-level oracle during authoring. Self-verify using prompt-derived tests.
 Transcripts exported to `<RUNDIR>/transcripts/` remain subject to
