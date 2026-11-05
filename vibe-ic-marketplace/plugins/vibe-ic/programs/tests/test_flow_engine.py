@@ -268,3 +268,30 @@ def test_from_does_not_restore_an_invalidated_later_state(tmp_path, monkeypatch)
     execute(tmp_path, rows, from_name="first", to_name="first")
     execute(tmp_path, rows, from_name="last")
     assert restored == ["first"]
+
+
+def test_resume_accounts_preparation_before_a_non_native_interval(tmp_path, monkeypatch):
+    import subprocess
+    import time
+    rows = [command_row(name) for name in ("previous", "resumed", "later")]
+    execute(tmp_path, rows)
+    (tmp_path / "steps/previous/state_out.json").write_text("{}")
+    observed = []
+    def initialize(chain):
+        started = time.perf_counter()
+        subprocess.run([sys.executable, "-c", "pass"], check=True)
+        elapsed = time.perf_counter() - started
+        observed.append(elapsed)
+        chain.observe_preparation({"name": "test-sizing-tool", "ran": True,
+            "exit_code": 0, "status": "PASS", "tool_seconds": elapsed,
+            "reports": str(tmp_path / "sizing")})
+    monkeypatch.setattr(engine.NativeChain, "initialize", initialize)
+    monkeypatch.setattr(engine.NativeChain, "restore", lambda chain, directory: None)
+    report = execute(tmp_path, rows, from_name="resumed")
+    first, later = report["steps"]
+    assert len(observed) == 1
+    assert first["native_steps"][0]["name"] == "test-sizing-tool"
+    assert first["tool_seconds"] >= observed[0] > 0
+    assert first["wall_seconds"] >= first["tool_seconds"]
+    assert first["program_seconds"] + first["tool_seconds"] == pytest.approx(first["wall_seconds"])
+    assert not later["native_steps"]

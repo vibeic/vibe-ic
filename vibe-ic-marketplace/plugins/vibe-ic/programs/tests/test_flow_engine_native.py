@@ -91,6 +91,31 @@ def test_missing_metadata_preserves_a_valid_native_database(tmp_path):
     assert chain.state.metrics["upstream"] == 1
 
 
+def test_failed_chip_preparation_charges_native_time_once(tmp_path):
+    if importlib.util.find_spec("librelane") is None:
+        pytest.skip("LibreLane runtime is required")
+    import flow_engine as engine
+    rtl = tmp_path / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "unit.v").write_text("module unit(input clk, output q); this is invalid RTL; endmodule\n")
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "unit"}))
+    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        {"domain_kind": "primary", "source_pin": "clk", "period_ns": 20}]}))
+    (docs / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({"fields": {"pdk_target": "sky130A"}}))
+    chain = engine.NativeChain(tmp_path, {"delivery_target": "shippable_gds"})
+    first = chain.execute(tmp_path / "first", {"steps": ["Yosys.JsonHeader"]})
+    assert first.tool_seconds > 0
+    assert first.tool_seconds == sum(row.get("tool_seconds", 0) for row in first.native_steps)
+    assert first.native_steps[0]["name"] == "Yosys.JsonHeader"
+    assert first.native_steps[0]["status"] == "FAIL"
+    assert engine.evaluate(first, []) == "FAIL"
+    second = chain.execute(tmp_path / "second", {"steps": ["Yosys.JsonHeader"]})
+    assert second.tool_seconds == 0
+    assert len(chain.preparation_runs) == 1
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=Path, required=True)

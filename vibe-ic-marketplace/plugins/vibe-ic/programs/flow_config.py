@@ -231,11 +231,13 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     return config
 
 
-def build_native_config(project: Path | str, *, route: str | None = None, pdk: str | None = None) -> dict[str, Any]:
+def build_native_config(project: Path | str, *, route: str | None = None, pdk: str | None = None,
+                        on_tool_run=None) -> dict[str, Any]:
     config = build_config(project, route=route, **({"pdk": pdk} if pdk else {}))
     if route in {"ic", "DIE"}:
         from flow_chip_inputs import prepare
-        config = prepare(Path(project).resolve(), config)
+        config = prepare(Path(project).resolve(), config,
+                         **({"on_tool_run": on_tool_run} if on_tool_run is not None else {}))
     return config
 
 
