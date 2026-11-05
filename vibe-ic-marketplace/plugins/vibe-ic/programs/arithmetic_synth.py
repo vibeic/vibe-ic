@@ -991,6 +991,16 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
             base["_latency_unparsed"] = True
         return base
     if rst and rdy and not start:                   # multi_booth_8bit shape
+        # This model has ports and completion counts, not arbitrary storage or
+        # reset-load expressions. Leave such explicit RTL state to the AI author.
+        # Numeric input/counter bounds alone do not declare writable state.
+        output_names = "|".join(re.escape(name) for name, _ in outs)
+        if (re.search(r"\b(?:reg|logic)\s+(?:(?:un)?signed\s+)?"
+                      r"(?:\[[^\]]+\]\s*)?[A-Za-z_]\w*\s*(?:[,;=]|\[)", text)
+                or re.search(r"\b[A-Za-z_]\w*(?:\s*\[[^\]]+\])?\s*<=\s*"
+                             r"(?:\{|[A-Za-z_$])", text)
+                or re.search(rf"\b(?:{output_names})\s*<=", text)):
+            return None
         # §4.05: PARSE the counter bound at which rdy rises, never guess it.
         bound = _parse_counter_bound(text)           # 'ctr is less than N'
         raise_at = _parse_rdy_raise_count(text)      # 'ctr reaches N -> rdy=1'
