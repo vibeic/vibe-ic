@@ -528,12 +528,15 @@ def test_explicit_pdn_actuator_overrides_documentary_starting_geometry(project):
     assert build_config(project, route="ip")["PDN_VPITCH"] == 80
 
 
-def test_hardmacro_sizes_native_defaults_after_current_estimate(project, monkeypatch):
+@pytest.mark.parametrize("extent_key", [None, "DIE_AREA", "CORE_AREA"])
+def test_hardmacro_sizes_native_defaults_after_current_estimate(project, monkeypatch, extent_key):
     from flow_config import build_native_config
     import flow_pdn_current
     import types
     seen = []
     native = {"PDN_CFG": None, "PDN_RAIL_WIDTH": .6}
+    if extent_key:
+        native[extent_key] = [10, 20, 90, 100]
     class Classic:
         def __init__(self, config, **kwargs):
             self.config = types.SimpleNamespace(to_raw_dict=lambda: native)
@@ -548,4 +551,4 @@ def test_hardmacro_sizes_native_defaults_after_current_estimate(project, monkeyp
     result = build_native_config(project, route="ip")
     assert result["PDN_VWIDTH"] == 2.4
     assert "PDN_RAIL_WIDTH" not in result
-    assert seen == [(project.resolve(), native, None)]
+    assert seen == [(project.resolve(), native, 80 if extent_key else None)]

@@ -144,6 +144,8 @@ END {layer}
         values = coherent_geometry(native, widths, database.getTech(), 200)
         assert values["PDN_VSPACING"] == 3
         assert values["PDN_CORE_RING_VSPACING"] == 3
+        known = coherent_geometry(native, widths, database.getTech(), 80, {"PDN_VSPACING"})
+        assert known["PDN_VSPACING"] == 1.7
         bound = coherent_geometry(native, widths, database.getTech(), None)
         assert bound["PDN_VSPACING"] == 3
         assert bound["PDN_CORE_RING_VSPACING"] == 3
