@@ -340,7 +340,8 @@ def test_cocotb_closure_carries_supplied_header_directories(tmp_path, different)
 
 @pytest.mark.parametrize("different", [False, True])
 @pytest.mark.parametrize("header_layout", ["unique", "mirrored", "selected_parent"])
-def test_macro_closure_uses_only_selected_provider(tmp_path, different, header_layout):
+@pytest.mark.parametrize("suffix", [".vh", pytest.param(".sv", id="source_suffix")])
+def test_macro_closure_uses_only_selected_provider(tmp_path, different, header_layout, suffix):
     if not all(shutil.which(name) for name in ("iverilog", "vvp", "verilator", "verilator_coverage")):
         pytest.skip("Native Icarus and Verilator tools are required")
     staged = tmp_path / "phase2/stage1/rtl"
@@ -349,13 +350,13 @@ def test_macro_closure_uses_only_selected_provider(tmp_path, different, header_l
     vendor.mkdir(parents=True)
     rtl, shadow = (vendor, staged) if header_layout == "selected_parent" else (staged, vendor)
     dut = rtl / "silicon_unit.v"
-    dut.write_text('`include "helper_defs.vh"\n'
+    dut.write_text(f'`include "helper_defs{suffix}"\n'
                    "module silicon_unit(input a, output z); `DRIVE_HELPER endmodule\n")
-    (rtl / "helper_defs.vh").write_text("`define DRIVE_HELPER selected_helper u(a,z);\n")
+    (rtl / f"helper_defs{suffix}").write_text("`define DRIVE_HELPER selected_helper u(a,z);\n")
     helper = rtl / "selected_helper.v"
     helper.write_text("module selected_helper(input a, output z); "
                       f"assign z={'a' if different else '~a'}; endmodule\n")
-    (shadow / ("shadow_defs.vh" if header_layout == "unique" else "helper_defs.vh")).write_text(
+    (shadow / (f"shadow_defs{suffix}" if header_layout == "unique" else f"helper_defs{suffix}")).write_text(
         "`define DRIVE_HELPER unrelated_helper u(a,z);\n")
     (shadow / "unrelated_helper.v").write_text(
         "module unrelated_helper(input a, output z); assign z = ; endmodule\n")

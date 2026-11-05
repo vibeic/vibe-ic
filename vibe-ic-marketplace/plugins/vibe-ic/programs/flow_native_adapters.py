@@ -172,11 +172,14 @@ def simulation_sources(project, files, top, benches):
         sources[path] = _strip_comments(path.read_text(errors="replace"))
     include_order = {parent: index for index, parent in enumerate(dict.fromkeys(
         path.parent for path in [*benches, *files, *sources]))}
+    included_names = {Path(name).name for text in sources.values()
+                      for name in _V662_INCLUDE_RE.findall(text)}
     relative_includes = {Path(name).name for text in sources.values()
                          for name in _V662_INCLUDE_RE.findall(text) if Path(name).name != name}
     headers = {}
     for path in sources:
-        if path.suffix in {".vh", ".svh"} and path.name not in relative_includes:
+        if ((path.suffix in {".vh", ".svh"} or path.name in included_names)
+                and path.name not in relative_includes):
             headers.setdefault(path.name, []).append(path)
     for providers in headers.values():
         selected = min(providers, key=lambda path: include_order[path.parent])
