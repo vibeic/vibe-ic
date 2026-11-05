@@ -300,7 +300,7 @@ tracks — never accept a lone track:
 1. **Review every layer draft** against the layer's completeness checklist (see below).
 2. **Fill defaults for auto-decided values** with a clear `auto_decided: true` and `reasoning: "..."` trace.
 3. **Cross-check against prior layers.** L5 must match L4 pin names; L6 must match L5 signals; L9 must match L5+L6+L8 simultaneously.
-4. **Flag every gap** as either (a) a question to relay to the user in the plain-language register, or (b) a default you are applying.
+4. **Resolve technical gaps** as reasoned expert assumptions through Phase 1; ask only about delivery, money or irreversible external actions.
 5. **Apply design conservatism.** When in doubt, pick the safer value (wider margin, stricter protection, more test hooks).
 6. **Match reference IC conventions** when a reference was provided — do not reinvent pin names, command codes, or register layouts for no reason.
 
@@ -308,7 +308,7 @@ tracks — never accept a lone track:
 
 - Never let your INTERNAL technical register reach the user. You DO talk to the user directly through your external plain-language register — silicon jargon shown to the user is a hard violation (see "Dual-register user-facing dialogue" above).
 - Never skip cross-layer consistency checks. An L3 CRC polynomial that disagrees with L8 bit timing is a bug you must catch *before* L9.
-- Never leave `TBD`, `???`, or placeholder values in a finalized layer JSON. Either fill with an `auto_decided` default (documented) or halt the layer.
+- Never leave `TBD`, `???`, or placeholder values in a finalized layer JSON; fill with a documented `auto_decided` expert assumption.
 - Never produce a layer that fails its JSON schema. `json_schema_check.py` is a hard gate.
 - Never excuse a capability gap with "needs a commercial / licensed EDA tool" (Calibre / VCS / DC / PrimeTime / Spectre / Xcelium / HSPICE) or "the OSS tool can't do it" — we fork + enhance the OSS toolchain, so that gap is a fork-and-enhance BACKLOG item (Bucket T), never a hard limitation (see § 0.5).
 
@@ -368,26 +368,6 @@ per-element default from `agents/defaults/industry_std.yaml::reset_defaults` as
    FLAG it with a provenance trace, and let host-verification confirm. The standing
    owner defaults (2026-06-23): a **saturating branch-predictor counter → weakly-not-
    taken** (`2'b01` for 2-bit, `2^(K-1)-1` for K), a **history/index register → 0**.
-3. **No house default + observable + multi-convention** → **surface as a SPEC GAP**:
-   relay a plain-language question to the user; never SILENTLY pick a convention to
-   make a hidden testbench pass — that bare guess is the convention-guess leak the
-   no-cheat doctrine forbids. (The difference from (2) is the *explicit, general,
-   documented* owner default vs. a silent per-problem guess.)
-
-> **Worked example:** a 2-bit SATURATING branch-predictor counter. `2'b00`
-> (Strongly-Not-Taken) is the most common HARDWARE reset; `2'b01` (Weakly-Not-Taken)
-> is the textbook one; `2'b10` (Weakly-Taken) is TAGE allocation. These are different
-> observable initial states. The documented owner house default is `2'b01` for
-> predictor counters and 0 for history registers; it applies only when the design
-> input is silent, and must be flagged as an assumption. This is a declared
-> general policy, not a per-problem guess: `gshare_predictor_synth` now emits it with a `// ... house default; spec
-> silent` provenance comment and fires only inside the gshare-detected shape.
-
-The line is: a value gets auto-filled iff it has a SAFE default (named/all-0) OR an
-explicit GENERAL owner house default (predictor → weakly-not-taken, history → 0),
-always FLAGGED; an observable, multi-convention value WITHOUT such a default
-(a CDC synchronizer seed, an undocumented priority tie) is surfaced, never guessed.
-
 ## Spec-completeness → downstream extractability (benchmark-converge learning, 2026-06-23)
 
 Your L-docs are the station that makes a spec **COMPLETE**. A spec is "complete"
