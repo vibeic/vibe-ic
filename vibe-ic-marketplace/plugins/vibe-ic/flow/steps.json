@@ -225,8 +225,6 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_technology_qualification.py",
-        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -2075,8 +2073,6 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "flow109_analog_floorplan.py",
-              "function": "native produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -2481,8 +2477,6 @@
       "when": "digital_physical and requires_spares",
       "tool": {
         "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -2813,8 +2807,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "flow109_route_check.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3179,8 +3171,6 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
-              "program": "execution_backend_producers.py",
-              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -3344,8 +3334,6 @@
       "when": "digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3404,8 +3392,6 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
-              "program": "execution_backend_producers.py",
-              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -3641,8 +3627,6 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
-              "program": "execution_backend_producers.py",
-              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -3685,8 +3669,6 @@
       "when": "physical and requires_perc",
       "tool": {
         "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -4202,8 +4184,6 @@
       "when": "physical and requires_perc",
       "tool": {
         "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -4230,8 +4210,6 @@
       "when": "package_model_required",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_package_electrical.py",
-        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -4314,8 +4292,6 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "flow109_final_extract.py",
-              "function": "execute",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4323,8 +4299,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "flow109_final_extract.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4558,8 +4532,6 @@
       "when": "digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_final_gls.py",
-        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -4633,8 +4605,6 @@
       "when": "requires_dft",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_final_gls.py",
-        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -4864,8 +4834,6 @@
       "when": "package_interface and package_declared",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_package_ready.py",
-        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [

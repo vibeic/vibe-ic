@@ -28,7 +28,6 @@ from pathlib import Path
 
 from _atomic_artefact import write_json
 from l_doc_consumer_contract import load_l_doc, l_doc_fields
-from execution_mixed_subject import project_subject
 
 PROGRAM = "mixed_signal_m3_run"
 SCHEMA = "vibeic.mixed_signal.m3.unmeasured.v1"
@@ -66,7 +65,7 @@ def read(path):
 def subject(project, top):
     if not isinstance(top, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", top):
         raise Refusal("INVALID_DESIGN", "an explicit top module is required")
-    return {"project": project_subject(project), "top": top}
+    return {"project": str(Path(project).resolve()), "top": top}
 
 
 def inputs(project, top):

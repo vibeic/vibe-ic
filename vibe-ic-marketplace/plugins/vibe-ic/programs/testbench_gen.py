@@ -2687,36 +2687,19 @@ def main() -> int:
                     or any(args.output_dir.is_relative_to(p.resolve()) or p.resolve().is_relative_to(args.output_dir)
                            for p in protected)):
                 p.error('--output-dir must be a fresh non-symlink project-local directory')
-            import flow109_metric_acceptance as metrics
-            import librelane_contract as contract
-            import benchmark_dispatch as binding
-            import uuid
-            _, _, authority = metrics._d13_authority(args.project, 'required_function_scenarios')
-            metrics._d13_execution(args.project, authority)
-            subject = metrics.d13_subject(args.project)
-            launch = contract.local_image_attestation()
             emitted = emit_unit_tbs(args.project, args.top, args.kind, report,
                 out_dir=args.output_dir / 'tb', scaffold=False, case_ids=args.case_ids)
             if emitted != len(args.case_ids):
                 print('[NOT_EXECUTED] selected case emission incomplete', file=sys.stderr)
                 return 2
-            invocation = {'invocation_id': uuid.uuid4().hex, 'project': str(args.project),
-                'argv': [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]}
-            invocation['source'] = binding._runner_source_snapshot(invocation['argv'])
         executed = run_unit_tbs(args.project, args.container, rep,
             case_ids=args.case_ids, output_dir=args.output_dir)
         if args.case_ids is not None:
             verdict = ('NOT_MEASURED' if executed < 0 or executed != len(args.case_ids)
                        else 'FAIL' if rep['failed'] or rep['errored'] else 'PASS')
-            if metrics.d13_subject(args.project) != subject:
-                verdict = 'NOT_MEASURED'
-            summary = binding._bind_runner_report({'project': str(args.project),
-                'verdict': verdict, 'subject': subject, 'selected_cases': args.case_ids,
-                'execution': rep, 'emission': report, 'model_sources': metrics.d13_model_sources()},
-                args.project, __file__, 'phase2_one_shot.json', context=invocation)
+            summary = {'project': str(args.project), 'verdict': verdict,
+                'selected_cases': args.case_ids, 'execution': rep, 'emission': report}
             _atomic_write_text(args.output_dir / 'phase2_one_shot.json', json.dumps(summary, indent=2) + '\n')
-            _atomic_write_text(args.output_dir / 'launch.json', json.dumps(launch, indent=2) + '\n')
-            (args.output_dir / 'host-launch.json').write_bytes(Path(launch['attestation_path']).read_bytes())
             print(json.dumps(summary))
             return {'PASS': 0, 'FAIL': 1}.get(verdict, 2)
         if executed < 0:

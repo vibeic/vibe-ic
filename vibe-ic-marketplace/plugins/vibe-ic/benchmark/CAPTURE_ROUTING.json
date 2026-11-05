@@ -4,13 +4,17 @@
     "phase2.latch_intent": {
       "description": "Make an explicitly requested storage element visible to the native RTL content checker through its typed SystemVerilog construct.",
       "bucket_A_program": "programs/comb_advanced_synth.py",
-      "bucket_A_related": ["programs/sequential_waveform_synth.py"],
+      "bucket_A_related": [
+        "programs/sequential_waveform_synth.py"
+      ],
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "benchmark.reference_model_handoff": {
       "description": "Producer advisory for the existing persistent reference-model input; ordinary native verification and independent review remain the boundary.",
       "bucket_A_program": "programs/professional_tb_gen.py",
-      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_A_related": [
+        "programs/design_one_shot_runner.py"
+      ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "benchmark.review_correction": {
@@ -24,13 +28,13 @@
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "flow.native_window_report": {
-      "description": "Retain measured native owner steps across one current Flow109 window without promoting later out-of-window sentinels.",
-      "bucket_A_program": "programs/flow109.py",
+      "description": "Read native tool results within the unchanged Router window.",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "flow.task_features": {
-      "description": "General source/evidence-bound task profile selection before public admission; capture routing only, not a new flow step or acceptance gate.",
-      "bucket_A_program": "programs/flow109.py",
+      "description": "Derive task nature and delivery evidence from visible design input.",
+      "bucket_A_program": "programs/task_nature_route.py",
       "bucket_A_related": [
         "programs/task_nature_route.py",
         "programs/vibe_ic_one_shot_runner.py",
@@ -102,7 +106,10 @@
     "phase2.required_site_results": {
       "description": "Producer-owned required gate results and current RTL binding; capture routing only, not a new gate.",
       "bucket_A_program": "programs/design_one_shot_runner.py",
-      "bucket_A_related": ["programs/flow_phase_attribution.py", "programs/benchmark_dispatch.py"],
+      "bucket_A_related": [
+        "programs/flow_phase_attribution.py",
+        "programs/benchmark_dispatch.py"
+      ],
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     },
     "phase2.sdc_gen": {
@@ -149,7 +156,9 @@
     "phase2.rtl_repair.public_port_metadata": {
       "description": "Source-bound native public-header port metadata in the existing structural repair contract; capture routing only, not a new gate.",
       "bucket_A_program": "programs/rtl_repair_contract.py",
-      "bucket_A_related": ["programs/benchmark_dispatch.py"],
+      "bucket_A_related": [
+        "programs/benchmark_dispatch.py"
+      ],
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "phase2.rtl_gen.public_port_order": {
@@ -172,13 +181,17 @@
     "phase2.rtl_gen.word_message_framing": {
       "description": "Capture subtype for source-bound fixed-length word framing; does not add a flow step or acceptance gate.",
       "bucket_A_program": "programs/serial_protocol_fsm_synth.py",
-      "bucket_A_related": ["programs/spec_artifact_registry.py"],
+      "bucket_A_related": [
+        "programs/spec_artifact_registry.py"
+      ],
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "phase2.sim.multi_output_waveform": {
       "description": "Capture subtype for source-bound valid-qualified multi-output waveform replay; does not add a flow step or acceptance gate.",
       "bucket_A_program": "programs/waveform_table_conformance_check.py",
-      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_A_related": [
+        "programs/design_one_shot_runner.py"
+      ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "phase2.rtl_gen.serial_parallel_multiplier": {
@@ -269,7 +282,9 @@
     "phase2.full_stack_tb.closed_form_arithmetic": {
       "description": "Closed-form arithmetic model extraction and test generation; capture routing only, not a new flow step.",
       "bucket_A_program": "programs/arith_oracle_tb_gen.py",
-      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_A_related": [
+        "programs/design_one_shot_runner.py"
+      ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "phase2.l10_unit_tb.testbench_gen.run_unit_tbs": {
@@ -374,7 +389,7 @@
     },
     "phase3.floorplan": {
       "description": "Floorplan / die-area / core-utilization / macro placement setup ahead of PnR.",
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/ppa-predict/SKILL.md"
     },
     "phase3.digital_hardmacro": {
@@ -388,9 +403,8 @@
       "bucket_B_skill_file": "skills/phase3-backend-verify/SKILL.md"
     },
     "phase3.synth": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_A_related": [
-        "programs/execution_production.py",
         "programs/execution_native_worker.py",
         "programs/execution_synthesis_engines.py"
       ],
@@ -398,28 +412,27 @@
     },
     "phase3.pnr_setup_repair": {
       "description": "PnR set_wire_rc + repair_design + repair_timing -setup (added in v0.1.26)",
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/sta-review/SKILL.md"
     },
     "phase3.cts_hold_fix": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/hold-fix/SKILL.md"
     },
     "phase3.drc": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/drc-fix/SKILL.md"
     },
     "phase3.lvs": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/lvs-triage/SKILL.md"
     },
     "phase3.sta": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/sta-review/SKILL.md",
       "bucket_A_related": [
         "programs/_ppa/timing.py",
-        "programs/sdc_environment.py",
-        "programs/execution_backend_producers.py"
+        "programs/sdc_environment.py"
       ]
     },
     "phase3.sta.architectural_residual": {
@@ -432,7 +445,7 @@
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "phase3.ir_drop": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/ir-drop-triage/SKILL.md"
     },
     "phase3.ip_release_docs": {
@@ -614,7 +627,7 @@
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
     "phase3.reference_flow_ingest": {
-      "bucket_A_program": "programs/phase3_one_shot_runner.py",
+      "bucket_A_program": "programs/flow_engine.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "phase2.rewrite_equivalence": {
@@ -641,7 +654,9 @@
     "benchmark.residual_triage": {
       "description": "Source-bound residual population and shared absorption validation; capture routing only.",
       "bucket_A_program": "programs/triage_record_check.py",
-      "bucket_A_related": ["programs/benchmark_triage_absorption_audit.py"],
+      "bucket_A_related": [
+        "programs/benchmark_triage_absorption_audit.py"
+      ],
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
     "benchmark.aggregate_verdict": {
@@ -717,8 +732,7 @@
       "bucket_A_program": "programs/vacuous_disclosure_needs_a_runtime_condition_check.py",
       "bucket_A_related": [
         "programs/flow_gate_grid.py",
-        "programs/tests/test_matrix_d6_skip_discipline.py",
-        "programs/gate_skip_routing_check.py"
+        "programs/tests/test_matrix_d6_skip_discipline.py"
       ],
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
@@ -726,8 +740,7 @@
       "description": "A published page stating one named figure twice, with two different values",
       "bucket_A_program": "programs/page_states_one_figure_twice_check.py",
       "bucket_A_related": [
-        "programs/ppa_page_claim_check.py",
-        "programs/derived_corpus_figure_check.py"
+        "programs/ppa_page_claim_check.py"
       ],
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },

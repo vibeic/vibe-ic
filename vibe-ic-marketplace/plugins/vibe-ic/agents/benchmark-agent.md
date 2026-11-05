@@ -179,68 +179,14 @@ Before any run, follow **`vibe-ic:open-benchmark-methodology`**:
    never fabricate a number or call something "floor" without the evidence.
 5. Every RESULT.md carries the seven mandatory sections (§ 6 of the skill).
 
-## ★ PUBLISHING A CONVERGED CELL — the layout is a CONTRACT, not a preference
+## Record native benchmark evidence
 
-**You do not hand-assemble an evidence folder and you do not invent a folder name.**
-Two programs own this; run them, do not reimplement them:
-
-| program | role |
-|---|---|
-| `programs/benchmark_evidence_publish.py` | STAGES a completed run into the canonical layout. **Refuses a non-converged run.** Excludes oversize files, generates `GDS_MANIFEST.txt`. Stages only — never commits. |
-| `programs/benchmark_evidence_structure_check.py` | VALIDATES any published folder. Run it before you commit; CI runs it with `--changed-since`. |
-| `programs/benchmark_evidence_index.py --write` | REGENERATES `<clone>/ic/INDEX.md`. Run it after any publish or delete. Point `VIBE_IC_BENCHMARK_DATA` at the clone — the corpus is not in this repo, and the program says which tree it walked. Without a corpus it writes NOTHING and reports `NO_CORPUS`; it never emits an index of empty sections that would read as "the corpus published nothing". |
-
-### The naming rule — VERSION FIRST, THEN PDK
-
-```
-<clone>/ic/<IC>/
-    input/                       # shared design input, staged ONCE per IC
-    v<major>.<minor>.<patch>_<PDK>/   # ONE folder per converged (version x PDK)
-```
-
-`v1.5.66_gf180mcuD`, `v1.9.86_sky130A`. **Nothing else belongs at the `<IC>/`
-level.** `<clone>/ic/spm/` is the reference: `input/` plus exactly three
-`v*_<PDK>/` folders and not one other entry. Look at it before you publish.
-
-Names that are rejected by name, each because it caused a real loss:
-  * `clean_run_*` — a gitignored prefix, so the committed phase folders are
-    STRIPPED and the evidence silently never lands
-  * `pass_*` / `fail_*` / `PASS_*` — a verdict in the folder name. The verdict
-    belongs in `RESULT.md`, where it can be audited, not in a path.
-
-### Publishing a new result MEANS retiring the old one
-
-When a cell re-converges on a newer plugin, the older `v*_<PDK>` folder for the
-SAME (IC x PDK) is superseded and comes out. Before deleting anything, check what
-depends on it — the repo has three separate mechanisms that cite published paths
-and each of them FAILS LOUDLY when a citation goes stale:
-
-  * `<clone>/ic/retention.json` — the index gate fails when a retention
-    key names no published cell
-  * `programs/tests/fixtures/matrix_d3_output_manifest.json` — records run roots
-    and the artefacts under them
-  * `programs/tests/**` — several read published cells directly
-
-If something genuinely depends on a folder you are retiring, MIGRATE THE
-DEPENDENT and then delete. Keeping a non-conforming folder "because a test reads
-it" is how an IC directory drifts back into the shape this contract exists to
-end.
-
-### The sequence, in order
-
-```
-1  gate the run        flow_compliance_check.py <run> --strict     # exit 0 or stop
-2  stage               benchmark_evidence_publish.py --run-dir <run> --ic <IC> \
-                          --pdk <PDK> --plugin-version <X.Y.Z>
-3  retire the old      git rm -r <clone>/ic/<IC>/v<older>_<PDK>
-4  fix the citations   retention.json / matrix_d3 manifest / any test that read it
-5  regenerate          VIBE_IC_BENCHMARK_DATA=<clone> benchmark_evidence_index.py --write
-6  validate            VIBE_IC_BENCHMARK_DATA=<clone> \
-                          benchmark_evidence_structure_check.py --tree benchmark-data
-7  commit + push
-```
-
-Skipping step 1 is fabrication. Skipping step 4 breaks CI for whoever pushes next.
+Keep the design documents, selected native step results, and official scorer
+outputs in the run directory outside the plugin repository. Read each native
+measurement against its original spec or PDK limit and record what remains
+unmeasured. `flow_engine_report.py` can render the native result table. Open RTL
+benchmarks still require Program First, independent blind AI review and backup,
+and official scoring through `benchmark_dispatch.py`.
 
 ## Check-in boundary (HARD — enforced by a program, not by trust)
 

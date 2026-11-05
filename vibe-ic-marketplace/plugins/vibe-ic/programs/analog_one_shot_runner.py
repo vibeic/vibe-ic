@@ -1346,15 +1346,6 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
     skill (spec extract, topology select, etc.); mark them WAIVED with
     the skill name if no deterministic program exists.
     """
-    if step_name in ('A6_block_pv', 'A7_post_layout_resim', 'A8_hardmacro_gen'):
-        from execution_analog_caller import dispatch_site
-        routed = dispatch_site(project, block, step_name)
-        if routed is not None:
-            return StepResult(step_name, block.get('name', ''), routed['status'], 0.0,
-                routed.get('reason', 'ANALOG_NATIVE_ADMISSION_UNAVAILABLE'),
-                extras={'execution_result': routed},
-                reason_class=_V.ReasonClass.TOOL_ABSENT.value
-                    if routed['status'] == 'NOT_MEASURED' else '')
     t0 = time.time()
     bname = block.get("name") or block.get("type") or "unknown"
     out_dir = _pl.analog_dir(project) / bname

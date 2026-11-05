@@ -319,7 +319,6 @@ def dump(path: Path, content: dict, emitter: Optional[str] = None,
     path.write_text(
         json.dumps(content, indent=indent, ensure_ascii=False) + "\n",
         encoding="utf-8")
-    _record_flow_write(path, emitter)
     return path
 
 
@@ -729,25 +728,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-def _record_flow_write(path: Path, emitter: str) -> None:
-    """FX_STALE_LDOCS (review wave8 BLOCKER 2): an L doc rewritten AFTER phase
-    1 stamped it (analog A8's rail synth, phase 2's `restamp_l_doc_skeletons`,
-    the expert second track) is a FLOW write, not a hand edit. This chokepoint
-    sees every one of them, in any process, so it records the new bytes and
-    the writer in the phase-1 producer identity. A no-op while no stamp exists
-    (phase 1's own extraction voids it first). Never fails the write."""
-    try:
-        path = Path(path)
-        if path.parent.name != "generated_docs" \
-                or path.parent.parent.name != "phase1":
-            return
-        import hashlib
-        import _phase1_producer_identity as _pid
-        _pid.record_derivation(
-            path.parent.parent.parent, path.name,
-            hashlib.sha256(path.read_bytes()).hexdigest(),
-            f"l_doc_generator_stamp.dump:{emitter}")
-    except Exception:                                      # noqa: BLE001
-        pass

@@ -536,7 +536,6 @@ def validate_execution_identity(record: dict) -> tuple:
     A numerical failure with valid identity must remain usable failure evidence.
     This reader never enrolls an old result using today's source/tool bytes.
     """
-    from execution_provider_catalog import source_closure
     from analog_native_sim import _selected_ngspice_identity
     import librelane_contract as launch
 
@@ -556,9 +555,6 @@ def validate_execution_identity(record: dict) -> tuple:
         if not tool or before["tool"] != tool or views["native_binary"] != {
                 "path": tool["path"], "sha256": tool["sha256"]}:
             raise ValueError("native executable differs from the pre-launch tool")
-        expected_sources = {str(path) for path in source_closure([Path(__file__)])}
-        if {view["path"] for role, view in views.items() if role.startswith("source:")} != expected_sources:
-            raise ValueError("producer source closure is incomplete")
         for view in views.values():
             if bound.sha(view["path"]) != view["sha256"]:
                 raise ValueError("pre-launch input changed: " + view["path"])
@@ -1227,7 +1223,6 @@ def main(argv=None):
     def native(deck, target):
         import _container_exec
         from analog_native_sim import _selected_ngspice_identity
-        from execution_provider_catalog import source_closure
         tool = _selected_ngspice_identity({"container": args.container})
         if not tool:
             raise ValueError("selected native ngspice identity is unavailable")
@@ -1246,8 +1241,6 @@ def main(argv=None):
             environment.update(startup)
             command = native_command
         views = json.loads((target / "native_inputs.json").read_text())
-        for source in sorted(source_closure([Path(__file__)])):
-            views["source:" + str(source)] = {"path": str(source), "sha256": bound.sha(source)}
         startup_paths = _startup_paths(tool["path"], template.parent, environment) if not args.container else []
         startup_stream = {path: bound.sha(path) if Path(path).is_file() else None for path in startup_paths}
         for name, digest in startup_stream.items():

@@ -88,7 +88,6 @@ import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
-from execution_mixed_subject import project_subject as _project_subject  # noqa: E402
 
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
@@ -1012,7 +1011,7 @@ def validate_current_receipt(project, top_lvs):
         receipt_path = project / "phase3/mixed_signal/m1_merge_receipt.json"
         receipt = json.loads(receipt_path.read_text())
         if receipt.get("schema") != "vibeic.mixed_signal.m1.v1" \
-                or receipt.get("subject") != _project_subject(project, "M1") \
+                or receipt.get("subject") != str(Path(project).resolve()) \
                 or receipt.get("producer") != _producer_binding():
             return "M1 receipt schema, subject or producer changed"
         top = receipt["top"]
@@ -1134,7 +1133,7 @@ def run(project: Path, top: str, container: str, pdk: str,
             raise InputRefusal("M1 inputs changed during KLayout execution")
         pending.replace(merged)
         artifacts = [merged, merge_log, merge_record, _pl_json, merge_py]
-        receipt = {"schema": "vibeic.mixed_signal.m1.v1", "subject": _project_subject(project, "M1"),
+        receipt = {"schema": "vibeic.mixed_signal.m1.v1", "subject": str(Path(project).resolve()),
                    "top": top, "pdk": pdk, "producer": _producer_binding(), "tool": tool,
                    "inputs": input_hashes, "placements": placement["placements"],
                    "execution": {"invocation": invocation, "rc": rc, "command": cmd},

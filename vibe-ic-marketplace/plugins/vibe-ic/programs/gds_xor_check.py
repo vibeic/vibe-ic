@@ -1449,19 +1449,6 @@ _NATIVE_METRIC_RE = re.compile(r"^%OL_METRIC_I (\S+) (\d+)\s*$", re.M)
 _RDB_LAYER_RE = re.compile(r"^(\d+)/(\d+)$")
 
 
-def ic_front_door_owns_xor() -> bool:
-    """True on a Flow109 IC launch whose validated plan selects no 37.3 row."""
-    import os
-    import flow109
-    raw = os.environ.get(flow109.CONTEXT_ENV)
-    if not raw:
-        return False
-    context = flow109.validate_execution_context(json.loads(Path(raw).read_text()))
-    if context["features"].get("ic") is not True:
-        return False
-    plan = flow109.resolve_plan(context["features"], context["step_profiles"])
-    return not any(str((row["profile"].get("dispatch") or {}).get("native_step_id")) == "37.3"
-                   for row in plan["rows"])
 
 
 def delivered_gds(project: Path) -> Path:
@@ -1657,15 +1644,6 @@ def _run_native_xor(project, report, runner, delivered, signoff, top, timeout):
                        f"across {len(rows)} layer(s) compared")
 
 
-def ic_front_door_xor(project: Path) -> Optional[Dict[str, Any]]:
-    """D77's XOR receipt on the IC front door; None on every other route."""
-    try:
-        owned = ic_front_door_owns_xor()
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        print(f"[{GATE}] IC front door not established, XOR not produced: {exc}",
-              file=sys.stderr)
-        return None
-    return native_delivered_xor(project) if owned else None
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -14,7 +14,7 @@ import re
 import sys
 import yaml
 
-from _phase1_producer_identity import BEHAVIORAL_REFINEMENT_INPUT
+BEHAVIORAL_REFINEMENT_INPUT = "phase1/behavioral_refinement.facts.yaml"
 from phase1_expert_parse_track import input_text_report, SKIP_ORACLE_PATH
 import phase1_port_extract
 
