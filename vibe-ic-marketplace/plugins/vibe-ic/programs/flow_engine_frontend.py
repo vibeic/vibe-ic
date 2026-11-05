@@ -409,14 +409,8 @@ def run_public(args):
         forwarded["from_name"] = args.from_name
     if getattr(args, "pdk", "auto") != "auto":
         forwarded["pdk"] = args.pdk
-    from flow_pdn_current import needs_estimate
     previous_report = project / "reports/flow_engine.json"
     previous_report = json.loads(previous_report.read_text()) if previous_report.is_file() else {}
-    if (route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}
-            and needs_estimate(route, forwarded.get("from_name"), json.loads(flow_engine.TABLE.read_text()))):
-        estimate = flow_engine.run(project, route=route, to_name="pre_layout_timing", **forwarded)
-        if forwarded.get("from_name"):
-            forwarded["from_name"] = "die_floorplan_and_macros"
     summary = flow_engine.run(project, route=route, **forwarded)
     from flow_pdn_recovery import plan_recovery, apply_plan, finish_replay
     recovery_started = time.perf_counter()

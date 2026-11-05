@@ -158,7 +158,6 @@ def test_public_entry_performs_one_replay_even_when_second_em_fails(tmp_path, mo
         calls.append(kwargs)
         return {"steps": [{"name": names[-1], "status": "FAIL"}], "selected_names": names,
                 "fail": 1, "not_measured": 0, "completed_at": 20, "common_wall_seconds": 10}
-    monkeypatch.setattr(flow_pdn_current, "needs_estimate", lambda *args: False)
     def plan(*args):
         plans.append(args)
         return RecoveryPlan({"PDN_VPITCH": 80}, ())

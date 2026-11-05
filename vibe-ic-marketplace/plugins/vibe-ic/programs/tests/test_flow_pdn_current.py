@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from flow_pdn_current import coherent_geometry, current_settings, estimated_current, needs_estimate, sized_widths
+from flow_pdn_current import coherent_geometry, current_settings, estimated_current, sized_widths
 
 
 LEF = """MANUFACTURINGGRID 0.005 ;
@@ -104,16 +104,6 @@ def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertica
     assert not (tmp_path / "work/flow/chip/pdn_current.tcl").exists()
 
 
-def test_estimate_window_covers_physical_deliveries_before_geometry():
-    from flow_engine import TABLE
-    table = json.loads(TABLE.read_text())
-    route = {"delivery_target": "shippable_gds", "entry_step": "requirements_and_delivery_route",
-             "verify_through": "compliance_and_final_adoption"}
-    assert needs_estimate(route, None, table)
-    assert needs_estimate(route, "synthesis", table)
-    assert not needs_estimate(route, "die_floorplan_and_macros", table)
-    assert needs_estimate({**route, "delivery_target": "ip_hardmacro"}, None, table)
-    assert not needs_estimate({**route, "verify_through": "pre_layout_timing"}, None, table)
 
 
 def test_native_parallel_run_length_rules_and_explicit_geometry(tmp_path):
