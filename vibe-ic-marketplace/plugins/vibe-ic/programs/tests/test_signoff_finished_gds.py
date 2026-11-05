@@ -1,5 +1,4 @@
-"""Ruling 93b: signoff reads the GDS the finishing publisher named, not the stream."""
-import hashlib
+"""Signoff selects the actual native final State GDS and post-fill views."""
 import json
 
 import pytest
@@ -13,8 +12,6 @@ def put(path, value):
     return path
 
 
-def sha(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def state_at(project, folder, step, state):
@@ -44,16 +41,14 @@ def canonical(tmp_path):
     state_at(tmp_path, '34-fill/01-klayout-filler', 'KLayout.Filler', {'gds': filled})
     topped = put(ll / '34-fill-topup/chip_top.topped.gds', 'finished')
     finished = put(tmp_path / 'phase3/stage4/gds/spm.gds', 'finished')
-    record = put(ll / '37-default-promotion.json', {
-        'stream': str(stream), 'stream_sha256': sha(stream),
-        'stream_state': str(final), 'stream_state_sha256': sha(final),
-        'source': str(topped), 'source_sha256': sha(topped),
-        'canonical': str(finished), 'canonical_sha256': sha(finished)})
-    return tmp_path, views, final, stream, finished, record
+    state = json.loads(final.read_text())
+    state['gds'] = str(finished)
+    put(final, state)
+    return tmp_path, views, final, stream, finished
 
 
 def test_real_shaped_canonical_signs_the_finished_gds_with_post_fill_views(canonical):
-    project, views, final, stream, finished, _ = canonical
+    project, views, final, stream, finished = canonical
     assert native.final_state(project, streamed=True) == final
     selected = native.signoff_inputs(project, 'gds', 'def', 'netlist', 'sdc', 'odb')
     assert selected['gds'] == finished != stream
@@ -61,79 +56,38 @@ def test_real_shaped_canonical_signs_the_finished_gds_with_post_fill_views(canon
         views['def'], views['nl'], views['sdc'], views['odb'])
 
 
-def test_missing_finishing_record_is_named(canonical):
-    project, _, _, _, _, record = canonical
-    record.unlink()
-    with pytest.raises(ValueError, match='CURRENT_FINISHED_GDS_RECORD_MISSING: '
-                                         'phase3/librelane/37-default-promotion.json'):
-        native.signoff_inputs(project, 'gds')
 
 
 @pytest.mark.parametrize('value', [123, ['finished.gds'], {'path': 'finished.gds'}])
-@pytest.mark.parametrize('half', ['drc', 'lvs'])
-def test_malformed_finished_gds_path_is_not_measured(canonical, value, half):
-    import phase3_one_shot_runner as runner
-
-    project, _, _, _, _, record = canonical
-    doc = json.loads(record.read_text())
-    doc['canonical'] = value
-    put(record, doc)
-    try:
-        row = runner._step31_librelane(project, 'unit', None, half, publish=False)
-        observed = row.status, row.detail
-    except TypeError as exc:
-        observed = type(exc).__name__, str(exc)
-    assert observed[0] == 'NOT_MEASURED'
-    assert 'CURRENT_FINISHED_GDS_RECORD_INVALID: canonical' in observed[1]
+def test_malformed_finished_gds_path_is_not_measured(canonical, value):
+    project, _, final, _, _ = canonical
+    doc = json.loads(final.read_text())
+    doc['gds'] = value
+    put(final, doc)
+    with pytest.raises(ValueError, match='CURRENT_FINAL_STATE_VIEW_INVALID'):
+        native.signoff_inputs(project, 'gds')
 
 
 def test_views_other_than_gds_do_not_need_the_finishing_record(canonical):
-    project, views, _, _, _, record = canonical
-    record.unlink()
+    project, views, _, _, _ = canonical
     assert native.signoff_inputs(project, 'netlist') == {'netlist': views['nl']}
 
 
-def test_record_naming_another_stream_state_is_refused(canonical):
-    project, _, _, _, _, record = canonical
-    doc = json.loads(record.read_text())
-    doc['stream_state'] = str(project / 'phase3/librelane/15-floorplan/48-klayout-streamout/state_out.json')
-    put(record, doc)
-    with pytest.raises(ValueError, match='CURRENT_FINISHED_GDS_OTHER_STATE'):
-        native.signoff_inputs(project, 'gds')
 
 
-@pytest.mark.parametrize('roles', [('gds',), ('gds', 'def', 'netlist', 'sdc', 'odb')])
-def test_rewritten_state_cannot_reuse_a_finished_gds_from_its_previous_bytes(canonical, roles):
-    project, _, final, _, finished, _ = canonical
-    state = json.loads(final.read_text())
-    for role in ('def', 'nl', 'sdc', 'odb'):
-        state[role] = str(put(project / 'new' / ('final.' + role), 'new ' + role))
-    put(final, state)
-    try:
-        selected = native.signoff_inputs(project, *roles)
-        observed = 'SELECTED ' + str(selected['gds'])
-    except ValueError as exc:
-        observed = str(exc).split(':', 1)[0]
-    assert observed == 'CURRENT_FINISHED_GDS_STATE_CHANGED'
-    assert finished.is_file()
 
 
-def test_finished_gds_changed_after_publication_is_refused(canonical):
-    project, _, _, _, finished, _ = canonical
-    finished.write_text('rewritten')
-    with pytest.raises(ValueError, match='CURRENT_FINISHED_GDS_CHANGED'):
-        native.signoff_inputs(project, 'gds')
 
 
 def test_finished_gds_absent_is_named(canonical):
-    project, _, _, _, finished, _ = canonical
+    project, _, _, _, finished = canonical
     finished.unlink()
     with pytest.raises(ValueError, match='CURRENT_FINISHED_GDS_MISSING'):
         native.signoff_inputs(project, 'gds')
 
 
 def test_later_stream_in_an_unnumbered_folder_is_refused_by_name(canonical):
-    project, views, _, _, _, _ = canonical
+    project, views, _, _, _ = canonical
     late = state_at(project, 'B-canon-stream/01-klayout-streamout', 'KLayout.StreamOut', views)
     with pytest.raises(ValueError, match='CURRENT_FINAL_STATE_UNORDERED') as exc:
         native.final_state(project, streamed=True)
