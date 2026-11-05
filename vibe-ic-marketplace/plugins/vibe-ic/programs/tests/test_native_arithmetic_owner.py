@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import arith_oracle_tb_gen as testbench
 import design_one_shot_runner as owner
 import serial_parallel_mul_synth as producer
@@ -56,6 +58,32 @@ def test_native_function_is_not_inferred_from_a_multiplier_label(tmp_path):
     assert producer.main([str(project), "--emit", "--engine", "native"]) == 2
     assert not (project / "declaration.json").exists()
     assert not (project / "phase2/stage1/rtl").exists()
+
+
+@pytest.mark.parametrize("resolved_width,declared_width,expected", [
+    (4, "WORD_WIDTH-bit (`[BITS-1:0]`)", 0),
+    (8, "WORD_WIDTH-bit (`[BITS-1:0]`)", 2),
+    (None, "WORD_WIDTH-bit (`[BITS-1:0]`)", 2),
+    (4, "2*WORD_WIDTH-bit (`[BITS-1:0]`)", 2),
+])
+def test_equation_width_alias_uses_the_resolved_operand_declaration(
+        tmp_path, resolved_width, declared_width, expected):
+    project = design_documents(tmp_path / "native")
+    docs = project / "phase1/generated_docs"
+    source = docs / "L2_FRS.json"
+    content = json.loads(source.read_text())
+    content["frs_sections"][0]["content"] = content["frs_sections"][0]["content"].replace(
+        "2^BITS", "2^WORD_WIDTH").replace(" result =", "\nresult =")
+    source.write_text(json.dumps(content))
+    interface = docs / "L9_INTEGRATION_SPEC.json"
+    data = json.loads(interface.read_text())
+    operand = next(port for port in data["top_ports"] if port["name"] == "parallel_data")
+    operand["width_resolution"] = {"resolved_width": resolved_width, "width_declared": declared_width}
+    interface.write_text(json.dumps(data))
+    assert producer.main([str(project), "--emit", "--engine", "native"]) == expected
+    if expected == 0:
+        function, reason = testbench.declared_function(project)
+        assert function["modulus_bits"] == 4, reason
 
 
 def test_native_producer_does_not_guess_a_missing_operand_width(tmp_path):
