@@ -1060,12 +1060,16 @@ def accept_d20(project, context, component):
         result['accepted_dependencies'] = {step: flow109._accepted_row(project,
             Path('reports/flow109/default_rows') / (step + '.json'), step)[1]
             for step in context['resolved_row']['acceptance_deps']}
-        qualified = admission.require_admission(project, context)
-        uses = context['runtime_tool_uses']
-        expected = {'purpose': 'D20.default.constraint_validation', 'native_steps': D20_STEPS,
-                    'model_sources': d20_model_sources()}
-        if len(uses) != 1 or json.loads((project / uses[0]['config']['path']).read_text()) != expected:
-            raise MetricRefusal('D20_MODEL_QUALIFICATION_STALE', 'only current Python method/readset')
+        try:
+            qualified = admission.require_admission(project, context)
+            uses = context['runtime_tool_uses']
+            expected = {'purpose': 'D20.default.constraint_validation', 'native_steps': D20_STEPS,
+                        'model_sources': d20_model_sources()}
+            if len(uses) != 1 or json.loads((project / uses[0]['config']['path']).read_text()) != expected:
+                raise MetricRefusal('D20_MODEL_QUALIFICATION_STALE', 'only current Python method/readset')
+        except (admission.AdmissionRefusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, ImportError) as exc:
+            qualified = {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D20_QUALIFICATION_NOT_MEASURED'), 'detail': str(exc)}
+        result['admission'] = qualified
         refs = {**identity['consumed_inputs'], **component['d20_evidence']['reports'],
                 adopted['path']: adopted['sha256'], adopted['source']['path']: adopted['source']['sha256'],
                 **{ref['path']: ref['sha256'] for ref in result['accepted_dependencies'].values()}}
