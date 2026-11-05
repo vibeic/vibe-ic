@@ -78332,10 +78332,15 @@ def _cvc_from_native_state(project: Path) -> dict:
     """The existing PDK CVC recipe on this run's native LVS State."""
     import time
     started = time.monotonic()
-    selected = json.loads((_pl.reports_phase3_dir(project) / 'librelane_pv_lvs.json').read_text())
-    folder = Path(selected['metrics']['design__lvs_error__count']['folder'])
-    state = json.loads((folder / 'state_out.json').read_text())
-    config = json.loads((folder / 'config.json').read_text())
+    try:
+        selected = json.loads((_pl.reports_phase3_dir(project) / 'librelane_pv_lvs.json').read_text())
+        folder = Path(selected['metrics']['design__lvs_error__count']['folder'])
+        state = json.loads((folder / 'state_out.json').read_text())
+        config = json.loads((folder / 'config.json').read_text())
+    except FileNotFoundError as exc:
+        return {'verdict': 'NOT_MEASURED', 'native_started': False,
+                'reason': 'CVC_NATIVE_INPUT_ABSENT', 'detail': str(exc),
+                'wall_seconds': time.monotonic() - started}
     root = Path(os.environ['VIBEIC_LIBRELANE_PDK_ROOT'])
     def material(raw):
         path = Path(raw)
