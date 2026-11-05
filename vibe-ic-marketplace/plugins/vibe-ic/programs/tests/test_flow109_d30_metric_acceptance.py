@@ -287,6 +287,51 @@ def test_d30_existing_consumer_closes_only_bound_independent_empty_population(tm
     assert result['status'] == 'PASS' and result['delivery_blocked'] is False
 
 
+@pytest.mark.parametrize('damage', ['none', 'missing_equivalence', 'missing_timing_modes'])
+def test_d30_public_dispatch_preserves_complete_canonical_handoff(tmp_path, monkeypatch, damage):
+    from types import SimpleNamespace
+    import _specrtl_common as sources
+
+    context, _, _, _ = _case(tmp_path, monkeypatch)
+    _independent_empty_changes(tmp_path, monkeypatch)
+    rtl_root = tmp_path / 'phase2/stage1/rtl'
+    _write(tmp_path / 'phase2/stage2/synth/synth_inputs.json', {'rtl_sha256': {
+        path.relative_to(rtl_root).as_posix(): _sha(path)
+        for path in sources.rtl_source_files(tmp_path)}})
+    _write(tmp_path / 'phase3/librelane/02-yosys-synthesis/handoff_netlist_gate.json',
+           {'verdict': 'PASS'})
+    assert flow109._retained_native_result(tmp_path, context) is None
+    manifest = tmp_path / 'selection.json'
+    _write(manifest, {'features': context['features']})
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest,
+        flow109_plan_only=False, execution_mode='default', entry_step='D30', exit_step='D30')
+    if damage == 'missing_equivalence':
+        (tmp_path / 'reports/flow109/default_rows/D25.json').unlink()
+        with pytest.raises(flow109.Flow109Error, match='FLOW109_D25_RESULT_MISSING'):
+            flow109.prepare_front_door(args, tmp_path)
+        assert not (tmp_path / 'reports/flow109/default_rows/D30.json').exists()
+        return
+    if damage == 'missing_timing_modes':
+        path = tmp_path / 'reports/flow109/default_rows/D26.json'
+        row = json.loads(path.read_text())
+        row.pop('timing_modes_receipt')
+        _write(path, row)
+        with pytest.raises(flow109.Flow109Error, match='FLOW109_D26_TIMING_MODES_MISSING'):
+            flow109.prepare_front_door(args, tmp_path)
+        assert not (tmp_path / 'reports/flow109/default_rows/D30.json').exists()
+        return
+    assert flow109.prepare_front_door(args, tmp_path) is None
+    route = json.loads((tmp_path / 'reports/flow109/owner_route.json').read_text())
+    assert route['owner_runner'] == 'design_one_shot_runner'
+    assert route['dft_preroute_admission']['adopted_netlist']['path']
+
+    selected = flow109._selected_step_result(tmp_path, context, _deliver(tmp_path, context))
+    assert selected['default_row_status'] == 'PASS' and selected['completed'] is True
+    assert selected['dft_preroute_admission']['normalized_preroute_chain']['status'] == 'PASS'
+    assert [o['status'] for o in selected['metric_acceptance']['obligations']] == ['PASS', 'PASS']
+    assert 'native_measurements' not in selected
+
+
 @pytest.mark.parametrize('damage', ['absence', 'source_semantics', 'foreign_subject', 'unbound_producer'])
 def test_d30_empty_declaration_cannot_substitute_native_population(tmp_path, monkeypatch, damage):
     context, _, _, _ = _case(tmp_path, monkeypatch)
