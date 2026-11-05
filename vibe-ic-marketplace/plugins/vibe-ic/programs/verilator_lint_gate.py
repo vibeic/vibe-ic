@@ -69,9 +69,10 @@ def _sha(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def parse_transcript(text: str) -> dict:
+def parse_transcript(text: str, *, calibrate: bool = True) -> dict:
     """Diagnostics and the tool's own error total, from a Verilator log."""
-    _calibration.assert_calibrated("verilator_lint_gate::parse_transcript")
+    if calibrate:
+        _calibration.assert_calibrated("verilator_lint_gate::parse_transcript")
     diagnostics = []
     exiting: Optional[int] = None
     for raw in text.splitlines():

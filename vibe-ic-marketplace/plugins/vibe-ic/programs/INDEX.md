@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1524
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1524)
+- **Total programs (excluding helpers / shims):** 1531
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1531)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1515 |
+| `any` | 1522 |
 
 ## Alphabetical listing
 
@@ -545,14 +545,20 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_artifact_paths` | any | — | flow_artifact_paths |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15). |
 | `flow_condition_reachability_check` | any | — | the self-disabling-condition guard. |
+| `flow_config` | any | — | Translate generated design documents into native LibreLane configuration. |
 | `flow_dashboard` | any | — | unified entry for the Vibe-IC flow execution dashboard. |
 | `flow_dashboard_cli` | any | — | LIVE terminal dashboard for the Vibe-IC flow. |
 | `flow_dashboard_data` | any | — | DATA PROVIDER for the live Vibe-IC flow dashboard. |
 | `flow_dashboard_web` | any | — | a localhost WEB dashboard for the Vibe-IC flow. |
 | `flow_declared_producer_run` | any | — | run the producers the FLOW already declares, so the RUN writes the documents it is supposed to write. |
+| `flow_density_topup` | any | — | flow_density_topup |
 | `flow_dependency_graph_check` | any | — | recompute the flow-gate's dependency dimension. |
+| `flow_engine` | any | — | Run the Router-selected window of the native step table. |
+| `flow_engine_frontend` | any | — | flow_engine_frontend |
+| `flow_engine_report` | any | — | Render measured engine results and an integration guide for exported views. |
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
+| `flow_native_adapters` | any | — | flow_native_adapters |
 | `flow_output_substance` | any | — | did the run actually produce this output, or only a file? |
 | `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
@@ -561,6 +567,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_step_execution_coverage_check` | any | — | enforce "every applicable step ran, in order". |
 | `flow_step_executor_coverage_check` | any | — | "every step has an executor that runs it". |
 | `flow_step_output_content_check` | any | — | Content check for flow step outputs; refusal exits nonzero. |
+| `flow_steps_generate` | any | — | One-time migration of the old registry into the editable native step table. |
 | `fmeda_coverage_check` | any | — | independent anti-fabrication gate over the FMEDA diagnostic-coverage report emitted by `fmeda_fault_injection_coverage.py`. |
 | `fmeda_fault_injection_coverage` | any | — | REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p... |
 | `fork_downgrade_visibility_check` | any | — | Every abort our EDA fork downgrades to a warning must still be visible to the flow. |
@@ -1596,7 +1603,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1515 programs)
+### `any` (1522 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2113,14 +2120,20 @@ _(no programs in this group)_
 - `flow_artifact_paths` — flow_artifact_paths
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15).  _[Wave 91]_
 - `flow_condition_reachability_check` — the self-disabling-condition guard.
+- `flow_config` — Translate generated design documents into native LibreLane configuration.
 - `flow_dashboard` — unified entry for the Vibe-IC flow execution dashboard.
 - `flow_dashboard_cli` — LIVE terminal dashboard for the Vibe-IC flow.
 - `flow_dashboard_data` — DATA PROVIDER for the live Vibe-IC flow dashboard.
 - `flow_dashboard_web` — a localhost WEB dashboard for the Vibe-IC flow.
 - `flow_declared_producer_run` — run the producers the FLOW already declares, so the RUN writes the documents it is supposed to write.
+- `flow_density_topup` — flow_density_topup
 - `flow_dependency_graph_check` — recompute the flow-gate's dependency dimension.
+- `flow_engine` — Run the Router-selected window of the native step table.
+- `flow_engine_frontend` — flow_engine_frontend
+- `flow_engine_report` — Render measured engine results and an integration guide for exported views.
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
+- `flow_native_adapters` — flow_native_adapters
 - `flow_output_substance` — did the run actually produce this output, or only a file?
 - `flow_phase_attribution` — WHO did each of the four phases, and HOW.
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
@@ -2129,6 +2142,7 @@ _(no programs in this group)_
 - `flow_step_execution_coverage_check` — enforce "every applicable step ran, in order".
 - `flow_step_executor_coverage_check` — "every step has an executor that runs it".
 - `flow_step_output_content_check` — Content check for flow step outputs; refusal exits nonzero.
+- `flow_steps_generate` — One-time migration of the old registry into the editable native step table.
 - `fmeda_coverage_check` — independent anti-fabrication gate over the FMEDA diagnostic-coverage report emitted by `fmeda_fault_injection_coverage.py`.
 - `fmeda_fault_injection_coverage` — REAL ISO-26262 FMEDA diagnostic-coverage (DC) measurement by single-stuck-at FAULT INJECTION against a declared safety mechanism (ECC / p...
 - `fork_downgrade_visibility_check` — Every abort our EDA fork downgrades to a warning must still be visible to the flow.

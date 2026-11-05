@@ -14688,7 +14688,8 @@ def _step_d11_original_engineering(project, context, *, pdk_name, bounded_rtl,
 def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
                        bounded_rtl: bool = False,
                        top_name: Optional[str] = None,
-                       container: str = _pin.default_container_name()) -> Optional[StepResult]:
+                       container: str = _pin.default_container_name(),
+                       native_engine: bool = False) -> Optional[StepResult]:
     """Flow Step 2 lint through the tool: LibreLane Verilator.Lint + its gate.
 
     A bounded RTL request with no PDK and no explicit implementation/step
@@ -14703,6 +14704,9 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
     and blocks on the union, recording which arm found what. The linted files
     are the step-9 synthesis input (`silicon_rtl_selection`), so a lint of a
     different or empty file set cannot pass."""
+    if native_engine:
+        from flow_engine_frontend import native_lint
+        return native_lint(project, top_name)
     import librelane_contract as _ll
     raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
     d11_context = None
@@ -28369,6 +28373,9 @@ def main() -> int:
     _line_buffer_own_stream()
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
+    from flow_engine_frontend import selected_engine
+    p.add_argument("--engine", choices=("legacy", "native"), default=selected_engine(),
+                   help="Run native owner tools without legacy interstep admission.")
     p.add_argument("--pdk", default="auto",
                    help="Select a PDK declared by the design, including its secondary targets.")
     p.add_argument("--skip-hardware", action="store_true")
@@ -28447,6 +28454,7 @@ def main() -> int:
     import execution_policy as _execution
     _execution.add_arguments(p)
     args = p.parse_args()
+    _native_engine = args.engine == "native"
     if bool(args.area_receipt) != bool(args.area_run_manifest):
         p.error("--area-receipt and --area-run-manifest must be supplied together")
     _execution.configure(args)
@@ -28466,7 +28474,8 @@ def main() -> int:
                 raise ValueError(f"ORIGINAL_TOP_CONFLICT: --top-name {args.top_name} conflicts with original {source_top}")
             if source_top:
                 args.top_name = source_top
-        _activate_runtime_program_tree(project)
+        if not _native_engine:
+            _activate_runtime_program_tree(project)
     except Exception as exc:
         print(f"REFUSED: runtime program tree: {exc}", file=sys.stderr)
         return 2
@@ -28716,8 +28725,13 @@ def main() -> int:
                 _adm = {'admitted': False, 'reason': str(exc)}
         else:
             _entry_staged = step_reused_ip_consume(project, args.top_name)
-            _adm = _spf.entry_admission(project, "design_one_shot_runner",
-                                        str(args.entry_step))
+            if _native_engine:
+                site = _spf.site_for_step("design_one_shot_runner", str(args.entry_step))
+                _adm = {"admitted": site is not None, "site": site,
+                        "reason": "No owner dispatch site for the selected entry."}
+            else:
+                _adm = _spf.entry_admission(project, "design_one_shot_runner",
+                                            str(args.entry_step))
         if not _adm["admitted"]:
             print(f"REFUSED: cannot enter at step {args.entry_step!r} — "
                   f"{_adm['reason']}", file=sys.stderr)
@@ -28725,24 +28739,25 @@ def main() -> int:
                 print(f"  absent: {_m}", file=sys.stderr)
             return 2
         _entry_site = _adm["site"]
-        try:
-            import datetime as _dtm             # noqa: PLC0415
-            import run_entry_manifest as _rem   # noqa: PLC0415
-            _man = _rem.build(project, str(args.entry_step),
-                              "design_one_shot_runner", _entry_site,
-                              list(sys.argv[1:]),
-                              _dtm.datetime.utcnow().isoformat() + "Z")
-            _bad = _rem.validate(_man)
-            if _bad:
-                print("REFUSED: the run-entry manifest does not validate: "
-                      + "; ".join(_bad), file=sys.stderr)
+        if not _native_engine:
+            try:
+                import datetime as _dtm             # noqa: PLC0415
+                import run_entry_manifest as _rem   # noqa: PLC0415
+                _man = _rem.build(project, str(args.entry_step),
+                                  "design_one_shot_runner", _entry_site,
+                                  list(sys.argv[1:]),
+                                  _dtm.datetime.utcnow().isoformat() + "Z")
+                _bad = _rem.validate(_man)
+                if _bad:
+                    print("REFUSED: the run-entry manifest does not validate: "
+                          + "; ".join(_bad), file=sys.stderr)
+                    return 2
+                _rem.write(project, _man)
+            except ImportError as _exc:
+                print(f"REFUSED: --entry-step needs run_entry_manifest ({_exc}); "
+                      "refusing to enter mid-flow without recording that it "
+                      "happened", file=sys.stderr)
                 return 2
-            _rem.write(project, _man)
-        except ImportError as _exc:
-            print(f"REFUSED: --entry-step needs run_entry_manifest ({_exc}); "
-                  "refusing to enter mid-flow without recording that it "
-                  "happened", file=sys.stderr)
-            return 2
 
     # DECIDED HERE, not at parse time: `_exit_pruned` and `_entry_site` are the
     # run's real dispatch signals and neither exists until the two blocks above
@@ -28810,7 +28825,7 @@ def main() -> int:
     _bounded_rtl_lint = (
         args.skip_phase3 and str(args.entry_step) != "D1"
         and _lint_scope.is_rtl_only_evidence(exit_step=args.exit_step))
-    if (str(args.entry_step) == "2" and str(args.exit_step) == "2"
+    if (not _native_engine and str(args.entry_step) == "2" and str(args.exit_step) == "2"
             and (_lint_contract.selected_mode(project, "2") == "librelane"
                  or (_pl.rtl_input(project) == "original"
                      and os.environ.get("VIBEIC_FLOW109_CONTEXT")))):
@@ -28876,6 +28891,12 @@ def main() -> int:
     # the retry actually left behind.
     _redispatch: Dict[str, Callable[[], List[StepResult]]] = {}
 
+    def _owner_dispatch(project, runner, site, refusal_factory, fn, *args, **kwargs):
+        if _native_engine:
+            return fn(*args, **{key: value for key, value in kwargs.items()
+                              if not key.startswith("_preflight_")})
+        return _spf.gate(project, runner, site, refusal_factory, fn, *args, **kwargs)
+
     def _dispatch_site(site: str,
                        thunk: Callable[[], List[StepResult]]
                        ) -> List[StepResult]:
@@ -28938,15 +28959,16 @@ def main() -> int:
     # 1, but it must SAY when the docs it reads are not the current
     # producer's; the front door demotes a PASS over them.
     _p1_note = ""
-    try:
-        import _phase1_producer_identity as _p1id_mod
-        _fr = (_p1id_mod.assess(project, PROGRAMS_DIR)
-               if args.rtl_input != "original" else {"state": _p1id_mod.REUSE})
-        if _fr.get("state") != _p1id_mod.REUSE:
-            _p1_note = (f"; STALE_GENERATED_DOCS: {_fr.get('state')} "
-                        f"({_fr.get('reason')}): {_fr.get('why')}")
-    except Exception:                                      # noqa: BLE001
-        pass
+    if not _native_engine:
+        try:
+            import _phase1_producer_identity as _p1id_mod
+            _fr = (_p1id_mod.assess(project, PROGRAMS_DIR)
+                   if args.rtl_input != "original" else {"state": _p1id_mod.REUSE})
+            if _fr.get("state") != _p1id_mod.REUSE:
+                _p1_note = (f"; STALE_GENERATED_DOCS: {_fr.get('state')} "
+                            f"({_fr.get('reason')}): {_fr.get('why')}")
+        except Exception:                                      # noqa: BLE001
+            pass
     if args.rtl_input == "original":
         plan.append(StepResult("phase1_precheck", "NOT_APPLICABLE", 0.0,
                                "bounded original-input RTL contract; D1 documents are not consumed",
@@ -28983,7 +29005,7 @@ def main() -> int:
     elif _after_exit("rtl_gen"):
         plan.append(_exit_sentinel("rtl_gen"))
     else:
-        plan.append(_spf.gate(
+        plan.append(_owner_dispatch(
             project, "design_one_shot_runner", "rtl_gen",
             _preflight_refusal("rtl_gen"),
             step_rtl_gen, project, ic_class, _preflight_canonical_acceptance=True))
@@ -29041,6 +29063,12 @@ def main() -> int:
     else:
         plan.append(step_catalog_synth_safe_params(project))
 
+    if _native_engine and _after_exit("rtl_validate"):
+        from flow_engine_frontend import finish_frontend
+        result = finish_frontend(project, plan, args, ic_class, evidence)
+        _lock.release()
+        return result
+
     # Structural DETERMINISM gates — the SAME gates the benchmark emit path
     # applies (shape_b_sample_export.guard_export checks C/D: clock-divider
     # phase-form + spec worked-example oracle), promoted into the production
@@ -29063,7 +29091,7 @@ def main() -> int:
     elif _after_exit("rtl_validate"):
         plan.append(_exit_sentinel("rtl_validate"))
     else:
-        _dispatch_site("rtl_validate", lambda: [_spf.gate(
+        _dispatch_site("rtl_validate", lambda: [_owner_dispatch(
             project, "design_one_shot_runner", "rtl_validate",
             _preflight_refusal("rtl_validate"),
             step_determinism_gates, project, args.top_name)])
@@ -29117,9 +29145,15 @@ def main() -> int:
     else:
         _tool_lint = step_rtl_lint_tool(
             project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
-            top_name=args.top_name, container=args.container)
+            top_name=args.top_name, container=args.container, native_engine=_native_engine)
         if _tool_lint is not None:
             plan.append(_required_site_row(project, "rtl_validate", _tool_lint))
+
+    if _native_engine and _after_exit("sim"):
+        from flow_engine_frontend import finish_frontend
+        result = finish_frontend(project, plan, args, ic_class, evidence)
+        _lock.release()
+        return result
 
     # Flow step 2 — pad-budget feasibility. Placed HERE, right after the RTL is
     # stable and long before synthesis/DFT/PnR, because the whole point of the
@@ -29165,7 +29199,7 @@ def main() -> int:
         # professional cocotb path below) sits past the declared exit.
         plan.append(_exit_sentinel("sim"))
     else:
-        _sim_rows = _dispatch_site("sim", lambda: [_spf.gate(
+        _sim_rows = _dispatch_site("sim", lambda: [_owner_dispatch(
             project, "design_one_shot_runner", "sim",
             _preflight_refusal("sim"),
             step_full_stack_tb_gen, project, args.top_name)])
@@ -29531,7 +29565,7 @@ def main() -> int:
     elif _after_exit("asic_sdc"):
         plan.append(_exit_sentinel("asic_sdc"))
     else:
-        plan.append(_spf.gate(
+        plan.append(_owner_dispatch(
             project, "design_one_shot_runner", "asic_sdc",
             _preflight_refusal("asic_sdc"),
             step_asic_sdc, project, args.top_name, args.container, ic_class,
@@ -29567,7 +29601,7 @@ def main() -> int:
     elif _after_exit("yosys_synth"):
         plan.append(_exit_sentinel("yosys_synth"))
     else:
-        plan.append(_spf.gate(
+        plan.append(_owner_dispatch(
             project, "design_one_shot_runner", "yosys_synth",
             _preflight_refusal("yosys_synth"),
             step_yosys_synth, project, args.top_name, args.container, ic_class,
@@ -29771,7 +29805,7 @@ def main() -> int:
         # steps past its own deliverable.
         plan.append(_exit_sentinel("dft_lec_chain"))
     else:
-        _dft_chain = _spf.gate(
+        _dft_chain = _owner_dispatch(
             project, "design_one_shot_runner", "dft_lec_chain",
             lambda detail, extras: [_preflight_refusal("dft_lec_chain")(
                 detail, extras)],
@@ -29799,7 +29833,7 @@ def main() -> int:
                     Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
                 if _candidate_context.get('requested_step') == 'D30':
                     _handoff_context = _candidate_context
-            _handoff = _spf.gate(
+            _handoff = _owner_dispatch(
                 project, 'design_one_shot_runner', 'synthesis_handoff',
                 _preflight_refusal('synthesis_handoff'),
                 step_synthesis_handoff, project, plan=plan,

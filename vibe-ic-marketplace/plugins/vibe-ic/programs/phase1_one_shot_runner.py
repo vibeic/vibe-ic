@@ -1823,6 +1823,10 @@ def main_recorded() -> int:
     covers only the docs this run WROTE. A `--second-track-only` pass is not
     the doc producer: the docs it rewrote are recorded as derivations, and the
     producer's recording, inputs and every other doc are left alone."""
+    from flow_engine_frontend import selected_engine
+    if selected_engine() == "native":
+        from flow_engine_frontend import phase1_main
+        return phase1_main()
     import _phase1_producer_identity as _pid
     _RUN.update(project=None, second_track_only=False, extracting=False,
                 knobs=None, dft_intent_output=None)
