@@ -655,102 +655,8 @@ def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
                         historical: bool = False,
                         allow_repaired_output: bool = False,
                         repaired_output_sha256: str | None = None) -> dict | None:
-    """Disclose pre-gate refusals without interpreting rc as a gate verdict.
-
-    BLOCKING only for unbound/stale evidence or a named refusal before ANY
-    fresh canonical report. Nonzero exits with usable reports keep the ordinary
-    collection/gate contract. Logs alone never establish a successful gate.
-    """
-    from flow_engine_frontend import native_diagnostics, selected_engine
-    if selected_engine(argv) == "native":
-        return native_diagnostics(process, argv, project, require_phase2)
-    project = Path(project).resolve()
-    diagnostic = {
-        "invocation_id": getattr(process, "invocation_id", None),
-        "receipt_path": getattr(process, "receipt_path", None),
-        "receipt_sha256": getattr(process, "receipt_sha256", None),
-        "project": str(project), "argv": list(argv), "rc": process.rc,
-    }
-    try:
-        raw = Path(diagnostic["receipt_path"] or "").read_bytes()
-        receipt = _strict_json_loads(raw)
-        _runner_receipt_paths(project, receipt)
-        latest = _strict_json_loads((project / "reports" / "orchestrator" / "runner_invocations"
-                             / "latest.json").read_bytes())
-        retained = None
-        if historical and receipt["invocation_id"] != latest["invocation_id"]:
-            retained = _stored_duplicate_observation(receipt, latest, project)
-        if not (hashlib.sha256(raw).hexdigest() == process.receipt_sha256
-                and receipt["invocation_id"] == process.invocation_id
-                and (receipt["invocation_id"] == latest["invocation_id"] or retained)
-                and receipt["argv"] == latest["argv"] == list(argv)
-                and receipt["project"] == latest["project"] == str(project)
-                and receipt["rc"] == process.rc and receipt["error"] == process.error
-                and receipt["stdout"] == process.stdout and receipt["stderr"] == process.stderr
-                and (receipt["reports_after"] == _runner_report_snapshot(project) or retained)):
-            raise ValueError("runner binding changed")
-        if retained:
-            diagnostic["retained_after_duplicate"] = retained
-        current_material = _runner_material_snapshot(project)
-        if (allow_repaired_output
-                and (not isinstance(repaired_output_sha256, str)
-                     or current_material.get("output_rtl_sha256")
-                     != repaired_output_sha256)):
-            return {**diagnostic, "status": "MATERIAL_MISMATCH",
-                    "reason_class": "RUNNER_MATERIAL_UNBOUND",
-                    "reason": "RUNNER_MATERIAL_UNBOUND: repaired RTL hash is not the admitted hash"}
-        repaired_output_bound = (
-            allow_repaired_output
-            and isinstance(repaired_output_sha256, str)
-            and current_material.get("output_rtl_sha256") == repaired_output_sha256)
-        if (receipt["material_after"] != current_material
-                and not (repaired_output_bound
-                         and _material_matches_repaired_output(
-                             receipt["material_after"], current_material))):
-            return {**diagnostic, "status": "MATERIAL_MISMATCH",
-                    "reason_class": "RUNNER_MATERIAL_UNBOUND",
-                    "reason": "RUNNER_MATERIAL_UNBOUND: input or output file population/content changed after invocation"}
-        if not (receipt["source_before"] == receipt["source_after"]
-                and (_historical_runner_sources_match(receipt) if historical
-                     else receipt["source_before"] == _runner_source_snapshot(argv))):
-            return {**diagnostic, "status": "SOURCE_MISMATCH",
-                    "reason_class": "RUNNER_SOURCE_UNBOUND",
-                    "reason": "RUNNER_SOURCE_UNBOUND: actual runner executable/source/options changed"}
-    except (OSError, ValueError, KeyError, TypeError):
-        return {**diagnostic, "status": "INVOCATION_MISMATCH",
-                "reason_class": "RUNNER_INVOCATION_UNBOUND",
-                "reason": "RUNNER_INVOCATION_UNBOUND: missing, changed or mismatched runner receipt/reports"}
-    fresh = _runner_fresh_reports(receipt["reports_before"], receipt["reports_after"])
-    diagnostic["fresh_reports"] = fresh
-    binding_reason = _runner_report_binding_reason(receipt, require_phase2=require_phase2)
-    if binding_reason:
-        diagnostic = {**diagnostic, "report_binding_error": binding_reason,
-                      "report_binding_status": "REPORT_BINDING_MISMATCH"}
-        refusal = _runner_refusal_line(process)
-        if refusal:
-            # A fresh report that lost its producer binding remains unusable.
-            # Keep the binding failure primary while retaining the runner's
-            # actual refusal stream as secondary diagnostic metadata.
-            diagnostic = {**diagnostic, "actual_refusal_class": refusal[0],
-                          "actual_refusal": refusal[1]}
-        return {**diagnostic, "status": "REPORT_BINDING_MISMATCH",
-                "reason_class": "RUNNER_REPORT_UNBOUND", "reason": binding_reason}
-    if not fresh:
-        refusal = _runner_refusal_line(process)
-        if refusal:
-            return {**diagnostic, "status": "REFUSED_PRE_GATE",
-                    "reason_class": refusal[0], "reason": refusal[1]}
-    phase2 = "phase2_one_shot.json"
-    if require_phase2 and phase2 in receipt["reports_after"] and phase2 not in fresh:
-        return {**diagnostic, "status": "STALE_RUNNER_REPORT",
-                "reason_class": "RUNNER_REPORT_NOT_FRESH",
-                "reason": "RUNNER_REPORT_NOT_FRESH: phase2 report predates this invocation or replays identical report bytes"}
-    # Some alternate subprocess implementations do not supply captured streams.
-    # Their receipt still binds the invocation/reports, but cannot disclose a
-    # stdout/stderr diagnostic. Never invent empty logs for an unavailable capture.
-    if process.stdout is None or process.stderr is None:
-        return None
-    return {**diagnostic, "status": ("REPORTS_AVAILABLE" if fresh else "NO_FRESH_REPORTS")}
+    from flow_engine_frontend import native_diagnostics
+    return native_diagnostics(process, argv, project, require_phase2)
 
 
 def _collect_runner_result(process: _ProcessOutcome, argv: list[str],
@@ -1840,26 +1746,11 @@ def _required_gate_ledger(solve_result: Any) -> dict:
     grouped = {}
     spans = dict(sites)
     current_rtl = p3.get("required_site_rtl_sha256")
-    from flow_engine_frontend import selected_engine
-    native = selected_engine([]) == "native"
     for current, observations in ((True, owned), (False, superseded)):
         for row in observations:
             binding = row.get("ownership") if isinstance(row, dict) else None
             site = binding.get("site") if isinstance(binding, dict) else None
-            if (not isinstance(binding, dict)
-                    or binding.get("runner") != "design_one_shot_runner"
-                    or not isinstance(site, str) or site not in spans
-                    or binding.get("flow_steps") != spans[site]
-                    or (not native and (
-                        not isinstance(current_rtl, str)
-                        or not re.fullmatch(r"[0-9a-f]{64}", current_rtl)
-                        or not isinstance(binding.get("rtl_sha256"), str)
-                        or not re.fullmatch(r"[0-9a-f]{64}", binding["rtl_sha256"])
-                        or (binding["rtl_sha256"] == current_rtl) != current))
-                    or not isinstance(row.get("result_name"), str)
-                    or row["result_name"] not in recorded
-                    or not isinstance(row.get("status"), str) or row["status"] not in {
-                        "PASS", "FAIL", "NOT_MEASURED", "NOT_APPLICABLE", "PASS_WITH_WAIVERS"}):
+            if (not isinstance(binding, dict) or binding.get('runner') != 'design_one_shot_runner' or (not isinstance(site, str)) or (site not in spans) or (binding.get('flow_steps') != spans[site]) or (not isinstance(row.get('result_name'), str)) or (row['result_name'] not in recorded) or (not isinstance(row.get('status'), str)) or (row['status'] not in {'PASS', 'FAIL', 'NOT_MEASURED', 'NOT_APPLICABLE', 'PASS_WITH_WAIVERS'})):
                 ledger["why"] = "required-site evidence disagrees with the runner plan or results"
                 invalid_ownership = True
                 continue
@@ -1879,7 +1770,7 @@ def _required_gate_ledger(solve_result: Any) -> dict:
         elif any(status not in {"PASS", "NOT_APPLICABLE", "PASS_WITH_WAIVERS"}
                  for status in statuses):
             recorded[site] = _NOT_MEASURED
-        elif native and recorded.get(site) in (None, "NOT_APPLICABLE"):
+        elif recorded.get(site) in (None, "NOT_APPLICABLE"):
             recorded[site] = recorded.get(site, _NOT_MEASURED)
         elif "PASS_WITH_WAIVERS" in statuses:
             recorded[site] = "PASS_WITH_WAIVERS"
@@ -6414,9 +6305,7 @@ def cmd_score(bench: str, run: str, dataset: str | None,
             "partial, separate-scaffold, or benchmark-local runs are not eligible")
     accepted = _require_program_first_ai_acceptance(run_p)
     entry_guard = Path(__file__).resolve().parent / "vibe_ic_entry_guard.py"
-    from flow_engine_frontend import selected_engine
-    if (entry_guard.is_file() and not allow_direct_agent
-            and not (selected_engine([]) == "native" and accepted)):
+    if entry_guard.is_file() and not allow_direct_agent and not accepted:
         rc = subprocess.call([sys.executable, str(entry_guard), str(run_p),
                               "--strict"])
         if rc != 0:
@@ -6726,37 +6615,8 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
     return len(validation) == 1 and validation[0].get("status") in {"PASS", "FAIL"}
 
 
-def _stage_product_manifest(run_p: Path, source: str | Path | None) -> None:
-    """Retain explicit operator features; never synthesize absent feature facts."""
-    if source is None:
-        return
-    from flow_engine_frontend import selected_engine
-    if selected_engine([]) == "native":
-        raise ValueError("--flow109-manifest belongs to the legacy engine")
-    import flow109
-    try:
-        raw = Path(source).read_bytes()
-        manifest = _strict_json_loads(raw.decode("utf-8"))
-    except (OSError, UnicodeError, ValueError) as exc:
-        raise ValueError("FLOW109_MANIFEST_INVALID: " + str(exc)) from exc
-    if not isinstance(manifest, dict):
-        raise ValueError("FLOW109_MANIFEST_INVALID: expected object")
-    flow109.resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
-    _write_immutable_bytes(Path(run_p) / "input" / "flow109-manifest.json", raw)
 
 
-def _forward_product_manifest(run_p: Path, project: Path, receipt: dict | None = None) -> None:
-    from flow_engine_frontend import selected_engine
-    if selected_engine([]) == "native":
-        return
-    source = Path(run_p) / "input" / "flow109-manifest.json"
-    if source.is_file():
-        _write_immutable_bytes(Path(project) / "input" / "flow109-manifest.json",
-                               source.read_bytes())
-    elif receipt is not None:
-        import flow109
-        flow109.resolve_task_manifest(project, receipt.get("entry_step"),
-            receipt.get("verify_through"), receipt.get("delivery_target"))
 
 
 def _rtl_delivery_target(receipt: dict | None) -> str | None:
@@ -6777,8 +6637,7 @@ def _rtl_delivery_target(receipt: dict | None) -> str | None:
 
 def _solver_argv(runner: Path, proj: Path, entry, exit_step,
                  delivery_route: str = "ip", input_contract: str = "structured",
-                 delivery_target: str | None = None, *,
-                 resolve_manifest: bool = True) -> list:
+                 delivery_target: str | None = None) -> list:
     """One problem's runner argv, assembled from the routing verdict.
 
     Open RTL evaluations deliver IP/module evidence, so explicitly choose the
@@ -6789,24 +6648,12 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     physical design because no RTL consumer reads a netlist or GDS; a run
     whose exit lies before step 15 therefore skips Phase 3 outright.
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
     import task_nature_route as tnr                       # noqa: PLC0415
     if delivery_route not in {"ic", "ip"}:
         raise ValueError(f"invalid delivery runner route: {delivery_route!r}")
-    from flow_engine_frontend import selected_engine
-    native_engine = selected_engine([]) == "native"
-    selected = None
-    if resolve_manifest and not native_engine:
-        import flow109
-        selected = flow109.resolve_task_manifest(proj, entry or "D1", exit_step,
-                                                delivery_target, delivery_route)
-    if selected is not None:
-        delivery_target = "rtl"
     argv = [sys.executable, str(runner), str(proj),
             "--route", delivery_route, "--skip-analog", "--skip-hardware",
             "--no-dashboard"]
-    if native_engine:
-        argv += ["--engine", "native"]
     if delivery_target == "rtl":
         argv += ["--delivery-target", "rtl"]
     if input_contract == "original":
@@ -6822,21 +6669,8 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
         # and DFT/LEC. Forward the exit itself; the phase2 runner prunes every
         # dispatch site wholly past it as SKIPPED-BY-EXIT.
         argv += ["--exit-step", str(exit_step)]
-    if entry and (entry != "D1" or native_engine):
+    if entry:
         argv += ["--entry-step", str(entry)]
-    manifest_path = Path(proj) / "input" / "flow109-manifest.json"
-    if not native_engine and manifest_path.is_file():
-        manifest = _strict_json_loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(manifest, dict):
-            raise ValueError("FLOW109_MANIFEST_INVALID: expected object")
-        first, last = tnr.flow109_product_window(
-            manifest, str(entry or "D1"), str(exit_step), delivery_route)
-        for option in ("--entry-step", "--exit-step"):
-            if option in argv:
-                index = argv.index(option)
-                del argv[index:index + 2]
-        argv += ["--flow", "109", "--flow109-manifest", str(manifest_path),
-                 "--entry-step", first, "--exit-step", last]
     # Same-bytes re-entry stages below program_regates, rather than projects.
     for owner in Path(proj).resolve().parents:
         if ((owner / _RUNTIME_PAIR_RECORD).exists()
@@ -6851,8 +6685,7 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
 def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
                         entry, exit_step, delivery_route: str = "ip",
                         input_contract: str = "structured",
-                        delivery_target: str | None = None, *,
-                        resolve_manifest: bool = True) -> list:
+                        delivery_target: str | None = None) -> list:
     """Re-enter one routed problem without losing its declared exit.
 
     AI backup/repair supplies RTL, so it resumes at the first RTL-validation
@@ -6861,7 +6694,7 @@ def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
     """
     effective_entry = "2" if supplied_rtl and str(exit_step) != "1" else entry
     return _solver_argv(runner, proj, effective_entry, exit_step, delivery_route,
-                        input_contract, delivery_target, resolve_manifest=resolve_manifest)
+                        input_contract, delivery_target)
 
 
 def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
@@ -7740,7 +7573,7 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
             except (OSError, ValueError, TypeError, KeyError) as authority_error:
                 return {"status": "REFUSED", "reason": str(authority_error)}
             separate_d1 = (str(receipt["entry_step"]) == "D1"
-                           and (project / "input" / "flow109-manifest.json").is_file())
+)
             return {"status": "ACTIVE" if rtl_only and not separate_d1 else "D1_ONLY",
                     "reason": str(exc),
                     "route_receipt": receipt, "task": task, "project": project,
@@ -8644,13 +8477,11 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
     if not diagnostic or diagnostic.get("reason"):
         raise ValueError(str((diagnostic or {}).get("reason")
                              or "RETAINED_HANDOFF_NOT_MEASURED"))
-    if not (project / "input/flow109-manifest.json").is_file():
-        raise ValueError("RETAINED_HANDOFF_FLOW_MANIFEST_MISSING")
     expected = _solver_argv(
         Path(invocation["argv"][1]), project, state["effective_entry"],
         state["exit_step"], state["delivery_route"],
         str(receipt.get("input_contract") or "structured"),
-        _rtl_delivery_target(receipt), resolve_manifest=False)
+        _rtl_delivery_target(receipt))
     expected[0] = invocation["argv"][0]  # its recorded interpreter is checked below
     if "--container" not in invocation["argv"] and "--container" in expected:
         # Historical runners inherited their selection through the environment.
@@ -8930,8 +8761,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                       worker_threads: int = 0,
                       routed_tasks: list[dict] | None = None,
                       route_decisions: dict[str, dict] | None = None,
-                      shape: str | None = None,
-                      flow109_manifest: str | None = None) -> int:
+                      shape: str | None = None) -> int:
     """Solve every problem through the GENERAL flow.
 
     This verb did not exist. A separate scaffold prepared the run and
@@ -8999,7 +8829,6 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 or config.get("diagnostic_limit") != int(limit or 0)):
             print("ERROR: route continuation differs from original run", file=sys.stderr)
             return 2
-    _stage_product_manifest(run_p, flow109_manifest)
     _write_runtime_pair_record(run_p, pair_record)
     runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
     runner_budget = _RunnerBudget(jobs, heavy_jobs, worker_threads)
@@ -9149,7 +8978,6 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             if (current_route["receipt"].get("receipt_sha256")
                     != route_receipt.get("receipt_sha256")):
                 raise ValueError("ROUTE_RECEIPT_CURRENT_POINTER_MISMATCH")
-            _forward_product_manifest(run_p, proj, route_receipt)
             # `entry_step` and `verify_through` are derived by the Program
             # receipt. The semantic reviewer never supplies or overrides them.
             entry = str(route_receipt["entry_step"])
@@ -9174,7 +9002,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 planned_snapshot = None
                 admitted_steps = list(route_receipt["verify_closed_steps"])
             elif (rtl_delivery and entry == "D1"
-                  and (proj / "input" / "flow109-manifest.json").is_file()):
+):
                 phase1_frontdoor, pending, activation = _activate_route_d1(
                     proj, route_task, route_receipt, runner, runner_budget,
                     run_scope=run_scope,
@@ -9488,15 +9316,14 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
 
 def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0,
               jobs: int = 1, heavy_jobs: int | None = None,
-              worker_threads: int = 0, shape: str | None = None,
-              flow109_manifest: str | None = None) -> int:
+              worker_threads: int = 0, shape: str | None = None) -> int:
     """Run the sole solve coordinator under an exclusive run-root lock."""
     try:
         with _run_root_coordinator_lock(Path(run), "solve"):
             return _cmd_solve_locked(
                 bench, dataset, run, limit=limit, jobs=jobs,
                 heavy_jobs=heavy_jobs, worker_threads=worker_threads,
-                shape=shape, flow109_manifest=flow109_manifest)
+                shape=shape)
     except _CoordinatorBusy as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -9837,7 +9664,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         # exit still applies; otherwise resume expands a step-2/4 task into LEC.
         input_contract = str(
             state["route_receipt"].get("input_contract") or "structured")
-        _forward_product_manifest(run_p, proj, state["route_receipt"])
         argv = _resume_solver_argv(
             runner, proj, supplied_rtl, state["effective_entry"],
             state["exit_step"], state["delivery_route"],
@@ -9861,12 +9687,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                     expected_repaired_output_sha256=expected_repaired_output_sha256)
             if process.error or process.rc:
                 break
-            if step is not None:
-                import flow109
-                row = argv[argv.index("--entry-step") + 1]
-                if next((item["status"] for item in flow109.whole_run_verdict(proj)["steps"]
-                         if item["id"] == row), _NOT_MEASURED) != "PASS":
-                    break
         diagnostic = _runner_diagnostics(process, argv, proj)
         diagnostics_json = json.dumps(diagnostic) if diagnostic else None
         if process.error is not None:
@@ -12032,8 +11852,7 @@ def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
                worker_threads: int = 0,
                review_correction: str | list[str] | None = None,
                program_regate: str | None = None,
-               program_retry: str | None = None,
-               flow109_manifest: str | None = None) -> int:
+               program_retry: str | None = None) -> int:
     """Run the sole resume coordinator under an exclusive run-root lock.
 
     TWO explicit operations remain, separate and mutually exclusive: a review
@@ -12073,7 +11892,6 @@ def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
                                     if review_correction is not None
                                     else _REGATE_REFUSED))
         with _run_root_coordinator_lock(Path(run), "resume"):
-            _stage_product_manifest(Path(run), flow109_manifest)
             _guard_program_regate_journals(Path(run).resolve())
             if review_correction is not None:
                 try:
@@ -12123,9 +11941,6 @@ def main():
                          "evidence-backed OVERRIDE_PROGRAM and is the final "
                          "semantic authority. No benchmark-specific solver is "
                          "involved.")
-    ap.add_argument("--flow109-manifest", type=str,
-                    help="Explicit operator feature manifest for the common --flow 109 entry; "
-                         "retained unchanged across solve/resume. No feature defaults are invented.")
     ap.add_argument("--resume", action="store_true",
                     help="Advance needs_ai_routing.jsonl before any runner, "
                          "then needs_ai_backup.jsonl, needs_ai_review.jsonl, "
@@ -12199,8 +12014,6 @@ def main():
                     help="OPT-IN: score even if the run lacks Vibe-IC runner entry evidence "
                          "(NON-CANONICAL). Default HARD-BLOCKs direct-agent authoring/patching.")
     a = ap.parse_args()
-    if a.flow109_manifest and not (a.solve or a.resume):
-        ap.error("--flow109-manifest requires --solve or --resume")
     if a.shape and not a.solve:
         ap.error("--shape selects I/O at --solve; --resume retains that selection")
     if a.review_correction and (not a.resume or a.solve or a.score or a.show or a.list):
@@ -12270,15 +12083,14 @@ def main():
             heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads,
             review_correction=a.review_correction,
             program_regate=a.program_regate,
-            program_retry=a.program_retry,
-            flow109_manifest=a.flow109_manifest))
+            program_retry=a.program_retry))
     if a.solve:
         if not (a.dataset and a.run):
             raise SystemExit("--solve requires --dataset and --run")
         sys.exit(cmd_solve(
             a.bench, a.dataset, a.run, limit=a.limit, jobs=a.jobs,
             heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads,
-            shape=a.shape, flow109_manifest=a.flow109_manifest))
+            shape=a.shape))
     # default: show plan + env status
     env = _env_check()
     print(f"# Environment: iverilog={'OK' if env['iverilog'] else 'MISSING'}, "
