@@ -325,3 +325,13 @@ def test_allocated_pulse_run_preserves_progress_and_launch_record(tmp_path,monke
     if with_record:
         assert record['pid']==321 and record['argv']==argv and record['returncode']==got[0]
         assert record['supervision']['watched']=='output+cpu'
+
+
+@pytest.mark.parametrize("text", [
+    "Keep the clock inactive when the storage latches are not written.",
+    "The active-low reset must not toggle near the rising edge of the clock.",
+])
+def test_unrelated_inactive_clock_or_reset_prose_is_not_a_pulse_contract(text):
+    result = contract.extract_contract(text)
+    assert result.declared is False
+    assert result.contract is None

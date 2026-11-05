@@ -291,8 +291,8 @@ def _prose_contract(source_text: str) -> Optional[ContractParse]:
     clauses = re.split(r"(?<=[.!?])\s+|\n+", source_text.strip())
     for clause in clauses:
         low = clause.lower()
-        if re.search(r"\b(?:not|never|without|does\s+not|must\s+not|shall\s+not)\b",
-                     low):
+        if (re.search(r"\bpulse\b|\bre[- ]?arm\b", low)
+                and re.search(r"\b(?:not|never|without|does\s+not|must\s+not|shall\s+not)\b", low)):
             # A negated mention must never be inverted into a positive contract.
             if re.search(r"timeout|overlong|re[- ]?arm|inactive|rising\s+edge",
                          low):
