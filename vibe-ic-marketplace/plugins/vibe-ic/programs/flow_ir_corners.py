@@ -62,6 +62,53 @@ class IRDropCorners(IRDropReport):
         return {}, metrics
 
 
+def execute(project, directory, tool, route, *, state=None, config=None):
+    from types import SimpleNamespace
+    from librelane.config import Config
+    from flow_engine import NativeChain, ToolResult
+
+    if state is None or not config:
+        return ToolResult(detail="IR analysis needs captured native State and configuration.").__dict__
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    kind = "Chip" if route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"} else "Classic"
+    chain = NativeChain(Path(project), route)
+    chain.owner = SimpleNamespace(config=Config(config),
+        gating_config_vars=Flow.factory.get(kind).gating_config_vars)
+    chain.state, chain.config = state, dict(config)
+    chain.toolbox = Toolbox(str(directory / "tool_tmp"))
+    result = chain.execute(directory, tool)
+    static = result.metrics.get("ir__drop__worst__pct")
+    if static is not None:
+        result.metrics["ir__drop__static__worst__pct"] = static
+    drop = result.metrics.get("vibeic__ir_dynamic__drop__worst")
+    scaled = result.metrics.get("vibeic__ir_dynamic__scaled_static_bound")
+    reason = ""
+    if drop is None:
+        reason = "Native transient IR produced no dynamic drop."
+    elif scaled != 0:
+        reason = "Native transient IR is a scaled static bound; dynamic response was not measured."
+    else:
+        libraries = chain.toolbox.filter_views(chain.owner.config, chain.owner.config["LIB"])
+        voltage = chain.toolbox.get_lib_voltage(str(libraries[0])) if libraries else None
+        if voltage is None or not math.isfinite(float(voltage)) or voltage <= 0:
+            reason = "Native transient IR has no supply voltage for its selected corner."
+        else:
+            percentage = float(drop) / float(voltage) * 100
+            result.metrics["ir__drop__dynamic__worst__pct"] = percentage
+            result.metrics["ir__drop__worst__pct"] = max(static, percentage) if static is not None else percentage
+    if reason:
+        dynamic = next((row for row in result.native_steps if row["name"] == "Vibeic.TransientIR"), None)
+        if dynamic is None:
+            dynamic = {"name": "Vibeic.TransientIR", "ran": False, "exit_code": None}
+            result.native_steps.append(dynamic)
+        if dynamic.get("status") != "FAIL":
+            detail = dynamic.get("detail", "")
+            dynamic.update(status="NOT_MEASURED", detail=detail + (" " if detail else "") + reason)
+        result.detail += " " + reason
+    return result.__dict__
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run native IR drop at configured maximum RC corners")
     parser.add_argument("--project", type=Path, required=True)
