@@ -1,0 +1,1987 @@
+{
+  "steps": {
+    "Checker.NetlistAssignStatements": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 29,
+      "inputs": [
+        "nl"
+      ],
+      "outputs": []
+    },
+    "Checker.YosysUnmappedCells": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 172,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.YosysSynthChecks": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 191,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.TrDRC": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 209,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.MagicDRC": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 228,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.IllegalOverlap": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 247,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.DisconnectedPins": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 266,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.WireLength": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 285,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.XOR": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 320,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.LVS": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 339,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.PowerGridViolations": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 358,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.LintErrors": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 376,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.LintWarnings": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 396,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.LintTimingConstructs": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 416,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.KLayoutDRC": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 451,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.KLayoutDensity": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 470,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.KLayoutAntenna": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 488,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.SetupViolations": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 673,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.MaxCapViolations": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 683,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.MaxSlewViolations": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 694,
+      "inputs": [],
+      "outputs": []
+    },
+    "Checker.HoldViolations": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+      "line": 705,
+      "inputs": [],
+      "outputs": []
+    },
+    "Yosys.JsonHeader": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/pyosys.py",
+      "line": 366,
+      "inputs": [],
+      "outputs": [
+        "json_h"
+      ]
+    },
+    "Yosys.Synthesis": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/pyosys.py",
+      "line": 656,
+      "inputs": [],
+      "outputs": [
+        "nl"
+      ]
+    },
+    "Yosys.Resynthesis": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/pyosys.py",
+      "line": 680,
+      "inputs": [
+        "nl"
+      ],
+      "outputs": [
+        "nl"
+      ]
+    },
+    "Yosys.VHDLSynthesis": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/pyosys.py",
+      "line": 709,
+      "inputs": [],
+      "outputs": [
+        "nl"
+      ]
+    },
+    "Yosys.EQY": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/yosys.py",
+      "line": 250,
+      "inputs": [
+        "nl"
+      ],
+      "outputs": []
+    },
+    "OpenROAD.CheckSDCFiles": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 149,
+      "inputs": [],
+      "outputs": []
+    },
+    "OpenROAD.STAMidPNR": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 541,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": []
+    },
+    "OpenROAD.CheckMacroInstances": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 673,
+      "inputs": [
+        "nl"
+      ],
+      "outputs": []
+    },
+    "OpenROAD.STAPrePNR": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 891,
+      "inputs": [
+        "nl"
+      ],
+      "outputs": [
+        "sdf",
+        "sdc"
+      ]
+    },
+    "OpenROAD.STAPostPNR": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 944,
+      "inputs": [
+        "nl",
+        "spef",
+        "odb"
+      ],
+      "outputs": [
+        "sdf",
+        "sdc",
+        "lib"
+      ]
+    },
+    "OpenROAD.Floorplan": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1082,
+      "inputs": [
+        "nl"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.PadRing": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1217,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.IOPlacement": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1288,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.TapEndcapInsertion": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1369,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.UnplaceAll": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1417,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.GeneratePDN": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1452,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.GlobalPlacement": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1590,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.GlobalPlacementSkipIO": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1623,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.DetailedPlacement": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1676,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.CheckAntennas": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1692,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": []
+    },
+    "OpenROAD.GlobalRouting": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1841,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "OpenROAD.RepairAntennas": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1871,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "def",
+        "odb"
+      ]
+    },
+    "OpenROAD.DetailedRouting": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 1915,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.LayoutSTA": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2035,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": []
+    },
+    "OpenROAD.FillInsertion": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2058,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.RCX": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2098,
+      "inputs": [
+        "def"
+      ],
+      "outputs": [
+        "spef"
+      ]
+    },
+    "OpenROAD.IRDropReport": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2229,
+      "inputs": [
+        "odb",
+        "spef"
+      ],
+      "outputs": []
+    },
+    "OpenROAD.CutRows": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2336,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "OpenROAD.WriteCDL": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2407,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "cdl"
+      ]
+    },
+    "OpenROAD.CTS": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2442,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.RepairDesignPostGPL": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2599,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.RepairDesign": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2673,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.RepairDesignPostGRT": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2683,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.ResizerTimingPostCTS": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2729,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.ResizerTimingPostGRT": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2840,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "OpenROAD.DEFtoODB": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2956,
+      "inputs": [
+        "def"
+      ],
+      "outputs": [
+        "odb"
+      ]
+    },
+    "OpenROAD.OpenGUI": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 2975,
+      "inputs": [
+        "odb",
+        "spef"
+      ],
+      "outputs": []
+    },
+    "OpenROAD.DumpRCValues": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/openroad.py",
+      "line": 3022,
+      "inputs": [
+        "def"
+      ],
+      "outputs": [
+        "odb",
+        "def",
+        "sdc",
+        "nl",
+        "pnl"
+      ]
+    },
+    "Odb.CheckMacroAntennaProperties": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 195,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": []
+    },
+    "Odb.CheckDesignAntennaProperties": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 236,
+      "inputs": [
+        "odb",
+        "lef"
+      ],
+      "outputs": []
+    },
+    "Odb.ApplyDEFTemplate": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 250,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.SetPowerConnections": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 318,
+      "inputs": [
+        "json_h",
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.WriteVerilogHeader": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 347,
+      "inputs": [
+        "odb",
+        "json_h"
+      ],
+      "outputs": [
+        "vh"
+      ]
+    },
+    "Odb.ManualMacroPlacement": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 400,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.ReportWireLength": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 471,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": []
+    },
+    "Odb.ReportDisconnectedPins": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 495,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.AddRoutingObstructions": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 575,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.RemoveRoutingObstructions": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 622,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.AddPDNObstructions": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 636,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.RemovePDNObstructions": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 662,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.CustomIOPlacement": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 678,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.PortDiodePlacement": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 749,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.DiodesOnPorts": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 817,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "def",
+        "sdc",
+        "odb",
+        "pnl",
+        "nl"
+      ]
+    },
+    "Odb.FuzzyDiodePlacement": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 854,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.HeuristicDiodeInsertion": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 925,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "def",
+        "sdc",
+        "odb",
+        "pnl",
+        "nl"
+      ]
+    },
+    "Odb.CellFrequencyTables": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 967,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.ManualGlobalPlacement": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 1026,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.InsertECOBuffers": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 1083,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Odb.InsertECODiodes": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/odb.py",
+      "line": 1140,
+      "inputs": [
+        "odb"
+      ],
+      "outputs": [
+        "odb",
+        "def"
+      ]
+    },
+    "Magic.WriteLEF": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/magic.py",
+      "line": 233,
+      "inputs": [
+        "gds",
+        "def"
+      ],
+      "outputs": [
+        "lef"
+      ]
+    },
+    "Magic.StreamOut": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/magic.py",
+      "line": 308,
+      "inputs": [
+        "def"
+      ],
+      "outputs": [
+        "gds",
+        "mag_gds",
+        "mag"
+      ]
+    },
+    "Magic.Filler": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/magic.py",
+      "line": 429,
+      "inputs": [
+        "gds"
+      ],
+      "outputs": [
+        "gds"
+      ]
+    },
+    "Magic.DRC": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/magic.py",
+      "line": 532,
+      "inputs": [
+        "def",
+        "gds"
+      ],
+      "outputs": []
+    },
+    "Magic.SpiceExtraction": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/magic.py",
+      "line": 604,
+      "inputs": [
+        "gds",
+        "def"
+      ],
+      "outputs": [
+        "spice"
+      ]
+    },
+    "Magic.OpenGUI": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/magic.py",
+      "line": 717,
+      "inputs": [
+        "def"
+      ],
+      "outputs": []
+    },
+    "Magic.RCX": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/magic.py",
+      "line": 772,
+      "inputs": [
+        "gds"
+      ],
+      "outputs": [
+        "spice_rcx"
+      ]
+    },
+    "Netgen.LVS": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/netgen.py",
+      "line": 182,
+      "inputs": [
+        "spice",
+        "pnl"
+      ],
+      "outputs": []
+    },
+    "KLayout.Render": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 163,
+      "inputs": [
+        "def"
+      ],
+      "outputs": []
+    },
+    "KLayout.StreamOut": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 260,
+      "inputs": [
+        "def"
+      ],
+      "outputs": [
+        "gds",
+        "klayout_gds"
+      ]
+    },
+    "KLayout.XOR": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 340,
+      "inputs": [
+        "mag_gds",
+        "klayout_gds"
+      ],
+      "outputs": []
+    },
+    "KLayout.DRC": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 430,
+      "inputs": [
+        "gds"
+      ],
+      "outputs": []
+    },
+    "KLayout.LVS": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 776,
+      "inputs": [
+        "cdl",
+        "gds"
+      ],
+      "outputs": [
+        "spice"
+      ]
+    },
+    "KLayout.SealRing": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 958,
+      "inputs": [
+        "gds"
+      ],
+      "outputs": [
+        "gds"
+      ]
+    },
+    "KLayout.Filler": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 1164,
+      "inputs": [
+        "gds"
+      ],
+      "outputs": [
+        "gds"
+      ]
+    },
+    "KLayout.Density": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 1305,
+      "inputs": [
+        "gds"
+      ],
+      "outputs": []
+    },
+    "KLayout.Antenna": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 1429,
+      "inputs": [
+        "gds"
+      ],
+      "outputs": []
+    },
+    "KLayout.OpenGUI": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+      "line": 1538,
+      "inputs": [
+        "def"
+      ],
+      "outputs": []
+    },
+    "Misc.LoadBaseSDC": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/misc.py",
+      "line": 26,
+      "inputs": [],
+      "outputs": [
+        "sdc"
+      ]
+    },
+    "Misc.ReportManufacturability": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/misc.py",
+      "line": 59,
+      "inputs": [],
+      "outputs": []
+    },
+    "Verilator.Lint": {
+      "source": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/verilator.py",
+      "line": 28,
+      "inputs": [],
+      "outputs": []
+    }
+  },
+  "checks": {
+    "Checker.YosysUnmappedCells": [
+      {
+        "metric": "design__instance_unmapped__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 173
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_UNMAPPED_CELLS",
+        "enabled_default": true
+      }
+    ],
+    "Checker.YosysSynthChecks": [
+      {
+        "metric": "synthesis__check_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 192
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_SYNTH_CHECKS",
+        "enabled_default": true
+      }
+    ],
+    "Checker.TrDRC": [
+      {
+        "metric": "route__drc_errors",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 210
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_TR_DRC",
+        "enabled_default": true
+      }
+    ],
+    "Checker.MagicDRC": [
+      {
+        "metric": "magic__drc_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 229
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_MAGIC_DRC",
+        "enabled_default": true
+      }
+    ],
+    "Checker.IllegalOverlap": [
+      {
+        "metric": "magic__illegal_overlap__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 248
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_ILLEGAL_OVERLAPS",
+        "enabled_default": true
+      }
+    ],
+    "Checker.DisconnectedPins": [
+      {
+        "metric": "design__critical_disconnected_pin__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 267
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_DISCONNECTED_PINS",
+        "enabled_default": true
+      }
+    ],
+    "Checker.WireLength": [
+      {
+        "metric": "route__wirelength__max",
+        "operator": "<=",
+        "limit": null,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 286
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 286
+        },
+        "unit": "um",
+        "enabled_by": "ERROR_ON_LONG_WIRE",
+        "enabled_default": true,
+        "limit_config": "WIRE_LENGTH_THRESHOLD"
+      }
+    ],
+    "Checker.XOR": [
+      {
+        "metric": "design__xor_difference__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 321
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_XOR_ERROR",
+        "enabled_default": true
+      }
+    ],
+    "Checker.LVS": [
+      {
+        "metric": "design__lvs_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 340
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_LVS_ERROR",
+        "enabled_default": true
+      }
+    ],
+    "Checker.PowerGridViolations": [
+      {
+        "metric": "design__power_grid_violation__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 359
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_PDN_VIOLATIONS",
+        "enabled_default": true
+      }
+    ],
+    "Checker.LintErrors": [
+      {
+        "metric": "design__lint_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 377
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_LINTER_ERRORS",
+        "enabled_default": true
+      }
+    ],
+    "Checker.LintWarnings": [
+      {
+        "metric": "design__lint_warning__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 397
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_LINTER_WARNINGS",
+        "enabled_default": false
+      }
+    ],
+    "Checker.LintTimingConstructs": [
+      {
+        "metric": "design__lint_timing_construct__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 417
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_LINTER_TIMING_CONSTRUCTS",
+        "enabled_default": true
+      }
+    ],
+    "Checker.KLayoutDRC": [
+      {
+        "metric": "klayout__drc_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 452
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_KLAYOUT_DRC",
+        "enabled_default": true
+      }
+    ],
+    "Checker.KLayoutDensity": [
+      {
+        "metric": "klayout__density_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 471
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_KLAYOUT_DENSITY",
+        "enabled_default": true
+      }
+    ],
+    "Checker.KLayoutAntenna": [
+      {
+        "metric": "klayout__antenna_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 489
+        },
+        "unit": "count",
+        "enabled_by": "ERROR_ON_KLAYOUT_ANTENNA",
+        "enabled_default": true
+      }
+    ],
+    "Checker.SetupViolations": [
+      {
+        "metric": "timing__setup_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 674
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "SETUP_VIOLATION_CORNERS"
+      }
+    ],
+    "Checker.MaxCapViolations": [
+      {
+        "metric": "design__max_cap_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 684
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+      }
+    ],
+    "Checker.MaxSlewViolations": [
+      {
+        "metric": "design__max_slew_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 695
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+      }
+    ],
+    "Checker.HoldViolations": [
+      {
+        "metric": "timing__hold_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 706
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "HOLD_VIOLATION_CORNERS"
+      }
+    ]
+  },
+  "runs": {
+    "structural_rtl_preflight": {
+      "otherwise": [
+        "Yosys.JsonHeader"
+      ]
+    },
+    "rtl_validation_and_lint": {
+      "otherwise": [
+        "Verilator.Lint",
+        "Checker.LintTimingConstructs",
+        "Checker.LintErrors",
+        "Checker.LintWarnings"
+      ]
+    },
+    "mode_corner_and_constraint_plan": {
+      "otherwise": [
+        "Misc.LoadBaseSDC"
+      ]
+    },
+    "synthesis": {
+      "otherwise": [
+        "Yosys.Synthesis",
+        "Checker.YosysUnmappedCells",
+        "Checker.YosysSynthChecks",
+        "Checker.NetlistAssignStatements"
+      ]
+    },
+    "pre_layout_timing": {
+      "otherwise": [
+        "OpenROAD.CheckSDCFiles",
+        "OpenROAD.CheckMacroInstances",
+        "OpenROAD.STAPrePNR"
+      ]
+    },
+    "die_floorplan_and_macros": {
+      "otherwise": [
+        "OpenROAD.Floorplan",
+        "OpenROAD.DumpRCValues",
+        "Odb.CheckMacroAntennaProperties",
+        "Odb.SetPowerConnections",
+        "Odb.ManualMacroPlacement",
+        "OpenROAD.CutRows",
+        "OpenROAD.TapEndcapInsertion"
+      ]
+    },
+    "io_pad_ring_and_power_distribution": {
+      "otherwise": [
+        "Odb.AddPDNObstructions",
+        "OpenROAD.GeneratePDN",
+        "Odb.RemovePDNObstructions"
+      ]
+    },
+    "placement_and_optimization": {
+      "otherwise": [
+        "Odb.AddRoutingObstructions",
+        "OpenROAD.GlobalPlacementSkipIO",
+        "OpenROAD.IOPlacement",
+        "Odb.CustomIOPlacement",
+        "Odb.ApplyDEFTemplate",
+        "OpenROAD.GlobalPlacement",
+        "Odb.WriteVerilogHeader",
+        "Checker.PowerGridViolations",
+        "OpenROAD.STAMidPNR",
+        "OpenROAD.RepairDesignPostGPL",
+        "Odb.ManualGlobalPlacement",
+        "OpenROAD.DetailedPlacement"
+      ]
+    },
+    "clock_tree_synthesis": {
+      "otherwise": [
+        "OpenROAD.CTS",
+        "OpenROAD.STAMidPNR"
+      ]
+    },
+    "post_cts_timing_repair": {
+      "otherwise": [
+        "OpenROAD.ResizerTimingPostCTS",
+        "OpenROAD.STAMidPNR"
+      ]
+    },
+    "routing_and_cell_filler": {
+      "otherwise": [
+        "OpenROAD.GlobalRouting",
+        "OpenROAD.CheckAntennas",
+        "OpenROAD.RepairDesignPostGRT",
+        "Odb.DiodesOnPorts",
+        "Odb.HeuristicDiodeInsertion",
+        "OpenROAD.RepairAntennas",
+        "OpenROAD.ResizerTimingPostGRT",
+        "OpenROAD.STAMidPNR",
+        "OpenROAD.DetailedRouting",
+        "Odb.RemoveRoutingObstructions",
+        "OpenROAD.FillInsertion",
+        "Odb.CellFrequencyTables"
+      ]
+    },
+    "post_route_timing_repair": {
+      "otherwise": [
+        "OpenROAD.RCX",
+        "OpenROAD.STAPostPNR"
+      ]
+    },
+    "routed_candidate_physical_checks": {
+      "otherwise": [
+        "Checker.TrDRC",
+        "Odb.ReportDisconnectedPins",
+        "Checker.DisconnectedPins",
+        "Odb.ReportWireLength",
+        "Checker.WireLength"
+      ]
+    },
+    "antenna_checks": {
+      "otherwise": [
+        "OpenROAD.CheckAntennas"
+      ],
+      "analog_physical and not digital_physical": [
+        "KLayout.Antenna",
+        "Checker.KLayoutAntenna"
+      ]
+    },
+    "final_adopted_netlist_equivalence": {
+      "otherwise": [
+        "Yosys.EQY"
+      ]
+    },
+    "candidate_parasitic_extraction": {
+      "otherwise": [
+        "OpenROAD.RCX"
+      ]
+    },
+    "candidate_timing_closure": {
+      "otherwise": [
+        "OpenROAD.STAPostPNR",
+        "Checker.SetupViolations",
+        "Checker.HoldViolations",
+        "Checker.MaxSlewViolations",
+        "Checker.MaxCapViolations"
+      ]
+    },
+    "candidate_ir_drop": {
+      "otherwise": [
+        "OpenROAD.IRDropReport"
+      ]
+    },
+    "stream_out": {
+      "otherwise": [
+        "Magic.StreamOut",
+        "KLayout.StreamOut",
+        "KLayout.Render",
+        "Magic.WriteLEF",
+        "Odb.CheckDesignAntennaProperties"
+      ]
+    },
+    "seal_ring_and_die_identification": {
+      "otherwise": [
+        "KLayout.SealRing"
+      ]
+    },
+    "metal_density_fill": {
+      "otherwise": [
+        "KLayout.Filler",
+        "KLayout.Density",
+        "Checker.KLayoutDensity"
+      ]
+    },
+    "finishing_geometry_fidelity": {
+      "otherwise": [
+        "KLayout.XOR",
+        "Checker.XOR"
+      ]
+    },
+    "final_physical_verification": {
+      "otherwise": [
+        "Magic.DRC",
+        "KLayout.DRC",
+        "Checker.MagicDRC",
+        "Checker.KLayoutDRC",
+        "Magic.SpiceExtraction",
+        "Checker.IllegalOverlap",
+        "Netgen.LVS",
+        "Checker.LVS"
+      ]
+    },
+    "final_geometry_rc_and_pex": {
+      "otherwise": [
+        "OpenROAD.RCX"
+      ]
+    },
+    "final_electrical_analysis": {
+      "otherwise": [
+        "OpenROAD.STAPostPNR",
+        "Checker.SetupViolations",
+        "Checker.HoldViolations",
+        "Checker.MaxSlewViolations",
+        "Checker.MaxCapViolations"
+      ]
+    },
+    "analog_block_physical_verification": {
+      "otherwise": [
+        "KLayout.DRC",
+        "Checker.KLayoutDRC",
+        "Magic.SpiceExtraction",
+        "Checker.IllegalOverlap",
+        "Netgen.LVS",
+        "Checker.LVS"
+      ]
+    },
+    "design_for_manufacturability": {
+      "otherwise": [
+        "Misc.ReportManufacturability"
+      ]
+    }
+  },
+  "row_checks": {
+    "pre_layout_timing": [
+      {
+        "metric": "timing__setup_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 674
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "SETUP_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "timing__hold_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 706
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "HOLD_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_slew_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 695
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_cap_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 684
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+      }
+    ],
+    "clock_tree_synthesis": [
+      {
+        "metric": "timing__setup_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 674
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "SETUP_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "timing__hold_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 706
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "HOLD_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_slew_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 695
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_cap_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 684
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+      }
+    ],
+    "post_cts_timing_repair": [
+      {
+        "metric": "timing__setup_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 674
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "SETUP_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "timing__hold_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 706
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "HOLD_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_slew_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 695
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_cap_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 684
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+      }
+    ],
+    "post_route_timing_repair": [
+      {
+        "metric": "timing__setup_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 674
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "SETUP_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "timing__hold_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 706
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "HOLD_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_slew_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 695
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_cap_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 684
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+      }
+    ],
+    "candidate_ir_drop": [
+      {
+        "metric": "ir__drop__worst__pct",
+        "operator": "<=",
+        "limit": 5.0,
+        "source": {
+          "file": "programs/flow109_final_electrical.py",
+          "line": 28
+        },
+        "unit": "%",
+        "limit_note": "Native PSM worst drop divided by the Liberty supply voltage."
+      }
+    ],
+    "candidate_timing_closure": [
+      {
+        "metric": "timing__setup_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 674
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "SETUP_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "timing__hold_vio__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 706
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "HOLD_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_slew_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 695
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+      },
+      {
+        "metric": "design__max_cap_violation__count__corner:*",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 684
+        },
+        "unit": "count",
+        "match": "all",
+        "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+      }
+    ],
+    "antenna_checks": [
+      {
+        "metric": "route__antenna_violation__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "programs/gds_antenna_deck_check.py",
+          "line": 1307
+        },
+        "unit": "count",
+        "when": "digital_physical"
+      }
+    ]
+  },
+  "adapters": {},
+  "deleted_metrics": {
+    "source_file_coverage": "File-population binding removed; the tool receives the complete RTL file list directly.",
+    "reported_pass_denominator": "Result accounting is a runner output, not a chip measurement.",
+    "missing_required_obligations": "The runner reports native results directly; no acceptance-obligation layer.",
+    "unresolved_revalidation": "Plugin changes do not invalidate results.",
+    "required_tool_confidence_evidence": "Tool confidence paperwork removed; native tools decide.",
+    "required_dfm_capabilities": "Tool-capability qualification removed; native DFM results decide.",
+    "advanced_dfm_required_capabilities": "Tool-capability qualification removed; native DFM results decide."
+  },
+  "report_rows": {
+    "clock_planning": "pre_layout_timing",
+    "candidate_parasitic_extraction": "post_route_timing_repair",
+    "candidate_timing_closure": "post_route_timing_repair",
+    "candidate_power_analysis": "post_route_timing_repair"
+  },
+  "profile_tools": {
+    "die_floorplan_and_macros": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "OpenROAD.Floorplan",
+          "OpenROAD.DumpRCValues",
+          "Odb.CheckMacroAntennaProperties",
+          "Odb.SetPowerConnections",
+          "OpenROAD.PadRing",
+          "Odb.ManualMacroPlacement",
+          "OpenROAD.CutRows",
+          "OpenROAD.TapEndcapInsertion"
+        ]
+      }
+    },
+    "placement_and_optimization": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "Odb.AddRoutingObstructions",
+          "OpenROAD.GlobalPlacementSkipIO",
+          "Odb.ApplyDEFTemplate",
+          "OpenROAD.GlobalPlacement",
+          "Odb.WriteVerilogHeader",
+          "Checker.PowerGridViolations",
+          "OpenROAD.STAMidPNR",
+          "OpenROAD.RepairDesignPostGPL",
+          "Odb.ManualGlobalPlacement",
+          "OpenROAD.DetailedPlacement"
+        ]
+      }
+    },
+    "stream_out": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "Magic.StreamOut",
+          "KLayout.StreamOut",
+          "KLayout.Render",
+          "Odb.CheckDesignAntennaProperties"
+        ]
+      }
+    }
+  },
+  "generation_note": "Migration support only. After generation, steps.json owns the new runtime table. Default tools and source lines were read from the installed LibreLane package."
+}

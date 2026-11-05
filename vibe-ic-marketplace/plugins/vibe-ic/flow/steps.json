@@ -1,0 +1,4727 @@
+{
+  "predicates": {
+    "physical": "ic or hard_ip or assembly_only",
+    "owner_die": "ic or hard_ip",
+    "die_physical": "physical and owner_die",
+    "digital_physical": "die_physical and has_digital",
+    "analog_physical": "die_physical and has_analog",
+    "mixed": "has_digital and has_analog",
+    "mixed_physical": "mixed and die_physical",
+    "ip": "soft_ip or hard_ip or model_ip",
+    "analog_trim": "trim_onchip_digital or trim_external or trim_analog_loop"
+  },
+  "implications": {
+    "digital_netlist": [
+      "has_digital",
+      "technology_specific"
+    ],
+    "digital_physical": [
+      "digital_netlist"
+    ],
+    "has_analog": [
+      "technology_specific"
+    ],
+    "physical": [
+      "technology_specific"
+    ],
+    "ic": [
+      "package_interface"
+    ],
+    "requires_dft": [
+      "digital_netlist"
+    ],
+    "requires_scan": [
+      "requires_dft"
+    ],
+    "early_atpg": [
+      "requires_dft"
+    ],
+    "requires_path_atpg": [
+      "requires_dft",
+      "requires_scan",
+      "digital_physical"
+    ],
+    "requires_sdd": [
+      "requires_path_atpg"
+    ],
+    "analog_trim": [
+      "analog_testability",
+      "has_analog"
+    ],
+    "analog_statistics": [
+      "has_analog"
+    ],
+    "analog_testability": [
+      "has_analog"
+    ],
+    "trim_onchip_digital": [
+      "analog_trim",
+      "has_digital"
+    ],
+    "trim_external": [
+      "analog_trim"
+    ],
+    "trim_analog_loop": [
+      "analog_trim"
+    ],
+    "package_model_required": [
+      "package_interface",
+      "physical"
+    ],
+    "fpga_early": [
+      "has_digital"
+    ],
+    "fpga_final": [
+      "has_digital"
+    ],
+    "assembly_only": [
+      "multidie",
+      "uses_macros",
+      "package_interface",
+      "package_model_required",
+      "requires_system_scenarios"
+    ],
+    "multidie": [
+      "physical",
+      "package_interface"
+    ],
+    "requires_advanced_dfm": [
+      "physical"
+    ],
+    "requires_si": [
+      "physical"
+    ],
+    "requires_aging": [
+      "physical"
+    ],
+    "requires_thermal": [
+      "physical"
+    ],
+    "requires_ir": [
+      "physical"
+    ],
+    "requires_em": [
+      "physical"
+    ],
+    "requires_perc": [
+      "physical"
+    ],
+    "requires_spice": [
+      "physical"
+    ],
+    "requires_cts": [
+      "digital_physical"
+    ],
+    "requires_spares": [
+      "digital_physical"
+    ],
+    "soft_ip": [
+      "has_digital"
+    ]
+  },
+  "exclusions": [
+    [
+      "ic",
+      "ip"
+    ],
+    [
+      "assembly_only",
+      "has_digital"
+    ],
+    [
+      "assembly_only",
+      "has_analog"
+    ],
+    [
+      "trim_onchip_digital",
+      "trim_external"
+    ],
+    [
+      "trim_onchip_digital",
+      "trim_analog_loop"
+    ],
+    [
+      "trim_external",
+      "trim_analog_loop"
+    ],
+    [
+      "model_ip",
+      "requires_dft"
+    ],
+    [
+      "model_ip",
+      "requires_scan"
+    ]
+  ],
+  "steps": [
+    {
+      "name": "requirements_and_delivery_route",
+      "title": "Requirements and delivery route",
+      "when": "always",
+      "tool": {
+        "kind": "adapter",
+        "program": "phase1_one_shot_runner.py",
+        "function": "doc_extract",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "unresolved_route_facts",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "observed_vs_declared_features",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "requirements_trace",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D01",
+        "native": [
+          "D1"
+        ]
+      }
+    },
+    {
+      "name": "submission_and_implementation_interface",
+      "title": "Submission and implementation interface",
+      "when": "always",
+      "tool": {
+        "kind": "adapter",
+        "program": "phase1_one_shot_runner.py",
+        "function": "_run_step_0_5ic",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "endpoint_delivery_items",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "unassigned_requirements",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D02",
+        "native": [
+          "0.5ic"
+        ]
+      }
+    },
+    {
+      "name": "pdk_library_deck_and_tool_use_qualification",
+      "title": "PDK library deck and tool-use qualification",
+      "when": "technology_specific",
+      "tool": {
+        "kind": "adapter",
+        "program": "flow109_technology_qualification.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "native_measurement",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "This step has no numeric native limit."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D03",
+        "native": []
+      }
+    },
+    {
+      "name": "functional_safety_plan_and_tool_confidence",
+      "title": "Functional safety plan and tool confidence",
+      "when": "requires_functional_safety",
+      "tool": {
+        "kind": "adapter",
+        "program": null,
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "safety_goals_allocation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D04",
+        "native": []
+      }
+    },
+    {
+      "name": "power_intent_and_domain_rules",
+      "title": "Power intent and domain rules",
+      "when": "has_power_intent",
+      "tool": {
+        "kind": "adapter",
+        "program": "l21_to_upf_emit.py",
+        "function": "main",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "semantic_demand_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "illegal_power_states",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "supply_cell_assignments",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D05",
+        "native": []
+      }
+    },
+    {
+      "name": "package_load_and_test_interface_feasibility",
+      "title": "Package load and test-interface feasibility",
+      "when": "package_interface",
+      "tool": {
+        "kind": "adapter",
+        "program": "pad_assignment_gen.py",
+        "function": "main",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "pad_bump_interface_constraints",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "package_escape_feasibility",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "test_access_plan",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D06",
+        "native": []
+      }
+    },
+    {
+      "name": "multi_die_partition_and_interface_budget",
+      "title": "Multi-die partition and interface budget",
+      "when": "multidie",
+      "tool": {
+        "kind": "adapter",
+        "program": null,
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "child_ownership",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "d2d_budgets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "unassigned_links",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D07",
+        "native": []
+      }
+    },
+    {
+      "name": "analog_specifications",
+      "title": "Analog specifications",
+      "when": "has_analog",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_a1_spec_emit.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "analog_specs_with_units",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "required_measurements",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A01",
+        "native": [
+          "A1"
+        ]
+      }
+    },
+    {
+      "name": "analog_model_qualification",
+      "title": "Analog model qualification",
+      "when": "has_analog",
+      "tool": {
+        "kind": "adapter",
+        "program": "pdk_analog_completeness_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "device_model_load_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "model_corner_statistics_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A02",
+        "native": [
+          "A1"
+        ]
+      }
+    },
+    {
+      "name": "mixed_signal_interface_contract",
+      "title": "Mixed-signal interface contract",
+      "when": "mixed",
+      "tool": {
+        "kind": "adapter",
+        "program": "spec_analog_iface_extract.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "noise_supply_budgets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "unowned_crossings",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M01",
+        "native": [
+          "M2",
+          "M3"
+        ]
+      }
+    },
+    {
+      "name": "analog_testability_and_trim_plan",
+      "title": "Analog testability and trim plan",
+      "when": "analog_testability",
+      "tool": {
+        "kind": "adapter",
+        "program": "spec_calibration_extract.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "observable_test_nodes",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "trim_range_resolution",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "test_access_unreachable",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A03",
+        "native": []
+      }
+    },
+    {
+      "name": "analog_topology",
+      "title": "Analog topology",
+      "when": "has_analog",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_a2_topology_emit.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "allocated_gain_noise_power_budgets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "topology_constraints",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A04",
+        "native": [
+          "A2"
+        ]
+      }
+    },
+    {
+      "name": "analog_netlist_and_sizing",
+      "title": "Analog netlist and sizing",
+      "when": "has_analog",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_a3_netlist_emit.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "operating_point_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "netlist_connectivity_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A05",
+        "native": [
+          "A2",
+          "A3"
+        ]
+      }
+    },
+    {
+      "name": "analog_measurement_testbench",
+      "title": "Analog measurement testbench",
+      "when": "has_analog",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_acceptance_tb_gen.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "measurement_window_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "known_stimulus_calibration",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "unit_mismatches",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A06",
+        "native": [
+          "A3",
+          "A4"
+        ]
+      }
+    },
+    {
+      "name": "analog_pre_layout_nominal_performance",
+      "title": "Analog pre-layout nominal performance",
+      "when": "has_analog",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_real_corner_sweep.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "nominal_performance",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "early_model_correlation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A07",
+        "native": [
+          "A4"
+        ]
+      }
+    },
+    {
+      "name": "macro_logical_and_timing_views",
+      "title": "Macro logical and timing views",
+      "when": "uses_macros",
+      "tool": {
+        "kind": "adapter",
+        "program": "ip_integration_check.py",
+        "function": "audit",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "required_macro_views",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "unresolved_macro_instances",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D08",
+        "native": []
+      }
+    },
+    {
+      "name": "rtl_authoring",
+      "title": "RTL authoring",
+      "when": "has_digital",
+      "tool": {
+        "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "step_rtl_gen",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "rtl_requirement_mapping",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D09",
+        "native": [
+          "1"
+        ]
+      }
+    },
+    {
+      "name": "structural_rtl_preflight",
+      "title": "Structural RTL preflight",
+      "when": "has_digital",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Yosys.JsonHeader"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "elaboration_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "unexpected_blackboxes",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D10",
+        "native": [
+          "P0"
+        ]
+      }
+    },
+    {
+      "name": "rtl_validation_and_lint",
+      "title": "RTL validation and lint",
+      "when": "has_digital",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Verilator.Lint",
+          "Checker.LintTimingConstructs",
+          "Checker.LintErrors",
+          "Checker.LintWarnings"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "design__lint_timing_construct__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 417
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_LINTER_TIMING_CONSTRUCTS",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "design__lint_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 377
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_LINTER_ERRORS",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "design__lint_warning__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 397
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_LINTER_WARNINGS",
+          "enabled_default": false,
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D11",
+        "native": [
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "rtl_cdc_and_rdc",
+      "title": "RTL CDC and RDC",
+      "when": "has_digital",
+      "tool": {
+        "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "step_d12_cdc_rdc",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "clock_reset_crossing_census",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "unresolved_crossings",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "cdc_protocol_results",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D12",
+        "native": [
+          "3"
+        ]
+      }
+    },
+    {
+      "name": "functional_simulation_and_coverage",
+      "title": "Functional simulation and coverage",
+      "when": "has_digital",
+      "tool": {
+        "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "step_d13_simulation",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "required_function_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "assertion_failures",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "coverage_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D13",
+        "native": [
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "formal_verification",
+      "title": "Formal verification",
+      "when": "has_digital",
+      "tool": {
+        "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "sim",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "unproved_required_properties",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "vacuous_required_proofs",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "proof_partition_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D14",
+        "native": [
+          "5"
+        ]
+      }
+    },
+    {
+      "name": "power_aware_state_transitions",
+      "title": "Power-aware state transitions",
+      "when": "has_power_intent and has_digital",
+      "tool": {
+        "kind": "adapter",
+        "program": "power_domain_crossing_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "required_power_transitions",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "isolation_retention_behavior_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D15",
+        "native": []
+      }
+    },
+    {
+      "name": "system_and_software_scenarios",
+      "title": "System and software scenarios",
+      "when": "requires_system_scenarios",
+      "tool": {
+        "kind": "adapter",
+        "program": "full_stack_functional_tb.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "required_fullchip_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "boot_workload_protocol_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "blocking_system_scenario_failures",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "system_signoff_required_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D16",
+        "native": []
+      }
+    },
+    {
+      "name": "requirement_derived_security_verification",
+      "title": "Requirement-derived security verification",
+      "when": "requires_security",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "has_analog and not has_digital",
+            "tool": {
+              "kind": "adapter",
+              "program": "formal_property_run.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "formal_property_run.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "threat_requirements_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "security_counterexample_failures",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "security_metric_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D17",
+        "native": []
+      }
+    },
+    {
+      "name": "early_fpga_verification",
+      "title": "Early FPGA verification",
+      "when": "fpga_early",
+      "tool": {
+        "kind": "adapter",
+        "program": "fpga_test_harness_gen.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "prototype_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D18",
+        "native": [
+          "6"
+        ]
+      }
+    },
+    {
+      "name": "pre_layout_mixed_signal_verification",
+      "title": "Pre-layout mixed-signal verification",
+      "when": "mixed",
+      "tool": {
+        "kind": "adapter",
+        "program": "mixed_signal_m3_run.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "ams_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "prelayout_interface_performance",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "model_correlation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M02",
+        "native": [
+          "A9",
+          "M3"
+        ]
+      }
+    },
+    {
+      "name": "analog_pre_layout_pvt_and_operating_range",
+      "title": "Analog pre-layout PVT and operating range",
+      "when": "has_analog",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_real_corner_sweep.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "pvt_load_modes",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "prelayout_performance",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A08",
+        "native": [
+          "A4"
+        ]
+      }
+    },
+    {
+      "name": "analog_pre_layout_statistics",
+      "title": "Analog pre-layout statistics",
+      "when": "analog_statistics",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_real_corner_sweep.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "mismatch_confidence_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A09",
+        "native": [
+          "A4"
+        ]
+      }
+    },
+    {
+      "name": "calibration_algorithm_verification",
+      "title": "Calibration algorithm verification",
+      "when": "analog_trim",
+      "tool": {
+        "kind": "adapter",
+        "program": "spec_calibration_extract.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "finite_code_convergence",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "calibration_time_error",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "oracle_code_selection",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A10",
+        "native": []
+      }
+    },
+    {
+      "name": "mode_corner_and_constraint_plan",
+      "title": "Mode corner and constraint plan",
+      "when": "digital_netlist or (soft_ip and has_digital)",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Misc.LoadBaseSDC"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "scenario_constraints",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "exception_justification",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D19",
+        "native": [
+          "7"
+        ]
+      }
+    },
+    {
+      "name": "constraint_validation",
+      "title": "Constraint validation",
+      "when": "digital_netlist or (soft_ip and has_digital)",
+      "tool": {
+        "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "step_sdc_validation",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "invalid_timing_exceptions",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D20",
+        "native": [
+          "8"
+        ]
+      }
+    },
+    {
+      "name": "soft_ip_synthesis_and_constraints",
+      "title": "Soft-IP synthesis and constraints",
+      "when": "soft_ip and has_digital",
+      "tool": {
+        "kind": "adapter",
+        "program": "sdc_syntax_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "portable_sdc_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "required_config_synthesis_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D21",
+        "native": []
+      }
+    },
+    {
+      "name": "synthesis",
+      "title": "Synthesis",
+      "when": "digital_netlist",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Yosys.Synthesis",
+          "Checker.YosysUnmappedCells",
+          "Checker.YosysSynthChecks",
+          "Checker.NetlistAssignStatements"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "design__instance_unmapped__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 173
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_UNMAPPED_CELLS",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "synthesis__check_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 192
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_SYNTH_CHECKS",
+          "enabled_default": true,
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D22",
+        "native": [
+          "9"
+        ]
+      }
+    },
+    {
+      "name": "dft_architecture_and_insertion",
+      "title": "DFT architecture and insertion",
+      "when": "requires_dft",
+      "tool": {
+        "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "_step_dft_insertion",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "dft_architecture_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "scan_test_protocol_integrity",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D23",
+        "native": [
+          "11",
+          "FS1"
+        ]
+      }
+    },
+    {
+      "name": "post_dft_optimization",
+      "title": "Post-DFT optimization",
+      "when": "requires_dft",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Yosys.Resynthesis"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "scan_preservation_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D24",
+        "native": [
+          "12"
+        ]
+      }
+    },
+    {
+      "name": "netlist_equivalence",
+      "title": "Netlist equivalence",
+      "when": "digital_netlist",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Yosys.EQY"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "required_lec_partitions",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "unproved_equivalence",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D25",
+        "native": [
+          "13"
+        ]
+      }
+    },
+    {
+      "name": "pre_layout_timing",
+      "title": "Pre-layout timing",
+      "when": "digital_netlist",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "OpenROAD.CheckSDCFiles",
+          "OpenROAD.CheckMacroInstances",
+          "OpenROAD.STAPrePNR"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "timing__setup_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 674
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "SETUP_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "timing__hold_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 706
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "HOLD_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_slew_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 695
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_cap_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 684
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D26",
+        "native": [
+          "10"
+        ]
+      }
+    },
+    {
+      "name": "safety_fault_injection_and_diagnostic_coverage",
+      "title": "Safety fault injection and diagnostic coverage",
+      "when": "requires_functional_safety",
+      "tool": {
+        "kind": "adapter",
+        "program": "fmeda_fault_injection_coverage.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "fault_population_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "diagnostic_coverage_latency",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "fmeda_fault_classification",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D27",
+        "native": []
+      }
+    },
+    {
+      "name": "early_transition_atpg",
+      "title": "Early transition ATPG",
+      "when": "early_atpg",
+      "tool": {
+        "kind": "adapter",
+        "program": "transition_fault_atpg_run.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "early_fault_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D28",
+        "native": [
+          "DT1"
+        ]
+      }
+    },
+    {
+      "name": "final_fpga_verification",
+      "title": "Final FPGA verification",
+      "when": "fpga_final",
+      "tool": {
+        "kind": "adapter",
+        "program": "fpga_on_board_attestation_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "required_onboard_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D29",
+        "native": [
+          "39"
+        ]
+      }
+    },
+    {
+      "name": "netlist_handoff",
+      "title": "Netlist handoff",
+      "when": "digital_netlist",
+      "tool": {
+        "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "step_synthesis_handoff",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "post_synth_crossing_power_changes",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D30",
+        "native": [
+          "14"
+        ]
+      }
+    },
+    {
+      "name": "analog_layout",
+      "title": "Analog layout",
+      "when": "analog_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_a5_layout_emit.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "matching_symmetry_guard_constraints",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "analog_layout_connectivity",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A11",
+        "native": [
+          "A5"
+        ]
+      }
+    },
+    {
+      "name": "analog_block_physical_verification",
+      "title": "Analog block physical verification",
+      "when": "analog_physical",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "KLayout.DRC",
+          "Checker.KLayoutDRC",
+          "Magic.SpiceExtraction",
+          "Checker.IllegalOverlap",
+          "Netgen.LVS",
+          "Checker.LVS"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "klayout__drc_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 452
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_KLAYOUT_DRC",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "magic__illegal_overlap__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 248
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_ILLEGAL_OVERLAPS",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "design__lvs_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 340
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_LVS_ERROR",
+          "enabled_default": true,
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "A12",
+        "native": [
+          "A6"
+        ]
+      }
+    },
+    {
+      "name": "analog_parasitic_extraction",
+      "title": "Analog parasitic extraction",
+      "when": "analog_physical",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Magic.RCX"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "pex_annotation_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A13",
+        "native": [
+          "A7"
+        ]
+      }
+    },
+    {
+      "name": "analog_post_layout_performance",
+      "title": "Analog post-layout performance",
+      "when": "analog_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_a7_post_layout_emit.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "postlayout_pvt_performance",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "calibration_replay",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A14",
+        "native": [
+          "A7"
+        ]
+      }
+    },
+    {
+      "name": "analog_post_layout_statistics",
+      "title": "Analog post-layout statistics",
+      "when": "analog_physical and analog_statistics",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_a7_post_layout_emit.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "postlayout_statistical_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "required_sample_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A15",
+        "native": [
+          "A7"
+        ]
+      }
+    },
+    {
+      "name": "analog_reliability",
+      "title": "Analog reliability",
+      "when": "analog_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "thermal_screen_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "device_stress_lifetime",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "analog_ir_em_aging",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A16",
+        "native": [
+          "A7",
+          "25",
+          "28"
+        ]
+      }
+    },
+    {
+      "name": "analog_characterized_views",
+      "title": "Analog characterized views",
+      "when": "analog_physical",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Magic.WriteLEF"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "postlayout_view_correlation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "model_corner_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A17",
+        "native": [
+          "A8",
+          "A9"
+        ]
+      }
+    },
+    {
+      "name": "analog_macro_integration",
+      "title": "Analog macro integration",
+      "when": "mixed_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "mixed_signal_top_lvs_run.py",
+        "function": "run",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "unresolved_top_interfaces",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M03",
+        "native": [
+          "A8",
+          "M1"
+        ]
+      }
+    },
+    {
+      "name": "die_floorplan_and_macros",
+      "title": "Die floorplan and macros",
+      "when": "die_physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "flow109_analog_floorplan.py",
+              "function": "native produce",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "OpenROAD.Floorplan",
+                "OpenROAD.DumpRCValues",
+                "Odb.CheckMacroAntennaProperties",
+                "Odb.SetPowerConnections",
+                "OpenROAD.PadRing",
+                "Odb.ManualMacroPlacement",
+                "OpenROAD.CutRows",
+                "OpenROAD.TapEndcapInsertion"
+              ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "OpenROAD.Floorplan",
+                "OpenROAD.DumpRCValues",
+                "Odb.CheckMacroAntennaProperties",
+                "Odb.SetPowerConnections",
+                "Odb.ManualMacroPlacement",
+                "OpenROAD.CutRows",
+                "OpenROAD.TapEndcapInsertion"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "floorplan_boundary_pin_feasibility",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "illegal_macro_overlap",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D31",
+        "native": [
+          "15"
+        ]
+      }
+    },
+    {
+      "name": "io_pad_ring_and_power_distribution",
+      "title": "IO pad ring and power distribution",
+      "when": "die_physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "pad_ring_gen.py",
+              "function": "execute existing pad ring",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "Odb.AddPDNObstructions",
+                "OpenROAD.GeneratePDN",
+                "Odb.RemovePDNObstructions"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "pad_io_esd_pg_inventory",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "pg_supply_connectivity_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "pad_access_spacing",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D32",
+        "native": [
+          "15.5ic"
+        ]
+      }
+    },
+    {
+      "name": "mixed_signal_power_domains",
+      "title": "Mixed-signal power domains",
+      "when": "mixed_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "mixed_signal_power_domain_run.py",
+        "function": "main",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "crossdomain_integration_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M04",
+        "native": [
+          "M1",
+          "M2"
+        ]
+      }
+    },
+    {
+      "name": "assembly_placement_and_redistribution",
+      "title": "Assembly placement and redistribution",
+      "when": "assembly_only",
+      "tool": {
+        "kind": "adapter",
+        "program": null,
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "bump_alignment_rules",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "assembly_connectivity_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "assembly_drc_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D33",
+        "native": []
+      }
+    },
+    {
+      "name": "clock_planning",
+      "title": "Clock planning",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "native_report",
+        "from": "pre_layout_timing"
+      },
+      "checks": [
+        {
+          "metric": "skew_insertion_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D34",
+        "native": [
+          "16"
+        ]
+      }
+    },
+    {
+      "name": "placement_and_optimization",
+      "title": "Placement and optimization",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "Odb.AddRoutingObstructions",
+                "OpenROAD.GlobalPlacementSkipIO",
+                "Odb.ApplyDEFTemplate",
+                "OpenROAD.GlobalPlacement",
+                "Odb.WriteVerilogHeader",
+                "Checker.PowerGridViolations",
+                "OpenROAD.STAMidPNR",
+                "OpenROAD.RepairDesignPostGPL",
+                "Odb.ManualGlobalPlacement",
+                "OpenROAD.DetailedPlacement"
+              ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "Odb.AddRoutingObstructions",
+                "OpenROAD.GlobalPlacementSkipIO",
+                "OpenROAD.IOPlacement",
+                "Odb.CustomIOPlacement",
+                "Odb.ApplyDEFTemplate",
+                "OpenROAD.GlobalPlacement",
+                "Odb.WriteVerilogHeader",
+                "Checker.PowerGridViolations",
+                "OpenROAD.STAMidPNR",
+                "OpenROAD.RepairDesignPostGPL",
+                "Odb.ManualGlobalPlacement",
+                "OpenROAD.DetailedPlacement"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "design__power_grid_violation__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 359
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_PDN_VIOLATIONS",
+          "enabled_default": true,
+          "when": "ic"
+        },
+        {
+          "metric": "design__power_grid_violation__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 359
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_PDN_VIOLATIONS",
+          "enabled_default": true,
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D35",
+        "native": [
+          "17"
+        ]
+      }
+    },
+    {
+      "name": "physical_scan_stitching",
+      "title": "Physical scan stitching",
+      "when": "requires_scan and physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "phase3_one_shot_runner.py",
+        "function": "step_scan_physical",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "scan_flush_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D36",
+        "native": []
+      }
+    },
+    {
+      "name": "spare_cells_and_eco_preparation",
+      "title": "Spare cells and ECO preparation",
+      "when": "digital_physical and requires_spares",
+      "tool": {
+        "kind": "adapter",
+        "program": "execution_backend_producers.py",
+        "function": "produce",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "required_spare_distribution",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "spare_tie_connectivity_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D37",
+        "native": [
+          "18"
+        ]
+      }
+    },
+    {
+      "name": "clock_tree_synthesis",
+      "title": "Clock tree synthesis",
+      "when": "digital_physical and requires_cts",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "OpenROAD.CTS",
+          "OpenROAD.STAMidPNR"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "timing__setup_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 674
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "SETUP_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "timing__hold_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 706
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "HOLD_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_slew_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 695
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_cap_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 684
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D38",
+        "native": [
+          "19"
+        ]
+      }
+    },
+    {
+      "name": "post_cts_timing_repair",
+      "title": "Post-CTS timing repair",
+      "when": "digital_physical and requires_cts",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "OpenROAD.ResizerTimingPostCTS",
+          "OpenROAD.STAMidPNR"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "timing__setup_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 674
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "SETUP_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "timing__hold_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 706
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "HOLD_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_slew_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 695
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_cap_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 684
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D39",
+        "native": [
+          "20"
+        ]
+      }
+    },
+    {
+      "name": "routing_and_cell_filler",
+      "title": "Routing and cell filler",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "OpenROAD.GlobalRouting",
+          "OpenROAD.CheckAntennas",
+          "OpenROAD.RepairDesignPostGRT",
+          "Odb.DiodesOnPorts",
+          "Odb.HeuristicDiodeInsertion",
+          "OpenROAD.RepairAntennas",
+          "OpenROAD.ResizerTimingPostGRT",
+          "OpenROAD.STAMidPNR",
+          "OpenROAD.DetailedRouting",
+          "Odb.RemoveRoutingObstructions",
+          "OpenROAD.FillInsertion",
+          "Odb.CellFrequencyTables"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "routed_net_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "routing_drc_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D40",
+        "native": [
+          "21"
+        ]
+      }
+    },
+    {
+      "name": "analog_top_interconnect_pads_and_power",
+      "title": "Analog top interconnect pads and power",
+      "when": "analog_physical and not digital_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_macro_top_gen.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "analog_top_pad_core_connectivity_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "analog_sensitive_route_constraints",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A18",
+        "native": []
+      }
+    },
+    {
+      "name": "post_route_timing_repair",
+      "title": "Post-route timing repair",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "OpenROAD.RCX",
+          "OpenROAD.STAPostPNR"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "timing__setup_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 674
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "SETUP_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "timing__hold_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 706
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "HOLD_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_slew_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 695
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_cap_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 684
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D41",
+        "native": [
+          "32"
+        ]
+      }
+    },
+    {
+      "name": "routed_candidate_physical_checks",
+      "title": "Routed-candidate physical checks",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "KLayout.DRC",
+                "KLayout.LVS"
+              ]
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "flow109_route_check.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "Checker.TrDRC",
+                "Odb.ReportDisconnectedPins",
+                "Checker.DisconnectedPins",
+                "Odb.ReportWireLength",
+                "Checker.WireLength"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "route__drc_errors",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 210
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_TR_DRC",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "design__critical_disconnected_pin__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 267
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_DISCONNECTED_PINS",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "route__wirelength__max",
+          "operator": "<=",
+          "limit": null,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 286
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 286
+          },
+          "unit": "um",
+          "enabled_by": "ERROR_ON_LONG_WIRE",
+          "enabled_default": true,
+          "limit_config": "WIRE_LENGTH_THRESHOLD",
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D42",
+        "native": []
+      }
+    },
+    {
+      "name": "antenna_checks",
+      "title": "Antenna checks",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "KLayout.Antenna",
+                "Checker.KLayoutAntenna"
+              ]
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "antenna_report_check.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "OpenROAD.CheckAntennas"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "klayout__antenna_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 489
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_KLAYOUT_ANTENNA",
+          "enabled_default": true,
+          "when": "analog_physical and not digital_physical"
+        },
+        {
+          "metric": "route__antenna_violation__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "programs/gds_antenna_deck_check.py",
+            "line": 1307
+          },
+          "unit": "count",
+          "when": "digital_physical"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D43",
+        "native": [
+          "26"
+        ]
+      }
+    },
+    {
+      "name": "final_adopted_netlist_equivalence",
+      "title": "Final adopted netlist equivalence",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Yosys.EQY"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "final_lec_unproved",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D44",
+        "native": []
+      }
+    },
+    {
+      "name": "implemented_netlist_cdc_and_rdc",
+      "title": "Implemented netlist CDC and RDC",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "cdc_crossing_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "implemented_crossing_census",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "new_unexplained_crossings",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D45",
+        "native": []
+      }
+    },
+    {
+      "name": "implemented_power_intent_consistency",
+      "title": "Implemented power intent consistency",
+      "when": "has_power_intent and physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "power_domain_crossing_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "implemented_upf_semantics",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "aon_supply_path_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "power_sequence_behavior_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "multivoltage_timing",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D46",
+        "native": []
+      }
+    },
+    {
+      "name": "candidate_parasitic_extraction",
+      "title": "Candidate parasitic extraction",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "magic_extract_spice_emit.py",
+              "function": "execute native candidate extraction",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "librelane_signoff.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "native_report",
+              "from": "post_route_timing_repair"
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "candidate_parasitic_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "si_applicability_evidence",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D47",
+        "native": [
+          "22"
+        ]
+      }
+    },
+    {
+      "name": "candidate_signal_integrity",
+      "title": "Candidate signal integrity",
+      "when": "physical and requires_si",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "analog_bound_measurements.py",
+              "function": "run_measurements",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "si_signoff_timing_aware.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "si_required_windows",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "coupling_noise_delay_bounds",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D48",
+        "native": [
+          "27"
+        ]
+      }
+    },
+    {
+      "name": "candidate_timing_closure",
+      "title": "Candidate timing closure",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "native_report",
+        "from": "post_route_timing_repair"
+      },
+      "checks": [
+        {
+          "metric": "timing__setup_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 674
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "SETUP_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "timing__hold_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 706
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "HOLD_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_slew_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 695
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_SLEW_VIOLATION_CORNERS"
+        },
+        {
+          "metric": "design__max_cap_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 684
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_CAP_VIOLATION_CORNERS"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D49",
+        "native": [
+          "23"
+        ]
+      }
+    },
+    {
+      "name": "path_delay_atpg",
+      "title": "Path-delay ATPG",
+      "when": "requires_path_atpg",
+      "tool": {
+        "kind": "adapter",
+        "program": "path_delay_fault_atpg_run.py",
+        "function": "main",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "path_fault_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D50",
+        "native": [
+          "DT2"
+        ]
+      }
+    },
+    {
+      "name": "small_delay_defect_atpg",
+      "title": "Small-delay-defect ATPG",
+      "when": "requires_sdd",
+      "tool": {
+        "kind": "adapter",
+        "program": "sdd_atpg_run.py",
+        "function": "main",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "sdd_graded_fault_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D51",
+        "native": [
+          "DT3"
+        ]
+      }
+    },
+    {
+      "name": "final_test_patterns_and_test_activity",
+      "title": "Final test patterns and test activity",
+      "when": "requires_dft",
+      "tool": {
+        "kind": "adapter",
+        "program": "fault_atpg_run.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "final_test_pattern_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "test_protocol_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D52",
+        "native": []
+      }
+    },
+    {
+      "name": "candidate_gate_level_simulation",
+      "title": "Candidate gate-level simulation",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "execution_backend_producers.py",
+        "function": "produce",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "candidate_gls_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "candidate_sdf_annotation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "gls_failures",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D53",
+        "native": [
+          "29"
+        ]
+      }
+    },
+    {
+      "name": "post_layout_spice_correlation",
+      "title": "Post-layout SPICE correlation",
+      "when": "physical and requires_spice",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "analog_native_physical.py",
+              "function": "_resim existing A14 results",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "postlayout_spice_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "critical_path_correlation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D54",
+        "native": [
+          "30"
+        ]
+      }
+    },
+    {
+      "name": "functional_activity_and_external_loads",
+      "title": "Functional activity and external loads",
+      "when": "physical",
+      "tool": {
+        "kind": "adapter",
+        "program": null,
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "functional_mission_modes",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D55",
+        "native": []
+      }
+    },
+    {
+      "name": "candidate_power_analysis",
+      "title": "Candidate power analysis",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "analog_native_interconnect_run.py",
+              "function": "execute retained native capture",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "power_report_check.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "native_report",
+              "from": "post_route_timing_repair"
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "power_activity_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "per_mode_rail_average_peak_power",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D56",
+        "native": [
+          "33"
+        ]
+      }
+    },
+    {
+      "name": "candidate_ir_drop",
+      "title": "Candidate IR drop",
+      "when": "physical and requires_ir",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "analog_bound_measurements.py",
+              "function": "source-bound native voltage capture",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "ir_drop_report_check.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "OpenROAD.IRDropReport"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "ir__drop__worst__pct",
+          "operator": "<=",
+          "limit": 5.0,
+          "source": {
+            "file": "programs/flow109_final_electrical.py",
+            "line": 28
+          },
+          "unit": "%",
+          "limit_note": "Native PSM worst drop divided by the Liberty supply voltage."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D57",
+        "native": [
+          "24"
+        ]
+      }
+    },
+    {
+      "name": "candidate_electromigration",
+      "title": "Candidate electromigration",
+      "when": "physical and requires_em",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "analog_native_interconnect_run.py",
+              "function": "run native interconnect capture",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "em_current_density_check.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "em_current_lifetime_limits",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "current_temperature_model_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D58",
+        "native": [
+          "25"
+        ]
+      }
+    },
+    {
+      "name": "candidate_reliability_and_esd",
+      "title": "Candidate reliability and ESD",
+      "when": "physical and requires_perc",
+      "tool": {
+        "kind": "adapter",
+        "program": "execution_backend_producers.py",
+        "function": "produce",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "candidate_esd_supply_paths",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "candidate_perc_latchup_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D59",
+        "native": [
+          "28"
+        ]
+      }
+    },
+    {
+      "name": "substrate_and_supply_coupling",
+      "title": "Substrate and supply coupling",
+      "when": "mixed_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "mixed_signal_interface_si_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "substrate_supply_model_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "noise_budget_limits",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M05",
+        "native": []
+      }
+    },
+    {
+      "name": "candidate_mixed_signal_scenarios",
+      "title": "Candidate mixed-signal scenarios",
+      "when": "mixed_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "mixed_signal_m3_run.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "candidate_ams_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "candidate_ams_performance",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M06",
+        "native": [
+          "A9",
+          "M3"
+        ]
+      }
+    },
+    {
+      "name": "stream_out",
+      "title": "Stream-out",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "analog_hardmacro_gds_emit.py",
+              "function": "execute Magic native stream",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "phase3_one_shot_runner.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "Magic.StreamOut",
+                "KLayout.StreamOut",
+                "KLayout.Render",
+                "Odb.CheckDesignAntennaProperties"
+              ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "Magic.StreamOut",
+                "KLayout.StreamOut",
+                "KLayout.Render",
+                "Magic.WriteLEF",
+                "Odb.CheckDesignAntennaProperties"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "unresolved_gds_cells",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D60",
+        "native": [
+          "37"
+        ]
+      }
+    },
+    {
+      "name": "complete_top_level_layout_assembly",
+      "title": "Complete top-level layout assembly",
+      "when": "mixed_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "mixed_signal_top_lvs_run.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "missing_duplicate_macro_instances",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M07",
+        "native": [
+          "M1"
+        ]
+      }
+    },
+    {
+      "name": "seal_ring_and_die_identification",
+      "title": "Seal ring and die identification",
+      "when": "ic and owner_die",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "KLayout.SealRing"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "seal_dieid_rules",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "seal_core_clearance",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D61",
+        "native": [
+          "26.5ic"
+        ]
+      }
+    },
+    {
+      "name": "metal_density_fill",
+      "title": "Metal density fill",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "KLayout.Filler"
+              ]
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "KLayout.Filler"
+              ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "KLayout.Filler",
+                "KLayout.Density",
+                "Checker.KLayoutDensity"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "klayout__density_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 471
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_KLAYOUT_DENSITY",
+          "enabled_default": true,
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D62",
+        "native": [
+          "34"
+        ]
+      }
+    },
+    {
+      "name": "design_for_manufacturability",
+      "title": "Design for manufacturability",
+      "when": "physical",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Misc.ReportManufacturability"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "dfm_density_lithography_cmp_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "advanced_dfm_provider_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D63",
+        "native": [
+          "35"
+        ]
+      }
+    },
+    {
+      "name": "finishing_geometry_fidelity",
+      "title": "Finishing geometry fidelity",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "flow109_final_geometry.py",
+              "function": "execute",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "KLayout.XOR",
+                "Checker.XOR"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "design__xor_difference__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 321
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_XOR_ERROR",
+          "enabled_default": true,
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D64",
+        "native": [
+          "37.3"
+        ]
+      }
+    },
+    {
+      "name": "final_physical_verification",
+      "title": "Final physical verification",
+      "when": "physical",
+      "tool": {
+        "kind": "librelane",
+        "steps": [
+          "Magic.DRC",
+          "KLayout.DRC",
+          "Checker.MagicDRC",
+          "Checker.KLayoutDRC",
+          "Magic.SpiceExtraction",
+          "Checker.IllegalOverlap",
+          "Netgen.LVS",
+          "Checker.LVS"
+        ]
+      },
+      "checks": [
+        {
+          "metric": "magic__drc_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 229
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_MAGIC_DRC",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "klayout__drc_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 452
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_KLAYOUT_DRC",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "magic__illegal_overlap__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 248
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_ILLEGAL_OVERLAPS",
+          "enabled_default": true,
+          "when": "otherwise"
+        },
+        {
+          "metric": "design__lvs_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 340
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_LVS_ERROR",
+          "enabled_default": true,
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D65",
+        "native": [
+          "31"
+        ]
+      }
+    },
+    {
+      "name": "final_perc_esd_and_latch_up",
+      "title": "Final PERC ESD and latch-up",
+      "when": "physical and requires_perc",
+      "tool": {
+        "kind": "adapter",
+        "program": "execution_backend_producers.py",
+        "function": "produce",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "final_esd_supply_topology",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "final_perc_latchup_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D66",
+        "native": []
+      }
+    },
+    {
+      "name": "package_and_external_load_electrical_models",
+      "title": "Package and external-load electrical models",
+      "when": "package_model_required",
+      "tool": {
+        "kind": "adapter",
+        "program": "flow109_package_electrical.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "package_rc_thermal_validity",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D67",
+        "native": []
+      }
+    },
+    {
+      "name": "assembly_parasitic_extraction",
+      "title": "Assembly parasitic extraction",
+      "when": "assembly_only",
+      "tool": {
+        "kind": "adapter",
+        "program": null,
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "interdie_rc_rlc_thermal_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "assembly_model_correlation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D68",
+        "native": []
+      }
+    },
+    {
+      "name": "final_geometry_rc_and_pex",
+      "title": "Final geometry RC and PEX",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "flow109_final_extract.py",
+              "function": "execute",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "flow109_final_extract.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "OpenROAD.RCX"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "fill_sensitive_reference_correlation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "final_parasitic_corner_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D69",
+        "native": []
+      }
+    },
+    {
+      "name": "final_electrical_analysis",
+      "title": "Final electrical analysis",
+      "when": "physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "analog_physical and not digital_physical",
+            "tool": {
+              "kind": "adapter",
+              "program": "analog_bound_measurements.py",
+              "function": "explicit final analog mission",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "assembly_only",
+            "tool": {
+              "kind": "adapter",
+              "program": "librelane_signoff.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "OpenROAD.STAPostPNR",
+                "Checker.SetupViolations",
+                "Checker.HoldViolations",
+                "Checker.MaxSlewViolations",
+                "Checker.MaxCapViolations"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "timing__setup_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 674
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "SETUP_VIOLATION_CORNERS",
+          "when": "otherwise"
+        },
+        {
+          "metric": "timing__hold_vio__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 706
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "HOLD_VIOLATION_CORNERS",
+          "when": "otherwise"
+        },
+        {
+          "metric": "design__max_slew_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 695
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_SLEW_VIOLATION_CORNERS",
+          "when": "otherwise"
+        },
+        {
+          "metric": "design__max_cap_violation__count__corner:*",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 684
+          },
+          "unit": "count",
+          "match": "all",
+          "corner_config": "MAX_CAP_VIOLATION_CORNERS",
+          "when": "otherwise"
+        }
+      ],
+      "legacy_id": {
+        "registry": "D70",
+        "native": []
+      }
+    },
+    {
+      "name": "final_sdf_gate_level_replay",
+      "title": "Final SDF gate-level replay",
+      "when": "digital_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "flow109_final_gls.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "final_sdf_annotation",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "final_gls_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "final_gls_function_timing_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D71",
+        "native": []
+      }
+    },
+    {
+      "name": "final_geometry_mixed_signal_scenarios",
+      "title": "Final geometry mixed-signal scenarios",
+      "when": "mixed_physical",
+      "tool": {
+        "kind": "adapter",
+        "program": "mixed_signal_m3_run.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "final_ams_scenarios",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "final_ams_noise_settling_calibration",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M08",
+        "native": []
+      }
+    },
+    {
+      "name": "final_test_pattern_replay",
+      "title": "Final test-pattern replay",
+      "when": "requires_dft",
+      "tool": {
+        "kind": "adapter",
+        "program": "flow109_final_gls.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "final_pattern_good_machine_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "export_roundtrip_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D72",
+        "native": []
+      }
+    },
+    {
+      "name": "implemented_security_and_debug_access",
+      "title": "Implemented security and debug access",
+      "when": "requires_security and physical",
+      "tool": {
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "has_analog and not has_digital",
+            "tool": {
+              "kind": "adapter",
+              "program": "formal_property_run.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "formal_property_run.py",
+              "function": null,
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
+      },
+      "checks": [
+        {
+          "metric": "final_security_requirements",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "scan_debug_access_violations",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "final_analog_security_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D73",
+        "native": []
+      }
+    },
+    {
+      "name": "analog_block_signoff",
+      "title": "Analog block signoff",
+      "when": "has_analog",
+      "tool": {
+        "kind": "adapter",
+        "program": "analog_flow_compliance_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "analog_endpoint_evidence",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "A19",
+        "native": [
+          "A8"
+        ]
+      }
+    },
+    {
+      "name": "mixed_signal_signoff",
+      "title": "Mixed-signal signoff",
+      "when": "mixed",
+      "tool": {
+        "kind": "adapter",
+        "program": "mixed_signal_signoff_run.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "mixed_requirement_evidence",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "M09",
+        "native": [
+          "M4"
+        ]
+      }
+    },
+    {
+      "name": "assembly_physical_and_cross_die_signoff",
+      "title": "Assembly physical and cross-die signoff",
+      "when": "assembly_only",
+      "tool": {
+        "kind": "adapter",
+        "program": null,
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "crossdie_system_dft_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "assembly_pv_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "interdie_timing_pi_thermal_targets",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "assembly_alignment_stackup_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "whole_assembly_connectivity_pv_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D74",
+        "native": []
+      }
+    },
+    {
+      "name": "package_and_test_readiness",
+      "title": "Package and test readiness",
+      "when": "package_interface",
+      "tool": {
+        "kind": "adapter",
+        "program": "flow109_package_ready.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "escape_bond_feasibility",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "package_feedback_unresolved",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "test_access_ready",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "package_electrical_feedback_coverage",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D75",
+        "native": []
+      }
+    },
+    {
+      "name": "design_safety_case",
+      "title": "Design safety case",
+      "when": "requires_functional_safety",
+      "tool": {
+        "kind": "adapter",
+        "program": "fmeda_coverage_check.py",
+        "function": null,
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "safety_evidence_trace",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "redundancy_separation_dfa",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D76",
+        "native": []
+      }
+    },
+    {
+      "name": "signoff_aggregation",
+      "title": "Signoff aggregation",
+      "when": "always",
+      "tool": {
+        "kind": "adapter",
+        "program": "signoff_metrics_aggregate.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "native_measurement",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "This step has no numeric native limit."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D77",
+        "native": [
+          "37.4"
+        ]
+      }
+    },
+    {
+      "name": "compliance_and_final_adoption",
+      "title": "Compliance and final adoption",
+      "when": "always",
+      "tool": {
+        "kind": "adapter",
+        "program": "execution_release_worker.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "native_measurement",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "This step has no numeric native limit."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D78",
+        "native": [
+          "36"
+        ]
+      }
+    },
+    {
+      "name": "ip_release_views_and_documentation",
+      "title": "IP release views and documentation",
+      "when": "ip",
+      "tool": {
+        "kind": "adapter",
+        "program": "flow109_ip_release.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "ip_endpoint_views",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "ip_integration_limits_documented",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D79",
+        "native": [
+          "37.5ip"
+        ]
+      }
+    },
+    {
+      "name": "tapeout_precheck",
+      "title": "Tapeout precheck",
+      "when": "ic",
+      "tool": {
+        "kind": "adapter",
+        "program": "tapeout_precheck.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "provider_design_rule_errors",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        },
+        {
+          "metric": "provider_delivery_items",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D80",
+        "native": [
+          "37.5ic"
+        ]
+      }
+    },
+    {
+      "name": "design_release",
+      "title": "Design release",
+      "when": "always",
+      "tool": {
+        "kind": "adapter",
+        "program": "foundry_handoff_pack_gen.py",
+        "function": "execute",
+        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+      },
+      "checks": [
+        {
+          "metric": "release_required_items",
+          "operator": null,
+          "limit": null,
+          "source": null,
+          "decision_request": "No numeric native limit found in the current implementation."
+        }
+      ],
+      "legacy_id": {
+        "registry": "D81",
+        "native": [
+          "38"
+        ]
+      }
+    }
+  ]
+}
