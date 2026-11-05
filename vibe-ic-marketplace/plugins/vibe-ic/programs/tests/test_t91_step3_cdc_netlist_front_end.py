@@ -600,3 +600,23 @@ def test_native_reset_role_missing_original_input_remains_blocking(tmp_path):
     rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
     assert rc == 1 and _rules(report) == ['RESET_ROLE_UNRESOLVED'], report
     assert not expert.check(project, '3')[0]
+
+
+def test_explicit_wrapper_top_can_bind_when_l9_names_the_core(tmp_path):
+    """An explicit integration top may wrap the L9-described IP core."""
+    import _cdc_netlist as cn
+
+    rtl = tmp_path / "phase2/stage1/rtl/wrapper.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module aes_core; endmodule\nmodule chip_top; aes_core u_aes(); endmodule\n")
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(
+        json.dumps({"top_module": "aes_core"}))
+
+    native = cn.build(tmp_path, [rtl], "chip_top")
+    model = cn.load(native, "chip_top")
+    binding = cn.require_binding(tmp_path, native, model)
+    assert model.top == "chip_top"
+    options = binding["input"]["options"]
+    assert (options["requested_top"], options["declared_top"]) == ("chip_top", "aes_core")

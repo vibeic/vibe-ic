@@ -170,10 +170,8 @@ def source_binding(project: Path, top: Optional[str],
     if rtl_files is not None and set(map(Path.resolve, rtl_files)) != set(files):
         raise Refusal("CDC_NETLIST_PARTIAL_SOURCES",
                       "native read must cover the current RTL source population")
+    # L9 may name the IP core while the caller explicitly selects its wrapper.
     declared = _top(project)
-    if declared and top and declared != top:
-        raise Refusal("CDC_NETLIST_TOP_MISMATCH",
-                      f"declared top {declared!r}, native requested top {top!r}")
     deps = set(files)
     deps.update(p.resolve() for p in sources.rtl_source_files(
         project, exts=("*.vh", "*.svh")))
@@ -239,9 +237,7 @@ def require_binding(project: Path, path: Path, nl: "Netlist") -> dict:
                   and argv[-3:] == ["-q", "-p", yosys_script(
                       files, top, root / Path(NETLIST_REL).with_suffix(".json.tmp"))])
         current = source_binding(project, top, normalization=not legacy)
-        declared = current["options"]["declared_top"]
-        if declared and declared != nl.top:
-            raise Refusal("CDC_NETLIST_TOP_MISMATCH", "current declared top differs from JSON top")
+        # The fingerprint retains both declarations; a later change is stale.
         if current != inputs:
             raise Refusal("CDC_NETLIST_STALE", "source population, contents, top or options changed")
         if sorted(order) != current["rtl_files"]:
@@ -392,9 +388,8 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
             or ll.digest(raw) != raw_hash):
         raise Refusal("CDC_NETLIST_STALE", "sources or raw input changed during normalization")
     nl = load(tmp)
-    if ((top and nl.top != top)
-            or binding["options"]["declared_top"] not in (None, nl.top)):
-        raise Refusal("CDC_NETLIST_TOP_MISMATCH", "native JSON top differs from requested/declared top")
+    if top and nl.top != top:
+        raise Refusal("CDC_NETLIST_TOP_MISMATCH", "native JSON top differs from requested top")
     tmp.replace(out)
     ll.write_json(manifest, {
         "input": binding, "top": nl.top,
