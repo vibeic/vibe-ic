@@ -440,7 +440,7 @@ def test_native_seal_skip_is_missing_measurement_and_verifier_failure_still_fail
 @pytest.mark.parametrize("target,nature,entry,exit_step,count", [
     ("rtl", "debug", "4", "4", 4),
     ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 39),
-    ("shippable_gds", "spec_generation", "D1", "37.5ic", 41),
+    ("shippable_gds", "spec_generation", "D1", "37.5ic", 45),
 ])
 def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         tmp_path, target, nature, entry, exit_step, count):
@@ -467,6 +467,9 @@ def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         assert {"formal_verification", "functional_simulation_and_coverage",
                 "implemented_netlist_cdc_and_rdc", "final_geometry_rc_and_pex",
                 "final_electrical_analysis", "final_sdf_gate_level_replay"} <= names
+        if target == "shippable_gds":
+            assert {"candidate_signal_integrity", "post_layout_spice_correlation",
+                    "candidate_reliability_and_esd", "final_perc_esd_and_latch_up"} <= names
         assert selected[0]["name"] == "requirements_and_delivery_route"
         assert selected[-1]["name"] == ("ip_release_views_and_documentation"
                                           if target == "ip_hardmacro" else "compliance_and_final_adoption")
