@@ -214,8 +214,6 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
-        "program": "phase1_one_shot_runner.py",
-        "function": "_run_step_0_5ic",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -265,8 +263,6 @@
       "when": "has_power_intent",
       "tool": {
         "kind": "adapter",
-        "program": "l21_to_upf_emit.py",
-        "function": "main",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -294,8 +290,6 @@
       "when": "package_interface and package_declared",
       "tool": {
         "kind": "adapter",
-        "program": "pad_assignment_gen.py",
-        "function": "main",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -969,8 +963,6 @@
       "when": "has_power_intent and has_digital",
       "tool": {
         "kind": "adapter",
-        "program": "power_domain_crossing_check.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -998,8 +990,6 @@
       "when": "requires_system_scenarios",
       "tool": {
         "kind": "adapter",
-        "program": "full_stack_functional_tb.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1044,8 +1034,6 @@
             "when": "has_analog and not has_digital",
             "tool": {
               "kind": "adapter",
-              "program": "formal_property_run.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -1053,8 +1041,6 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
-              "program": "formal_property_run.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -1236,8 +1222,6 @@
       "when": "analog_trim",
       "tool": {
         "kind": "adapter",
-        "program": "spec_calibration_extract.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1313,8 +1297,6 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
-        "program": "design_one_shot_runner.py",
-        "function": "step_sdc_validation",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -1332,8 +1314,6 @@
       "when": "soft_ip and has_digital",
       "tool": {
         "kind": "adapter",
-        "program": "sdc_syntax_check.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1437,8 +1417,6 @@
       "when": "requires_dft",
       "tool": {
         "kind": "adapter",
-        "program": "design_one_shot_runner.py",
-        "function": "_step_dft_insertion",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1608,8 +1586,6 @@
       "when": "requires_functional_safety",
       "tool": {
         "kind": "adapter",
-        "program": "fmeda_fault_injection_coverage.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1655,8 +1631,6 @@
       "when": "early_atpg",
       "tool": {
         "kind": "adapter",
-        "program": "transition_fault_atpg_run.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1707,8 +1681,6 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
-        "program": "design_one_shot_runner.py",
-        "function": "step_synthesis_handoff",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -2166,8 +2138,6 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "pad_ring_gen.py",
-              "function": "execute existing pad ring",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -2466,8 +2436,6 @@
       "when": "requires_scan and physical",
       "tool": {
         "kind": "adapter",
-        "program": "phase3_one_shot_runner.py",
-        "function": "step_scan_physical",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -2980,8 +2948,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "antenna_report_check.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3106,8 +3072,6 @@
       "when": "has_power_intent and physical",
       "tool": {
         "kind": "adapter",
-        "program": "power_domain_crossing_check.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3176,8 +3140,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "librelane_signoff.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3236,8 +3198,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "si_signoff_timing_aware.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3296,8 +3256,6 @@
       "when": "requires_path_atpg",
       "tool": {
         "kind": "adapter",
-        "program": "path_delay_fault_atpg_run.py",
-        "function": "main",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3330,8 +3288,6 @@
       "when": "requires_sdd",
       "tool": {
         "kind": "adapter",
-        "program": "sdd_atpg_run.py",
-        "function": "main",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3364,8 +3320,6 @@
       "when": "requires_dft",
       "tool": {
         "kind": "adapter",
-        "program": "fault_atpg_run.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3553,8 +3507,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "power_report_check.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3618,8 +3570,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "ir_drop_report_check.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3686,8 +3636,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "em_current_density_check.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3859,8 +3807,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "phase3_one_shot_runner.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4436,8 +4382,6 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
-              "program": "librelane_signoff.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4722,8 +4666,6 @@
             "when": "has_analog and not has_digital",
             "tool": {
               "kind": "adapter",
-              "program": "formal_property_run.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4731,8 +4673,6 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
-              "program": "formal_property_run.py",
-              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -4938,8 +4878,6 @@
       "when": "requires_functional_safety",
       "tool": {
         "kind": "adapter",
-        "program": "fmeda_coverage_check.py",
-        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -5061,8 +4999,6 @@
       "when": "ic and provider_deck_declared",
       "tool": {
         "kind": "adapter",
-        "program": "tapeout_precheck.py",
-        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
