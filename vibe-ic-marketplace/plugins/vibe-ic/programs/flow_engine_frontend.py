@@ -110,6 +110,7 @@ def native_lint(project, top_name=None):
                     "design__lint_error__count": parsed["exiting_errors"] if parsed["exiting_errors"] is not None
                         else sum(item["severity"] == "ERROR" for item in diagnostics),
                     "design__lint_warning__count": sum(item["severity"] == "WARNING" for item in diagnostics),
+                    "design__inferred_latch__count": sum(item["code"] == "LATCH" for item in diagnostics),
                     "design__lint_timing_construct__count": sum(item["code"] == "NEEDTIMINGOPT" for item in diagnostics),
                     "blocking_lint_diagnostics": len(lint.blocking(diagnostics, map(str, support))),
                 })
