@@ -3731,7 +3731,8 @@ unless the input explicitly requires that relation. A requirement about one edge
 as a wrap edge, constrains that edge alone. Keep flags defined as comparisons as comparisons.
 For Gray pointers, use `gray <= bin2gray(waddr_bin)` for the named current binary register.
 Only an explicit contrary input relating both updates on the same edge selects the next
-binary position. Keep registered read data and the stated pointer synchronizers. Check accepted
+binary position. Keep registered read data by default; follow the spec for explicit read timing.
+Keep the stated pointer synchronizers. Check accepted
 and stalled operations, reset, wrap, and capacity against those source requirements.
 
 ### Skill: pulse / edge detector — the state holds only the PREVIOUS sample, and reset is a real baseline
