@@ -15,5 +15,5 @@ operating-point measurement must be present, finite and within its positive
 source-owned bounds.
 
 The supported subset does not measure AC gain/noise, transient behavior,
-PVT/statistics, G1-G9, full Flow 109 qualification, production-PDK signoff or
+PVT/statistics, G1-G9, full flow qualification, production-PDK signoff or
 benchmark PASS. Those remain `NOT_MEASURED`.

@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-phase2
-description: Run a bounded frontend Flow109 row through the sole public entry in Default mode. AI-monitored + bounded repair/retry.
+description: Run a bounded frontend flow row through the sole public entry in Default mode. AI-monitored + bounded repair/retry.
 argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D09|D11|D13|D22|D23|D30> --exit-step <same-or-supported-D-id> [--top-name <top>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
@@ -8,9 +8,9 @@ argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
-# /vibe-ic-phase2 — bounded Flow109 frontend entry
+# /vibe-ic-phase2 — bounded flow frontend entry
 
-**Prerequisite**: the selected current Flow109 row's declared inputs must exist.
+**Prerequisite**: the selected current flow row's declared inputs must exist.
 The manifest must select that row for the owner-declared IC/IP route.
 
 Main execution (**program-driven**):
@@ -21,7 +21,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS \
 ```
 
 Do not call the owner runner directly. The public entry resolves the stable ID,
-records the immutable Flow109 request/attempt, and then dispatches the existing
+records the immutable flow request/attempt, and then dispatches the existing
 owner. Current frontend anchors are:
 
 | Responsibility | ID | Position |
@@ -63,12 +63,12 @@ After the run completes, the AI must:
    - **`fpga_compile`** FAIL → check `fpga/compile.log`; common: QSF init_file SEARCH_PATH, SystemVerilog patterns Quartus does not accept → fix RTL template / qsf_gen
    - **`fpga_burn`** FAIL → parse `error_code` and `failed_gates` (pre-burn structural-gate audit); close-loop each gate (call `programs/<gate>.py` to capture detail → patch RTL/L doc → re-run)
    - **`md905_verify`** FAIL → `<unparsed>` = driver did not see frame; first verify the SOF was burned in + <half-duplex-tester> connected to PIN_V10; if `expected ≠ observed` it is a real hardware bug and requires RTL repair (not a metal-layer ECO)
-4. A selected-row PASS permits only the next dependency-valid Flow109 request;
+4. A selected-row PASS permits only the next dependency-valid flow request;
    it does not imply frontend or whole-flow PASS.
 
 **Helper skills:** `spec-to-rtl` / `cdc-check` / `rtl-review` / `formal-verify` / `bringup-plan`
 
-**Rule:** the selected Flow109 attempt and every selected component must be
+**Rule:** the selected flow attempt and every selected component must be
 current and terminal. A row-local PASS is never promoted to phase or whole-flow
 PASS by this command.
 

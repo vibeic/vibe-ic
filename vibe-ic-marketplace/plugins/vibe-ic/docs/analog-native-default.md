@@ -12,7 +12,7 @@ python3 programs/vibe_ic_one_shot_runner.py /path/to/project \
 ```
 
 The public front door requires its existing resolved feature manifest. Its
-windows follow the complete Flow109 interleaved row order: an A-row endpoint
+windows follow the complete flow interleaved row order: an A-row endpoint
 does not imply that intervening digital or mixed-signal rows are absent. Select
 only a contiguous window whose complete resolved ownership is supported.
 Native analog execution does not require a tool qualification registry.

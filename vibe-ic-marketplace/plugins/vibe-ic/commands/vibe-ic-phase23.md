@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-phase23
-description: Run one explicit current Flow109 window through the sole public entry in Default mode. AI-monitored + close-loop.
+description: Run one explicit current flow window through the sole public entry in Default mode. AI-monitored + close-loop.
 argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id> [--top-name <top>] [--pdk <pdk>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
@@ -8,7 +8,7 @@ argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
-# /vibe-ic-phase23 — bounded cross-stage Flow109 entry
+# /vibe-ic-phase23 — bounded cross-stage flow entry
 
 Main execution (**program-driven**):
 
@@ -34,7 +34,7 @@ After the run completes, the AI must (combine `/vibe-ic-phase2` + `/vibe-ic-phas
 4. A selected-row or bounded-window PASS does not mean the whole flow is
    complete.
 
-Do not use phase skip aliases to emulate a Flow109 window. Use only the current
+Do not use phase skip aliases to emulate a flow window. Use only the current
 stable IDs and positions recorded by the registry.
 
 **Helper skills:** same as `/vibe-ic-phase2` + `/vibe-ic-phase3`, plus `tapeout-checklist`, `flow-orchestrate`.
