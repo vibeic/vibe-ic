@@ -111,6 +111,27 @@ def test_the_canonical_record_reports_the_oracle_this_run_ran(tmp_path):
         f"record was: {xml}")
 
 
+def test_professional_functional_result_does_not_require_connectivity_xml(tmp_path):
+    proj = _project(tmp_path, _junit(tests=3))
+    rc, detail = GATE._evaluate(proj)
+    assert rc == 0, detail
+    assert 'professional-TB' in detail
+    assert not (proj / 'phase2/stage1/sim/results.xml').exists()
+
+
+@pytest.mark.parametrize('damage', ['failed_suite', 'unexecuted_case'])
+def test_without_connectivity_xml_real_functional_obligations_still_apply(tmp_path, damage):
+    proj = _project(tmp_path, _junit(tests=3, failures=int(damage == 'failed_suite')))
+    if damage == 'unexecuted_case':
+        docs = proj / 'phase1/generated_docs'
+        docs.mkdir(parents=True)
+        (docs / 'L10_TEST_CASES.json').write_text(json.dumps({
+            'test_cases': [{'name': 'independent_case', 'kind': 'functional_vector',
+                            'input': {'a': 1}, 'expected': {'y': 1}}]}))
+    rc, detail = GATE._evaluate(proj)
+    assert rc != 0, detail
+
+
 def _current_professional_reference(tmp_path, monkeypatch, *, during_run=None,
                                     during_generate=None):
     """Real producers/consumers; only simulator transport is a neutral fixture."""
