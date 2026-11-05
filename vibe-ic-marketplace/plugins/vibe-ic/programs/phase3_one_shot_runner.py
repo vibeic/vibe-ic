@@ -13066,8 +13066,8 @@ def _pdk_registry_entry(name: str) -> Optional[Dict[str, Any]]:
     Chip-AGNOSTIC."""
     if not _pdk_registry_entry._cache:
         try:
-            reg = json.loads(
-                (PROGRAMS_DIR / "pdk_registry.json").read_text())
+            reg = json.loads(Path(os.environ.get(
+                "VIBEIC_PDK_REGISTRY", PROGRAMS_DIR / "pdk_registry.json")).read_text())
             for e in (reg.get("pdks") or []):
                 if e.get("name"):
                     _pdk_registry_entry._cache[e["name"]] = e
