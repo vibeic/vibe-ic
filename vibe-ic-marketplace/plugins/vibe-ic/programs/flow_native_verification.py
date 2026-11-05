@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 import fnmatch
 import json
 from pathlib import Path
@@ -375,6 +376,49 @@ def layout_step(directory, tool, commands, state, config, step_class, metric, ov
     return result
 
 
+def gls_signal_netlist(directory, netlist, text, used, closure, config, commands):
+    import sdf_gate_sim as native
+    from _pad_ring import parse_lef_pin_roles, parse_verilog_rail_bridges
+    from _specrtl_common import parse_rtl_ports
+    from flow_chip_inputs import _paths
+    from flow109_netlist_cdc import _word
+
+    roles, connections, removed = {}, {}, set()
+    for key in ("PAD_LEFS", "CELL_LEFS", "EXTRA_LEFS"):
+        for path in _paths(config.get(key)):
+            if path.is_file():
+                roles.update(parse_lef_pin_roles(path.read_text()))
+    for instance in native._INSTANCE_STMT_RE.finditer(text):
+        connections.setdefault(instance[1], set()).update(
+            pin for pin, _ in native._CONN_RE.findall(instance[3]))
+    for path in closure["files"]:
+        code = native.strip_comments(Path(path).read_text())
+        bridges = parse_verilog_rail_bridges(code)
+        for module in native._MODULE_BODY_RE.finditer(code):
+            name = module[2]
+            if name not in bridges or name not in used or name not in roles:
+                continue
+            if "`" in code[:module.end()]:
+                continue
+            _, ports = parse_rtl_ports(module[0], name)
+            names = {port.name for port in ports}
+            if (ports and connections.get(name, set()) - names
+                    and all(port.direction == "inout" and roles[name].get(port.name, ("", ""))[1]
+                            in {"POWER", "GROUND"} for port in ports)):
+                removed.add(name)
+    if not removed:
+        return Path(netlist), [], []
+    signal, projection = directory / "signal_netlist.v", directory / "signal_netlist.ys"
+    projection.write_text(f"read_verilog -sv -icells {_word(netlist)}\n"
+        + "\n".join("delete t:" + name for name in sorted(removed))
+        + f"\nwrite_verilog -noattr {_word(signal)}\n")
+    projected = commands.run(["yosys", "-s", projection])
+    reports = [projection, signal]
+    if projected is None or projected.returncode or not signal.is_file():
+        return Path(netlist), [], reports
+    return signal, sorted(removed), reports
+
+
 def gls(project, directory, tool, commands, *, state, config):
     import sdf_gate_sim as native
     from _sim_results_bridge import parse_junit
@@ -422,22 +466,26 @@ def gls(project, directory, tool, commands, *, state, config):
         return commands.result(detail="GLS needs the configured PDK's functional and timing cell models.")
     used = native.netlist_used_cells(text)
     closure = native.verilog_model_closure(declared, used)
+    signal_netlist, physical, projection_reports = gls_signal_netlist(
+        directory, netlist, text, used, closure, config, commands)
+    signal_text = signal_netlist.read_text()
     model_text = "\n".join(Path(path).read_text() for path in closure["files"])
-    stubs = native.missing_empty_cell_stubs(text, used, model_text)
+    stubs = native.missing_empty_cell_stubs(signal_text, used, model_text)
     unresolved = sorted(set(closure["unresolved"]) - set(stubs))
     if unresolved or closure["clashes"]:
         return commands.result(detail=f"GLS cell models incomplete: unresolved={unresolved}, "
             f"clashes={closure['clashes']}.")
     stub_file = directory / "physical_cells.v"
     stub_file.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
-    rows, reports = [], [stub_file]
+    rows, reports = [], [stub_file, *projection_reports]
     for corner, sdf in sdfs.items():
         for bench in benches:
             work = directory / ("corner_" + str(len(rows) + 1))
             work.mkdir(parents=True, exist_ok=True)
             row = {"corner": corner, "testbench": str(bench), "status": "NOT_MEASURED",
                    "ran": False, "exit_code": None}
-            models = [str(netlist), *closure["files"], str(stub_file)]
+            clock_unmeasured = False
+            models = [str(signal_netlist), *closure["files"], str(stub_file)]
             flags = shlex.split(native._IVERILOG_FLAGS)
             for parent in dict.fromkeys([str(bench.parent), *(str(Path(p).parent) for p in models)]):
                 flags.extend(["-I", parent])
@@ -462,14 +510,42 @@ def gls(project, directory, tool, commands, *, state, config):
                 sources = " ".join(shlex.quote(path).replace("$", "$$") for path in [*models, str(shim)])
                 compile_flags = " ".join(shlex.quote(flag).replace("$", "$$") for flag in flags)
                 module = shlex.quote(bench.stem).replace("$", "$$")
+                if sdc:
+                    try:
+                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                    except (OSError, ValueError) as exc:
+                        row["detail"] = str(exc)
+                        rows.append(row)
+                        continue
+                    if clocks["clocks_s"]:
+                        periods = {name: format(Decimal(str(value)) / Decimal("1e-9"), "f")
+                                   for name, value in clocks["clocks_s"].items()}
+                        entry = work / "flow_clocked_suite.py"
+                        entry.write_text("from decimal import Decimal\nfrom importlib import import_module\n"
+                            f"suite = import_module({bench.stem!r})\nperiods = {periods!r}\n"
+                            "clock = getattr(suite, 'CLK', None)\n"
+                            "if (clock in periods and hasattr(suite, 'HALF_NS')\n"
+                            "        and callable(getattr(suite, '_start_clock', None))):\n"
+                            "    suite.HALF_NS = Decimal(periods[clock]) / 2\n"
+                            "    print(f'COCOTB_CLOCK_NS {clock}={periods[clock]}', flush=True)\n"
+                            "else:\n    clock = None\n"
+                            "if set(periods) != ({clock} if clock else set()):\n"
+                            "    print('COCOTB_CLOCK_UNBOUND: suite has no supported clock setting', flush=True)\n"
+                            "globals().update({name: value for name, value in vars(suite).items()\n"
+                            "                  if not name.startswith('__')})\n")
+                        module = entry.stem
+                        row["clock"] = clocks
+                        reports.append(entry)
                 makefile.write_text("SIM = icarus\nTOPLEVEL_LANG = verilog\n"
                     f"VERILOG_SOURCES = {sources}\nCOCOTB_TOPLEVEL = flow_sdf_tb\n"
                     f"COCOTB_TEST_MODULES = {module}\n"
                     f"COMPILE_ARGS += {compile_flags}\n"
                     "COCOTB_PLUSARGS += -sdf-info\nSIM_BUILD = build\nCOCOTB_RESULTS_FILE = results.xml\n"
-                    f"export PYTHONPATH := {str(bench.parent).replace('$', '$$')}:$(PYTHONPATH)\n"
+                    f"export PYTHONPATH := {str(work).replace('$', '$$')}:{str(bench.parent).replace('$', '$$')}:$(PYTHONPATH)\n"
                     "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
                 completed = commands.run(["make", "-f", makefile, "-j8"], cwd=work)
+                clock_unmeasured = (completed is not None and "COCOTB_CLOCK_UNBOUND:" in
+                                    completed.stdout + completed.stderr)
                 summary = parse_junit(work / "results.xml")
                 functional = (summary if summary and summary["tests"] > 0 and not summary["skipped"] else None)
                 failures = functional["failures"] + functional["errors"] if functional else None
@@ -579,8 +655,10 @@ def gls(project, directory, tool, commands, *, state, config):
             applied = len(native._SDF_APPLIED_RE.findall(transcript))
             errors = len(native._SDF_ERROR_RE.findall(transcript))
             status = ("FAIL" if completed.returncode or errors or failures else
-                      "PASS" if applied and failures == 0 else "NOT_MEASURED")
+                      "PASS" if applied and failures == 0 and not clock_unmeasured else "NOT_MEASURED")
             detail = ("Icarus reported no applied SDF delay records. " if not applied else "")
+            if clock_unmeasured:
+                detail += "The Python suite has no supported setting for every native SDC clock. "
             if failures is None:
                 detail += "No native self-check or complete JUnit functional verdict was produced. "
             row.update(ran=True, exit_code=completed.returncode, status=status, tests=total,
@@ -589,6 +667,7 @@ def gls(project, directory, tool, commands, *, state, config):
             rows.append(row)
     summary = directory / "gls.json"
     summary.write_text(json.dumps({"runs": rows, "cell_models": closure,
+        "physical_only_types_omitted": physical,
         "selected_corners": selected, "unmeasured_corners": unmeasured,
         "corner_selection": "explicit tool selection" if requested is not None else "direct owner single-SDF default"},
         indent=2) + "\n")
@@ -601,6 +680,7 @@ def gls(project, directory, tool, commands, *, state, config):
                                      tool.get("metric", "gls_failures")}, failures))
     result = commands.result(metrics, [*reports, summary],
         f"Selected GLS corners: {selected}; other native SDF corners unmeasured: {unmeasured}. "
+        f"Signal simulation omits physical-only cell types: {physical}. "
         "The full existing suite is replayed; no timing annotation means NOT_MEASURED.")
     result["native_steps"] = [{"name": "Icarus.GLS", **row} for row in rows]
     return result
