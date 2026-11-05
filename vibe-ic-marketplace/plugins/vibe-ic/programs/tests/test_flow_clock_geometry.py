@@ -54,6 +54,14 @@ def test_clock_wire_budget_respects_extra_native_cell_exclusions(native):
     assert clock_settings(native) == {"CTS_CLK_MAX_WIRE_LENGTH": 95}
 
 
+def test_clock_wire_budget_accepts_supplemental_liberty_without_buffers(native, tmp_path):
+    path = tmp_path / "other.lib"
+    path.write_text('library (other) { capacitive_load_unit (1,pf);'
+                    + buffer("inverter", .19, function="!I") + "}")
+    native["LIB"]["*slow"].append(str(path))
+    assert clock_settings(native) == {"CTS_CLK_MAX_WIRE_LENGTH": 80}
+
+
 @pytest.mark.parametrize("override", [{"CTS_CLK_MAX_WIRE_LENGTH": 12},
                                       {"CTS_CLK_MAX_WIRE_LENGTH": -1},
                                       {"PNR_SDC_FILE": "operator.sdc"},

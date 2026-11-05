@@ -74,7 +74,7 @@ def clock_settings(config):
             opener = gzip.open if path.suffix == ".gz" else open
             with opener(path, "rt") as stream:
                 values = _buffer_input_caps(stream.read(), excluded)
-            if not values:
+            if values is None:
                 return {}
             input_caps.extend(values)
         grids = []
@@ -85,7 +85,7 @@ def clock_settings(config):
             grids.append(Decimal(grid[1]))
     except OSError:
         return {}
-    if (not grids or any(not value.is_finite() or value <= 0 for value in grids)
+    if (not input_caps or not grids or any(not value.is_finite() or value <= 0 for value in grids)
             or any(not math.isfinite(value) or value <= 0 for value in wire_caps)
             or not math.isfinite(float(limit))):
         return {}
