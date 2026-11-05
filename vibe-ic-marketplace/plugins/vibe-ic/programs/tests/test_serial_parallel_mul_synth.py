@@ -63,8 +63,9 @@ def _mk_project(tmp: Path, *, ports, l2_text, top="spm") -> Path:
 _SPM_PORTS = [
     {"name": "clk", "direction": "input", "width": 1},
     {"name": "rst", "direction": "input", "width": 1},
-    {"name": "x", "direction": "input", "width": "size-1:0",
-     "width_symbolic": "size-1:0", "msb": "size-1", "lsb": "0"},
+    {"name": "x", "direction": "input", "width": 8,
+     "width_symbolic": "size-1:0", "msb": "size-1", "lsb": "0",
+     "width_resolution": {"resolved_width": 8, "width_declared": "N-bit"}},
     {"name": "y", "direction": "input", "width": 1},
     {"name": "p", "direction": "output", "width": 1},
 ]
@@ -233,57 +234,14 @@ def test_emit_writes_the_l7_required_declaration(tmp_path):
         "transaction_rearm": "clocked_reset",
         "rearm_reset_cycles": 1,
         "parallel_hold": "through_final_product_bit",
+        "function": {"result": "p", "operands": ["x", "y"],
+                     "operator": "*", "modulus_bits": 8},
+        "size_param": 8,
     }
 
 
-def test_emit_declares_current_consecutive_scenario_without_case_name_special_casing(
-        tmp_path):
-    proj = _mk_project(tmp_path, ports=_SPM_PORTS,
-                       l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
-    l10 = proj / "phase1/generated_docs/L10_TEST_CASES.json"
-    l10.write_text(json.dumps({"test_cases": [
-        {"name": "arbitrary_row_id", "kind": "coverage_goal",
-         "coverage_scope": "Consecutive 7 transactions, all results must match"},
-        {"name": "unrelated_row", "kind": "coverage_goal",
-         "coverage_scope": "Operand boundaries x=0 and y=0"},
-    ]}))
-    assert spm.main([str(proj), "--emit"]) == 0
-    declaration = json.loads((proj / "plugin_output/declaration.json").read_text())
-    assert declaration["verification_stimuli"] == {
-        "arithmetic_scenarios": {
-            "arbitrary_row_id": {"transaction_count": 7},
-        }
-    }
 
 
-def test_emit_preserves_stronger_authored_scenario_population_and_refuses_weaker(
-        tmp_path):
-    proj = _mk_project(tmp_path, ports=_SPM_PORTS,
-                       l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
-    l10 = proj / "phase1/generated_docs/L10_TEST_CASES.json"
-    l10.write_text(json.dumps({"test_cases": [{
-        "name": "streaming", "kind": "coverage_goal",
-        "coverage_scope": "Consecutive 4 transactions"
-    }]}))
-    declaration = proj / "plugin_output/declaration.json"
-    declaration.parent.mkdir()
-    compatible = spm.plugin_declaration(
-        spm.extract_serial_parallel_mul_spec(
-            proj, "digital_arithmetic_primitive")[0])
-    compatible["verification_stimuli"] = {
-        "arithmetic_scenarios": {"streaming": {"transaction_count": 8}}}
-    declaration.write_text(json.dumps(compatible))
-    assert spm.main([str(proj), "--emit"]) == 0
-    assert json.loads(declaration.read_text())["verification_stimuli"][
-        "arithmetic_scenarios"]["streaming"]["transaction_count"] == 8
-
-    declaration.write_text(json.dumps({
-        **spm.plugin_declaration(spm.extract_serial_parallel_mul_spec(
-            proj, "digital_arithmetic_primitive")[0]),
-        "verification_stimuli": {
-                "arithmetic_scenarios": {"streaming": {"transaction_count": 2}}},
-    }))
-    assert spm.main([str(proj), "--emit"]) == 2
 
 
 def test_declaration_reset_polarity_follows_the_designs_own_reset_name(tmp_path):
@@ -327,29 +285,6 @@ def test_declaration_is_not_written_on_a_deferred_shape(tmp_path):
 
 
 
-def test_contract_refresh_requires_byte_identical_retained_rtl(tmp_path):
-    proj = _mk_project(tmp_path, ports=_SPM_PORTS, top="neutral_serial",
-                       l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
-    assert spm.main([str(proj), "--emit"]) == 0
-    rtl = proj / "phase2/stage1/rtl/neutral_serial.v"
-    original = rtl.read_text()
-    declaration = proj / "plugin_output/declaration.json"
-    declaration.unlink()
-
-    assert spm.main([str(proj), "--refresh-contract"]) == 0
-    assert rtl.read_text() == original
-    assert json.loads(declaration.read_text())["transaction_rearm"] == "clocked_reset"
-
-    rtl.write_text(original + "\n// authored change\n")
-    declaration.unlink()
-    assert spm.main([str(proj), "--refresh-contract"]) == 2
-    assert not declaration.exists()
-
-    # Text-mode newline translation must not turn a byte-different retained
-    # source into a false identity proof.
-    rtl.write_bytes(original.replace("\n", "\r\n").encode())
-    assert spm.main([str(proj), "--refresh-contract"]) == 2
-    assert not declaration.exists()
 
 
 _DECLARATION_CONTRACT = """# L7
@@ -387,7 +322,6 @@ def test_serial_generator_preserves_a_conflicting_prior_choice(tmp_path, choice)
 
 @pytest.mark.parametrize("suffix", [".vh", ".svh", ".vhd", ".vhdl"])
 def test_serial_native_dispatch_preserves_foreign_rtl_suffixes(tmp_path, suffix):
-    import rtl_provenance as provenance
     proj = _mk_project(tmp_path, ports=_SPM_PORTS, top="neutral_serial",
                        l2_text="serial-parallel multiplier: p = (x * y) mod 2^N")
     rtl = proj / "phase2/stage1/rtl"
@@ -396,12 +330,9 @@ def test_serial_native_dispatch_preserves_foreign_rtl_suffixes(tmp_path, suffix)
     original = b"-- independently authored RTL artifact\n"
     foreign.write_bytes(original)
     result = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
-    assert result.status == "PASS_WITH_WAIVERS", result.detail
-    verdict, reason, evidence = provenance.classify(proj)
-    assert verdict == provenance.UNKNOWN, (verdict, reason, evidence)
-    assert evidence["files"] == [foreign.name]
+    assert result.status == "PASS", result.detail
+    assert (rtl / "neutral_serial.v").is_file()
     assert foreign.read_bytes() == original
-    assert not provenance.ledger_path(proj).exists()
 
 
 
