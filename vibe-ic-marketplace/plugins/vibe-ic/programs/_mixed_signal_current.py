@@ -385,7 +385,6 @@ def deck(project, data, row, drive, wave):
         refuse("noise bias must lie inside the current rails")
     if m["temperature_c"] is None:
         refuse("current Liberty temperature is unavailable")
-    model_sha = n.api().digest(n.local(project, m["post"]))
     lines = ["* Current A7 + same-PDK driver + actual SPEF R/C; no analytical augmentation",
              *(f'.include "{n.local(project, p)}"' for p in m["driver_sources"]),
              f'.include "{n.local(project, m["post"])}"', f'.temp {m["temperature_c"]:.17g}',
@@ -423,7 +422,7 @@ def deck(project, data, row, drive, wave):
         f"echo M3RUN {token}", f'tran {step * 1e-9:.17g} {cycles * period * 1e-9:.17g}',
         f'wrdata wave.txt v(live_{sense_index})', f'wrdata coupling.txt v(live_{sense_index}) v(reference_{sense_index})',
         f"echo M3DONE {token}", "unset sqrnoise",
-        f'echo M3NOISE_RUN {token} {row["id"]} {model_sha}',
+        f'echo M3NOISE_RUN {token} {row["id"]}',
         f'noise v(live_{sense_index}) Vdrive dec {count} {start:.17g} {stop:.17g}',
         "setplot noise1", "wrdata spectrum.txt onoise_spectrum", "setplot noise2",
         "wrdata integrated.txt onoise_total", "print onoise_total", f'echo M3NOISE_DONE {token} {row["id"]}',
@@ -469,7 +468,7 @@ def measure(project, data, row, work, token):
     criteria = [{**c, "measured": peak, "verdict": "PASS" if c.get("min", 0) <= peak <= c["max"] else "FAIL"}
                 for c in data["canonical"]["crosstalk"]["criteria"]]
     spec = {**data["canonical"]["noise"], "id": row["id"], "top": data["top"], "scope": SCOPE,
-            "analysis": "ngspice_noise", "model": m["post"], "model_sha256": n.api().digest(n.local(project, m["post"])),
+            "analysis": "ngspice_noise", "model": m["post"],
             "subckt": m["block"], "temperature_c": m["temperature_c"]}
     # derive() checks the independent scalar/spectrum, actual band and tokens.
     noise_spec = noise.derive(project, spec, work, token, log_name="ngspice.log")

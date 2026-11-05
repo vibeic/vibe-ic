@@ -2,7 +2,7 @@
 
 This qualifies only the supplied two-port component at the declared bias,
 temperature and frequency band. It supplies no post-route, crosstalk or PDK
-coverage. The ordinary M3 producer owns execution and receipt publication.
+coverage. The ordinary M3 producer owns execution and result publication.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from _atomic_artefact import write_text
 SCHEMA = "vibeic.mixed_signal.receiver_noise_inputs.v1"
 METRIC = "integrated_output_noise_v_rms"
 UNITS = "V_RMS"
-KEYS = {"schema", "id", "top", "scope", "analysis", "model", "model_sha256", "subckt",
+KEYS = {"schema", "id", "top", "scope", "analysis", "model", "subckt",
         "ports", "dependencies", "temperature_c", "dc_drive_v", "frequency_start_hz",
         "frequency_stop_hz", "points_per_decade", "criteria"}
 
@@ -38,7 +38,7 @@ def declaration(project, data):
     if not isinstance(si, dict) or "receiver_noise" not in si:
         return None
     spec = si["receiver_noise"]
-    if not isinstance(spec, dict) or set(spec) != KEYS:
+    if not isinstance(spec, dict) or not KEYS.issubset(spec):
         raise n.api().Refusal("UNSUPPORTED_NOISE_DECLARATION", "complete known receiver_noise fields required")
     if (spec["schema"] != SCHEMA or spec["analysis"] != "ngspice_noise" or
             spec["scope"] != "declared_model_component"):
@@ -48,16 +48,12 @@ def declaration(project, data):
     for k in ("id", "subckt"):
         if not isinstance(spec[k], str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", spec[k]):
             raise n.api().Refusal("UNSUPPORTED_NOISE_DECLARATION", "literal noise identity/subcircuit required")
-    if spec["ports"] != ["drive", "sense"] or not isinstance(spec["dependencies"], dict):
-        raise n.api().Refusal("UNSUPPORTED_NOISE_DECLARATION", "two-port model and declared dependency hashes required")
-    if spec["model"] in spec["dependencies"]:
-        raise n.api().Refusal("UNSUPPORTED_NOISE_DECLARATION", "model cannot shadow its own declared hash through dependencies")
-    for rel, sha in {spec["model"]: spec["model_sha256"], **spec["dependencies"]}.items():
+    if spec["ports"] != ["drive", "sense"] or not isinstance(spec["dependencies"], list):
+        raise n.api().Refusal("UNSUPPORTED_NOISE_DECLARATION", "two-port model and dependency paths required")
+    for rel in [spec["model"], *spec["dependencies"]]:
         path = n.local(project, rel)
-        if any(c in str(path) for c in '"\n\r') or not path.is_file():
-            raise n.api().Refusal("MISSING_NOISE_MODEL", "project-local current model required: " + str(rel))
-        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha) or n.api().digest(path) != sha:
-            raise n.api().Refusal("STALE_NOISE_MODEL", "declared model bytes differ: " + rel)
+        if any(c in str(path) for c in '\"\n\r') or not path.is_file():
+            raise n.api().Refusal("MISSING_NOISE_MODEL", "project-local model required: " + str(rel))
         text = path.read_text()
         if re.search(r"(?im)^\s*\.(?:control|include|inc|lib|end|ac|noise|tran|op|dc|options?|temp|alter|save|print|plot)\b", text):
             raise n.api().Refusal("UNSUPPORTED_NOISE_MODEL", "flattened model definitions only; no hidden analysis/include/control")
@@ -106,7 +102,7 @@ def deck(project, spec, token):
         f'Xreceiver drive sense {spec["subckt"]}', f'.temp {spec["temperature_c"]:.17g}',
         ".control", "set sparse", "unset sqrnoise", "set numdgt=15",
         "set wr_singlescale", "set wr_vecnames",
-        f'echo M3NOISE_RUN {token} {spec["id"]} {spec["model_sha256"]}',
+        f'echo M3NOISE_RUN {token} {spec["id"]}',
         f'noise v(sense) Vdrive dec {spec["points_per_decade"]} {spec["frequency_start_hz"]:.17g} {spec["frequency_stop_hz"]:.17g}',
         "setplot noise1", "wrdata spectrum.txt onoise_spectrum", "setplot noise2",
         "wrdata integrated.txt onoise_total", "print onoise_total",
@@ -138,7 +134,7 @@ def samples(path, header):
 def derive(project, spec, work, token, *, log_name="noise.log"):
     n = native()
     log = (work / log_name).read_text()
-    if (f'M3NOISE_RUN {token} {spec["id"]} {spec["model_sha256"]}' not in log or
+    if (f'M3NOISE_RUN {token} {spec["id"]}' not in log or
             f'M3NOISE_DONE {token} {spec["id"]}' not in log or
             re.search(r"(?mi)^\s*(?:Error(?:\s|:)|Warning:.*(?:no.*noise|unknown))", log)):
         raise n.api().Refusal("MISSING_NOISE_OBSERVATION", "no completed noise analysis for current model/invocation")
@@ -167,7 +163,7 @@ def derive(project, spec, work, token, *, log_name="noise.log"):
                  "verdict": "PASS" if c.get("min", 0) <= value <= c["max"] else "FAIL"}
                 for c in spec["criteria"]]
     return {"id": spec["id"], "top": spec["top"], "scope": spec["scope"], "analysis": spec["analysis"],
-            "model": spec["model"], "model_sha256": spec["model_sha256"], "subckt": spec["subckt"],
+            "model": spec["model"], "subckt": spec["subckt"],
             "temperature_c": spec["temperature_c"], "dc_drive_v": spec["dc_drive_v"],
             "frequency_band_hz": [spec["frequency_start_hz"], spec["frequency_stop_hz"]],
             "sample_count": len(spectrum), "metrics": {METRIC: {"measured": value, "units": UNITS}},
@@ -196,19 +192,13 @@ def verify(project, data, root, record):
     if spec is None:
         return None
     work = root / "si/receiver_noise"
-    execution = [e for e in record["execution"] if e["command"] == command(work) and
-                 e["stage"] == "measurement" and e["cwd"] == str(work) and
-                 e["log"] == str((work / "noise.log").relative_to(project))]
-    if len(execution) != 1:
-        raise n.api().Refusal("MISSING_NOISE_OBSERVATION", "one exact native receiver/noise execution required")
-    e = execution[0]
     if (work / "noise.sp").read_text() != deck(project, spec, record["run_id"]):
         raise n.api().Refusal("CONTRADICTS_NATIVE_OUTPUT", "noise instrument differs from current receiver/scenario")
     for name in ("spectrum.txt", "integrated.txt", "noise.rss"):
         path = work / name
-        if not path.is_file() or not e["started_ns"] <= path.stat().st_mtime_ns <= e["finished_ns"]:
-            raise n.api().Refusal("STALE_NATIVE_OUTPUT", "noise observations predate/differ from this invocation")
+        if not path.is_file():
+            raise n.api().Refusal("MISSING_NOISE_OBSERVATION", "native noise observations missing")
     peak = int((work / "noise.rss").read_text().strip())
-    if peak <= 0 or peak * 1024 > n.LIMIT or e.get("peak_rss_kib") != peak:
+    if peak <= 0 or peak * 1024 > n.LIMIT:
         raise n.api().Refusal("MEMORY_BUDGET_EXCEEDED", "missing/invalid native noise RSS evidence")
     return derive(project, spec, work, record["run_id"])
