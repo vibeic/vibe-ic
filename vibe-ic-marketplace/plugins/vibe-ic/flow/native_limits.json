@@ -4397,6 +4397,10 @@
     "early_transition_atpg": {
       "kind": "adapter",
       "adapter": "transition_atpg"
+    },
+    "final_test_patterns_and_test_activity": {
+      "kind": "adapter",
+      "adapter": "final_atpg"
     }
   },
   "report_check_readers": {
