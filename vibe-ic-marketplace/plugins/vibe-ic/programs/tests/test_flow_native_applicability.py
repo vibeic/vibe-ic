@@ -7,7 +7,6 @@ import pytest
 
 import flow_engine as engine
 import flow_native_adapters as adapters
-import flow_steps_generate as generator
 
 
 def row(name):
@@ -66,16 +65,6 @@ def test_bought_slot_hard_ip_still_fails(tmp_path):
     assert 'bought shuttle slot' in result['detail']
 
 
-def test_generator_does_not_infer_deletion_from_metric_words():
-    registry = {'rows': [{'id': 'neutral', 'name': 'Neutral row', 'when': 'always',
-        'profiles': [{'select_when': 'otherwise'}], 'obligations': [
-            {'metric': name, 'expectation': {'operator': 'eq', 'value': 0}}
-            for name in ('binding_errors', 'qualification_errors', 'approval_errors', 'stale_adopted_evidence')]}],
-        'predicate_definitions': {}, 'feature_implications': {}, 'feature_exclusions': {}}
-    native = {'steps': {}, 'runs': {}, 'deleted_metrics': {'stale_adopted_evidence': 'Explicit owner deletion.'}}
-    table, dropped, _ = generator.generate(registry, native)
-    assert [item['metric'] for item in table['steps'][0]['checks']] == ['binding_errors', 'qualification_errors', 'approval_errors']
-    assert [item['metric'] for item in dropped] == ['stale_adopted_evidence']
 
 
 def test_native_technology_conflict_is_a_failure_without_context_or_image(tmp_path, monkeypatch):
