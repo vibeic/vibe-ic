@@ -107,27 +107,61 @@ def _input_docs(project: Path) -> dict[str, str]:
             and path.suffix.lower() in {".md", ".rst", ".txt", ".markdown"}}
 
 
+def _resolve_rtl_inputs(project: Path, sources: dict) -> tuple[list[Path], str]:
+    from _rtl_include_hub import silicon_rtl_selection
+    from _design_module_set import module_names_in_text
+
+    rtl_root = project / "phase2/stage1/rtl"
+    rtl = silicon_rtl_selection(rtl_root)
+    canonical_modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
+                                     for path in rtl))
+    for directory in sorted(path for path in rtl_root.rglob("*") if path.is_dir()):
+        for path in silicon_rtl_selection(directory):
+            names = module_names_in_text(path.read_text(errors="replace"))
+            # The producer's flat sources win over nested copies. A mixed file
+            # stays for the native compiler to diagnose without losing modules.
+            if len(names) == 1 and names <= canonical_modules:
+                continue
+            rtl.append(path)
+    if not rtl:
+        raise FileNotFoundError("No produced RTL in phase2/stage1/rtl")
+    docs = project / "phase1/generated_docs"
+    l9 = _load(docs / "L9_INTEGRATION_SPEC.json")
+    l1 = _load(docs / "L1_DATASHEET.json")
+    top = l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell")
+    modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
+                            for path in rtl))
+    if top not in modules:
+        from phase1_doc_one_shot_runner import _extract_top_module_from_docs
+
+        for source, text in _input_docs(project).items():
+            declared = _extract_top_module_from_docs({source: text})
+            if declared in modules:
+                top = declared
+                sources["DESIGN_NAME"] = source
+                break
+    if not top or top not in modules:
+        raise FileNotFoundError(f"Declared top module {top} is absent from produced RTL")
+    return rtl, top
+
+
+def resolve_rtl_inputs(project: Path | str) -> tuple[list[Path], str]:
+    """Pure source and declared-top selection shared by native tool callers."""
+    return _resolve_rtl_inputs(Path(project).resolve(), {})
+
+
 def build_config(project: Path | str, *, route: str | None = None) -> dict[str, Any]:
     """Read L documents and produced RTL; route is supplied by the Router caller."""
     project = Path(project).resolve()
     docs = project / "phase1/generated_docs"
-    l1 = _load(docs / "L1_DATASHEET.json")
     l8 = _load(docs / "L8_TIMING_WAVEFORM.json")
-    l9 = _load(docs / "L9_INTEGRATION_SPEC.json")
     l19 = _load(docs / "L19_CONSTRAINTS_PDK.json")
     fields = l19.get("fields", {})
-    top = l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell")
     pdk = fields.get("pdk_target") or l19.get("pdk_target")
-    from _chip_synth_read import chip_rtl_files
-    from _design_module_set import module_names_in_text
-
     rtl_root = project / "phase2/stage1/rtl"
-    rtl = [path for directory in [rtl_root, *sorted(rtl_root.rglob("*"))]
-           if directory.is_dir() for path in chip_rtl_files(directory)]
-    if not rtl:
-        raise FileNotFoundError("No produced RTL in phase2/stage1/rtl")
     inputs = _input_docs(project)
     sources: dict[str, Any] = {}
+    rtl, top = _resolve_rtl_inputs(project, sources)
     assumptions = []
     if not pdk:
         from parametric_spec_extractor import extract_pdk_target
@@ -138,21 +172,8 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
                 pdk = target["pdk"]
                 sources["PDK"] = source
                 break
-    modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
-                            for path in rtl))
-    if top not in modules:
-        from phase1_doc_one_shot_runner import _extract_top_module_from_docs
-
-        for source, text in inputs.items():
-            declared = _extract_top_module_from_docs({source: text})
-            if declared in modules:
-                top = declared
-                sources["DESIGN_NAME"] = source
-                break
-    if not top or not pdk:
+    if not pdk:
         raise FileNotFoundError("Top module and PDK must be declared in design documents")
-    if top not in modules:
-        raise FileNotFoundError(f"Declared top module {top} is absent from produced RTL")
     config: dict[str, Any] = {"DESIGN_NAME": top, "PDK": pdk,
                               "VERILOG_FILES": [str(path) for path in rtl]}
     config["VERILOG_INCLUDE_DIRS"] = sorted({str(path.parent) for path in
