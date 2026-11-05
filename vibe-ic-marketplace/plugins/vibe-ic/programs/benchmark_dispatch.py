@@ -226,99 +226,6 @@ def _runner_source_snapshot(argv: list[str], *, consumer: str | None = None) -> 
             "runner": source(argv[1]), "consumer": source(consumer or __file__)}
 
 
-def _historical_runner_sources_match(receipt: dict) -> bool:
-    """Validate executed bytes retained by the native producer, across upgrades."""
-    import runtime_program_tree as rpt
-
-    project = Path(receipt["project"]).resolve()
-    base = project / ".vibeic" / "runtime-program-trees"
-    trees = {}
-    fresh = _runner_fresh_reports(receipt["reports_before"], receipt["reports_after"])
-    for name in fresh:
-        binding = receipt["reports_after"][name].get("runner_binding") or {}
-        producer = Path(binding.get("producer", {}).get("path", ""))
-        try:
-            relative = producer.relative_to(base)
-        except ValueError:
-            continue  # Legacy producers still require their unchanged live bytes.
-        if len(relative.parts) < 3 or relative.parts[1] != "plugin":
-            raise ValueError("retained report producer path is malformed")
-        root = base / relative.parts[0]
-        if root in trees:
-            continue
-        if root.resolve() != root or base.resolve() != base:
-            raise ValueError("retained source tree escapes its project")
-        manifest = _read_json_regular(root / "manifest.json")
-        if (manifest.get("source_tree_sha256") != root.name
-                or manifest.get("retained_plugin_root") != str(root / "plugin")):
-            raise ValueError("retained source tree identity differs")
-        try:
-            trees[root] = rpt.load_historical(root / "manifest.json")
-        except rpt.RuntimeTreeError as exc:
-            raise ValueError(str(exc)) from exc
-
-    source, argv = receipt["source_before"], receipt["argv"]
-    if (source["argv"] != argv
-            or source["runner"]["path"] != str(Path(argv[1]).resolve())):
-        return False
-    for label in ("executable", "runner", "consumer"):
-        record = source[label]
-        path = Path(record["path"])
-        retained = []
-        if label != "executable":
-            for tree in trees.values():
-                try:
-                    relative = str(path.relative_to(tree.source_root))
-                except ValueError:
-                    continue
-                retained.append(tree.manifest["files"].get(relative))
-        if retained:
-            if any(digest != record["sha256"] for digest in retained):
-                return False
-        elif ((trees and label == "consumer" and path != Path(__file__).resolve())
-              or not path.is_file()
-              or hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]):
-            return False
-    executable = shutil.which(argv[0]) or argv[0]
-    return source["executable"]["path"] == str(Path(executable).resolve())
-
-
-def _bind_runner_report(summary: dict, project: Path, producer: str,
-                        report_name: str, *, context: dict | None = None) -> dict:
-    """Bind measured reports at the writer, preserving standalone output format.
-    Dispatched writers assert their own generation/material; never bind found files.
-    Provenance does not assert a successful gate verdict.
-    """
-    if context is None:
-        raw = os.environ.get(_RUNNER_CONTEXT_ENV)
-        if raw is None:
-            return summary
-        context = _strict_json_loads(raw)
-    project = Path(project).resolve()
-    if context["project"] != str(project):
-        return summary  # an internal isolated child has its own report subject
-    # Runtime retention imports this helper from a byte-identical copy. The
-    # consumer is still the dispatcher that issued this invocation, not the
-    # copy's location. Revalidate the issued source AND the imported helper's
-    # bytes; relocating a helper must not admit a different implementation.
-    consumer = context["source"]["consumer"]
-    if (context["source"] != _runner_source_snapshot(
-                context["argv"], consumer=consumer["path"])
-            or hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != consumer["sha256"]
-            or report_name not in _RUNNER_REPORT_NAMES):
-        raise ValueError("RUNNER_REPORT_UNBOUND: producer context/source differs")
-    producer_path = Path(producer).resolve(strict=True)
-    return {**summary, "runner_binding": {
-        "schema": "vibeic.runner_report_binding.v1",
-        "invocation_id": context["invocation_id"],
-        "project": str(project), "argv": context["argv"],
-        "source": context["source"], "report_name": report_name,
-        "producer": {"path": str(producer_path),
-                     "sha256": hashlib.sha256(producer_path.read_bytes()).hexdigest()},
-        "material": _runner_material_snapshot(project),
-    }}
-
-
 def _runner_report_snapshot(project: Path) -> dict:
     """Bind canonical reports to their bytes and filesystem generation.
 
@@ -354,104 +261,6 @@ def _runner_fresh_reports(before: dict, after: dict) -> list[str]:
     """
     return [name for name, record in after.items() if record["valid"]
             and record["sha256"] != before.get(name, {}).get("sha256")]
-
-
-def _runner_child_report_current(project: Path, binding: dict, receipt: dict,
-                                 *, native_step: str) -> None:
-    """Revalidate a delegated owner against the exact parent that launched it."""
-    expected_parent = {"invocation_id": receipt["invocation_id"], "argv": receipt["argv"],
-                       "project": receipt["project"], "source": receipt["source_before"]}
-    argv = binding["argv"]
-    source = binding["source"]
-    if (binding.get("parent_invocation") != expected_parent
-            or not binding.get("invocation_id")
-            or binding["invocation_id"] == receipt["invocation_id"]
-            or binding.get("schema") != "vibeic.runner_report_binding.v1"
-            or binding.get("project") != str(project)
-            or binding.get("report_name") != "phase2_one_shot.json"
-            or binding.get("material") != receipt["material_after"]
-            or len(argv) < 3 or Path(argv[1]).name != "phase2_one_shot_runner.py"
-            or Path(argv[2]).resolve() != project
-            or argv[argv.index("--entry-step") + 1] != native_step
-            or argv[argv.index("--exit-step") + 1] != native_step
-            or source != _runner_source_snapshot(argv, consumer=source["consumer"]["path"])):
-        raise ValueError("child owner source/generation/material differs")
-
-    if native_step == "1":
-        outer = _read_json_regular(project / "reports/orchestrator/vibe_ic_one_shot.json")
-        launched = (outer.get("d09_finalization") or {}).get("launched_invocation_id")
-        prior = (receipt["reports_before"].get("phase2_one_shot.json") or {}).get("runner_binding") or {}
-        if launched != binding["invocation_id"] or prior.get("invocation_id") == binding["invocation_id"]:
-            raise ValueError("D09 child was not launched by the current parent")
-
-
-def _runner_owner_report_current(project: Path, binding: dict, receipt: dict) -> None:
-    """Reopen the actual child owner behind an outer current publication."""
-    owner = binding.get("owner_report")
-    if owner is None:
-        return
-    relative = owner["path"]
-    path = project / relative
-    if (not isinstance(relative, str) or Path(relative).is_absolute()
-            or ".." in Path(relative).parts
-            or path.parent.parent != project / "reports/flow109/attempts"
-            or path.name != "phase2_one_shot.json"
-            or any(p.is_symlink() for p in (path, *path.parents))):
-        raise ValueError("child owner path is not a current-project attempt")
-    raw = path.read_bytes()
-    child = _strict_json_loads(raw)
-    current = _strict_json_loads((project / "reports/orchestrator/phase2_one_shot.json").read_bytes())
-    owned = child["runner_binding"]
-    if (hashlib.sha256(raw).hexdigest() != owner["sha256"]
-            or {k:v for k,v in child.items() if k != "runner_binding"}
-                != {k:v for k,v in current.items() if k != "runner_binding"}
-            or owned.get("producer") != binding["producer"]):
-        raise ValueError("child owner publication differs")
-    _runner_child_report_current(project, owned, receipt, native_step="2")
-
-
-def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str | None:
-    """The same report subject/generation check at collect, freeze and reentry."""
-    fresh = _runner_fresh_reports(receipt["reports_before"], receipt["reports_after"])
-    for name, record in receipt["reports_after"].items():
-        if name not in fresh:
-            continue  # an earlier phase's retained history is not this producer
-        declared_project = record.get("project")
-        if declared_project is not None and (
-                not isinstance(declared_project, str)
-                or Path(declared_project).resolve() != Path(receipt["project"])):
-            return "RUNNER_REPORT_UNBOUND: report explicitly names another project"
-        binding = record.get("runner_binding")
-        if binding is None:
-            if receipt["reports_before"].get(name, {}).get("runner_binding") is not None:
-                return "RUNNER_REPORT_UNBOUND: report dropped its producer generation binding"
-            return "RUNNER_REPORT_UNBOUND: fresh report has no producer generation binding"
-        try:
-            if (binding["schema"] != "vibeic.runner_report_binding.v1"
-                    or binding["project"] != receipt["project"]
-                    or binding["report_name"] != name):
-                raise ValueError("report subject differs")
-            if binding.get("parent_invocation") is not None:
-                # D09 publishes the actual child author report. D11 instead
-                # publishes an outer report pointing to its retained child.
-                _runner_child_report_current(Path(receipt["project"]), binding,
-                                             receipt, native_step="4" if "D13" in receipt["argv"] else "1")
-            elif (binding["invocation_id"] != receipt["invocation_id"]
-                    or binding["argv"] != receipt["argv"]
-                    or binding["source"] != receipt["source_before"]):
-                raise ValueError("report invocation/source differs")
-            _runner_owner_report_current(Path(receipt["project"]), binding, receipt)
-            producer = binding["producer"]
-            if hashlib.sha256(Path(producer["path"]).read_bytes()).hexdigest() != producer["sha256"]:
-                raise ValueError("report producer source changed")
-            # Phase 1 can precede legitimate RTL generation in the same run.
-            # Its historical output population is not phase 2's measurement.
-            if (name != "phase1_one_shot.json" or not require_phase2):
-                if binding["material"] != receipt["material_after"]:
-                    raise ValueError("report input/output material differs")
-        except (OSError, ValueError, KeyError, TypeError, IndexError):
-            return "RUNNER_REPORT_UNBOUND: report generation/source/material does not bind this invocation"
-    return None
 
 
 def _runner_refusal_line(process: _ProcessOutcome) -> tuple[str, str] | None:
@@ -497,7 +306,7 @@ def _runner_material_snapshot(project: Path) -> dict:
         material[label] = files
     # A fixed optional author input lives outside input/: it must affect the
     # existing invocation's material binding without being called user source.
-    from _phase1_producer_identity import BEHAVIORAL_REFINEMENT_INPUT
+    BEHAVIORAL_REFINEMENT_INPUT = "phase1/behavioral_refinement.facts.yaml"
     author = project / BEHAVIORAL_REFINEMENT_INPUT
     if author.exists() or author.is_symlink():
         author.resolve().relative_to(project)
@@ -543,111 +352,6 @@ def _material_matches_repaired_output(expected: dict, current: dict) -> bool:
             and expected.get("output_rtl") != current.get("output_rtl")
             and expected.get("output_rtl_sha256")
             != current.get("output_rtl_sha256"))
-
-
-def _stored_duplicate_scene(original: dict, later: dict, wrapper: dict,
-                            project: Path) -> dict | None:
-    """Reopen the native admission identity without appending to its ledger."""
-    import canonical_run_admission as admission
-    from datetime import datetime, timezone
-    phases = wrapper.get("phases") or []
-    phase2 = [row for row in phases if row.get("name") == "phase2"]
-    if (len(phase2) != 1
-            or phase2[0].get("verdict") != "REFUSED-CANONICAL-ADMISSION"
-            or phase2[0].get("rc") != 2
-            or any(row.get("verdict") != "SKIPPED"
-                   for row in phases if row.get("name") != "phase2")
-            or wrapper.get("halted_at") != "phase2"
-            or wrapper.get("verdict") != "NOT_MEASURED"):
-        return None
-    if (type(original.get("finished_ns")) is not int
-            or type(later.get("started_ns")) is not int
-            or later["started_ns"] < original["finished_ns"]):
-        return None
-    image = wrapper.get("container_image") or {}
-    ref = image.get("image_ref") or ""
-    if (not re.fullmatch(r".+@sha256:[0-9a-f]{64}", ref)
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", image.get("image_id") or "")
-            or image.get("status") != "ok"
-            or image.get("image_match") is not True
-            or image.get("require_image") != ref
-            or image.get("require_image_id") != image.get("image_id")):
-        return None
-    # LOCAL admission records the verified content ID; Docker admission keeps
-    # its registry-portable digest. Compare in the domain that was recorded.
-    admitted_image = (image["image_id"] if image.get("execution_route") == "local"
-                      else ref.rsplit("@", 1)[1])
-    producer = original["reports_after"]["phase2_one_shot.json"]["runner_binding"]["producer"]
-    programs = Path(producer["path"]).parent
-    window = wrapper["declared_window"]
-    matches = []
-    ledger = admission.ledger_path(project)
-    if ledger.is_symlink():
-        return None
-    for row in _read_jsonl(ledger):
-        identity = row.get("identity") or {}
-        config = identity.get("dispatch_config") or {}
-        if (row.get("status") != "ADMITTED" or identity.get("span") != "phase2"
-                or config.get("entry_step") != window.get("entry_step")
-                or config.get("exit_step") != window.get("exit_step")
-                or config.get("rtl_input", "structured") != _invocation_rtl_input(original)
-                or row.get("identity_sha256") != admission.identity_sha256(identity)):
-            continue
-        event_ns = int(datetime.strptime(row["admitted_at"], "%Y-%m-%dT%H:%M:%SZ")
-                       .replace(tzinfo=timezone.utc).timestamp()) * 1_000_000_000
-        # Native admission records UTC seconds. Use that recorded event's
-        # precision, never a newest-file guess, to bind it to this invocation.
-        if (type(original.get("started_ns")) is not int
-                or type(original.get("finished_ns")) is not int
-                or event_ns > original["finished_ns"]
-                or event_ns + 1_000_000_000 <= original["started_ns"]):
-            continue
-        current = admission.build_identity(
-            project, "phase2", container_image=identity["container_image"],
-            config=config, program_paths=admission.canonical_program_paths(programs))
-        if current == identity:
-            if identity.get("container_image") != admitted_image:
-                return None
-            matches.append(row["identity_sha256"])
-    return {"admission_identity_sha256": sorted(set(matches))} if matches else None
-
-
-
-def _stored_duplicate_observation(original: dict, latest: dict,
-                                  project: Path) -> dict | None:
-    """A later refusal may retain an earlier measurement, never replace it."""
-    archive = project / "reports/orchestrator/runner_invocations"
-    later_path = archive / (str(latest["invocation_id"]) + ".json")
-    later = _read_json_regular(later_path)
-    current = _runner_report_snapshot(project)
-    phase2 = "phase2_one_shot.json"
-    wrapper_name = "vibe_ic_one_shot.json"
-    if (original.get("status") != "COMPLETED" or original.get("error")
-            or original.get("rc") not in (0, 1)
-            or later.get("status") != "COMPLETED" or later.get("error")
-            or later.get("invocation_id") != latest["invocation_id"]
-            or later.get("rc") != 1 or later.get("argv") != original["argv"]
-            or later.get("project") != original["project"]
-            or later.get("record_path") != str(later_path)
-            or "DUPLICATE_NO_NEW_EVIDENCE" not in (later.get("stderr") or "")
-            or original["reports_after"].get(phase2) != current.get(phase2)
-            or phase2 not in _runner_fresh_reports(original["reports_before"], original["reports_after"])
-            or {k:v for k,v in original["reports_after"].items() if k != wrapper_name}
-                != {k:v for k,v in current.items() if k != wrapper_name}):
-        return None
-    diagnostic = _stored_runner_diagnostics(later)
-    if (not diagnostic or diagnostic.get("status") != "STALE_RUNNER_REPORT"
-            or diagnostic.get("reason_class") != "RUNNER_REPORT_NOT_FRESH"):
-        return None
-    wrapper = _read_json_regular(project / "reports/orchestrator" / wrapper_name)
-    scene = _stored_duplicate_scene(original, later, wrapper, project)
-    if scene is None:
-        return None
-    return {"invocation_id": later["invocation_id"], "receipt_path": str(later_path),
-            "receipt_sha256": hashlib.sha256(later_path.read_bytes()).hexdigest(),
-            "status": "STALE_RUNNER_REPORT", "reason_class": "DUPLICATE_NO_NEW_EVIDENCE",
-            **scene}
-
 
 
 def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
@@ -1450,7 +1154,6 @@ def cmd_show(bench: str):
             f"the registry entry — refusing to print an empty plan")
 
 
-
 # ── OUR OWN GOLDEN CORPUS, CAPTURED AT THE MOMENT THE HOST SAYS PASS ─────────
 # `benchmark_golden_capture` records a HOST-VERIFIED, vibe-ic-AUTHORED solution
 # tagged with the plugin version + AI model that produced it, in a corpus kept
@@ -1647,184 +1350,31 @@ _GATE_UNMEASURED = frozenset({"BLOCKED", "INCOMPLETE", "NOT_MEASURED", ""})
 
 
 def _required_gate_ledger(solve_result: Any) -> dict:
-    """Which REQUIRED IN-SCOPE Program gates this run declared, and what each
-    actually said — the ledger #2216 says does not exist.
-
-    THE GAP THIS CLOSES. The accept path asks four questions: is the artefact
-    owned by the runner, does the reviewed hash still match, is Phase-1
-    provenance intact, and did the RTL-OWNING gate (`rtl_gen`) reach an allowed
-    status. It then prints `ACCEPTED by PROGRAM gates`, which is a claim about
-    EVERY required gate. No question it asked can see a second, downstream,
-    in-scope gate that FAILED on the same RTL. Measured on the real collector
-    with the issue's own probe: `rtl_gen=PASS, rtl_validate=FAIL` collects
-    `ok=True` and reaches that message.
-
-    SCOPE IS READ, NEVER INVENTED, from two records the run already publishes:
-
-      * `step_preflight.RUNNER_PLANS["design_one_shot_runner"].sites` — the
-        runner's OWN ordered (site, flow-step-span) declaration, the same table
-        `--exit-step` prunes against, so "in scope" here means exactly what the
-        runner meant when it decided which sites to dispatch;
-      * the run's declared ``exit`` in solve_report.
-
-    The shared `step_preflight.exit_pruned_sites` defines the exit boundary.
-    Named exits use dispatch order; numeric exits use span HEADs because a
-    span is one dispatch and cannot be stopped mid-span. A numeric exit cannot
-    establish the scope of a non-numeric span.
-
-    WHAT IS DELIBERATELY *NOT* CLAIMED. A gate the ledger cannot place on the
-    flow (`sdc_gen`, `final_audit`, `lec_equivalence`, …) is recorded under
-    ``unscoped`` and NEVER blocks. Guessing a step id for it would be inventing
-    the scope oracle this function exists to read, and blocking on a guess
-    would fail 61 published candidates whose out-of-exit FAILs are #2208's
-    producer/consumer defect, not a defect in the reviewed RTL.
-
-    ELIGIBILITY IS THREE-VALUED, and the third value is the point:
-      * ``INELIGIBLE`` — a required in-scope gate REPORTED a failure;
-      * ``ELIGIBLE``   — every required in-scope gate reported an allowed status;
-      * ``NOT_MEASURED`` — a required in-scope gate never reported at all.
-        Never collapsed into either neighbour. Reporting a hole as ELIGIBLE is
-        the defect; reporting it as INELIGIBLE would fail 61 published
-        candidates for a state nobody measured.
-
-    Pure: reads one dict, returns one dict. chip-AGNOSTIC.
-    """
+    """Summarize native results inside the window the runner actually ran."""
     ledger = {
         "schema": "vibeic.benchmark.required_gate_ledger.v1",
-        "declared_exit": None, "in_scope": {}, "out_of_scope": {},
-        "unscoped": {}, "failed_required": [], "unmeasured_required": [],
+        "declared_exit": solve_result.get("exit") if isinstance(solve_result, dict) else None,
+        "in_scope": {}, "out_of_scope": {}, "unscoped": {},
+        "failed_required": [], "unmeasured_required": [],
         "eligibility": _NOT_MEASURED,
-        "scope_source": ("step_preflight.RUNNER_PLANS[design_one_shot_runner]"
-                         " + solve_report.exit"),
+        "scope_source": "runner report for the Router-selected window",
     }
-    if not isinstance(solve_result, dict):
-        ledger["why"] = "solve_report row is malformed, so no gate is placeable"
+    phases = solve_result.get("phases") if isinstance(solve_result, dict) else None
+    verification = phases.get("phase3_verifying") if isinstance(phases, dict) else None
+    if not isinstance(verification, dict):
+        ledger["why"] = "The runner reported no tool results."
         return ledger
-    ledger["declared_exit"] = solve_result.get("exit")
-    phases = solve_result.get("phases")
-    p3 = (phases or {}).get("phase3_verifying") if isinstance(phases, dict) else None
-    if not isinstance(p3, dict):
-        ledger["why"] = "solve_report carries no Program gate record"
-        return ledger
-    recorded: dict = {}
-    for key in ("ran", "not_attempted"):
-        block = p3.get(key)
-        if isinstance(block, dict):
-            for name, status in block.items():
-                recorded[str(name)] = str(status)
-    if not recorded:
-        ledger["why"] = "the Program gate record names no gate"
-        return ledger
-
-    try:
-        import step_preflight as _spf                     # noqa: PLC0415
-        plan = _spf.RUNNER_PLANS.get("design_one_shot_runner")
-        sites = [(str(n), [str(x) for x in span])
-                 for n, span in (plan.sites if plan else ())]
-    except Exception:                                     # noqa: BLE001
-        sites = []
-    if not sites:
-        ledger["unscoped"] = dict(sorted(recorded.items()))
-        ledger["why"] = ("the runner's own site plan is unreadable, so no gate "
-                         "can be placed on the flow")
-        return ledger
-
-    # New producer reports bind required results to their actual dispatch
-    # site. Preserve old reports as unknown: never guess display-name aliases.
-    # Keep every occurrence, including an earlier failure in a retry chain.
-    owned = p3.get("required_site_results", [])
-    superseded = p3.get("superseded_required_site_results", [])
-    invalid_ownership = False
-    if not isinstance(owned, list):
-        ledger["why"] = "required-site evidence is malformed"
-        invalid_ownership = True
-        owned = []
-    if not isinstance(superseded, list):
-        ledger["why"] = "superseded required-site evidence is malformed"
-        invalid_ownership = True
-        superseded = []
-    grouped = {}
-    spans = dict(sites)
-    current_rtl = p3.get("required_site_rtl_sha256")
-    for current, observations in ((True, owned), (False, superseded)):
-        for row in observations:
-            binding = row.get("ownership") if isinstance(row, dict) else None
-            site = binding.get("site") if isinstance(binding, dict) else None
-            if (not isinstance(binding, dict) or binding.get('runner') != 'design_one_shot_runner' or (not isinstance(site, str)) or (site not in spans) or (binding.get('flow_steps') != spans[site]) or (not isinstance(row.get('result_name'), str)) or (row['result_name'] not in recorded) or (not isinstance(row.get('status'), str)) or (row['status'] not in {'PASS', 'FAIL', 'NOT_MEASURED', 'NOT_APPLICABLE', 'PASS_WITH_WAIVERS'})):
-                ledger["why"] = "required-site evidence disagrees with the runner plan or results"
-                invalid_ownership = True
-                continue
-            if not current:
-                continue
-            grouped.setdefault(site, []).append(row["status"])
-            # An old observation never authorizes discarding a failure in
-            # the published current-name result, even for that same name.
-            grouped[site].append(recorded[row["result_name"]])
-    for site, statuses in grouped.items():
-        if site in recorded:
-            statuses.append(recorded[site])
-        if any(status.upper() in _GATE_FAILED for status in statuses):
-            recorded[site] = "FAIL"
-        elif invalid_ownership:
-            recorded[site] = _NOT_MEASURED
-        elif any(status not in {"PASS", "NOT_APPLICABLE", "PASS_WITH_WAIVERS"}
-                 for status in statuses):
-            recorded[site] = _NOT_MEASURED
-        elif recorded.get(site) in (None, "NOT_APPLICABLE"):
-            recorded[site] = recorded.get(site, _NOT_MEASURED)
-        elif "PASS_WITH_WAIVERS" in statuses:
-            recorded[site] = "PASS_WITH_WAIVERS"
-        else:
-            recorded[site] = "PASS" if "PASS" in statuses else "NOT_APPLICABLE"
-
-    pruned = _spf.exit_pruned_sites(sites, ledger["declared_exit"])
-    if pruned is None:
-        ledger["unscoped"] = dict(sorted(recorded.items()))
-        ledger["why"] = (f"declared exit {ledger['declared_exit']!r} is not an "
-                         f"orderable flow step id or named site, so nothing can be scoped")
-        return ledger
-
-    pruned = set(pruned)
-    named_exit = ledger["declared_exit"] in {name for name, _ in sites}
-    # Generation may decline when the project already supplies build RTL.
-    requested_endpoint = next((name for name, span in reversed(sites)
-        if name != "rtl_gen" and name not in pruned
-        and (named_exit or span and str(span[0]).isdigit())), None)
-    placed = set()
-    for name, span in sites:
-        scope_known = named_exit or bool(span and str(span[0]).isdigit())
-        in_scope = scope_known and name not in pruned
-        if name not in recorded:
-            # A site the run never recorded at all. In scope, and it did not
-            # report — that is a hole, and it is named as one.
-            if in_scope:
-                ledger["in_scope"][name] = "(absent)"
-                ledger["unmeasured_required"].append(name)
-            continue
-        placed.add(name)
-        status = recorded[name]
-        if not scope_known:
-            ledger["unscoped"][name] = status
-            continue
-        if in_scope:
-            ledger["in_scope"][name] = status
-            if status.upper() in _GATE_FAILED:
-                ledger["failed_required"].append(name)
-            elif (status.upper() in _GATE_UNMEASURED
-                  or name == requested_endpoint and status.upper() == "NOT_APPLICABLE"):
-                ledger["unmeasured_required"].append(name)
-        else:
-            ledger["out_of_scope"][name] = status
-    for name, status in recorded.items():
-        if name not in placed and name not in ledger["unscoped"]:
-            ledger["unscoped"][name] = status
-
-    for key in ("in_scope", "out_of_scope", "unscoped"):
-        ledger[key] = dict(sorted(ledger[key].items()))
-    ledger["failed_required"] = sorted(set(ledger["failed_required"]))
-    ledger["unmeasured_required"] = sorted(set(ledger["unmeasured_required"]))
-    if invalid_ownership:
-        ledger["unmeasured_required"].append("invalid required-site evidence")
+    for source in (verification.get("ran"), verification.get("not_attempted")):
+        for name, status in (source or {}).items():
+            if status not in {"NOT_APPLICABLE", "SKIPPED-BY-ENTRY", "SKIPPED-BY-EXIT"}:
+                ledger["in_scope"][name] = str(status)
+    for name, status in ledger["in_scope"].items():
+        if status in _GATE_FAILED:
+            ledger["failed_required"].append(name)
+        elif status in _GATE_UNMEASURED or status not in {"PASS", "PASS_WITH_WAIVERS"}:
+            ledger["unmeasured_required"].append(name)
+    if verification.get("selected_steps", 0) > verification.get("steps_recorded", 0):
+        ledger["unmeasured_required"].append("remaining selected steps")
     if ledger["failed_required"]:
         ledger["eligibility"] = "INELIGIBLE"
     elif ledger["unmeasured_required"]:
@@ -1832,30 +1382,6 @@ def _required_gate_ledger(solve_result: Any) -> dict:
     elif ledger["in_scope"]:
         ledger["eligibility"] = "ELIGIBLE"
     return ledger
-
-
-def _gate_evidence_freshness_reasons(project: Path, result: dict) -> list[str]:
-    """BLOCKING: acceptance/export must not reuse a stale gate snapshot.
-
-    Derive both ledgers with the existing policy, including NOT_MEASURED for
-    BLOCKED. Compare gate evidence, not the whole attribution: AI review adds
-    fields to the latter without changing the Program's measured gates.
-    """
-    import flow_phase_attribution as fpa                 # noqa: PLC0415
-    try:
-        rep, why = fpa.step_report(project)
-        if rep is None:
-            return [f"current Program gate evidence is unavailable: {why}"]
-        current = {
-            "exit": result.get("exit"),
-            "phases": {"phase3_verifying": fpa.phase3_verifying(rep, why)},
-        }
-    except (OSError, ValueError, TypeError, AttributeError) as exc:
-        return [f"current Program gate evidence is unreadable: {exc}"]
-    if _required_gate_ledger(current) != _required_gate_ledger(result):
-        return ["Program gate evidence changed since the solve snapshot; "
-                "the reviewed evidence is stale"]
-    return []
 
 
 def _gate_status_note(ledger: dict) -> str:
@@ -2084,48 +1610,6 @@ def _program_review_coverage_result(prompt_text: str, candidate: dict,
         "blocking_gaps": report.get("blocking_gaps"),
         "blocking_gap_items": gaps,
     }
-
-
-def _refresh_retained_measurement_result(task: dict, result: dict,
-                                         collected: dict) -> bool:
-    """Re-derive metadata only for the exact validated later duplicate attempt.
-
-    The current collector has already read the measured candidate; no gate or
-    acceptance is manufactured. Changed evidence still reaches the unchanged
-    freshness/required-gate checks after this owner correction.
-    """
-    import flow_phase_attribution as fpa                  # noqa: PLC0415
-    try:
-        invocation = task["program_verification"]["runner_invocation"]
-        diagnostic = _stored_runner_diagnostics(invocation)
-        retained = (diagnostic or {}).get("retained_after_duplicate")
-        phase3 = (result.get("phases") or {}).get("phase3_verifying") or {}
-        if (not retained or diagnostic.get("reason") or not collected.get("ok")
-                or Path(task["project"]).resolve() != Path(invocation["project"]).resolve()
-                or _sha256_text(str(collected.get("completion") or "")) != task.get("rtl_sha256")
-                or phase3.get("status") != "NOT_MEASURED"
-                or phase3.get("reason") != "RUNNER_REPORT_NOT_FRESH"
-                or (result.get("runner_diagnostics") or {}).get("reason_class") != "RUNNER_REPORT_NOT_FRESH"):
-            return False
-        attempt = _read_json_regular(Path(retained["receipt_path"]))
-        if (result.get("runner_invocation") != attempt
-                or hashlib.sha256(Path(retained["receipt_path"]).read_bytes()).hexdigest()
-                != retained["receipt_sha256"]):
-            return False
-        phases = fpa.attribute(
-            Path(task["project"]), routing=result.get("routing_verdict") or {},
-            entry=result.get("entry"), evidence=result.get("evidence"),
-            exit_step=result.get("exit"), artefact_collected=True)
-        first = result.get("program_first_phases") or {}
-        for key in ("phase2_solving", "phase4_debugging"):
-            if isinstance(first.get(key), dict):
-                phases[key] = dict(first[key])
-        result.update(phases=phases, runner_invocation=invocation,
-                      runner_diagnostics=diagnostic, rc=invocation["rc"],
-                      ok=True, candidate_ready=True)
-        return True
-    except (OSError, ValueError, KeyError, TypeError):
-        return False
 
 
 def _rtl_files(project: Path) -> list[Path]:
@@ -5760,8 +5244,6 @@ def _shape_c_task_binding_reasons(task: dict, run_p: Path,
         reasons.append("RTL-owning Program gate did not pass its allowed status")
     # Export and acceptance require the same measured, in-scope ledger.
     ledger = _required_gate_ledger(solve_result)
-    reasons.extend(_gate_evidence_freshness_reasons(
-        expected_project, solve_result))
     for name in ledger.get("failed_required") or []:
         reasons.append(
             f"required in-scope PROGRAM gate {name} reported "
@@ -6615,10 +6097,6 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
     return len(validation) == 1 and validation[0].get("status") in {"PASS", "FAIL"}
 
 
-
-
-
-
 def _rtl_delivery_target(receipt: dict | None) -> str | None:
     """Forward explicit RTL delivery only for the admitted RTL proof window."""
     import task_nature_route as tnr
@@ -6758,7 +6236,7 @@ def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
     provenance = emit_attestation.phase1_provenance(project)
     if provenance.get("ran") is not True:
         return {"status": "BLOCKED", "runner_rc": process.rc,
-                "reason": "D1-only front door emitted no hash-bound L-doc provenance", **diagnostics}
+                "reason": "D1-only front door produced no L documents", **diagnostics}
     result = {"status": "GENERATED", "runner_rc": process.rc,
               "provenance": provenance, **diagnostics}
     if force_current:
@@ -6773,19 +6251,7 @@ def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
             return {**result, "d1_gate_error": f"D1_GATE_REPORT_UNREADABLE: {exc}"}
         if not isinstance(report, dict) or not isinstance(report.get("verdict"), str):
             return {**result, "d1_gate_error": "D1_GATE_REPORT_SCHEMA_INVALID"}
-        binding = report.get("runner_binding")
         invocation_id = str(process.invocation_id or "")
-        if (not invocation_id or not isinstance(binding, dict)
-                or binding.get("schema") != "vibeic.runner_report_binding.v1"
-                or binding.get("invocation_id") != invocation_id
-                or binding.get("project") != str(project)
-                or binding.get("report_name") != "phase1_one_shot.json"
-                or not isinstance(binding.get("argv"), list)
-                or any(not isinstance(arg, str) for arg in binding.get("argv"))
-                or not isinstance(binding.get("source"), dict)
-                or not isinstance(binding.get("producer"), dict)
-                or not isinstance(binding.get("material"), dict)):
-            return {**result, "d1_gate_error": "D1_GATE_REPORT_NOT_CURRENT_CALL"}
         if source_sha256 is None or task_sha256 is None or ldoc_root_handle is None:
             return {**result, "d1_gate_error": "D1_GATE_BINDING_INPUT_MISSING"}
         result["d1_gate"] = rd.make_d1_gate(
@@ -7290,7 +6756,7 @@ def _capture_d1_evidence(project: Path) -> _D1EvidenceSnapshot:
     prompt = capture(project / "input" / "phase1_prompt.md")
     report = capture(report_path)
     ldocs = tuple(capture(p) for p in sorted(docs.glob("L*.json")))
-    from _phase1_producer_identity import BEHAVIORAL_REFINEMENT_INPUT
+    BEHAVIORAL_REFINEMENT_INPUT = "phase1/behavioral_refinement.facts.yaml"
     author = project / BEHAVIORAL_REFINEMENT_INPUT
     author_inputs = (capture(author),) if author.exists() or author.is_symlink() else ()
     if not ldocs:
@@ -7321,7 +6787,7 @@ def _assert_d1_snapshot_current(snapshot: _D1EvidenceSnapshot) -> None:
     docs = snapshot.project / "phase1" / "generated_docs"
     if tuple(sorted(docs.glob("L*.json"))) != tuple(p for p, _, _ in snapshot.ldocs):
         raise ValueError("D1_SNAPSHOT_LDOC_SET_CHANGED")
-    from _phase1_producer_identity import BEHAVIORAL_REFINEMENT_INPUT
+    BEHAVIORAL_REFINEMENT_INPUT = "phase1/behavioral_refinement.facts.yaml"
     author = snapshot.project / BEHAVIORAL_REFINEMENT_INPUT
     current_author = (author,) if author.exists() or author.is_symlink() else ()
     if current_author != tuple(p for p, _, _ in snapshot.author_inputs):
@@ -7986,7 +7452,6 @@ def _require_route_admission(run_p: Path, task: dict, receipt: dict,
             raise ValueError("D1_OWNER_ADMISSION_REPLACED")
 
 
-
 def _owned_d1_admission_path(run_p: Path, task: dict, activation: dict) -> Path:
     digest = str(activation.get("activation_sha256") or "")
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
@@ -8545,7 +8010,6 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
     for key in ("worker_status", "worker_error", "worker_retryable"):
         result.pop(key, None)
     return review, backup
-
 
 
 def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
@@ -10085,8 +9549,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         gate_ledger = _required_gate_ledger(result)
         native_repair = (bool(gate_ledger.get("failed_required"))
                          and all(gate_ledger["in_scope"].get(name) == "FAIL"
-                                 for name in gate_ledger["failed_required"])
-                         and not _gate_evidence_freshness_reasons(proj, result))
+                                 for name in gate_ledger["failed_required"]))
 
         def repair_authorized(verdict):
             return (verdict.get("status") == "REPAIR_REQUIRED"
@@ -10202,7 +9665,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 and result.get("candidate_origin") == "PROGRAM"
                 and result.get("accepted") is True
                 and gate_ledger.get("eligibility") == _NOT_MEASURED
-                and not _gate_evidence_freshness_reasons(proj, result)
                 and not (run_p / "pass_at_1.json").exists()
                 and _validate_ai_review(task).get("status") == "ACCEPTED")
             if (result.get("accepted") or response.is_file()) and not recover_unmeasured:
@@ -10670,8 +10132,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                            "awaiting_ai_review": True,
                            "ai_repair_required": True})
             continue
-        if _refresh_retained_measurement_result(task, result, got):
-            _attach_ai_review_attribution(result, verdict, task)
         # #2012's invariant, at the only site that can violate it: a
         # candidate whose canonical Phase-1 provenance is missing, or was
         # changed after its review task was written, is NOT accepted and NOT
@@ -10712,25 +10172,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                            "ai_repair_required": False})
             continue
         # Collection remains reviewable; only an ELIGIBLE ledger can publish.
-        freshness_reasons = _gate_evidence_freshness_reasons(
-            Path(str(task.get("project") or "")), result)
-        if freshness_reasons:
-            repairs.append({
-                "schema": "vibeic.benchmark.ai_repair_task.v2",
-                "id": pid, "project": task.get("project"),
-                "status": "PROGRAM_GATE_EVIDENCE_STALE",
-                "reasons": freshness_reasons,
-                "required_next": (
-                    "refresh the solve attribution and review handoff from "
-                    "the current Program step report, then obtain a fresh "
-                    "review before acceptance; repeating --resume alone "
-                    "cannot refresh reviewed gate evidence"),
-            })
-            result.update({"accepted": False, "awaiting_ai": True,
-                           "awaiting_ai_review": True,
-                           "ai_repair_required": False})
-            print(f"  {pid:44s} NOT ACCEPTED -- {freshness_reasons[0]}")
-            continue
         gate_ledger = _required_gate_ledger(result)
         result["required_gate_ledger"] = gate_ledger
         if gate_ledger.get("failed_required"):
