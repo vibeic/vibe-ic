@@ -333,17 +333,6 @@ def build_native_config(project: Path | str, *, route: str | None = None, pdk: s
         from flow_chip_inputs import prepare
         config = prepare(Path(project).resolve(), config,
                          **({"on_tool_run": on_tool_run} if on_tool_run is not None else {}))
-    elif (Path(project) / "steps/pre_layout_timing/result.json").is_file():
-        from librelane.flows import Flow
-        from flow_pdn_current import current_settings
-        import os
-        owner = Flow.factory.get("Classic")(config, design_dir=str(Path(project).resolve()),
-                                            pdk_root=os.environ.get("PDK_ROOT"))
-        resolved = owner.config.to_raw_dict()
-        extent = resolved.get("DIE_AREA") or resolved.get("CORE_AREA")
-        span = (max(float(extent[2]) - float(extent[0]), float(extent[3]) - float(extent[1]))
-                if extent else None)
-        config.update(current_settings(Path(project).resolve(), resolved, parallel_length_um=span))
     return _native_pdn_numbers(config)
 
 

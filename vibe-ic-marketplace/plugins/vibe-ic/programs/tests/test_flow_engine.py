@@ -321,7 +321,7 @@ def test_native_missing_report_is_not_a_chip_failure():
     assert engine.evaluate(outcome, [{"status": "NOT_MEASURED"}]) == "NOT_MEASURED"
 
 
-def test_existing_native_results_survive_an_added_table_entry(tmp_path):
+def test_new_invocation_runs_existing_and_added_entries(tmp_path):
     row = command_row("existing")
     counter = tmp_path / "calls"
     row["tool"]["command"][2] = (
@@ -329,7 +329,7 @@ def test_existing_native_results_survive_an_added_table_entry(tmp_path):
         + row["tool"]["command"][2])
     execute(tmp_path, [row])
     result = execute(tmp_path, [row, command_row("added")])
-    assert counter.read_text() == "1"
+    assert counter.read_text() == "2"
     assert result["pass"] == 2
 
 

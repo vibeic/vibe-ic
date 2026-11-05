@@ -37,7 +37,7 @@ def native_run(project: Path, programs: Path) -> dict:
     route = router.route_decision_receipt(
         prompt, nature="spec_generation", delivery_target="ip_hardmacro")
     report = engine.run(project, route=route,
-                        from_name="structural_rtl_preflight", to_name="die_floorplan_and_macros")
+                        from_name="structural_rtl_preflight", to_name="io_pad_ring_and_power_distribution")
     steps = {row["name"]: row for row in report["steps"]}
     for name in ("rtl_validation_and_lint", "synthesis"):
         native_checks = [check for check in steps[name]["metrics"]
@@ -49,6 +49,10 @@ def native_run(project: Path, programs: Path) -> dict:
     assert len(actual) == 1 and actual[0]["ran"] and actual[0]["exit_code"] == 0, floorplan
     state = json.loads((project / "steps/die_floorplan_and_macros/state_out.json").read_text())
     assert Path(state["odb"]).is_file()
+    sizing = json.loads((project / "work/flow/chip/pdn_sizing.json").read_text())
+    config = json.loads((project / "steps/io_pad_ring_and_power_distribution/openroad_generatepdn/config.json").read_text())
+    from decimal import Decimal
+    assert all(Decimal(str(config[key])) == Decimal(str(value)) for key, value in sizing["settings"].items())
     assert report["route"] == route
     assert report["fail"] == 0, report
     return report

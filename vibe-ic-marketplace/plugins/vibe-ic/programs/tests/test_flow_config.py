@@ -591,30 +591,16 @@ def test_explicit_pdn_actuator_overrides_documentary_starting_geometry(project):
     assert build_config(project, route="ip")["PDN_VPITCH"] == 80
 
 
-@pytest.mark.parametrize("extent_key", [None, "DIE_AREA", "CORE_AREA"])
-def test_hardmacro_sizes_native_defaults_after_current_estimate(project, monkeypatch, extent_key):
+def test_native_config_does_not_reuse_an_existing_power_estimate(project, monkeypatch):
     from flow_config import build_native_config
     import flow_pdn_current
-    import types
-    seen = []
-    native = {"PDN_CFG": None, "PDN_RAIL_WIDTH": .6}
-    if extent_key:
-        native[extent_key] = [10, 20, 90, 100]
-    class Classic:
-        def __init__(self, config, **kwargs):
-            self.config = types.SimpleNamespace(to_raw_dict=lambda: native)
-    flows = types.ModuleType("librelane.flows")
-    flows.Flow = types.SimpleNamespace(factory=types.SimpleNamespace(get=lambda kind: Classic))
-    monkeypatch.setitem(sys.modules, "librelane.flows", flows)
-    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda root, config, parallel_length_um:
-        seen.append((root, config, parallel_length_um)) or {"PDN_VWIDTH": 2.4})
+    def unexpected(*args, **kwargs):
+        raise AssertionError("PDN sizing belongs at floorplan, after current native timing")
+    monkeypatch.setattr(flow_pdn_current, "current_settings", unexpected)
     power = project / "steps/pre_layout_timing/result.json"
     power.parent.mkdir(parents=True)
     power.write_text("{}")
-    result = build_native_config(project, route="ip")
-    assert result["PDN_VWIDTH"] == Decimal("2.4")
-    assert "PDN_RAIL_WIDTH" not in result
-    assert seen == [(project.resolve(), native, 80 if extent_key else None)]
+    assert build_native_config(project, route="ip")["PDK"] == build_config(project, route="ip")["PDK"]
 
 
 @pytest.mark.parametrize("vertical,horizontal,legal", [(76.8, 76.59, True), (76.801, 76.59, False)])
@@ -633,7 +619,10 @@ def test_native_pdn_actuator_roundtrip_keeps_decimal_grid_exact(project, monkeyp
     assert flow_config.main() == 0
     if not legal:
         with pytest.raises(ValueError, match="manufacturing grid"):
-            flow_config.build_native_config(project, route="ip")
+            from flow_pdn_current import current_settings
+            config = flow_config.build_native_config(project, route="ip")
+            owner = Flow.factory.get("Classic")(config, design_dir=str(project))
+            current_settings(project, owner.config.to_raw_dict())
         return
     native = flow_config.build_native_config(project, route="ip")
     owner = Flow.factory.get("Classic")(native, design_dir=str(project))

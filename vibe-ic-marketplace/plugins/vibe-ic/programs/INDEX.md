@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1476
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1476)
+- **Total programs (excluding helpers / shims):** 1475
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1475)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1467 |
+| `any` | 1466 |
 
 ## Alphabetical listing
 
@@ -558,7 +558,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_output_substance` | any | — | did the run actually produce this output, or only a file? |
 | `flow_package_interface` | any | — | Run the existing IO and pad-assignment producers in the native chain. |
 | `flow_pdn_current` | any | — | flow_pdn_current |
-| `flow_pdn_recovery` | any | — | Plan one physical PDN replay from native conductor measurements. |
 | `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
 | `flow_spare_cells` | any | — | flow_spare_cells |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
@@ -1548,7 +1547,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1467 programs)
+### `any` (1466 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2078,7 +2077,6 @@ _(no programs in this group)_
 - `flow_output_substance` — did the run actually produce this output, or only a file?
 - `flow_package_interface` — Run the existing IO and pad-assignment producers in the native chain.
 - `flow_pdn_current` — flow_pdn_current
-- `flow_pdn_recovery` — Plan one physical PDN replay from native conductor measurements.
 - `flow_phase_attribution` — WHO did each of the four phases, and HOW.
 - `flow_spare_cells` — flow_spare_cells
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.

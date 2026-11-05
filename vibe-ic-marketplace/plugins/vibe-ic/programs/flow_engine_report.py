@@ -48,11 +48,11 @@ def render(project: Path, output: Path, stage: str, head: str,
     with (output / "STEPS.tsv").open("w", newline="") as stream:
         writer = csv.writer(stream, delimiter="\t")
         writer.writerow(["position", "name", "status", "exit_code", "tool_seconds", "program_seconds",
-                         "ai_seconds", "ai_review", "retained", "report"])
+                         "ai_seconds", "ai_review", "report"])
         for row in report["steps"]:
             writer.writerow([positions[row["name"]], row["name"], row["status"], row["tool_exit_code"],
                              row["tool_seconds"], row["program_seconds"], row.get("ai_seconds"),
-                             row.get("ai_review"), row.get("retained", False),
+                             row.get("ai_review"),
                              project / "steps" / row["name"] / "result.json"])
     with (output / "SELECTED_GAPS.tsv").open("w", newline="") as stream:
         writer = csv.writer(stream, delimiter="\t")

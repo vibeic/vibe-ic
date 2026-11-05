@@ -164,14 +164,3 @@ def current_settings(project, config, parallel_length_um=0):
                  "Widths and native spacing/pitch/offset geometry are resolved before floorplan; "
                  "native connectivity, DRC and final EM determine adequacy."}, indent=2) + "\n")
     return settings
-
-
-def needs_estimate(route, from_name, table):
-    if route["delivery_target"] not in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}:
-        return False
-    from flow_engine import aliases
-    positions = {name: index for index, row in enumerate(table["steps"])
-                 for name in [row["name"], *aliases(row)]}
-    first = positions[str(from_name or route["entry_step"])]
-    last = positions[str(route["verify_through"])]
-    return first <= positions["pre_layout_timing"] < positions["die_floorplan_and_macros"] <= last
