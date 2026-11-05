@@ -127,7 +127,8 @@ def coherent_geometry(config, widths, tech, parallel_length_um=0, explicit=()):
 
 def current_settings(project, config, parallel_length_um=0):
     base = project / "work/flow/pdn_cfg.tcl"
-    if Path(str(config.get("PDN_CFG", ""))).resolve() != base.resolve():
+    script = config.get("PDN_CFG")
+    if script is not None and Path(str(script)).resolve() != base.resolve():
         return {}
     power = project / "steps/pre_layout_timing/result.json"
     if not power.is_file():
@@ -161,7 +162,7 @@ def current_settings(project, config, parallel_length_um=0):
 
 
 def needs_estimate(route, from_name, table):
-    if route["delivery_target"] not in {"gds", "shippable_gds", "foundry_handoff"}:
+    if route["delivery_target"] not in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}:
         return False
     from flow_engine import aliases
     positions = {name: index for index, row in enumerate(table["steps"])

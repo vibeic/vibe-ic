@@ -101,7 +101,7 @@ def test_native_geometry_is_resolved_before_floorplan(tmp_path, current, vertica
     assert not (tmp_path / "work/flow/chip/pdn_current.tcl").exists()
 
 
-def test_estimate_window_is_only_for_chip_before_physical_geometry():
+def test_estimate_window_covers_physical_deliveries_before_geometry():
     from flow_engine import TABLE
     table = json.loads(TABLE.read_text())
     route = {"delivery_target": "shippable_gds", "entry_step": "requirements_and_delivery_route",
@@ -109,7 +109,7 @@ def test_estimate_window_is_only_for_chip_before_physical_geometry():
     assert needs_estimate(route, None, table)
     assert needs_estimate(route, "synthesis", table)
     assert not needs_estimate(route, "die_floorplan_and_macros", table)
-    assert not needs_estimate({**route, "delivery_target": "ip_hardmacro"}, None, table)
+    assert needs_estimate({**route, "delivery_target": "ip_hardmacro"}, None, table)
     assert not needs_estimate({**route, "verify_through": "pre_layout_timing"}, None, table)
 
 
