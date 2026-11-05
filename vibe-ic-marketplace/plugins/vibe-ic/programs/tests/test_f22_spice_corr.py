@@ -137,6 +137,48 @@ def test_the_layout_view_takes_the_schematic_subckts_place_in_the_schematic_port
     assert 'ad=0.3608p' in text and 'C21 ZN VPW 0.27964f' in text
 
 
+def test_explicit_mindelay_reaches_layout_extraction(tmp_path, monkeypatch):
+    root = _pdk(tmp_path)
+    netlist = write(tmp_path / 'design/nl.v', NETLIST)
+    monkeypatch.setattr(pst, '_docker', _magic_edge([]))
+    view = pst.cell_view('img', tmp_path / 'design', [(root / 'x', '/pdk/x')],
+                         config={'CELL_GDS': ['/pdk/x/cells.gds']}, pdk_dir=root / 'x',
+                         guest_root='/pdk', pdk='x', netlist=netlist,
+                         cell_sources=[root / 'x/libs.ref/cells/spice/cells.spice'],
+                         out_dir=tmp_path / 'out', extresist_mindelay_ps=0)
+    commands = (tmp_path / 'out/extract/extract.tcl').read_text()
+    assert commands.index('extresist mindelay 0\n') < commands.index('extresist all\n')
+    assert view['extresist_mindelay_ps'] == 0
+    assert 'cells__nand2_1' in view['extracted']
+
+
+@pytest.mark.parametrize('mindelay, extracted', [(None, False), (0, True)])
+def test_detailed_extraction_preserves_native_private_signal_splits(tmp_path, monkeypatch, mindelay, extracted):
+    root = _pdk(tmp_path)
+    cell = 'cells__nand2_1'
+    native = EXTRACTED_NAND2.replace(' VNW VPW\n', ' VNW VPW private.n0 private.t0\n')
+    native = native.replace('X1 ZN A1 a_245_68#', 'X1 ZN A1 private.n0')
+    native = native.replace('X3 a_245_68# A2', 'X3 private.t0 A2')
+    native = native.replace('.ends', 'R0 private.n0 private.t0 100\n.ends')
+    ports = ['A1', 'A2', 'ZN', 'VDD', 'VNW', 'VPW', 'VSS']
+    def magic(*args, **kwargs):
+        work = Path(args[4])
+        write(work / f'{cell}.spice', native)
+        write(work / f'{cell}.ext', '\n'.join(f'port "{p}" 0' for p in ports))
+        write(work / f'{cell}.res.ext', 'rnode "private.n0" 0\nrnode "private.t0" 0\n')
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+    monkeypatch.setattr(pst, '_docker', magic)
+    view = pst.extract_cells('img', tmp_path, [], gds=['neutral.gds'], magicrc='neutral.magicrc',
+        guest_root='/pdk', schematic={cell: ports}, cells=[cell], out_dir=tmp_path / 'out',
+        extresist_mindelay_ps=mindelay)
+    assert (cell in view['extracted']) is extracted
+    if extracted:
+        body = Path(view['path']).read_text()
+        assert f'.subckt {cell} ' + ' '.join(ports) + '\n' in body
+        assert 'R0 private.n0 private.t0 100\n' in body
+        assert 'X1 ZN A1 private.n0' in body and 'X3 private.t0 A2' in body
+
+
 def test_the_first_definition_of_a_cell_is_the_one_the_deck_simulates(tmp_path):
     extracted = write(tmp_path / 'x.spice', '.subckt cells__nand2_1 A1 A2 ZN VDD VNW VPW VSS\n'
                       + EXTRACTED_NAND2.split('\n', 3)[3])

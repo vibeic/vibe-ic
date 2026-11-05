@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import math
 import os
+from decimal import Decimal
 from pathlib import Path
+from typing import Optional
 
+from librelane.config import Variable
 from librelane.state import DesignFormat
 from librelane.steps import Step, StepError, StepException
 
@@ -76,15 +79,21 @@ class SpiceCorrelation(Step):
     name = "Native extracted path SPICE correlation"
     inputs = [DesignFormat.NETLIST, DesignFormat.SDC, DesignFormat.SPEF, DesignFormat.SDF]
     outputs = []
+    config_vars = [Variable("SPICE_EXTRESIST_MINDELAY_PS", Optional[Decimal],
+        "Native Magic minimum cell RC delay in ps; 0 retains small signal networks. "
+        "Omit to preserve Magic's default.", default=None, units="ps")]
 
     def run(self, state_in, **kwargs):
         from path_spice_tool import run_case_correlation
         from librelane_contract import Refusal
 
+        extraction_options = {}
+        if (mindelay := self.config.get("SPICE_EXTRESIST_MINDELAY_PS")) is not None:
+            extraction_options["extresist_mindelay_ps"] = float(mindelay)
         try:
             result = run_case_correlation(Path(self.config["DESIGN_DIR"]),
                 os.environ.get("VIBEIC_EDA_IMAGE", ""), Path(str(self.config["PDK_ROOT"])),
-                self.config["PDK"], sta_step_dir=timing_folder(state_in))
+                self.config["PDK"], sta_step_dir=timing_folder(state_in), **extraction_options)
         except Refusal as exc:
             raise StepException(f"NOT_MEASURED: {exc}") from exc
         (Path(self.step_dir) / "spice_correlation.json").write_text(json.dumps(result, indent=2) + "\n")

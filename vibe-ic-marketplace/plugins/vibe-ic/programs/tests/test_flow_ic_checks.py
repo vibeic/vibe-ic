@@ -67,6 +67,19 @@ def test_spice_case_keeps_native_sta_exit_status(tmp_path, monkeypatch):
     assert result["sta_rc"] == 2
 
 
+def test_spice_explicit_minimum_rc_delay_reaches_the_native_case(tmp_path, monkeypatch):
+    from decimal import Decimal
+    import path_spice_tool
+    calls = []
+    monkeypatch.setattr(path_spice_tool, "run_case_correlation",
+                        lambda *args, **kwargs: calls.append(kwargs) or {"paths": []})
+    step = SimpleNamespace(step_dir=str(tmp_path), config={"DESIGN_DIR": str(tmp_path),
+                           "PDK_ROOT": str(tmp_path), "PDK": "technology",
+                           "SPICE_EXTRESIST_MINDELAY_PS": Decimal(0)})
+    checks.SpiceCorrelation.run(step, timing_state(tmp_path))
+    assert calls == [{"sta_step_dir": tmp_path / "sta", "extresist_mindelay_ps": 0.0}]
+
+
 @pytest.mark.parametrize("failed", [False, True])
 def test_si_keeps_native_slack_and_rejects_failed_sta(tmp_path, monkeypatch, failed):
     import path_spice_tool
