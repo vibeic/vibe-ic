@@ -494,7 +494,7 @@ def _reset_map(mod: dict, port_bit: int) -> Dict[str, list]:
                 continue
             par = _parity(drivers, _bits(c, pin)[0], port_bit) if _bits(c, pin) else None
             pol = _param_bit(params.get(f"{pin}_POLARITY"))
-            eff = None if (par is None or pol is None) else (pol ^ par)
+            eff = None if (par is None or pol not in (0, 1)) else (pol ^ par)
             if eff is None:
                 # a GATED reset pin (e.g. `rst_n && clear`) is not a reset the
                 # port forces — unclassified, never counted as forced (round 5)
@@ -2516,7 +2516,6 @@ def check_claim(netlist: dict, top: str, claim: dict,
                                  f"{'active-low' if value == 'active_high' else 'active-high'}"
                                  f", against the declared {value}"))
         unknown = sorted(f["cell"] for f in forced if f.get("polarity") is None)
-        unknown += sorted(f["cell"] for f in rm["data"])
         if unknown or unclass:
             return dict(out, verdict=NOT_DISCHARGED,
                         cells=unknown + [u["cell"] for u in unclass],
