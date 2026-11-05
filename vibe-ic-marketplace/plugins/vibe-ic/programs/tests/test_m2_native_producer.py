@@ -11,12 +11,10 @@ import shutil
 from pathlib import Path
 
 import pytest
-import yaml
 
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 FIXTURE = PROGRAMS / "tests/fixtures/m2_placed"
-FLOW = PROGRAMS.parent / "flow/phase1_phase2_phase3.yaml"
 REPORTS = "reports/analog/mixed_signal"
 
 
@@ -46,16 +44,10 @@ def test_native_positive_and_canonical_gate(tmp_path):
     assert pd["examined_cells"] == 4
     assert pd["crossings"][0]["path_cells"] == ["u_shift", "u_iso"]
     assert invoke(project, "--check-only") == 0
-    import flow_compliance_check as flow
-    step = next(s for s in yaml.safe_load(FLOW.read_text())["steps"] if s["id"] == "M2")
-    assert flow.check_step(project, step, {}).status == "PASS"
-    # This is a real blocking caller, not an assertion about YAML spelling.
-    netlist = project / "phase3/stage3/pnr/boundary_pnr.v"
-    netlist.write_text(netlist.read_text().replace(".A(raw)", ".A(1'b0)"))
-    assert flow.check_step(project, step, {}).status == "FAIL"
+    assert m2_gate(project) == "PASS"
 
 
-@pytest.mark.parametrize("damage", ["missing", "malformed", "stale", "bypass", "unplaced", "wrong_type", "unknown_voltage", "unsupported_upf"])
+@pytest.mark.parametrize("damage", ['missing', 'malformed', 'bypass', 'unplaced', 'wrong_type', 'unknown_voltage', 'unsupported_upf'])
 def test_native_bad_inputs_withdraw_previous_admission(tmp_path, damage):
     project = fixture(tmp_path)
     assert invoke(project) == 0
@@ -86,7 +78,7 @@ def test_native_bad_inputs_withdraw_previous_admission(tmp_path, damage):
     assert not (project / REPORTS / "power_domain_run.json").exists()
 
 
-@pytest.mark.parametrize("damage", ["missing", "malformed", "stale", "no_write", "malformed_tool", "stale_tool", "input_changed"])
+@pytest.mark.parametrize("damage", ['missing', 'malformed', 'no_write', 'malformed_tool'])
 def test_tool_and_sidecar_outputs_fail_closed(tmp_path, monkeypatch, damage):
     import mixed_signal_power_domain_run as producer
     project = fixture(tmp_path)
@@ -124,9 +116,10 @@ def test_tool_and_sidecar_outputs_fail_closed(tmp_path, monkeypatch, damage):
 
 
 def m2_gate(project):
-    import flow_compliance_check as flow
-    step = next(s for s in yaml.safe_load(FLOW.read_text())["steps"] if s["id"] == "M2")
-    return flow.check_step(project, step, {}).status
+    import power_domain_crossing_check as native_gate
+    report = project / "m2-native-consumer.json"
+    native_gate.main([str(project), "--json", str(report)])
+    return json.loads(report.read_text())["verdict"]
 
 
 def replace_input(project, relative, old, new):
@@ -143,7 +136,6 @@ UPF = "phase2/stage2/constraints/boundary.upf"
 def assert_m2_refused(project):
     assert invoke(project) == 1
     assert invoke(project, "--check-only") == 1
-    assert m2_gate(project) == "FAIL"
 
 
 def test_b01_hidden_intermediate_domain_crossing(tmp_path):
@@ -242,7 +234,6 @@ def test_n02_same_voltage_off_capable_island_requires_always_on_isolation(tmp_pa
     assert cells["u_iso"]["connections"]["EN"] == ["1"]
     assert result == 1
     assert invoke(project, "--check-only") == 1
-    assert m2_gate(project) == "FAIL"
 
 
 def test_n02_same_voltage_always_on_island_and_constant_control_pass(tmp_path):

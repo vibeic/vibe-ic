@@ -341,7 +341,8 @@ def test_M_PATH_7_the_space_still_publishes_for_a_proven_ip_delivery(tmp_path):
     assert space["delivery_path"]["path"] == DP.PATH_IP
     lever = [l for l in space["levers"]
              if l["lever"] == "spare_cell_density"][0]
-    assert lever["eco_floor"]["bounds_this_lever"] is False
+    assert lever["status"] == "NOT_EXPOSED"
+    assert lever["admitted"] is False
 
 
 # ---------------------------------------------------------------------------
