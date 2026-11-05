@@ -1355,8 +1355,9 @@ def d30_consumed_timing(project: Path, admission: Mapping[str, Any]) -> dict:
             return {"path": name, "sha256": inputs[name]}
 
         timing = admission["pre_route_timing"]["timing_modes"]
-        for record in (admission["pre_route_timing"]["D26_result"], timing["receipt"]):
-            ref(_d30_file(project, record, "D26 current consumer"))
+        for record in (admission["pre_route_timing"]["D26_result"], timing.get("receipt")):
+            if record is not None:
+                ref(_d30_file(project, record, "D26 current consumer"))
         if admission["requires_scan"]:
             arm = timing["post_scan_arms"]["functional"]
             folder = (project / arm["native"]["folder"]).resolve()
