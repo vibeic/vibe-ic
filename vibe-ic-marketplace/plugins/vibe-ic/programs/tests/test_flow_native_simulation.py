@@ -257,3 +257,44 @@ def test_debug_reference_model_is_consumed_without_changing_the_rtl(tmp_path, di
     assert [row["status"] for row in functional] == ["FAIL" if different else "PASS"], result
     assert (result["metrics"]["assertion_failures"] > 0) is different
     assert "reference_model_handoff" not in json.loads(report_path.read_text())
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_testbench_helper_closure_does_not_change_silicon_sources(tmp_path, different):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "verilator", "verilator_coverage")):
+        pytest.skip("Native Icarus and Verilator tools are required")
+    from flow_config import resolve_rtl_inputs
+
+    rtl = tmp_path / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    dut = rtl / "silicon_unit.v"
+    dut.write_text("module silicon_unit(input a, output z); assign z=~a; endmodule\n")
+    helper = rtl / "stimulus_helper.v"
+    helper.write_text("module stimulus_helper(input a, output expected); "
+                      f"assign expected={'a' if different else '~a'}; endmodule\n")
+    (rtl / "unused_stimulus.v").write_text("Unrelated source that must not be compiled.\n")
+    mirror = rtl / "mirror"
+    mirror.mkdir()
+    (mirror / dut.name).write_text("module silicon_unit(input a, output z); assign z=a; endmodule\n")
+    vendor = tmp_path / "input/vendor_rtl"
+    vendor.mkdir(parents=True)
+    (vendor / helper.name).write_bytes(helper.read_bytes())
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "silicon_unit"}))
+    benches = tmp_path / "phase2/stage1/sim/tb"
+    benches.mkdir(parents=True)
+    tb = benches / "tb_unit.v"
+    tb.write_text("module tb_unit; reg a; wire z, expected; integer passed=0; "
+                  "silicon_unit dut(a,z); stimulus_helper helper(a,expected); "
+                  "initial begin a=0; #1; if(z===expected) passed=passed+1; "
+                  "a=1; #1; if(z===expected) passed=passed+1; "
+                  "$display(\"ORACLE_TB_DONE pass=%0d/2\",passed); $finish; end endmodule\n")
+    original, top = resolve_rtl_inputs(tmp_path)
+    assert original == [dut]
+    result = execute(tmp_path, tmp_path / "output", {
+        "adapter": "simulation", "testbenches": [str(tb)]}, {})
+    assert resolve_rtl_inputs(tmp_path) == (original, top)
+    functional = [row for row in result["native_steps"] if row["name"] == "Icarus.Functional"]
+    assert [row["status"] for row in functional] == ["FAIL" if different else "PASS"], result
+    assert result["metrics"]["assertion_failures"] == (2 if different else 0)

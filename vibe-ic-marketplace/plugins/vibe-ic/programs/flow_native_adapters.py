@@ -157,6 +157,31 @@ def testbenches(project, tool):
     return list(dict.fromkeys(paths))
 
 
+def simulation_sources(project, files, top, benches):
+    from catalog_glue_closure_resolver import _gather, _strip_comments, build_index, resolve_closure
+    from testbench_gen import package_first_order
+    from verilator_coverage_measure import _tb_top_module
+
+    files = [path.resolve() for path in files]
+    hdl_benches = [path.resolve() for path in benches if path.suffix in (".v", ".sv")]
+    sources = _gather(project / "phase2/stage1/rtl")
+    for path in [*files, *hdl_benches]:
+        sources[path] = _strip_comments(path.read_text(errors="replace"))
+    index = build_index(sources)
+    # Preserve the selected implementation when staged RTL also has a copy.
+    for kind in ("mod_def", "pkg_def", "macro_def"):
+        for name, providers in index[kind].items():
+            selected = [path for path in providers if path in files]
+            if selected:
+                index[kind][name] = selected
+    reachable = set()
+    for root in [top, *(_tb_top_module(path) for path in hdl_benches)]:
+        closure, _ = resolve_closure(root, sources, index)
+        reachable.update(closure)
+    return package_first_order(list(dict.fromkeys([*files, *(path for path in sorted(reachable)
+        if path.suffix in (".v", ".sv") and path not in hdl_benches)])))
+
+
 def cocotb_run(directory, tb, files, top, commands, simulator):
     import verilator_coverage_measure as coverage
     directory.mkdir()
@@ -217,6 +242,8 @@ def simulation(project, directory, tool, commands):
     if not files or not benches:
         return commands.result(reports=[producer_report] if producer_report.is_file() else [],
             detail="Produced RTL and a program-generated testbench are required.")
+    silicon_files = files
+    files = simulation_sources(project, files, top, benches)
     reports, dats, assertions, native_steps = [], [], [], []
 
     def invoke(argv, cwd):
@@ -290,7 +317,7 @@ def simulation(project, directory, tool, commands):
             if line_map is not None:
                 parsed["line_union"] = line_map
                 reports.append(Path(info))
-            scoped = coverage.scope_totals(parsed, list(map(str, files)))
+            scoped = coverage.scope_totals(parsed, list(map(str, silicon_files)))
             if scoped:
                 for category, counts in scoped["totals"].items():
                     if counts["total"] > 0 and (category != "line" or scoped["line_metric"] == "executable_line_union"):
