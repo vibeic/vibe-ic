@@ -8,14 +8,10 @@ import flow_engine_frontend as frontend
 import pytest
 
 
-def test_native_phase1_calls_document_owner_without_submission_admission(tmp_path):
+def test_document_owner_calls_extractor_without_submission_admission(tmp_path):
     import phase1_one_shot_runner as owner
-    argv = ["phase1_one_shot_runner.py", str(tmp_path), "--route", "ip",
-            "--pdk", "sky130A", "--engine", "native"]
-    with patch.object(sys, "argv", argv), \
-            patch.object(owner, "_run_docs_mode", return_value=0) as extract, \
-            patch.object(owner, "_run_step_0_5ic", side_effect=AssertionError("admission reached")):
-        assert owner.main_recorded() == 0
+    with patch.object(owner, "_run_docs_mode", return_value=0) as extract:
+        assert frontend.document_owner(tmp_path, {"pdk": "sky130A"}) == 0
     extract.assert_called_once_with(tmp_path.resolve(), "UNNAMED_CHIP", ["--pdk", "sky130A"])
     report = json.loads((tmp_path / "reports/orchestrator/phase1_one_shot.json").read_text())
     assert report["expert_review"] == "PENDING"
@@ -24,12 +20,11 @@ def test_native_phase1_calls_document_owner_without_submission_admission(tmp_pat
 def test_native_benchmark_argv_preserves_router_window_without_old_manifest(tmp_path, monkeypatch):
     import benchmark_dispatch as dispatcher
     import flow109
-    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", "native")
     with patch.object(flow109, "resolve_task_manifest", side_effect=AssertionError("old manifest reached")):
         command = dispatcher._solver_argv(Path("vibe_ic_one_shot_runner.py"), tmp_path,
                                           "1", "2", "ip", "original", "rtl")
     for flag, value in (("--entry-step", "1"), ("--exit-step", "2"),
-                        ("--rtl-input", "original"), ("--engine", "native")):
+                        ("--rtl-input", "original")):
         assert command[command.index(flag) + 1] == value
     assert not (tmp_path / "input/flow109-manifest.json").exists()
 
@@ -47,35 +42,21 @@ def test_public_native_entry_forwards_the_selected_bounded_window(tmp_path, monk
         "delivery_target": "rtl", "verify_closed_steps": ["1", "2"]}})]
 
 
-def test_native_rtl_owner_reaches_generator_without_parse_track(tmp_path, monkeypatch):
+def test_rtl_owner_reaches_generator_without_parse_track(tmp_path, monkeypatch):
     import design_one_shot_runner as owner
 
     class GeneratorReached(Exception):
         pass
 
-    def forbidden(*args, **kwargs):
-        raise AssertionError("legacy admission reached")
-
     def generate(*args, **kwargs):
         raise GeneratorReached
 
-    monkeypatch.setattr(sys, "argv", ["design_one_shot_runner.py", str(tmp_path),
-        "--entry-step", "1", "--exit-step", "2", "--engine", "native",
-        "--skip-phase3", "--skip-hardware", "--skip-analog"])
     monkeypatch.setattr(owner._pl, "select_rtl_input", lambda *args: None)
-    monkeypatch.setattr(owner, "_bootstrap_execution_policy", lambda *args, **kwargs: None)
-    monkeypatch.setattr(owner, "_activate_runtime_program_tree", forbidden)
-    monkeypatch.setattr(owner._spf, "entry_admission", forbidden)
-    monkeypatch.setattr(owner._spf, "gate", forbidden)
-    monkeypatch.setattr(owner._runner_lock, "acquire_or_reenter",
-                        lambda *args: SimpleNamespace(release=lambda: None))
     monkeypatch.setattr(owner, "step_reused_ip_consume", lambda *args: None)
-    monkeypatch.setattr(owner, "step_rig_topology_skeleton",
-                        lambda *args: owner.StepResult("topology", "PASS", 0, ""))
     monkeypatch.setattr(owner, "detect_ic_class", lambda *args: ("generic", {}))
     monkeypatch.setattr(owner, "step_rtl_gen", generate)
     with pytest.raises(GeneratorReached):
-        owner.main()
+        frontend.rtl_owner(tmp_path, {"entry_step": "1", "verify_through": "2"})
 
 
 def test_native_lint_without_rtl_does_not_resolve_an_image(tmp_path):
@@ -160,22 +141,14 @@ def test_author_fallback_is_decided_by_produced_rtl(tmp_path, produced, owner_st
     assert flow_engine.evaluate(result, []) == ("PASS" if produced else "FAIL")
 
 
-def test_public_entry_retains_the_existing_router_closure(tmp_path, monkeypatch):
-    route = {"entry_step": "1", "verify_through": "2", "answer_step": "1",
-             "delivery_target": "rtl", "input_contract": "original",
-             "verify_closed_steps": ["1", "2"], "task_nature": "completion"}
-    decision = tmp_path / "route.json"
-    decision.write_text(json.dumps({"payload": route}))
-    pointer = tmp_path / "reports/orchestrator/receipts/route_decision.current.json"
-    pointer.parent.mkdir(parents=True)
-    pointer.write_text(json.dumps({"receipt_path": str(decision)}))
+def test_public_entry_preserves_router_closure_without_a_stored_receipt(tmp_path, monkeypatch):
     args = SimpleNamespace(project=tmp_path, entry_step="1", exit_step="2",
                            rtl_input="original", delivery_target="rtl", route="ip")
     engine = SimpleNamespace(run=lambda *args, **kwargs: {"route": kwargs["route"]})
     monkeypatch.setitem(sys.modules, "flow_engine", engine)
     with patch.object(engine, "run", wraps=engine.run) as execute:
         assert frontend.run_public(args) == 0
-    assert execute.call_args.kwargs["route"] == route
+    assert execute.call_args.kwargs["route"]["verify_closed_steps"] == ["1", "2"]
 
 
 @pytest.mark.parametrize("selected,target", [("ic", "shippable_gds"), ("ip", "ip_hardmacro")])
@@ -199,7 +172,7 @@ def test_native_owner_forwards_explicit_pdk_to_document_extraction(tmp_path):
     with patch.object(frontend.subprocess, "run") as execute:
         frontend.OwnerSession(tmp_path, route).result(tmp_path / "step", "phase1")
     command = execute.call_args.args[0]
-    assert command[command.index("--pdk") + 1] == "process_variant"
+    assert json.loads(command[-2])["pdk"] == "process_variant"
 
 
 def test_failed_owner_invocation_cannot_reuse_the_previous_report(tmp_path):
@@ -223,10 +196,9 @@ def test_fresh_physical_project_invokes_the_document_owner(tmp_path):
         report.parent.mkdir(parents=True)
         report.write_text(json.dumps({"steps": [
             {"name": "phase1_ingest_render", "status": "PASS"}]}))
-        assert Path(command[1]).name == "phase1_one_shot_runner.py"
-        assert command[command.index("--route") + 1] == "ip"
-        assert command[command.index("--mode") + 1] == "docs"
-        assert "--pdk" not in command
+        assert command[-1] == "phase1"
+        assert json.loads(command[-2])["delivery_target"] == "ip_hardmacro"
+        assert "pdk" not in json.loads(command[-2])
         return SimpleNamespace(returncode=0)
 
     with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
@@ -252,9 +224,9 @@ def test_fresh_physical_author_uses_only_the_table_author_window(tmp_path, monke
         report.write_text(json.dumps({"steps": [
             {"name": "rtl_gen", "status": "PASS_WITH_WAIVERS",
              "extras": {"fallback_skill": "spec-to-rtl"}}]}))
-        assert Path(command[1]).name == "design_one_shot_runner.py"
-        assert command[command.index("--entry-step") + 1] == "author-address"
-        assert command[command.index("--exit-step") + 1] == "author-address"
+        assert command[-1] == "rtl"
+        assert json.loads(command[-2])["entry_step"] == "author-address"
+        assert json.loads(command[-2])["verify_through"] == "author-address"
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(Path, "read_text", read)

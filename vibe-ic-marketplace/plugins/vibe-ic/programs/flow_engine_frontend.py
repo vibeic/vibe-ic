@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,51 +12,90 @@ import tempfile
 import time
 
 
-def selected_engine(argv=None):
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--engine", choices=("legacy", "native"),
-                        default=os.environ.get("VIBEIC_FLOW_ENGINE", "legacy"))
-    return parser.parse_known_args(argv)[0].engine
+def phase_main(argv=None, *, scope="all"):
+    """Parse the public interface shared by all phase entries."""
+    parser = argparse.ArgumentParser(description="Run the Router-selected step table.")
+    parser.add_argument("project", type=Path)
+    parser.add_argument("--route", choices=("ic", "ip"))
+    parser.add_argument("--delivery-target", choices=("rtl", "ip_soft", "ip_model", "ip_hardmacro", "shippable_gds", "foundry_handoff"))
+    parser.add_argument("--entry-step")
+    parser.add_argument("--exit-step")
+    parser.add_argument("--rtl-input", choices=("structured", "original"), default="structured")
+    parser.add_argument("--pdk", default="auto")
+    parser.add_argument("--ic-name", default="UNNAMED_CHIP")
+    parser.add_argument("--mode", choices=("auto", "docs", "prompt"), default="docs")
+    parser.add_argument("--execution-mode", choices=("default",), default="default")
+    parser.add_argument("--skip-phase2", action="store_true")
+    parser.add_argument("--skip-phase3", action="store_true")
+    parser.add_argument("--skip-phase1", action="store_true")
+    parser.add_argument("--skip-analog", action="store_true")
+    parser.add_argument("--skip-hardware", action="store_true")
+    parser.add_argument("--no-dashboard", action="store_true")
+    parser.add_argument("--top-name", default="chip_top")
+    parser.add_argument("--container")
+    parser.add_argument("--from", dest="from_name")
+    parser.add_argument("--to", dest="to_name")
+    args = parser.parse_args(argv)
+    args.scope = scope
+    try:
+        return run_public(args)
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 def phase1_main(argv=None):
-    """Run the existing document extractor without submission admission."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("project", type=Path)
-    parser.add_argument("--engine", choices=("native",), default="native")
-    parser.add_argument("--route", choices=("ic", "ip"))
-    parser.add_argument("--ic-name", default="UNNAMED_CHIP")
-    parser.add_argument("--mode", choices=("auto", "docs", "prompt"), default="auto")
-    parser.add_argument("--pdk")
-    parser.add_argument("--skip-analog", action="store_true")
-    parser.add_argument("--execution-mode", choices=("default",), default="default")
-    args, forwarded = parser.parse_known_args(argv)
-    project = args.project.resolve()
-    if not project.is_dir():
-        parser.error(f"not a directory: {project}")
-    import _delivery_route
-    refusal = _delivery_route.admit(project, args.route, allow_rtl_scope=False)
-    if refusal:
-        print(_delivery_route.refusal_message(refusal), file=sys.stderr)
-        return 2
+    return phase_main(argv, scope="phase1")
+
+
+def document_owner(project, route):
+    """Extract design documents through the existing document owner."""
     import phase1_one_shot_runner as owner
-    if args.pdk:
-        forwarded += ["--pdk", args.pdk]
-    start = time.monotonic()
-    code = owner._run_docs_mode(project, args.ic_name, forwarded)
+    project = Path(project).resolve()
+    forwarded = ["--pdk", route["pdk"]] if route.get("pdk") else []
+    started = time.monotonic()
+    code = owner._run_docs_mode(project, route.get("ic_name", "UNNAMED_CHIP"), forwarded)
     status = {0: "PASS", 1: "FAIL"}.get(code, "NOT_MEASURED")
-    report = {
-        "project": str(project), "phase": 1, "mode": "docs",
-        "verdict": status, "duration_s": time.monotonic() - start,
-        "delegated_to": "phase1_doc_one_shot_runner", "delegated_rc": code,
-        "steps": [{"name": owner.D1_STEP_NAME, "status": status,
-                   "exit_code": code}],
-        "expert_review": "PENDING",
-    }
+    report = {"project": str(project), "phase": 1, "mode": "docs",
+              "verdict": status, "duration_s": time.monotonic() - started,
+              "delegated_to": "phase1_doc_one_shot_runner", "delegated_rc": code,
+              "steps": [{"name": owner.D1_STEP_NAME, "status": status, "exit_code": code}],
+              "expert_review": "PENDING"}
     output = project / "reports/orchestrator/phase1_one_shot.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2) + "\n")
     return code
+
+
+def rtl_owner(project, route):
+    """Run authoring and lint owners without re-entering the public runner."""
+    from types import SimpleNamespace
+    import design_one_shot_runner as owner
+    project = Path(project).resolve()
+    first, last = str(route["entry_step"]), str(route["verify_through"])
+    contract = route.get("input_contract", "structured")
+    owner._pl.select_rtl_input(project, contract, first, "1" if last == "1" else "2")
+    top = route.get("top_name", "chip_top")
+    if contract == "original":
+        top = owner._phase1_declared_module_name(owner._gather_phase1_plain_spec_text(project).text) or top
+    ic_class, evidence = owner.detect_ic_class(project)
+    plan = []
+    staged = owner.step_reused_ip_consume(project, top)
+    if staged is not None:
+        plan.append(staged)
+    if first in {"1", "D09", "rtl_authoring"}:
+        plan.append(owner.step_rtl_gen(project, ic_class))
+        plan.append(owner.step_reused_ip_consume(project, top))
+        plan.append(owner.step_leaf_typo_aliases(project))
+        plan.append(owner.step_reset_clock_variant_aliases(project, top))
+    if last not in {"1", "D09", "rtl_authoring"}:
+        plan.append(native_lint(project, top))
+    args = SimpleNamespace(entry_step=first, exit_step=last)
+    return finish_frontend(project, [row for row in plan if row is not None], args, ic_class, evidence)
+
+
+def owner_main(project, route, kind):
+    return document_owner(project, route) if kind == "phase1" else rtl_owner(project, route)
 
 
 def native_lint(project, top_name=None):
@@ -170,6 +208,14 @@ class OwnerSession:
         self.phase1_executed = False
         self.log = None
 
+    def _command(self, kind, route=None):
+        code = ("import json,sys; from pathlib import Path; "
+                "sys.path.insert(0, sys.argv[1]); "
+                "from flow_engine_frontend import owner_main; "
+                "raise SystemExit(owner_main(Path(sys.argv[2]), json.loads(sys.argv[3]), sys.argv[4]))")
+        return [sys.executable, "-c", code, str(Path(__file__).parent),
+                str(self.project), json.dumps(route or self.route), kind]
+
     def result(self, directory, kind, *, rerun=False):
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
@@ -179,12 +225,7 @@ class OwnerSession:
         bounded = self.route["delivery_target"] == "rtl"
         command = None
         if kind == "phase1" and not self.phase1_executed and (rerun or not path.is_file()):
-            from task_nature_route import delivery_route_for_target
-            command = [sys.executable, str(Path(__file__).with_name("phase1_one_shot_runner.py")),
-                       str(self.project), "--route", delivery_route_for_target(self.route["delivery_target"]),
-                       "--mode", "docs", "--execution-mode", "default", "--engine", "native"]
-            if self.route.get("pdk"):
-                command += ["--pdk", self.route["pdk"]]
+            command = self._command("phase1")
             self.phase1_executed = True
         elif kind != "phase1" and not self.executed and (bounded or rerun or not path.is_file()):
             if bounded:
@@ -193,11 +234,7 @@ class OwnerSession:
                 table = json.loads((Path(__file__).parents[1] / "flow/steps.json").read_text())
                 author = next(row for row in table["steps"] if row["tool"].get("function") == "step_rtl_gen")
                 first = last = author["legacy_id"]["native"][0]
-            command = [sys.executable, str(Path(__file__).with_name("design_one_shot_runner.py")),
-                       str(self.project), "--entry-step", str(first), "--exit-step", str(last),
-                       "--rtl-input", self.route.get("input_contract", "structured"),
-                       "--skip-hardware", "--skip-analog", "--skip-phase3",
-                       "--execution-mode", "default", "--engine", "native"]
+            command = self._command("rtl", {**self.route, "entry_step": first, "verify_through": last})
             self.executed = True
         if command is not None:
             path.unlink(missing_ok=True)
@@ -206,7 +243,7 @@ class OwnerSession:
             self.log = directory / "owner.log"
             with tempfile.TemporaryFile() as log:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
-                    env={**os.environ, "VIBEIC_FLOW_ENGINE": "legacy"}, cwd=directory, check=False)
+                    cwd=directory, check=False)
                 log.seek(0)
                 with self.log.open("wb") as destination:
                     shutil.copyfileobj(log, destination)
@@ -282,14 +319,9 @@ def run_public(args):
     if args.entry_step is not None or args.exit_step is not None:
         if args.entry_step is None or args.exit_step is None:
             raise ValueError("The native entry requires both Router window bounds.")
-        route = {}
-        pointer = project / "reports/orchestrator/receipts/route_decision.current.json"
-        if pointer.is_file():
-            selected = json.loads(pointer.read_text())
-            route = json.loads(Path(selected["receipt_path"]).read_text())["payload"]
-        route = {**route, "entry_step": args.entry_step, "verify_through": args.exit_step,
+        route = {"entry_step": args.entry_step, "verify_through": args.exit_step,
                  "input_contract": args.rtl_input,
-                 "delivery_target": args.delivery_target or route.get("delivery_target") or
+                 "delivery_target": args.delivery_target or
                     ("ip_hardmacro" if args.route == "ip" else "shippable_gds")}
         if args.rtl_input == "original" and "verify_closed_steps" not in route:
             import route_decision
@@ -314,7 +346,43 @@ def run_public(args):
             text, nature=proposal["entry_nature"], delivery_target=target)
     if getattr(args, "pdk", "auto") != "auto":
         route = {**route, "pdk": args.pdk}
-    summary = flow_engine.run(project, route=route)
+    for name, default in (("ic_name", "UNNAMED_CHIP"), ("top_name", "chip_top")):
+        if getattr(args, name, default) != default:
+            route[name] = getattr(args, name)
+    scope = getattr(args, "scope", "all")
+    if (scope == "all" and not any(getattr(args, flag, False)
+            for flag in ("skip_phase1", "skip_phase2", "skip_phase3"))):
+        options = {"route": route}
+        for name in ("from_name", "to_name"):
+            if getattr(args, name, None):
+                options[name] = getattr(args, name)
+        summary = flow_engine.run(project, **options)
+        return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
+    table = flow_engine.read_json(flow_engine.TABLE)
+    selected = flow_engine.select_steps(table, route,
+        flow_engine.design_features(project, route, table), None, None)
+    positions = {row["name"]: i for i, row in enumerate(table["steps"])}
+    lower, upper = 0, len(table["steps"]) - 1
+    scope = getattr(args, "scope", "all")
+    if scope == "phase1":
+        upper = positions["requirements_and_delivery_route"]
+    if scope in {"phase2", "phase23"} or getattr(args, "skip_phase1", False):
+        lower = positions["rtl_authoring"]
+    if scope == "phase2" or getattr(args, "skip_phase3", False):
+        upper = positions["netlist_handoff"]
+    if scope == "phase3" or getattr(args, "skip_phase2", False):
+        lower = positions["die_floorplan_and_macros"]
+    requested = [row for row in selected if lower <= positions[row["name"]] <= upper]
+    if not requested:
+        raise ValueError("The selected phase does not intersect the Router window")
+    first = getattr(args, "from_name", None) or (requested[0]["name"] if lower else None)
+    last = getattr(args, "to_name", None) or (requested[-1]["name"] if upper < len(table["steps"]) - 1 else None)
+    options = {"route": route}
+    if first:
+        options["from_name"] = first
+    if last:
+        options["to_name"] = last
+    summary = flow_engine.run(project, **options)
     return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
 
 
