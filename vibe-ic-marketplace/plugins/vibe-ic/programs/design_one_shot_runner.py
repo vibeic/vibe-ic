@@ -28064,7 +28064,7 @@ def step_synthesis_handoff(project: Path, *, plan=None, owner_capture=False) -> 
                     admission = flow109.dft_preroute_admission(project, context)
                     mapped = _current_phase2_consumer(project, '8', 0.0)
                     retained_native = (
-                        admission['functional_equivalence']['path'] == 'reports/lec_eqy_execution.json'
+                        admission['functional_equivalence']['path'] in ('reports/lec_eqy_execution.json', 'reports/lec_eqy.json')
                         and mapped is not None
                         and mapped['result'].get('site') == 'step_sdc_validation_post_prelayout')
             except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError):
