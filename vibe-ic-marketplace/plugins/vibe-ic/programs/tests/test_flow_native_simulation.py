@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sys
 import time
@@ -51,6 +52,35 @@ def test_missing_command_does_not_publish_a_run(tmp_path):
     assert commands.records == []
     assert not (tmp_path / "command_1.log").exists()
     assert commands.result()["ran"] is False
+
+
+@pytest.mark.parametrize("outcome,status", [("pass", "PASS"), ("fail", "FAIL"), ("skip", "NOT_MEASURED")])
+def test_declared_runtime_supplies_cocotb_without_host_tools(tmp_path, outcome, status):
+    if not (os.environ.get("EDA_CONTAINER") or os.environ.get("VIBEIC_EDA_CONTAINER")) or not shutil.which("docker"):
+        pytest.skip("An existing declared tool container with this source and temporary directory mounted is required")
+    if shutil.which("cocotb-config"):
+        pytest.skip("This regression exercises a host without cocotb")
+    rtl = tmp_path / "unit.v"
+    rtl.write_text("`timescale 1ns/1ps\nmodule unit(input wire a, output wire z); assign z=~a; endmodule\n")
+    tb = tmp_path / "tb_unit.py"
+    tb.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+                  f"@cocotb.test(skip={outcome == 'skip'})\n"
+                  "async def check(dut):\n    dut.a.value=0\n    await Timer(1, unit='ns')\n"
+                  f"    assert int(dut.z.value)=={0 if outcome == 'fail' else 1}\n")
+    result = execute(tmp_path, tmp_path / "output", {
+        "adapter": "simulation", "rtl": [str(rtl)], "top": "unit", "testbenches": [str(tb)]}, {})
+    functional = next(row for row in result["native_steps"] if row["name"] == "Icarus.Functional")
+    assert functional["ran"]
+    assert functional["status"] == status
+    assert all(Path(path).is_file() for path in result["reports"])
+    logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
+                     if str(path).endswith(".log"))
+    assert "cocotb" in logs
+    if outcome == "skip":
+        assert "assertion_failures" not in result["metrics"]
+    else:
+        assert result["metrics"]["assertion_failures"] == (1 if outcome == "fail" else 0)
+        assert bool(result["exit_code"]) == (outcome == "fail")
 
 
 @pytest.mark.parametrize("four_state,failures", [(True, 0), (False, 1)])
