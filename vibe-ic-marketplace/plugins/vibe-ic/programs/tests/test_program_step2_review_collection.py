@@ -12,26 +12,12 @@ import pytest
 import benchmark_dispatch as bd
 import benchmark_io_adapter as bio
 import flow_phase_attribution as fpa
-from test_stored_runner_issued_consumer import ordinary_duplicate, restore_bytes  # noqa: F401
+from test_stored_runner_issued_consumer import restore_bytes
 
 
-@pytest.fixture(scope="module")
-def program_step2(ordinary_duplicate):
-    root, project, argv, measured, duplicate = ordinary_duplicate
-    got = bio.collect("rtllm", "neutral", project, supplied_rtl=True)
-    assert got["ok"]
-    task = bd._make_ai_review_task("neutral", project, got,
-        {"nature": "spec_generation", "route": "SPEC_TO_RTL"},
-        measured.rc, root / "review-run", "PROGRAM", runner_invocation=measured.invocation)
-    result = {"candidate_origin": "PROGRAM", "rc": measured.rc}
-    assert bd._runner_reentry_reason(task, result) is None
-    return root, project, task, result, measured
-
-
-@pytest.fixture(scope="module")
-def program_step4(tmp_path_factory):
+def _program_reentry(tmp_path_factory, exit_step):
     import source_manifest_md_emit
-    root = tmp_path_factory.mktemp("native_program_window")
+    root = tmp_path_factory.mktemp("program_window_" + exit_step)
     project = root / "project"
     prompt = project / "input/phase1_prompt.md"
     prompt.parent.mkdir(parents=True)
@@ -39,19 +25,33 @@ def program_step4(tmp_path_factory):
     rtl = project / "phase2/stage1/rtl/straight_link.v"
     rtl.parent.mkdir(parents=True)
     rtl.write_text("module straight_link(input a,output y); assign y=a; endmodule\n")
+    switch = project / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True)
+    switch.write_text('{"steps":{"2":"direct"}}')
     source_manifest_md_emit.emit(project)
     with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("VIBEIC_FLOW_ENGINE", "native")
-        argv = bd._resume_solver_argv(Path(bd.__file__).with_name("vibe_ic_one_shot_runner.py"),
-            project, True, "2", "4", "ip", "original", "rtl", resolve_manifest=False)
+        patch.setenv("VIBEIC_FLOW_ENGINE", "native" if exit_step == "4" else "legacy")
+        argv = bd._solver_argv(Path(bd.__file__).with_name("vibe_ic_one_shot_runner.py"),
+            project, "2", exit_step, "ip", "original", "rtl")
         measured = bd._RunnerBudget(1, 1, 1).run(argv)
         assert not measured.error, measured.stderr
         got = bio.collect("rtllm", "neutral", project, supplied_rtl=True)
+        assert got["ok"], got
         task = bd._make_ai_review_task("neutral", project, got, {}, measured.rc,
             root / "review-run", "PROGRAM", runner_invocation=measured.invocation)
-        result = {"candidate_origin": "PROGRAM", "rc": measured.rc, "exit": "4", "phases": fpa.attribute(project)}
+        result = {"candidate_origin": "PROGRAM", "rc": measured.rc, "exit": exit_step, "phases": fpa.attribute(project)}
         assert bd._runner_reentry_reason(task, result) is None
     return root, project, task, result, measured
+
+
+@pytest.fixture(scope="module")
+def program_step2(tmp_path_factory):
+    return _program_reentry(tmp_path_factory, "2")
+
+
+@pytest.fixture(scope="module")
+def program_step4(tmp_path_factory):
+    return _program_reentry(tmp_path_factory, "4")
 
 
 @pytest.mark.parametrize("engine", ["native", "legacy"])
