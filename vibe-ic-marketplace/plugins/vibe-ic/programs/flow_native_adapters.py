@@ -383,7 +383,7 @@ def simulation(project, directory, tool, commands):
 
 
 def formal(project, directory, tool, commands):
-    from formal_property_run import _ensure_expert_observers_bound, _model_texts
+    from formal_property_run import _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read
     from flow109_netlist_cdc import _word
     from formal_harness_gen import _resolve_top
 
@@ -411,6 +411,7 @@ def formal(project, directory, tool, commands):
     if not paths or any(not path.is_file() for path in paths):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
     statuses, covers, reports, required, observed, native_steps, scope, proof_scopes = [], [], [], [], [], [], [], []
+    frontend_failures = set()
 
     def cover_model(output, key, options):
         model, cells = output / "model/design.il", output / "model/cover_inputs.json"
@@ -485,9 +486,30 @@ def formal(project, directory, tool, commands):
             key = f"{source.name}:{task}"
             required.append(key)
             output = directory / f"proof_{index + 1}_{task_index + 1}"
+            first_read = len(commands.records)
             completed = commands.run(["sby", "-f", "-d", output, source, *([task] if task else [])], cwd=source.parent)
             if completed is None:
                 return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
+            config = output / "config.sby"
+            if frontend_aborted_the_read(completed.stdout + completed.stderr) and config.is_file():
+                body = config.read_text()
+                reads = list(re.finditer(r"(?m)^read_verilog[ \t]+-formal[ \t]+-sv[ \t]+([^\n]+)", body))
+                converted = (commands.run(["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
+                    "-DFORMAL", "-DYOSYS", "-I.", *shlex.split(reads[0][1])], cwd=output / "src")
+                    if len(reads) == 1 else None)
+                if converted is not None and converted.returncode == 0:
+                    lowered = output / "sv_frontend.v"
+                    lowered.write_text(converted.stdout)
+                    body = body[:reads[0].start()] + "read_verilog -formal -sv " + _word(lowered) + body[reads[0].end():]
+                    body = body.replace("[files]\n", "[files]\n" + str(lowered) + "\n", 1)
+                    retry = output / "sv_frontend.sby"
+                    retry.write_text(body)
+                    destination = output / "sv_frontend"
+                    alternate = commands.run(["sby", "-f", "-d", destination, retry], cwd=source.parent)
+                    if alternate is not None:
+                        frontend_failures.add(first_read)
+                        reports.extend([lowered, retry, output / "status"])
+                        output, completed = destination, alternate
             native = sorted(output.rglob("status"))
             config = output / "config.sby"
             word = (output / "status").read_text().strip().split() if (output / "status").is_file() else []
@@ -534,6 +556,9 @@ def formal(project, directory, tool, commands):
         "scope": "Properties of the actual harness subjects only; top-level function uses simulation, ISA suites and GLS."}, indent=2) + "\n")
     result = commands.result(metrics, [*reports, scope_report], " ".join([*scope, cover_detail,
         f"proves_declared_top={str(proves_top).lower()}; scope is the actual harness subjects in {scope_report}."]))
+    result["exit_code"] = next((r["exit_code"] for i, r in enumerate(commands.records)
+                                if i not in frontend_failures and r["exit_code"]),
+                               0 if commands.records else None)
     result["native_steps"] = native_steps
     return result
 

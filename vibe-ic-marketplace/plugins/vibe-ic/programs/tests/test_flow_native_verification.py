@@ -24,19 +24,24 @@ def test_native_formal_retries_an_unsupported_sv_read_without_changing_propertie
     source.mkdir(parents=True)
     package = source / "unit_pkg.sv"
     package.write_text("package unit_pkg; parameter SET=1'b1; endpackage\n")
+    header = tmp_path / "input/settings.vh"
+    header.parent.mkdir()
+    header.write_text("`define RESET_VALUE 0\n")
     rtl = source / "unit.sv"
-    rtl.write_text("module unit import unit_pkg::*; (input clk, output q);\n"
+    rtl.write_text("module unit import unit_pkg::*; (input clk, rst_n, output reg [1:0] q);\n"
         "`ifdef FORMAL\n`ifdef YOSYS\n`ifndef SYNTHESIS\n"
-        f"assign q=1'b{0 if bad else 1};\n"
-        "`else\nassign q=0;\n`endif\n`else\nassign q=0;\n`endif\n"
-        "`else\nassign q=0;\n`endif\nendmodule\n")
+        f"always @(posedge clk) if(!rst_n) q<=2'd{int(bad)}; else q<=q+1;\n"
+        "`else\nalways @(posedge clk) q<=1;\n`endif\n"
+        "`else\nalways @(posedge clk) q<=1;\n`endif\n"
+        "`else\nalways @(posedge clk) q<=1;\n`endif\nendmodule\n")
     harness = source / "proof.sv"
-    harness.write_text("module proof import unit_pkg::*; (input clk);\n"
-        "wire q; unit dut(clk,q); always @(posedge clk) assert(q==SET); endmodule\n")
+    harness.write_text("`include \"settings.vh\"\nmodule proof import unit_pkg::*; (input clk);\n"
+        "(* anyseq *) reg rst_n; reg valid=0; wire [1:0] q; unit dut(clk,rst_n,q);\n"
+        "always @(posedge clk) begin valid<=1; if(valid && !$past(rst_n)) assert(q==`RESET_VALUE); end endmodule\n")
     path = (lambda p: p.name) if relative else str
     deck = source / "proof.sby"
     deck.write_text(emit_invariant_sby([path(package), path(rtl)], path(harness),
-        "proof", [], [], prove_depth=8, bmc_depth=8))
+        "proof", [], [], prove_depth=8, bmc_depth=8, include_files=[str(header)]))
     original = deck.read_bytes(), harness.read_bytes(), rtl.read_bytes()
     output = tmp_path / "output"
     output.mkdir()
@@ -52,8 +57,30 @@ def test_native_formal_retries_an_unsupported_sv_read_without_changing_propertie
     assert len(retry) == 2
     for entry in retry:
         text = entry.read_text()
-        assert "read_slang --single-unit" in text
+        assert "read_verilog -formal -sv" in text and "sv_frontend.v" in text
         assert "depth 8" in text and "abc " in text
+        lowered = entry.with_suffix(".v").read_text()
+        assert "(* anyseq *)" in lowered and "assert (q == 0)" in lowered
+
+
+def test_native_formal_keeps_an_uncompilable_sv_model_unmeasured(tmp_path):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    source = tmp_path / "phase2/stage1/formal"
+    source.mkdir(parents=True)
+    harness = source / "proof.sv"
+    harness.write_text("module proof(input clk); always @(posedge clk) assert( ; endmodule\n")
+    deck = source / "proof.sby"
+    deck.write_text(emit_invariant_sby([], str(harness), "proof", [], []))
+    original = deck.read_bytes(), harness.read_bytes()
+    output = tmp_path / "output"
+    output.mkdir()
+    result = formal(tmp_path, output, {}, Commands(output))
+    assert "unproved_required_properties" not in result["metrics"], result
+    assert all(row["status"] == "NOT_MEASURED" for row in result["native_steps"]), result
+    assert (deck.read_bytes(), harness.read_bytes()) == original
 
 
 @pytest.mark.parametrize("reset_value", [0, 1])
