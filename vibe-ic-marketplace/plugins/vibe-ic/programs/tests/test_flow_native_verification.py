@@ -372,9 +372,15 @@ def test_actual_eqy_undecided_strategy_is_not_a_design_failure(tmp_path):
 def test_actual_eqy_native_strategy_timeout_is_unmeasured(tmp_path, monkeypatch):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
-    import lec_run
+    import librelane_eqy
 
-    monkeypatch.setattr(lec_run, "DEFAULT_YOSYS_TIMEOUT_S", 1)
+    original_script = librelane_eqy.eqy_script
+
+    def timed_script(*args, **kwargs):
+        kwargs["timeout"] = 1
+        return original_script(*args, **kwargs)
+
+    monkeypatch.setattr(librelane_eqy, "eqy_script", timed_script)
     gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
     gold.write_text("module unit(input [19:0] a,b,output [39:0] y); assign y=a*b; endmodule\n")
     gate.write_text("module unit(input [19:0] a,b,output reg [39:0] y); integer i; "
