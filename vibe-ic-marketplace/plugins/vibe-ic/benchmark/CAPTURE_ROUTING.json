@@ -562,29 +562,17 @@
       "bucket_A_program": "programs/ppa_search_run.py",
       "bucket_B_skill_file": "skills/ppa-optimize/SKILL.md"
     },
-    "repo.absence_verdict": {
-      "description": "A refusal that a declared thing is not there. The rule this step carries: an absence verdict must name the search space it exhausted, because 'not found' and 'not looked for' are different verdicts that print the same way.",
-      "bucket_A_program": "programs/absence_verdict_names_its_search_space_check.py",
-      "bucket_B_skill_file": "agents/ic-expert-agent.md"
-    },
+
     "repo.host_independence": {
       "bucket_A_program": "programs/gate_host_independence_check.py",
       "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
     },
-    "repo.upstream_parity": {
-      "description": "Where this plugin RE-IMPLEMENTS an upstream flow's computation or configuration contract",
-      "bucket_A_program": "programs/upstream_contract_parity_check.py",
-      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md",
-      "_comment": "Deliberately NOT routed to the step a divergence was first found at: the rule is about re-implementation, not about the subsystem that happened to surface it."
-    },
+
     "repo.test_population": {
       "bucket_A_program": "programs/plugin_change_pytest_gate.py",
       "bucket_B_skill_file": "skills/full-test-audit/SKILL.md"
     },
-    "repo.doc_command_reproducibility": {
-      "bucket_A_program": "programs/changelog_command_reproducibility_check.py",
-      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
-    },
+
     "phase3.lec_post_layout": {
       "bucket_A_program": "programs/lec_post_layout_check.py",
       "bucket_B_skill_file": "skills/equivalence-check/SKILL.md"
@@ -601,10 +589,7 @@
       "bucket_A_program": "programs/_ppa/cli_exit.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
-    "repo.tracked_artefact_hygiene": {
-      "bucket_A_program": "programs/tracked_json_yaml_parses_check.py",
-      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
-    },
+
     "ppa.schema_coverage": {
       "bucket_A_program": "programs/_ppa/schema_validation.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
@@ -694,15 +679,7 @@
       ],
       "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     },
-    "flow.matrix_d2_falsifiable": {
-      "description": "The 68x9 matrix's falsifiability dimension: can each gate reach a genuine non-zero exit",
-      "bucket_A_program": "programs/gate_red_is_more_than_absence_census.py",
-      "bucket_A_related": [
-        "programs/flow_gate_grid.py",
-        "programs/tests/test_matrix_d2_falsifiable.py"
-      ],
-      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
-    },
+
     "flow.matrix_d3_outputs_produced": {
       "description": "The 68x9 matrix's outputs dimension: are declared required_outputs genuinely written by a run",
       "bucket_A_program": "programs/declared_output_has_a_live_producer_check.py",

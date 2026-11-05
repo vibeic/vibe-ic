@@ -5,11 +5,13 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
-from librelane.common import Path as NativePath
+from librelane.common import Path as NativePath, get_script_dir
 from librelane.state import DesignFormat, State
 from librelane.steps import Step, StepException
 from librelane.steps.klayout import Density
+from librelane.steps.magic import MagicStep
 
 from metal_fill_config_gen import build_metal_fill_config
 
@@ -69,8 +71,12 @@ class DensityTopUp(Density):
     name = "PDK density top-up"
     inputs = [DesignFormat.GDS, DesignFormat.ODB]
     outputs = [DesignFormat.GDS]
+    config_vars = [*Density.config_vars,
+                   next(item for item in MagicStep.config_vars if item.name == "MAGICRC")]
 
     def run(self, state_in, **kwargs):
+        if not self.config.get("KLAYOUT_DENSITY_RUNSET"):
+            return self.run_magic(state_in, **kwargs)
         count = state_in.metrics.get(METRIC)
         if count is None:
             raise StepException("NOT_MEASURED: KLayout density has not produced its native count")
@@ -106,3 +112,43 @@ class DensityTopUp(Density):
         if METRIC not in checked.metrics:
             raise StepException("NOT_MEASURED: density rerun left no native count")
         return {DesignFormat.GDS: NativePath(str(output))}, {METRIC: checked.metrics[METRIC]}
+
+    def run_magic(self, state_in, **kwargs):
+        magicrc = self.config.get("MAGICRC")
+        helpers = Path(str(magicrc)).parent if magicrc else None
+        if helpers is None or not all((helpers / name).is_file() for name in
+                                      ("generate_fill.py", "check_density.py")):
+            raise StepException("NOT_MEASURED: no configured native density runset or Magic helpers")
+        work = Path(tempfile.mkdtemp(prefix="magic-", dir=self.step_dir))
+        fill_dir, checked_dir = work / "fill", work / "checked"
+        fill_dir.mkdir()
+        checked_dir.mkdir()
+        name = self.config["DESIGN_NAME"]
+        input_gds = fill_dir / f"{name}.gds"
+        input_gds.symlink_to(Path(str(state_in[DesignFormat.GDS])).resolve())
+        kwargs, environment = self.extract_env(kwargs)
+        environment.update(PDK=str(self.config["PDK"]), PDK_ROOT=str(self.config["PDK_ROOT"]))
+        self.run_subprocess(
+            ["python3", str((helpers / "generate_fill.py").resolve()), input_gds.name],
+            log_to=work / "fill.log", env=environment, **{**kwargs, "cwd": str(fill_dir)})
+        pattern = fill_dir / f"{name}_fill_pattern.gds.gz"
+        if not pattern.is_file() or not pattern.stat().st_size:
+            raise StepException("NOT_MEASURED: native Magic fill left no pattern GDS")
+        output = checked_dir / input_gds.name
+        self.run_subprocess(
+            ["klayout", "-b", "-zz", "-r", str(Path(get_script_dir()) / "klayout/insert_cell.py"),
+             "-rd", f"input={input_gds}", "-rd", f"insert={pattern}", "-rd", f"output={output}"],
+            log_to=work / "merge.log", env=environment, **kwargs)
+        if not output.is_file() or not output.stat().st_size:
+            raise StepException("NOT_MEASURED: native fill merge left no combined GDS")
+        report = work / "density.log"
+        self.run_subprocess(
+            ["python3", str((helpers / "check_density.py").resolve()), output.name],
+            log_to=report, env=environment, **{**kwargs, "cwd": str(checked_dir)})
+        text = report.read_text()
+        if (not text.rstrip().endswith("Done!")
+                or not re.search(r"^Stepped area density results \(total tiles = [1-9]\d*\):$", text, re.M)
+                or not re.search(r"^\S+ Density: [-+]?\d+(?:\.\d+)?$", text, re.M)):
+            raise StepException("NOT_MEASURED: native Magic density report is incomplete or unmeasured")
+        return {DesignFormat.GDS: NativePath(str(output))}, {
+            "magic__density_error__count": len(re.findall(r"^\*\*\*Error:", text, re.M))}
