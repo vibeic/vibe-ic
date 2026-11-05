@@ -4056,6 +4056,60 @@
         "OpenROAD.RCX",
         "OpenROAD.STAPostPNR"
       ]
+    },
+    "candidate_ir_drop": {
+      "kind": "profiles",
+      "profiles": [
+        {
+          "when": "analog_physical and not digital_physical",
+          "tool": {
+            "kind": "adapter",
+            "program": "analog_bound_measurements.py",
+            "function": "source-bound native voltage capture",
+            "gap": "Native invocation must be adapted without the old acceptance wrappers."
+          }
+        },
+        {
+          "when": "assembly_only",
+          "tool": {
+            "kind": "adapter",
+            "program": "ir_drop_report_check.py",
+            "function": null,
+            "gap": "Native invocation must be adapted without the old acceptance wrappers."
+          }
+        },
+        {
+          "when": "ic",
+          "tool": {
+            "kind": "adapter",
+            "steps": [
+              "VibeIC.IRDropCorners",
+              "Vibeic.TransientIR"
+            ],
+            "imports": [
+              "flow_ir_corners",
+              "librelane_plugins.librelane_plugin_vibeic.ir_drop"
+            ],
+            "adapter": "ir_drop",
+            "parallel": true
+          }
+        },
+        {
+          "when": "otherwise",
+          "tool": {
+            "kind": "adapter",
+            "steps": [
+              "OpenROAD.IRDropReport",
+              "Vibeic.TransientIR"
+            ],
+            "adapter": "ir_drop",
+            "parallel": true,
+            "imports": [
+              "librelane_plugins.librelane_plugin_vibeic.ir_drop"
+            ]
+          }
+        }
+      ]
     }
   },
   "report_check_readers": {
