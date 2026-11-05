@@ -83,21 +83,52 @@ def eqy(project, directory, tool, commands, *, state, config):
     top, netlist = config.get("DESIGN_NAME"), state.get("nl") if state is not None else None
     rtl = [Path(p) if Path(p).is_absolute() else project / p for p in config.get("VERILOG_FILES") or []]
     corner = config.get("DEFAULT_CORNER", "")
-    libraries = config.get("CELL_LIBS") or config.get("LIB") or {}
-    liberty = list(dict.fromkeys(str(path) for pattern, paths in libraries.items()
-        if fnmatch.fnmatchcase(corner, pattern)
-        for path in (paths if isinstance(paths, (list, tuple)) else [paths])))
+    liberty, external_liberty = [], []
+    for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
+        libraries = config.get(key) or []
+        groups = ([paths for pattern, paths in libraries.items() if fnmatch.fnmatchcase(corner, pattern)]
+                  if isinstance(libraries, dict) else [libraries])
+        for paths in groups:
+            values = [str(path) for path in (paths if isinstance(paths, (list, tuple)) else [paths])]
+            liberty.extend(values)
+            if key in {"PAD_LIBS", "EXTRA_LIBS"}:
+                external_liberty.extend(values)
+    liberty = list(dict.fromkeys(liberty))
     if (not top or not netlist or not Path(netlist).is_file() or not rtl
             or any(not path.is_file() for path in rtl) or not liberty
             or any(not Path(path).is_file() for path in liberty)):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
+    declared = [Path(path) if Path(path).is_absolute() else project / path
+                for key in ("PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS")
+                for path in config.get(key) or []]
+    missing = [str(path) for path in declared if not path.is_file()]
+    if missing:
+        return commands.result(detail="EQY declared pad/extra models are unavailable: " + ", ".join(missing))
+    for library in external_liberty:
+        declared.extend(sorted((Path(library).parent.parent / "verilog").glob("*.v")))
+    models = []
+    if declared:
+        from sdf_gate_sim import netlist_used_cells, verilog_model_closure
+        used = netlist_used_cells("\n".join(path.read_text() for path in [*rtl, Path(netlist)]))
+        models = list(map(Path, verilog_model_closure(declared, used)["files"]))
     script = directory / "equivalence.eqy"
-    script.write_text(reset_script(eqy_script(top, rtl, Path(netlist), " ".join(liberty),
-                                 synthesis=config, views=directory), reset_boundary(project)))
+    script.write_text(reset_script(eqy_script(top, rtl, Path(netlist), liberty[0],
+        synthesis=config, views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models),
+        reset_boundary(project)))
     completed = commands.run(["eqy", "-j", "8", "-f", "-d", directory / "scratch", script])
     if completed is None:
         return commands.result(reports=[script], detail="The native EQY executable is unavailable.")
     status, count, detail, reports = eqy_partitions(directory / "scratch")
+    if status == "NOT_MEASURED":
+        logs = list((directory / "scratch/strategies").glob("*/*/*/logfile.txt"))
+        witness_error = any("yosys-witness" in (text := path.read_text(errors="replace"))
+                            and ("bad interpreter" in text or "No such file or directory" in text)
+                            for path in logs)
+        witness = shutil.which("yosys-witness")
+        if (witness_error and witness and not Path("/usr/bin/env").exists()
+                and Path(witness).read_text(errors="replace").splitlines()[0].startswith("#!/usr/bin/env")):
+            detail += " Native yosys-witness cannot execute: its /usr/bin/env shebang interpreter is absent."
+        reports.extend(logs)
     metrics = {}
     if count is not None:
         metrics = dict.fromkeys({"unproved_equivalence", "final_lec_unproved",

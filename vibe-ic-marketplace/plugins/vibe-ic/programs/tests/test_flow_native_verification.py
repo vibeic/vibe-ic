@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import shutil
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -102,6 +103,92 @@ def test_actual_eqy_detects_unequal_logic(tmp_path, different):
     assert result["metrics"]["final_lec_unproved"] == int(different), result
     assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
     assert not (tmp_path / "result.json").exists()
+
+
+@pytest.mark.parametrize("model_key", ["PAD_LIBS", "EXTRA_LIBS", "PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS", "LIBERTY_SIBLING"])
+@pytest.mark.parametrize("different", [False, True])
+def test_eqy_preserves_chip_ports_and_declared_external_logic(tmp_path, model_key, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    gold, gate, core = [tmp_path / name for name in ("gold.v", "gate.v", "core.lib")]
+    gold.write_text("module unit(input a, output y, output vss);\nwire x;\n"
+        "PADIN input_cell(.PAD(a),.Y(x));\nPADGND supply_cell(.GND(vss));\nassign y=x; endmodule\n")
+    gate.write_text(gold.read_text().replace("assign y=x", "assign y=~x" if different else "assign y=x"))
+    core.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(core)]}}
+    if model_key.endswith("LIBS") or model_key == "LIBERTY_SIBLING":
+        model = tmp_path / "external.lib"
+        model.write_text('library(external) {cell(PADIN) {pin(PAD) {direction:input;}'
+            'pin(Y) {direction:output; function:"PAD";}} '
+            'cell(PADGND) {pin(GND) {direction:output; function:"0";}}}\n')
+        if model_key == "LIBERTY_SIBLING":
+            directory = tmp_path / "pdk/lib"
+            directory.mkdir(parents=True)
+            moved = directory / model.name
+            moved.write_text(model.read_text())
+            model.unlink()
+            model = moved
+            models = tmp_path / "pdk/verilog"
+            models.mkdir()
+            (models / "models.v").write_text("module PADIN(input PAD,output Y); assign Y=PAD; endmodule\n"
+                                            "module PADGND(output GND); assign GND=0; endmodule\n")
+        config["PAD_LIBS" if model_key == "LIBERTY_SIBLING" else model_key] = (
+            {"typical": [str(model)]} if model_key == "PAD_LIBS" else [str(model)])
+    else:
+        declared, model = tmp_path / "blackbox.v", tmp_path / "external_models.v"
+        declared.write_text("(* blackbox *) module PADIN(input PAD, output Y); endmodule\n"
+                           "(* blackbox *) module PADGND(output GND); endmodule\n")
+        model.write_text("module PADIN(input PAD,output Y); assign Y=PAD; endmodule\n"
+                         "module PADGND(output GND); assign GND=0; endmodule\n")
+        config[model_key] = [str(declared)]
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    assert result["metrics"].get("unproved_equivalence") == int(different), result
+    assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
+    for side in ("gold", "gate"):
+        ports = json.loads((tmp_path / f"{side}.before-normalization.json").read_text())["modules"]["unit"]["ports"]
+        assert set(ports) == {"a", "y", "vss"}
+
+
+def test_eqy_missing_external_model_stays_unmeasured(tmp_path):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    gold, gate, core = [tmp_path / name for name in ("gold.v", "gate.v", "core.lib")]
+    gold.write_text("module unit(input a, output y); PADIN input_cell(.PAD(a),.Y(y)); endmodule\n")
+    gate.write_text(gold.read_text())
+    core.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(core)]}}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
+    assert not result["metrics"]
+
+
+def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
+    gold, core, witness = [tmp_path / name for name in ("gold.v", "core.lib", "yosys-witness")]
+    gold.write_text("module unit(input a,output y);assign y=a;endmodule\n")
+    core.write_text("library(neutral) {}\n")
+    witness.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(shutil, "which", lambda name: str(witness))
+    exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: False if str(path) == "/usr/bin/env" else exists(path))
+
+    class NativeFailure(Commands):
+        def run(self, argv, cwd=None):
+            scratch = tmp_path / "scratch"
+            scratch.mkdir()
+            partition(scratch, "unit", "UNKNOWN")
+            log = scratch / "strategies/unit/pdr/unit/logfile.txt"
+            log.parent.mkdir(parents=True)
+            log.write_text("yosys-witness: /usr/bin/env: bad interpreter: No such file or directory\n")
+            self.records.append({"command": list(map(str, argv)), "exit_code": 1, "log": str(log)})
+            return subprocess.CompletedProcess(argv, 1, "", "")
+
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(core)]}}
+    result = eqy(tmp_path, tmp_path, {}, NativeFailure(tmp_path), state={"nl": str(gold)}, config=config)
+    assert not result["metrics"] and result["exit_code"] == 1
+    assert "yosys-witness cannot execute" in result["detail"] and "/usr/bin/env" in result["detail"]
 
 
 def test_xor_reuses_native_state_number(tmp_path):
