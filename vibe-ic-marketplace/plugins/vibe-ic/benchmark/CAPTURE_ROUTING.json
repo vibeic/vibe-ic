@@ -404,10 +404,7 @@
     },
     "phase3.synth": {
       "bucket_A_program": "programs/flow_engine.py",
-      "bucket_A_related": [
-        "programs/execution_native_worker.py",
-        "programs/execution_synthesis_engines.py"
-      ],
+      "bucket_A_related": [],
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "phase3.pnr_setup_repair": {

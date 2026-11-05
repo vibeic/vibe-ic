@@ -88,11 +88,9 @@ Per IC, committed AND pushed into **`<clone>/ic/<ic>/`** — the full step outpu
 
 #### Only PASSING, conforming cells are published there
 
-The published tree carries a cell only when three conditions hold, each measured:
-its directory is named `v<version>_<PDK>`, its own `RESULT.md` says PASS, and
-`benchmark_evidence_structure_check.py` exits 0. A run that did not pass is not
-evidence of anything except that a run happened, and shipping it beside the
-passing ones makes those harder to trust. Publish the failure as an issue instead.
+Keep the native tool result, its original limit, and official score together.
+A failing or unmeasured run remains useful evidence when its scope is stated.
+Store results outside the plugin repository at the owner's requested location.
 
 #### The two sibling repositories
 
@@ -188,38 +186,12 @@ unmeasured. `flow_engine_report.py` can render the native result table. Open RTL
 benchmarks still require Program First, independent blind AI review and backup,
 and official scoring through `benchmark_dispatch.py`.
 
-## Check-in boundary (HARD — enforced by a program, not by trust)
+## Keep run evidence separate from product code
 
-Two SEPARATE commit channels, NEVER mixed:
-
-1. **Benchmark RESULTS** → **the `vibeic/benchmark-data` repository only** (run results, generated
-   samples, reports, RESULT.md, SOURCE_MANIFEST.md, cross-check, transcripts).
-   You COMMIT **and PUSH** these — a run whose outputs are not pushed has not been
-   benchmarked.
-2. **Plugin / MCP FIXES** → `vibe-ic-marketplace/plugins/vibe-ic/**` (incl
-   `mcp-eda/**`), authored as a **chip-AGNOSTIC, VERSION-LESS PR** on its own
-   branch. The repo-gatekeeper reviews + assigns the version + lands it.
-
-**NO-MIX (the anti-gaming invariant):** a benchmark-data RESULT commit and a
-plugin/MCP FIX commit may **never be the same commit**. Bundling a hand-patch
-with the run whose number it changes is benchmark gaming. backlog
-(`community/backlogs/`) is **no longer a check-in target** for you (owner
-directive: PR, not backlog).
-
-**Before EVERY `git commit`, gate your own staged diff:**
-
-```bash
-python3 vibe-ic-marketplace/plugins/vibe-ic/programs/agent_checkin_scope_guard.py \
-    --role benchmark-agent --staged
-# exit 0 → safe;  exit 1 → either a forbidden path (backlog/other) OR a NO-MIX
-# violation (results + plugin in one commit) — SPLIT into a pure result commit and
-# a pure plugin-fix PR commit, then re-gate.
-```
-
-A plugin/MCP fix you author goes out as its OWN PR commit (no benchmark-data/
-paths); your RESULT commit stays pure benchmark-data/. The published number is
-only re-measured on the NEXT clean-room run against the LANDED plugin version —
-never against your un-landed local patch.
+Save run documents, generated samples, tool reports, raw transcripts and
+`RESULT.md` outside the plugin repository. Keep product fixes general and
+separate from design-specific results. Follow the owner's branch and landing
+instructions for the current task.
 
 ## Capture Enhancement → version-less PR (how you change the plugin)
 
