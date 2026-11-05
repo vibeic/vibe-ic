@@ -310,13 +310,17 @@ def _resolve_tb_width(project: Path, ports: List[dict]) -> int:
 # --------------------------------------------------------------------------
 # DUT shape classification
 # --------------------------------------------------------------------------
-def _native_top_ports(project: Path) -> Tuple[Optional[str], List[dict], Optional[str]]:
+def _native_top_ports(project: Path, *, rtl: Optional[List[Path]] = None,
+                      top: Optional[str] = None) -> Tuple[Optional[str], List[dict], Optional[str]]:
     """Read the authored interface with Yosys when prose supplied no port names."""
     from _cdc_netlist import yosys_script
     from flow_config import resolve_rtl_inputs
 
     try:
-        files, top = resolve_rtl_inputs(project)
+        if rtl is None or top is None:
+            files, top = resolve_rtl_inputs(project)
+        else:
+            files = rtl
     except (FileNotFoundError, ValueError) as error:
         return None, [], str(error)
     directory = project / "reports/phase2/professional_interface"
@@ -339,7 +343,8 @@ def _native_top_ports(project: Path) -> Tuple[Optional[str], List[dict], Optiona
                  for name, port in ports.items()], None
 
 
-def classify_dut(project: Path, ic_class: str
+def classify_dut(project: Path, ic_class: str, *, rtl: Optional[List[Path]] = None,
+                 top: Optional[str] = None
                  ) -> Tuple[Optional[dict], Optional[str]]:
     """Return (shape, reason_if_none). shape kinds:
       * "parallel_arith"  — c = a OP b, all full-width  (closed-form ref)
@@ -347,10 +352,12 @@ def classify_dut(project: Path, ic_class: str
                             1-bit serial result (bounded-latency scoreboard)
       * "generic"         — reference hook (dual-track)
     """
-    top, ports = _aog._load_top_ports(project)
-    authored_interface = not top or not ports
+    documented_top, ports = _aog._load_top_ports(project)
+    authored_interface = not documented_top or not ports
+    native_top = top
+    top = documented_top
     if authored_interface:
-        top, ports, why = _native_top_ports(project)
+        top, ports, why = _native_top_ports(project, rtl=rtl, top=native_top)
         if not top or not ports:
             return None, why or "no usable native top ports"
     cr = _load_clock_reset(project, ports)
@@ -358,8 +365,8 @@ def classify_dut(project: Path, ic_class: str
             if p["name"] not in (cr["clk"], cr["rst"])]
     ins = [p for p in data if p["dir"] == "input"]
     outs = [p for p in data if p["dir"] == "output"]
-    if not ins or not outs:
-        return None, "need >=1 data input and >=1 data output"
+    if not outs:
+        return None, "need >=1 data output"
     width = _resolve_tb_width(project, ports)
     if authored_interface:
         return ({"kind": "generic", "top": top, "cr": cr, "ports": ports,
@@ -1255,9 +1262,10 @@ def _rtl_files(project: Path, top: str) -> List[str]:
     return out
 
 
-def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
+def generate(project: Path, out_dir: Optional[Path] = None, *,
+             rtl: Optional[List[Path]] = None, top: Optional[str] = None) -> dict:
     ic_class = _detect_ic_class(project)
-    shape, why = classify_dut(project, ic_class)
+    shape, why = classify_dut(project, ic_class, rtl=rtl, top=top)
     if shape is None:
         if _memory_signature_rows(project):
             return {"status": "INCOMPLETE", "reason": why,
@@ -1320,7 +1328,7 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
 
     cov = build_coverage_model(shape)
     sva, l29 = build_assertions(project, shape)
-    rtl = _rtl_files(project, top)
+    rtl = list(map(str, rtl)) if rtl is not None else _rtl_files(project, top)
     # Make runs inside the emitted bundle, potentially under a different
     # project mount. Keep source references relative to that consumer cwd.
     from testbench_gen import package_first_order

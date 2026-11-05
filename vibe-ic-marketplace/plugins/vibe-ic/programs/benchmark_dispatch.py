@@ -9360,12 +9360,17 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                     and all(name in gate_ledger["in_scope"] for name in pending)
                     and (not gate_ledger.get("failed_required") or native_repair)
                     and isinstance(invocation, dict)):
+                from flow_engine_frontend import selected_engine
                 current_source = _runner_source_snapshot([sys.executable, str(runner)])
                 if any(invocation["source_before"][name]["sha256"]
                        != current_source[name]["sha256"]
                        for name in ("runner", "consumer")):
                     invocation_reason = (
                         "RUNNER_REQUIRED_GATES_REMEASURE: Program source changed")
+                elif (selected_engine([]) == "native" and not result.get("accepted")
+                      and not gate_ledger.get("failed_required")):
+                    invocation_reason = (
+                        "RUNNER_REQUIRED_GATES_REMEASURE: native gates unmeasured")
             if not invocation_reason:
                 invocation_reason = _reference_model_reentry_reason(proj, result)
             if invocation_reason and Path(str(task.get("review_path") or "")).is_file():

@@ -75,6 +75,9 @@ def test_owner_session_runs_one_window_for_all_result_readers(tmp_path, monkeypa
     ]}
     def publish(*args, **kwargs):
         report.write_text(json.dumps(measured))
+        rtl = tmp_path / "phase2/stage1/rtl"
+        rtl.mkdir(parents=True)
+        (rtl / "unit.v").write_text("module unit; endmodule\n")
         return SimpleNamespace(returncode=0)
     selected = {"entry_step": "1", "verify_through": "2", "input_contract": "original",
                 "delivery_target": "rtl"}
@@ -124,7 +127,7 @@ def test_owner_lint_numbers_are_read_from_its_report(tmp_path):
 
 
 @pytest.mark.parametrize("produced", [True, False])
-@pytest.mark.parametrize("owner_status", ["WAIVED", "PASS_WITH_WAIVERS", "PASS"])
+@pytest.mark.parametrize("owner_status", ["WAIVED", "PASS_WITH_WAIVERS", "PASS", "FAIL", "NOT_MEASURED"])
 def test_author_fallback_is_decided_by_produced_rtl(tmp_path, produced, owner_status):
     import flow_engine
     report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
@@ -231,7 +234,7 @@ def test_fresh_physical_author_uses_only_the_table_author_window(tmp_path, monke
     with patch.object(frontend.subprocess, "run", side_effect=publish) as execute:
         observed = frontend.OwnerSession(tmp_path, selected).result(tmp_path / "steps/author", "rtl_gen")
     execute.assert_called_once()
-    assert observed["metrics"]["rtl_gen"] == "PASS_WITH_WAIVERS"
+    assert observed["metrics"]["rtl_gen"] == "FAIL"
     assert observed["native_steps"][0]["status"] == "FAIL"
     assert observed["native_steps"][0]["detail"] == "The owner produced no RTL."
 
@@ -255,6 +258,9 @@ def test_debug_closure_runs_only_owner_backed_dependencies(tmp_path, input_contr
     route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
              "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
     report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    prior_backup = tmp_path / "phase2/stage1/ai_backup_author.json"
+    prior_backup.parent.mkdir(parents=True)
+    prior_backup.write_text(json.dumps({"author": {"kind": "AI", "model": "prior-author"}}))
     def publish(command, **kwargs):
         assert json.loads(command[-2])["entry_step"] == "1"
         assert json.loads(command[-2])["verify_through"] == "2"
@@ -277,6 +283,7 @@ def test_debug_closure_runs_only_owner_backed_dependencies(tmp_path, input_contr
     execute.assert_called_once()
     assert requirements["native_steps"][0]["source"].startswith("task_nature_route.")
     assert authored["metrics"]["rtl_gen"] == "PASS"
+    assert authored["native_steps"][-1]["source"]["author"] == {"kind": "PROGRAM", "program": "existing_program"}
     assert checked["metrics"]["rtl_validate"] == "PASS"
     assert session.route == route
     assert not (tmp_path / "reports/orchestrator/phase1_one_shot.json").exists()
@@ -312,6 +319,79 @@ def test_debug_resume_keeps_ai_canonical_rtl_and_lints_only(tmp_path, input_cont
     assert result["native_steps"][-1]["reused"] is True
     assert "C7" in result["detail"]
     assert json.loads((tmp_path / "steps/author/reused_authoring.json").read_text()) == previous
+
+
+@pytest.mark.parametrize("input_contract", ["original", "structured"])
+def test_debug_author_failure_refreshes_from_ai_output_and_retains_history(tmp_path, input_contract):
+    import ai_signed_judgement
+    import flow_engine
+    route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
+             "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    report.parent.mkdir(parents=True)
+    previous = {"steps": [{"name": "rtl_gen", "status": "FAIL", "detail": "Program could not author RTL.",
+                            "extras": {"exit_code": 1, "fallback_skill": "spec-to-rtl"}}]}
+    original_report = json.dumps(previous, indent=2) + "\n"
+    report.write_text(original_report)
+    session = frontend.OwnerSession(tmp_path, route)
+    session.executed = True
+    failed = session.result(tmp_path / "steps/old-author", "rtl_gen")
+    assert flow_engine.evaluate(flow_engine.ToolResult(**failed), []) == "FAIL"
+
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit(input a, output y); assign y = ~a; endmodule\n")
+    backup = rtl.parent.parent / "ai_backup_author.json"
+    author = {"kind": "AI", "model": "fixture-author-model"}
+    backup.write_text(json.dumps({"schema": "vibeic.benchmark.ai_backup_record.v1", "author": author}))
+    (rtl.parent.parent / "fallback_skill.md").write_text("Use spec-to-rtl to implement the generic inverter.\n")
+    judgement = tmp_path / "reports/audit/ai_judgements/1.json"
+    judgement.parent.mkdir(parents=True)
+    judgement.write_text(json.dumps({"schema": "vibeic.ai-judgement.v1", "step_id": "1",
+                                     "verdict": "PASS", "signed_by": "fixture-reviewer",
+                                     "evidence_sha256": ai_signed_judgement.evidence_sha256(tmp_path, "1"),
+                                     "judgement": "Reviewed the authored RTL."}))
+    assert ai_signed_judgement.check(tmp_path, "1")[0]
+    def lint_only(command, **kwargs):
+        assert command[command.index("--entry-step") + 1] == "2"
+        assert command[command.index("--exit-step") + 1] == "2"
+        report.write_text(json.dumps({"steps": [{"name": "rtl_gen", "status": "NOT_APPLICABLE"},
+                                                {"name": "rtl_validate", "status": "PASS"}]}))
+        return SimpleNamespace(returncode=0)
+
+    with patch.object(frontend.subprocess, "run", side_effect=lint_only) as execute:
+        refreshed = frontend.OwnerSession(tmp_path, route).result(tmp_path / "steps/author", "rtl_gen")
+    execute.assert_called_once()
+    assert flow_engine.evaluate(flow_engine.ToolResult(**refreshed), []) == "PASS"
+    assert refreshed["metrics"]["rtl_gen"] == "PASS"
+    output = refreshed["native_steps"][-1]
+    assert output["source"]["author"] == author
+    assert output["source"]["record"] == str(backup)
+    assert all(row["status"] != "FAIL" for row in refreshed["native_steps"])
+    assert (tmp_path / "steps/old-author/phase2_one_shot.json").read_text() == original_report
+    assert (tmp_path / "steps/author/reused_authoring.json").read_text() == original_report
+    assert str(tmp_path / "steps/author/ai_backup_author.json") in refreshed["reports"]
+    assert str(tmp_path / "steps/author/1.json") in refreshed["reports"]
+    with patch.object(frontend.subprocess, "run", side_effect=lint_only):
+        again = frontend.OwnerSession(tmp_path, route).result(tmp_path / "steps/again", "rtl_gen")
+    assert flow_engine.evaluate(flow_engine.ToolResult(**again), []) == "PASS"
+    assert (tmp_path / "steps/again/reused_authoring.json").read_text() == original_report
+
+
+@pytest.mark.parametrize("target", ["rtl", "ip_hardmacro"])
+def test_existing_canonical_author_output_without_identity_reports_unknown_source(tmp_path, target):
+    route = {"entry_step": "1", "verify_through": "1", "delivery_target": target,
+             "input_contract": "structured"}
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit; endmodule\n")
+    judgement = tmp_path / "reports/audit/ai_judgements/1.json"
+    judgement.parent.mkdir(parents=True)
+    judgement.write_text(json.dumps({"signed_by": "reviewer-is-not-the-author"}))
+    with patch.object(frontend.subprocess, "run", side_effect=AssertionError("existing RTL author reran")):
+        result = frontend.OwnerSession(tmp_path, route, force=True).result(tmp_path / "steps/author", "rtl_gen")
+    assert result["metrics"]["rtl_gen"] == "PASS"
+    assert result["native_steps"][-1]["source"]["author"]["kind"] == "UNKNOWN_RETAINED"
 
 
 def test_bounded_native_lint_does_not_import_librelane(tmp_path, monkeypatch):

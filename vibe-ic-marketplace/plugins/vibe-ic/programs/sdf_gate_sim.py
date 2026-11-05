@@ -2007,6 +2007,7 @@ def declared_sdc_clocks(sdc: Path, sdf_texts: List[str]) -> Dict[str, object]:
     An SDC that creates no PORT clock (a combinational design, a virtual clock)
     declares that no DUT port is clocked: the result carries no clock, and a
     bench that free-runs a DUT port is then refused by `bind_bench_clock`."""
+    from decimal import Decimal
     import sdc_constraints as _sdcc
     try:
         text = Path(sdc).read_text(errors="replace")
@@ -2029,7 +2030,7 @@ def declared_sdc_clocks(sdc: Path, sdf_texts: List[str]) -> Dict[str, object]:
     units = _SDC_SET_UNITS_TIME_RE.findall(text)
     if units:
         scale, unit = units[-1]
-        unit_s = float(scale or 1) * _UNIT_S[unit]
+        unit_s = float(Decimal(scale or "1") * Decimal(str(_UNIT_S[unit])))
         unit_source = f"{sdc}: set_units -time"
     else:
         # The WHOLE text: a header statement past any fixed prefix is still
@@ -2041,10 +2042,11 @@ def declared_sdc_clocks(sdc: Path, sdf_texts: List[str]) -> Dict[str, object]:
             raise ValueError(f"SDC_TIME_UNIT_UNSTATED: {sdc} has no set_units "
                              f"-time and the SDFs state {sorted(stated)}")
         scale, unit = stated.pop()
-        unit_s = float(scale) * _UNIT_S[unit]
+        unit_s = float(Decimal(scale) * Decimal(str(_UNIT_S[unit])))
         unit_source = "the STA session's SDF TIMESCALE"
     return {"sdc": str(sdc), "unit_s": unit_s, "unit_source": unit_source,
-            "clocks_s": {port: period * unit_s for port, period in clocks.items()}}
+            "clocks_s": {port: float(Decimal(str(period)) * Decimal(str(unit_s)))
+                         for port, period in clocks.items()}}
 
 
 def bind_bench_clock(tb_text: str, dut_instance: str, declared: Dict[str, object]

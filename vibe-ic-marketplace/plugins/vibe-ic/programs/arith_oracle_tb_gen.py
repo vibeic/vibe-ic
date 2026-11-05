@@ -48,6 +48,7 @@ direction is printed — the caller keeps the #654 cap); 1 = error.
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 import json
 import math
 import re
@@ -1219,6 +1220,11 @@ def select_operand_pairs(spec: dict, profile: str = "mixed",
     return uniq[:cap] if cap else uniq
 
 
+def _time_literal_ns(value) -> str:
+    text = format(Decimal(str(value)), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def emit_serial_oracle_module(module_name: str, spec: dict,
                               pairs: "List[Tuple[int, int]] | None" = None,
                               abort_before_each: bool = False, *,
@@ -1314,7 +1320,9 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     conns = ", ".join(f".{p['name']}({pad_nets.get(p['name'], p['name'])})" for p in ports)
     L.append(f"  {top} dut ({conns});")
     L.append(f"  initial {clk} = 1'b0;")
-    L.append(f"  always #{clock_period_ns / 2:.12g} {clk} = ~{clk};")
+    half_period = Decimal(str(clock_period_ns)) / 2
+    sample = _time_literal_ns(sample_offset_ns)
+    L.append(f"  always #{_time_literal_ns(half_period)} {clk} = ~{clk};")
     L.append(f"  localparam integer NV = {len(pairs)};")
     L.append("  reg [N-1:0] _av [0:NV-1];")
     L.append("  reg [N-1:0] _bv [0:NV-1];")
@@ -1331,11 +1339,11 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     # discarding it (see ORACLE_TB_FRAMING below).
     L.append("  integer _bio, _boo, _boff;")
     assert_v, deassert_v = ("0", "1") if ral else ("1", "0")
-    delayed = sample_offset_ns >= clock_period_ns / 2
+    delayed = Decimal(str(sample_offset_ns)) >= half_period
     if delayed:
         L.extend(["  integer pending_observers=0;",
                   "  task automatic observe(input integer inorder, v, k); begin",
-                  f"    #{sample_offset_ns:.12g};",
+                  f"    #{sample};",
                   f"    if(inorder==0) _capL[v][k]={sout}; else _capM[v][k]={sout};",
                   "    pending_observers=pending_observers-1;", "  end endtask"])
 
@@ -1371,7 +1379,7 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
         L.extend(["        pending_observers=pending_observers+1;",
                   "        fork observe(inorder,_vi,_k); join_none"])
     else:
-        L.append(f"        #{sample_offset_ns:.12g}; _word[_k] = {sout};  // sample after this edge settles")
+        L.append(f"        #{sample}; _word[_k] = {sout};  // sample after this edge settles")
     L.append(f"        @(negedge {clk});")
     L.append("      end")
     if not delayed:
@@ -1683,7 +1691,7 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
         families = ['random_transactions']
     if not families:
         return None
-    required_choices = {}; required_population = None
+    required_choices = {}; required_population = None; assumptions = []
 
     def defer(reason: str) -> None:
         if request is not None:
@@ -1709,7 +1717,7 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
         required_choices['rearm_reset_cycles'] = {'type': 'integer', 'minimum': 1, 'maximum': 16}
     if choices.get('parallel_hold') != 'through_final_product_bit':
         required_choices['parallel_hold'] = {'type': 'string', 'allowed': ['through_final_product_bit']}
-    # Read a designer's explicit count, never turn a generic sample into it.
+    # A stated population always outranks the fallback for a silent document.
     count = declared_vector_population(intent['case']) if (intent['consecutive_transactions'] or random_vectors) else None
     if random_vectors and count is not None and count > MAX_CASE_VECTORS:
         defer('declared random population exceeds supported per-case vector capacity')
@@ -1725,6 +1733,11 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
         malformed = type(chosen) is not int or not minimum <= chosen <= MAX_CASE_VECTORS
         if not malformed:
             count = chosen
+    elif intent['consecutive_transactions'] and count is None and not malformed:
+        count = minimum
+        assumptions.append({'field': population_path, 'value': count,
+                            'minimum': minimum, 'maximum': MAX_CASE_VECTORS,
+                            'basis': 'Document omits the transaction population; use the supported minimum.'})
     if intent['consecutive_transactions'] and (malformed or count is None or not minimum <= count <= MAX_CASE_VECTORS):
         required_population = {'type': 'integer', 'minimum': minimum, 'maximum': MAX_CASE_VECTORS,
                                'declaration_path': population_path}
@@ -1811,6 +1824,8 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
             'comparisons': sum(p['comparisons'] for p in phases)}
     if len(phases) > 1:
         plan['populations'] = phases
+    if assumptions:
+        plan['assumptions'] = assumptions
     return plan
 
 
@@ -1976,8 +1991,8 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict, *,
     random_vectors = plan['scenario'] == 'random_transactions'
     observation = plan['observation']
     deadline = bool(observation.get('postlayout_deadline'))
-    half = format(observation['clock_period_ns'] / 2, '.12g')
-    sample = format(observation['sample_offset_ns'], '.12g')
+    half = _time_literal_ns(Decimal(str(observation['clock_period_ns'])) / 2)
+    sample = _time_literal_ns(observation['sample_offset_ns'])
     on, off = (0, 1) if spec['reset_active_low'] else (1, 0)
     rearm = int(framing['transaction_rearm'] == 'clocked_reset')
     reset_cycles = framing['rearm_reset_cycles']

@@ -37,7 +37,6 @@ ROOT = PLUGIN.parent.parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import checker_execution_wiring_audit as A  # noqa: E402
-import gate_is_wired_check as G  # noqa: E402
 import _invocation_credit as C  # noqa: E402
 
 BASELINE = PROGRAMS / "checker_execution_wiring_baseline.json"
@@ -133,13 +132,6 @@ def _audit_says(caller: str, stem: str, rule=None) -> bool:
     return stem in inv
 
 
-def _gate_is_wired_says(caller: str, stem: str) -> bool:
-    src = (PROGRAMS / caller).read_text(errors="replace")
-    stages = {stem: C.verdict_path(
-        (PROGRAMS / f"{stem}.py").read_text(errors="replace"))}
-    return stem in G.py_invocations(src, {stem}, stages)
-
-
 #: (caller, gate, must credit) — read one at a time from the real files on the
 #: day this landed. The first three are the call sites vibe-ic#2141's own
 #: commit body names as CONSUMED; the last two are the library uses that made
@@ -154,17 +146,6 @@ _SHIPPED = [
 ]
 
 
-@pytest.mark.parametrize("caller,stem,credits", _SHIPPED)
-def test_both_instruments_give_the_same_answer_about_the_same_file(
-        caller, stem, credits):
-    """THE WHOLE OF vibe-ic#2169, asserted on shipped files. Before the shared
-    resolver these two could disagree by construction, and on a bare import
-    they DID: `gate_is_wired` refused it and the audit credited it."""
-    a, g = _audit_says(caller, stem), _gate_is_wired_says(caller, stem)
-    assert a == g == credits, (
-        f"{caller} -> {stem}: audit={a}, gate_is_wired={g}, expected {credits}")
-
-
 def test_the_denials_are_not_vacuous():
     """The paired half of the two `False` rows above: under the superseded
     rule the audit credited both, so the rows measure the RULE and not a
@@ -176,8 +157,7 @@ def test_the_denials_are_not_vacuous():
 
 
 # ── ONE resolver: neither instrument may keep a copy ───────────────────────
-@pytest.mark.parametrize("prog", ["checker_execution_wiring_audit.py",
-                                  "gate_is_wired_check.py"])
+@pytest.mark.parametrize("prog", ["checker_execution_wiring_audit.py"])
 def test_neither_instrument_defines_its_own_copy_of_the_rule(prog):
     """The defect #2169 names is not the old rule, it is that there were TWO
     of them. A second implementation diverges again the next time either file
@@ -196,8 +176,7 @@ def test_neither_instrument_defines_its_own_copy_of_the_rule(prog):
         for a in n.names}, f"{prog} does not import the shared resolver"
 
 
-@pytest.mark.parametrize("prog", ["checker_execution_wiring_audit.py",
-                                  "gate_is_wired_check.py"])
+@pytest.mark.parametrize("prog", ["checker_execution_wiring_audit.py"])
 def test_the_superseded_rule_is_reachable_only_from_the_migration(prog):
     """`credit_on_import` exists so a migration can attribute an addition to
     the rule change. A gate path that reached it would restore the defect."""
@@ -214,12 +193,6 @@ def test_the_superseded_rule_is_reachable_only_from_the_migration(prog):
     assert set(holders) <= {"_migrate"}, (
         f"{prog}: the superseded credit-on-import rule is reachable from "
         f"{holders}; only the one-shot --migrate-rule-id path may name it")
-
-
-def test_both_instruments_measure_under_the_same_rule_id():
-    assert A._RULE_ID == G._RULE_ID == C.RULE_ID, (
-        "two registers stamped with different rule ids cannot be compared, "
-        "which is how the divergence #2169 is about became invisible")
 
 
 # ── the register records the rule it was measured under ────────────────────

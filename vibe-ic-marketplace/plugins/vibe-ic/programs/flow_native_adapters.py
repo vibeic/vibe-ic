@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -72,22 +73,48 @@ def inputs(project, tool):
 def cdc(project, directory, tool, commands, *, state=None, config=None):
     import _cdc_netlist as native
     from cdc_async_input_check import is_probable_async_port
-    files, top = inputs(project, tool)
-    if not files or not top:
+    implemented = tool.get("adapter") == "implemented_cdc"
+    native_top = (config or {}).get("DESIGN_NAME") if implemented else None
+    files, top = ([], native_top) if native_top else inputs(project, tool)
+    if not top or (not implemented and not files):
         return commands.result(detail="Produced RTL and the declared top module are required.")
     raw, graph = directory / "graph_raw.json", directory / "graph.json"
     script = directory / "elaborate.ys"
-    if tool.get("adapter") == "implemented_cdc":
+    if implemented:
         import fnmatch
+        from lec_post_layout_check import _LIB_CELL_RE
+        from sdf_gate_sim import missing_empty_cell_stubs, netlist_used_cells
         netlist = state.get("nl") if state is not None else None
-        libraries = config.get("CELL_LIBS") or config.get("LIB") or {}
-        liberty = [Path(p) for pattern, paths in libraries.items()
-                   if fnmatch.fnmatchcase(config.get("DEFAULT_CORNER", ""), pattern)
-                   for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
-        if not netlist or not Path(netlist).is_file() or not liberty:
+        if not netlist or not Path(netlist).is_file():
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
+        text = Path(netlist).read_text()
+        used = netlist_used_cells(text)
+        liberty = []
+        for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
+            libraries = config.get(key) or []
+            groups = ([paths for pattern, paths in libraries.items()
+                       if fnmatch.fnmatchcase(config.get("DEFAULT_CORNER", ""), pattern)]
+                      if isinstance(libraries, dict) else [libraries])
+            for paths in groups:
+                values = [Path(p) for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
+                if key in {"PAD_LIBS", "EXTRA_LIBS"}:
+                    values = [path for path in values if not path.is_file()
+                              or used.intersection(_LIB_CELL_RE.findall(path.read_text()))]
+                liberty.extend(values)
+        liberty = list(dict.fromkeys(liberty))
+        if not liberty:
+            return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
+        defined = {name for path in liberty if path.is_file()
+                   for name in _LIB_CELL_RE.findall(path.read_text())}
+        stubs = missing_empty_cell_stubs(text, used - defined, "")
+        models = []
+        if stubs:
+            physical = directory / "physical_cells.v"
+            physical.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
+            models.append("read_verilog -lib " + _word(physical))
         script.write_text("\n".join([
             *["read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
+            *models,
             "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
             "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
     else:
@@ -133,12 +160,60 @@ def testbenches(project, tool):
     return list(dict.fromkeys(paths))
 
 
-def cocotb_run(directory, tb, files, top, commands, simulator):
+def simulation_sources(project, files, top, benches):
+    from catalog_glue_closure_resolver import (
+        _gather, _macro_body_module_refs, _strip_comments, build_index, resolve_closure,
+    )
+    from design_one_shot_runner import _V662_INCLUDE_RE, _v662_design_src_rtl_files
+    from testbench_gen import package_first_order
+    from verilator_coverage_measure import _tb_top_module
+
+    files = [path.resolve() for path in files]
+    hdl_benches = [path.resolve() for path in benches if path.suffix in (".v", ".sv")]
+    sources = _gather(project / "phase2/stage1/rtl")
+    for path in [*_v662_design_src_rtl_files(project), *files, *hdl_benches]:
+        sources[path] = _strip_comments(path.read_text(errors="replace"))
+    include_order = {parent: index for index, parent in enumerate(dict.fromkeys(
+        path.parent for path in [*benches, *files, *sources]))}
+    included_names = {Path(name).name for text in sources.values()
+                      for name in _V662_INCLUDE_RE.findall(text)}
+    relative_includes = {Path(name).name for text in sources.values()
+                         for name in _V662_INCLUDE_RE.findall(text) if Path(name).name != name}
+    headers = {}
+    for path in sources:
+        if ((path.suffix in {".vh", ".svh"} or path.name in included_names)
+                and path.name not in relative_includes):
+            headers.setdefault(path.name, []).append(path)
+    for providers in headers.values():
+        selected = min(providers, key=lambda path: include_order[path.parent])
+        for path in providers:
+            if path != selected:
+                del sources[path]
+    index = build_index(sources)
+    # Selected RTL wins, then staged sources, then supplied dependencies.
+    for kind in ("mod_def", "pkg_def", "macro_def"):
+        for name, providers in index[kind].items():
+            selected = [path for path in providers if path in files]
+            index[kind][name] = selected or providers[:1]
+    index["macro_refs"] = {name: set().union(*(
+        _macro_body_module_refs(sources[path]).get(name, set()) for path in providers))
+        for name, providers in index["macro_def"].items()}
+    reachable = set()
+    for root in [top, *(_tb_top_module(path) for path in hdl_benches)]:
+        closure, _ = resolve_closure(root, sources, index)
+        reachable.update(closure)
+    selected = list(dict.fromkeys([*files, *(path for path in sources
+        if path in reachable and path not in hdl_benches)]))
+    return (package_first_order([path for path in selected if path.suffix in (".v", ".sv")]),
+            list(dict.fromkeys(path.parent for path in [*benches, *selected])))
+
+
+def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs):
     import verilator_coverage_measure as coverage
     directory.mkdir()
     makefile = directory / "simulation.mk"
     flags = " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
-    includes = " ".join(dict.fromkeys(str(f.parent.resolve()) for f in files))
+    includes = " ".join(str(path.resolve()) for path in include_dirs)
     makefile.write_text(
         f"SIM = {simulator}\nTOPLEVEL_LANG = verilog\n"
         f"VERILOG_SOURCES = {' '.join(str(f.resolve()) for f in files)}\n"
@@ -170,18 +245,43 @@ def simulation(project, directory, tool, commands):
             for path in sorted(unit_dir.glob(pattern)) if is_unit_tb(path))]))
     if files and not benches:
         from arith_oracle_tb_gen import generate as arithmetic
-        from professional_tb_gen import generate, _detect_ic_class
+        from professional_tb_gen import _detect_ic_class
         arithmetic(project, _detect_ic_class(project))
         benches = testbenches(project, tool)
-        if not benches:
-            generate(project)
-            benches = testbenches(project, tool)
+    producer_report = project / "reports/phase2/gates/professional_tb.json"
+    professional = project / "phase2/stage1/sim_professional" / str(top)
+    managed = (professional / "verification_plan.json").is_file() and any(
+        bench.parent == professional for bench in benches)
+    if files and (not benches or managed):
+        from professional_tb_gen import generate
+        generated = generate(project, rtl=files, top=top)
+        producer_report.parent.mkdir(parents=True, exist_ok=True)
+        producer_report.write_text(json.dumps({**generated, "status": "INCOMPLETE",
+            "reason": generated.get("reason") or "Native functional verification has not completed."}, indent=2) + "\n")
+        handoff = generated.get("reference_model_handoff")
+        if handoff:
+            Path(handoff["artifact_path"]).parent.mkdir(parents=True, exist_ok=True)
+            return commands.result(reports=[producer_report], detail=
+                "The existing professional testbench producer requires its reference model: "
+                + json.dumps(handoff))
+        benches = testbenches(project, tool)
     if not files or not benches:
-        return commands.result(detail="Produced RTL and a program-generated testbench are required.")
+        return commands.result(reports=[producer_report] if producer_report.is_file() else [],
+            detail="Produced RTL and a program-generated testbench are required.")
+    silicon_files = files
+    files, include_dirs = simulation_sources(project, files, top, benches)
     reports, dats, assertions, native_steps = [], [], [], []
+    frontend_failures = set()
+    coverage_run = None
 
     def invoke(argv, cwd):
+        nonlocal coverage_run
+        if argv[0] == "verilator":
+            argv = [argv[0], *["-I" + str(path) for path in include_dirs
+                              if "-I" + str(path) not in argv], *argv[1:]]
         completed = commands.run(argv, cwd)
+        if len(argv) == 1:
+            coverage_run = completed
         return ((completed.returncode, completed.stdout, completed.stderr) if completed is not None
                 else (127, "", "Native executable is absent."))
 
@@ -189,15 +289,25 @@ def simulation(project, directory, tool, commands):
         run = directory / f"testbench_{index + 1}"
         run.mkdir()
         failures = None
+        coverage_run = None
+        simulator = "Icarus"
+        frontend_record = len(commands.records)
         if tb.suffix == ".py":
             if not top or not shutil.which("cocotb-config"):
                 return commands.result(reports=reports, detail="Cocotb and the declared top are required.")
-            functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus")
+            functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus", include_dirs)
             report = run / "functional/results.xml"
             summary = parse_junit(report)
+            elaborated = (run / "functional/build/sim.vvp").is_file()
             if summary and summary["tests"] > 0 and not summary["skipped"]:
                 failures = summary["failures"] + summary["errors"]
-            completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator")
+            completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator", include_dirs)
+            fallback = parse_junit(run / "coverage/results.xml")
+            if not elaborated and fallback and fallback["tests"] > 0:
+                simulator, functional = "Verilator", completed
+                failures = (fallback["failures"] + fallback["errors"]
+                            if not fallback["skipped"] else None)
+                frontend_failures.add(frontend_record)
             data = run / "coverage/coverage.dat"
             if report.is_file():
                 reports.append(report)
@@ -208,7 +318,8 @@ def simulation(project, directory, tool, commands):
         else:
             executable = run / "functional.vvp"
             compiled = commands.run(["iverilog", "-g2012", "-s", coverage._tb_top_module(tb),
-                "-o", executable, *["-I" + str(f.parent) for f in files], *files, tb])
+                "-o", executable, *["-I" + str(path) for path in include_dirs], *files, tb])
+            elaborated = compiled is not None and compiled.returncode == 0
             functional = (commands.run(["vvp", executable], cwd=tb.parent)
                           if compiled is not None and compiled.returncode == 0 else compiled)
             if functional is not None and compiled is not None and compiled.returncode == 0:
@@ -224,10 +335,18 @@ def simulation(project, directory, tool, commands):
                 completed = True
             except SystemExit:
                 completed = None
+            if not elaborated and coverage_run is not None:
+                simulator, functional = "Verilator", coverage_run
+                frontend_failures.add(frontend_record)
+                parsed = parse_l10_case_stdout(functional.stdout + functional.stderr)
+                if parsed["verdict"] is None:
+                    parsed = parse_sim_stdout(functional.stdout + functional.stderr)
+                if parsed["verdict"] is not None and parsed["total"] > 0:
+                    failures = parsed["total"] - parsed["passed"]
         if failures is not None:
             assertions.append(failures)
         native_steps.extend([
-            {"name": "Icarus.Functional", "ran": functional is not None,
+            {"name": simulator + ".Functional", "ran": functional is not None,
              "exit_code": functional.returncode if functional is not None else None,
              "status": ("FAIL" if functional.returncode or failures
                         else "PASS" if failures == 0 else "NOT_MEASURED") if functional is not None else "NOT_MEASURED"},
@@ -237,7 +356,8 @@ def simulation(project, directory, tool, commands):
                        else "NOT_MEASURED"}])
         reports.extend(dats[-1:])
     metrics = {}
-    if commands.records and not any(r["exit_code"] for r in commands.records):
+    if commands.records and not any(r["exit_code"] for i, r in enumerate(commands.records)
+                                   if i not in frontend_failures):
         metrics["simulation_exit_code"] = 0
     if len(assertions) == len(benches):
         metrics["assertion_failures"] = sum(assertions)
@@ -245,24 +365,28 @@ def simulation(project, directory, tool, commands):
         merged = directory / "coverage.dat"
         completed = commands.run(["verilator_coverage", "--write", merged, *dats])
         if completed is not None and not completed.returncode and merged.is_file():
-            parsed = coverage.parse_coverage_dat(str(merged))
+            parsed = (coverage.parse_coverage_dat(str(merged)) if len(dats) == 1
+                      else coverage.union_coverage_dats(list(map(str, dats))))
             line_map, info = coverage.lcov_line_union([str(merged)], str(directory), exec_fn=invoke)
             if line_map is not None:
                 parsed["line_union"] = line_map
                 reports.append(Path(info))
-            scoped = coverage.scope_totals(parsed, list(map(str, files)))
+            scoped = coverage.scope_totals(parsed, list(map(str, silicon_files)))
             if scoped:
                 for category, counts in scoped["totals"].items():
                     if counts["total"] > 0 and (category != "line" or scoped["line_metric"] == "executable_line_union"):
                         metrics[f"coverage_{category}_pct"] = 100.0 * counts["covered"] / counts["total"]
             reports.append(merged)
     result = commands.result(metrics, reports)
+    result["exit_code"] = next((r["exit_code"] for i, r in enumerate(commands.records)
+                                if i not in frontend_failures and r["exit_code"]),
+                               0 if commands.records else None)
     result["native_steps"] = native_steps
     return result
 
 
 def formal(project, directory, tool, commands):
-    from formal_property_run import _ensure_expert_observers_bound, _model_texts
+    from formal_property_run import _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read
     from formal_harness_gen import _resolve_top
 
     authored = {}
@@ -289,6 +413,7 @@ def formal(project, directory, tool, commands):
     if not paths or any(not path.is_file() for path in paths):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
     statuses, covers, reports, required, observed, native_steps, scope, proof_scopes = [], [], [], [], [], [], [], []
+    frontend_failures = set()
 
     def cover_model(output, key, options):
         model, cells = output / "model/design.il", output / "model/cover_inputs.json"
@@ -363,9 +488,30 @@ def formal(project, directory, tool, commands):
             key = f"{source.name}:{task}"
             required.append(key)
             output = directory / f"proof_{index + 1}_{task_index + 1}"
+            first_read = len(commands.records)
             completed = commands.run(["sby", "-f", "-d", output, source, *([task] if task else [])], cwd=source.parent)
             if completed is None:
                 return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
+            config = output / "config.sby"
+            if frontend_aborted_the_read(completed.stdout + completed.stderr) and config.is_file():
+                body = config.read_text()
+                reads = list(re.finditer(r"(?m)^read_verilog[ \t]+-formal[ \t]+-sv[ \t]+([^\n]+)", body))
+                converted = (commands.run(["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
+                    "-DFORMAL", "-DYOSYS", "-I.", *shlex.split(reads[0][1])], cwd=output / "src")
+                    if len(reads) == 1 else None)
+                if converted is not None and converted.returncode == 0:
+                    lowered = output / "sv_frontend.v"
+                    lowered.write_text(converted.stdout)
+                    body = body[:reads[0].start()] + "read_verilog -formal -sv " + _word(lowered) + body[reads[0].end():]
+                    body = body.replace("[files]\n", "[files]\n" + str(lowered) + "\n", 1)
+                    retry = output / "sv_frontend.sby"
+                    retry.write_text(body)
+                    destination = output / "sv_frontend"
+                    alternate = commands.run(["sby", "-f", "-d", destination, retry], cwd=source.parent)
+                    if alternate is not None:
+                        frontend_failures.add(first_read)
+                        reports.extend([lowered, retry, output / "status"])
+                        output, completed = destination, alternate
             native = sorted(output.rglob("status"))
             config = output / "config.sby"
             word = (output / "status").read_text().strip().split() if (output / "status").is_file() else []
@@ -412,6 +558,9 @@ def formal(project, directory, tool, commands):
         "scope": "Properties of the actual harness subjects only; top-level function uses simulation, ISA suites and GLS."}, indent=2) + "\n")
     result = commands.result(metrics, [*reports, scope_report], " ".join([*scope, cover_detail,
         f"proves_declared_top={str(proves_top).lower()}; scope is the actual harness subjects in {scope_report}."]))
+    result["exit_code"] = next((r["exit_code"] for i, r in enumerate(commands.records)
+                                if i not in frontend_failures and r["exit_code"]),
+                               0 if commands.records else None)
     result["native_steps"] = native_steps
     return result
 
@@ -450,6 +599,59 @@ def declared_electrical_checks(project):
     return list(checks.values())
 
 
+def _simulation_in_runtime(project, work, tool):
+    import _eda_pin
+
+    container = os.environ.get("EDA_CONTAINER") or _eda_pin.default_container_name()
+    transport = work / "runtime"
+    transport.mkdir()
+    commands = Commands(transport)
+    inspected = commands.run(["docker", "inspect", "--format", "{{json .Mounts}}", container])
+    if inspected is None or inspected.returncode:
+        return {**commands.result(detail="The declared simulation runtime could not be opened."),
+                "ran": False, "exit_code": None}
+    mounts = [(str(Path(mount["Source"]).resolve()), mount["Destination"])
+              for mount in json.loads(inspected.stdout) if mount["Type"] == "bind"]
+
+    def mapped(value, pairs):
+        if isinstance(value, str):
+            for source, destination in sorted(pairs, key=lambda pair: len(pair[0]), reverse=True):
+                if value == source or value.startswith(source.rstrip("/") + "/"):
+                    return destination.rstrip("/") + value[len(source):]
+        elif isinstance(value, list):
+            return [mapped(item, pairs) for item in value]
+        elif isinstance(value, dict):
+            return {key: mapped(item, pairs) for key, item in value.items()}
+        return value
+
+    result_path = work / "simulation_result.json"
+    code = """import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from flow_native_adapters import Commands, simulation
+project, work = map(Path, sys.argv[2:4])
+commands = Commands(work)
+try:
+    result = simulation(project, work, json.loads(sys.argv[4]), commands)
+except (OSError, ValueError, KeyError) as exc:
+    result = commands.result(detail=str(exc))
+Path(sys.argv[5]).write_text(json.dumps(result))
+"""
+    argv = ["python3", "-c", code, str(Path(__file__).resolve().parent),
+            str(project), str(work), json.dumps(mapped(tool, mounts)), str(result_path)]
+    options = ["-w", mapped(str(work), mounts)]
+    if os.environ.get("TMPDIR"):
+        options.extend(["-e", "TMPDIR=" + mapped(os.environ["TMPDIR"], mounts)])
+    completed = commands.run(["docker", "exec", *options, container, "bash", "-lc",
+                              "exec " + shlex.join(mapped(argv, mounts))])
+    if completed is None or completed.returncode or not result_path.is_file():
+        return {**commands.result(detail="The declared simulation runtime did not return a result."),
+                "ran": False, "exit_code": None}
+    result = mapped(json.loads(result_path.read_text()), [(target, source) for source, target in mounts])
+    result["reports"] = commands.result()["reports"] + result.get("reports", [])
+    return result
+
+
 def execute(project, directory, tool, route, *, state=None, config=None):
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
@@ -465,6 +667,10 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if adapter is None:
         return commands.result(detail=f"No native adapter for {tool.get('adapter')!r}.")
     try:
+        if tool.get("adapter") == "simulation":
+            from _container_exec import no_container_route
+            if not no_container_route():
+                return _simulation_in_runtime(project, work, tool)
         return adapter(project, work, tool, commands)
     except (OSError, ValueError, KeyError) as exc:
         return commands.result(detail=str(exc))

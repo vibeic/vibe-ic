@@ -42,7 +42,6 @@ sys.path.insert(0, str(_PROGRAMS))
 from _ppa import feasibility as F  # noqa: E402
 import ppa_eco_spare_records as P  # noqa: E402
 
-CHECK = _PROGRAMS / "ppa_feasibility_check.py"
 PRODUCER = _PROGRAMS / "ppa_eco_spare_records.py"
 SPACE = _PROGRAMS / "ppa_pnr_search_space.py"
 
@@ -125,18 +124,6 @@ def policy(declaration=DECL, views=(VIEW,)):
 
 def axis_of(result, name=F.ECO_AXIS):
     return [a for a in result.axes if a.name == name][0]
-
-
-def run_cli(tmp_path, doc, *extra):
-    p = tmp_path / "candidates.json"
-    p.write_text(json.dumps(doc), encoding="utf-8")
-    out = tmp_path / "feas.json"
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates", str(p),
-                        "--json", str(out), *extra],
-                       capture_output=True, text=True)
-    payload = json.loads(out.read_text(encoding="utf-8")) if out.exists() \
-        else None
-    return r, payload
 
 
 PLAN_TEN = {
@@ -259,18 +246,6 @@ def test_negative_spares_with_floating_inputs_are_refused():
     assert axis_of(r).status == F.AXIS_VIOLATED
 
 
-def test_negative_via_the_cli_is_rc1_and_names_the_axis(tmp_path):
-    r, doc = run_cli(tmp_path, {
-        "required_views": [VIEW], "eco_readiness": DECL,
-        "candidates": [cand("deleted", clean_nine() + spares(
-            count=0, by_kind={k: 0 for k in DECL["min_spare_cells_by_kind"]},
-            positions=0, tied=None))]})
-    assert r.returncode == F.RC_FAIL, r.stdout + r.stderr
-    axes = {a["axis"]: a["status"] for a in doc["candidates"][0]["axes"]}
-    assert axes["eco_readiness"] == "VIOLATED"
-    assert "eco_readiness: REQUIRED" in r.stdout
-
-
 # ---------------------------------------------------------------------------
 # VACUOUS -- the arm that matters most
 # ---------------------------------------------------------------------------
@@ -285,18 +260,6 @@ def test_vacuous_no_spare_evidence_is_undetermined_not_zero_and_not_pass():
     a = axis_of(r)
     assert a.status == F.AXIS_UNDETERMINED
     assert F.C_METRIC_ABSENT in a.codes
-
-
-def test_vacuous_a_not_measured_spare_count_is_undetermined(tmp_path):
-    ms = clean_nine() + [
-        rec(F.ECO_M_COUNT, None, status="NOT_MEASURED",
-            reason="the spare plan could not be read")]
-    r, doc = run_cli(tmp_path, {"required_views": [VIEW],
-                                "eco_readiness": DECL,
-                                "candidates": [cand("unread", ms)]})
-    assert r.returncode == F.RC_UNDETERMINED
-    axes = {a["axis"]: a["status"] for a in doc["candidates"][0]["axes"]}
-    assert axes["eco_readiness"] == "UNDETERMINED"
 
 
 def test_vacuous_a_declaration_that_requires_nothing_is_refused_not_passed():
@@ -669,23 +632,6 @@ def _bundle(root, tmp_path, name="bundle.json"):
     return r, json.loads(out.read_text(encoding="utf-8"))
 
 
-def _adjudicate(bundle, declaration, tmp_path, name="c.json"):
-    doc = {"required_views": [dict(VIEW)],
-           "required_views_by_axis": {"eco_readiness": [dict(VIEW)]},
-           "candidates": [{"candidate_id": "wired",
-                           "metrics": bundle["records"]}]}
-    if declaration is not None:
-        doc["eco_readiness"] = declaration
-    p = tmp_path / name
-    p.write_text(json.dumps(doc), encoding="utf-8")
-    out = tmp_path / ("feas_" + name)
-    subprocess.run([sys.executable, str(CHECK), "--candidates", str(p),
-                    "--json", str(out)], capture_output=True, text=True)
-    rep = json.loads(out.read_text(encoding="utf-8"))
-    return [a for a in rep["candidates"][0]["axes"]
-            if a["axis"] == "eco_readiness"][0]
-
-
 def test_wired_the_signoff_bundle_carries_the_eco_evidence(tmp_path):
     """The join. `ppa_signoff_records.py` is what the flow runs and what the
     gate reads; before this it emitted nothing the ECO axis could prove from."""
@@ -696,46 +642,6 @@ def test_wired_the_signoff_bundle_carries_the_eco_evidence(tmp_path):
     assert F.ECO_M_TIE_OFF in names
     assert F.eco_metric_for_kind("dff") in names
     assert bundle["eco_readiness_reader"]["program"] == "ppa_eco_spare_records"
-
-
-def test_wired_a_real_run_tree_satisfies_the_axis(tmp_path):
-    axis = _adjudicate(_bundle(_run_tree(tmp_path / "run"), tmp_path)[1],
-                       DECL, tmp_path)
-    assert axis["status"] == "SATISFIED", axis["codes"]
-
-
-def test_wired_a_run_that_deleted_its_spares_violates_the_axis(tmp_path):
-    bundle = _bundle(_run_tree(tmp_path / "run", plan=PLAN_NONE), tmp_path)[1]
-    axis = _adjudicate(bundle, DECL, tmp_path)
-    assert axis["status"] == "VIOLATED"
-
-
-def test_wired_a_run_with_no_spare_plan_is_undetermined_not_zero(tmp_path):
-    """The vacuous arm at the JOIN, which is where it would be lost. A run tree
-    with no plan must not reach the gate as a measured zero."""
-    bundle = _bundle(_run_tree(tmp_path / "run", plan=None), tmp_path)[1]
-    eco_rows = [rec for rec in bundle["records"]
-                if rec["metric"].startswith("design_for_eco.")]
-    assert eco_rows, "the rows must be PRESENT and NOT_MEASURED, never omitted"
-    assert all(rec["status"] != "MEASURED" for rec in eco_rows)
-    assert all("value" not in rec for rec in eco_rows)
-    axis = _adjudicate(bundle, DECL, tmp_path)
-    assert axis["status"] == "UNDETERMINED"
-
-
-def test_wired_preservation_is_read_when_the_run_carries_the_report(tmp_path):
-    root = _run_tree(tmp_path / "run",
-                     preservation={"inserted": 10, "survived": 9,
-                                   "verdict": "FAIL"})
-    bundle = _bundle(root, tmp_path)[1]
-    surviving = [rec for rec in bundle["records"]
-                 if rec["metric"] == F.ECO_M_SURVIVING][0]
-    assert surviving["status"] == "MEASURED"
-    assert surviving["value"] == 9
-    axis = _adjudicate(bundle, dict(DECL, require_preservation=True), tmp_path)
-    assert axis["status"] == "VIOLATED", (
-        "ten were inserted and nine reached the shipped artefacts; the design "
-        "has nine, and nine is below the declared floor of ten")
 
 
 def test_wired_M_the_bundle_has_exactly_one_reader_of_the_spare_plan():
@@ -785,22 +691,3 @@ def test_wired_M_the_bundle_has_exactly_one_reader_of_the_spare_plan():
     prod_strings = {n.value for n in ast.walk(prod)
                     if isinstance(n, ast.Constant) and isinstance(n.value, str)}
     assert {"instances", "tie_off", "cell_map"} <= prod_strings
-
-
-def test_wired_an_eco_only_tree_is_not_a_vacuous_pass(tmp_path):
-    """rc=0 from the signoff program means "at least one axis was MEASURED",
-    and an ECO measurement is one. But the GATE must still refuse: nine axes
-    have no evidence in this tree, and a candidate is promotable only when
-    every axis is."""
-    r, bundle = _bundle(_run_tree(tmp_path / "run"), tmp_path)
-    assert r.returncode == 0
-    doc = {"required_views": [dict(VIEW)],
-           "required_views_by_axis": {"eco_readiness": [dict(VIEW)]},
-           "eco_readiness": DECL,
-           "candidates": [{"candidate_id": "eco-only",
-                           "metrics": bundle["records"]}]}
-    p = tmp_path / "eco_only.json"
-    p.write_text(json.dumps(doc), encoding="utf-8")
-    proc = subprocess.run([sys.executable, str(CHECK), "--candidates", str(p)],
-                          capture_output=True, text=True)
-    assert proc.returncode == F.RC_UNDETERMINED

@@ -68,3 +68,73 @@ def test_implemented_cdc_uses_liberty_functions_with_udp_models(tmp_path, fault)
     assert {finding["rule"] for finding in actual["findings"]} == expected[fault]
     assert (result["metrics"]["new_unexplained_crossings"] > 0) == bool(fault)
     assert result["metrics"]["new_unexplained_crossings"] == result["metrics"]["unresolved_crossings"]
+
+
+@pytest.mark.parametrize("source,physical,pad_role", [
+    ("core_rtl", False, None), ("netlist_only", False, None),
+    ("explicit", True, None), ("core_rtl", True, "PAD_LIBS"),
+    ("core_rtl", True, "EXTRA_LIBS"), ("explicit", False, "UNUSED_PAD_LIBS"),
+])
+def test_implemented_cdc_uses_native_top_and_empty_physical_cells(tmp_path, source, physical, pad_role):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    if source == "core_rtl":
+        rtl = tmp_path / "phase2/stage1/rtl"
+        rtl.mkdir(parents=True)
+        (rtl / "core.v").write_text("module core(input clk,d,output reg q); always @(posedge clk) q<=d; endmodule\n")
+        docs = tmp_path / "phase1/generated_docs"
+        docs.mkdir(parents=True)
+        (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "core"}))
+    netlist, liberty = tmp_path / "native.v", tmp_path / "cells.lib"
+    extra = "physical_only tap();\n" if physical else ""
+    used_pad = pad_role in {"PAD_LIBS", "EXTRA_LIBS"}
+    clock = "core_clock" if used_pad else "clk"
+    pad = "wire core_clock;\npad_input clock_pad(.PAD(clk),.Y(core_clock));\n" if used_pad else ""
+    netlist.write_text("module chip_unit(input clk,d,output q);\n" + pad
+                      + f"storage first(.CLK({clock}),.D(d),.Q(q));\n" + extra + "endmodule\n")
+    liberty.write_text('library(neutral) { cell(storage) { '
+                       'ff(IQ,IQN) { clocked_on: "CLK"; next_state: "D"; } '
+                       'pin(CLK) { direction: input; clock: true; } '
+                       'pin(D) { direction: input; } '
+                       'pin(Q) { direction: output; function: "IQ"; } } }\n')
+    config = {"DESIGN_NAME": "chip_unit", "DEFAULT_CORNER": "typical",
+              "LIB": {"typical": [str(liberty)]}}
+    if pad_role:
+        pad_liberty = tmp_path / "pads.lib"
+        pad_liberty.write_text('library(pads) { cell(pad_input) { '
+                               'pin(PAD) { direction: input; } '
+                               'pin(Y) { direction: output; function: "PAD"; } } }\n')
+        if not used_pad:
+            pad_liberty.write_text('library(pads) { type(bus2) { base_type: array; '
+                'data_type: bit; bit_width: 2; bit_from: 1; bit_to: 0; downto: true; } '
+                'cell(unused_pad) { bus(PAD) { bus_type: bus2; direction: input; } '
+                'pin(Y) { direction: output; function: "PAD[0]"; } } }\n')
+        config["EXTRA_LIBS" if pad_role == "EXTRA_LIBS" else "PAD_LIBS"] = (
+            {"typical": [str(pad_liberty)]} if pad_role != "EXTRA_LIBS"
+                            else [str(pad_liberty)])
+    tool = {"adapter": "implemented_cdc"}
+    if source == "explicit":
+        tool.update(rtl=[str(netlist)], top="chip_unit")
+    result = execute(tmp_path, tmp_path / "output", tool, {},
+                     state={"nl": str(netlist)}, config=config)
+    assert result["exit_code"] == 0, result
+    assert result["metrics"]["new_unexplained_crossings"] == 0, result
+    report = next(Path(p) for p in result["reports"] if p.endswith("cdc.json"))
+    assert json.loads(report.read_text())["crossings"]["decoded_flops"] == 1
+
+
+def test_implemented_cdc_does_not_stub_connected_unknown_storage(tmp_path):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    netlist, liberty = tmp_path / "native.v", tmp_path / "cells.lib"
+    netlist.write_text("module chip_unit(input clk,d,output q);\n"
+                      "unknown_storage first(.CLK(clk),.D(d),.Q(q));\nendmodule\n")
+    liberty.write_text("library(neutral) {}\n")
+    result = execute(tmp_path, tmp_path / "output",
+        {"adapter": "implemented_cdc", "rtl": [str(netlist)], "top": "chip_unit"}, {},
+        state={"nl": str(netlist)}, config={"DESIGN_NAME": "chip_unit", "DEFAULT_CORNER": "typical",
+                                           "LIB": {"typical": [str(liberty)]}})
+    assert result["exit_code"] != 0, result
+    assert result["metrics"] == {}, result
+    logs = "\n".join(Path(p).read_text() for p in result["reports"] if p.endswith(".log"))
+    assert "unknown_storage" in logs and "not part of the design" in logs

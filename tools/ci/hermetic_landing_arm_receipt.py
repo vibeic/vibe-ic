@@ -628,16 +628,13 @@ def validate(
     expected_overlays = (
         [
             "tools/ci/hermetic_test_arm_entry.sh",
-            "vibe-ic-marketplace/plugins/vibe-ic/programs/"
-            "matrix_mutation_ledger.py",
+
             "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
             "test_flow_matrix_census_freshness.py",
             "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
             "test_flow_matrix_coverage.py",
-            "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
-            "test_matrix_artefact_mutation_channel.py",
-            "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/"
-            "test_matrix_mutation_ledger.py",
+
+
         ]
         if arm in {"A1", "B1"}
         else ["tools/gatekeeper-land.sh"]

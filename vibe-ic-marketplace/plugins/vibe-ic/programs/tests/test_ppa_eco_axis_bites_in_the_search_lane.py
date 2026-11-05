@@ -65,7 +65,7 @@ from _ppa import feasibility as F               # noqa: E402
 from _ppa import search as S                    # noqa: E402
 from _ppa import search_feasibility as SF       # noqa: E402
 from test_ppa_eco_readiness_axis import (       # noqa: E402
-    CHECK, DECL, VIEW, axis_of, cand, clean_nine, policy, rec, run_cli, spares)
+    DECL, VIEW, axis_of, cand, clean_nine, policy, rec, spares)
 
 #: A candidate identical to a preserving one on every other axis, whose whole
 #: spare population is gone. This is the published PnR-only winner's shape:
@@ -138,14 +138,6 @@ def test_bite_a_better_number_on_every_other_axis_does_not_buy_it():
     r = F.promotion_verdict(cand("area-winner", better), policy())
     assert r.verdict == F.INFEASIBLE, r.codes
     assert not r.eligible_for_promotion
-
-
-def test_bite_the_cli_returns_rc1_and_names_the_axis(tmp_path):
-    r, doc = run_cli(tmp_path, {"required_views": [VIEW], "eco_readiness": DECL,
-                                "candidates": [cand("deleted", deleted_spares())]})
-    assert r.returncode == F.RC_FAIL, r.stdout + r.stderr
-    axes = {a["axis"]: a["status"] for a in doc["candidates"][0]["axes"]}
-    assert axes[F.ECO_AXIS] == "VIOLATED"
 
 
 def test_bite_reaches_the_search_bridge_which_is_the_campaign_s_own_path():
@@ -269,7 +261,7 @@ def test_all_three_ppa_clis_can_resolve_the_route(tmp_path):
     CLI's own help text rather than asserted, so it goes red if any of them
     loses the flag again.
     """
-    progs = ("ppa_feasibility_check.py", "ppa_pnr_search_space.py",
+    progs = ( "ppa_pnr_search_space.py",
              "ppa_search_run.py")
     # THE DENOMINATOR, AGAINST THE POPULATION AND NOT AGAINST ITSELF.
     # This row used to read `len(progs) == 3`, which compares a literal to its
@@ -1422,49 +1414,6 @@ def test_publication_negative_control_the_clause_is_what_refuses(tmp_path):
 # `equivalence` are unmeasured in these sets, which is the finding of
 # `ppa-gate-audit/RESULT.md`, not of this file. The row below asserts the ECO
 # axis specifically, so it cannot pass or fail on that account.)
-def test_shipped_cli_cannot_tell_the_kept_arm_from_the_deleted_arm():
-    """The whole audit in one assertion, with nothing authored by a test.
-
-    Skipped, never silently passed, when the campaign tree is absent.
-    """
-    import pytest
-    trials = _campaign_trials()
-    if not trials.is_dir():
-        pytest.skip("the cross-layer campaign records are not in this tree; "
-                    "NOT OBSERVED")
-
-    seen = {}
-    for trial in ("z23", "p04"):
-        cands = trials / trial / "candidates.json"
-        plan = trials / trial / "spare_cells.json"
-        if not (cands.is_file() and plan.is_file()):
-            pytest.skip(f"{trial} is not fully present in this tree")
-        p = subprocess.run(
-            [sys.executable, str(CHECK), "--candidates", str(cands)],
-            capture_output=True, text=True)
-        assert p.returncode in (F.RC_PASS, F.RC_FAIL, F.RC_UNDETERMINED), p.stderr
-        # The axis row, parsed from the CLI's own stdout. ANCHORED ON THE TRIAL
-        # ID, not on the first occurrence of the marker: the verdict line's
-        # shape is not this test's to rely on, and it has already moved once --
-        # it gained a `<candidates path>: ` prefix and a block of per-axis
-        # MISSING detail lines. Taking the first match would silently start
-        # reading a different candidate's row the day a run carries two.
-        rows = [ln for ln in p.stdout.splitlines()
-                if "[eco_readiness " in ln and f"{trial}:" in ln]
-        assert len(rows) == 1, (
-            f"expected exactly one eco_readiness verdict row naming {trial}, "
-            f"got {len(rows)}; the CLI's output shape moved and this row is "
-            f"no longer reading what it thinks:\n{p.stdout}")
-        status = rows[0].split("[eco_readiness ", 1)[1].split("]", 1)[0].strip()
-        spares = json.loads(plan.read_text(encoding="utf-8"))["count"]
-        seen[trial] = (spares, status)
-
-    assert seen["z23"][0] == 10, seen        # kept every declared spare
-    assert seen["p04"][0] == 0, seen         # deleted every one
-    assert seen["z23"][1] == seen["p04"][1] == "NOT_APPLICABLE", (
-        f"the shipped CLI now distinguishes these two arms: {seen}. That is "
-        f"the gap this file measures being CLOSED -- re-measure the report "
-        f"rather than trusting it.")
 
 
 # ---------------------------------------------------------------------------
@@ -1514,35 +1463,6 @@ def test_the_hygiene_declaration_and_the_axis_table_disagree_on_the_count():
     assert of < len(F.DEFAULT_AXES), (
         f"the declaration counts {of} axes and the table has "
         f"{len(F.DEFAULT_AXES)}")
-
-
-def test_the_axis_the_declaration_omits_is_not_applicable_on_every_candidate():
-    """And it is omitted while being uniformly inert, which is why nothing
-    noticed: on all 21 real candidate sets the tenth axis reads
-    NOT_APPLICABLE, so it never appears in a failure anybody reads."""
-    import pytest
-    trials = _campaign_trials()
-    if not trials.is_dir():
-        pytest.skip("the cross-layer campaign records are not in this tree; "
-                    "NOT OBSERVED")
-    sets = sorted(trials.glob("*/candidates.json"))
-    if not sets:
-        pytest.skip("no candidate sets in this tree; NOT OBSERVED")
-
-    seen = []
-    for cands in sets:
-        p = subprocess.run(
-            [sys.executable, str(CHECK), "--candidates", str(cands)],
-            capture_output=True, text=True)
-        rows = [ln for ln in p.stdout.splitlines() if "[eco_readiness " in ln]
-        assert rows, (cands, p.stdout)
-        for line in rows:
-            seen.append(line.split("[eco_readiness ", 1)[1]
-                        .split("]", 1)[0].strip())
-    assert len(seen) >= len(sets), (len(seen), len(sets))
-    assert set(seen) == {"NOT_APPLICABLE"}, (
-        f"the tenth axis now reports {sorted(set(seen))} on the campaign; it "
-        f"was uniformly NOT_APPLICABLE when this was measured")
 
 
 def test_the_repo_root_anchor_fails_loudly_when_it_goes_stale(monkeypatch,

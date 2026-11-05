@@ -174,10 +174,10 @@
     },
     "requires_em": {
       "value": true,
-      "when": "ic",
+      "when": "physical",
       "source": {
         "file": "programs/flow_em_corners.py",
-        "note": "Ruling211: retain published IC power-grid EM against PDK Jmax."
+        "note": "Ruling220: retain the IC native engineering tool and original limit for physical hard IP as well."
       }
     },
     "requires_spares": {
@@ -190,10 +190,10 @@
     },
     "requires_si": {
       "value": true,
-      "when": "ic",
+      "when": "physical",
       "source": {
         "file": "programs/flow_ic_checks.py",
-        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+        "note": "Ruling220: retain the IC native engineering tool and original limit for physical hard IP as well."
       }
     },
     "requires_spice": {
@@ -238,6 +238,8 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
+        "program": "phase1_one_shot_runner.py",
+        "function": "_run_step_0_5ic",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -255,6 +257,8 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
+        "program": "flow109_technology_qualification.py",
+        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -287,6 +291,8 @@
       "when": "has_power_intent",
       "tool": {
         "kind": "adapter",
+        "program": "l21_to_upf_emit.py",
+        "function": "main",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -314,6 +320,8 @@
       "when": "package_interface and package_declared",
       "tool": {
         "kind": "adapter",
+        "program": "pad_assignment_gen.py",
+        "function": "main",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -653,6 +661,8 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
+        "program": "ip_integration_check.py",
+        "function": "audit",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -976,6 +986,8 @@
       "when": "has_power_intent and has_digital",
       "tool": {
         "kind": "adapter",
+        "program": "power_domain_crossing_check.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1003,6 +1015,8 @@
       "when": "requires_system_scenarios",
       "tool": {
         "kind": "adapter",
+        "program": "full_stack_functional_tb.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1047,6 +1061,8 @@
             "when": "has_analog and not has_digital",
             "tool": {
               "kind": "adapter",
+              "program": "formal_property_run.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -1054,6 +1070,8 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
+              "program": "formal_property_run.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -1235,6 +1253,8 @@
       "when": "analog_trim",
       "tool": {
         "kind": "adapter",
+        "program": "spec_calibration_extract.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1310,6 +1330,8 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "step_sdc_validation",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -1327,6 +1349,8 @@
       "when": "soft_ip and has_digital",
       "tool": {
         "kind": "adapter",
+        "program": "sdc_syntax_check.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1430,6 +1454,8 @@
       "when": "requires_dft",
       "tool": {
         "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "_step_dft_insertion",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1599,6 +1625,8 @@
       "when": "requires_functional_safety",
       "tool": {
         "kind": "adapter",
+        "program": "fmeda_fault_injection_coverage.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1644,6 +1672,8 @@
       "when": "early_atpg",
       "tool": {
         "kind": "adapter",
+        "program": "transition_fault_atpg_run.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -1694,6 +1724,8 @@
       "when": "False",
       "tool": {
         "kind": "adapter",
+        "program": "design_one_shot_runner.py",
+        "function": "step_synthesis_handoff",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [],
@@ -2075,6 +2107,8 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
+              "program": "flow109_analog_floorplan.py",
+              "function": "native produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -2151,6 +2185,8 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
+              "program": "pad_ring_gen.py",
+              "function": "execute existing pad ring",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -2449,6 +2485,8 @@
       "when": "requires_scan and physical",
       "tool": {
         "kind": "adapter",
+        "program": "phase3_one_shot_runner.py",
+        "function": "step_scan_physical",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -2492,6 +2530,8 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -2863,6 +2903,8 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "flow109_route_check.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -2961,6 +3003,8 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "antenna_report_check.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3085,6 +3129,8 @@
       "when": "has_power_intent and physical",
       "tool": {
         "kind": "adapter",
+        "program": "power_domain_crossing_check.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3153,6 +3199,8 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "librelane_signoff.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3211,11 +3259,13 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "si_signoff_timing_aware.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
           {
-            "when": "ic",
+            "when": "ic or hard_ip",
             "tool": {
               "kind": "librelane",
               "steps": [
@@ -3230,6 +3280,8 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -3240,7 +3292,7 @@
           "metric": "si_setup_slack_ns",
           "operator": ">=",
           "limit": 0,
-          "when": "ic",
+          "when": "ic or hard_ip",
           "source": {
             "file": "programs/flow_ic_checks.py"
           }
@@ -3249,7 +3301,7 @@
           "metric": "si_hold_slack_ns",
           "operator": ">=",
           "limit": 0,
-          "when": "ic",
+          "when": "ic or hard_ip",
           "source": {
             "file": "programs/flow_ic_checks.py"
           }
@@ -3258,7 +3310,7 @@
           "metric": "coupling_noise_delay_bounds",
           "operator": "within_declared_bounds",
           "limit": null,
-          "when": "not ic or analog_physical",
+          "when": "not (ic or hard_ip) or analog_physical",
           "source": {
             "file": "flow/flow109.json",
             "line": 11894
@@ -3267,7 +3319,7 @@
             "kind": "design_or_pdk",
             "metric": "coupling_noise_delay_bounds"
           },
-          "tool_gap": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool."
+          "tool_gap": "Digital IC and hard IP retain the published native numerical scope; broader analog or assembly engineering measurements still need their native tool."
         }
       ],
       "legacy_id": {
@@ -3299,6 +3351,8 @@
       "when": "requires_path_atpg",
       "tool": {
         "kind": "adapter",
+        "program": "path_delay_fault_atpg_run.py",
+        "function": "main",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3331,6 +3385,8 @@
       "when": "requires_sdd",
       "tool": {
         "kind": "adapter",
+        "program": "sdd_atpg_run.py",
+        "function": "main",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3363,6 +3419,8 @@
       "when": "requires_dft",
       "tool": {
         "kind": "adapter",
+        "program": "fault_atpg_run.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -3481,6 +3539,8 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -3571,6 +3631,8 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "power_report_check.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3578,7 +3640,10 @@
             "when": "otherwise",
             "tool": {
               "kind": "native_report",
-              "from": "post_route_timing_repair"
+              "from": "post_route_timing_repair",
+              "check_readers": [
+                "flow_config.declared_power_checks"
+              ]
             }
           }
         ]
@@ -3634,6 +3699,8 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "ir_drop_report_check.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -3700,11 +3767,13 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "em_current_density_check.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
           {
-            "when": "ic",
+            "when": "ic or hard_ip",
             "tool": {
               "kind": "librelane",
               "steps": [
@@ -3719,6 +3788,8 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -3740,7 +3811,7 @@
           "operator": "<=",
           "limit": 100,
           "unit": "%",
-          "when": "ic",
+          "when": "ic or hard_ip",
           "source": {
             "file": "programs/flow109_final_electrical.py",
             "line": 166
@@ -3781,6 +3852,8 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -3920,6 +3993,8 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "phase3_one_shot_runner.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4139,59 +4214,6 @@
       }
     },
     {
-      "name": "design_for_manufacturability",
-      "title": "Design for manufacturability",
-      "when": "physical",
-      "tool": {
-        "kind": "native_report",
-        "from": "final_electrical_analysis",
-        "scope": "Native summary is emitted after the final native checkers, following Classic and Chip."
-      },
-      "checks": [],
-      "legacy_id": {
-        "registry": "D63",
-        "native": [
-          "35"
-        ]
-      },
-      "observations": [
-        {
-          "metric": "dfm_density_lithography_cmp_targets",
-          "native_metrics": [
-            "*__density_error__count"
-          ],
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 15053
-          },
-          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
-          "declared_limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "dfm_density_lithography_cmp_targets"
-          },
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical"
-        },
-        {
-          "metric": "advanced_dfm_provider_targets",
-          "native_metrics": [],
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 15090
-          },
-          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
-          "declared_limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "advanced_dfm_provider_targets"
-          },
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical and requires_advanced_dfm"
-        }
-      ]
-    },
-    {
       "name": "finishing_geometry_fidelity",
       "title": "Finishing geometry fidelity",
       "when": "physical",
@@ -4339,6 +4361,8 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -4378,6 +4402,8 @@
       "when": "package_model_required",
       "tool": {
         "kind": "adapter",
+        "program": "flow109_package_electrical.py",
+        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -4460,6 +4486,8 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
+              "program": "flow109_final_extract.py",
+              "function": "execute",
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4467,6 +4495,8 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "flow109_final_extract.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4522,6 +4552,8 @@
             "when": "assembly_only",
             "tool": {
               "kind": "adapter",
+              "program": "librelane_signoff.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4677,6 +4709,59 @@
       }
     },
     {
+      "name": "design_for_manufacturability",
+      "title": "Design for manufacturability",
+      "when": "physical",
+      "tool": {
+        "kind": "native_report",
+        "from": "final_electrical_analysis",
+        "scope": "Native summary is emitted after the final native checkers, following Classic and Chip."
+      },
+      "checks": [],
+      "legacy_id": {
+        "registry": "D63",
+        "native": [
+          "35"
+        ]
+      },
+      "observations": [
+        {
+          "metric": "dfm_density_lithography_cmp_targets",
+          "native_metrics": [
+            "*__density_error__count"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15053
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "dfm_density_lithography_cmp_targets"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical"
+        },
+        {
+          "metric": "advanced_dfm_provider_targets",
+          "native_metrics": [],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 15090
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "advanced_dfm_provider_targets"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical and requires_advanced_dfm"
+        }
+      ]
+    },
+    {
       "name": "final_sdf_gate_level_replay",
       "title": "Final SDF gate-level replay",
       "when": "digital_physical",
@@ -4762,6 +4847,8 @@
       "when": "requires_dft",
       "tool": {
         "kind": "adapter",
+        "program": "flow109_final_gls.py",
+        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -4806,6 +4893,8 @@
             "when": "has_analog and not has_digital",
             "tool": {
               "kind": "adapter",
+              "program": "formal_property_run.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           },
@@ -4813,6 +4902,8 @@
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
+              "program": "formal_property_run.py",
+              "function": null,
               "gap": "Native invocation must be adapted without the old acceptance wrappers."
             }
           }
@@ -4987,6 +5078,8 @@
       "when": "package_interface and package_declared",
       "tool": {
         "kind": "adapter",
+        "program": "flow109_package_ready.py",
+        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -5018,6 +5111,8 @@
       "when": "requires_functional_safety",
       "tool": {
         "kind": "adapter",
+        "program": "fmeda_coverage_check.py",
+        "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [
@@ -5139,6 +5234,8 @@
       "when": "ic and provider_deck_declared",
       "tool": {
         "kind": "adapter",
+        "program": "tapeout_precheck.py",
+        "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
       "checks": [

@@ -551,10 +551,6 @@
       "bucket_A_program": "programs/_atomic_artefact.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
-    "ppa.feasibility": {
-      "bucket_A_program": "programs/ppa_feasibility_check.py",
-      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
-    },
     "ppa.head_to_head": {
       "bucket_A_program": "programs/ppa_head_to_head_check.py",
       "bucket_B_skill_file": "skills/ppa-benchmark/SKILL.md"
@@ -581,10 +577,6 @@
     },
     "ppa.schema_coverage": {
       "bucket_A_program": "programs/_ppa/schema_validation.py",
-      "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
-    },
-    "ppa.problem_identity": {
-      "bucket_A_program": "programs/ppa_problem_integrity_check.py",
       "bucket_B_skill_file": "skills/ppa-measure/SKILL.md"
     },
     "phase3.reference_flow_ingest": {

@@ -1941,16 +1941,56 @@ def test_source_upgrade_regates_unmeasured_required_gates(tmp_path, monkeypatch,
     assert runner.is_file()
 
 
-@pytest.mark.parametrize("control", [
-    "same-source", "no-required-gap", "native-fail", "invalid-evidence",
-    "accepted", "published", "changed-material", "semantic-fail", "clarification",
+@pytest.mark.parametrize("engine", ["native", "legacy"])
+@pytest.mark.parametrize("origin", ["PROGRAM", "AI_BACKUP"])
+def test_resume_remeasures_native_gate_holes_without_entry_source_changes(
+        tmp_path, monkeypatch, engine, origin):
+    run, task, runner = _dispatched_parent_task(tmp_path)
+    task["candidate_origin"] = origin
+    _solve_report(run, task)
+    _stub_dispatched_reentry(monkeypatch, runner=runner)
+    argv_for = bd._resume_solver_argv
+    monkeypatch.setattr(bd, "_resume_solver_argv", lambda _runner, *a, **kw:
+                        argv_for(runner, *a, **{**kw, "resolve_manifest": False}))
+    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
+    before = task["program_verification"]["runner_invocation"]
+    source = bd._runner_source_snapshot([sys.executable, str(runner)])
+    assert all(before["source_before"][name]["sha256"] == source[name]["sha256"]
+               for name in ("runner", "consumer"))
+    material = bd._runner_material_snapshot(Path(task["project"]))
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+
+    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    archives = list((run / "runner_regates" / task["id"]).glob("runner-regate-*"))
+    assert len(archives) == (1 if engine == "native" else 0)
+    assert current["rtl_sha256"] == task["rtl_sha256"]
+    assert current["candidate_origin"] == origin
+    assert bd._runner_material_snapshot(Path(task["project"])) == material
+    assert not Path(current["review_path"]).exists()
+    assert not Path(current["response_path"]).exists()
+    if engine == "native":
+        assert current["review_path"] != task["review_path"]
+        assert current["program_verification"]["runner_invocation"]["invocation_id"] != before["invocation_id"]
+        assert bd._strict_json_loads((archives[0] / "prior_task.json").read_text()) == task
+    else:
+        assert current["review_path"] == task["review_path"]
+
+
+@pytest.mark.parametrize("engine,control", [
+    (engine, control)
+    for engine in ("legacy", "native")
+    for control in ("same-source", "no-required-gap", "native-fail", "invalid-evidence",
+                    "accepted", "published", "changed-material", "semantic-fail", "clarification")
+    if engine == "legacy" or control != "same-source"
 ])
-def test_source_upgrade_does_not_grant_unrelated_reentry(tmp_path, monkeypatch, control):
+def test_source_upgrade_does_not_grant_unrelated_reentry(tmp_path, monkeypatch, engine, control):
     run, task, _ = _dispatched_parent_task(tmp_path)
     _solve_report(run, task)
     _stub_dispatched_reentry(monkeypatch)
+    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
     source = copy.deepcopy(task["program_verification"]["runner_invocation"]["source_before"])
-    if control not in {"same-source", "native-fail"}:
+    if engine == "legacy" and control not in {"same-source", "native-fail"}:
         source["consumer"]["sha256"] = "0" * 64
     snapshot = bd._runner_source_snapshot
     monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
@@ -3816,12 +3856,14 @@ def test_unmeasured_native_gate_is_not_accepted_after_real_semantic_pass(tmp_pat
 
 
 @_NEEDS_SIMULATOR
+@pytest.mark.parametrize('engine', ['legacy', 'native'])
 @pytest.mark.parametrize('prior', ['unmeasured', 'scored', 'eligible', 'failed', 'foreign-response'])
-def test_source_upgrade_recovers_only_unscored_false_acceptance(tmp_path, monkeypatch, prior):
+def test_source_upgrade_recovers_only_unscored_false_acceptance(tmp_path, monkeypatch, prior, engine):
     selection = {}
     run, task, rtl = _native_gate_parent_task(
         tmp_path, monkeypatch, wrapper_reject=prior != 'eligible',
         unmeasured=prior in {'unmeasured', 'scored', 'foreign-response'}, runner_selection=selection)
+    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
     _write_review(task, _valid_review(task))
     assert bd._validate_ai_review(task)['challenge_result']['status'] == 'PASS'
     # Retained producer output from the defective coordinator, never a live run.
@@ -3842,8 +3884,11 @@ def test_source_upgrade_recovers_only_unscored_false_acceptance(tmp_path, monkey
     runner = Path(task['program_verification']['runner_invocation']['source_before']['runner']['path'])
     upgraded = runner.parent.with_name('upgraded-runner') / runner.name
     upgraded.parent.mkdir()
-    upgraded.write_text(runner.read_text().replace('upstream_blocked = True', 'upstream_blocked = False')
-                        .replace('wrapper_reject = True', 'wrapper_reject = False'))
+    upgraded_source = runner.read_text().replace('upstream_blocked = True', 'upstream_blocked = False')
+    upgraded_source = upgraded_source.replace('wrapper_reject = True', 'wrapper_reject = False')
+    if engine == 'native':
+        upgraded_source = upgraded_source.replace('neutral_native_lint', 'rtl_validate')
+    upgraded.write_text(upgraded_source)
     selection['path'] = upgraded
     rc = bd.cmd_resume('rtllm', '/unused', str(run))
     current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]

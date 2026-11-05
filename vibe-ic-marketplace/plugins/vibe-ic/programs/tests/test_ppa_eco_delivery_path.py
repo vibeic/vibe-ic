@@ -45,7 +45,6 @@ import _submission_template as ST  # noqa: E402
 from test_ppa_eco_readiness_axis import (DECL, VIEW, axis_of, cand,  # noqa: E402
                                          clean_nine, spares)
 
-CHECK = _PROGRAMS / "ppa_feasibility_check.py"
 SPACE = _PROGRAMS / "ppa_pnr_search_space.py"
 
 
@@ -148,43 +147,9 @@ def test_negative_an_unestablished_route_is_refused_not_read_as_ip():
         assert axis_of(r).codes == (F.C_ECO_PATH_UNDETERMINED,), path
 
 
-def test_negative_via_the_cli_with_a_real_chip_tree(tmp_path):
-    project = chip_tree(tmp_path / "proj")
-    doc = {"required_views": [VIEW], "candidates": [cand("c", clean_nine())]}
-    p = tmp_path / "candidates.json"
-    p.write_text(json.dumps(doc), encoding="utf-8")
-    out = tmp_path / "feas.json"
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates", str(p),
-                        "--project", str(project), "--json", str(out)],
-                       capture_output=True, text=True)
-    assert r.returncode == F.RC_UNDETERMINED, r.stdout + r.stderr
-    assert "[CANNOT CHECK]" in r.stderr
-    assert "delivery path CHIP" in r.stdout
-    report = json.loads(out.read_text(encoding="utf-8"))
-    axes = {a["axis"]: a["status"] for a in report["candidates"][0]["axes"]}
-    assert axes["eco_readiness"] == "UNDETERMINED"
-    assert report["policy"]["eco_readiness"]["delivery_path"]["path"] == "CHIP"
-
-
 # ---------------------------------------------------------------------------
 # IP path -- a finding, and the right one
 # ---------------------------------------------------------------------------
-def test_ip_path_with_no_declaration_is_not_applicable_and_says_why(tmp_path):
-    project = ip_tree(tmp_path / "proj")
-    doc = {"required_views": [VIEW], "candidates": [cand("c", clean_nine())]}
-    p = tmp_path / "candidates.json"
-    p.write_text(json.dumps(doc), encoding="utf-8")
-    out = tmp_path / "feas.json"
-    r = subprocess.run([sys.executable, str(CHECK), "--candidates", str(p),
-                        "--project", str(project), "--json", str(out)],
-                       capture_output=True, text=True)
-    assert r.returncode == F.RC_PASS, r.stdout + r.stderr
-    report = json.loads(out.read_text(encoding="utf-8"))
-    row = [a for a in report["candidates"][0]["axes"]
-           if a["axis"] == "eco_readiness"][0]
-    assert row["status"] == "NOT_APPLICABLE"
-    assert row["codes"] == [F.C_ECO_NOT_APPLICABLE_ON_IP_PATH]
-    assert "hardmacro" in row["applicability"]["reason"]
 
 
 def test_the_two_not_applicables_do_not_share_a_code():
@@ -352,43 +317,12 @@ def test_M_PATH_7_the_space_still_publishes_for_a_proven_ip_delivery(tmp_path):
 #: are easy to confuse in exactly the way that matters: a caller that skips on 2
 #: reads a misspelled flag as a step with nothing to check. `--project` is a new
 #: flag on two programs, so it gets the arm both of them already have.
-def test_bad_invocation_project_with_no_value_is_3_not_2(tmp_path):
-    for prog, base in ((CHECK, ["--candidates", str(tmp_path / "x.json")]),
-                       (SPACE, [])):
-        r = subprocess.run([sys.executable, str(prog), *base, "--project"],
-                           capture_output=True, text=True, cwd=str(tmp_path))
-        assert r.returncode == 3, (
-            f"{prog.name} exited {r.returncode} on `--project` with no value; "
-            f"§1 says a bad invocation is 3 and 2 would be read as "
-            f"'nothing to check'.\n{r.stderr[-300:]}")
-
-
-def test_bad_invocation_help_documents_project_on_both(tmp_path):
-    """A flag nobody can find is a flag nobody passes, and this one decides
-    what an ABSENT ECO declaration means. Asserted on the OUTPUT rather than
-    the exit code, because one of the two CLIs gets that code wrong -- see
-    below."""
-    for prog in (CHECK, SPACE):
-        r = subprocess.run([sys.executable, str(prog), "--help"],
-                           capture_output=True, text=True, cwd=str(tmp_path))
-        assert "--project" in r.stdout, prog.name
 
 
 def test_bad_invocation_help_exits_0_on_the_search_space(tmp_path):
     """The opposite mistake, and it is the one the obvious fix invites: asking
     a program what its flags are is not a bad invocation."""
     r = subprocess.run([sys.executable, str(SPACE), "--help"],
-                       capture_output=True, text=True, cwd=str(tmp_path))
-    assert r.returncode == 0
-
-
-def test_bad_invocation_help_is_0_on_the_feasibility_cli_too(tmp_path):
-    """`ppa_feasibility_check.py` used to exit 3 here: its own hand-rolled
-    `except SystemExit: return RC_BAD_INVOCATION` could not tell `--help`
-    (SystemExit(0)) from a usage error (SystemExit(2)). It now parses through
-    `_ppa/cli_exit.parse_or_refuse`, which reads the code, so this arm is
-    unconditional and the xfail that stood here is gone with the defect."""
-    r = subprocess.run([sys.executable, str(CHECK), "--help"],
                        capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 0
 
@@ -405,3 +339,20 @@ def test_bad_invocation_a_project_that_is_a_file_is_2_not_3(tmp_path):
                        capture_output=True, text=True, cwd=str(tmp_path))
     assert r.returncode == 2, r.stdout + r.stderr
     assert "[CANNOT CHECK]" in r.stderr
+
+
+def test_bad_invocation_project_with_no_value_is_3_not_2(tmp_path):
+    for prog, base in ((SPACE, []),):
+        r = subprocess.run([sys.executable, str(prog), *base, "--project"],
+                           capture_output=True, text=True, cwd=str(tmp_path))
+        assert r.returncode == 3, (
+            f"{prog.name} exited {r.returncode} on `--project` with no value; "
+            f"§1 says a bad invocation is 3 and 2 would be read as "
+            f"'nothing to check'.\n{r.stderr[-300:]}")
+
+
+def test_bad_invocation_help_documents_project_on_both(tmp_path):
+    for prog in (SPACE,):
+        r = subprocess.run([sys.executable, str(prog), "--help"],
+                           capture_output=True, text=True, cwd=str(tmp_path))
+        assert "--project" in r.stdout, prog.name

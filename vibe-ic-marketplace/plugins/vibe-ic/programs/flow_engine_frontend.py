@@ -210,6 +210,7 @@ class OwnerSession:
         self.log = None
         self.reused_rtl = []
         self.reused_authoring = {}
+        self.reused_authoring_path = None
 
     def table_steps(self):
         if self.table is None:
@@ -239,6 +240,22 @@ class OwnerSession:
         return [sys.executable, "-c", code, str(Path(__file__).parent),
                 str(self.project), json.dumps(route or self.route), kind]
 
+    def retain_authoring_report(self, path):
+        history = path.parent / "rtl_authoring_history"
+        previous = sorted(history.glob("*.json"))
+        if path.is_file():
+            report = json.loads(path.read_text())
+            if any(row["name"] == "rtl_gen" and row["status"] != "NOT_APPLICABLE"
+                   for row in report.get("steps", [])):
+                raw = path.read_bytes()
+                if previous and previous[-1].read_bytes() == raw:
+                    return previous[-1]
+                history.mkdir(exist_ok=True)
+                saved = history / f"{len(previous) + 1:06d}.json"
+                shutil.copyfile(path, saved)
+                return saved
+        return previous[-1] if previous else None
+
     def result(self, directory, kind, *, rerun=False):
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
@@ -254,6 +271,12 @@ class OwnerSession:
                         "exit_code": 0, "status": "PASS", "reused": True,
                         "source": "task_nature_route.route_decision_receipt supplied output"}],
                     "detail": "C7 reuse of the unchanged Router selection for bounded requirements; no physical document extraction."}
+        if kind != "phase1" and not self.executed:
+            from _rtl_include_hub import silicon_rtl_selection
+            self.reused_rtl = list(silicon_rtl_selection(self.project / "phase2/stage1/rtl"))
+            self.reused_authoring_path = self.retain_authoring_report(path)
+            if self.reused_rtl and self.reused_authoring_path:
+                self.reused_authoring = json.loads(self.reused_authoring_path.read_text())
         command = None
         if kind == "phase1" and not self.phase1_executed and (rerun or not path.is_file()):
             command = self._command("phase1")
@@ -261,17 +284,13 @@ class OwnerSession:
         elif kind != "phase1" and not self.executed and (bounded or rerun or not path.is_file()):
             if bounded:
                 owner_rows = self.bounded_owner_rows()
-                from _rtl_include_hub import silicon_rtl_selection
-                produced = list(silicon_rtl_selection(self.project / "phase2/stage1/rtl"))
-                if produced:
-                    self.reused_rtl = produced
-                    self.reused_authoring = json.loads(path.read_text()) if path.is_file() else {}
+                if self.reused_rtl:
                     owner_rows = [row for row in owner_rows if row["tool"].get("function") != "step_rtl_gen"]
                 first = owner_rows[0]["legacy_id"]["native"][0] if owner_rows else None
                 last = owner_rows[-1]["legacy_id"]["native"][0] if owner_rows else None
             else:
                 author = next(row for row in self.table_steps() if row["tool"].get("function") == "step_rtl_gen")
-                first = last = author["legacy_id"]["native"][0]
+                first = last = None if self.reused_rtl else author["legacy_id"]["native"][0]
             command = self._command("rtl", {**self.route, "entry_step": first, "verify_through": last}) if first is not None else None
             self.executed = True
         if command is not None:
@@ -305,23 +324,42 @@ class OwnerSession:
                    "exit_code": row.get("extras", {}).get("exit_code"), "status": row["status"]}
                   for row in own if row["status"] != "NOT_APPLICABLE"]
         authoring = kind in ("rtl", "rtl_gen")
+        author_sources = []
         if authoring:
             from _rtl_include_hub import silicon_rtl_selection
             produced = list(silicon_rtl_selection(self.project / "phase2/stage1/rtl"))
-            native = ([] if self.reused_rtl else
-                      [row for row in native if row["status"] not in ("WAIVED", "PASS_WITH_WAIVERS")])
-            native.append({"name": "rtl_output", "ran": True, "exit_code": 0 if produced else 1,
+            source = {"author": {"kind": "UNKNOWN_RETAINED" if self.reused_rtl else "UNKNOWN"}}
+            backup = self.project / "phase2/stage1/ai_backup_author.json"
+            generator = next((row.get("extras", {}).get("deterministic_generator") for row in own
+                              if row["status"] == "PASS" and row.get("extras", {}).get("deterministic_generator")), None)
+            if generator and not self.reused_rtl:
+                source = {"author": {"kind": "PROGRAM", "program": generator}, "record": str(path)}
+            if backup.is_file():
+                author_sources.append(backup)
+                try:
+                    recorded_author = json.loads(backup.read_text()).get("author")
+                except (OSError, ValueError, AttributeError):
+                    recorded_author = None
+                if (not generator or self.reused_rtl) and isinstance(recorded_author, dict) and recorded_author.get("kind"):
+                    source = {"author": recorded_author, "record": str(backup)}
+            judgement = self.project / "reports/audit/ai_judgements/1.json"
+            if judgement.is_file():
+                author_sources.append(judgement)
+            native = [{"name": "rtl_output", "ran": True, "exit_code": 0 if produced else 1,
                            "status": "PASS" if produced else "FAIL",
                            "detail": ("C7 reused existing canonical RTL; its authoring owner was not rerun."
                                       if self.reused_rtl else "Owner produced RTL.") if produced else "The owner produced no RTL.",
-                           **({"reused": True, "source": list(map(str, self.reused_rtl))} if self.reused_rtl else {})})
+                           "source": source, "output_files": list(map(str, produced)),
+                           **({"reused": True} if self.reused_rtl else {})}]
         metrics.update({row["name"]: row["status"] for row in own})
-        sources = [path, *([lint_path] if measured else [])]
+        if authoring:
+            metrics["rtl_gen"] = "PASS" if produced else "FAIL"
+        sources = [path, *author_sources, *([lint_path] if measured else [])]
         if authoring and self.reused_rtl:
             sources.extend(self.reused_rtl)
-            if self.reused_authoring:
+            if self.reused_authoring_path:
                 source = directory / "reused_authoring.json"
-                source.write_text(json.dumps(self.reused_authoring, indent=2) + "\n")
+                shutil.copyfile(self.reused_authoring_path, source)
                 sources.append(source)
         for row in own:
             for output in row.get("output_files", []):
@@ -339,7 +377,7 @@ class OwnerSession:
         return {"ran": bool(own) or authoring, "exit_code": None, "metrics": metrics,
                 "reports": reports, "tool_seconds": sum(item["tool_seconds"] for item in tools),
                 "native_steps": [*native, *tools],
-                "detail": ("C7 reused canonical RTL and retained its original author report; native lint uses the current RTL."
+                "detail": ("C7 reused canonical RTL without rerunning its author; rtl_output names its source or UNKNOWN_RETAINED, and native lint uses the current RTL."
                            if self.reused_rtl else "Existing owner report; native verdicts remain in its steps.")}
 
 

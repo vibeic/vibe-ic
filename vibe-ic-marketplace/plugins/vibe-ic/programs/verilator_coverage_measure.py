@@ -318,6 +318,7 @@ def verilate_tb_and_run(rtl_files: List[str], tb_path: str, build_dir: str,
     # Parse package declarations before the testbench that imports them.
     vcmd += [str(f) for f in rtl_files] + [str(tb)]
     rc, out, err = exec_fn(vcmd, run_dir)
+    (Path(build_dir) / "build.log").write_text(out + err)
     if rc != 0:
         raise SystemExit(
             f"verilator coverage build failed (rc={rc}):\nSTDERR:\n{err}\n"
@@ -325,6 +326,7 @@ def verilate_tb_and_run(rtl_files: List[str], tb_path: str, build_dir: str,
 
     exe = Path(build_dir) / f"V{top}"
     rc, out, err = exec_fn([str(exe)], run_dir)
+    (Path(run_dir) / "simulation.log").write_text(out + err)
     if rc != 0:
         # A TB may $finish non-zero; coverage.dat can still be valid, so this
         # is a warning, not a substitution.

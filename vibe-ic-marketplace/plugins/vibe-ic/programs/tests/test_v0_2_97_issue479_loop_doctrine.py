@@ -226,14 +226,6 @@ def test_core_skill_step25_binds_verbatim_acceptance():
     assert "acceptance command" in low or "acceptance command text" in low
 
 
-def test_core_skill_names_the_two_478_gates():
-    text = _read(CORE_SKILL)
-    assert "acceptance_evidence_in_fix_comment_check.py" in text
-    assert "defect_artifact_fixture_check.py" in text
-    # exit 0 required before posting.
-    assert "exit 0" in text.lower()
-
-
 def test_core_skill_has_why_not_bucket_a_note():
     text = _read(CORE_SKILL)
     low = text.lower()

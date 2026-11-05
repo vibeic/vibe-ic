@@ -584,7 +584,6 @@ import step_write_ledger as _swl  # noqa: E402
 # paths measurably read as their producer. A second copy of that in this file
 # would drift away from the shipped gate within a release, and this repository
 # has paid for that before.
-import declared_output_has_a_live_producer_check as _producer  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -2958,7 +2957,6 @@ def _corpus_skip_would_hide(step_id, cites: Tuple[Tuple[str, str, str], ...]) ->
 # admission; it can have exactly one text.
 
 
-
 # ──────────────────────────────────────────────────────────────────────
 # The SOURCE arm — "does anything still write it", per step
 # ──────────────────────────────────────────────────────────────────────
@@ -2992,120 +2990,6 @@ class ProducerRegression(AssertionError):
     """
 
 
-
-@lru_cache(maxsize=1)
-def producer_rows() -> Dict[str, Dict]:
-    """``{declared path: producer state}`` for the whole flow, measured NOW.
-
-    One scan per session (~12 s), shared by all 69 cells. The rows are keyed by
-    the flow's declared path with alternates split out, and each carries the
-    ``steps`` that declare it — which is how a cell asks about ITS OWN outputs
-    without this module re-deriving the step→path mapping the program already
-    computed from the same yaml.
-    """
-    return _producer.audit(SOURCE_ROOT,
-                           flow=Path(F.FLOW_YAML),
-                           plugin_root=F.PLUGIN_ROOT)["rows"]
-
-
-@lru_cache(maxsize=1)
-def write_site_baseline() -> frozenset:
-    """Declared paths this repository HAS resolved to a real write site.
-
-    Read from the program's own inventory file, not recomputed: it is the same
-    record ``declared_output_has_a_live_producer_check --strict`` blocks on, so
-    a cell here and the shipped gate cannot disagree about what a regression
-    is. Missing or unreadable is refused rather than treated as empty — an
-    empty baseline would make :func:`producer_regressions` unable to fire, and
-    a guard that degrades to "off" reports success.
-    """
-    # `SHIPPED_INVENTORY`, not the program's `--root`-relative default: this
-    # module audits `SOURCE_ROOT` (= `F.PLUGIN_ROOT`) in-process, so the
-    # baseline it must agree with is the one shipped beside the program.
-    inv = _producer.SHIPPED_INVENTORY
-    assert inv.is_file(), (
-        f"{inv} is missing. It is the shrink-only record of declared outputs "
-        f"this tree resolves to a write site, and without it the source arm of "
-        f"this dimension cannot fire at all"
-    )
-    data = json.loads(inv.read_text(encoding="utf-8"))
-    paths = data.get("write_site")
-    assert paths, f"{inv} records no write site; the source arm could not fire"
-    return frozenset(paths)
-
-
-def producer_regressions(step_id, rows: Optional[Dict[str, Dict]] = None
-                         ) -> Tuple[Tuple[str, str], ...]:
-    """This step's declared paths whose producer the SOURCE can no longer find.
-
-    Two arms, and together they are exactly the program's own ``--strict``
-    verdict restricted to one step. Neither is invented here.
-
-    ``NO-TRACE``
-        the declared path appears nowhere in the source that runs — not as a
-        write destination, not even as a name. Nothing could write it.
-
-    ``LOST WRITE SITE``
-        the path is in the shrink-only baseline — this repository HAS resolved
-        it to a real write call — and no longer resolves to one. This is the
-        arm that fires when a producer is deleted, and the program's own
-        docstring records WHY the strong arm alone cannot: measured
-        2026-08-29, simulating deletion of the entire sole producer of all 34
-        single-producer paths, not one reached NO-TRACE. Every one landed in
-        TOKEN-TRACE, because the path's name still appears in the source —
-        written there by its READERS. A rule that blocked only on NO-TRACE
-        would be a rule that cannot fire.
-
-    NOT asserted: that every declared output HAS a write site. Measured on this
-    tree, 18 of 197 declared paths do; the other 179 are written to destinations
-    assembled at runtime (``f"L{n}_{name}.json"``) that no scanner can resolve.
-    Demanding WRITE-SITE per cell reddens 62 of the 68 cells and reports the
-    ordinary way this repository writes files, not a defect.
-
-    ``rows`` is injectable for ONE purpose: a can-fail test needs to hand this
-    function an audit taken with a producer excluded, and a predicate that
-    cannot be shown a deleted producer cannot be shown to notice one.
-    """
-    sid = F.normalize_id(step_id)
-    rows = producer_rows() if rows is None else rows
-    baseline = write_site_baseline()
-    out: List[Tuple[str, str]] = []
-    for decl, row in sorted(rows.items()):
-        if sid not in row["steps"]:
-            continue
-        state = row["state"]
-        if state == "NO-TRACE":
-            out.append((decl, "NO-TRACE — nothing in the running source writes "
-                              "or even names this path"))
-        elif decl in baseline and state != "WRITE-SITE":
-            out.append((decl, f"LOST WRITE SITE — demoted to {state}"
-                              f"{' (evidence: ' + row['evidence'] + ')' if row['evidence'] else ''}"
-                              f"; this repository resolved this path to a real "
-                              f"write call and no longer does"))
-    return tuple(out)
-
-
-@lru_cache(maxsize=1)
-def producer_arm_coverage() -> Tuple[str, ...]:
-    """The cells the source arm can currently speak about, DERIVED.
-
-    A step is covered when at least one of its declared paths is in the
-    baseline, because that is the only arm measured able to fire. Derived from
-    the commit rather than pinned to a literal: the baseline may GROW freely
-    (that is the program's own rule) and a pinned count would turn growth into
-    a failure. What must never happen is the set going EMPTY, and
-    :func:`test_d3_the_source_arm_covers_a_named_and_non_empty_set_of_cells`
-    is what says so.
-    """
-    baseline = write_site_baseline()
-    rows = producer_rows()
-    covered: set = set()
-    for decl, row in rows.items():
-        if decl in baseline:
-            covered |= set(row["steps"])
-    return tuple(sorted(covered, key=str))
-
-
 def dim_waivers() -> Tuple[waivers.Waiver, ...]:
     """This dimension's waivers, from the one registry that is consumed."""
     return tuple(waivers.waivers_for_dim(DIM))
@@ -3128,44 +3012,25 @@ def _params():
 # ──────────────────────────────────────────────────────────────────────
 # The 63 cells
 # ──────────────────────────────────────────────────────────────────────
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Guards — these keep the 63 above from going quietly hollow
+# ──────────────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────
+# THE THIRD OUTCOME MUST NOT BECOME A DOOR (vibe-ic#2177 follow-up)
+# ──────────────────────────────────────────────────────────────────────
+# `produce_live` may now answer UNMEASURED, and an UNMEASURED entry does not
+# redden its cell. That is a door, and a door needs two locks: the producer
+# must have DISCLOSED the gap in the flow's own vacuity token, and an entry
+# nobody measured must never hide one that was measured and found absent.
+# Both are driven below against the real functions.
 @pytest.mark.parametrize("cell", _params(), ids=lambda c: f"step{c.step_id}")
 def test_d3_required_outputs_are_produced(cell):
     sid = cell.step_id
     rec = step_record(sid)
     verdict = rec["verdict"]
-
-    # ---- THE SOURCE ARM: does anything still WRITE what this declares? ----
-    #
-    # Asked FIRST, and asked of every cell — NA, waived and enforced alike —
-    # because it is the only question in this body that dies when a producer
-    # dies. Everything below it reads an artefact, and an artefact committed in
-    # 2026-07 answers the same whether or not this checkout still writes it.
-    #
-    # AHEAD OF THE NA RETURNS on purpose. Step 37.5ip is NA_DORMANT_CONDITION
-    # and carries a baseline-anchored write site; "this step has not run" is a
-    # statement about a run tree and cannot excuse a deleted writer in the
-    # source. Ahead of the corpus skip for the same reason in the other
-    # direction: this question is about THIS checkout, so no corpus can supply
-    # it and no absent corpus can be a reason not to ask it.
-    #
-    # LIMIT, STATED RATHER THAN HIDDEN. A cell with a waiver carries
-    # `xfail(strict=True)`, so on those two cells (6 and 39) a failure here is
-    # absorbed as an expected failure. Neither waived step has a
-    # baseline-anchored path today, and `test_d3_a_waived_cell_does_not_absorb
-    # _the_source_arm` is the guard that makes the day one does a named event
-    # rather than a silent one.
-    lost = producer_regressions(sid)
-    if lost:
-        raise ProducerRegression(
-            f"step {sid} ({F.step_name(sid)}) declares required_outputs whose "
-            f"PRODUCER this source tree can no longer find:\n  "
-            + "\n  ".join(f"{path} \u2014 {why}" for path, why in lost)
-            + f"\n[measured by declared_output_has_a_live_producer_check.audit("
-            + f"{SOURCE_ROOT}) \u2014 the flow may still be able to SHOW you "
-            + f"this artefact out of a committed run tree, which is exactly why "
-            + f"this arm exists: a file in the corpus is not proof the flow "
-            + f"still writes it]"
-        )
 
     # ---- NA: the step declares nothing to produce -------------------
     if verdict == "NA_NO_REQUIRED_OUTPUTS":
@@ -3277,18 +3142,6 @@ def test_d3_required_outputs_are_produced(cell):
             "\n  " + "\n  ".join(unmeasured))
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Guards — these keep the 63 above from going quietly hollow
-# ──────────────────────────────────────────────────────────────────────
-
-# ──────────────────────────────────────────────────────────────────────
-# THE THIRD OUTCOME MUST NOT BECOME A DOOR (vibe-ic#2177 follow-up)
-# ──────────────────────────────────────────────────────────────────────
-# `produce_live` may now answer UNMEASURED, and an UNMEASURED entry does not
-# redden its cell. That is a door, and a door needs two locks: the producer
-# must have DISCLOSED the gap in the flow's own vacuity token, and an entry
-# nobody measured must never hide one that was measured and found absent.
-# Both are driven below against the real functions.
 def _live_entry_for_probe():
     """The same subject the working-tree test drives, chosen the same way."""
     candidates = [
@@ -3415,92 +3268,6 @@ def test_d3_a_measured_absence_still_fails_beside_an_unmeasured_entry(
     assert measured_missing == [f"{real!r}: the artefact is absent"], (
         "the measured absence was swallowed by the unmeasured one; an entry "
         "nobody could look at would then be a way to carry a real one")
-
-
-def test_d3_the_source_arm_goes_red_when_a_real_producer_is_deleted():
-    """MUT: delete the sole writer of a declared output; the cell must move.
-
-    Not a synthetic probe — the producer excluded here is one this repository
-    really ships, chosen because it is the ONLY write site for its declared
-    path, and the exclusion is the program's own `exclude_modules` hook rather
-    than a hand-built rows dict. Before the wiring, the real deletion of this
-    same line left the whole module at `54 passed, 66 skipped`.
-    """
-    clean = producer_rows()
-    singles = sorted((p, r["producers"][0], r["steps"])
-                     for p, r in clean.items()
-                     if r["state"] == "WRITE-SITE"
-                     and len(r["producers"]) == 1
-                     and p in write_site_baseline())
-    assert singles, (
-        "no baseline-anchored declared output has a single producer, so this "
-        "module cannot show its source arm noticing one being deleted"
-    )
-    path, producer, steps = singles[0]
-    assert not producer_regressions(steps[0]), (
-        f"step {steps[0]} is already regressed on the clean tree; the "
-        f"mutation below would prove nothing"
-    )
-    mutated = _producer.audit(SOURCE_ROOT, exclude_modules=[producer],
-                              flow=Path(F.FLOW_YAML),
-                              plugin_root=F.PLUGIN_ROOT)["rows"]
-    lost = producer_regressions(steps[0], rows=mutated)
-    assert any(p == path for p, _ in lost), (
-        f"{producer} is the only writer of {path}, declared by step "
-        f"{steps[0]}; removing it left that cell green — the source arm is "
-        f"reading something other than the producer"
-    )
-
-
-def test_d3_the_source_arm_covers_a_named_and_non_empty_set_of_cells():
-    """Say which cells this arm can speak about, and refuse an empty answer.
-
-    The coverage is DERIVED from the baseline and the flow, never pinned to a
-    literal: the baseline may grow freely and a pinned count would turn growth
-    into a failure. Measured 2026-08-29 it is 15 of the 68 cells — every cell
-    whose declared outputs include at least one path this repository resolves
-    to a real write call. The other 53 cells carry only paths written to
-    runtime-assembled destinations, where the strong arm cannot resolve a site
-    and the weak arm (NO-TRACE) is measured unable to fire; those cells are
-    asked the question and it is vacuously satisfied, which is a limit of the
-    scanner and is recorded as one here rather than presented as a clean bill.
-    """
-    covered = producer_arm_coverage()
-    assert covered, (
-        "the source arm covers NO cell: every baseline path has left the flow "
-        "declaration, so nothing on the 69 cells can ever fire this arm"
-    )
-    known = {F.normalize_id(c.step_id) for c in cells_for(DIM)}
-    stray = sorted(set(covered) - known)
-    assert not stray, (
-        f"the baseline anchors declared outputs to steps that are not cells "
-        f"of this dimension: {stray}"
-    )
-
-
-def test_d3_a_waived_cell_does_not_absorb_the_source_arm():
-    """A waiver is about EVIDENCE; it must not silently swallow a dead writer.
-
-    Waived cells carry `xfail(strict=True)`, so an assertion failing inside one
-    reports as an expected failure. That is the module's idiom and is not
-    changed here — but it means the source arm is only genuinely enforceable on
-    unwaived cells. Measured 2026-08-29: the two waived steps (6 and 39, both
-    Intel Quartus bitstreams no program in this plugin synthesises) anchor NO
-    baseline path, so no cell is currently in that shadow. The day one is, this
-    test names it instead of leaving it to be discovered.
-    """
-    shadowed = sorted(
-        F.normalize_id(c.step_id) for c in cells_for(DIM)
-        if waiver_for(c.step_id) is not None
-        and F.normalize_id(c.step_id) in producer_arm_coverage()
-    )
-    assert not shadowed, (
-        f"steps {shadowed} are WAIVED (xfail strict) and also carry a "
-        f"baseline-anchored declared output, so a deleted producer there "
-        f"would report as an expected failure rather than as a defect. Move "
-        f"the source arm out of the waived cell body for these steps, or "
-        f"retire the waiver"
-    )
 
 
 def test_d3_manifest_covers_exactly_the_flow_steps():

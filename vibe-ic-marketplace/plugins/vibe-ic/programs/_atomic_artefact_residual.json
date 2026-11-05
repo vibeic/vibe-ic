@@ -5,7 +5,7 @@
   "measured_on": "PR #1094 + #1110 + the 40-gate tranche (#1138) + the open(..., 'w') category closed in this PR; tail-A rc1 (2026-09-03, live main 7903c1972305): the register followed the tree DOWN \u2014 three names already converted by earlier work were still recorded, and a recorded-but-converted name is a slot that can regress in silence; R-0915-168 (2026-09-24, next/icslot-atomic rebased on main 861ea6c18): the register followed the tree DOWN again, 511 -> 509. `design_input_digest.py` (2 sites) and `flow_compliance_check.py` (1 site) each wrote their `--json` receipt with a bare `Path(args.json).write_text(...)`; all three now publish through `_auditor_write.publish`, which is temp+replace. VERIFIED A CONVERSION AND NOT A BLIND DETECTOR: the three sites are present and flagged in 861ea6c18's copies of both files, absent from the branch's, and both files parse -- `scan_program` fails open on SyntaxError, so the parse check is part of the claim. NOTHING WAS ABSORBED UPWARD: `tree - recorded` is empty, which is the growth half and belongs to --strict, not to this row removal.",
   "offenders": [
     "_pdk_via_analyzer.py",
-    "acceptance_evidence_in_fix_comment_check.py",
+
     "ams_analysis_select.py",
     "analog_a0_skip_forbidden_check.py",
     "analog_a1_spec_emit.py",
@@ -67,7 +67,7 @@
     "container_image_provenance.py",
     "container_login_banner_parse_check.py",
     "control_substance_check.py",
-    "convergence_doctrine_present_check.py",
+
     "conway_2d_synth.py",
     "corner_schedule_policy.py",
     "corner_yield_vs_spec_check.py",
@@ -84,7 +84,7 @@
     "def_manufacturing_grid_check.py",
     "def_stage_progression_check.py",
     "defect_artifact_fixture_check.py",
-    "defect_artifact_snapshot.py",
+
     "deliverable_verdict_consistency_check.py",
     "derived_clock_sdc_required_check.py",
     "derived_corpus_figure_check.py",
@@ -166,9 +166,9 @@
     "gate_discloses_denominator_check.py",
     "gate_evidence_completeness_check.py",
     "gate_host_independence_check.py",
-    "gate_is_wired_check.py",
+
     "gate_netlist_rtl_gen.py",
-    "gate_self_assertion_check.py",
+
     "gate_skip_routing_check.py",
     "gate_zero_denominator_refuses_check.py",
     "gatekeeper_assign_version.py",
@@ -279,7 +279,7 @@
     "manifest_leak_check.py",
     "manufacturing_fab_intake_check.py",
     "mask_application_check.py",
-    "matrix_mutation_ledger.py",
+
     "mbist_wrapper_gen.py",
     "memory_read_pipeline_check.py",
     "metadata_content_substance_check.py",
@@ -309,7 +309,7 @@
     "oracle_vector_gen.py",
     "org_duplicate_fork_check.py",
     "org_open_work_poll.py",
-    "organic_issue_body_lint.py",
+
     "otp_image_layer_consistency_check.py",
     "otp_write_lock_gate_check.py",
     "output_artifact_check.py",
@@ -385,11 +385,8 @@
     "ramp_waveform_oracle_check.py",
     "real_artefact_test_backing_check.py",
     "regmap_transaction_tb_gen.py",
-    "regression_failure_dedup.py",
-    "regression_failure_route.py",
-    "regression_flaky_quarantine.py",
-    "regression_report_aggregate.py",
-    "regression_severity_classify.py",
+
+
     "report_belongs_to_project_check.py",
     "reported_figure_artifact_backing_check.py",
     "reports_subfolder_taxonomy_check.py",
@@ -433,7 +430,7 @@
     "signoff_waiver_emit.py",
     "signoff_waiver_md_emit.py",
     "silent_decline_audit.py",
-    "single_testpath_guard.py",
+
     "sizing_adjust_policy.py",
     "sizing_history_emit.py",
     "skill_doc_section_present_check.py",
