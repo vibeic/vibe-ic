@@ -491,6 +491,36 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
         assert not any(cell["type"] in {"INPAD", "INPAD_ALT", "OUTPAD"} for cell in module["cells"].values())
 
 
+
+@pytest.mark.parametrize("direct_output", [False, True])
+def test_pad_boundary_removes_logical_package_outputs_and_keeps_core_outputs(tmp_path, direct_output):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    from flow_native_verification import eqy_pad_views
+
+    models, source = tmp_path / "pads.v", tmp_path / "unit.v"
+    models.write_text("(* blackbox *) module INPAD(input PAD,output Y); endmodule\n"
+                      "(* blackbox *) module OUTPAD(input A,output PAD); endmodule\n")
+    ports = "input [6:0] a,output [6:0] y,inout vdd,vss"
+    if direct_output:
+        ports += ",output monitor"
+    source.write_text(f"module unit({ports});\nwire [6:0] internal;\n"
+        + "\n".join(f"INPAD pi{i}(.PAD(a[{i}]),.Y(internal[{i}])); "
+                      f"OUTPAD po{i}(.A(~internal[{i}]),.PAD(y[{i}]));" for i in range(7))
+        + ("\nassign monitor=internal[0];" if direct_output else "") + "\nendmodule\n")
+    script = (f"[gold]\nread_verilog -sv {source}\n[gate]\nread_verilog -sv {source}\n"
+              "[script]\nproc\n")
+    result, count, _, _ = eqy_pad_views(tmp_path, "unit", script,
+        {"liberty": [], "types": {"INPAD", "OUTPAD"}, "defines": [], "include_dirs": []},
+        [models], Commands(tmp_path), None)
+    assert result is not None and count == 0
+    for side in ("gold", "gate"):
+        module = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]
+        assert "y" not in module["ports"] or module["ports"]["y"]["direction"] != "output"
+        assert (module["ports"].get("monitor", {}).get("direction") == "output") == direct_output
+        assert not any(cell["type"] in {"INPAD", "OUTPAD"} for cell in module["cells"].values())
+
+
 def test_xor_reuses_native_state_number(tmp_path):
     state = SimpleNamespace(metrics={"design__xor_difference__count": 3})
     commands = Commands(tmp_path)
