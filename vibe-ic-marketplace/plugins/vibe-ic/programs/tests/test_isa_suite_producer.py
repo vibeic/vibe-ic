@@ -1257,11 +1257,13 @@ def test_flow_system_privileged_instructions_do_not_admit_general_or_unknown_csr
 
 
 
-@pytest.mark.parametrize("latency,wrong_address", [
-    (0, False), (1, False), (2, False), (0, True),
-], ids=["async0", "sync1", "pipeline2", "wrong-address"])
+@pytest.mark.parametrize("latency,wrong_address,read_enable", [
+    (0, False, True), (1, False, True), (2, False, True), (0, True, True),
+    (1, False, False), (2, False, False), (1, True, False),
+], ids=["async0", "sync1", "pipeline2", "wrong-address",
+        "sync1-always-read", "pipeline2-always-read", "wrong-address-always-read"])
 def test_native_sram_read_latency_from_generated_parent(
-        tmp_path, latency, wrong_address):
+        tmp_path, latency, wrong_address, read_enable):
     """Public #3108's SRAM contract, not an ISA-suite qualification.
 
     Declaration/ports, renderer, Icarus and strict transcript/tohost judge are
@@ -1274,12 +1276,14 @@ def test_native_sram_read_latency_from_generated_parent(
         sram_interface_protocol=(
             "sdp8_raddr_waddr_wdata_rdata_we_sync" + str(latency) + "r"))
     address = 2 if wrong_address else 1
+    ren_port = ", output wire o_m_ren" if read_enable else ""
+    ren_assignment = "assign o_m_ren=1;" if read_enable else ""
     rtl = f"""`timescale 1ns/1ps
 module soc_top #(parameter memsize=16, parameter aw=$clog2(memsize)) (
   input wire clk_i, input wire rst_i,
   output wire [aw-1:0] o_m_waddr, output wire [7:0] o_m_wdata,
   output wire o_m_wen, output wire [aw-1:0] o_m_raddr,
-  input wire [7:0] i_m_rdata, output wire o_m_ren, output wire o_led);
+  input wire [7:0] i_m_rdata{ren_port}, output wire o_led);
   reg [aw-1:0] address=0;
   reg write_enable=0;
   integer beat;
@@ -1287,7 +1291,7 @@ module soc_top #(parameter memsize=16, parameter aw=$clog2(memsize)) (
   assign o_m_wdata=1;
   assign o_m_wen=write_enable;
   assign o_m_raddr=address;
-  assign o_m_ren=1;
+  {ren_assignment}
   assign o_led=0;
   initial begin
     wait (rst_i === 1'b0);
@@ -1360,7 +1364,8 @@ endmodule
     assert simulated.returncode == (1 if wrong_address else 0), values
     assert verdict == (I.FAIL if wrong_address else I.PASS), values
     if wrong_address:
-        assert "ASYNC0_VALUE_FAIL" in simulated.stdout, values
+        message = "ASYNC0_VALUE_FAIL" if latency == 0 else "CLOCKED_READ_VALUE_FAIL"
+        assert message in simulated.stdout, values
     else:
         assert f"SRAM_READ_VALUE_PASS latency={latency}" in simulated.stdout, values
         assert parsed["tohost"] == 1, values

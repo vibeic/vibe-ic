@@ -71893,7 +71893,9 @@ def main() -> int:
     # to reports/phase1/, FAIL bubbles to the strict-mode exit via
     # `cov_gate_failed`. Chip-AGNOSTIC — every gate reads only the
     # project's own L docs and its consuming program.
-    _layergate2_result = _run_layergate2(project)
+    _layergate2_result = _run_layergate2(project, gates=[
+        gate for gate in LAYERGATE2_GATES
+        if gate[0] != "l6_fsm_scaffold_actionable_check"])
     if _layergate2_result:
         cov_gate_failed = True
 

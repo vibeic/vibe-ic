@@ -1200,7 +1200,7 @@ def reset_role_candidates(nl: Netlist) -> List[dict]:
 def reset_dependency_findings(
         nl: Netlist, lookup: Optional[_LookupSnapshot] = None, *,
         metadata: Optional[dict] = None, reset_roles: Optional[dict] = None,
-        calibrate: bool = True) -> List[dict]:
+        calibrate: bool = True, require_reset_roles: bool = True) -> List[dict]:
     """Complete reset-cycle detection; one ERROR witness per cyclic SCC.
 
     Reset roles and graph edges retain their existing meaning. Iterative
@@ -1214,7 +1214,7 @@ def reset_dependency_findings(
         instrument_calibration.assert_calibrated("_cdc_netlist::reset_dependency_findings")
     lookup = lookup or _LookupSnapshot(nl)
     reset_roles = reset_roles or {}
-    unresolved = [r for r in reset_role_candidates(nl)
+    unresolved = [r for r in (reset_role_candidates(nl) if require_reset_roles else [])
                   if reset_roles.get(r["state"]) not in ("synchronous_reset", "functional_update")]
     resets: Dict[object, List[Flop]] = {}
     for f in nl.flops:
@@ -1338,7 +1338,7 @@ def reset_dependency_findings(
 
 def judge(nl: Netlist, rule: str, is_candidate=None, *,
           metadata: Optional[dict] = None, reset_roles: Optional[dict] = None,
-          calibrate: bool = True) -> List[dict]:
+          calibrate: bool = True, require_reset_roles: bool = True) -> List[dict]:
     """The one entry every gate uses to judge a netlist.
 
     Each rule carries its own `assert_calibrated` line: one pair per rule, so
@@ -1351,7 +1351,8 @@ def judge(nl: Netlist, rule: str, is_candidate=None, *,
         return async_input_findings(
             nl, is_candidate or (lambda _n: False), lookup, calibrate=calibrate)
     if rule == "reset_dependency":
-        return reset_dependency_findings(nl, lookup, metadata=metadata, reset_roles=reset_roles, calibrate=calibrate)
+        return reset_dependency_findings(nl, lookup, metadata=metadata, reset_roles=reset_roles,
+                                        calibrate=calibrate, require_reset_roles=require_reset_roles)
     raise ValueError(rule)
 
 

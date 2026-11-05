@@ -61,6 +61,36 @@ def test_native_lint_synthesis_floorplan(tmp_path):
         "FLOW_ENGINE_PROGRAMS", str(Path(__file__).resolve().parents[1]))))
 
 
+def test_missing_metadata_preserves_a_valid_native_database(tmp_path):
+    if importlib.util.find_spec("librelane") is None:
+        pytest.skip("LibreLane runtime is required")
+    import flow_engine as engine
+    from librelane.state import State, DesignFormat
+    from librelane.common import Path as NativePath
+
+    rtl = tmp_path / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "unit.v").write_text("module unit(input clk, output q); assign q=clk; endmodule\n")
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "unit"}))
+    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        {"domain_kind": "primary", "source_pin": "clk", "period_ns": 20}]}))
+    (docs / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({"fields": {"pdk_target": "sky130A"}}))
+    chain = engine.NativeChain(tmp_path, {"delivery_target": "ip_hardmacro"})
+    chain.initialize()
+    odb = tmp_path / "valid-input.odb"
+    odb.touch()
+    chain.state = State({DesignFormat.ODB: NativePath(str(odb))}, metrics={"upstream": 1})
+    output = tmp_path / "step"
+    output.mkdir()
+    result = chain.execute(output, {"steps": ["Odb.SetPowerConnections"]})
+    assert result.native_steps[0]["missing_inputs"] == ["json_h"]
+    assert not result.ran
+    assert chain.state.get_by_df(DesignFormat.ODB) == str(odb)
+    assert chain.state.metrics["upstream"] == 1
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=Path, required=True)

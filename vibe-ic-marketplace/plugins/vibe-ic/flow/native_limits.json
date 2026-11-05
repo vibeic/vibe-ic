@@ -700,6 +700,17 @@
           "file": "programs/flow109_metric_acceptance.py",
           "line": 1838
         }
+      },
+      {
+        "metric": "invalid_timing_exceptions",
+        "operator": "==",
+        "limit": 0,
+        "unit": "count",
+        "source": {
+          "file": "programs/flow109_metric_acceptance.py",
+          "line": 1032
+        },
+        "tool_gap": "OpenSTA native exception diagnostics; wire invalid/unmatched object diagnostics without requirement traces."
       }
     ],
     "candidate_ir_drop": [
@@ -1056,6 +1067,58 @@
         },
         "unit": "count"
       }
+    ],
+    "spare_cells_and_eco_preparation": [
+      {
+        "metric": "spare_density_fraction",
+        "operator": ">=",
+        "limit": 0.02,
+        "when": "ic",
+        "source": {
+          "file": "programs/spare_cell_coverage_check.py",
+          "line": 132
+        }
+      },
+      {
+        "metric": "spare_distribution_errors",
+        "operator": "==",
+        "limit": 0,
+        "when": "ic",
+        "source": {
+          "file": "programs/spare_cell_coverage_check.py",
+          "line": 132
+        }
+      },
+      {
+        "metric": "spare_tie_connectivity_errors",
+        "operator": "==",
+        "limit": 0,
+        "when": "digital_physical and requires_spares",
+        "source": {
+          "file": "programs/spare_cell_coverage_check.py",
+          "line": 132
+        }
+      },
+      {
+        "metric": "spare_planned_mismatch",
+        "operator": "==",
+        "limit": 0,
+        "when": "ic",
+        "source": {
+          "file": "programs/spare_cell_coverage_check.py",
+          "line": 132
+        }
+      },
+      {
+        "metric": "vibeic__spare__pg__unconnected",
+        "operator": "==",
+        "limit": 0,
+        "when": "ic",
+        "source": {
+          "file": "programs/spare_cell_coverage_check.py",
+          "line": 132
+        }
+      }
     ]
   },
   "adapters": {
@@ -1221,6 +1284,17 @@
         ],
         "imports": [
           "flow_em_corners"
+        ]
+      }
+    },
+    "spare_cells_and_eco_preparation": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "VibeIC.SpareCells"
+        ],
+        "imports": [
+          "flow_spare_cells"
         ]
       }
     }
@@ -1702,8 +1776,16 @@
       "value": true,
       "when": "ic",
       "source": {
-        "file": "/mnt/ssd2/codex_tasks/in/flow-ic/leader.txt",
+        "file": "programs/flow_em_corners.py",
         "note": "Ruling211: retain published IC power-grid EM against PDK Jmax."
+      }
+    },
+    "requires_spares": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_spare_cells.py",
+        "note": "Ruling212 retains the published native IC spare-cell checks."
       }
     }
   },
@@ -2218,8 +2300,8 @@
     "constraint_validation": [
       {
         "old_name": "invalid_timing_exceptions",
-        "class": "T",
-        "reason": "OpenSTA native exception diagnostics; wire invalid/unmatched object diagnostics without requirement traces."
+        "class": "D",
+        "reason": "The same native OpenSTA SDC diagnostic count is enforced at pre_layout_timing, after its netlist exists."
       }
     ],
     "soft_ip_synthesis_and_constraints": [
@@ -2299,13 +2381,27 @@
     "pre_layout_timing": [
       {
         "old_name": "unconstrained_required_paths",
-        "class": "T",
-        "reason": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
+        "class": "N",
+        "reason": "Existing OpenSTA check_setup native count, read by original parser with unchanged zero limit.",
+        "native_metrics": [
+          "unconstrained_required_paths"
+        ]
       },
       {
         "old_name": "unconstrained_endpoints",
-        "class": "T",
-        "reason": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
+        "class": "N",
+        "reason": "Existing OpenSTA check_setup native count, read by original parser with unchanged zero limit.",
+        "native_metrics": [
+          "unconstrained_endpoints"
+        ]
+      },
+      {
+        "old_name": "invalid_timing_exceptions",
+        "class": "N",
+        "native_metrics": [
+          "invalid_timing_exceptions"
+        ],
+        "reason": "Native OpenSTA read_sdc diagnostics at the actual pre-layout STA producer; original zero limit."
       },
       {
         "old_name": "prelayout_timing_targets",
@@ -2590,14 +2686,50 @@
     ],
     "spare_cells_and_eco_preparation": [
       {
-        "old_name": "required_spare_distribution",
-        "class": "T",
-        "reason": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
+        "old_name": "spare_density_fraction",
+        "class": "N",
+        "native_metrics": [
+          "spare_density_fraction"
+        ],
+        "reason": "OpenROAD spare-cell measured census and the existing coverage comparator."
+      },
+      {
+        "old_name": "spare_distribution_errors",
+        "class": "N",
+        "native_metrics": [
+          "spare_distribution_errors"
+        ],
+        "reason": "OpenROAD spare-cell measured census and the existing coverage comparator."
       },
       {
         "old_name": "spare_tie_connectivity_errors",
+        "class": "N",
+        "native_metrics": [
+          "spare_tie_connectivity_errors"
+        ],
+        "reason": "OpenROAD spare-cell measured census and the existing coverage comparator."
+      },
+      {
+        "old_name": "spare_planned_mismatch",
+        "class": "N",
+        "native_metrics": [
+          "spare_planned_mismatch"
+        ],
+        "reason": "OpenROAD spare-cell measured census and the existing coverage comparator."
+      },
+      {
+        "old_name": "vibeic__spare__pg__unconnected",
+        "class": "N",
+        "native_metrics": [
+          "vibeic__spare__pg__unconnected"
+        ],
+        "reason": "OpenROAD spare-cell measured census and the existing coverage comparator."
+      },
+      {
+        "old_name": "required_spare_distribution",
         "class": "T",
-        "reason": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
+        "when": "digital_physical and requires_spares and not ic",
+        "reason": "Non-IC spare distribution remains an engineering measurement; the IC profile uses the native density and distribution numbers above."
       }
     ],
     "clock_tree_synthesis": [
@@ -2886,14 +3018,16 @@
       },
       {
         "old_name": "candidate_sdf_annotation",
-        "class": "T",
-        "reason": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool.",
-        "native_population": "Native simulator SDF annotated and unannotated delay counts"
+        "class": "D",
+        "reason": "The native GLS adapter only emits a conclusive functional defect count when native annotation applied delays >0 and original SDF error count is0. Existing sdf_gate_sim.py2740-2755 owns those same limits; missing annotation remains NOT_MEASURED."
       },
       {
         "old_name": "gls_failures",
-        "class": "T",
-        "reason": "Icarus/Verilator gate-level simulation with native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
+        "class": "N",
+        "reason": "Actual Icarus self-check/JUnit defect count; original zero-functional-error limit.",
+        "native_metrics": [
+          "gls_failures"
+        ]
       }
     ],
     "post_layout_spice_correlation": [
@@ -3283,14 +3417,16 @@
     "final_sdf_gate_level_replay": [
       {
         "old_name": "final_gls_function_timing_errors",
-        "class": "T",
-        "reason": "Icarus gate-level simulation and native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
+        "class": "N",
+        "reason": "Actual Icarus self-check/JUnit defect count; original zero-functional-error limit.",
+        "native_metrics": [
+          "final_gls_function_timing_errors"
+        ]
       },
       {
         "old_name": "final_sdf_annotation",
-        "class": "T",
-        "reason": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool.",
-        "native_population": "Native simulator SDF annotated and unannotated delay counts"
+        "class": "D",
+        "reason": "The native GLS adapter only emits a conclusive functional defect count when native annotation applied delays >0 and original SDF error count is0. Existing sdf_gate_sim.py2740-2755 owns those same limits; missing annotation remains NOT_MEASURED."
       },
       {
         "old_name": "final_gls_scenarios",
@@ -3523,6 +3659,10 @@
     "submission_and_implementation_interface": {
       "when": "False",
       "reason": "No native engineering tool or checks remain. _run_step_0_5ic performs old submission/template admission and is not an available native OwnerSession tool. Documents and unchanged Router own the implementation interface."
+    },
+    "constraint_validation": {
+      "when": "False",
+      "reason": "SDC validation runs with native pre-layout STA, where the synthesis netlist exists; duplicate pre-netlist wrapper removed."
     }
   },
   "classification_decision": {
@@ -3553,6 +3693,78 @@
       "adapter": "xor",
       "program": "flow_native_verification.py",
       "metric": "unexplained_stream_xor"
+    },
+    "pre_layout_timing": {
+      "kind": "librelane",
+      "steps": [
+        "OpenROAD.CheckSDCFiles",
+        "OpenROAD.CheckMacroInstances",
+        "OpenROAD.STAPrePNR"
+      ],
+      "report_readers": [
+        {
+          "reader": "flow_native_timing.read_sta_reports",
+          "native_step": "OpenROAD.STAPrePNR"
+        }
+      ]
+    },
+    "implemented_netlist_cdc_and_rdc": {
+      "kind": "adapter",
+      "adapter": "implemented_cdc",
+      "program": "flow_native_adapters.py"
+    },
+    "candidate_gate_level_simulation": {
+      "kind": "adapter",
+      "adapter": "gls",
+      "program": "flow_native_verification.py",
+      "metric": "gls_failures",
+      "native_limits": [
+        {
+          "metric": "sdf_delays_applied",
+          "operator": ">",
+          "limit": 0,
+          "source": {
+            "file": "programs/sdf_gate_sim.py",
+            "line": 2749
+          }
+        },
+        {
+          "metric": "sdf_annotation_errors",
+          "operator": "==",
+          "limit": 0,
+          "source": {
+            "file": "programs/sdf_gate_sim.py",
+            "line": 2751
+          }
+        }
+      ]
+    },
+    "final_sdf_gate_level_replay": {
+      "kind": "adapter",
+      "adapter": "gls",
+      "program": "flow_native_verification.py",
+      "metric": "final_gls_function_timing_errors",
+      "native_limits": [
+        {
+          "metric": "sdf_delays_applied",
+          "operator": ">",
+          "limit": 0,
+          "source": {
+            "file": "programs/sdf_gate_sim.py",
+            "line": 2749
+          }
+        },
+        {
+          "metric": "sdf_annotation_errors",
+          "operator": "==",
+          "limit": 0,
+          "source": {
+            "file": "programs/sdf_gate_sim.py",
+            "line": 2751
+          }
+        }
+      ],
+      "corners": "all"
     }
   }
 }

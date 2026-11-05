@@ -3,13 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import shutil
+import subprocess
 from types import SimpleNamespace
 
 import pytest
 
-from flow_native_adapters import Commands
-from flow_native_adapters import formal
-from flow_native_verification import eqy, eqy_partitions, reset_boundary, xor
+from flow_native_adapters import Commands, formal
+from flow_native_verification import eqy, eqy_partitions, gls, reset_boundary, xor
 
 
 @pytest.mark.parametrize("reset_value", [0, 1])
@@ -136,6 +136,114 @@ def test_actual_eqy_detects_unequal_logic(tmp_path, different):
     assert not (tmp_path / "result.json").exists()
 
 
+@pytest.mark.parametrize("model_key", ["PAD_LIBS", "EXTRA_LIBS", "PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS", "LIBERTY_SIBLING", "SIMULATION_DIRECTIVES"])
+@pytest.mark.parametrize("different", [False, True])
+def test_eqy_preserves_chip_ports_and_declared_external_logic(tmp_path, model_key, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    gold, gate, core = [tmp_path / name for name in ("gold.v", "gate.v", "core.lib")]
+    gold.write_text("module unit(input a, output y, output vss);\nwire x;\n"
+        "PADIN input_cell(.PAD(a),.Y(x));\nPADGND supply_cell(.GND(vss));\nassign y=x; endmodule\n")
+    gate.write_text(gold.read_text().replace("assign y=x", "assign y=~x" if different else "assign y=x"))
+    core.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(core)]}}
+    if model_key.endswith("LIBS") or model_key == "LIBERTY_SIBLING":
+        model = tmp_path / "external.lib"
+        model.write_text('library(external) {cell(PADIN) {pin(PAD) {direction:input;}'
+            'pin(Y) {direction:output; function:"PAD";}} '
+            'cell(PADGND) {pin(GND) {direction:output; function:"0";}}}\n')
+        if model_key == "LIBERTY_SIBLING":
+            directory = tmp_path / "pdk/lib"
+            directory.mkdir(parents=True)
+            moved = directory / model.name
+            moved.write_text(model.read_text())
+            model.unlink()
+            model = moved
+            models = tmp_path / "pdk/verilog"
+            models.mkdir()
+            (models / "models.v").write_text("module PADIN(input PAD,output Y); assign Y=PAD; endmodule\n"
+                                            "module PADGND(output GND); assign GND=0; endmodule\n")
+        config["PAD_LIBS" if model_key == "LIBERTY_SIBLING" else model_key] = (
+            {"typical": [str(model)]} if model_key == "PAD_LIBS" else [str(model)])
+    else:
+        declared, model = tmp_path / "blackbox.v", tmp_path / "external_models.v"
+        declared.write_text("(* blackbox *) module PADIN(input PAD, output Y); endmodule\n"
+                           "(* blackbox *) module PADGND(output GND); endmodule\n")
+        model.write_text("module PADIN(input PAD,output Y); assign Y=PAD; endmodule\n"
+                         "module PADGND(output GND); assign GND=0; endmodule\n")
+        if model_key == "SIMULATION_DIRECTIVES":
+            model.write_text("`suppress_faults\n`enable_portfaults\n`delay_mode_path\n" + model.read_text())
+        config["PAD_VERILOG_MODELS" if model_key == "SIMULATION_DIRECTIVES" else model_key] = [str(declared)]
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    assert result["metrics"].get("unproved_equivalence") == int(different), result
+    assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
+    for side in ("gold", "gate"):
+        ports = json.loads((tmp_path / f"{side}.before-normalization.json").read_text())["modules"]["unit"]["ports"]
+        assert set(ports) == {"a", "y", "vss"}
+
+
+def test_eqy_missing_external_model_stays_unmeasured(tmp_path):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    gold, gate, core = [tmp_path / name for name in ("gold.v", "gate.v", "core.lib")]
+    gold.write_text("module unit(input a, output y); PADIN input_cell(.PAD(a),.Y(y)); endmodule\n")
+    gate.write_text(gold.read_text())
+    core.write_text("library(neutral) {}\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(core)]}}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
+    assert not result["metrics"]
+
+
+def test_eqy_core_uses_real_pdk_defaults_without_unused_io_models(tmp_path):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    pytest.importorskip("librelane")
+    from librelane.flows import Flow
+    gold = tmp_path / "gold.v"
+    gold.write_text("module unit(input a, output y); assign y=a; endmodule\n")
+    flow = Flow.factory.get("Classic")({"DESIGN_NAME": "unit", "PDK": "sky130A",
+        "VERILOG_FILES": [str(gold)]}, design_dir=str(tmp_path))
+    config = flow.config.to_raw_dict()
+    assert config["PAD_LIBS"], "The real optional PDK IO defaults must be present in this control"
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gold)}, config=config)
+    assert result["native_steps"][0]["status"] == "PASS", result
+    assert result["metrics"]["unproved_equivalence"] == 0
+    script = (tmp_path / "equivalence.eqy").read_text()
+    for paths in config["PAD_LIBS"].values():
+        for path in paths:
+            assert str(path) not in script
+
+
+def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
+    gold, core, witness = [tmp_path / name for name in ("gold.v", "core.lib", "yosys-witness")]
+    gold.write_text("module unit(input a,output y);assign y=a;endmodule\n")
+    core.write_text("library(neutral) {}\n")
+    witness.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(shutil, "which", lambda name: str(witness))
+    exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: False if str(path) == "/usr/bin/env" else exists(path))
+
+    class NativeFailure(Commands):
+        def run(self, argv, cwd=None):
+            scratch = tmp_path / "scratch"
+            scratch.mkdir()
+            partition(scratch, "unit", "UNKNOWN")
+            log = scratch / "strategies/unit/pdr/unit/logfile.txt"
+            log.parent.mkdir(parents=True)
+            log.write_text("yosys-witness: /usr/bin/env: bad interpreter: No such file or directory\n")
+            self.records.append({"command": list(map(str, argv)), "exit_code": 1, "log": str(log)})
+            return subprocess.CompletedProcess(argv, 1, "", "")
+
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(core)]}}
+    result = eqy(tmp_path, tmp_path, {}, NativeFailure(tmp_path), state={"nl": str(gold)}, config=config)
+    assert not result["metrics"] and result["exit_code"] == 1
+    assert "yosys-witness cannot execute" in result["detail"] and "/usr/bin/env" in result["detail"]
+
+
 def test_xor_reuses_native_state_number(tmp_path):
     state = SimpleNamespace(metrics={"design__xor_difference__count": 3})
     commands = Commands(tmp_path)
@@ -216,3 +324,122 @@ def test_original_klayout_xor_invocation(tmp_path, different):
     assert result["ran"], result
     assert result["metrics"]["design__xor_difference__count"] == int(different), result
     assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
+
+
+def gls_fixture(project, *, different=False, annotated=True, cocotb=False):
+    project.mkdir(parents=True, exist_ok=True)
+    netlist, model, sdf = [project / name for name in ("netlist.v", "model.v", "timing.sdf")]
+    operation = "~a" if different else "a"
+    model.write_text("`timescale 1ns/1ps\nmodule delay_cell(input a, output y);\n"
+                     f"assign y={operation}; specify (a=>y)=(1,1); endspecify endmodule\n")
+    netlist.write_text("module unit(input a, output y);\ndelay_cell gate(.a(a),.y(y));\nendmodule\n")
+    delays = "(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1))))" if annotated else ""
+    connection = ('(CELL (CELLTYPE "unit") (INSTANCE) (DELAY (ABSOLUTE '
+                  '(INTERCONNECT a gate/a (0.5:0.5:0.5)))))\n') if annotated else ""
+    sdf.write_text('(DELAYFILE (SDFVERSION "3.0") (DESIGN "unit") (DIVIDER /) (TIMESCALE 1ns)\n'
+                   + connection + f'(CELL (CELLTYPE "delay_cell") (INSTANCE gate) {delays}))\n')
+    benches = project / "phase2/stage1/sim"
+    benches.mkdir(parents=True)
+    if cocotb:
+        tb = benches / "tb_unit.py"
+        tb.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+            "@cocotb.test()\nasync def function(dut):\n"
+            "    dut.a.value=0\n    await Timer(3,unit='ns')\n"
+            "    dut.a.value=1\n    await Timer(3,unit='ns')\n    assert int(dut.y.value)==1\n")
+    else:
+        tb = benches / "tb_unit.v"
+        tb.write_text("`timescale 1ns/1ps\nmodule tb_unit;\nreg a=0; wire y;\nunit dut(a,y);\n"
+            "initial begin #5; a=1; #5;\n"
+            "if(y!==1) begin $display(\"ORACLE_TB_DONE pass=0/1\"); $fatal(1,\"functional mismatch\"); end\n"
+            "$display(\"ORACLE_TB_DONE pass=1/1\"); $finish; end\nendmodule\n")
+    class NativeState(dict):
+        metrics = {}
+    state = NativeState(nl=str(netlist), sdf={"typical": str(sdf)})
+    config = {"DESIGN_NAME": "unit", "CELL_VERILOG_MODELS": [str(model)]}
+    return state, config
+
+
+@pytest.mark.parametrize("different,annotated,expected", [
+    (False, True, "PASS"), (True, True, "FAIL"), (False, False, "NOT_MEASURED"),
+])
+@pytest.mark.parametrize("cocotb", [False, True])
+def test_native_gls_annotations_and_function(tmp_path, different, annotated, expected, cocotb):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    if cocotb and not shutil.which("cocotb-config"):
+        pytest.skip("Native cocotb is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different, annotated=annotated, cocotb=cocotb)
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == expected, result
+    if expected == "NOT_MEASURED":
+        assert "gls_failures" not in result["metrics"]
+    else:
+        assert result["metrics"]["gls_failures"] == int(different), result
+        assert result["metrics"]["final_gls_function_timing_errors"] == int(different), result
+        assert result["metrics"]["sdf_delays_applied"] > 0, result
+    assert not (directory / "result.json").exists()
+
+
+def test_gls_names_missing_native_inputs(tmp_path):
+    result = gls(tmp_path, tmp_path, {}, Commands(tmp_path), state={}, config={})
+    assert not result["ran"] and "State netlist" in result["detail"]
+
+
+def test_gls_replays_every_state_corner(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    state["sdf"]["second_corner"] = state["sdf"]["typical"]
+    result = gls(project, directory, {"corners": "all"}, Commands(directory), state=state, config=config)
+    assert [row["corner"] for row in result["native_steps"]] == ["typical", "second_corner"]
+    assert all(row["status"] == "PASS" and row["tests"] == 1 for row in result["native_steps"])
+    assert result["metrics"]["gls_failures"] == 0
+
+
+def test_gls_default_matches_configured_single_corner(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    state["sdf"]["unselected_corner"] = str(project / "absent.sdf")
+    config["DEFAULT_CORNER"] = "typical"
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert [row["corner"] for row in result["native_steps"]] == ["typical"]
+    assert result["metrics"]["gls_failures"] == 0
+    report = json.loads((directory / "gls.json").read_text())
+    assert report["unmeasured_corners"] == ["unselected_corner"]
+
+
+def test_gls_requires_functional_evidence_even_with_annotation(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    bench = project / "phase2/stage1/sim/tb_unit.v"
+    bench.write_text(bench.read_text().replace('$display("ORACLE_TB_DONE pass=1/1");', ""))
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["metrics"]["sdf_delays_applied"] > 0
+    assert "gls_failures" not in result["metrics"]
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED"
+
+
+@pytest.mark.parametrize("connected", [False, True])
+def test_gls_accepts_native_physical_cell_models(tmp_path, connected):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    model = Path(config["CELL_VERILOG_MODELS"][0])
+    port, connection = ("inout node", ".node(a)") if connected else ("", "")
+    model.write_text(model.read_text() + f"module physical_cell({port}); endmodule\n")
+    netlist = Path(state["nl"])
+    netlist.write_text(netlist.read_text().replace("endmodule", f"physical_cell fill({connection});\nendmodule"))
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == "PASS", result

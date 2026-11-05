@@ -70,6 +70,29 @@ def test_raw_json_fields_do_not_create_a_structured_logic_authority():
     assert contract.source != "json"
 
 
+@pytest.mark.parametrize("sentence", [
+    "The testbench is only able to be compiled, nor are there any test entries.",
+    "Only the build is supported; neither tests nor sequences are implemented.",
+    "Only compilation is supported, no tests run nor any sequences exist.",
+])
+def test_prose_conjunction_does_not_declare_a_gate_basis(sentence):
+    contract = common.prose_emission_spec_contract(PULSE + sentence, top="pulse_detect")
+    assert contract.logic_obligations == []
+
+
+@pytest.mark.parametrize("sentence", ["Use only NOR logic.",
+                                      "Implement using only nor primitives.",
+                                      "Use only nor gates.", "Use nor-only logic.",
+                                      "Use only nor.",
+                                      "Implement the circuit using nor exclusively.",
+                                      "Neither clock nor reset is required; use only nor gates.",
+                                      "Neither clock nor reset is required, use only nor gates."])
+def test_explicit_nor_basis_remains_an_implementation_obligation(sentence):
+    contract = common.prose_emission_spec_contract(PULSE + sentence, top="pulse_detect")
+    assert [(row.kind, row.family) for row in contract.logic_obligations] == [
+        ("logic_basis", ("nor",))]
+
+
 def test_raw_prose_and_decoded_entry_share_typed_interface_obligation_override():
     def row(sentence, module):
         return {"kind": "logic_basis", "family": ["nand"],

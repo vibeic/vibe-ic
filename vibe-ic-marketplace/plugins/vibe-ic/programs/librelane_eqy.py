@@ -20,7 +20,9 @@ def write_json(path, document):
 
 
 def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
-               *, synthesis: Optional[dict] = None, views: Optional[Path] = None) -> str:
+               *, synthesis: Optional[dict] = None, views: Optional[Path] = None,
+               liberty_files: Optional[list[Path]] = None,
+               model_verilog: Optional[list[Path]] = None) -> str:
     from lec_run import (fsm_encfile_beside_netlist, fsm_signal_names,
                          _equiv_splitnets)
     encoding = fsm_encfile_beside_netlist(str(netlist))
@@ -28,6 +30,7 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
     gold_prep = ([f"hierarchy -top {top}", "proc", "opt -nosdff -nodffe", "fsm"]
                  if states else [])
     split = _equiv_splitnets(encoding, states).replace("splitnets -ports", "splitnets", 1)
+    rtl = [*rtl, *(model_verilog or [])]
     if synthesis is not None:
         from rtl_transitive_cone import topological_package_first
         from _rtl_include_hub import macro_headers_first
@@ -40,9 +43,18 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         frontend = (f"read_slang --single-unit --top {top}"
                     if synthesis.get('USE_SLANG') else 'read_verilog -sv')
         read = f"{frontend} {defines} {includes} {gold}"
+    libraries = [f"read_liberty -ignore_miss_func {liberty}"] if liberty_files is None else [
+        f"read_liberty -ignore_miss_func{' -nooverwrite' if model_verilog else ''} {path}"
+        for path in liberty_files]
+    gate_models = []
+    if model_verilog:
+        defines = " ".join('-D' + str(d) for d in (synthesis or {}).get('VERILOG_DEFINES') or [])
+        includes = " ".join('-I ' + str(p) for p in sorted({p.parent for p in model_verilog}))
+        gate_models = [f"read_verilog -formal -sv -overwrite {defines} {includes} "
+                       + " ".join(map(str, model_verilog))]
     return "\n".join([
-        "[gold]", read, *([f"read_liberty -ignore_miss_func {liberty}"] if synthesis is not None else []), *gold_prep, "",
-        "[gate]", f"read_liberty -ignore_miss_func {liberty}",
+        "[gold]", read, *(libraries if synthesis is not None else []), *gold_prep, "",
+        "[gate]", *libraries, *gate_models,
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
         "memory", *(["[gold]", f"write_json {views}/gold.before-normalization.json",
