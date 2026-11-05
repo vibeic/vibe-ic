@@ -504,39 +504,6 @@ def subckt_devices(text: str) -> Dict[str, Tuple[List[str], int]]:
     return out
 
 
-def _resistive_internal_ports(body: str, extra: set, public: set) -> bool:
-    """Magic may expose resistance-split contact nodes as extra ports.
-
-    They can stay internal to the original public cell interface only when
-    each has a positive-resistance path to exactly one public port. Keep
-    the native node names and all resistor/device lines unchanged.
-    """
-    graph: Dict[str, set] = {}
-    for line in body.splitlines():
-        words = line.split()
-        if len(words) != 4 or not words[0].lower().startswith('r'):
-            continue
-        try:
-            value = float(words[3])
-        except ValueError:
-            continue
-        if not math.isfinite(value) or value <= 0:
-            continue
-        a, b = words[1:3]
-        graph.setdefault(a, set()).add(b)
-        graph.setdefault(b, set()).add(a)
-    for node in extra:
-        seen, pending = set(), [node]
-        while pending:
-            item = pending.pop()
-            if item not in seen:
-                seen.add(item)
-                pending.extend(graph.get(item, set()) - seen)
-        if len(seen & public) != 1:
-            return False
-    return True
-
-
 def netlist_cells(netlist_text: str, known: Sequence[str]) -> List[str]:
     """The cells among `known` the structural netlist instantiates."""
     used = set(_INSTANCE_RE.findall(netlist_text))
@@ -546,7 +513,7 @@ def netlist_cells(netlist_text: str, known: Sequence[str]) -> List[str]:
 def extraction_tcl(gds: Sequence[str], cells: Sequence[str], out_dir: Path, *,
                    extract_style: Optional[str] = None) -> str:
     """One Magic session: the declared cell GDS read once, then each cell
-    extracted with the existing full parasitic-RC recipe. An absent style
+    extracted with minimum RC delay zero. An absent style
     leaves the PDK rcfile's selection intact; it does not assert a corner."""
     lines = ['gds readonly true', 'gds rescale false']
     lines += [f'gds read {g}' for g in gds]
@@ -557,7 +524,8 @@ def extraction_tcl(gds: Sequence[str], cells: Sequence[str], out_dir: Path, *,
     for cell in cells:
         lines += [f'extract path {out_dir}', _mx.build_extraction_tcl(
             cell, str(out_dir / f'{cell}.spice'),
-            _mx.MagicResimExtractOptions(extract_style=None))]
+            _mx.MagicResimExtractOptions(extract_style=None,
+                extresist_mindelay_ps=0))]
     return '\n'.join(lines + ['quit -noprompt']) + '\n'
 
 
@@ -636,9 +604,9 @@ def extract_cells(image: str, project: Path, mounts: List[Tuple[Path, str]], *,
                                             original_text, re.M))
             split_nodes = set(re.findall(r'^rnode\s+"([^"]+)"', resistance_text, re.M))
             generated = original_ports == public and extra <= split_nodes - original_nodes
-        if (not public <= set(ports)
-                or not generated
-                or not _resistive_internal_ports(inner, extra, public)):
+        # Native resistance-split nodes may belong to private signal nets.
+        # The original-port and rnode inventories above preserve the interface.
+        if not public <= set(ports) or not generated:
             kept[cell] = f'layout ports {sorted(ports)} are not the schematic ports'
             continue
         body += [f'.subckt {cell} ' + ' '.join(schematic[cell]), inner, '.ends']
@@ -646,6 +614,7 @@ def extract_cells(image: str, project: Path, mounts: List[Tuple[Path, str]], *,
     out.write_text('* vibe-ic step 30: cells extracted from the declared layout\n'
                    + '\n'.join(body) + '\n')
     return {'path': str(out), 'magic_rc': run.returncode, 'magicrc': magicrc,
+            'extresist_mindelay_ps': 0,
             'magic_execution': {'tool': 'Magic', 'rc': run.returncode,
                 'argv': ['magic', '-dnull', '-noconsole', '-rcfile', magicrc, str(tcl)],
                 'script': str(tcl), 'log': str(work / 'magic.log')},

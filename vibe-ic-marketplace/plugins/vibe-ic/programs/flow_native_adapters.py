@@ -371,8 +371,11 @@ def simulation(project, directory, tool, commands):
             scoped = coverage.scope_totals(parsed, list(map(str, silicon_files)))
             if scoped:
                 for category, counts in scoped["totals"].items():
-                    if counts["total"] > 0 and (category != "line" or scoped["line_metric"] == "executable_line_union"):
-                        metrics[f"coverage_{category}_pct"] = 100.0 * counts["covered"] / counts["total"]
+                    if (category != "line" or scoped["line_metric"] == "executable_line_union"
+                            or (line_map is not None and counts["total"] == 0)):
+                        metrics[f"coverage_{category}_points"] = counts["total"]
+                        if counts["total"] > 0:
+                            metrics[f"coverage_{category}_pct"] = 100.0 * counts["covered"] / counts["total"]
             reports.append(merged)
     result = commands.result(metrics, reports)
     result["exit_code"] = next((r["exit_code"] for i, r in enumerate(commands.records)
