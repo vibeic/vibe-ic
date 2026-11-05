@@ -1,6 +1,12 @@
 {
   "_comment": "Maps each Vibe-IC flow step to the right Bucket-A program file + Bucket-B skill file. Used by enhancement_emit.py to route a captured recovery to the correct target. Step IDs match the canonical flow naming.",
   "steps": {
+    "phase2.latch_intent": {
+      "description": "Make an explicitly requested storage element visible to the native RTL content checker through its typed SystemVerilog construct.",
+      "bucket_A_program": "programs/comb_advanced_synth.py",
+      "bucket_A_related": ["programs/sequential_waveform_synth.py"],
+      "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
+    },
     "benchmark.reference_model_handoff": {
       "description": "Producer advisory for the existing persistent reference-model input; ordinary native verification and independent review remain the boundary.",
       "bucket_A_program": "programs/professional_tb_gen.py",
