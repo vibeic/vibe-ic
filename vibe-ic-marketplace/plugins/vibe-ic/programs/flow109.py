@@ -2616,7 +2616,6 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
         'D22': {'method': 'synthesis', 'report': 'phase3/librelane/02-yosys-synthesis/state_out.json'},
         'D25': {'method': 'equivalence', 'report': 'reports/lec_eqy_execution.json'},
         'D26': {'method': 'sta', 'report': 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr/state_out.json'},
-        'D30': {'method': 'verdict', 'report': 'phase3/librelane/02-yosys-synthesis/handoff_netlist_gate.json'},
     }
     row = context.get('resolved_row', {})
     step = row.get('id')
