@@ -1,7 +1,7 @@
 # Execution modes: canonical Default routing and Ultra qualification
 
 The execution policy has two deliberately separate paths. User/operator flow
-instructions bind them through the Flow109 public entry and stable IDs in
+instructions bind them through the flow public entry and stable IDs in
 `flow/flow109.json`:
 
 * **Default mode** is program-first. The caller owns the one canonical producer
@@ -25,7 +25,7 @@ python3 programs/vibe_ic_one_shot_runner.py PROJECT --route ic \
   --entry-step D09 --exit-step D09 --execution-mode default
 ```
 
-Both window endpoints are current Flow109 IDs, never positions and never former
+Both window endpoints are current flow IDs, never positions and never former
 step numbers. The registry records D09/17, D11/19, D13/21, D22/34, D23/35,
 D30/42 and D50/72. Position is display/audit metadata only. A row without a
 registered dispatch refuses rather than entering another producer.
