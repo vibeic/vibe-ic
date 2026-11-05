@@ -90,7 +90,7 @@ def test_public_entry_performs_one_replay_even_when_second_em_fails(tmp_path, mo
         return RecoveryPlan({"PDN_VPITCH": 80}, ())
     monkeypatch.setattr(flow_pdn_recovery, "plan_recovery", plan)
     monkeypatch.setattr(flow_pdn_recovery, "apply_plan", lambda *args: tmp_path / "archive")
-    monkeypatch.setattr(flow_pdn_recovery, "finish_replay", lambda project, first, final, archive: final)
+    monkeypatch.setattr(flow_pdn_recovery, "finish_replay", lambda project, first, final, archive, **kwargs: final)
     monkeypatch.setitem(sys.modules, "flow_engine", SimpleNamespace(run=run, TABLE=flow_engine.TABLE))
     args = SimpleNamespace(project=tmp_path, entry_step="requirements_and_delivery_route",
         exit_step="candidate_electromigration", rtl_input="structured", delivery_target="ip_hardmacro",
@@ -123,6 +123,63 @@ def test_public_prepass_preserves_historical_native_clock_on_retained_run(tmp_pa
     assert reports[-1]["native_common_started_at"] == 100
 
 
+@pytest.mark.parametrize("native_epoch", [False, True])
+def test_actual_retained_engine_cannot_erase_original_public_clock(tmp_path, monkeypatch, native_epoch):
+    import flow_engine
+    import flow_engine_frontend as frontend
+    from test_flow_engine import command_row
+    names = ["pre_layout_timing", "die_floorplan_and_macros", "candidate_electromigration"]
+    rows = [command_row(name) for name in names]
+    for row in rows:
+        row["tool"]["timing_group"] = "librelane"
+    table = tmp_path / "steps.json"
+    table.write_text(json.dumps({"steps": rows}))
+    monkeypatch.setattr(flow_engine, "TABLE", table)
+    route = {"entry_step": names[0], "verify_through": names[-1],
+             "delivery_target": "ip_hardmacro", "input_contract": "structured"}
+    flow_engine.run(tmp_path, route=route)
+    first = tmp_path / "steps" / names[0] / "result.json"
+    saved = json.loads(first.read_text())
+    saved.update(started_at=100, completed_at=101)
+    if native_epoch:
+        saved["native_common_started_at"] = 100
+    first.write_text(json.dumps(saved))
+    args = SimpleNamespace(project=tmp_path, entry_step=names[0], exit_step=names[-1],
+        rtl_input="structured", delivery_target="ip_hardmacro", route="ip", pdk="auto", from_name=None)
+    assert frontend.run_public(args) == 0
+    retained = json.loads(first.read_text())
+    assert retained["retained"]
+    assert "native_common_started_at" not in retained
+    report = json.loads((tmp_path / "reports/flow_engine.json").read_text())
+    assert report["native_common_started_at"] == 100
+    assert report["common_wall_seconds"] > 100
+
+
+def test_actual_floorplan_resume_keeps_failed_attempt_execution_times(tmp_path, monkeypatch):
+    import flow_engine
+    import flow_engine_frontend as frontend
+    from test_flow_engine import command_row
+    names = ["pre_layout_timing", "die_floorplan_and_macros", "candidate_electromigration"]
+    rows = [command_row(name) for name in names]
+    table = tmp_path / "steps.json"
+    table.write_text(json.dumps({"steps": rows}))
+    monkeypatch.setattr(flow_engine, "TABLE", table)
+    route = {"entry_step": names[0], "verify_through": names[-1],
+             "delivery_target": "ip_hardmacro", "input_contract": "structured"}
+    first = flow_engine.run(tmp_path, route=route)
+    first["pdn_recovery"] = {"first_attempt": str(tmp_path / "archive"), "physical_replays": 1}
+    report_path = tmp_path / "reports/flow_engine.json"
+    report_path.write_text(json.dumps(first))
+    old_floorplan = next(row["tool_seconds"] for row in first["steps"] if row["name"] == names[1])
+    args = SimpleNamespace(project=tmp_path, entry_step=names[0], exit_step=names[-1],
+        rtl_input="structured", delivery_target="ip_hardmacro", route="ip", pdk="auto", from_name=names[1])
+    assert frontend.run_public(args) == 0
+    report = json.loads(report_path.read_text())
+    assert report["selected_names"] == names
+    assert report["pdn_recovery"]["physical_replays"] == 1
+    assert next(row["tool_seconds"] for row in report["steps"] if row["name"] == names[1]) > old_floorplan
+
+
 def test_replayed_metrics_replace_old_candidate_and_spent_times_remain(tmp_path):
     import flow_engine
     row = {"name": "die_floorplan_and_macros", "status": "PASS", "tool_seconds": 4,
@@ -135,10 +192,10 @@ def test_replayed_metrics_replace_old_candidate_and_spent_times_remain(tmp_path)
     first = {"steps": [old], "selected": 1, "selected_names": [row["name"]],
              "native_common_started_at": 10, "started_at": 8, "common_step_names": [row["name"]]}
     final = {"steps": [row], "completed_at": 25, "native_common_completed_at": 25}
-    result = finish_replay(tmp_path, first, final, tmp_path / "archive")
+    result = finish_replay(tmp_path, first, final, tmp_path / "archive", extra_program_seconds=2)
     assert result["steps"][0]["native_metrics"] == {"measured": 2}
     assert result["tool_seconds"] == 11
-    assert result["program_seconds"] == 3
+    assert result["program_seconds"] >= 5
     assert result["common_wall_seconds"] == 15
     assert result["started_at"] == 8
 

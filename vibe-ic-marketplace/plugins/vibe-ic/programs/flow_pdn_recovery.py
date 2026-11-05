@@ -28,6 +28,20 @@ class RecoveryPlan:
     evidence: tuple[dict, ...]
 
 
+def recorded_common_start(project: Path):
+    report = project / "reports/flow_engine.json"
+    summary = json.loads(report.read_text()) if report.is_file() else {}
+    rows = [json.loads(path.read_text()) for path in (project / "steps").glob("*/result.json")]
+    rows.extend(summary.get("steps", []))
+    starts = [row["native_common_started_at"] for row in [summary, *rows]
+              if row.get("native_common_started_at") is not None]
+    if not starts:
+        starts = [row["started_at"] for row in rows if row.get("timing_group") == "librelane"
+                  and row.get("tool_ran") and row.get("tool_kind") != "native_report"
+                  and row.get("started_at") is not None]
+    return min(starts) if starts else None
+
+
 def printed_bound(value: str, upper: bool) -> Decimal:
     number = Decimal(value)
     half_unit = Decimal(5).scaleb(number.as_tuple().exponent - 1)
@@ -217,9 +231,11 @@ def apply_plan(project: Path, route: dict, summary: dict, plan: RecoveryPlan) ->
     return directory
 
 
-def finish_replay(project: Path, first: dict, final: dict, archive: Path) -> dict:
+def finish_replay(project: Path, first: dict, final: dict, archive: Path,
+                  extra_program_seconds=0.0) -> dict:
     """Retain spent execution time while final-candidate measurements replace old ones."""
     import flow_engine
+    started = time.perf_counter()
     old_rows = {row["name"]: row for row in first["steps"]}
     for row in final["steps"]:
         old = old_rows.get(row["name"], {})
@@ -237,6 +253,12 @@ def finish_replay(project: Path, first: dict, final: dict, archive: Path) -> dic
             final[key] = first[key]
     if first.get("native_common_started_at") is not None:
         final["native_common_started_at"] = first["native_common_started_at"]
-    final["pdn_recovery"] = {"first_attempt": str(archive), "physical_replays": 1}
+    overhead = extra_program_seconds + time.perf_counter() - started
+    floorplan = project / "steps/die_floorplan_and_macros/result.json"
+    row = json.loads(floorplan.read_text())
+    row["program_seconds"] = row.get("program_seconds", 0) + overhead
+    flow_engine.write_json(floorplan, row)
+    final["pdn_recovery"] = {"first_attempt": str(archive), "physical_replays": 1,
+                             "program_seconds": overhead}
     flow_engine.write_json(project / "reports/flow_engine.json", final)
     return flow_engine.refresh_report(project)
