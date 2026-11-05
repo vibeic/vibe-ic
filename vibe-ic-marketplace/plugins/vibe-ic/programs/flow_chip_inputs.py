@@ -533,6 +533,16 @@ def _tcl_word(value):
         "\\" + char if char in '\\ $;{}[]"' else char) for char in str(value))
 
 
+def _clock_periods(project: Path, config: dict) -> dict:
+    from flow_config import declared_clocks, clock_period_ns
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    document = json.loads(path.read_text()) if path.is_file() else {}
+    override = document.get('fields', {}).get('clock_target', {}).get('period_ns')
+    return {clock.get('source_pin') or clock.get('name'):
+            override if override is not None else clock_period_ns(clock)
+            for clock in declared_clocks(project, config['PDK'])}
+
+
 def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str] | None = None) -> str:
     directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
     def collection(names):
@@ -556,12 +566,13 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
     clocks = _required(config, "CLOCK_PORT")
     if isinstance(clocks, str):
         clocks = [clocks]
-    period = float(_required(config, "CLOCK_PERIOD"))
-    budget = period * float(delay) / 100
+    periods = _clock_periods(project, config)
     if any(clock not in directions or directions[clock] != "input" for clock in clocks):
         raise ValueError("CLOCK_PORT must name an elaborated core input")
     lines = ["set_units -time ns"]
     for index, clock in enumerate(clocks):
+        period = float(periods.get(clock) or _required(config, "CLOCK_PERIOD"))
+        budget = period * float(delay) / 100
         lines.append(f"create_clock -name core_clock_{index} -period {period:g} {collection([clock])}")
         for key, command in (("CLOCK_UNCERTAINTY_CONSTRAINT", "set_clock_uncertainty"),
                              ("CLOCK_TRANSITION_CONSTRAINT", "set_clock_transition")):
@@ -651,7 +662,8 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     result.update(DESIGN_NAME=top, VERILOG_FILES=[*core_config["VERILOG_FILES"], str(wrapper)],
                   FP_SIZING="absolute", DIE_AREA=die, CORE_AREA=core,
                   PDN_ENABLE_PINS=False, MAGIC_EXT_USE_GDS=True,
-                  VDD_NETS=[power], GND_NETS=[ground], PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+                  VDD_NETS=[power], GND_NETS=[ground], FALLBACK_SDC=str(sdc),
+                  PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
     if native.get("PDN_CORE_RING") and native.get("PDN_CORE_RING_CONNECT_TO_PADS"):
         ring_layers = {native.get(f"PDN_CORE_{axis}_LAYER") or native[f"PDN_{axis}_LAYER"]
                        for axis in ("VERTICAL", "HORIZONTAL")}

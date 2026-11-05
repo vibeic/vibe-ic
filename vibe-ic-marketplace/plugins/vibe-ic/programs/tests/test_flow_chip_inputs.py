@@ -353,6 +353,7 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert ".Y(_core_port_2[5])" in wrapper
     assert "fixture_tie_hi" in wrapper
     assert ".A(_core_port_3)" in wrapper
+    assert result["FALLBACK_SDC"] == result["PNR_SDC_FILE"] == result["SIGNOFF_SDC_FILE"]
     sdc = Path(result["PNR_SDC_FILE"]).read_text()
     assert "-period 24" in sdc
     assert "set_input_delay 4.8" in sdc
@@ -807,3 +808,30 @@ def test_escaped_core_identifiers_have_legal_verilog_names(inputs):
     assert "input wire [5:2] \\data.value " in wrapper
     assert ".\\data.value (_core_port_2)" in wrapper
     assert ".PAD(\\data.value [5])" in wrapper
+
+
+@pytest.mark.parametrize("override", [None, 12])
+@pytest.mark.parametrize("period_field", ["period_ns", "freq_mhz"])
+def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, override, period_field):
+    from sdc_constraints import create_clocks_in_text
+
+    project, config, _, ports, _ = inputs
+    config["CLOCK_PORT"] = ["clk", "other_clock"]
+    ports = [*ports, {"name": "other_clock", "direction": "input", "width": 1,
+                     "indexed": False, "msb": 0, "lsb": 0}]
+    docs = project / "phase1/generated_docs"
+    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        {"domain_kind": "primary", "source_pin": "clk", "period_ns": 20},
+        {"domain_kind": "primary", "source_pin": "other_clock", period_field: 50 if period_field == "period_ns" else 20},
+        {"domain_kind": "generated", "source_pin": "derived_clock", "period_ns": 2}]}))
+    if override is not None:
+        path = docs / "L19_CONSTRAINTS_PDK.json"
+        document = json.loads(path.read_text())
+        document.setdefault("fields", {})["clock_target"] = {"period_ns": override}
+        path.write_text(json.dumps(document))
+    text = chip._sdc(project, config, ports)
+    periods = [clock["period_ns"] for clock in create_clocks_in_text(text)]
+    assert periods == ([override, override] if override is not None else [20, 50])
+    budget = (override or 50) * 0.2
+    assert f"set_input_delay {budget:g} -clock core_clock_1 -add_delay" in text
+    assert f"set_output_delay {budget:g} -clock core_clock_1 -add_delay" in text
