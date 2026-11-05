@@ -26,7 +26,7 @@ SETTINGS = {
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
 }
 IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "RUN_POST_GRT_DESIGN_REPAIR",
-                           "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
+                           "EXTRA_EXCLUDED_CELLS", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
 
 
 def implementation_setting(key: str) -> bool:
