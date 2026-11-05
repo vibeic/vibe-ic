@@ -62222,6 +62222,8 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         # each report's own STA_BASIS stamp, exactly as it counted the one.
         per_corner = sta_out / STEP10_CORNER_DIR
         pre_pnr = sta_out / "pre_pnr_timing.rpt"
+        if pre_pnr.is_file():
+            pre_pnr.replace(pre_pnr.with_name(pre_pnr.name + '.stale_basis'))
         if _ll and _ll_modes["10"] == "librelane":
             # The tool timed the synthesis netlist in its own step directory; its
             # corner reports are published under the step-10 names and the
@@ -62230,9 +62232,10 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
             _ll_reports = _llp.compose_corner_reports(
                 _ll["folder"], per_corner, _classify_corner_from_name)
             written.append(str(per_corner))
-            pre_pnr.unlink(missing_ok=True)
         elif runner_sdc.is_file():
             per_corner.mkdir(parents=True, exist_ok=True)
+            for retained in per_corner.glob('sta_*.rpt'):
+                retained.replace(retained.with_name(retained.name + '.stale_basis'))
             if _emit_multi_corner_sta(project, top, pdk, container,
                                       staged_libs, per_corner, notes,
                                       force_prelayout=True):
@@ -69057,6 +69060,8 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
         _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
+            if rpt.is_file():
+                rpt.replace(rpt.with_name(rpt.name + '.failed'))
             # #437(c): NO single-corner stand-in. The old fallback copied
             # the single-corner TT report into per_corner/ verbatim —
             # exactly the "byte-identical single-corner copies
@@ -69119,26 +69124,7 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"basis could NOT be verified against basis={basis}; they are "
             "UNVERIFIED, which is not the same as agreeing.")
     if not any_emitted:
-        # #437(c): remove the work files + dir so an EMPTY per_corner
-        # never stands as an unsubstantiated multi-corner claim. The
-        # failure reasons live in `notes`.
-        # `.stale_basis` quarantines are debris too in this branch: nothing was
-        # substantiated, so there is no per_corner/ to keep them beside, and
-        # leaving them would block the rmdir and make the note below a lie.
-        for debris in (list(out_dir.glob("sta_*.tcl"))
-                       + list(out_dir.glob("sta_*.log"))
-                       + list(out_dir.glob("sta_*.rpt.stale_basis"))):
-            try:
-                debris.unlink()
-            except OSError:
-                pass
-        try:
-            out_dir.rmdir()
-        except OSError:
-            pass
-        notes.append(
-            "multi-corner STA produced no corner report; per_corner/ "
-            "removed to avoid an unsubstantiated multi-corner claim (#437c)")
+        notes.append("multi-corner STA produced no corner report; native work files retained")
     return any_emitted
 
 
