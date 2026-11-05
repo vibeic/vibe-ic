@@ -253,6 +253,8 @@ def gls(project, directory, tool, commands, *, state, config):
     if not top or not netlist or not Path(netlist).is_file() or not sdfs:
         return commands.result(detail="GLS needs the declared top, native State netlist and corner SDF files.")
     sdfs = sdfs if isinstance(sdfs, dict) else {"default": sdfs}
+    native_sdfs = [Path(path) for path in sdfs.values() if path]
+    sdc = state.get("sdc") or config.get("SIGNOFF_SDC_FILE") or config.get("PNR_SDC_FILE")
     requested = tool.get("corners")
     if requested == "all":
         selected = list(sdfs)
@@ -341,8 +343,85 @@ def gls(project, directory, tool, commands, *, state, config):
                 total = functional["tests"] if functional else None
                 reports.extend([shim, makefile, work / "results.xml"])
             else:
+                import arith_oracle_tb_gen as arithmetic
                 tb_text = native.strip_comments(bench.read_text())
-                module, instance = native._TB_MODULE_RE.search(tb_text), native._tb_dut_instance(tb_text, top)
+                module = native._TB_MODULE_RE.search(tb_text)
+                plan = arithmetic._scenario_header(bench)
+                manifest = bench.parent / "arith_oracle_manifest.json"
+                sample = json.loads(manifest.read_text()) if manifest.is_file() else {}
+                generated = (sample.get("topology") == "serial_parallel"
+                             and project / sample.get("tb", "") == bench)
+                try:
+                    if module and (plan or generated):
+                        from _specrtl_common import parse_rtl_ports
+                        _, ports = parse_rtl_ports(text, top)
+                        inout_ports = {port.name for port in ports if port.direction == "inout"}
+                        if not sdc:
+                            raise ValueError("The generated arithmetic bench needs the native timing SDC.")
+                        if plan:
+                            spec = plan["spec"]
+                        else:
+                            from professional_tb_gen import _detect_ic_class
+                            spec, why = arithmetic.extract_serial_arith_spec(project, _detect_ic_class(project))
+                            if spec is None:
+                                raise ValueError(why)
+                        logical_top = spec["top"]
+                        binding = ({"dut_module": top, "rebound": top != logical_top, "port_map": {}}
+                                   if not (project / native.CHIP_TOP_RECORD_REL).is_file()
+                                   else native.declared_dut_binding(project, logical_top, text))
+                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                        clock = binding["port_map"].get(spec["clk"], spec["clk"]) if binding.get("port_map") else spec["clk"]
+                        period = clocks["clocks_s"][clock] / 1e-9
+                        folder = Path(sdf).parent.parent
+                        if plan and (project / native.CHIP_TOP_RECORD_REL).is_file() and binding["rebound"]:
+                            _, observation = native._bound_arithmetic_case(project,
+                                {"path": bench, "text": tb_text, "module": module[1]}, logical_top,
+                                binding, closure["files"], netlist=Path(netlist), sdc=Path(sdc),
+                                sdfs=native_sdfs, sta_step_dir=folder, existing_plan=plan)
+                            plan["observation"] = observation
+                        else:
+                            timed_plan = plan or {"spec": spec, "observation": {"clock_period_ns": period}}
+                            deadline = native._postlayout_output_deadline(project, timed_plan, binding,
+                                Path(netlist), Path(sdc), native_sdfs, sta_step_dir=folder)
+                            observation = {**timed_plan["observation"], "top": top,
+                                "sample_offset_ns": deadline["sample_offset_ns"], "postlayout_deadline": deadline}
+                            if plan:
+                                plan["observation"] = observation
+                                if plan.get("reset_observation") and top != logical_top:
+                                    sources = [Path(p) if Path(p).is_absolute() else project / p
+                                               for p in config.get("VERILOG_FILES") or []]
+                                    cores = [name for source in sources
+                                             for name, (master, _) in native._instances(
+                                                 native.strip_comments(source.read_text())).items()
+                                             if master == logical_top]
+                                    if len(cores) != 1:
+                                        raise ValueError("The arithmetic reset observer needs the declared core instance.")
+                                    observation["reset_state_targets"] = arithmetic.mapped_reset_state_targets(
+                                        plan, text, cores[0])
+                        port_map = binding.get("port_map") or {}
+                        spec = json.loads(json.dumps(spec))
+                        for key in ("parallel", "serial_in", "serial_out", "clk", "rst"):
+                            spec[key] = port_map.get(spec[key], spec[key])
+                        for port in spec["ports"]:
+                            port["name"] = port_map.get(port["name"], port["name"])
+                        if plan:
+                            plan["spec"] = spec
+                            tb_text = arithmetic.emit_arithmetic_scenario_module(module[1], plan,
+                                dut_module=top, inout_ports=inout_ports)
+                        else:
+                            tb_text = arithmetic.emit_serial_oracle_module(module[1], spec,
+                                arithmetic.select_operand_pairs(spec, "mixed"), dut_module=top,
+                                clock_period_ns=period, sample_offset_ns=observation["sample_offset_ns"],
+                                inout_ports=inout_ports)
+                        row["observation"] = observation
+                    instance = native._tb_dut_instance(tb_text, top)
+                    if sdc and instance and not (plan or generated):
+                        clocks = native.declared_sdc_clocks(Path(sdc), [Path(sdf).read_text()])
+                        tb_text, row["clock"] = native.bind_bench_clock(tb_text, instance, clocks)
+                except (OSError, ValueError, KeyError) as exc:
+                    row["detail"] = str(exc)
+                    rows.append(row)
+                    continue
                 if not module or not instance:
                     row["detail"] = "The testbench does not instantiate the native netlist top."
                     rows.append(row)
