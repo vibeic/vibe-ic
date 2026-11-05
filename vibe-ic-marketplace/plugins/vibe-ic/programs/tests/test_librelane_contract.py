@@ -672,26 +672,26 @@ def test_emit_declared_values_and_sources(tmp_path):
     assert all(k in provenance for k in result)
 
 
-@pytest.mark.parametrize('rows,expected', [
-    ([('SYNTH_MAX_FANOUT', '8', None, 'L9_constraints.md')], 8),
+@pytest.mark.parametrize('rows,expected,reverse_value', [
+    ([('SYNTH_MAX_FANOUT', '8', None, 'L9_constraints.md')], 8, None),
     ([('MAX_FANOUT_CONSTRAINT', '12', None, 'L1_limits.md'),
-      ('SYNTH_MAX_FANOUT', '8', 'processA*', 'L9_constraints.md')], 8),
+      ('SYNTH_MAX_FANOUT', '8', 'processA*', 'L9_constraints.md')], 8, 9),
     ([('MAX_FANOUT_CONSTRAINT', '12', None, 'L1_limits.md'),
-      ('SYNTH_MAX_FANOUT', '8', 'processB*', 'L9_constraints.md')], 12),
+      ('SYNTH_MAX_FANOUT', '8', 'processB*', 'L9_constraints.md')], 12, None),
     ([('SYNTH_MAX_FANOUT', '8', None, 'L1_limits.md'),
-      ('MAX_FANOUT_CONSTRAINT', '12', 'processA*', 'L9_constraints.md')], 12),
+      ('MAX_FANOUT_CONSTRAINT', '12', 'processA*', 'L9_constraints.md')], 12, None),
     ([('SYNTH_MAX_FANOUT', '8', None, 'L1_limits.md'),
-      ('MAX_FANOUT_CONSTRAINT', '12', None, 'L9_constraints.md')], 12),
+      ('MAX_FANOUT_CONSTRAINT', '12', None, 'L9_constraints.md')], 12, None),
     ([('SYNTH_MAX_FANOUT', '8', None, 'L9_constraints.md'),
-      ('MAX_FANOUT_CONSTRAINT', '8', None, 'L9_constraints.md')], 8),
-    ([('MAX_FANOUT_CONSTRAINT', '8', None, 'L9_constraints.md')], 8),
-    ([('SYNTH_MAX_FANOUT', '', None, 'L9_constraints.md')], None),
-    ([('SYNTH_MAX_FANOUT', '工具預設', None, 'L9_constraints.md')], None),
-    ([('SYNTH_MAX_FANOUT', 'not_determined', None, 'L9_constraints.md')], None),
-    ([('SYNTH_MAX_FANOUT', 'not-a-number', None, 'L9_constraints.md')], None),
-    ([], None),
+      ('MAX_FANOUT_CONSTRAINT', '8', None, 'L9_constraints.md')], 8, None),
+    ([('MAX_FANOUT_CONSTRAINT', '8', None, 'L9_constraints.md')], 8, None),
+    ([('SYNTH_MAX_FANOUT', '', None, 'L9_constraints.md')], None, None),
+    ([('SYNTH_MAX_FANOUT', '工具預設', None, 'L9_constraints.md')], None, None),
+    ([('SYNTH_MAX_FANOUT', 'not_determined', None, 'L9_constraints.md')], None, None),
+    ([('SYNTH_MAX_FANOUT', 'not-a-number', None, 'L9_constraints.md')], None, None),
+    ([], None, None),
 ])
-def test_fanout_alias_uses_existing_native_setting_priority_and_defaults(tmp_path, rows, expected):
+def test_fanout_alias_uses_existing_native_setting_priority_and_defaults(tmp_path, rows, expected, reverse_value):
     project = design(tmp_path)
     path = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
     doc = json.loads(path.read_text())
@@ -711,6 +711,17 @@ def test_fanout_alias_uses_existing_native_setting_priority_and_defaults(tmp_pat
         assert provenance['MAX_FANOUT_CONSTRAINT'].endswith(':45')
     else:
         assert 'MAX_FANOUT_CONSTRAINT' not in provenance
+    if reverse_value is not None:
+        doc['fields']['constraint_declarations'][-1]['value'] = str(reverse_value)
+        put(path, doc)
+        reverse = contract.emit_config(project, 'processA', project / 'reverse.json')
+        assert reverse['MAX_FANOUT_CONSTRAINT'] == reverse_value != expected
+        doc['fields']['constraint_declarations'][-1]['value'] = rows[-1][1]
+        put(path, doc)
+        restored = contract.emit_config(project, 'processA', project / 'restored.json')
+        assert restored['MAX_FANOUT_CONSTRAINT'] == expected
+        put(project / 'source-only-reverse.json', {'healthy': emitted['MAX_FANOUT_CONSTRAINT'],
+            'reverse': reverse['MAX_FANOUT_CONSTRAINT'], 'restored': restored['MAX_FANOUT_CONSTRAINT']})
 
 
 @pytest.mark.parametrize('tokens', [
