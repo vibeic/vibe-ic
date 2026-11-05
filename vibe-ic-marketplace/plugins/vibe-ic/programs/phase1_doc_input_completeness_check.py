@@ -558,7 +558,7 @@ _AUTO_REFERENCE_DOC_GLOBS = (
 )
 
 
-def _load_reference_doc_globs(project: Path):
+def _load_reference_doc_globs(project: Path, *, auto_enabled: bool = True):
     """Optional `<project>/completeness_check_config.json` may carry
     a `reference_docs` list of filename glob patterns. Tokens from
     matching docs are still counted in the report but do NOT gate
@@ -574,14 +574,13 @@ def _load_reference_doc_globs(project: Path):
     """
     cfg = _pl.phase1_completeness_check_config_file(project)
     user_globs: list = []
-    auto_enabled = True
     if cfg.is_file():
         try:
             data = json.loads(cfg.read_text())
             refs = data.get("reference_docs") or []
             user_globs = [g for g in refs if isinstance(g, str) and g]
-            if data.get("auto_reference_docs") is False:
-                auto_enabled = False
+            if isinstance(data.get("auto_reference_docs"), bool):
+                auto_enabled = data["auto_reference_docs"]
         except Exception:
             pass
     auto = list(_AUTO_REFERENCE_DOC_GLOBS) if auto_enabled else []
