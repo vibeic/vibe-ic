@@ -41,12 +41,8 @@ def status(result):
     return engine.evaluate(engine.ToolResult(**result), checks)
 
 
-@pytest.mark.parametrize('dynamic', ['missing', 'scaled_static'])
-def test_static_pass_cannot_replace_missing_dynamic_data(tmp_path, native_result, dynamic):
+def test_static_pass_cannot_replace_missing_dynamic_data(tmp_path, native_result):
     native, calls, state, config, _ = native_result
-    if dynamic == 'scaled_static':
-        native.metrics.update({'vibeic__ir_dynamic__drop__worst': .036,
-                               'vibeic__ir_dynamic__scaled_static_bound': 1})
     result = execute(tmp_path, native_result)
     assert calls[0][0] is state
     assert calls[0][1] == config
@@ -55,14 +51,16 @@ def test_static_pass_cannot_replace_missing_dynamic_data(tmp_path, native_result
     assert result['native_steps'][-1]['status'] == 'NOT_MEASURED'
 
 
+@pytest.mark.parametrize('scaled', [0, 1])
 @pytest.mark.parametrize('drop,expected', [(.036, 'PASS'), (.108, 'FAIL')])
-def test_native_dynamic_number_uses_original_ir_limit(tmp_path, native_result, drop, expected):
+def test_native_dynamic_number_uses_original_ir_limit(tmp_path, native_result, drop, expected, scaled):
     native, _, _, _, _ = native_result
     native.metrics.update({'vibeic__ir_dynamic__drop__worst': drop,
-                           'vibeic__ir_dynamic__scaled_static_bound': 0})
+                           'vibeic__ir_dynamic__scaled_static_bound': scaled})
     result = execute(tmp_path, native_result)
     assert result['metrics']['ir__drop__dynamic__worst__pct'] == pytest.approx(drop / 1.8 * 100)
     assert status(result) == expected
+    assert result['metrics']['dynamic_model'] == ('scaled_static_bound' if scaled else 'transient')
 
 
 def test_selected_static_and_dynamic_tools_use_background_job_path():
