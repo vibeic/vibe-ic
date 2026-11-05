@@ -17,6 +17,202 @@ from decimal import Decimal
 from pathlib import Path
 
 
+
+KINDS = ("max_slew", "max_capacitance", "max_fanout")
+
+
+_TITLES = {"max slew": KINDS[0], "max capacitance": KINDS[1],
+           "max fanout": KINDS[2]}
+
+
+_VALUES = {"max_slew": ("max slew", "slew"),
+           "max_capacitance": ("max capacitance", "capacitance"),
+           "max_fanout": ("max fanout", "fanout")}
+
+
+_NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?"
+
+
+_PIN = re.compile(r"^Pin\s+(\S+)(?:\s+([\^v]))?\s*$")
+
+
+_METRIC = re.compile(rf"^(.+?)\s+({_NUM})(?:\s+\((?:VIOLATED|MET)\))?\s*$")
+
+
+def _sdc_values(body: str, command: str, *, include_ports: bool = True,
+                only_port: str | None = None) -> list[float]:
+    # Tcl is not a line-oriented format.  A conflicting later assignment must
+    # never be hidden by reading only the first matching line.
+    # IO port constraints have their own domain. They are not the core
+    # defaults the stage receipt and the core declaration must agree on.
+    values = []
+    for match in re.finditer(
+            rf"(?m)^\s*{re.escape(command)}\s+({_NUM})(?=\s|$)([^\n;]*)", body):
+        target = match.group(2).strip()
+        if only_port is not None:
+            listed = re.fullmatch(r"\[get_ports\s+\[list\s+((?:\{[^{}]+\}\s*)+)\]\]", target)
+            literal = re.fullmatch(r"\[get_ports\s+\{([^{}]+)\}\]", target)
+            names = (re.findall(r"\{([^{}]+)\}", listed[1]) if listed else
+                     [literal[1]] if literal else
+                     ["*"] if target == "[get_ports *]" else [])
+            if only_port not in names and "*" not in names:
+                continue
+        elif not include_ports and re.search(
+                r"\[(?:get_ports|all_inputs|all_outputs)\b", target):
+            continue
+        values.append(float(match.group(1)))
+    return values
+
+
+def parse_check_types(body: str, *, scene: str, mode: str,
+                      violators_only: bool) -> dict[str, list[dict]]:
+    """Parse OpenSTA 3.1 verbose Pin blocks; preserve rise/fall and tool slack."""
+    out: dict[str, list[dict]] = {kind: [] for kind in KINDS}
+    kind = None
+    row: dict[str, Any] | None = None
+    for raw in body.splitlines():
+        line = raw.strip()
+        if line in _TITLES:
+            kind = _TITLES[line]
+            row = None
+            continue
+        pin = _PIN.fullmatch(line)
+        if pin and kind:
+            row = {"pin": pin.group(1), "direction":
+                   {"^": "rise", "v": "fall"}.get(pin.group(2), "none"),
+                   "scene": scene, "mode": mode}
+            out[kind].append(row)
+            continue
+        if row is None or kind is None:
+            continue
+        status = re.fullmatch(r"Slack\s+\((VIOLATED|MET)\)", line)
+        if status:
+            # Native fanout reports can omit the numeric slack while retaining
+            # an explicit verdict. Preserve that verdict without inventing slack.
+            row["violated"] = status.group(1) == "VIOLATED"
+            continue
+        metric = _METRIC.fullmatch(line)
+        if not metric:
+            continue
+        name = metric.group(1).strip().lower()
+        limit_name, measured_name = _VALUES[kind]
+        if name == limit_name:
+            row["limit"] = float(metric.group(2))
+        elif name == measured_name:
+            row["measured"] = float(metric.group(2))
+        elif name == "slack":
+            row["slack"] = float(metric.group(2))
+            row["violated"] = "(VIOLATED)" in line or row["slack"] < 0
+    if violators_only:
+        for rows in out.values():
+            rows[:] = [r for r in rows if r.get("violated")]
+    return out
+
+
+def _attribute(block: str, key: str) -> float | None:
+    hit = re.search(rf"\b{re.escape(key)}\s*:\s*({_NUM})\s*;", block)
+    return float(hit.group(1)) if hit else None
+
+
+def _balanced_block(text: str, start: int) -> str:
+    opening = text.find("{", start)
+    if opening < 0:
+        return ""
+    depth = 1
+    # Liberty strings/comments may contain braces without opening a group.
+    for token in re.finditer(r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*|[{}]',
+                             text[opening + 1:], flags=re.S):
+        if token[0] == "{":
+            depth += 1
+        elif token[0] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[opening + 1:opening + 1 + token.start()]
+    return ""
+
+
+def _liberty_limits(body: str) -> dict:
+    """Read direct pin attributes in any order, excluding nested groups."""
+    # PDK Liberty writers commonly split a unit declaration with a Tcl-style
+    # backslash/newline (the linked gf180 IO library does exactly this).
+    body = re.sub(r"\\\s*\n\s*", " ", body)
+    time_match = re.search(r'time_unit\s*:\s*"?(' + _NUM +
+                           r')\s*(fs|ps|ns|us|ms|s)"?', body, re.I)
+    cap_match = re.search(r'capacitive_load_unit\s*\(\s*(' + _NUM +
+                          r')\s*,\s*"?(ff|pf|nf|uf)"?\s*\)', body, re.I)
+    if not time_match or not cap_match:
+        raise ValueError("Liberty time/capacitance units absent")
+    time_scale = float(time_match.group(1)) * {
+        "fs": 1e-6, "ps": 1e-3, "ns": 1, "us": 1e3,
+        "ms": 1e6, "s": 1e9}[time_match.group(2).lower()]
+    cap_scale = float(cap_match.group(1)) * {
+        "ff": 1e-3, "pf": 1, "nf": 1e3, "uf": 1e6}[cap_match.group(2).lower()]
+    scales = {"max_slew": time_scale, "max_capacitance": cap_scale,
+              "max_fanout": 1}
+    def scaled(block: str, kind: str, prefix: str = "") -> float | None:
+        value = _attribute(block, prefix + kind.replace("max_slew", "max_transition"))
+        return value * scales[kind] if value is not None else None
+    first_cell = re.search(r"\bcell\s*\(", body)
+    header = body[:first_cell.start()] if first_cell else body
+    defaults = {kind: scaled(header, kind, "default_")
+                for kind in KINDS}
+    default_fanout_load = _attribute(header, "default_fanout_load")
+    cells: dict[str, dict] = {}
+    ff_states: dict[str, set[str]] = {}
+    pad_cells: set[str] = set()
+    for cell in re.finditer(r'\bcell\s*\(\s*"?([^"\)]+)"?\s*\)\s*\{', body):
+        cell_body = _balanced_block(body, cell.start())
+        if re.search(r"\bpad_cell\s*:\s*true\s*;", cell_body, re.I):
+            pad_cells.add(cell.group(1).strip())
+        pins = {}
+        for pin in re.finditer(r'\bpin\s*\(\s*"?([^"\)]+)"?\s*\)\s*\{', cell_body):
+            pin_body = _balanced_block(cell_body, pin.start())
+            # Liberty permits pin attributes after timing/power tables. Keep
+            # every direct attribute while discarding child-group bodies.
+            direct_chars = []
+            depth = 0
+            for char in pin_body:
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                elif depth == 0:
+                    direct_chars.append(char)
+            direct = "".join(direct_chars)
+            pins[pin.group(1).strip()] = {
+                kind: scaled(direct, kind)
+                for kind in KINDS}
+            pins[pin.group(1).strip()]["fanout_load"] = _attribute(direct, "fanout_load")
+            pin_name = pin.group(1).strip()
+            related = re.findall(r'\brelated_pin\s*:\s*"?([^";]+)"?\s*;', cell_body)
+            pins[pin_name]["has_timing_arc"] = (
+                bool(re.search(r"\btiming\s*\(", pin_body)) or
+                any(pin_name in value.split() for value in related))
+        cells[cell.group(1).strip()] = pins
+        states = set()
+        # Only direct cell groups declare FF state; quoted descriptions,
+        # comments and child-group bodies cannot supply model authority.
+        depth = 0
+        tokens = re.finditer(
+            r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*'
+            r'|(?P<ff>\bff\s*\((?P<names>[^()]+)\)\s*\{)'
+            r'|[A-Za-z_][\w.-]*|(?P<brace>[{}])', cell_body, flags=re.S)
+        for token in tokens:
+            if token["ff"] is not None:
+                names = [re.fullmatch(r'\s*(?:"([A-Za-z_]\w*)"|([A-Za-z_]\w*))\s*', part)
+                         for part in token["names"].split(",")]
+                if depth == 0 and len(names) in (1, 2) and all(names):
+                    states.update(name[1] or name[2] for name in names)
+                depth += 1
+            elif token["brace"] == "{":
+                depth += 1
+            elif token["brace"] == "}":
+                depth -= 1
+        ff_states[cell.group(1).strip()] = states
+    return {"defaults": defaults, "cells": cells, "pad_cells": pad_cells,
+            "default_fanout_load": default_fanout_load, "ff_states": ff_states}
+
+
 def load(path: Path) -> dict:
     try:
         value = json.loads(path.read_text())
@@ -459,7 +655,6 @@ def drv(project: Path, state_path: Path) -> dict:
     # with the existing margins. Do not replace them with a looser default (#62).
     sdc = path(project, str(state.get('sdc', '')))
     body = text(sdc)
-    from drv_signoff_judge import _sdc_values, _liberty_limits, parse_check_types
     parsed_libs = {}
     fanouts = _sdc_values(body, 'set_max_fanout', include_ports=False)
     if not fanouts or any(not math.isfinite(v) or v <= 0 for v in fanouts):
