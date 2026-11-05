@@ -51,6 +51,49 @@ def test_missing_command_does_not_publish_a_run(tmp_path):
     assert commands.run([tmp_path / "missing_executable"]) is None
     assert commands.records == []
     assert not (tmp_path / "command_1.log").exists()
+
+
+@pytest.mark.parametrize("language,outcome,status", [
+    ("verilog", "pass", "PASS"), ("verilog", "fail", "FAIL"),
+    ("python", "pass", "PASS"), ("python", "fail", "FAIL"),
+    ("python", "skip", "NOT_MEASURED"),
+])
+def test_functional_simulation_uses_a_frontend_that_elaborates_the_source(
+        tmp_path, language, outcome, status):
+    if not all(shutil.which(name) for name in ("iverilog", "verilator", "verilator_coverage", "cocotb-config")):
+        pytest.skip("Native functional and coverage simulators are required")
+    package = tmp_path / "unit_pkg.sv"
+    package.write_text("package unit_pkg; localparam MASK = 1'b1; endpackage\n")
+    rtl = tmp_path / "unit.sv"
+    rtl.write_text("`timescale 1ns/1ps\nmodule unit import unit_pkg::*; "
+                   "(input wire a, output wire z); assign z=a^MASK; endmodule\n")
+    expected = 0 if outcome == "fail" else 1
+    tb = tmp_path / ("tb_unit.py" if language == "python" else "tb_unit.v")
+    if language == "python":
+        tb.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+            f"@cocotb.test(skip={outcome == 'skip'})\n"
+            "async def check(dut):\n    dut.a.value=0\n    await Timer(1, unit='ns')\n"
+            f"    assert int(dut.z.value)=={expected}\n")
+    else:
+        tb.write_text("`timescale 1ns/1ps\nmodule tb_unit; reg a; wire z; unit dut(a,z); "
+            "initial begin a=0; #1; "
+            f"if (z === 1'b{expected}) $display(\"ORACLE_TB_DONE pass=1/1\"); "
+            "else $display(\"ORACLE_TB_DONE pass=0/1\"); $finish; end endmodule\n")
+    result = execute(tmp_path, tmp_path / "output", {"adapter": "simulation", "top": "unit",
+        "rtl": [str(package), str(rtl)], "testbenches": [str(tb)]}, {})
+    functional = next(row for row in result["native_steps"] if row["name"] == "Verilator.Functional")
+    assert functional["ran"] and functional["status"] == status, result
+    if outcome == "skip":
+        assert "assertion_failures" not in result["metrics"], result
+    else:
+        assert result["metrics"]["assertion_failures"] == (outcome == "fail"), result
+    if outcome == "pass":
+        assert result["exit_code"] == 0, result
+    measured = [{"status": status}]
+    assert flow_engine.evaluate(flow_engine.ToolResult(**result), measured) == status, result
+    logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
+                     if str(path).endswith(".log"))
+    assert "syntax error" in logs
     assert commands.result()["ran"] is False
 
 
