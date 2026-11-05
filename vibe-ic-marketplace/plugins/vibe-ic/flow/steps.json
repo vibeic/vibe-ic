@@ -806,7 +806,8 @@
           "_cdc_netlist.normalization_script",
           "_cdc_netlist.load",
           "_cdc_netlist.judge"
-        ]
+        ],
+        "parallel": true
       },
       "checks": [
         {
@@ -841,7 +842,8 @@
           "verilator_coverage_measure.parse_coverage_dat",
           "verilator_coverage_measure.scope_totals",
           "_sim_results_bridge.parse_junit"
-        ]
+        ],
+        "parallel": true
       },
       "checks": [
         {
@@ -944,7 +946,8 @@
         "native_commands": [
           "sby --dumptasks INPUT",
           "sby -f -d OUTPUT INPUT TASK"
-        ]
+        ],
+        "parallel": true
       },
       "checks": [
         {
@@ -1518,7 +1521,8 @@
         "kind": "adapter",
         "adapter": "eqy",
         "program": "flow_native_verification.py",
-        "metric": "unproved_equivalence"
+        "metric": "unproved_equivalence",
+        "timing_group": "librelane"
       },
       "checks": [
         {
@@ -3075,7 +3079,8 @@
         "kind": "adapter",
         "adapter": "eqy",
         "program": "flow_native_verification.py",
-        "metric": "final_lec_unproved"
+        "metric": "final_lec_unproved",
+        "timing_group": "librelane"
       },
       "checks": [
         {
@@ -3102,7 +3107,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "implemented_cdc",
-        "program": "flow_native_adapters.py"
+        "program": "flow_native_adapters.py",
+        "parallel": true
       },
       "checks": [
         {
@@ -3485,7 +3491,8 @@
               "line": 2751
             }
           }
-        ]
+        ],
+        "parallel": true
       },
       "checks": [
         {
@@ -4221,7 +4228,8 @@
         "kind": "adapter",
         "adapter": "xor",
         "program": "flow_native_verification.py",
-        "metric": "unexplained_stream_xor"
+        "metric": "unexplained_stream_xor",
+        "timing_group": "librelane"
       },
       "checks": [
         {
@@ -4790,7 +4798,8 @@
             }
           }
         ],
-        "corners": "all"
+        "corners": "all",
+        "parallel": true
       },
       "checks": [
         {
@@ -5203,7 +5212,8 @@
           "lib": ".lib",
           "gds": ".gds",
           "nl": ".v"
-        }
+        },
+        "timing_group": "librelane"
       },
       "checks": [
         {
@@ -5273,7 +5283,8 @@
           "gds": ".gds",
           "nl": ".v"
         },
-        "metric": "release_required_items"
+        "metric": "release_required_items",
+        "timing_group": "librelane"
       },
       "checks": [
         {
