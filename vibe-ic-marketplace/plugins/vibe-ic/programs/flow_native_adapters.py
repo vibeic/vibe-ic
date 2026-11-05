@@ -159,13 +159,14 @@ def testbenches(project, tool):
 
 def simulation_sources(project, files, top, benches):
     from catalog_glue_closure_resolver import _gather, _strip_comments, build_index, resolve_closure
+    from design_one_shot_runner import _v662_design_src_rtl_files
     from testbench_gen import package_first_order
     from verilator_coverage_measure import _tb_top_module
 
     files = [path.resolve() for path in files]
     hdl_benches = [path.resolve() for path in benches if path.suffix in (".v", ".sv")]
     sources = _gather(project / "phase2/stage1/rtl")
-    for path in [*files, *hdl_benches]:
+    for path in [*_v662_design_src_rtl_files(project), *files, *hdl_benches]:
         sources[path] = _strip_comments(path.read_text(errors="replace"))
     index = build_index(sources)
     # Preserve the selected implementation when staged RTL also has a copy.

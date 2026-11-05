@@ -269,16 +269,15 @@ def test_testbench_helper_closure_does_not_change_silicon_sources(tmp_path, diff
     rtl.mkdir(parents=True)
     dut = rtl / "silicon_unit.v"
     dut.write_text("module silicon_unit(input a, output z); assign z=~a; endmodule\n")
-    helper = rtl / "stimulus_helper.v"
-    helper.write_text("module stimulus_helper(input a, output expected); "
-                      f"assign expected={'a' if different else '~a'}; endmodule\n")
-    (rtl / "unused_stimulus.v").write_text("Unrelated source that must not be compiled.\n")
-    mirror = rtl / "mirror"
-    mirror.mkdir()
-    (mirror / dut.name).write_text("module silicon_unit(input a, output z); assign z=a; endmodule\n")
     vendor = tmp_path / "input/vendor_rtl"
     vendor.mkdir(parents=True)
-    (vendor / helper.name).write_bytes(helper.read_bytes())
+    helper = vendor / "stimulus_helper.v"
+    helper.write_text("module stimulus_helper(input a, output expected); "
+                      f"assign expected={'a' if different else '~a'}; endmodule\n")
+    mirror = vendor / "unrelated/nested"
+    mirror.mkdir(parents=True)
+    (mirror / "unused_stimulus.v").write_text("Unrelated source that must not be compiled.\n")
+    (mirror / dut.name).write_text("module silicon_unit(input a, output z); assign z=a; endmodule\n")
     docs = tmp_path / "phase1/generated_docs"
     docs.mkdir(parents=True)
     (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"top_module": "silicon_unit"}))
