@@ -1335,7 +1335,7 @@ def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
         return {'path': str(path.relative_to(project)),
                 'sha256': contract.digest(path)}
 
-    prior, error = _current_step9_checkpoint(project, require_canonical=True)
+    prior, error = _current_step9_checkpoint(project)
     if error:
         return publish('NOT_MEASURED', 'Step10 ' + error)
     bound = handoff.bound_handoff(project)

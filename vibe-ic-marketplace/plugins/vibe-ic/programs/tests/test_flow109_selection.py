@@ -1456,57 +1456,54 @@ def test_d23_rejects_step9_handoff_after_netlist_bytes_change(tmp_path, monkeypa
     assert "no longer matches" in error
 
 
-@pytest.mark.parametrize("case", ["noncanonical", "missing", "stale", "foreign"])
-def test_d26_refuses_unbound_step9_before_prelayout_producer(
-        tmp_path, monkeypatch, case):
-    """A native handoff alone is not the current canonical D22 checkpoint."""
+class NativePrelayoutReached(Exception):
+    pass
+
+
+def test_d26_native_handoff_without_area_budget_reaches_original_timing_owner(tmp_path, monkeypatch):
     runner, netlist = _step9_native_state(tmp_path, monkeypatch)
-    mapped = netlist.with_name("top_synth.v")
+    mapped = netlist.with_name('top_synth.v')
     netlist.rename(mapped)
-    import hashlib
     sha = hashlib.sha256(mapped.read_bytes()).hexdigest()
-    record = next((tmp_path / "steps").rglob("outputs.json"))
-    body = json.loads(record.read_text())
-    body["outputs"][0]["sha256"] = sha
-    record.write_text(json.dumps(body))
-    sys.modules["synth_handoff_netlist_check"].bound_handoff = lambda _p: {
-        "verdict": "PASS", "canonical": str(mapped), "mapped": str(mapped),
-        "netlist_sha256": sha, "findings": [],
-    }
-    versions = sys.modules["step_output_collector"]
-    if case == "missing":
-        versions._read_index = lambda _p: {"steps": []}
-    elif case == "noncanonical":
-        versions.latest_pass = lambda *_a: None
+    sys.modules['synth_handoff_netlist_check'].bound_handoff = lambda _p: {
+        'verdict':'PASS', 'canonical':str(mapped), 'mapped':str(mapped),
+        'netlist_sha256':sha, 'findings':[]}
+    versions = sys.modules['step_output_collector']
+    versions.latest_pass = lambda *_a: None
+    monkeypatch.setitem(sys.modules, 'design_one_shot_runner', SimpleNamespace(
+        _phase2_pdk_config=lambda *_a: 'neutral-pdk'))
+    def native(project, top, pdk, container):
+        assert (project,top,pdk,container) == (tmp_path,'top','neutral-pdk','')
+        raise NativePrelayoutReached
+    monkeypatch.setitem(sys.modules, 'phase3_one_shot_runner', SimpleNamespace(
+        step_prelayout_signoff=native))
+    with pytest.raises(NativePrelayoutReached):
+        runner._complete_step10_prelayout(tmp_path, 'top', 'neutral', '')
+
+
+@pytest.mark.parametrize('case', ['missing', 'stale', 'native_failure'])
+def test_d26_refuses_unbound_step9_before_prelayout_producer(tmp_path, monkeypatch, case):
+    runner, netlist = _step9_native_state(tmp_path, monkeypatch)
+    mapped = netlist.with_name('top_synth.v')
+    netlist.rename(mapped)
+    sha = hashlib.sha256(mapped.read_bytes()).hexdigest()
+    handoff = {'verdict':'PASS', 'canonical':str(mapped), 'mapped':str(mapped),
+        'netlist_sha256':sha, 'findings':[]}
+    sys.modules['synth_handoff_netlist_check'].bound_handoff = lambda _p: handoff
+    versions = sys.modules['step_output_collector']
+    versions.latest_pass = lambda *_a: None
+    if case == 'missing':
+        versions._read_index = lambda _p: {'steps':[]}
+    elif case == 'stale':
+        mapped.write_text('module changed; endmodule\n')
     else:
-        current = {**body, "folder": "phase2/stage2/9_current",
-                   "current_inputs": case != "stale", "canonical_pass": True,
-                   "status": "PASS", "result": {"canonical_consumer": {
-                       "status": "PASS", "outputs": {"netlist": "foreign"}}}}
-        versions.latest_pass = lambda *_a: current
-        monkeypatch.setitem(sys.modules, "_flow_yaml", SimpleNamespace(
-            load=lambda: {"steps": [{"id": "9"}]}))
-        monkeypatch.setitem(sys.modules, "execution_backend_gates", SimpleNamespace(
-            contracts=lambda *_a: {"netlist": "current"}))
-    launched = []
-    versions.current_acceptance = lambda *_a: [{
-        "id": "10", "folder": "phase3/prelayout/10_current",
-        "status": "PASS", "canonical_pass": True,
-        "result": {"canonical_consumer": {"status": "PASS", "step": {
-            "reasons": []}}}}]
-    monkeypatch.setitem(sys.modules, "design_one_shot_runner", SimpleNamespace(
-        _phase2_pdk_config=lambda *_a: "neutral-pdk"))
-    monkeypatch.setitem(sys.modules, "phase3_one_shot_runner", SimpleNamespace(
-        step_prelayout_signoff=lambda *a, **_k: launched.append(a) or SimpleNamespace(
-            status="PASS", detail=f"{case} producer ran")))
-
-    result = runner._complete_step10_prelayout(tmp_path, "top", "neutral", "")
-
-    assert result["verdict"] == "NOT_MEASURED"
-    expected = ("current Step9 native synthesis record" if case == "missing"
-                else "current canonical Step9 checkpoint")
-    assert expected in result["detail"]
-    assert launched == []
+        handoff.update(verdict='FAIL', findings=['native mapped handoff failed'])
+    monkeypatch.setitem(sys.modules, 'design_one_shot_runner', SimpleNamespace(
+        _phase2_pdk_config=lambda *_a: 'neutral-pdk'))
+    monkeypatch.setitem(sys.modules, 'phase3_one_shot_runner', SimpleNamespace(
+        step_prelayout_signoff=lambda *a, **kw: pytest.fail('bad native handoff reached timing')))
+    result = runner._complete_step10_prelayout(tmp_path, 'top', 'neutral', '')
+    assert result['verdict'] == 'NOT_MEASURED'
 
 
 def test_d26_current_canonical_step9_launches_prelayout_producer(
