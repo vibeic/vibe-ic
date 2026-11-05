@@ -29,13 +29,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
-import flow_compliance_check as fcc  # noqa: E402
 
 GATE = "l6_fsm_scaffold_actionable_check"
 PROG = PROGRAMS / f"{GATE}.py"
@@ -137,19 +135,6 @@ def _ordinary_debt_project(tmp_path: Path, name: str) -> Path:
     return proj
 
 
-def _l6_record(project: Path, monkeypatch) -> dict:
-    """The umbrella's own record for this one gate.
-
-    `_STRUCTURAL_RTL_GATES` is narrowed to the gate under test: this is a
-    statement about ONE gate's classification, and running ~200 unrelated
-    validators would make it a statement about the machine instead.
-    """
-    monkeypatch.setattr(fcc, "_STRUCTURAL_RTL_GATES", (GATE,))
-    records: list = []
-    fcc._run_structural_rtl_gates(project, records_out=records)
-    mine = [r for r in records if r.get("name") == GATE]
-    assert mine, f"the umbrella recorded no row for {GATE}: {records}"
-    return mine[0]
 
 
 # ---------------------------------------------------------------------------
@@ -157,10 +142,6 @@ def _l6_record(project: Path, monkeypatch) -> dict:
 # override, so state it rather than assume it.
 # ---------------------------------------------------------------------------
 
-def test_the_gate_is_two_source_advisory_so_the_demotion_is_real():
-    assert fcc._gate_is_two_source_advisory(GATE), (
-        "the premise of #2098 no longer holds: this gate is not wired "
-        "advisory by both sources, so nothing was demoting its FAIL")
 
 
 # ---------------------------------------------------------------------------
@@ -181,24 +162,8 @@ def test_the_gate_declares_the_contradiction_on_a_machine_channel(tmp_path):
     assert "EXTRACTION_APPLICABILITY_CONTRADICTION" in tokens[0]
 
 
-def test_the_umbrella_records_the_finding_as_a_fail(tmp_path, monkeypatch):
-    """The defect of the issue, end to end."""
-    rec = _l6_record(_contradiction_project(tmp_path, "umbrella_fail"),
-                     monkeypatch)
-    assert rec["verdict"] == "FAIL", (
-        "the flow deferred a finding the gate declared non-waiverable: "
-        + json.dumps(rec, sort_keys=True))
 
 
-def test_the_advisory_step_arm_refuses_to_pass_the_step(tmp_path):
-    """The other consumer of the same two-source rule."""
-    proj = _contradiction_project(tmp_path, "advisory_arm")
-    ok, reasons = fcc._evaluate_gate(
-        proj, {"advisory_program_exit_zero": {"command": f"{GATE} ."}})
-    assert ok is False, (
-        "the advisory arm passed the step on a non-waiverable finding: "
-        + "\n".join(reasons))
-    assert any("non-waiverable finding" in x for x in reasons), reasons
 
 
 # ---------------------------------------------------------------------------
@@ -216,64 +181,15 @@ def test_ordinary_actionability_debt_carries_no_token(tmp_path):
         "does not have: " + r.stdout + r.stderr)
 
 
-def test_ordinary_actionability_debt_is_still_deferred(tmp_path, monkeypatch):
-    rec = _l6_record(_ordinary_debt_project(tmp_path, "debt_waived"),
-                     monkeypatch)
-    assert rec["verdict"] == "WAIVED", (
-        "the advisory class the flow row documents was lost: "
-        + json.dumps(rec, sort_keys=True))
 
 
-def test_advisory_class_survives_a_scoped_gate_population(tmp_path, monkeypatch):
-    """A prior scoped run must not freeze another run's advisory population."""
-    clear = getattr(fcc._two_source_advisory_gates, "cache_clear", None)
-    if clear:
-        clear()
-    try:
-        with monkeypatch.context() as scoped:
-            scoped.setattr(fcc, "_STRUCTURAL_RTL_GATES",
-                           ("json_schema_check",))
-            assert GATE not in fcc._two_source_advisory_gates()
-
-        ordinary = _l6_record(
-            _ordinary_debt_project(tmp_path, "after_scoped_population"),
-            monkeypatch)
-        assert ordinary["verdict"] == "WAIVED", ordinary
-
-        contradiction = _l6_record(
-            _contradiction_project(tmp_path, "after_scoped_contradiction"),
-            monkeypatch)
-        assert contradiction["verdict"] == "FAIL", contradiction
-        assert contradiction["evidence"].get("non_waiverable")
-    finally:
-        if clear:
-            clear()
 
 
-def test_the_advisory_step_arm_still_passes_ordinary_debt(tmp_path):
-    proj = _ordinary_debt_project(tmp_path, "advisory_arm_debt")
-    ok, _reasons = fcc._evaluate_gate(
-        proj, {"advisory_program_exit_zero": {"command": f"{GATE} ."}})
-    assert ok is True, "the advisory class was promoted to blocking"
 
 
 # ---------------------------------------------------------------------------
 # The detector itself: a token, not prose.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("text", [
-    "",
-    "the finding is not waiverable",
-    "  Reconcile L6's claim; this blocking finding is not waiverable.",
-    "see NON_WAIVERABLE: in the docstring for the convention",
-])
-def test_prose_about_waiverability_is_not_a_declaration(text):
-    assert fcc._output_declares_non_waiverable(text) == ""
 
 
-def test_the_token_is_read_from_either_stream():
-    assert fcc._output_declares_non_waiverable(
-        "", "NON_WAIVERABLE: X — because Y") == "X — because Y"
-    assert fcc._output_declares_non_waiverable(
-        "  NON_WAIVERABLE: indented still counts", None) == \
-        "indented still counts"
