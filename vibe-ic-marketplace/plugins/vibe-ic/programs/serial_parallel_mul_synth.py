@@ -641,9 +641,25 @@ def planned_declaration(project: Path, spec: Dict[str, Any], *, native_engine: b
 def native_function_declaration(project: Path, spec: dict) -> dict:
     """Translate a stated modulo equation into the existing typed function field."""
     gd = project / "phase1/generated_docs"
-    text = "\n".join(json.dumps(_find_doc(gd, name), ensure_ascii=False) for name in
-                     ("L2_FRS.json", "L2_ARCHITECTURE.json", "L1_DATASHEET.json", "L9_INTEGRATION_SPEC.json"))
-    exponent = "(?:" + re.escape(spec["size_param"]) + "|" + str(spec["size_default"]) + ")"
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for child in value.values():
+                yield from strings(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from strings(child)
+    text = "\n".join(value for name in ("L2_FRS.json", "L2_ARCHITECTURE.json",
+                     "L1_DATASHEET.json", "L9_INTEGRATION_SPEC.json") for value in strings(_find_doc(gd, name)))
+    widths = [spec["size_param"], str(spec["size_default"])]
+    for port in _find_doc(gd, "L9_INTEGRATION_SPEC.json").get("top_ports", []):
+        resolution = port.get("width_resolution") or {}
+        if port.get("name") == spec["parallel"] and resolution.get("resolved_width") == spec["size_default"]:
+            alias = re.match(r"\s*`?([A-Za-z_]\w*)`?[-\s]+bit\b", str(resolution.get("width_declared", "")))
+            if alias:
+                widths.append(alias[1])
+    exponent = "(?:" + "|".join(map(re.escape, widths)) + ")"
     function = None
     for left, right in ((spec["parallel"], spec["serial_in"]), (spec["serial_in"], spec["parallel"])):
         equation = (r"\b" + re.escape(spec["serial_out"]) + r"`?\s*=\s*\(?\s*`?"
