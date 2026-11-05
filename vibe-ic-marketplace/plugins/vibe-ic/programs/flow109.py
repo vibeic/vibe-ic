@@ -724,7 +724,8 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     native_proof = None
     named = ('input/flow109/D25.json', 'input/flow109/D25_source_authority.json',
              'reports/lec_eqy_execution.json')
-    if any((project / name).exists() or (project / name).is_symlink() for name in named):
+    generic = not intent['requires_scan'] and (project / 'reports/lec_eqy.json').is_file()
+    if generic or any((project / name).exists() or (project / name).is_symlink() for name in named):
         # The original native consumer binds its independent execution adoption,
         # full partition census, mode, models and launch. Do not manufacture a
         # legacy proof_identity or fall back to lec_run after a native refusal.
@@ -734,8 +735,17 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
         accepted = metrics.accept_d25(project, current)
         if intent['requires_scan'] or accepted.get('status') != 'PASS':
             raise Flow109Error('FLOW109_D25_PROOF_NOT_ACCEPTED', accepted.get('reason', 'native scope'))
-        native_proof = accepted['native_execution']
-        lec, lec_ref = {}, native_proof['execution_record']
+        if 'native_execution' in accepted:
+            native_proof = accepted['native_execution']
+            lec, lec_ref = {}, native_proof['execution_record']
+        else:
+            import synth_handoff_netlist_check as handoff
+            adopted_proof = handoff.bound_handoff(project)
+            native_proof = {'subject': {'gate_netlist': {
+                'path': Path(adopted_proof['mapped']).relative_to(project).as_posix(),
+                'sha256': adopted_proof['netlist_sha256']}}}
+            lec, lec_ref = _bound_project_json(project, Path('reports/lec_eqy.json'),
+                                              'FLOW109_D25_PROOF_MISSING')
     else:
         lec, lec_ref = _bound_project_json(project, _LEC_REPORT, "FLOW109_D25_PROOF_MISSING")
         if lec.get("verdict") != "PASS" or lec.get("equivalent") is not True:
