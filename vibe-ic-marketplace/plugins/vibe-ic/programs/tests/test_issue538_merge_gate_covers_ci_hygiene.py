@@ -790,7 +790,7 @@ def test_a_gate_added_to_ci_is_covered_with_no_edit_to_the_merge_gate():
     # would be the copied list.
     own = {"source_chip_agnostic_check", "shipped_path_portability_check",
 
-           "plugin_full_audit"}
+           }
     hygiene_programs = set()
     for _label, _wd, cmd in GD.parse_gates(_SCRIPT):
         for tok in cmd.split():

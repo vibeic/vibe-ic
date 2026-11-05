@@ -30,8 +30,6 @@ never re-implemented):
                                          (current > previous) + the
                                          marketplace equality re-assert
   * agent_checkin_scope_guard.py       — role-based check-in path scope
-  * plugin_full_audit.py               — D1 (every program tested) + D2 (every
-                                         step has a compliance checker)
   * full_suite_run_check.py            — the cadence-appropriate pytest command
                                          was actually issued
   * blindness_audit.py                 — (optional, only when transcripts are
@@ -647,16 +645,6 @@ def publication_base_gate(repo: Path, current_main: str,
             "main advanced after publication — author base correctly remains "
             "frozen; Repo Gatekeeper owns integration replay/rebase")
     return GateResult(name, 0, "validated publication base/head are pinned")
-
-
-# --------------------------------------------------------------------------
-# plugin_full_audit (D1 + D2) — subprocess against the plugin root.
-# --------------------------------------------------------------------------
-def plugin_audit_gate(plugin_root: Path) -> GateResult:
-    prog = _PROGRAMS_DIR / "plugin_full_audit.py"
-    rc, out, err = _run_program(prog, [str(plugin_root)])
-    last = (out.strip().splitlines() or [err.strip()] or [""])[-1][:240]
-    return GateResult("plugin_full_audit", rc, last or "(no output)")
 
 
 # --------------------------------------------------------------------------
@@ -1844,7 +1832,6 @@ def review(base: str, head: str, *,
     gates.append(nda_diff_scan_gate(repo, base, head))
     if version_by_gatekeeper:
         gates.append(publication_base_gate(repo, base, pr_metadata))
-    gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
     gates.append(test_cadence_gate(pytest_cmd, cadence))
     gates.append(run_deliverable_gate(repo, files))

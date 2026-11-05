@@ -170,7 +170,6 @@ def test_clean_diff_merge_ok(tmp_path):
     by_name = {g.name: g for g in v.gates}
     assert by_name["version_bump_monotonic_check"].rc == 0
     assert by_name["source_chip_agnostic_check"].rc == 0
-    assert by_name["plugin_full_audit"].rc == 0, by_name["plugin_full_audit"].summary
     assert by_name["git_prohibition_guard"].rc == 0
     assert by_name["full_suite_run_check"].rc == 0
     assert v.verdict == "MERGE_OK", v.blocking

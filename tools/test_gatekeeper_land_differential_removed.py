@@ -204,7 +204,7 @@ _HOOK_PROGRAMS = (
     "commit_msg_nda_check.py",
     "git_prohibition_guard.py",
     "nda_diff_scan_check.py",
-    "plugin_full_audit.py", "version_bump_monotonic_check.py",
+    "version_bump_monotonic_check.py",
 )
 
 

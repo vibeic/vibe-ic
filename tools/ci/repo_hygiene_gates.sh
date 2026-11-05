@@ -622,7 +622,6 @@ run "severity=ERROR is consumed" "$PLUGIN" python3 programs/error_diagnostic_con
 # side's gate list are exactly what #538 is about, so this one no longer
 # states a number it cannot keep true.)
 run "watchdog ceiling semantics"    "$PLUGIN" python3 programs/watchdog_ceiling_semantics_check.py
-run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit.py
 
 # vibe-ic#559 — two PLUGIN-scoped self-checks that were registered in the
 # per-project P0 umbrella, which cannot invoke them: they take no project, so

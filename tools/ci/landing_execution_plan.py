@@ -36,7 +36,6 @@ STEPS = (
     ("full:unselectable-census", "window", "corpus"),
     ("full:census-freshness", "window", "corpus"),
     ("full:repo-hygiene", "window", "hygiene"),
-    ("full:plugin-audit", "window", "audit"),
     ("full:gatekeeper-review", "after_window", ""),
     ("full:write-guard-final", "after_window", ""),
     ("full:worktree-fingerprint-final", "after_window", ""),

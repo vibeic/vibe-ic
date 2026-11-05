@@ -462,9 +462,9 @@ needed). CLOSED issues are still the terminal state.
 The gates that MUST be green before the push are unchanged from the PR era:
 1. `gatekeeper_review.py` → **MERGE_OK** is the AUTHORITATIVE machine gate of
    record (run locally — it composes `source_chip_agnostic_check`,
-   `git_prohibition_guard`, `marketplace_version_sync_check`,
+   `git_prohibition_guard`,
    `version_bump_monotonic_check`, `agent_checkin_scope_guard --role core-agent`,
-   `plugin_full_audit`, the cadence-correct pytest, blindness/full-suite asserts,
+   the cadence-correct pytest, blindness/full-suite asserts,
    **and — since #538 — the ENTIRE `tools/ci/repo_hygiene_gates.sh` set that CI
    runs**). Do NOT run that script by hand as a separate step: it is invoked by
    the review, and its verdict line states its own denominator

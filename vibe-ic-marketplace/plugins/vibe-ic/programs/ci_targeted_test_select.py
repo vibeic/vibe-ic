@@ -353,7 +353,6 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     "test_commit_msg_nda_check.py",
     "test_version_bump_monotonic_check.py",
     "test_agent_checkin_scope_guard.py",
-    "test_plugin_full_audit.py",
     "test_flow_compliance_check.py",
     # vibe-ic#220 — the self-disabling-condition guard. Belongs in the SMOKE
     # floor rather than in change-targeted selection: it asserts a global

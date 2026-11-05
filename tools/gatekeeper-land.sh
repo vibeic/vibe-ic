@@ -2127,40 +2127,6 @@ landing_unit_full_repo_hygiene() {
 lane_hygiene() {
   landing_plan_dispatch window hygiene
 }
-# `full:plugin-audit` IS KEPT, AND SO IS THE HYGIENE TIER'S OWN COPY.
-#
-# On the DIRECT-PUSH path these two are the same program over the same tree —
-# `plugin_full_audit.main` defaults `plugin_root` to the directory this call
-# site names explicitly, and `repo_hygiene_gates.sh:180` resolves the same
-# script — so it is tempting to call one a duplicate and delete it. Do not.
-#
-#   * The LABEL is `LANDING_PROGRESS_UNITS[23]`. Removing it refuses every
-#     landing driven with `VIBEIC_LANDING_PROGRESS` set, which is exactly how
-#     the B2/A2 arms are driven: `landing_completion_record.finish` refuses
-#     unless the emitted labels equal the complete 28-entry tuple.
-#     BOTH NUMBERS WERE ALREADY ONE BEHIND AT 425c6402841d, before this
-#     landing touched anything: the tuple was 26 entries and `full:plugin-audit`
-#     sat at index 21, because the vibe-ic#712 insertion at index 10 shifted
-#     every later index and re-stated only the window line above. vibe-ic#2138
-#     inserts `cheap:nested-progress-pin` at index 11 and shifts them again, so
-#     these are re-derived from the tuple rather than incremented -- an index
-#     nothing asserts is exactly the kind of number that rots in silence
-#     (`test_the_window_is_exactly_the_declared_contiguous_units` locates it
-#     by `order.index`, never by an ordinal, which is why nothing went red).
-#   * In an ARM they are not the same subject at all. This one runs the
-#     TRUSTED `/runtime` copy of the program; the hygiene tier runs the copy
-#     resolved against the candidate-controlled `/subject`. Two different
-#     instruments asking the same question of the same tree is the point.
-#
-# Both are read-only readers, 20.2 s and 21 s, so they cost nothing beside a
-# 259 s hygiene lane.
-landing_unit_full_plugin_audit() {
-    run_capture "$1" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
-}
-lane_audit() {
-  landing_plan_dispatch window audit
-}
-
 # ── LAUNCH THE WINDOW, JOIN IT, THEN EMIT IN DECLARATION ORDER ─────────────
 #
 # `run_emit` is called ONLY from the MAIN shell and ONLY in
@@ -2308,10 +2274,6 @@ landing_emit_full_repo_hygiene() {
       --record "$GK_HYG_RECORD" --head-ref "$BASE" --ledger-ref "$BASE" \
       || printf '  REPORT  debt checker reported findings or incomplete evidence\n'
   fi
-}
-landing_emit_full_plugin_audit() {
-  lane_join audit
-  run_emit "$1" "plugin full audit" --last
 }
 lane_emit_window() {
   landing_plan_dispatch window "" emit

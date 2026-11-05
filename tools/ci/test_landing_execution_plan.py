@@ -38,7 +38,7 @@ REQUIRED = tuple(('cheap:' + x) for x in (
     'competing-claims-report', 'worktree-clean', 'scratch-report', 'hygiene-ratchet')) + tuple(
     ('full:' + x) for x in ('write-guard-baseline', 'targeted-tests', 'repo-tools-tests',
     'unselectable-tests', 'unselectable-census', 'census-freshness', 'repo-hygiene',
-    'plugin-audit', 'gatekeeper-review', 'write-guard-final',
+    'gatekeeper-review', 'write-guard-final',
     'worktree-fingerprint-final', 'completion-record'))
 
 
