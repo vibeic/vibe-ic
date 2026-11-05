@@ -46,7 +46,7 @@ def inputs(project, tool):
     return files or produced, top or declared
 
 
-def cdc(project, directory, tool, commands):
+def cdc(project, directory, tool, commands, *, state=None, config=None):
     import _cdc_netlist as native
     from cdc_async_input_check import is_probable_async_port
     files, top = inputs(project, tool)
@@ -54,7 +54,22 @@ def cdc(project, directory, tool, commands):
         return commands.result(detail="Produced RTL and the declared top module are required.")
     raw, graph = directory / "graph_raw.json", directory / "graph.json"
     script = directory / "elaborate.ys"
-    script.write_text(native.yosys_script(files, top, raw) + "\n")
+    if tool.get("adapter") == "implemented_cdc":
+        import fnmatch
+        from flow109_netlist_cdc import _word
+        netlist = state.get("nl") if state is not None else None
+        libraries = config.get("CELL_LIBS") or config.get("LIB") or {}
+        liberty = [Path(p) for pattern, paths in libraries.items()
+                   if fnmatch.fnmatchcase(config.get("DEFAULT_CORNER", ""), pattern)
+                   for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
+        if not netlist or not Path(netlist).is_file() or not liberty:
+            return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
+        script.write_text("\n".join([
+            *["read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
+            "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
+            "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
+    else:
+        script.write_text(native.yosys_script(files, top, raw) + "\n")
     built = commands.run(["yosys", "-s", script])
     if built is None or built.returncode or not raw.is_file():
         return commands.result(reports=[script], detail="Native CDC elaboration did not produce its graph.")
@@ -67,7 +82,8 @@ def cdc(project, directory, tool, commands):
     crossing, reset = {}, {}
     findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
     findings += native.judge(netlist, "async_input", is_probable_async_port, calibrate=False)
-    findings += native.judge(netlist, "reset_dependency", metadata=reset, calibrate=False)
+    findings += native.judge(netlist, "reset_dependency", metadata=reset, calibrate=False,
+                             require_reset_roles=False)
     unresolved = [r for r in findings if r.get("rule") == "RESET_ROLE_UNRESOLVED"]
     violations = [r for r in findings if r.get("rule") != "RESET_ROLE_UNRESOLVED"]
     report = directory / "cdc.json"
@@ -75,6 +91,8 @@ def cdc(project, directory, tool, commands):
     metrics = {}
     if crossing.get("traversal_complete") and reset.get("cycle_detection_complete") and not unresolved:
         metrics["unresolved_crossings"] = len(violations)
+        if tool.get("adapter") == "implemented_cdc":
+            metrics["new_unexplained_crossings"] = len(violations)
     return commands.result(metrics, [graph, report],
                            "Decoded structural CDC/RDC; protocol and MTBF require their own native proof.")
 
@@ -82,12 +100,14 @@ def cdc(project, directory, tool, commands):
 def testbenches(project, tool):
     if tool.get("testbenches"):
         return [Path(p) if Path(p).is_absolute() else project / p for p in tool["testbenches"]]
+    from testbench_gen import is_unit_tb
     paths = []
     for name in ("sim", "sim_unit", "sim_full_stack", "sim_professional"):
         root = project / "phase2/stage1" / name
-        for pattern in ("tb*.v", "tb*.sv", "tb*.py"):
+        for pattern in ("*.v", "*.sv", "tb*.py"):
             paths.extend(p for p in sorted(root.rglob(pattern))
-                         if not any(part in {"build", "obj_dir", "sim_build", "cov_build"} for part in p.parts))
+                         if not any(part in {"build", "obj_dir", "sim_build", "cov_build"} for part in p.parts)
+                         and (p.name.startswith("tb") or is_unit_tb(p)))
     return list(dict.fromkeys(paths))
 
 
@@ -111,9 +131,21 @@ def cocotb_run(directory, tb, files, top, commands, simulator):
 def simulation(project, directory, tool, commands):
     import verilator_coverage_measure as coverage
     from _sim_results_bridge import parse_junit
-    from sdf_gate_sim import parse_self_check_stdout, parse_sim_stdout
+    from sdf_gate_sim import parse_l10_case_stdout, parse_sim_stdout
     files, top = inputs(project, tool)
+    if files:
+        from testbench_gen import emit_unit_tbs
+        scenarios = {}
+        emitted = emit_unit_tbs(project, top=top, report=scenarios, scaffold=False, case_stated=True)
+        if emitted == -2 or scenarios.get("arithmetic_scenario_requests"):
+            return commands.result(detail="Declared scenario producer needs author input: "
+                                   + json.dumps(scenarios))
     benches = testbenches(project, tool)
+    if files and emitted > 0 and tool.get("testbenches"):
+        from testbench_gen import is_unit_tb
+        unit_dir = project / "phase2/stage1/sim/tb"
+        benches = list(dict.fromkeys([*benches, *(path for pattern in ("*.v", "*.sv")
+            for path in sorted(unit_dir.glob(pattern)) if is_unit_tb(path))]))
     if files and not benches:
         from arith_oracle_tb_gen import generate as arithmetic
         from professional_tb_gen import generate, _detect_ic_class
@@ -134,6 +166,7 @@ def simulation(project, directory, tool, commands):
     for index, tb in enumerate(benches):
         run = directory / f"testbench_{index + 1}"
         run.mkdir()
+        failures = None
         if tb.suffix == ".py":
             if not top or not shutil.which("cocotb-config"):
                 return commands.result(reports=reports, detail="Cocotb and the declared top are required.")
@@ -141,7 +174,7 @@ def simulation(project, directory, tool, commands):
             report = run / "functional/results.xml"
             summary = parse_junit(report)
             if summary and summary["tests"] > 0 and not summary["skipped"]:
-                assertions.append(summary["failures"] + summary["errors"])
+                failures = summary["failures"] + summary["errors"]
             completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator")
             data = run / "coverage/coverage.dat"
             if report.is_file():
@@ -157,11 +190,11 @@ def simulation(project, directory, tool, commands):
             functional = (commands.run(["vvp", executable], cwd=tb.parent)
                           if compiled is not None and compiled.returncode == 0 else compiled)
             if functional is not None and compiled is not None and compiled.returncode == 0:
-                parsed = parse_self_check_stdout(functional.stdout + functional.stderr)
+                parsed = parse_l10_case_stdout(functional.stdout + functional.stderr)
                 if parsed["verdict"] is None:
                     parsed = parse_sim_stdout(functional.stdout + functional.stderr)
                 if parsed["verdict"] is not None and parsed["total"] > 0:
-                    assertions.append(parsed["total"] - parsed["passed"])
+                    failures = parsed["total"] - parsed["passed"]
             try:
                 data = coverage.verilate_tb_and_run(list(map(str, files)), str(tb),
                     str(run / "build"), str(run), exec_fn=invoke, build_jobs=8)
@@ -169,11 +202,13 @@ def simulation(project, directory, tool, commands):
                 completed = True
             except SystemExit:
                 completed = None
+        if failures is not None:
+            assertions.append(failures)
         native_steps.extend([
             {"name": "Icarus.Functional", "ran": functional is not None,
              "exit_code": functional.returncode if functional is not None else None,
-             "status": ("PASS" if functional.returncode == 0 and len(assertions) == index + 1
-                        else "FAIL" if functional.returncode else "NOT_MEASURED") if functional is not None else "NOT_MEASURED"},
+             "status": ("FAIL" if functional.returncode or failures
+                        else "PASS" if failures == 0 else "NOT_MEASURED") if functional is not None else "NOT_MEASURED"},
             {"name": "Verilator.Coverage", "ran": completed is not None,
              "exit_code": (getattr(completed, "returncode", 0) if completed is not None else None),
              "status": "PASS" if completed is not None and not getattr(completed, "returncode", 0)
@@ -205,6 +240,8 @@ def simulation(project, directory, tool, commands):
 
 
 def formal(project, directory, tool, commands):
+    from formal_property_run import _ensure_expert_observers_bound, _model_texts
+
     configured = tool.get("properties", [])
     paths = [Path(p) if Path(p).is_absolute() else project / p for p in configured]
     if not paths:
@@ -228,11 +265,16 @@ def formal(project, directory, tool, commands):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
     statuses, covers, reports, required, observed, native_steps = [], [], [], [], [], []
     for index, source in enumerate(paths):
+        _ensure_expert_observers_bound(source, source.parent,
+                                      harness_text=_model_texts(source, source.parent, None))
         listing = commands.run(["sby", "--dumptasks", source], cwd=source.parent)
         if listing is None:
             return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
         if listing.returncode:
-            return commands.result(reports=reports, detail="SymbiYosys could not read its task input.")
+            result = commands.result(reports=reports, detail="SymbiYosys could not read its task input.")
+            result["native_steps"] = [{"name": "SymbiYosys.Input", "ran": True,
+                "exit_code": listing.returncode, "status": "NOT_MEASURED"}]
+            return result
         for task_index, task in enumerate(listing.stdout.split() or [""]):
             key = f"{source.name}:{task}"
             required.append(key)
@@ -260,7 +302,8 @@ def formal(project, directory, tool, commands):
         metrics["unproved_required_properties"] = sum(word == "FAIL" for word in statuses)
     if covers and all(word in {"PASS", "FAIL"} for word in covers):
         metrics["vacuous_required_proofs"] = sum(word == "FAIL" for word in covers)
-    metrics["proof_partition_coverage"] = {"required": required, "observed": observed}
+    if required and all(row["status"] in {"PASS", "FAIL"} for row in native_steps):
+        metrics["proof_partition_coverage"] = {"required": required, "observed": observed}
     result = commands.result(metrics, reports,
         "Native property proofs only. Antecedent reachability is measured only when its cover tasks exist.")
     result["native_steps"] = native_steps
@@ -306,10 +349,12 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
-    if tool.get("adapter") in {"eqy", "xor"}:
+    if tool.get("adapter") in {"eqy", "xor", "gls"}:
         import flow_native_verification
         return getattr(flow_native_verification, tool["adapter"])(
             project, work, tool, commands, state=state, config=config or {})
+    if tool.get("adapter") == "implemented_cdc":
+        return cdc(project, work, tool, commands, state=state, config=config or {})
     adapter = ADAPTERS.get(tool.get("adapter"))
     if adapter is None:
         return commands.result(detail=f"No native adapter for {tool.get('adapter')!r}.")

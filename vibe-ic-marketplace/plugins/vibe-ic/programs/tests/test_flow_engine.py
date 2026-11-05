@@ -59,6 +59,17 @@ def test_added_table_entry_runs_without_runner_change(tmp_path):
     assert (tmp_path / "steps/new_step/tool.log").is_file()
 
 
+def test_progress_uses_full_table_order_after_filtering_and_insertion(tmp_path, capsys):
+    rows = [command_row(name) for name in ("first", "inapplicable", "selected")]
+    rows[1]["when"] = "False"
+    execute(tmp_path, rows, from_name="selected", to_name="selected")
+    assert capsys.readouterr().out == "第 3 步 selected: PASS\n"
+
+    rows.insert(0, command_row("inserted"))
+    execute(tmp_path, rows, from_name="selected", to_name="selected")
+    assert capsys.readouterr().out == "第 4 步 selected: PASS\n"
+
+
 def test_router_window_remains_bounded(tmp_path):
     import task_nature_route as router
     decision = router.route_decision_receipt(
@@ -72,6 +83,18 @@ def test_router_window_remains_bounded(tmp_path):
     assert report["route"] == decision
     with pytest.raises(ValueError, match="outside"):
         engine.run(tmp_path, table={"steps": rows}, route=decision, to_name="floorplan")
+
+
+def test_debug_entry_runs_the_router_declared_prerequisite_closure(tmp_path):
+    rows = [command_row(name) for name in ("requirements", "author", "lint", "unselected", "simulation", "floorplan")]
+    for row, native in zip(rows, ("D1", "1", "2", "3", "4", "15")):
+        row["legacy_id"] = {"registry": "", "native": [native]}
+    route = {"task_nature": "debug", "entry_step": "4", "verify_through": "4",
+             "delivery_target": "rtl", "input_contract": "original",
+             "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
+    report = engine.run(tmp_path, table={"steps": rows}, route=route)
+    assert [row["name"] for row in report["steps"]] == ["requirements", "author", "lint", "simulation"]
+    assert report["route"] == route
 
 
 def test_missing_limit_never_becomes_pass(tmp_path):

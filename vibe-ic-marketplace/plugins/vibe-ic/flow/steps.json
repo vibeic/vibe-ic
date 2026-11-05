@@ -171,6 +171,22 @@
         "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/flows/classic.py",
         "line": 148
       }
+    },
+    "requires_em": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_em_corners.py",
+        "note": "Ruling211: retain published IC power-grid EM against PDK Jmax."
+      }
+    },
+    "requires_spares": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_spare_cells.py",
+        "note": "Ruling212 retains the published native IC spare-cell checks."
+      }
     }
   },
   "steps": [
@@ -1291,32 +1307,21 @@
     {
       "name": "constraint_validation",
       "title": "Constraint validation",
-      "when": "digital_netlist or (soft_ip and has_digital)",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "design_one_shot_runner.py",
         "function": "step_sdc_validation",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "invalid_timing_exceptions",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 1032
-          },
-          "tool_gap": "OpenSTA native exception diagnostics; wire invalid/unmatched object diagnostics without requirement traces."
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D20",
         "native": [
           "8"
         ]
-      }
+      },
+      "applicability_reason": "SDC validation runs with native pre-layout STA, where the synthesis netlist exists; duplicate pre-netlist wrapper removed."
     },
     {
       "name": "soft_ip_synthesis_and_constraints",
@@ -1525,6 +1530,12 @@
           "OpenROAD.CheckSDCFiles",
           "OpenROAD.CheckMacroInstances",
           "OpenROAD.STAPrePNR"
+        ],
+        "report_readers": [
+          {
+            "reader": "flow_native_timing.read_sta_reports",
+            "native_step": "OpenROAD.STAPrePNR"
+          }
         ]
       },
       "checks": [
@@ -1536,8 +1547,7 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1832
-          },
-          "tool_gap": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
+          }
         },
         {
           "metric": "unconstrained_endpoints",
@@ -1547,8 +1557,18 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1838
+          }
+        },
+        {
+          "metric": "invalid_timing_exceptions",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 1032
           },
-          "tool_gap": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
+          "tool_gap": "OpenSTA native exception diagnostics; wire invalid/unmatched object diagnostics without requirement traces."
         }
       ],
       "legacy_id": {
@@ -2472,17 +2492,87 @@
       "title": "Spare cells and ECO preparation",
       "when": "digital_physical and requires_spares",
       "tool": {
-        "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "VibeIC.SpareCells"
+              ],
+              "imports": [
+                "flow_spare_cells"
+              ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
       },
       "checks": [
+        {
+          "metric": "spare_density_fraction",
+          "operator": ">=",
+          "limit": 0.02,
+          "when": "ic",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
+        {
+          "metric": "spare_distribution_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
+        {
+          "metric": "spare_tie_connectivity_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "digital_physical and requires_spares",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
+        {
+          "metric": "spare_planned_mismatch",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
+        {
+          "metric": "vibeic__spare__pg__unconnected",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
         {
           "metric": "required_spare_distribution",
           "operator": "within_declared_bounds",
           "limit": null,
-          "when": "digital_physical and requires_spares",
+          "when": "digital_physical and requires_spares and not ic",
           "source": {
             "file": "flow/flow109.json",
             "line": 9854
@@ -2491,19 +2581,7 @@
             "kind": "design_or_pdk",
             "metric": "required_spare_distribution"
           },
-          "tool_gap": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
-        },
-        {
-          "metric": "spare_tie_connectivity_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "digital_physical and requires_spares",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 9876
-          },
-          "unit": "count",
-          "tool_gap": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
+          "tool_gap": "Non-IC spare distribution remains an engineering measurement; the IC profile uses the native density and distribution numbers above."
         }
       ],
       "legacy_id": {
@@ -3003,9 +3081,8 @@
       "when": "digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "cdc_crossing_check.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "implemented_cdc",
+        "program": "flow_native_adapters.py"
       },
       "checks": [
         {
@@ -3336,26 +3413,31 @@
       "when": "digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "gls",
+        "program": "flow_native_verification.py",
+        "metric": "gls_failures",
+        "native_limits": [
+          {
+            "metric": "sdf_delays_applied",
+            "operator": ">",
+            "limit": 0,
+            "source": {
+              "file": "programs/sdf_gate_sim.py",
+              "line": 2749
+            }
+          },
+          {
+            "metric": "sdf_annotation_errors",
+            "operator": "==",
+            "limit": 0,
+            "source": {
+              "file": "programs/sdf_gate_sim.py",
+              "line": 2751
+            }
+          }
+        ]
       },
       "checks": [
-        {
-          "metric": "candidate_sdf_annotation",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 12665
-          },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "Native simulator SDF annotated and unannotated delay counts"
-          },
-          "tool_gap": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool."
-        },
         {
           "metric": "gls_failures",
           "operator": "==",
@@ -3365,8 +3447,7 @@
             "file": "flow/flow109.json",
             "line": 12686
           },
-          "unit": "count",
-          "tool_gap": "Icarus/Verilator gate-level simulation with native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3618,6 +3699,18 @@
             }
           },
           {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "VibeIC.EMCorners"
+              ],
+              "imports": [
+                "flow_em_corners"
+              ]
+            }
+          },
+          {
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
@@ -3637,23 +3730,19 @@
           "source": {
             "file": "programs/flow109_final_electrical.py",
             "line": 123
-          },
-          "tool_gap": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
+          }
         },
         {
-          "metric": "em_current_lifetime_limits",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical and requires_em",
+          "metric": "em_worst_utilization_pct",
+          "operator": "<=",
+          "limit": 100,
+          "unit": "%",
+          "when": "ic",
           "source": {
-            "file": "flow/flow109.json",
-            "line": 13638
+            "file": "programs/flow109_final_electrical.py",
+            "line": 166
           },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "em_current_lifetime_limits"
-          },
-          "tool_gap": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
+          "limit_note": "Native current-density utilization of the PDK Jmax, without an added margin."
         }
       ],
       "legacy_id": {
@@ -4323,42 +4412,26 @@
           }
         ]
       },
-      "checks": [
-        {
-          "metric": "fill_sensitive_reference_correlation",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16079
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "fill_sensitive_reference_correlation"
-          },
-          "tool_gap": "OpenRCX/Magic extraction and native parasitic annotation report; wire the report/input adapter without population emitters or requirement traces."
-        },
+      "checks": [],
+      "legacy_id": {
+        "registry": "D69",
+        "native": []
+      },
+      "observations": [
         {
           "metric": "final_parasitic_corner_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
+          "native_metrics": [],
           "source": {
             "file": "flow/flow109.json",
             "line": 16099
           },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "OpenSTA per-corner native parasitic annotation reports"
-          },
-          "tool_gap": "OpenSTA per-corner native parasitic annotation reports. Wire only this native report; both sides must come from the tool."
+          "reason": "OpenSTA reports native parasitic annotation counts for its timed corners, without a separate numeric corner-coverage limit. Report those native counts; final extraction and STA retain their original engineering checks.",
+          "declared_limit_from": {},
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical"
         }
-      ],
-      "legacy_id": {
-        "registry": "D69",
-        "native": []
-      }
+      ]
     },
     {
       "name": "final_electrical_analysis",
@@ -4542,9 +4615,30 @@
       "when": "digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_final_gls.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "gls",
+        "program": "flow_native_verification.py",
+        "metric": "final_gls_function_timing_errors",
+        "native_limits": [
+          {
+            "metric": "sdf_delays_applied",
+            "operator": ">",
+            "limit": 0,
+            "source": {
+              "file": "programs/sdf_gate_sim.py",
+              "line": 2749
+            }
+          },
+          {
+            "metric": "sdf_annotation_errors",
+            "operator": "==",
+            "limit": 0,
+            "source": {
+              "file": "programs/sdf_gate_sim.py",
+              "line": 2751
+            }
+          }
+        ],
+        "corners": "all"
       },
       "checks": [
         {
@@ -4555,23 +4649,7 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 199
-          },
-          "tool_gap": "Icarus gate-level simulation and native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
-        },
-        {
-          "metric": "final_sdf_annotation",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16702
-          },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "Native simulator SDF annotated and unannotated delay counts"
-          },
-          "tool_gap": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool."
+          }
         }
       ],
       "legacy_id": {

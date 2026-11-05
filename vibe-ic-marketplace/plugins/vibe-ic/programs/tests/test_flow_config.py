@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,20 @@ def test_config_uses_documents_and_leaves_pdk_defaults(project):
     assert config["VERILOG_FILES"] == [str(project / "phase2/stage1/rtl/unit.v")]
     assert "PDN_CFG" not in config
     assert "FP_CORE_UTIL" not in config
+
+
+def test_generated_lowercase_pdk_keeps_installed_registry_spelling(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"fields": {"pdk_target": "sky130a"}}))
+    assert build_config(project)["PDK"] == "sky130A"
+
+
+def test_explicit_pdk_does_not_require_rewriting_generated_documents(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"fields": {}}))
+    before = path.read_bytes()
+    assert build_config(project, pdk="sky130A")["PDK"] == "sky130A"
+    assert path.read_bytes() == before
 
 
 def test_declaration_values_keep_native_units_and_pdk_scope(project):
@@ -98,9 +113,80 @@ def test_chip_pdn_uses_native_script_and_registry_connections(project, monkeypat
         "add_pdn_connect -grid stdcell_grid -layers {pad horizontal}\n")
 
 
+@pytest.mark.parametrize("route", ["ic", "DIE"])
+@pytest.mark.parametrize("ring", [{}, {"widths": [1, 2]}])
+def test_ic_pdn_connects_pads_without_optional_registry_layers(project, monkeypatch, route, ring):
+    import flow_config
+
+    registry = project / "registry"
+    registry.mkdir()
+    target = json.loads((project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json")
+                        .read_text())["fields"]["pdk_target"]
+    (registry / "pdk_registry.json").write_text(json.dumps({"pdks": [{
+        "name": target, "pdn_ring": ring}]}))
+    monkeypatch.setattr(flow_config, "PROGRAMS", registry)
+    config = build_config(project, route=route)
+    assert {key: config.get(key) for key in ("PDN_CORE_RING", "PDN_CORE_RING_CONNECT_TO_PADS")} == {
+        "PDN_CORE_RING": True, "PDN_CORE_RING_CONNECT_TO_PADS": True}
+    assert Path(config["PDN_CFG"]).read_text() == (
+        "source $::env(SCRIPTS_DIR)/openroad/common/pdn_cfg.tcl\n")
+
+
+def test_declared_pdn_construction_overrides_ic_defaults(project):
+    declarations(project, [
+        {"kind": "flow_setting", "token": "PDN_CORE_RING", "value": "false"},
+        {"kind": "flow_setting", "token": "PDN_CORE_RING_CONNECT_TO_PADS", "value": "false"},
+    ])
+    config = build_config(project, route="ic")
+    assert config["PDN_CORE_RING"] is False
+    assert config["PDN_CORE_RING_CONNECT_TO_PADS"] is False
+
+
+@pytest.mark.parametrize("route", [None, "ip", "HARDMACRO"])
+def test_non_ic_routes_leave_native_pdn_construction_defaults(project, route):
+    config = build_config(project, route=route)
+    assert {key for key in ("PDN_CORE_RING", "PDN_CORE_RING_CONNECT_TO_PADS", "PDN_CFG")
+            if key in config} == set()
+
+
 def test_config_cli_output_is_the_config_the_caller_receives(project):
     output = write_config(project, route="HARDMACRO")
     assert json.loads(output.read_text()) == build_config(project, route="HARDMACRO")
+
+
+def test_cli_records_implementation_choices_and_preserves_source_constraints(project):
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text('{"author_choice": "retained"}')
+    command = [sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
+               "--project", str(project), "--route", "ip", "--set", "FP_CORE_UTIL=35",
+               "--set", 'CTS_CLK_BUFFERS=["native_buf_2","native_buf_4"]']
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    choices = json.loads(declaration.read_text())
+    assert choices["author_choice"] == "retained"
+    config = json.loads(Path(result.stdout.strip()).read_text())
+    assert config["FP_CORE_UTIL"] == 35
+    assert config["CTS_CLK_BUFFERS"] == ["native_buf_2", "native_buf_4"]
+    assert config["CLOCK_PERIOD"] == 17.5
+    assert config["PDK"] == "sky130A"
+    declarations(project, [{"kind": "flow_setting", "token": "FP_CORE_UTIL", "value": "45"}])
+    assert build_config(project, route="ip")["FP_CORE_UTIL"] == 45
+
+
+@pytest.mark.parametrize("missing_rtl", [False, True])
+def test_failed_config_command_preserves_existing_declaration(project, missing_rtl):
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    original = '{"author_choice":"retained"}\n'
+    declaration.write_text(original)
+    if missing_rtl:
+        (project / "phase2/stage1/rtl/unit.v").unlink()
+    result = subprocess.run([sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
+        "--project", str(project), "--set", "FP_CORE_UTIL=35", "--output", str(project)],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert declaration.read_text() == original
 
 
 def test_declared_grid_offsets_override_derived_ring_offsets(project):
@@ -111,6 +197,19 @@ def test_declared_grid_offsets_override_derived_ring_offsets(project):
     config = build_config(project, route="ic")
     assert config["PDN_VOFFSET"] == 9
     assert config["PDN_HOFFSET"] == 11
+
+
+def test_implementation_pdn_widths_reach_native_configuration(project):
+    output = project / "plugin_output"
+    output.mkdir()
+    (output / "declaration.json").write_text(json.dumps({
+        "PDN_VWIDTH": 3.2, "PDN_HWIDTH": 3.2,
+    }))
+    config = build_config(project, route="ic")
+    assert config["PDN_VWIDTH"] == 3.2
+    assert config["PDN_HWIDTH"] == 3.2
+    assert "PDN_VPITCH" not in config
+    assert config["CLOCK_PERIOD"] == 17.5
 
 
 def test_original_prompt_recovers_lost_pdk_and_invalid_top(project):

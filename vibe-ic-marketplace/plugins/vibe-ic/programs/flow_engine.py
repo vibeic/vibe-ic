@@ -160,11 +160,15 @@ def select_steps(table: dict, route: dict, features: dict,
             raise ValueError(f"Router boundary has no unique table address: {value}")
         return matches[0]
     start, end = find(str(route["entry_step"])), find(str(route["verify_through"]))
+    closed = set(route.get("verify_closed_steps", [])) if route.get("input_contract") == "original" else set()
+    if closed:
+        indices = [i for i, row in enumerate(rows) if closed.intersection(aliases(row))]
+        if indices:
+            start, end = min(indices), max(indices)
     first = find(from_name) if from_name else start
     last = find(to_name) if to_name else end
     if not start <= first <= last <= end:
         raise ValueError("Requested names lie outside the Router-selected window")
-    closed = set(route.get("verify_closed_steps", [])) if route.get("input_contract") == "original" else set()
     return [row for row in rows[first:last + 1] if predicate(row["when"], features)
             and (not closed or bool(closed.intersection(aliases(row))))]
 
@@ -204,8 +208,9 @@ def command_tool(project: Path, directory: Path, tool: dict) -> ToolResult:
 
 
 class NativeChain:
-    def __init__(self, project: Path, route: dict):
+    def __init__(self, project: Path, route: dict, pdk: str | None = None):
         self.project, self.route = project, route
+        self.pdk = pdk
         self.owner = self.state = self.toolbox = None
         self.config: dict = {}
         self.common_started: float | None = None
@@ -218,7 +223,8 @@ class NativeChain:
         from librelane.state import State
         from librelane.common import Toolbox
         kind = "Chip" if self.route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"} else "Classic"
-        config = build_config(self.project, route="ic" if kind == "Chip" else "ip")
+        config = build_config(self.project, route="ic" if kind == "Chip" else "ip",
+                              **({"pdk": self.pdk} if self.pdk else {}))
         os.environ["_OPENLANE_MAX_CORES"] = "8"
         self.owner = Flow.factory.get(kind)(config, design_dir=str(self.project),
                                             pdk_root=os.environ.get("PDK_ROOT"))
@@ -280,7 +286,8 @@ class NativeChain:
                 result.detail += f" {name} missing input: {missing}."
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
                                             "missing_inputs": missing})
-                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs},
+                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs
+                                                                    if item not in step.inputs},
                                               metrics=self.state.metrics)
                 continue
             destination = directory / name.lower().replace(".", "_")
@@ -307,7 +314,8 @@ class NativeChain:
                 status = "NOT_MEASURED"
             if code or not ran:
                 producer_unavailable = True
-                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs},
+                self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs
+                                                                    if item not in step.inputs},
                                               metrics=self.state.metrics)
             result.metrics.update(emitted)
             if name == "OpenROAD.IRDropReport" and "ir__drop__worst" in emitted:
@@ -511,7 +519,7 @@ def evaluate(tool: ToolResult, measurements: list) -> str:
 
 def run(project: Path | str, *, table: dict | None = None, route: dict | None = None,
         from_name: str | None = None, to_name: str | None = None,
-        budget_seconds: float | None = None) -> dict:
+        budget_seconds: float | None = None, pdk: str | None = None) -> dict:
     project = Path(project).resolve()
     table = table or read_json(TABLE)
     route = route or select_route(project)
@@ -522,7 +530,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         mapped = requested.get("legacy_id", {})
         if isinstance(mapped, dict) and mapped.get("native"):
             owner_route = {**route, "entry_step": mapped["native"][0]}
-    owner_session = OwnerSession(project, owner_route, force=bool(from_name))
+    owner_session = OwnerSession(project, owner_route, force=bool(from_name), table=table)
     prepared = {}
     entry_rows = [row for row in table["steps"]
                   if str(route["entry_step"]) in [row["name"], *aliases(row)]]
@@ -540,7 +548,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
     features = design_features(project, route, table)
     selected = select_steps(table, route, features, from_name, to_name)
     complete_selection = select_steps(table, route, features, None, None)
-    chain = NativeChain(project, route)
+    chain = NativeChain(project, route, pdk=pdk)
     positions = {row["name"]: i + 1 for i, row in enumerate(table["steps"])}
     results: dict[str, dict] = {}
     step_root = project / "steps"
@@ -633,6 +641,14 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
             native = ToolResult(**owner_session.result(directory, "phase1"))
         else:
             native = ToolResult(detail=tool.get("gap", "Native adapter is not available"))
+        for reader in tool.get("report_readers", []):
+            module, function = reader["reader"].rsplit(".", 1)
+            source = directory / reader["native_step"].lower().replace(".", "_")
+            report = getattr(importlib.import_module(module), function)(
+                source, read_json(source / "config.json") or chain.config)
+            native.metrics.update(report.get("metrics", {}))
+            native.reports.extend(report.get("reports", []))
+            native.detail += " " + report.get("detail", "")
         checks = [check for check in row["checks"] if check.get("when") != "otherwise"
                   or tool.get("selected_profile", "otherwise") == "otherwise"]
         observations, declared_checks = report_observations(row, directory, native, chain.config, features, project)
@@ -667,7 +683,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         write_json(directory / "result.json", result)
         results[row["name"]] = result
         results = {name: read_json(step_root / name / "result.json") for name in results}
-        print(f"Step {positions[row['name']]} {row['title']}: {result['status']}", flush=True)
+        print(f"第 {positions[row['name']]} 步 {row['title']}: {result['status']}", flush=True)
         summary = {"route": route, "selected": len(selected), "run": len(results),
                    "pass": sum(item["status"] == "PASS" for item in results.values()),
                    "fail": sum(item["status"] == "FAIL" for item in results.values()),
@@ -754,6 +770,7 @@ def main() -> int:
     command.add_argument("--from", dest="from_name")
     command.add_argument("--to", dest="to_name")
     command.add_argument("--budget-seconds", type=float)
+    command.add_argument("--pdk")
     review = sub.add_parser("review")
     review.add_argument("--project", type=Path, required=True)
     review.add_argument("--step", required=True)
@@ -771,7 +788,7 @@ def main() -> int:
             print(json.dumps(refresh_report(args.project, args.budget_seconds), default=str))
             return 0
         result = run(args.project, from_name=args.from_name, to_name=args.to_name,
-                     budget_seconds=args.budget_seconds)
+                     budget_seconds=args.budget_seconds, pdk=args.pdk)
     except (ValueError, FileNotFoundError, KeyError) as exc:
         print(f"NOT_MEASURED: {exc}", file=sys.stderr)
         return 2

@@ -18,6 +18,7 @@ class IRDropCorners(IRDropReport):
     id = "VibeIC.IRDropCorners"
     name = "IR drop at maximum RC corners"
     long_name = name
+    report_class = IRDropReport
 
     def run(self, state_in, **kwargs):
         corners = [corner for corner in self.config["STA_CORNERS"] if corner.startswith("max_")]
@@ -33,7 +34,7 @@ class IRDropCorners(IRDropReport):
                 raise StepException(f"NOT_MEASURED: supply voltage is missing for {corner}")
             emitted = {}
 
-            class ObservedIRDrop(IRDropReport):
+            class ObservedIRDrop(self.report_class):
                 def run(self, *args, **kwargs):
                     views, updates = super().run(*args, **kwargs)
                     emitted.update(updates)

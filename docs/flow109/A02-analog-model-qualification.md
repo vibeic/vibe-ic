@@ -1,6 +1,6 @@
 # A02 analog model qualification component
 
-The general Flow 109 entry dispatches `flow109_analog_a02.execute` only for an
+The general flow entry dispatches `flow109_analog_a02.execute` only for an
 explicit A02-to-A02 window. The adapter records the existing
 `pdk_analog_completeness_check` inventory result, but accepts neither that
 check's file existence alone nor its waiver path as model qualification.
