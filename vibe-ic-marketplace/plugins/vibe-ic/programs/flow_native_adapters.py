@@ -126,6 +126,7 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     if normalized is None or normalized.returncode or not graph.is_file():
         return commands.result(reports=[raw, script], detail="Native CDC graph normalization did not complete.")
     netlist = native.load(graph, top)
+    native._load_latched_clock_gates(netlist)
     crossing, reset = {}, {}
     findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
     findings += native.judge(netlist, "async_input", is_probable_async_port, calibrate=False)

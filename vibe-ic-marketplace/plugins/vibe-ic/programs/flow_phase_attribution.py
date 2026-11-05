@@ -191,6 +191,16 @@ def step_report(project: Path) -> Tuple[Optional[Dict[str, Any]], Optional[str]]
         return None, f"UNREADABLE: {rep.name} did not parse as JSON"
     if not isinstance(d.get("steps"), list):
         return None, f"NO_STEPS: {rep.name} carries no `steps` list"
+    from flow_engine_frontend import selected_engine
+    if selected_engine([]) == "native":
+        native = _read_json(Path(project) / "reports/flow_engine.json") or {}
+        status = next((row.get("status") for row in native.get("steps", [])
+                       if row.get("name") == "functional_simulation_and_coverage"), None)
+        if status is not None and not any(row.get("name") == "sim" for row in d["steps"]):
+            d["steps"].append({"name": "sim", "status": "NOT_MEASURED"})
+        for row in d["steps"]:
+            if row.get("name") == "sim" and row.get("status") in (_STATUS_RAN | _STATUS_NOT_ATTEMPTED) - set(_STATUS_FAILING):
+                row.update(status=status if status in {"PASS", "FAIL"} else "NOT_MEASURED", detail="reports/flow_engine.json")
     return d, None
 
 

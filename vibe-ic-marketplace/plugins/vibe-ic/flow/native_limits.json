@@ -3925,14 +3925,16 @@
       "adapter": "eqy",
       "program": "flow_native_verification.py",
       "metric": "unproved_equivalence",
-      "timing_group": "librelane"
+      "timing_group": "other",
+      "parallel": true
     },
     "final_adopted_netlist_equivalence": {
       "kind": "adapter",
       "adapter": "eqy",
       "program": "flow_native_verification.py",
       "metric": "final_lec_unproved",
-      "timing_group": "librelane"
+      "timing_group": "other",
+      "parallel": true
     },
     "finishing_geometry_fidelity": {
       "kind": "adapter",
