@@ -71,7 +71,7 @@ def test_prelayout_io_present_request_has_named_refusal(tmp_path, section):
 @pytest.mark.parametrize('mode', ['dual', 'librelane'])
 def test_tool_step8_defers_before_synth_without_frontend_dispatch(tmp_path, monkeypatch, mode):
     put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': mode}})
-    put(tmp_path / 'phase2/stage2/constraints/neutral.asic.sdc',
+    put(tmp_path / 'input/constraints/neutral.sdc',
         'create_clock -name clk -period 10 [get_ports clk]\n'
         'set_input_delay 1 -clock clk [get_ports d]\n'
         'set_output_delay 1 -clock clk [get_ports q]\n')
@@ -90,6 +90,17 @@ def test_tool_step8_defers_before_synth_without_frontend_dispatch(tmp_path, monk
     assert not (tmp_path / 'phase2/stage2/synth').exists()
     assert not (tmp_path / 'phase3/librelane/prelayout').exists()
     assert not calls
+    import flow109
+    from test_flow109_selection import profile
+    context = flow109.execution_context(flow109.resolve_plan(profile()), 'D20', 'D20')
+    request = tmp_path / 'native-context.json'
+    put(request, context)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
+    published = D._complete_d20_validation(tmp_path, row)
+    assert published.status == 'PASS', published.detail
+    assert published.extras['default_row_status'] == 'PASS'
+    assert published.extras['completed'] is True
+    assert not (tmp_path / 'requirements').exists()
 
 
 @pytest.mark.parametrize('mutation', ['missing_sdc', 'unjustified_exception'])
@@ -1169,3 +1180,20 @@ def test_pvt_preparation_refusal_cannot_run_native_or_accept_step10(
     row7 = next(row for row in index['steps'] if row['id'] == '7')
     actual = json.loads((tmp_path / 'steps' / row7['folder'] / 'outputs.json').read_text())
     assert actual['status'] == expected and actual['canonical_pass'] is False
+
+
+@pytest.mark.parametrize('damage', ['wrong_period', 'unjustified_exception'])
+def test_native_early_sdc_limits_still_reject_real_constraint_errors(tmp_path, monkeypatch, damage):
+    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'dual'}})
+    put(tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {
+        'clock_domains': [{'name': 'clk', 'source_pin': 'clk', 'period_ns': 10}]})
+    body = ('create_clock -name clk -period PERIOD [get_ports clk]\n'
+        'set_input_delay 1 -clock clk [get_ports d]\n'
+        'set_output_delay 1 -clock clk [get_ports q]\n').replace('PERIOD', '8' if damage == 'wrong_period' else '10')
+    if damage == 'unjustified_exception':
+        body += 'set_false_path -from [get_clocks clk] -to [get_clocks foreign]\n'
+    put(tmp_path / 'input/constraints/neutral.sdc', body)
+    monkeypatch.setattr(E, '_ordinary_runtime', {
+        'project': tmp_path.resolve(), 'policy': {'mode': 'default'}, 'parameters': {}})
+    row = D.step_sdc_validation(tmp_path)
+    assert row.status == 'FAIL', row.detail
