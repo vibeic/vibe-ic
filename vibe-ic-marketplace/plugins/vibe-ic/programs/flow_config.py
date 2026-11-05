@@ -37,6 +37,9 @@ def implementation_setting(key: str) -> bool:
 def native_defaults(config):
     """Exclude delay-cell families through LibreLane's native wildcard setting."""
     excluded = [*(config.get("EXTRA_EXCLUDED_CELLS") or []), "*dly*", "*delay*"]
+    if str(config.get("PDK", "")).lower().startswith("gf180mcu"):
+        # OpenROAD-flow-scripts flow/platforms/gf180/config.mk sets DONT_USE_CELLS = *_1.
+        excluded.append("*_1")
     return config.copy(EXTRA_EXCLUDED_CELLS=list(dict.fromkeys(excluded)))
 
 
