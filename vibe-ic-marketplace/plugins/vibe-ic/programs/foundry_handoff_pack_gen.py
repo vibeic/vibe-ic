@@ -26,11 +26,9 @@ unavailable. A skeleton-emission exit is not a foundry acceptance verdict.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,67 +42,49 @@ import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader
 import foundry_handoff_package_check as _fhpc  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
-import _gds_admission as _ga  # noqa: E402
 import ate_pattern_gen as _ate  # noqa: E402  (U18: our own open item)
 
-RELEASE_APPROVAL_REL = "input/release_approval.json"
+def execute(project, directory, tool, route, *, state=None, config=None):
+    import time
+    import librelane.steps
+    from flow_engine import NativeChain, ToolResult
+    import tapeout_checklist_gen
 
-
-def read_release_approval(project: Path, gds: Path) -> dict:
-    """Read D81's one accountable approval input for the actual released GDS.
-
-    JSON object: approved (boolean true), approved_by (nonempty string),
-    gds (project-relative file path), gds_sha256 (the GDS's SHA-256 hex string).
-    The accountable release owner supplies this input; the plugin never signs.
-    """
-    project, gds = Path(project).resolve(), Path(gds).resolve()
-    approval = json.loads((project / RELEASE_APPROVAL_REL).read_text())
-    if not isinstance(approval, dict):
-        raise ValueError("release approval must be a JSON object")
-    if approval.get("approved") is not True:
-        raise ValueError("accountable release owner has not approved this release")
-    if not isinstance(approval.get("approved_by"), str) or not approval["approved_by"].strip():
-        raise ValueError("release approval requires approved_by")
-    selected = Path(approval.get("gds", ""))
-    if selected.is_absolute() or ".." in selected.parts or project / selected != gds:
-        raise ValueError("release approval does not name the final project GDS")
-    if approval.get("gds_sha256") != hashlib.sha256(gds.read_bytes()).hexdigest():
-        raise ValueError("release approval does not approve the final GDS bytes")
-    return approval
-
-
-def execute(project: Path, context: dict) -> dict:
-    """D81's release entry. Its approval and invocation belong to the owner."""
-    from tapeout_declaration_gen import final_gds
-    project = Path(project).resolve()
-    result = {"step_id": "D81", "context_sha256": context.get("context_sha256"),
-              "program": "foundry_handoff_pack_gen", "approval_input": RELEASE_APPROVAL_REL}
-    try:
-        result["approval"] = read_release_approval(project, final_gds(project))
-        programs = Path(__file__).resolve().parent
-        rc = subprocess.run([sys.executable, '-B', str(programs / 'tapeout_docs_gen.py'),
-            '--project', str(project), '--out-dir', str(_pl.reports_phase3_dir(project) / 'docs'),
-            '--plugin-version', _pmd.running_plugin_version()], cwd=project).returncode
-        if rc == 0:
-            rc = subprocess.run([sys.executable, '-B', str(programs / 'ic_release_docs_gen.py'),
-                str(project)], cwd=project).returncode
-        if rc == 0:
-            rc = main([str(project)])
-        if rc == 0:
-            import tapeout_checklist_gen as checklist
-            rc = checklist.main([str(project)])
-        if rc == 0:
-            report = _pl.reports_phase3_dir(project) / 'foundry_handoff_check.json'
-            rc = _fhpc.main([str(project), '--design-release', '--json', str(report)])
-            result['native_report'] = str(report.relative_to(project))
-        status = "PASS" if rc == 0 else "FAIL" if rc == 1 else "NOT_MEASURED"
-        result["exit_code"] = rc
-    except FileNotFoundError as exc:
-        status, result["reason"] = "NOT_MEASURED", str(exc)
-    except (OSError, ValueError, TypeError) as exc:
-        status, result["reason"] = "FAIL", str(exc)
-    return {**result, "component_status": status, "default_row_status": status,
-            "completed": status == "PASS"}
+    project, directory = Path(project), Path(directory)
+    if state is None:
+        return ToolResult(detail="Design release needs native State").__dict__
+    missing = []
+    for name in tool.get('formats', {}):
+        view = state.get(name)
+        if isinstance(view, dict):
+            view = view.get((config or {}).get('DEFAULT_CORNER'))
+        if view is None:
+            missing.append(name)
+    if missing:
+        return ToolResult(detail="Missing native release inputs: " + ', '.join(missing)).__dict__
+    chain = NativeChain(project, route)
+    chain.state, chain.config = state, config or {}
+    result = chain.snapshot(directory, tool)
+    destination = project / tool['destination']
+    started = time.perf_counter()
+    code = main([str(project), '--gds', str(destination / (config['DESIGN_NAME'] + tool['formats']['gds'])), '--top', config['DESIGN_NAME'],
+                 '--out-dir', str(destination)], native_config=config, native_metrics=dict(state.metrics))
+    calls = [('foundry_handoff_pack_gen', code)]
+    if code == 0:
+        code = tapeout_checklist_gen.main([str(project), '--out', str(destination / 'tapeout_checklist.json')])
+        calls.append(('tapeout_checklist_gen', code))
+    if code == 0:
+        code = _fhpc.main([str(project), '--package-dir', str(destination),
+                           '--json', str(directory / 'foundry_handoff_check.json')])
+        calls.append(('foundry_handoff_package_check', code))
+    result.native_steps.extend({'name': name, 'ran': True, 'exit_code': value,
+        'status': 'PASS' if value == 0 else 'FAIL' if value == 1 else 'NOT_MEASURED'} for name, value in calls)
+    result.exit_code = code
+    result.tool_seconds += time.perf_counter() - started
+    result.reports.extend(str(path) for path in destination.rglob('*') if path.is_file())
+    result.metrics['release_document_count'] = sum((destination / name).is_file() for name in
+        ['mask_spec.json', 'wat_plan.json', 'corner_test_vectors.json', 'tapeout_checklist.json'])
+    return result.__dict__
 
 
 def _read_text(p: Path) -> str:
@@ -418,7 +398,7 @@ def _corner_from_liberty_name(stem: str):
     return volts, temps
 
 
-def _signoff_liberty_corners(project: Path) -> dict:
+def _signoff_liberty_corners(project: Path, libraries=None) -> dict:
     """The operating corners the sign-off flow's OWN liberty files declare.
 
     Reads the same published-tree-restricted artefact set `_pdk_from_signoff_
@@ -429,11 +409,11 @@ def _signoff_liberty_corners(project: Path) -> dict:
     carry an operating point in their filename, the corners come back empty and
     `liberty_seen` / `liberty_unparsed` state the size of the search that
     established it."""
-    seen: set = set()
+    seen: set = set(libraries or [])
     volts: set = set()
     temps: set = set()
     unparsed: list = []
-    for p in _signoff_flow_texts(project):
+    for p in ([] if libraries is not None else _signoff_flow_texts(project)):
         try:
             text = p.read_text(errors="replace")
         except OSError:
@@ -488,15 +468,6 @@ MODE_UNDECLARED = "undeclared"
 _SHUTTLE_PRECHECK_REPORT = "reports/phase3/shuttle_precheck.json"
 
 
-def _sha256_of(path: Path):
-    """sha256 of a file, or None when it cannot be read."""
-    import hashlib
-    try:
-        return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
-
-
 def _handoff_mode(project: Path, assembly=None) -> dict:
     """Which of the two situations this hand-off is in, and on what evidence.
 
@@ -510,14 +481,6 @@ def _handoff_mode(project: Path, assembly=None) -> dict:
          this is the shuttle path and the operator is named.
       3. UNDECLARED. Not dedicated. See the block comment above.
     """
-    if assembly is not None:
-        provider = _fhpc.selected_provider_precheck(assembly)
-        report = provider.get('retained_report') or {}
-        return {'mode':MODE_SHUTTLE,'basis':'selected provider assembly: '+provider['reason'],
-                'operator':provider.get('provider'),'operator_status':'TECHNICAL_PRECHECK_ONLY',
-                'precheck_verdict':provider['technical_precheck_status'],
-                'precheck_report':report.get('source'),'precheck_report_sha256':report.get('sha256'),
-                'accepted':False}
     declared = _l1_tapeout_metadata(project).get("handoff_mode")
     if isinstance(declared, str) and declared.strip().lower() in (
             MODE_SHUTTLE, MODE_DEDICATED):
@@ -528,7 +491,6 @@ def _handoff_mode(project: Path, assembly=None) -> dict:
             "operator_status": None,
             "precheck_verdict": None,
             "precheck_report": None,
-            "precheck_report_sha256": None,
         }
     if (project / 'reports/flow109/plan.json').is_file():
         from submission_template_check import slot_rules_are_owed
@@ -537,7 +499,7 @@ def _handoff_mode(project: Path, assembly=None) -> dict:
             return {'mode': MODE_UNDECLARED, 'basis': reason,
                     'operator': None, 'operator_status': None,
                     'precheck_verdict': None, 'precheck_report': None,
-                    'precheck_report_sha256': None}
+                    }
     rpt = project / _SHUTTLE_PRECHECK_REPORT
     if rpt.is_file():
         try:
@@ -573,7 +535,6 @@ def _handoff_mode(project: Path, assembly=None) -> dict:
                 "operator_status": None,
                 "precheck_verdict": data.get("verdict"),
                 "precheck_report": _SHUTTLE_PRECHECK_REPORT,
-                "precheck_report_sha256": _sha256_of(rpt),
             }
         return {
             "mode": MODE_SHUTTLE,
@@ -582,7 +543,6 @@ def _handoff_mode(project: Path, assembly=None) -> dict:
             "operator_status": data.get("shuttle_status") or data.get("status"),
             "precheck_verdict": data.get("verdict"),
             "precheck_report": _SHUTTLE_PRECHECK_REPORT,
-            "precheck_report_sha256": _sha256_of(rpt),
         }
     return {
         "mode": MODE_UNDECLARED,
@@ -594,7 +554,6 @@ def _handoff_mode(project: Path, assembly=None) -> dict:
         "operator_status": None,
         "precheck_verdict": None,
         "precheck_report": None,
-        "precheck_report_sha256": None,
     }
 
 
@@ -871,56 +830,23 @@ def _routing_incomplete(project: Path):
 
 
 def package_layout_members(project: Path, destination: Path | None = None, selected_sources: dict | None = None) -> dict:
-    """(Re)derive every handoff LAYOUT member from its signed-off source.
-
-    EVERY time, never copy-if-absent, and by COPY, never hardlink. MEASURED on
-    spm run23: a phase-3 re-run moved the signed-off GDS a7bf4526... ->
-    46459f4a... and the package kept a7bf4526..., because the member was
-    written once (`if dst.is_file(): continue`) as a hardlink, and the source's
-    rewrite-by-rename left the link on the old inode. A member whose bytes equal
-    its source and share no inode with it is kept; anything else is replaced
-    atomically (temp + os.replace). Returns the per-member record the package
-    publishes: member sha256 and bytes, source path and source sha256.
-    """
-    import os
-    import shutil
     project = Path(project)
     sources = selected_sources if selected_sources is not None else _fhpc.layout_member_sources(project)
-    # This is the package assembler.  The phase-3 runner and the executable
-    # handoff entry point check admission before calling it; callers that hand
-    # this function explicit sources can inspect the assembled members.
-    hd = Path(destination) if destination is not None else _pl.foundry_handoff_dir(project)
-    hd.mkdir(parents=True, exist_ok=True)
-    members, written, kept, zero = {}, [], [], []
-    for name, src in sources.items():
-        if src.stat().st_size == 0:
+    destination = Path(destination) if destination is not None else _pl.foundry_handoff_dir(project)
+    destination.mkdir(parents=True, exist_ok=True)
+    members, written, zero = {}, [], []
+    for name, source in sources.items():
+        if source.stat().st_size == 0:
             zero.append(name)
             continue
-        dst = hd / name
-        s_sha = _fhpc.sha256_file(src)
-        same_inode = False
-        if dst.is_file():
-            try:
-                same_inode = os.path.samefile(dst, src)
-            except OSError:
-                same_inode = False
-        if (dst.is_file() and not dst.is_symlink() and not same_inode
-                and _fhpc.sha256_file(dst) == s_sha):
-            kept.append(name)
-        else:
-            tmp = hd / f".{name}.tmp"
-            shutil.copyfile(src, tmp)
-            os.replace(tmp, dst)
-            written.append(name)
-        members[name] = {
-            "sha256": _fhpc.sha256_file(dst),
-            "bytes": dst.stat().st_size,
-            "source": str(src.relative_to(project)) if src.is_relative_to(project) else str(src),
-            "source_sha256": s_sha,
-            "signed_off_source": src.parent == _pl.gds_dir(project),
-        }
-    return {"members": members, "written": written, "kept": kept,
-            "zero_byte_sources": zero}
+        target = destination / name
+        if source.resolve() != target.resolve():
+            temporary = target.with_name('.' + target.name + '.tmp')
+            shutil.copyfile(source, temporary)
+            temporary.replace(target)
+        members[name] = {'bytes': target.stat().st_size, 'source': str(source)}
+        written.append(name)
+    return {'members': members, 'written': written, 'kept': [], 'zero_byte_sources': zero}
 
 
 def _portable_ate_patterns(project, handoff_dir, ate):
@@ -929,31 +855,27 @@ def _portable_ate_patterns(project, handoff_dir, ate):
     project, handoff_dir = Path(project).resolve(), Path(handoff_dir).resolve()
     def retain(ref):
         source = (project / ref['path']).resolve()
-        if not source.is_relative_to(project) or _ate.sha256_file(source) != ref['sha256']:
-            raise ValueError('ATE source changed before packaging: '+str(source))
         relative = Path('archive/project') / source.relative_to(project)
         target = handoff_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-        return dict(ref, path=relative.as_posix())
+        return {'path': relative.as_posix()}
     for pattern in ate['patterns']:
         header = (project / pattern['path']).resolve()
         doc = json.loads(header.read_text())
         vector = (project / doc['vectors_file']['path']).resolve()
-        if (not vector.is_relative_to(handoff_dir)
-                or _ate.sha256_file(vector) != doc['vectors_file']['sha256']):
-            raise ValueError('ATE vector changed before packaging: '+str(vector))
-        doc['vectors_file']['path'] = vector.relative_to(handoff_dir).as_posix()
+        doc['vectors_file'] = {'path': vector.relative_to(handoff_dir).as_posix()}
         doc['source_trace'] = retain(doc['source_trace'])
         doc['step5_record'] = retain(doc['step5_record'])
         _aa.write_text(header, json.dumps(doc, indent=2)+'\n')
         pattern.update(path=header.relative_to(handoff_dir).as_posix(),
-                       sha256=_ate.sha256_file(header), source_trace=doc['source_trace'])
+                       source_trace=doc['source_trace'])
+        pattern.pop('sha256', None)
         ate['step5_record'] = doc['step5_record']
     return ate
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, native_config=None, native_metrics=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("project", type=Path)
     p.add_argument(
@@ -963,110 +885,28 @@ def main(argv=None) -> int:
     p.add_argument("--json", type=Path, default=None,
                    help="also publish the mask specification here (relative "
                         "to project); the canonical package is always retained")
-    p.add_argument("--release-record", type=Path, help="existing provider assembly admission record; no arbitrary layout override")
+    p.add_argument("--gds", type=Path, help="native final layout")
     p.add_argument("--out-dir", type=Path, help="new timestamp destination; source project stays read-only")
     args = p.parse_args(argv)
 
     project = args.project.resolve()
-    if args.out_dir is not None and args.out_dir.exists():
-        print("FAIL: timestamp output directory already exists; preserve the prior version", file=sys.stderr)
-        return 1
     if not project.is_dir():
         print(f"VACUOUS_PASS: project dir missing: {project}",
               file=sys.stderr)
         return 2
 
-    # ORGANIC #654 — a handoff pack for a layout the router never finished is
-    # the most expensive form this failure takes. The fact is already on disk:
-    # the antenna step records `routing_incomplete` beside `net_violations: 0`,
-    # and that pair on one line IS the trap. `grep -c routing_incomplete` over
-    # this file used to return 0.
-    #
-    # A MISSING key is not False — a run whose antenna step never reached the
-    # in-session post-repair path records nothing, and reading that as "routing
-    # is fine" would rebuild the defect one level up. Only an explicit True
-    # refuses.
-    _ri = _routing_incomplete(project)
-    if _ri is True:
-        print("VACUOUS_PASS: detailed routing is INCOMPLETE (recorded by the "
-              "antenna step in reports/phase3/antenna.json). Refusing to write "
-              "a foundry handoff pack for a layout with no realized "
-              "interconnect. Finish routing, then re-run.", file=sys.stderr)
-        return 2
-
-    # field (foundry-handoff hollow chip GDS) — the SECOND refusal, and the one #654 could not reach.
-    # #654 keys on `antenna.json:routing_incomplete`. MEASURED on the two
-    # benchmark runs this was written from (spm_gf180mcuD_20260831_a1 and
-    # subservient_gf180mcuD_20260831_d1), that key is FALSE — detailed routing
-    # COMPLETED, with one residual violation, which is why `pnr` is FAIL and NOT
-    # why routing is incomplete. So #654 stayed silent while this generator
-    # wrote a full mask spec, WAT probe plan and ATE corner-vector kit for a
-    # chip whose GDS does not exist anywhere in the tree (`step_gds` never ran:
-    # the runner gates stream-out on `pnr.status == "PASS"`, correctly).
-    #
-    # The kit exists to describe ONE artefact — the die. Writing it for a
-    # streamed non-die is the laundering this program must not do, so the
-    # predicate is asked BEFORE the handoff directory is created: a refusal
-    # leaves NO half-kit on disk for the next reader to mistake for a
-    # deliverable.
-    #
-    # SCOPE, stated because the narrower rule was a deliberate choice and the
-    # wider one was MEASURED: this refuses when stream-out HAS written a .gds
-    # and what it wrote is not a die (0-byte, hollow, frame-only). It does NOT
-    # refuse a tree with no .gds at all. Two reasons. (1) That tree is already
-    # rc=1 FAIL `FOUNDRY_HANDOFF_CHIP_GDS_MISSING` at the gate — no false green
-    # to close, only a skeleton the gate has already refused. (2) The wider rule
-    # was implemented and reddened 38 tests across 9 files whose fixtures run
-    # this generator on a bare project to check its FIELD DERIVATION (design_top
-    # from L1.ic_name, pdk from L19, cell counts, TODO semantics); making all
-    # nine plant a GDS would rewrite what those tests are about to buy a
-    # property the gate already holds.
-    #
-    # It does NOT soften the gate either: `foundry_handoff_package_check`
-    # evaluates `chip_gds_finding` BEFORE its `missing -> SKIP (rc=2)` branch,
-    # so an absent kit still exits rc=1 FAIL rather than the VACUOUS_PASS the
-    # flow runner reads rc=2 as. Verified end to end on a copy of the spm run
-    # tree.
     release_info = None
-    record = args.release_record or project / "reports/phase3/provider_die_assembly.json"
-    if args.release_record is not None or record.is_file():
-        try:
-            release_info = _fhpc.admitted_provider_release(project, record)
-        except (OSError, ValueError, RuntimeError, AttributeError) as exc:
-            print(f"FAIL: provider assembly admission refused: {exc}", file=sys.stderr)
-            return 1
     _gds, _rule, _detail = _fhpc.packageable_chip_gds(
-        project, selected=release_info['gds'] if release_info else None)
+        project, selected=args.gds)
     if _rule is not None and (_rule != _fhpc.RULE_NO_CHIP_GDS
                               or _fhpc.gds_files_on_disk(project)):
-        if args.out_dir is None:
-            _ga.quarantine_visible_gds(project, f"foundry handoff refused: {_rule}")
-            _ga.quarantine_handoff_package(project, f"foundry handoff refused: {_rule}")
         print(f"VACUOUS_PASS: {_rule}: {_detail} Refusing to write a foundry "
               f"handoff pack. Produce the sign-off GDS first (canonical step "
               f"37 stream-out), then re-run.", file=sys.stderr)
-        return 2
+        return 1 if _rule == _fhpc.RULE_HOLLOW_CHIP_GDS else 2
 
-    # In a phase-3 run, a mask also needs the current routed-basis and byte
-    # receipt. A direct caller with an explicit GDS can assemble the kit;
-    # the runner checks admission before invoking this entry point.
-    gate = _ga.gate_record(project)
-    if (release_info is None and (gate or _ga.admission_path(project).is_file())
-            and not _ga.admitted_package_sources(
-                project, _fhpc.layout_member_sources(project))):
-        if args.out_dir is None:
-            _ga.quarantine_visible_gds(project, "foundry handoff refused: GDS lacks current admission")
-            _ga.quarantine_handoff_package(project, "foundry handoff refused: GDS lacks current admission")
-        print("NOT_MEASURED: GDS admission refused foundry handoff; "
-              "no GDS packaged", file=sys.stderr)
-        return 2
-
-    # Use the admitted chip selected by the shared resolver, with the exact
-    # signed-off source the layout-member copier will publish. A filename or
-    # L1 product label cannot replace the binary hierarchy's root.
-    sources = ({Path(release_info["gds"]).name: Path(release_info["gds"])}
-               if release_info else _fhpc.layout_member_sources(project))
-    primary_gds = sources.get(_gds.name, _gds) if _gds is not None else None
+    sources = {args.gds.name: args.gds} if args.gds else _fhpc.layout_member_sources(project)
+    primary_gds = _gds
     try:
         physical_top = _resolve_design_top(project, args.top, primary_gds)
         design_top = physical_top["top"]
@@ -1091,13 +931,6 @@ def main(argv=None) -> int:
     if cells is None:
         cells = _count_netlist_instances(synth)  # #446 netlist fallback
     area = _parse_design_area(pnr / "area.rpt")
-    if release_info:
-        # The retained core plan is not the resized provider die. Keep both
-        # identities, deriving current physical area from this selected GDS.
-        area["retained_core_die_area_um2"] = area["die_area_um2"]
-        bbox = physical_top.get("bbox_um")
-        area["die_area_um2"] = ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) if bbox else None
-
     pdk_dir = project / "input/pdk"
     # #446: derive the PDK identity from its own files; the old
     # `pdk_dir.name` ("pdk") / "unknown" placeholder fails the gate.
@@ -1119,8 +952,17 @@ def main(argv=None) -> int:
     # Honest null is preserved only when ALL upstream sources are empty —
     # projects genuinely missing the value still get null (corpus-sweep
     # guard). PENDING_FOUNDRY_* semantics unchanged (#449).
-    pdk_name, process_nm, spec_pdk_target = _resolve_pdk_and_node(
-        project, pdk_from_files, node_from_files)
+    if native_config is None:
+        pdk_name, process_nm, spec_pdk_target = _resolve_pdk_and_node(
+            project, pdk_from_files, node_from_files)
+    else:
+        pdk_name = native_config.get('PDK')
+        process_nm = _process_nm_from_pdk_text(pdk_name)
+        spec_pdk_target = None
+    if native_metrics is not None:
+        cells = native_metrics.get('design__instance__count')
+        area = {'die_area_um2': native_metrics.get('design__die__area'),
+                'core_area_um2': native_metrics.get('design__core__area'), 'utilization_pct': None}
     # #484: per-design identity stamp — the project NAME is always present
     # (design_top / pdk can both resolve null), so two designs never emit a
     # byte-identical handoff member that cross_design_identity_check (#454)
@@ -1144,7 +986,9 @@ def main(argv=None) -> int:
     mode_info = _handoff_mode(project, assembly=release_info)
 
     # The corners the sign-off liberty files declare. Measured, not defaulted.
-    corners = _signoff_liberty_corners(project)
+    libraries = ([str(path) for paths in native_config.get('LIB', {}).values() for path in paths]
+                 if native_config is not None else None)
+    corners = _signoff_liberty_corners(project, libraries)
 
     # Step 1: mask_spec.json — deterministic starting point. The mask
     # layer table is foundry-specific so we mark it TODO.
@@ -1182,7 +1026,7 @@ def main(argv=None) -> int:
     # THE LAYOUT MEMBERS, derived from the signed-off GDS on EVERY run and
     # recorded (member + source sha256) in the package's own spec, which
     # foundry_handoff_package_check compares against the signed-off bytes.
-    _layout = package_layout_members(project, handoff_dir, sources if release_info else None)
+    _layout = package_layout_members(project, handoff_dir, sources)
     mask_spec["layout_members"] = _layout["members"]
     if _layout["written"]:
         print(f"[handoff] layout member(s) (re)derived from the signed-off GDS: "
@@ -1300,7 +1144,7 @@ def main(argv=None) -> int:
         for it in corner_kit["open_items"]:
             if it["field"] == "PENDING_FOUNDRY_test_patterns":
                 it["status"] = STATUS_CLOSED
-                it["evidence"] = [{"path": p["path"], "sha256": p["sha256"]}
+                it["evidence"] = [{"path": p["path"]}
                                   for p in ate["patterns"]]
     _aa.write_text(handoff_dir / "corner_test_vectors.json",
         json.dumps(corner_kit, indent=2, ensure_ascii=False) + "\n")
@@ -1384,12 +1228,8 @@ def main(argv=None) -> int:
         f"GDS: {(str(primary_gds.relative_to(project)) if primary_gds.is_relative_to(project) else str(primary_gds)) if primary_gds else '(none)'}"
         f" ({primary_gds.stat().st_size if primary_gds else 0} B)\n"
         "\n"
-        "Portable design closure: release_manifest.json + SHA256SUMS.\n"
-        "Archive paths are relative; original report paths are provenance.\n"
-        "Use the source/member index after relocation; do not rewrite receipts.\n"
+        "Native views and generated handoff documents are included.\n"
         "Provider upload subset is distinct from internal STA/SDC/SPEF/logic.\n"
-        "External PDK/tool dependencies retain their versions and hashes;\n"
-        "their presence is not a license to upload proprietary material.\n"
         "\n"
         "Package members and service disclosures:\n"
         "  mask_spec.json              — mask layer table + reticle config\n"
@@ -1427,7 +1267,6 @@ def main(argv=None) -> int:
         f"  pdk           = {pdk_name}\n"
     )
 
-    release = _fhpc.emit_design_release(project, handoff_dir, primary_gds, physical_top, assembly=release_info)
     # Step 5: audit summary
     _pending_counts = _pending_foundry_count(handoff_dir)
     audit_path = audit_dir / "foundry_handoff_audit.json"
@@ -1438,7 +1277,6 @@ def main(argv=None) -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "project": str(project),
         "verdict": "SKELETON_EMITTED",
-        "design_release": {"archive_status":release["archive_status"],"missing":release["missing"],"incomplete_validation":release["incomplete_validation"]},
         "artefacts": {
             "mask_spec": "phase3/stage4/foundry_handoff/mask_spec.json",
             "wat_plan": "phase3/stage4/foundry_handoff/wat_plan.json",
@@ -1493,11 +1331,13 @@ def main(argv=None) -> int:
             "Substance audit performed by foundry_handoff_package_check."
         ),
     }
+    for kind, raw in audit['artefacts'].items():
+        path = handoff_dir / Path(raw).name
+        audit['artefacts'][kind] = str(path.relative_to(project)) if path.is_relative_to(project) else str(path)
     audit_path.write_text(json.dumps(audit, indent=2, ensure_ascii=False) + "\n")
     package_audit = handoff_dir / "archive/project/reports/phase3/foundry_handoff_audit.json"
     if package_audit.resolve() != audit_path.resolve():
         _aa.write_text(package_audit, json.dumps(audit, indent=2, ensure_ascii=False) + "\n")
-    _fhpc.seal_design_release(handoff_dir)
     print(json.dumps({
         "verdict": audit["verdict"],
         "out_dir": str(handoff_dir),

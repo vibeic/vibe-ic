@@ -5219,7 +5219,8 @@
       "title": "Design release",
       "when": "always",
       "tool": {
-        "kind": "snapshot",
+        "kind": "adapter",
+        "adapter": "design_release",
         "destination": "phase3/stage5/release",
         "formats": {
           "lef": ".lef",

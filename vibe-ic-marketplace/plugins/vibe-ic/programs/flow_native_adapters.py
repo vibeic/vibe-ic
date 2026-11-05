@@ -744,6 +744,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") == "design_release":
+        from foundry_handoff_pack_gen import execute as release
+        return release(project, work, tool, route, state=state, config=config)
     if tool.get("adapter") == "package_readiness":
         from fnmatch import fnmatch
         import flow109_package_ready

@@ -4354,6 +4354,18 @@
         "VibeIC.ElectricalRules",
         "VibeIC.PercGeometry"
       ]
+    },
+    "design_release": {
+      "kind": "adapter",
+      "adapter": "design_release",
+      "destination": "phase3/stage5/release",
+      "formats": {
+        "lef": ".lef",
+        "lib": ".lib",
+        "gds": ".gds",
+        "nl": ".v"
+      },
+      "metric": "release_required_items"
     }
   },
   "report_check_readers": {

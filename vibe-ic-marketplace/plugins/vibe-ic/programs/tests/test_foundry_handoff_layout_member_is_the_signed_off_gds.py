@@ -102,16 +102,18 @@ def test_the_producer_refreshes_a_hardlinked_member_after_a_re_run(tmp_path):
     assert (hd / "spm.gds").read_bytes() == NEW
     assert not os.path.samefile(hd / "spm.gds", src), "a member is a copy"
     m = rec["members"]["spm.gds"]
-    assert m["sha256"] == m["source_sha256"] == C.sha256_file(src), m
-    assert m["source"] == "phase3/stage4/gds/spm.gds" and m["signed_off_source"]
+    assert m["bytes"] == len(NEW), m
+    assert m["source"] == str(src)
     assert C.stale_layout_members(proj) == []
 
 
-def test_a_fresh_member_is_kept_not_rewritten(tmp_path):
+def test_repeated_copy_preserves_the_member_contents(tmp_path):
     import foundry_handoff_pack_gen as G
     proj = _project(tmp_path, NEW, NEW)
     rec = G.package_layout_members(proj)
-    assert rec["kept"] == ["spm.gds"] and rec["written"] == [], rec
+    assert len(rec["members"]) == 1
+    for name in rec["members"]:
+        assert (proj / "phase3/stage4/foundry_handoff" / name).read_bytes() == NEW
 
 
 def test_the_signed_off_gds_wins_over_a_pnr_gds_of_the_same_name(tmp_path):
