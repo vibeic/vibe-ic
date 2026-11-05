@@ -396,6 +396,12 @@ class NativeChain:
 
             step = ObservedStep(self.owner.config, self.state)
             metric_name = getattr(step, "metric_name", None)
+            if (metric_name and any(not item["ran"] or item.get("exit_code") for item in result.native_steps)
+                    and not any(key == metric_name or key.startswith(metric_name + "__corner:")
+                                for key in result.metrics)):
+                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
+                                            "status": "NOT_MEASURED", "missing_inputs": [metric_name]})
+                continue
             if metric_name:
                 result.metrics.update({key: value for key, value in self.state.metrics.items()
                                        if key == metric_name or key.startswith(metric_name + "__corner:")})

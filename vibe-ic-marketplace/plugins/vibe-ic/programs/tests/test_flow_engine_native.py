@@ -98,12 +98,14 @@ def test_missing_metadata_preserves_a_valid_native_database(tmp_path, lint_error
     assert result.native_steps[0]["status"] == "NOT_MEASURED"
     assert result.native_steps[0]["exit_code"] is None
     assert (output / "odb_setpowerconnections/state_in.json").is_file()
-    if lint_errors is None:
-        assert not result.ran
-    else:
-        assert result.native_steps[1]["ran"]
-        assert result.native_steps[1]["status"] == ("FAIL" if lint_errors else "PASS")
-        assert result.metrics["design__lint_error__count"] == lint_errors
+    assert not result.ran
+    if lint_errors is not None:
+        assert not result.native_steps[1]["ran"]
+        assert result.native_steps[1]["status"] == "NOT_MEASURED"
+        assert "design__lint_error__count" not in result.metrics
+    observed = engine.measure([{"metric": "design__lint_error__count", "operator": "<=", "limit": 0}],
+                              result.metrics, chain.config, {"always": True})
+    assert engine.evaluate(result, observed) == "NOT_MEASURED"
     assert chain.state.get_by_df(DesignFormat.ODB) == str(odb)
     assert chain.state.metrics["upstream"] == 1
 
