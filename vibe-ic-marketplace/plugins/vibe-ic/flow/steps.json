@@ -184,42 +184,7 @@
         "function": "doc_extract",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "unresolved_route_facts",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 7368
-          }
-        },
-        {
-          "metric": "observed_vs_declared_features",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 7368
-          }
-        },
-        {
-          "metric": "requirements_trace",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "always",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 1472
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "requirements_trace"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D01",
         "native": [
@@ -237,32 +202,7 @@
         "function": "_run_step_0_5ic",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "unassigned_requirements",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 7368
-          }
-        },
-        {
-          "metric": "endpoint_delivery_items",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "always",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 1564
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "endpoint_delivery_items"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D02",
         "native": [
@@ -273,7 +213,7 @@
     {
       "name": "pdk_library_deck_and_tool_use_qualification",
       "title": "PDK library deck and tool-use qualification",
-      "when": "technology_specific",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "flow109_technology_qualification.py",
@@ -284,38 +224,25 @@
       "legacy_id": {
         "registry": "D03",
         "native": []
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "functional_safety_plan_and_tool_confidence",
       "title": "Functional safety plan and tool confidence",
-      "when": "requires_functional_safety",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": null,
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "safety_goals_allocation",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "requires_functional_safety",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 1794
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "safety_goals_allocation"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D04",
         "native": []
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "power_intent_and_domain_rules",
@@ -329,20 +256,6 @@
       },
       "checks": [
         {
-          "metric": "semantic_demand_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_power_intent",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 1915
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "semantic_demand_coverage"
-          }
-        },
-        {
           "metric": "illegal_power_states",
           "operator": "==",
           "limit": 0,
@@ -351,21 +264,8 @@
             "file": "flow/flow109.json",
             "line": 1935
           },
-          "unit": "count"
-        },
-        {
-          "metric": "supply_cell_assignments",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_power_intent",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 1954
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "supply_cell_assignments"
-          }
+          "unit": "count",
+          "tool_gap": "Native engineering tool report for power intent and domain rules; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -376,7 +276,7 @@
     {
       "name": "package_load_and_test_interface_feasibility",
       "title": "Package load and test-interface feasibility",
-      "when": "package_interface",
+      "when": "package_interface and package_declared",
       "tool": {
         "kind": "adapter",
         "program": "pad_assignment_gen.py",
@@ -385,40 +285,22 @@
       },
       "checks": [
         {
-          "metric": "pad_bump_interface_constraints",
-          "operator": "native_pad_constraints_resolved",
-          "limit": null,
-          "when": "package_interface",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2073
-          }
-        },
-        {
           "metric": "package_escape_feasibility",
           "operator": "native_bare_die_interface_covered",
           "limit": null,
-          "when": "package_interface",
+          "when": "package_declared",
           "source": {
             "file": "flow/flow109.json",
             "line": 2092
-          }
-        },
-        {
-          "metric": "test_access_plan",
-          "operator": "native_functional_access_covered",
-          "limit": null,
-          "when": "package_interface",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2111
-          }
+          },
+          "tool_gap": "Bare die has no package escape obligation (P). A declared package requires the native package routing/escape solver; wire its report."
         }
       ],
       "legacy_id": {
         "registry": "D06",
         "native": []
-      }
+      },
+      "applicability_reason": "Owner ruling 207 accepted package checks apply only to a declared package."
     },
     {
       "name": "multi_die_partition_and_interface_budget",
@@ -432,20 +314,6 @@
       },
       "checks": [
         {
-          "metric": "child_ownership",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "multidie",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2199
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "child_ownership"
-          }
-        },
-        {
           "metric": "d2d_budgets",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -457,18 +325,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "d2d_budgets"
-          }
-        },
-        {
-          "metric": "unassigned_links",
-          "operator": "==",
-          "limit": 0,
-          "when": "multidie",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2239
           },
-          "unit": "count"
+          "tool_gap": "Native engineering tool report for multi die partition and interface budget; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -486,36 +344,7 @@
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "analog_specs_with_units",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_analog",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2345
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "analog_specs_with_units"
-          }
-        },
-        {
-          "metric": "required_measurements",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_analog",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2365
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "required_measurements"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "A01",
         "native": [
@@ -533,33 +362,7 @@
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "device_model_load_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "has_analog",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2481
-          },
-          "unit": "count"
-        },
-        {
-          "metric": "model_corner_statistics_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_analog",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2501
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "model_corner_statistics_coverage"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "A02",
         "native": [
@@ -590,18 +393,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "noise_supply_budgets"
-          }
-        },
-        {
-          "metric": "unowned_crossings",
-          "operator": "==",
-          "limit": 0,
-          "when": "mixed",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2668
           },
-          "unit": "count"
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -624,20 +417,6 @@
       },
       "checks": [
         {
-          "metric": "observable_test_nodes",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "analog_testability",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2773
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "observable_test_nodes"
-          }
-        },
-        {
           "metric": "trim_range_resolution",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -649,18 +428,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "trim_range_resolution"
-          }
-        },
-        {
-          "metric": "test_access_unreachable",
-          "operator": "==",
-          "limit": 0,
-          "when": "analog_testability",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2815
           },
-          "unit": "count"
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -691,21 +460,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "allocated_gain_noise_power_budgets"
-          }
-        },
-        {
-          "metric": "topology_constraints",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_analog",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 2955
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "topology_constraints"
-          }
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -738,18 +494,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "operating_point_targets"
-          }
-        },
-        {
-          "metric": "netlist_connectivity_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "has_analog",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 3095
           },
-          "unit": "count"
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -780,7 +526,8 @@
             "file": "flow/flow109.json",
             "line": 3213
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "known_stimulus_calibration",
@@ -794,7 +541,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "known_stimulus_calibration"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "unit_mismatches",
@@ -805,7 +553,8 @@
             "file": "flow/flow109.json",
             "line": 3255
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -839,7 +588,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "nominal_performance"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "early_model_correlation",
@@ -853,7 +603,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "early_model_correlation"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -866,47 +617,19 @@
     {
       "name": "macro_logical_and_timing_views",
       "title": "Macro logical and timing views",
-      "when": "uses_macros",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "ip_integration_check.py",
         "function": "audit",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "required_macro_views",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "uses_macros",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 3514
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "paths": [
-              "phase1/generated_docs/L9_INTEGRATION_SPEC.json#/submodules"
-            ],
-            "metric": "required_macro_views"
-          }
-        },
-        {
-          "metric": "unresolved_macro_instances",
-          "operator": "==",
-          "limit": 0,
-          "when": "uses_macros",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 3534
-          },
-          "unit": "count"
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D08",
         "native": []
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "rtl_authoring",
@@ -918,22 +641,7 @@
         "function": "step_rtl_gen",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "rtl_requirement_mapping",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 3642
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "rtl_requirement_mapping"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D09",
         "native": [
@@ -951,28 +659,7 @@
           "Yosys.JsonHeader"
         ]
       },
-      "checks": [
-        {
-          "metric": "elaboration_errors",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 2841
-          }
-        },
-        {
-          "metric": "unexpected_blackboxes",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 2841
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D10",
         "native": [
@@ -1044,17 +731,6 @@
           "enabled_by": "ERROR_ON_LINTER_WARNINGS",
           "enabled_default": false,
           "when": "otherwise"
-        },
-        {
-          "metric": "required_lint_violations",
-          "operator": "==",
-          "limit": 0,
-          "when": "has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 3913
-          },
-          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -1089,34 +765,6 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 4154
-          }
-        },
-        {
-          "metric": "clock_reset_crossing_census",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4053
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "clock_reset_crossing_census"
-          }
-        },
-        {
-          "metric": "cdc_protocol_results",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4092
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "cdc_protocol_results"
           }
         }
       ],
@@ -1186,35 +834,6 @@
             "line": 2768
           },
           "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
-        },
-        {
-          "metric": "required_function_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4249
-          },
-          "required_from": {
-            "paths": [
-              "phase1/generated_docs/L7_TEST_DEBUG.json#/test_scenarios"
-            ]
-          }
-        },
-        {
-          "metric": "coverage_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4288
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "coverage_targets"
-          }
         }
       ],
       "legacy_id": {
@@ -1257,7 +876,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 6600
-          }
+          },
+          "tool_gap": "SymbiYosys prove and antecedent reachability cover tasks; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "proof_partition_coverage",
@@ -1269,9 +889,10 @@
             "line": 4527
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "proof_partition_coverage"
-          }
+            "kind": "native_tool_population",
+            "tool": "SymbiYosys task listing and native per-task status reports"
+          },
+          "tool_gap": "SymbiYosys task listing and native per-task status reports. Wire only this native report; both sides must come from the tool."
         }
       ],
       "legacy_id": {
@@ -1293,20 +914,6 @@
       },
       "checks": [
         {
-          "metric": "required_power_transitions",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_power_intent and has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4634
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "required_power_transitions"
-          }
-        },
-        {
           "metric": "isolation_retention_behavior_errors",
           "operator": "==",
           "limit": 0,
@@ -1315,7 +922,8 @@
             "file": "flow/flow109.json",
             "line": 4654
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native engineering tool report for power aware state transitions; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1335,20 +943,6 @@
       },
       "checks": [
         {
-          "metric": "required_fullchip_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "requires_system_scenarios",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4776
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "required_fullchip_scenarios"
-          }
-        },
-        {
           "metric": "boot_workload_protocol_errors",
           "operator": "==",
           "limit": 0,
@@ -1357,7 +951,8 @@
             "file": "flow/flow109.json",
             "line": 4797
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native engineering tool report for system and software scenarios; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "blocking_system_scenario_failures",
@@ -1368,21 +963,8 @@
             "file": "flow/flow109.json",
             "line": 4818
           },
-          "unit": "count"
-        },
-        {
-          "metric": "system_signoff_required_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "requires_system_scenarios",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4838
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "system_signoff_required_scenarios"
-          }
+          "unit": "count",
+          "tool_gap": "Native engineering tool report for system and software scenarios; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1419,20 +1001,6 @@
       },
       "checks": [
         {
-          "metric": "threat_requirements_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "requires_security",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 4973
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "threat_requirements_coverage"
-          }
-        },
-        {
           "metric": "security_counterexample_failures",
           "operator": "==",
           "limit": 0,
@@ -1441,7 +1009,8 @@
             "file": "flow/flow109.json",
             "line": 4993
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "SymbiYosys security property and reachability tasks; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "security_metric_targets",
@@ -1455,7 +1024,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "security_metric_targets"
-          }
+          },
+          "tool_gap": "SymbiYosys security property and reachability tasks; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1473,22 +1043,7 @@
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "prototype_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "fpga_early",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 5115
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "prototype_scenarios"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D18",
         "native": [
@@ -1508,20 +1063,6 @@
       },
       "checks": [
         {
-          "metric": "ams_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "mixed",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 5243
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "ams_scenarios"
-          }
-        },
-        {
           "metric": "prelayout_interface_performance",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -1533,7 +1074,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "prelayout_interface_performance"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "model_correlation",
@@ -1547,7 +1089,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "model_correlation"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1570,20 +1113,6 @@
       },
       "checks": [
         {
-          "metric": "pvt_load_modes",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_analog",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 5394
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "pvt_load_modes"
-          }
-        },
-        {
           "metric": "prelayout_performance",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -1595,7 +1124,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "prelayout_performance"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1628,7 +1158,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "mismatch_confidence_targets"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1661,7 +1192,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "finite_code_convergence"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "calibration_time_error",
@@ -1675,7 +1207,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "calibration_time_error"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "oracle_code_selection",
@@ -1686,7 +1219,8 @@
             "file": "flow/flow109.json",
             "line": 5701
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1704,37 +1238,7 @@
           "Misc.LoadBaseSDC"
         ]
       },
-      "checks": [
-        {
-          "metric": "scenario_constraints",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_netlist or (soft_ip and has_digital)",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 5831
-          },
-          "required_from": {
-            "paths": [
-              "phase1/generated_docs/L8_TIMING_WAVEFORM.json#/clock_domains"
-            ]
-          }
-        },
-        {
-          "metric": "exception_justification",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_netlist or (soft_ip and has_digital)",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 5868
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "exception_justification"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D19",
         "native": [
@@ -1761,7 +1265,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1032
-          }
+          },
+          "tool_gap": "OpenSTA native exception diagnostics; wire invalid/unmatched object diagnostics without requirement traces."
         }
       ],
       "legacy_id": {
@@ -1783,20 +1288,6 @@
       },
       "checks": [
         {
-          "metric": "portable_sdc_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "soft_ip and has_digital",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 6095
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "portable_sdc_coverage"
-          }
-        },
-        {
           "metric": "required_config_synthesis_errors",
           "operator": "==",
           "limit": 0,
@@ -1805,7 +1296,8 @@
             "file": "flow/flow109.json",
             "line": 6115
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native engineering tool report for soft ip synthesis and constraints; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1862,7 +1354,7 @@
           "when": "otherwise"
         },
         {
-          "metric": "unexpected_latch_blackbox",
+          "metric": "design__inferred_latch__count",
           "operator": "==",
           "limit": 0,
           "when": "digital_netlist",
@@ -1871,20 +1363,6 @@
             "line": 6278
           },
           "unit": "count"
-        },
-        {
-          "metric": "synthesis_constraints",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_netlist",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 6298
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "synthesis_constraints"
-          }
         }
       ],
       "legacy_id": {
@@ -1892,7 +1370,24 @@
         "native": [
           "9"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "synthesis_constraints",
+          "native_metrics": [
+            "design__instance__area"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6298
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "synthesis_constraints"
+          }
+        }
+      ]
     },
     {
       "name": "dft_architecture_and_insertion",
@@ -1906,20 +1401,6 @@
       },
       "checks": [
         {
-          "metric": "dft_architecture_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "requires_scan",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 6416
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "dft_architecture_coverage"
-          }
-        },
-        {
           "metric": "scan_test_protocol_integrity",
           "operator": "==",
           "limit": 0,
@@ -1928,7 +1409,8 @@
             "file": "flow/flow109.json",
             "line": 6436
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1958,7 +1440,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1089
-          }
+          },
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -1987,21 +1470,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1628
-          }
-        },
-        {
-          "metric": "required_lec_partitions",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_netlist",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 6680
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "required_lec_partitions"
-          }
+          "tool_gap": "Yosys.EQY native partition status; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2032,7 +1502,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1832
-          }
+          },
+          "tool_gap": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "unconstrained_endpoints",
@@ -2042,21 +1513,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1838
-          }
-        },
-        {
-          "metric": "prelayout_timing_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_netlist",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 6851
           },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "prelayout_timing_targets"
-          }
+          "tool_gap": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2064,7 +1522,25 @@
         "native": [
           "10"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "prelayout_timing_targets",
+          "native_metrics": [
+            "timing__setup__ws",
+            "timing__hold__ws"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6851
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "prelayout_timing_targets"
+          }
+        }
+      ]
     },
     {
       "name": "safety_fault_injection_and_diagnostic_coverage",
@@ -2087,9 +1563,10 @@
             "line": 6981
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "fault_population_coverage"
-          }
+            "kind": "native_tool_population",
+            "tool": "Native fault simulator total faults and graded faults report"
+          },
+          "tool_gap": "Native fault simulator total faults and graded faults report. Wire only this native report; both sides must come from the tool."
         },
         {
           "metric": "diagnostic_coverage_latency",
@@ -2103,21 +1580,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "diagnostic_coverage_latency"
-          }
-        },
-        {
-          "metric": "fmeda_fault_classification",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "requires_functional_safety",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 7022
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "fmeda_fault_classification"
-          }
+          "tool_gap": "Native fault-injection simulation and diagnostic coverage report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2148,7 +1612,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "early_fault_coverage"
-          }
+          },
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2168,22 +1633,7 @@
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "required_onboard_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "fpga_final",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 7244
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "required_onboard_scenarios"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D29",
         "native": [
@@ -2194,35 +1644,21 @@
     {
       "name": "netlist_handoff",
       "title": "Netlist handoff",
-      "when": "digital_netlist",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "design_one_shot_runner.py",
         "function": "step_synthesis_handoff",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "post_synth_crossing_power_changes",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_netlist",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 7391
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "post_synth_crossing_power_changes"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D30",
         "native": [
           "14"
         ]
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "analog_layout",
@@ -2247,18 +1683,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "matching_symmetry_guard_constraints"
-          }
-        },
-        {
-          "metric": "analog_layout_connectivity",
-          "operator": "==",
-          "limit": 0,
-          "when": "analog_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 7539
           },
-          "unit": "count"
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2334,31 +1760,6 @@
           "enabled_by": "ERROR_ON_LVS_ERROR",
           "enabled_default": true,
           "when": "otherwise"
-        },
-        {
-          "metric": "block_drc_lvs_erc_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "analog_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 7668
-          },
-          "unit": "count"
-        },
-        {
-          "metric": "device_extraction_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "analog_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 7689
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "device_extraction_coverage"
-          }
         }
       ],
       "legacy_id": {
@@ -2389,9 +1790,10 @@
             "line": 7804
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "pex_annotation_coverage"
-          }
+            "kind": "native_tool_population",
+            "tool": "OpenSTA report_parasitic_annotation annotated and unannotated native nets"
+          },
+          "tool_gap": "OpenSTA report_parasitic_annotation annotated and unannotated native nets. Wire only this native report; both sides must come from the tool."
         }
       ],
       "legacy_id": {
@@ -2424,7 +1826,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "postlayout_pvt_performance"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "calibration_replay",
@@ -2438,7 +1841,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "calibration_replay"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2471,7 +1875,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "postlayout_statistical_targets"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "required_sample_coverage",
@@ -2483,9 +1888,10 @@
             "line": 8105
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "required_sample_coverage"
-          }
+            "kind": "native_tool_population",
+            "tool": "Native Monte Carlo solver requested sample count and completed sample count"
+          },
+          "tool_gap": "Native Monte Carlo solver requested sample count and completed sample count. Wire only this native report; both sides must come from the tool."
         }
       ],
       "legacy_id": {
@@ -2518,7 +1924,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "device_stress_lifetime"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "analog_ir_em_aging",
@@ -2532,7 +1939,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "analog_ir_em_aging"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2567,21 +1975,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "postlayout_view_correlation"
-          }
-        },
-        {
-          "metric": "model_corner_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "analog_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 8428
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "model_corner_coverage"
-          }
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2612,7 +2007,8 @@
             "file": "flow/flow109.json",
             "line": 8610
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2672,38 +2068,31 @@
           }
         ]
       },
-      "checks": [
-        {
-          "metric": "illegal_macro_overlap",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 182
-          }
-        },
-        {
-          "metric": "floorplan_boundary_pin_feasibility",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "die_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 8792
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "floorplan_boundary_pin_feasibility"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D31",
         "native": [
           "15"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "floorplan_boundary_pin_feasibility",
+          "native_metrics": [
+            "design__core__area",
+            "design__die__area"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 8792
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "floorplan_boundary_pin_feasibility"
+          }
+        }
+      ]
     },
     {
       "name": "io_pad_ring_and_power_distribution",
@@ -2736,21 +2125,7 @@
       },
       "checks": [
         {
-          "metric": "pad_io_esd_pg_inventory",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "die_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 8995
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "pad_io_esd_pg_inventory"
-          }
-        },
-        {
-          "metric": "pg_supply_connectivity_errors",
+          "metric": "design__power_grid_violation__count",
           "operator": "==",
           "limit": 0,
           "when": "die_physical",
@@ -2772,7 +2147,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "pad_access_spacing"
-          }
+          },
+          "tool_gap": "Native engineering tool report for io pad ring and power distribution; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2802,7 +2178,8 @@
             "file": "flow/flow109.json",
             "line": 9186
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2836,7 +2213,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "bump_alignment_rules"
-          }
+          },
+          "tool_gap": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "assembly_connectivity_errors",
@@ -2847,7 +2225,8 @@
             "file": "flow/flow109.json",
             "line": 9292
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "assembly_drc_errors",
@@ -2858,7 +2237,8 @@
             "file": "flow/flow109.json",
             "line": 9312
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2874,28 +2254,31 @@
         "kind": "native_report",
         "from": "pre_layout_timing"
       },
-      "checks": [
-        {
-          "metric": "skew_insertion_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 9436
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "skew_insertion_targets"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D34",
         "native": [
           "16"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "skew_insertion_targets",
+          "native_metrics": [
+            "clock__skew__worst_setup",
+            "clock__skew__worst_hold"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9436
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "skew_insertion_targets"
+          }
+        }
+      ]
     },
     {
       "name": "placement_and_optimization",
@@ -2978,45 +2361,6 @@
           "enabled_by": "ERROR_ON_PDN_VIOLATIONS",
           "enabled_default": true,
           "when": "otherwise"
-        },
-        {
-          "metric": "placement_legality_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 9568
-          },
-          "unit": "count"
-        },
-        {
-          "metric": "pre_cts_setup_drv_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 9588
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "pre_cts_setup_drv_targets"
-          }
-        },
-        {
-          "metric": "congestion_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 9609
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "congestion_targets"
-          }
         }
       ],
       "legacy_id": {
@@ -3024,7 +2368,42 @@
         "native": [
           "17"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "pre_cts_setup_drv_targets",
+          "native_metrics": [
+            "timing__setup__ws",
+            "design__max_slew_violation__count",
+            "design__max_cap_violation__count"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9588
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "pre_cts_setup_drv_targets"
+          }
+        },
+        {
+          "metric": "congestion_targets",
+          "native_metrics": [
+            "gpl__routability__congestion",
+            "global_route__wirelength"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 9609
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "congestion_targets"
+          }
+        }
+      ]
     },
     {
       "name": "physical_scan_stitching",
@@ -3045,7 +2424,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 6539
-          }
+          },
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3076,7 +2456,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "required_spare_distribution"
-          }
+          },
+          "tool_gap": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "spare_tie_connectivity_errors",
@@ -3087,7 +2468,8 @@
             "file": "flow/flow109.json",
             "line": 9876
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3119,23 +2501,10 @@
             "line": 10005
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "clock_tree_sink_coverage"
-          }
-        },
-        {
-          "metric": "clock_skew_insertion_drv",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical and requires_cts",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 10025
+            "kind": "native_tool_population",
+            "tool": "OpenROAD CTS native clock-net loads and connected sink counts"
           },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "clock_skew_insertion_drv"
-          }
+          "tool_gap": "OpenROAD CTS native clock-net loads and connected sink counts. Wire only this native report; both sides must come from the tool."
         }
       ],
       "legacy_id": {
@@ -3143,7 +2512,25 @@
         "native": [
           "19"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "clock_skew_insertion_drv",
+          "native_metrics": [
+            "clock__skew__worst_setup",
+            "clock__skew__worst_hold"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10025
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "clock_skew_insertion_drv"
+          }
+        }
+      ]
     },
     {
       "name": "post_cts_timing_repair",
@@ -3156,42 +2543,46 @@
           "OpenROAD.STAMidPNR"
         ]
       },
-      "checks": [
+      "checks": [],
+      "legacy_id": {
+        "registry": "D39",
+        "native": [
+          "20"
+        ]
+      },
+      "observations": [
         {
           "metric": "post_cts_setup_hold_drv",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical and requires_cts",
+          "native_metrics": [
+            "timing__setup__ws",
+            "timing__hold__ws",
+            "design__max_slew_violation__count",
+            "design__max_cap_violation__count"
+          ],
           "source": {
             "file": "flow/flow109.json",
             "line": 10141
           },
-          "limit_from": {
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "post_cts_setup_hold_drv"
           }
         },
         {
           "metric": "repair_stagnation_iterations",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical and requires_cts",
+          "native_metrics": [],
           "source": {
             "file": "flow/flow109.json",
             "line": 10162
           },
-          "limit_from": {
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "repair_stagnation_iterations"
           }
         }
-      ],
-      "legacy_id": {
-        "registry": "D39",
-        "native": [
-          "20"
-        ]
-      }
+      ]
     },
     {
       "name": "routing_and_cell_filler",
@@ -3216,21 +2607,7 @@
       },
       "checks": [
         {
-          "metric": "routed_net_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 10311
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "routed_net_coverage"
-          }
-        },
-        {
-          "metric": "routing_drc_errors",
+          "metric": "route__drc_errors",
           "operator": "==",
           "limit": 0,
           "when": "digital_physical",
@@ -3268,7 +2645,8 @@
             "file": "flow/flow109.json",
             "line": 10451
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "analog_sensitive_route_constraints",
@@ -3282,7 +2660,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "analog_sensitive_route_constraints"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3301,53 +2680,46 @@
           "OpenROAD.STAPostPNR"
         ]
       },
-      "checks": [
-        {
-          "metric": "post_repair_timing_drv",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 10592
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "post_repair_timing_drv"
-          }
-        },
-        {
-          "metric": "filler_restore_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 10614
-          },
-          "unit": "count"
-        },
-        {
-          "metric": "repair_iteration_budget",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 10634
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "repair_iteration_budget"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D41",
         "native": [
           "32"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "post_repair_timing_drv",
+          "native_metrics": [
+            "timing__setup__ws",
+            "timing__hold__ws",
+            "design__max_slew_violation__count",
+            "design__max_cap_violation__count"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10592
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "post_repair_timing_drv"
+          }
+        },
+        {
+          "metric": "repair_iteration_budget",
+          "native_metrics": [],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10634
+          },
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "repair_iteration_budget"
+          }
+        }
+      ]
     },
     {
       "name": "routed_candidate_physical_checks",
@@ -3442,28 +2814,6 @@
           "enabled_default": true,
           "limit_config": "WIRE_LENGTH_THRESHOLD",
           "when": "otherwise"
-        },
-        {
-          "metric": "disconnected_required_pins",
-          "operator": "==",
-          "limit": 0,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 10799
-          },
-          "unit": "count"
-        },
-        {
-          "metric": "route_short_overlap_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 10820
-          },
-          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3527,18 +2877,7 @@
           "when": "analog_physical and not digital_physical"
         },
         {
-          "metric": "route__antenna_violation__count",
-          "operator": "<=",
-          "limit": 0,
-          "source": {
-            "file": "programs/gds_antenna_deck_check.py",
-            "line": 1307
-          },
-          "unit": "count",
-          "when": "digital_physical"
-        },
-        {
-          "metric": "antenna_net_pin_violations",
+          "metric": "antenna__violating__nets",
           "operator": "==",
           "limit": 0,
           "when": "physical",
@@ -3549,18 +2888,15 @@
           "unit": "count"
         },
         {
-          "metric": "antenna_rule_coverage",
-          "operator": "covers_all",
-          "limit": null,
+          "metric": "antenna__violating__pins",
+          "operator": "==",
+          "limit": 0,
           "when": "physical",
           "source": {
             "file": "flow/flow109.json",
-            "line": 10998
+            "line": 10978
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "antenna_rule_coverage"
-          }
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -3589,7 +2925,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 5377
-          }
+          },
+          "tool_gap": "Yosys.EQY native final partition status; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3609,20 +2946,6 @@
       },
       "checks": [
         {
-          "metric": "implemented_crossing_census",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 11287
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "implemented_crossing_census"
-          }
-        },
-        {
           "metric": "new_unexplained_crossings",
           "operator": "==",
           "limit": 0,
@@ -3631,7 +2954,8 @@
             "file": "flow/flow109.json",
             "line": 11307
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Yosys implemented-netlist CDC graph and protocol assertions; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3651,20 +2975,6 @@
       },
       "checks": [
         {
-          "metric": "implemented_upf_semantics",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_power_intent and physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 11429
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "implemented_upf_semantics"
-          }
-        },
-        {
           "metric": "aon_supply_path_errors",
           "operator": "==",
           "limit": 0,
@@ -3673,7 +2983,8 @@
             "file": "flow/flow109.json",
             "line": 11450
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native engineering tool report for implemented power intent consistency; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "power_sequence_behavior_errors",
@@ -3684,7 +2995,8 @@
             "file": "flow/flow109.json",
             "line": 11471
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native engineering tool report for implemented power intent consistency; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "multivoltage_timing",
@@ -3698,7 +3010,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "multivoltage_timing"
-          }
+          },
+          "tool_gap": "Native engineering tool report for implemented power intent consistency; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3751,23 +3064,10 @@
             "line": 11676
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "candidate_parasitic_coverage"
-          }
-        },
-        {
-          "metric": "si_applicability_evidence",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 11715
+            "kind": "native_tool_population",
+            "tool": "OpenSTA report_parasitic_annotation annotated and unannotated native nets"
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "si_applicability_evidence"
-          }
+          "tool_gap": "OpenSTA report_parasitic_annotation annotated and unannotated native nets. Wire only this native report; both sides must come from the tool."
         }
       ],
       "legacy_id": {
@@ -3815,20 +3115,6 @@
       },
       "checks": [
         {
-          "metric": "si_required_windows",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical and requires_si",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 11874
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "si_required_windows"
-          }
-        },
-        {
           "metric": "coupling_noise_delay_bounds",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -3840,7 +3126,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "coupling_noise_delay_bounds"
-          }
+          },
+          "tool_gap": "Native engineering tool report for candidate signal integrity; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3858,36 +3145,7 @@
         "kind": "native_report",
         "from": "post_route_timing_repair"
       },
-      "checks": [
-        {
-          "metric": "candidate_setup_hold_drv",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 12025
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "candidate_setup_hold_drv"
-          }
-        },
-        {
-          "metric": "candidate_sdf_generation",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 12046
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "candidate_sdf_generation"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D49",
         "native": [
@@ -3918,7 +3176,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "path_fault_coverage"
-          }
+          },
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3951,7 +3210,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "sdd_graded_fault_coverage"
-          }
+          },
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3984,7 +3244,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "final_test_pattern_coverage"
-          }
+          },
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "test_protocol_errors",
@@ -3995,7 +3256,8 @@
             "file": "flow/flow109.json",
             "line": 12515
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4015,20 +3277,6 @@
       },
       "checks": [
         {
-          "metric": "candidate_gls_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 12645
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "candidate_gls_scenarios"
-          }
-        },
-        {
           "metric": "candidate_sdf_annotation",
           "operator": "covers_all",
           "limit": null,
@@ -4038,9 +3286,10 @@
             "line": 12665
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "candidate_sdf_annotation"
-          }
+            "kind": "native_tool_population",
+            "tool": "Native simulator SDF annotated and unannotated delay counts"
+          },
+          "tool_gap": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool."
         },
         {
           "metric": "gls_failures",
@@ -4051,7 +3300,8 @@
             "file": "flow/flow109.json",
             "line": 12686
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Icarus/Verilator gate-level simulation with native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4101,7 +3351,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "postlayout_spice_targets"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "critical_path_correlation",
@@ -4115,7 +3366,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "critical_path_correlation"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4128,33 +3380,19 @@
     {
       "name": "functional_activity_and_external_loads",
       "title": "Functional activity and external loads",
-      "when": "physical",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": null,
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "functional_mission_modes",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 13026
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "functional_mission_modes"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D55",
         "native": []
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "candidate_power_analysis",
@@ -4192,20 +3430,6 @@
       },
       "checks": [
         {
-          "metric": "power_activity_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 13237
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "power_activity_coverage"
-          }
-        },
-        {
           "metric": "per_mode_rail_average_peak_power",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -4217,7 +3441,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "per_mode_rail_average_peak_power"
-          }
+          },
+          "tool_gap": "Native engineering tool report for candidate power analysis; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4276,20 +3501,6 @@
           "limit_note": "Native PSM worst drop divided by the Liberty supply voltage."
         },
         {
-          "metric": "rail_source_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical and requires_ir",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 13440
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "rail_source_coverage"
-          }
-        },
-        {
           "metric": "static_dynamic_ir_limits",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -4301,7 +3512,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "static_dynamic_ir_limits"
-          }
+          },
+          "tool_gap": "OpenROAD PDNSim static and dynamic IR native analysis; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4356,7 +3568,8 @@
           "source": {
             "file": "programs/flow109_final_electrical.py",
             "line": 123
-          }
+          },
+          "tool_gap": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "em_current_lifetime_limits",
@@ -4370,21 +3583,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "em_current_lifetime_limits"
-          }
-        },
-        {
-          "metric": "current_temperature_model_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical and requires_em",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 13659
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "current_temperature_model_coverage"
-          }
+          "tool_gap": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4406,20 +3606,6 @@
       },
       "checks": [
         {
-          "metric": "candidate_esd_supply_paths",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical and requires_perc",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 13793
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "candidate_esd_supply_paths"
-          }
-        },
-        {
           "metric": "candidate_perc_latchup_errors",
           "operator": "==",
           "limit": 0,
@@ -4428,7 +3614,8 @@
             "file": "flow/flow109.json",
             "line": 13814
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native PERC/ERC and reliability solver reports; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4450,20 +3637,6 @@
       },
       "checks": [
         {
-          "metric": "substrate_supply_model_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "mixed_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 13956
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "substrate_supply_model_coverage"
-          }
-        },
-        {
           "metric": "noise_budget_limits",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -4475,7 +3648,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "noise_budget_limits"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4495,20 +3669,6 @@
       },
       "checks": [
         {
-          "metric": "candidate_ams_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "mixed_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 14148
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "candidate_ams_scenarios"
-          }
-        },
-        {
           "metric": "candidate_ams_performance",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -4520,7 +3680,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "candidate_ams_performance"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4621,17 +3782,6 @@
           "enabled_by": "ERROR_ON_XOR_ERROR",
           "enabled_default": true,
           "when": "otherwise"
-        },
-        {
-          "metric": "unresolved_gds_cells",
-          "operator": "==",
-          "limit": 0,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 14372
-          },
-          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -4651,19 +3801,7 @@
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "missing_duplicate_macro_instances",
-          "operator": "==",
-          "limit": 0,
-          "when": "mixed_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 14521
-          },
-          "unit": "count"
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "M07",
         "native": [
@@ -4694,7 +3832,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "seal_dieid_rules"
-          }
+          },
+          "tool_gap": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "seal_core_clearance",
@@ -4708,7 +3847,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "seal_core_clearance"
-          }
+          },
+          "tool_gap": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4784,31 +3924,6 @@
           "enabled_by": "ERROR_ON_KLAYOUT_DENSITY",
           "enabled_default": true,
           "when": "ic"
-        },
-        {
-          "metric": "fill_density_rules",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 14877
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "fill_density_rules"
-          }
-        },
-        {
-          "metric": "fill_keepout_violations",
-          "operator": "==",
-          "limit": 0,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 14897
-          },
-          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -4827,42 +3942,43 @@
         "from": "final_electrical_analysis",
         "scope": "Native summary is emitted after the final native checkers, following Classic and Chip."
       },
-      "checks": [
+      "checks": [],
+      "legacy_id": {
+        "registry": "D63",
+        "native": [
+          "35"
+        ]
+      },
+      "observations": [
         {
           "metric": "dfm_density_lithography_cmp_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical",
+          "native_metrics": [
+            "klayout__density_error__count"
+          ],
           "source": {
             "file": "flow/flow109.json",
             "line": 15053
           },
-          "limit_from": {
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "dfm_density_lithography_cmp_targets"
           }
         },
         {
           "metric": "advanced_dfm_provider_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical and requires_advanced_dfm",
+          "native_metrics": [],
           "source": {
             "file": "flow/flow109.json",
             "line": 15090
           },
-          "limit_from": {
+          "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+          "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "advanced_dfm_provider_targets"
           }
         }
-      ],
-      "legacy_id": {
-        "registry": "D63",
-        "native": [
-          "35"
-        ]
-      }
+      ]
     },
     {
       "name": "finishing_geometry_fidelity",
@@ -4900,7 +4016,8 @@
             "file": "flow/flow109.json",
             "line": 15246
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "KLayout XOR of pre/post-finishing geometry with native difference count; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -4995,45 +4112,6 @@
           "enabled_by": "ERROR_ON_LVS_ERROR",
           "enabled_default": true,
           "when": "otherwise"
-        },
-        {
-          "metric": "final_drc_lvs_erc_antenna_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 15427
-          },
-          "unit": "count"
-        },
-        {
-          "metric": "full_device_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 15446
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "full_device_coverage"
-          }
-        },
-        {
-          "metric": "final_density_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 15465
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "final_density_targets"
-          }
         }
       ],
       "legacy_id": {
@@ -5062,21 +4140,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 7013
-          }
-        },
-        {
-          "metric": "final_esd_supply_topology",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical and requires_perc",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 15608
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "final_esd_supply_topology"
-          }
+          "tool_gap": "Native PERC/ERC and reliability solver reports; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5107,7 +4172,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "package_rc_thermal_validity"
-          }
+          },
+          "tool_gap": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5136,9 +4202,10 @@
             "line": 15868
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "interdie_rc_rlc_thermal_coverage"
-          }
+            "kind": "native_tool_population",
+            "tool": "Native assembly extractor/model solver extracted and unannotated interconnect population"
+          },
+          "tool_gap": "Native assembly extractor/model solver extracted and unannotated interconnect population. Wire only this native report; both sides must come from the tool."
         },
         {
           "metric": "assembly_model_correlation",
@@ -5152,7 +4219,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "assembly_model_correlation"
-          }
+          },
+          "tool_gap": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5209,7 +4277,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "fill_sensitive_reference_correlation"
-          }
+          },
+          "tool_gap": "OpenRCX/Magic extraction and native parasitic annotation report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "final_parasitic_corner_coverage",
@@ -5221,9 +4290,10 @@
             "line": 16099
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "final_parasitic_corner_coverage"
-          }
+            "kind": "native_tool_population",
+            "tool": "OpenSTA per-corner native parasitic annotation reports"
+          },
+          "tool_gap": "OpenSTA per-corner native parasitic annotation reports. Wire only this native report; both sides must come from the tool."
         }
       ],
       "legacy_id": {
@@ -5342,34 +4412,6 @@
           "when": "otherwise"
         },
         {
-          "metric": "final_mission_scenario_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16351
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "final_mission_scenario_coverage"
-          }
-        },
-        {
-          "metric": "final_timing_si_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "digital_physical or (assembly_only and child_has_digital)",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16374
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "final_timing_si_targets"
-          }
-        },
-        {
           "metric": "final_analog_mission_targets",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -5381,35 +4423,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "final_analog_mission_targets"
-          }
-        },
-        {
-          "metric": "final_ir_em_thermal_aging_targets",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical and (requires_ir or requires_em or requires_thermal or requires_aging)",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16422
           },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "final_ir_em_thermal_aging_targets"
-          }
-        },
-        {
-          "metric": "final_sdf_annotation",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16446
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "final_sdf_annotation"
-          }
+          "tool_gap": "Native OpenSTA, SPICE, thermal and aging solver reports; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "thermal_temperature_gradient_targets",
@@ -5423,21 +4438,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "thermal_temperature_gradient_targets"
-          }
-        },
-        {
-          "metric": "thermal_aware_em_timing_feedback",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical and requires_thermal",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16492
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "thermal_aware_em_timing_feedback"
-          }
+          "tool_gap": "Native OpenSTA, SPICE, thermal and aging solver reports; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "aged_timing_margin_targets",
@@ -5451,7 +4453,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "aged_timing_margin_targets"
-          }
+          },
+          "tool_gap": "Native OpenSTA, SPICE, thermal and aging solver reports; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "aged_analog_margin_targets",
@@ -5465,21 +4468,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "aged_analog_margin_targets"
-          }
-        },
-        {
-          "metric": "aging_mission_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical and requires_aging",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16560
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "aging_mission_coverage"
-          }
+          "tool_gap": "Native OpenSTA, SPICE, thermal and aging solver reports; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5506,7 +4496,8 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 199
-          }
+          },
+          "tool_gap": "Icarus gate-level simulation and native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "final_sdf_annotation",
@@ -5518,23 +4509,10 @@
             "line": 16702
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "final_sdf_annotation"
-          }
-        },
-        {
-          "metric": "final_gls_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16722
+            "kind": "native_tool_population",
+            "tool": "Native simulator SDF annotated and unannotated delay counts"
           },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "final_gls_scenarios"
-          }
+          "tool_gap": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool."
         }
       ],
       "legacy_id": {
@@ -5554,20 +4532,6 @@
       },
       "checks": [
         {
-          "metric": "final_ams_scenarios",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "mixed_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16893
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "final_ams_scenarios"
-          }
-        },
-        {
           "metric": "final_ams_noise_settling_calibration",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -5579,7 +4543,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "final_ams_noise_settling_calibration"
-          }
+          },
+          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5607,7 +4572,8 @@
             "file": "flow/flow109.json",
             "line": 17047
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "export_roundtrip_errors",
@@ -5618,7 +4584,8 @@
             "file": "flow/flow109.json",
             "line": 17086
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5655,20 +4622,6 @@
       },
       "checks": [
         {
-          "metric": "final_security_requirements",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "requires_security and physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 17239
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "final_security_requirements"
-          }
-        },
-        {
           "metric": "scan_debug_access_violations",
           "operator": "==",
           "limit": 0,
@@ -5677,7 +4630,8 @@
             "file": "flow/flow109.json",
             "line": 17262
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "SymbiYosys security property and reachability tasks; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "final_analog_security_targets",
@@ -5691,7 +4645,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "final_analog_security_targets"
-          }
+          },
+          "tool_gap": "SymbiYosys security property and reachability tasks; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5702,68 +4657,40 @@
     {
       "name": "analog_block_signoff",
       "title": "Analog block signoff",
-      "when": "has_analog",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "analog_flow_compliance_check.py",
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "analog_endpoint_evidence",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "has_analog",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 17435
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "analog_endpoint_evidence"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "A19",
         "native": [
           "A8"
         ]
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "mixed_signal_signoff",
       "title": "Mixed-signal signoff",
-      "when": "mixed",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "mixed_signal_signoff_run.py",
         "function": null,
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "mixed_requirement_evidence",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "mixed",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 17600
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "mixed_requirement_evidence"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "M09",
         "native": [
           "M4"
         ]
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "assembly_physical_and_cross_die_signoff",
@@ -5786,9 +4713,10 @@
             "line": 17723
           },
           "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "crossdie_system_dft_coverage"
-          }
+            "kind": "native_tool_population",
+            "tool": "Native ATPG detected faults and total modeled faults report"
+          },
+          "tool_gap": "Native ATPG detected faults and total modeled faults report. Wire only this native report; both sides must come from the tool."
         },
         {
           "metric": "assembly_pv_errors",
@@ -5799,7 +4727,8 @@
             "file": "flow/flow109.json",
             "line": 17745
           },
-          "unit": "count"
+          "unit": "count",
+          "tool_gap": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "interdie_timing_pi_thermal_targets",
@@ -5813,7 +4742,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "interdie_timing_pi_thermal_targets"
-          }
+          },
+          "tool_gap": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "assembly_alignment_stackup_errors",
@@ -5824,21 +4754,8 @@
             "file": "flow/flow109.json",
             "line": 17789
           },
-          "unit": "count"
-        },
-        {
-          "metric": "whole_assembly_connectivity_pv_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "assembly_only",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 17810
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "whole_assembly_connectivity_pv_coverage"
-          }
+          "unit": "count",
+          "tool_gap": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5849,7 +4766,7 @@
     {
       "name": "package_and_test_readiness",
       "title": "Package and test readiness",
-      "when": "package_interface",
+      "when": "package_interface and package_declared",
       "tool": {
         "kind": "adapter",
         "program": "flow109_package_ready.py",
@@ -5861,7 +4778,7 @@
           "metric": "escape_bond_feasibility",
           "operator": "within_declared_bounds",
           "limit": null,
-          "when": "package_interface",
+          "when": "package_declared",
           "source": {
             "file": "flow/flow109.json",
             "line": 17993
@@ -5869,52 +4786,15 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "escape_bond_feasibility"
-          }
-        },
-        {
-          "metric": "package_feedback_unresolved",
-          "operator": "==",
-          "limit": 0,
-          "when": "package_interface",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 18016
           },
-          "unit": "count"
-        },
-        {
-          "metric": "test_access_ready",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "package_interface",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 18037
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "test_access_ready"
-          }
-        },
-        {
-          "metric": "package_electrical_feedback_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "package_model_required",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 18058
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "package_electrical_feedback_coverage"
-          }
+          "tool_gap": "Bare die duplicates native DRC/LVS (D). A declared package requires native package/bond geometry analysis."
         }
       ],
       "legacy_id": {
         "registry": "D75",
         "native": []
-      }
+      },
+      "applicability_reason": "Owner ruling 207 bare-die geometry is checked by final native PV; package checks require a declared package."
     },
     {
       "name": "design_safety_case",
@@ -5928,20 +4808,6 @@
       },
       "checks": [
         {
-          "metric": "safety_evidence_trace",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "requires_functional_safety",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 18167
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "safety_evidence_trace"
-          }
-        },
-        {
           "metric": "redundancy_separation_dfa",
           "operator": "within_declared_bounds",
           "limit": null,
@@ -5953,7 +4819,8 @@
           "limit_from": {
             "kind": "design_or_pdk",
             "metric": "redundancy_separation_dfa"
-          }
+          },
+          "tool_gap": "Native fault-injection simulation and diagnostic coverage report; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -5964,7 +4831,7 @@
     {
       "name": "signoff_aggregation",
       "title": "Signoff aggregation",
-      "when": "always",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "signoff_metrics_aggregate.py",
@@ -5977,12 +4844,13 @@
         "native": [
           "37.4"
         ]
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "compliance_and_final_adoption",
       "title": "Compliance and final adoption",
-      "when": "always",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "execution_release_worker.py",
@@ -5995,7 +4863,8 @@
         "native": [
           "36"
         ]
-      }
+      },
+      "applicability_reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
     },
     {
       "name": "ip_release_views_and_documentation",
@@ -6011,36 +4880,7 @@
           "nl": ".v"
         }
       },
-      "checks": [
-        {
-          "metric": "ip_endpoint_views",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "ip",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 18720
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "ip_endpoint_views"
-          }
-        },
-        {
-          "metric": "ip_integration_limits_documented",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "ip",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 18739
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "ip_integration_limits_documented"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D79",
         "native": [
@@ -6051,7 +4891,7 @@
     {
       "name": "tapeout_precheck",
       "title": "Tapeout precheck",
-      "when": "ic",
+      "when": "ic and provider_deck_declared",
       "tool": {
         "kind": "adapter",
         "program": "tapeout_precheck.py",
@@ -6063,26 +4903,13 @@
           "metric": "provider_design_rule_errors",
           "operator": "==",
           "limit": 0,
-          "when": "ic",
+          "when": "provider_deck_declared",
           "source": {
             "file": "flow/flow109.json",
             "line": 18870
           },
-          "unit": "count"
-        },
-        {
-          "metric": "provider_delivery_items",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "ic",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 18889
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "provider_delivery_items"
-          }
+          "unit": "count",
+          "tool_gap": "Without a provider deck this duplicates final native DRC (D). A declared provider deck requires its native DRC run."
         }
       ],
       "legacy_id": {
@@ -6090,7 +4917,8 @@
         "native": [
           "37.5ic"
         ]
-      }
+      },
+      "applicability_reason": "Owner ruling 207 provider checks duplicate native DRC unless a provider deck is declared."
     },
     {
       "name": "design_release",
@@ -6102,22 +4930,7 @@
         "function": "execute",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "release_required_items",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "always",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 19013
-          },
-          "required_from": {
-            "kind": "design_or_tool_population",
-            "metric": "release_required_items"
-          }
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D81",
         "native": [

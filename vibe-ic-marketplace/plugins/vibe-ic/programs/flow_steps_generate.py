@@ -113,6 +113,56 @@ def write_tsv(path, rows, fields):
         writer.writerows(rows)
 
 
+def classify_checks(table, native):
+    """Apply the owner-reviewed migration facts to the complete generated table."""
+    mapping, dropped, work = [], [], []
+    for row in table["steps"]:
+        facts = native["check_classifications"][row["name"]]
+        checks = row["checks"]
+        if [c["metric"] for c in checks] != [f["old_name"] for f in facts]:
+            raise ValueError(f"Reclassify the changed checks in {row['name']}")
+        retained, observations = [], []
+        for check, fact in zip(checks, facts):
+            if fact.get("when"):
+                check = {**check, "when": fact["when"]}
+            category = fact["class"]
+            if category not in {"N", "X", "D", "T", "R", "P"}:
+                raise ValueError(f"Unknown check class {category}")
+            names = fact.get("native_metrics", [])
+            entry = {"step": row["name"], "old_name": check["metric"], "class": category,
+                     "new_native_name_or_reason": ", ".join(names) or fact["reason"],
+                     "limit": json.dumps(check["limit"]), "source": json.dumps(check["source"])}
+            mapping.append(entry)
+            if category == "N":
+                if not names:
+                    raise ValueError(f"Native metric missing for {row['name']}.{check['metric']}")
+                retained.extend({**check, "metric": name} for name in names)
+            elif category == "T":
+                retained.append({**check, "tool_gap": fact["reason"]})
+                if check["operator"] == "covers_all":
+                    if not fact.get("native_population"):
+                        raise ValueError(f"Native population report missing for {row['name']}.{check['metric']}")
+                    retained[-1]["required_from"] = {"kind": "native_tool_population",
+                                                     "tool": fact["native_population"]}
+                work.append({"step": row["name"], "old_name": check["metric"],
+                             "tool_and_work": fact["reason"]})
+            elif category == "R":
+                observations.append({"metric": check["metric"], "native_metrics": names,
+                                     "source": check["source"], "reason": fact["reason"],
+                                     "declared_limit_from": check.get("limit_from", {})})
+            elif category == "P":
+                dropped.append({"step": row["name"], "old_name": check["metric"],
+                                "class": category, "what_still_protects": fact["reason"]})
+        row["checks"] = retained
+        if observations:
+            row["observations"] = observations
+        if row["name"] in native.get("row_applicability", {}):
+            selection = native["row_applicability"][row["name"]]
+            row["when"] = selection["when"]
+            row["applicability_reason"] = selection["reason"]
+    return mapping, dropped, work
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path, default=ROOT / "flow" / "flow109.json")
@@ -134,17 +184,41 @@ def main():
                 "file": str(args.registry.relative_to(ROOT)) if args.registry.is_relative_to(ROOT) else str(args.registry),
                 "line": raw.count("\n", 0, position) + 1}
     table, dropped, unmeasured = generate(registry, native)
+    classifications = []
+    if "check_classifications" in native:
+        classifications, paper, work = classify_checks(table, native)
+        dropped = [{"step": r["step"], "old_name": r["metric"], "class": "P",
+                    "what_still_protects": r["reason"]} for r in dropped] + paper
+        unmeasured = [{"step": row["name"], "metric": c["metric"], "operator": c["operator"],
+                       "required_source": json.dumps(c.get("required_from", c.get("limit_from", {}))),
+                       "searched_sources": json.dumps(native.get("searched_sources", {}).get(row["name"], []))}
+                      for row in table["steps"] for c in row["checks"] if c["limit"] is None]
     args.output.write_text(json.dumps(table, indent=2) + "\n")
     if args.reports:
         args.reports.mkdir(parents=True, exist_ok=True)
-        write_tsv(args.reports / "DROPPED.tsv", dropped, ["step", "metric", "operator", "reason"])
+        if classifications:
+            write_tsv(args.reports / "CHECK_MAP.tsv", classifications,
+                      ["step", "old_name", "class", "new_native_name_or_reason", "limit", "source"])
+            write_tsv(args.reports / "DROPPED.tsv", dropped,
+                      ["step", "old_name", "class", "what_still_protects"])
+            write_tsv(args.reports / "REAL_WORK.tsv", work, ["step", "old_name", "tool_and_work"])
+            requests = [r for r in classifications if r["class"] in {"R", "P"}]
+            fields = ["step", "old_name", "class", "new_native_name_or_reason"]
+            (args.reports / "DECISION-REQUEST.md").write_text(
+                "# Ruling 207 R/P classification for owner review\n\n"
+                "Provisional R/P classifications across every table row. Numeric signoff limits remain unchanged. "
+                "R observations do not block without a declared bound. P entries are removed paper obligations. "
+                "N/X/D/T work continues.\n\n```tsv\n" + "\t".join(fields) + "\n"
+                + "".join("\t".join(r[k] for k in fields) + "\n" for r in requests) + "```\n")
+        else:
+            write_tsv(args.reports / "DROPPED.tsv", dropped, ["step", "metric", "operator", "reason"])
         write_tsv(args.reports / "UNMEASURED_METRICS.tsv", unmeasured,
                   ["step", "metric", "operator", "required_source", "searched_sources"])
         rows = [{"step": s["name"], "metric": c["metric"], "operator": c["operator"],
                  "limit": json.dumps(c["limit"]), "source": json.dumps(c["source"])}
                 for s in table["steps"] for c in s["checks"]]
         write_tsv(args.reports / "LIMITS.tsv", rows, ["step", "metric", "operator", "limit", "source"])
-    print(f"Wrote {len(table['steps'])} steps; dropped {len(dropped)} wrapper obligations; preserved the original operators.")
+    print(f"Wrote {len(table['steps'])} steps; dropped {len(dropped)} wrapper obligations; preserved numeric limits.")
 
 
 if __name__ == "__main__":
