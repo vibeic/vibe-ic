@@ -378,12 +378,12 @@ def layout_step(directory, tool, commands, state, config, step_class, metric, ov
 
 def gls_signal_netlist(directory, netlist, text, used, closure, config, commands):
     import sdf_gate_sim as native
-    from _pad_ring import parse_lef_pin_roles
+    from _pad_ring import parse_lef_pin_roles, parse_verilog_rail_bridges
     from _specrtl_common import parse_rtl_ports
     from flow_chip_inputs import _paths
     from flow109_netlist_cdc import _word
 
-    roles, connections, candidates = {}, {}, {}
+    roles, connections, removed = {}, {}, set()
     for key in ("PAD_LEFS", "CELL_LEFS", "EXTRA_LEFS"):
         for path in _paths(config.get(key)):
             if path.is_file():
@@ -392,43 +392,28 @@ def gls_signal_netlist(directory, netlist, text, used, closure, config, commands
         connections.setdefault(instance[1], set()).update(
             pin for pin, _ in native._CONN_RE.findall(instance[3]))
     for path in closure["files"]:
-        for module in native._MODULE_BODY_RE.finditer(native.strip_comments(Path(path).read_text())):
+        code = native.strip_comments(Path(path).read_text())
+        bridges = parse_verilog_rail_bridges(code)
+        for module in native._MODULE_BODY_RE.finditer(code):
             name = module[2]
-            if module[1] != "module" or name not in used or name not in roles:
+            if name not in bridges or name not in used or name not in roles:
+                continue
+            if "`" in code[:module.end()]:
                 continue
             _, ports = parse_rtl_ports(module[0], name)
             names = {port.name for port in ports}
             if (ports and connections.get(name, set()) - names
                     and all(port.direction == "inout" and roles[name].get(port.name, ("", ""))[1]
                             in {"POWER", "GROUND"} for port in ports)):
-                candidates[name] = module[0]
-    if not candidates:
-        return Path(netlist), [], []
-    models, graph = directory / "passive_models.v", directory / "passive_models.json"
-    models.write_text("\n".join(candidates.values()) + "\n")
-    script = directory / "passive_models.ys"
-    script.write_text(f"read_verilog -sv {_word(models)}\nproc\nwrite_json {_word(graph)}\n")
-    checked = commands.run(["yosys", "-s", script])
-    reports = [models, script, graph]
-    if checked is None or checked.returncode or not graph.is_file():
-        return Path(netlist), [], reports
-    removed = []
-    for name, module in json.loads(graph.read_text())["modules"].items():
-        ports = module.get("ports", {})
-        if (ports and not module.get("cells") and not module.get("memories")
-                and not any("init" in wire.get("attributes", {}) for wire in module.get("netnames", {}).values())
-                and all(port["direction"] == "inout" and roles[name].get(pin, ("", ""))[1]
-                        in {"POWER", "GROUND"} and all(type(bit) is int for bit in port["bits"])
-                        for pin, port in ports.items())):
-            removed.append(name)
+                removed.add(name)
     if not removed:
-        return Path(netlist), [], reports
+        return Path(netlist), [], []
     signal, projection = directory / "signal_netlist.v", directory / "signal_netlist.ys"
     projection.write_text(f"read_verilog -sv -icells {_word(netlist)}\n"
         + "\n".join("delete t:" + name for name in sorted(removed))
         + f"\nwrite_verilog -noattr {_word(signal)}\n")
     projected = commands.run(["yosys", "-s", projection])
-    reports.extend([projection, signal])
+    reports = [projection, signal]
     if projected is None or projected.returncode or not signal.is_file():
         return Path(netlist), [], reports
     return signal, sorted(removed), reports
@@ -484,9 +469,6 @@ def gls(project, directory, tool, commands, *, state, config):
     signal_netlist, physical, projection_reports = gls_signal_netlist(
         directory, netlist, text, used, closure, config, commands)
     signal_text = signal_netlist.read_text()
-    if physical:
-        used = native.netlist_used_cells(signal_text)
-        closure = native.verilog_model_closure(declared, used)
     model_text = "\n".join(Path(path).read_text() for path in closure["files"])
     stubs = native.missing_empty_cell_stubs(signal_text, used, model_text)
     unresolved = sorted(set(closure["unresolved"]) - set(stubs))

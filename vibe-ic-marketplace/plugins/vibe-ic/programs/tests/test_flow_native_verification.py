@@ -616,6 +616,9 @@ def test_gls_accepts_native_physical_cell_models(tmp_path, connected):
     ("logic", False, "FAIL"), ("state", False, "FAIL"),
     ("signal", False, "FAIL"), ("constant", False, "FAIL"),
     ("init", False, "FAIL"), ("io", False, "FAIL"),
+    ("macro", False, "FAIL"), ("conditional", False, "FAIL"),
+    ("unused_signal", False, "FAIL"), ("ansi", False, "FAIL"),
+    ("header_macro", False, "FAIL"),
 ])
 def test_gls_omits_only_passive_supply_connectors(tmp_path, kind, different, expected):
     if not all(shutil.which(name) for name in ("yosys", "iverilog", "vvp")):
@@ -623,7 +626,8 @@ def test_gls_omits_only_passive_supply_connectors(tmp_path, kind, different, exp
     project, directory = tmp_path / "project", tmp_path / "run"
     directory.mkdir()
     state, config = gls_fixture(project, different=different)
-    model = Path(config["CELL_VERILOG_MODELS"][0])
+    model = project / "connector.v"
+    config["PAD_VERILOG_MODELS"] = [str(model)]
     behavior = {
         "passive": "assign p1=p0; assign g1=g0;",
         "signal": "assign p1=p0; assign g1=g0;",
@@ -632,15 +636,35 @@ def test_gls_omits_only_passive_supply_connectors(tmp_path, kind, different, exp
         "constant": "assign p1=1'b1; assign g1=g0;",
         "init": "reg q=1'b0; assign p1=q; assign g1=g0;",
         "io": "assign p1=p0; assign g1=g0;",
+        "macro": "`ifdef ACTIVE\nreg q; always @(posedge p0) q<=p1; assign g1=q;\n"
+                 "`else\nassign p1=p0; assign g1=g0;\n`endif",
+        "conditional": "reg q; always @(posedge p0) q<=p1; assign g1=q;",
+        "unused_signal": "assign p1=p0; assign g1=g0;",
+        "ansi": "assign p1=p0; assign g1=g0;",
+        "header_macro": "assign p1=p0; assign g1=g0;",
     }[kind]
-    ports = "input p0,output p1,inout g0,g1" if kind == "io" else "inout p0,p1,g0,g1"
-    model.write_text(model.read_text() +
-        f"module connector({ports});\n" + behavior + "\nendmodule\n")
+    names = "p0,p1,g0,g1" + (",unused" if kind == "unused_signal" else "")
+    declarations = ("input p0; output p1; inout g0,g1;" if kind == "io" else f"inout {names};")
+    header = f"module connector({names});\n{declarations}\n"
+    source = header + behavior + "\nendmodule\n"
+    if kind == "ansi":
+        source = "module connector(inout p0,p1,g0,g1);\n" + behavior + "\nendmodule\n"
+    elif kind == "macro":
+        source = "`define ACTIVE\n" + source
+    elif kind == "conditional":
+        source = "`define ACTIVE\n`ifdef ACTIVE\n" + source + "`else\n" + header + \
+                 "assign p1=p0; assign g1=g0;\nendmodule\n`endif\n"
+    elif kind == "header_macro":
+        library = Path(config["CELL_VERILOG_MODELS"][0])
+        library.write_text(library.read_text() + "\n`define CONNECTOR_PORTS p0,p1,g0,g1\n")
+        source = "module connector(`CONNECTOR_PORTS);\n" + declarations + "\n" + behavior + "\nendmodule\n"
+    model.write_text(source)
     lef = project / "physical.lef"
     lef.write_text("MACRO connector\n" + "".join(
         f" PIN {pin}\n  DIRECTION INOUT ;\n  USE {use} ;\n END {pin}\n"
-        for pin, use in (("p0", "POWER"), ("p1", "SIGNAL" if kind == "signal" else "POWER"),
-                         ("g0", "GROUND"), ("g1", "GROUND"))) + "END connector\n")
+        for pin, use in [("p0", "POWER"), ("p1", "SIGNAL" if kind == "signal" else "POWER"),
+                         ("g0", "GROUND"), ("g1", "GROUND")]
+        + ([("unused", "SIGNAL")] if kind == "unused_signal" else [])) + "END connector\n")
     config["PAD_LEFS"] = [str(lef)]
     netlist = Path(state["nl"])
     netlist.write_text(netlist.read_text().replace("endmodule", "wire v0,v1,g0,g1,aux0,aux1;\n"
@@ -657,6 +681,8 @@ def test_gls_omits_only_passive_supply_connectors(tmp_path, kind, different, exp
         assert result["metrics"]["sdf_delays_applied"] > 0
         assert result["metrics"]["sdf_annotation_errors"] == 0
         assert bool(result["metrics"]["gls_failures"]) == different
+    else:
+        assert json.loads((directory / "gls.json").read_text())["physical_only_types_omitted"] == []
 
 
 def test_gls_uses_the_native_sdc_clock(tmp_path):
