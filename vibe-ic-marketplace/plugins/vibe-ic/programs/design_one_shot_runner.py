@@ -29990,6 +29990,8 @@ def main() -> int:
     _io.demote_verdict(summary)    # a step the flow did not do: never PASS
     import ai_signed_judgement as _ai_judgement
     _ai_steps = ("1", "3", "4", "5")
+    if _bounded and _window_step_ids() == {'4'}:
+        _ai_steps = tuple(step for step in _ai_steps if step != '4')
     if _bounded:
         _ai_steps = tuple(s for s in _ai_steps if s in _window_step_ids())
     summary["ai_judgements"] = _ai_judgement.pending(project, _ai_steps)
