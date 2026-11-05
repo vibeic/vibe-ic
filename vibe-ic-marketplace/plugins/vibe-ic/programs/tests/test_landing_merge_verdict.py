@@ -8,33 +8,6 @@ pushes nothing from a local clone, so neither ever fires. Measured on
 Branch not protected`, no required status check exists. There is no
 server-side check to fall back on and none can be created.
 
-`tools/gatekeeper-verify-merge.sh` puts the existing gates on the path that
-lands code. This file gates the DECISION that script defers to
-(`landing_merge_verdict.decide`) and the plumbing that feeds it.
-
-WHAT THIS FILE REFUSES
-======================
-1. **A gate that cannot refuse.** Nine independent refusal reasons, each
-   asserted on the VERDICT rather than on the printed text, so the mutant that
-   neuters only the decision line kills them.
-2. **A gate that refuses everything.** :func:`test_a_known_good_pr_shape_is_allowed`
-   and the end-to-end paired guard: a landing that broke nothing must LAND OK.
-   PR #1020 lost a whole corpus's one true finding to an always-fires mutant
-   hours before #1019 was filed; a landing gate that refuses every landing is a
-   ban, not a check.
-3. **Crediting a silenced failure as a fix.** `failed -> skipped` and
-   `failed -> absent` are refusals. Without that row the differential rewards
-   the cheat it exists to catch: delete the red test and the failed set shrinks.
-4. **A permissive degradation.** Every way the differential can lose
-   information — empty base, no overlap, a truncated candidate run, a selected
-   file that produced no test case — is asserted to go STRICTER, never softer.
-   That list was asked of the CANDIDATE arm only. The BASE arm's completeness
-   is the one that goes SOFTER (vibe-ic#1443): `silenced` and `weakened` are
-   read off what was red or passing ON THE BASE, so a base failure that never
-   got measured is a base failure the branch may delete for free. Measured on
-   `3d13e2c59`, one selected file missing from the base report turned
-   `REFUSE 1 FAILING TEST(S) WERE SILENCED` into `LAND OK` with every other
-   input byte-identical.
 5. **A verdict about the wrong tree.** `gh pr merge --squash` creates the
    forge's merge tree. A rebase that produces a different tree, or a forge that
    disagrees with the local merge, is refused before any suite is run.
@@ -818,10 +791,6 @@ if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
     export GATE_DISPATCH_ATTESTATION_FILE="${GATEKEEPER_HYGIENE_REPORT}.attest"
     . "$ROOT/tools/ci/_gate_dispatch.sh"
     gate_dispatch_init --summary-json "$GATEKEEPER_HYGIENE_REPORT"
-    # One real dispatched gate, not zero: `hygiene_finding_delta` requires an
-    # exact bijection between the gates in PROCESS states and the process
-    # attestations, so a summary with a gate and no attestation is REFUSED and
-    # the verdict cannot compute the differential at all.
     run "a cheap gate" "$ROOT" true
     gate_dispatch_finish
   ) >/dev/null 2>&1 || true

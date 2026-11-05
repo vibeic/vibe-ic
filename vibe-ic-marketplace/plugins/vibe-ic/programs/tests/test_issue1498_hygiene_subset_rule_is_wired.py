@@ -73,12 +73,6 @@ def test_both_arms_are_asked_for_a_hygiene_record():
     """The defect exactly: arm A2 set the variable and arm B did not, so the
     baseline had nothing to be differenced against."""
     src = _VERIFY.read_text(encoding="utf-8")
-    # SPELLING ADAPTED to the hermetic arms 7c376e348 (v1.10.69) introduced. A
-    # land arm no longer writes a host path directly: it is told ONE
-    # container-relative destination, and the parent then seals that arm's
-    # evidence into the arm's own record. What is asserted is unchanged — A2's
-    # record lands in BASE_HYG and B2's in CAND_HYG, so neither side of the
-    # subset rule is a path nothing ever writes.
     assert "--env GATEKEEPER_HYGIENE_REPORT=/evidence/hygiene.json" in src, \
         "no land arm is asked for a hygiene record at all"
     assert ('publish_validated_arm_artifact "$A2_VALIDATION" "$A2_OUTPUT" '

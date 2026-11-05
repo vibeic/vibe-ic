@@ -582,7 +582,7 @@ Each tick must:
      b. `DELIVERED` or any possibly-partial final-write status ends the tick.
         Only `BLOCKED_NO_ACCEPTED_CANDIDATE` permits bounded preparation of a
         candidate without a receipt: run its existing machine gates, Step-2.7,
-        version assignment and `gatekeeper-verify-merge.sh --json` once. Red
+        version assignment once. Red
         requests changes; green exact bytes enter the next atomic manifest.
         Never make an accepted later candidate wait behind this preparation,
         and never rerun acceptance due to waiting, handoff, identity or

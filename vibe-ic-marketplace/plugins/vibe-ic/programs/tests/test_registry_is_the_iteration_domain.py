@@ -214,14 +214,6 @@ REACH_AND_WHAT_BINDS_IT = {
 
 @pytest.mark.consistency
 def test_the_reach_is_pinned_by_MEMBERS_not_by_a_count():
-    """The reach is 1 of 21 — and this pins WHICH 1.
-
-    A bare `== 2` is exactly the defect
-    `population_pin_without_its_member_set` refuses: one module leaving the
-    reach as another enters would keep the number and change the set. So the
-    identities are compared in both directions, and the count is derived from
-    them rather than typed a second time.
-    """
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")

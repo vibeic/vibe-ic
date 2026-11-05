@@ -230,11 +230,6 @@ def test_the_not_run_set_covers_every_state_the_dispatcher_records():
 def test_all_three_consumers_agree_on_what_counts_as_having_run():
     """One name for one thing, checked across every consumer.
 
-    `hygiene_finding_delta` owns the set and computed `ran` from it correctly
-    all along. `gatekeeper_review` and `gate_red_since_check` had each grown a
-    hand-maintained complement of it, and both were wrong in the same
-    direction — a state the dispatcher added was counted as having run, or as
-    being red. This asserts the three now share one definition.
     """
     import hygiene_finding_delta as H
     assert tuple(R._process_states()) == tuple(H.PROCESS_STATES)

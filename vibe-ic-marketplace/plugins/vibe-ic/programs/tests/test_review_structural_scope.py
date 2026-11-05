@@ -62,26 +62,3 @@ def test_real_red_and_incomplete_hygiene_remain_blocking(bounded, monkeypatch, r
 def test_scope_cannot_be_combined_with_substitute_evidence(bounded, tmp_path):
     with pytest.raises(RuntimeError, match='cannot accept'):
         R.review(**bounded, scope='structural', hygiene_record_in=tmp_path/'fake')
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# The adjudicator may not be more certain than its producer.
-#
-# `repo_hygiene_gate` reports "this tree wires no hygiene set" as an honest SKIP
-# that states its denominator (rc -1, "0 gate(s) consulted"), and writes no
-# record because nothing ran. `gate_red_since_gate` read that deliberate absence
-# and returned rc 2 BLOCKING -- "INCOMPLETE — debt evidence unavailable: [Errno
-# 2] No such file or directory: '/tmp/gate_red_since_xxxxxxxx/hygiene.json'".
-# MEASURED on 6883a9c93 that sentence was the SOLE blocker turning MERGE_OK into
-# REQUEST_CHANGES for two reviews of trees that wire no hygiene set, and it names
-# a temp path that never existed, so a reader learns nothing from it.
-#
-# The three tests below are the whole rule, and the second and third are why the
-# first is safe: the blocking direction the original rule was written for is
-# UNCHANGED. Only "the producer said it did not run, and there is indeed no
-# record" is inherited.
-# ---------------------------------------------------------------------------

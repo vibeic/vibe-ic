@@ -16,12 +16,6 @@ arrived and two had not:
        generated_artifact_conflict_resolve.py:391  .write_text(...)
        hygiene_finding_delta.py:420  .write_text(...)
 
-Both are landing-evidence writers: one records whether a merge was resolved or
-REFUSED, the other records which hygiene findings a tree INTRODUCED. Those are
-exactly the artefacts #1082 is about — a reader opens them to learn a verdict,
-and under `.write_text` the final name is created before it is filled, so a
-process that dies mid-write leaves a truncated record that no consumer can tell
-from a complete one.
 
 WHY THIS FILE IS NOT JUST `assert scan_program(...) == []`
 ==========================================================

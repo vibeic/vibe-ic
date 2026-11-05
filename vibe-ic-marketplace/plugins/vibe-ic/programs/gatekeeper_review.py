@@ -964,9 +964,6 @@ def _git_text(cwd: Path, argv: List[str]) -> Optional[str]:
     return out or None
 
 
-#: Where the toolchain profile of a hygiene record lives. ONE spelling, used by
-#: the writer here and by `hygiene_finding_delta`'s reader, so the two cannot
-#: drift into writing and looking for different names.
 
 
 

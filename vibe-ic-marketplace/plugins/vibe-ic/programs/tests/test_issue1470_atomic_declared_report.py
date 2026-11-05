@@ -17,11 +17,6 @@ and wrote their declared report destination with `Path(...).write_text(...)`:
     generated_artifact_conflict_resolve.py:391  .write_text(...)
     hygiene_finding_delta.py:420  .write_text(...)
 
-Both are verdict-bearing. `generated_artifact_conflict_resolve` writes a
-RESOLVED/REFUSED/UNMEASURABLE verdict a landing acts on; `hygiene_finding_delta`
-writes the subset comparison that BLOCKS a landing. A truncated one of those is
-read downstream as the step's own evidence — exactly the lie #1082 exists to
-remove — so the fix is to convert them, never to widen the register.
 
 WHY THE REGISTER IS NOT TOUCHED, AND WHY THAT IS ASSERTED HERE
 ==============================================================
@@ -32,20 +27,6 @@ is the whole ratchet. `test_the_green_was_not_bought_by_widening_the_register`
 is the assertion that pins that, so the cheap fix cannot be reintroduced later
 and still look like this one.
 
-AND THE PROPERTY IS CHECKED AT RUNTIME, NOT ONLY AS A SHAPE
-===========================================================
-Every other test around #1082 checks the SHAPE of the source — that no
-`.write_text` reaches a declared destination. A shape assertion cannot tell a
-converted program from one whose writer no longer runs. So the two runtime
-tests below drive both real programs end to end and check the invariant the
-issue is actually about, in both directions:
-
-    the write succeeds  -> the declared destination exists and parses
-    the write dies      -> the declared destination DOES NOT EXIST at all,
-                           and no temp sibling is left behind
-
-The second is only a measurement because the first exists: a program that wrote
-nothing under any circumstances would satisfy "absent after a death" for free.
 
 chip-AGNOSTIC: nothing here reasons about any IC, vendor, SKU or process.
 """

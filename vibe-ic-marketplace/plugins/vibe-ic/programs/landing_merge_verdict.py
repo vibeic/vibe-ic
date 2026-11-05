@@ -355,8 +355,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if "--service-ready" in argv:
         return _service_main(argv)
-    if "--service-final-write" in argv:
-        return _service_final_main(argv)
+    return _service_final_main(argv)
 
 
 if __name__ == "__main__":
