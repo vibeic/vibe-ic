@@ -184,9 +184,9 @@ def native_lint(project, top_name=None):
 
 
 def finish_frontend(project, plan, args, ic_class, evidence):
-    """Publish the existing owner rows without whole-flow artifact emitters."""
-    import design_one_shot_runner as owner
-    status = owner._V.run_verdict(owner._step_verdicts(plan)).value
+    statuses = {row.status for row in plan}
+    status = ("FAIL" if "FAIL" in statuses else "NOT_MEASURED" if "NOT_MEASURED" in statuses
+              else "PASS_WITH_WAIVERS" if "PASS_WITH_WAIVERS" in statuses else "PASS")
     summary = {"project": str(project), "ic_class": ic_class,
                "ic_class_evidence": evidence, "steps": [asdict(row) for row in plan],
                "verdict": status, "expert_review": "PENDING",
@@ -194,7 +194,7 @@ def finish_frontend(project, plan, args, ic_class, evidence):
     path = Path(project) / "reports/orchestrator/phase2_one_shot.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n")
-    print(f"Native frontend {status}: {path}", flush=True)
+    print(f"Owner tools {status}: {path}", flush=True)
     return 0 if status in ("PASS", "PASS_WITH_WAIVERS") else 1 if status == "FAIL" else 2
 
 
