@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,41 @@ def test_chip_pdn_uses_native_script_and_registry_connections(project, monkeypat
 def test_config_cli_output_is_the_config_the_caller_receives(project):
     output = write_config(project, route="HARDMACRO")
     assert json.loads(output.read_text()) == build_config(project, route="HARDMACRO")
+
+
+def test_cli_records_implementation_choices_and_preserves_source_constraints(project):
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text('{"author_choice": "retained"}')
+    command = [sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
+               "--project", str(project), "--route", "ip", "--set", "FP_CORE_UTIL=35",
+               "--set", 'CTS_CLK_BUFFERS=["native_buf_2","native_buf_4"]']
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    choices = json.loads(declaration.read_text())
+    assert choices["author_choice"] == "retained"
+    config = json.loads(Path(result.stdout.strip()).read_text())
+    assert config["FP_CORE_UTIL"] == 35
+    assert config["CTS_CLK_BUFFERS"] == ["native_buf_2", "native_buf_4"]
+    assert config["CLOCK_PERIOD"] == 17.5
+    assert config["PDK"] == "sky130A"
+    declarations(project, [{"kind": "flow_setting", "token": "FP_CORE_UTIL", "value": "45"}])
+    assert build_config(project, route="ip")["FP_CORE_UTIL"] == 45
+
+
+@pytest.mark.parametrize("missing_rtl", [False, True])
+def test_failed_config_command_preserves_existing_declaration(project, missing_rtl):
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    original = '{"author_choice":"retained"}\n'
+    declaration.write_text(original)
+    if missing_rtl:
+        (project / "phase2/stage1/rtl/unit.v").unlink()
+    result = subprocess.run([sys.executable, str(Path(__file__).parents[1] / "flow_config.py"),
+        "--project", str(project), "--set", "FP_CORE_UTIL=35", "--output", str(project)],
+        capture_output=True, text=True)
+    assert result.returncode != 0
+    assert declaration.read_text() == original
 
 
 def test_declared_grid_offsets_override_derived_ring_offsets(project):
