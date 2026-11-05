@@ -3085,7 +3085,7 @@ def prepare_front_door(args, project: Path) -> int | None:
                 status = native['verdict']
                 result = {'step_id': 'D59', 'context_sha256': current['context_sha256'],
                     'component_status': status, 'default_row_status': status,
-                    'completed': status == 'PASS', 'native_started': True, 'native_result': native,
+                    'completed': status == 'PASS', 'native_started': native.get('native_started', True), 'native_result': native,
                     'wall_seconds': native['wall_seconds']}
             _selected_step_result(project, current, result)
             return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[result['component_status']]
