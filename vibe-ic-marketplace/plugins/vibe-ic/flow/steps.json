@@ -3402,9 +3402,7 @@
       "when": "requires_dft",
       "tool": {
         "kind": "adapter",
-        "program": "fault_atpg_run.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "final_atpg"
       },
       "checks": [
         {

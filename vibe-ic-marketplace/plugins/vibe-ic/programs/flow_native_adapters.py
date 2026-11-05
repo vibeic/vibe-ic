@@ -747,6 +747,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if tool.get("adapter") == "transition_atpg":
         from flow_atpg import transition
         return transition(project, work, state=state, config=config)
+    if tool.get("adapter") == "final_atpg":
+        from flow_atpg import stuck_at
+        return stuck_at(project, work, state=state, config=config)
     if tool.get("adapter") == "design_release":
         from foundry_handoff_pack_gen import execute as release
         return release(project, work, tool, route, state=state, config=config)
