@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1471
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1471)
+- **Total programs (excluding helpers / shims):** 1472
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1472)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1462 |
+| `any` | 1463 |
 
 ## Alphabetical listing
 
@@ -530,6 +530,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_adapter_jobs` | any | — | One FIFO subprocess lane for independent native adapters. |
 | `flow_artifact_paths` | any | — | flow_artifact_paths |
 | `flow_chip_inputs` | any | — | Generate native Chip inputs from the elaborated core and active PDK. |
+| `flow_clock_geometry` | any | — | Derive native clock-wire repair length from the core capacitance budget. |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15). |
 | `flow_condition_reachability_check` | any | — | the self-disabling-condition guard. |
 | `flow_config` | any | — | Translate generated design documents into native LibreLane configuration. |
@@ -1543,7 +1544,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1462 programs)
+### `any` (1463 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2045,6 +2046,7 @@ _(no programs in this group)_
 - `flow_adapter_jobs` — One FIFO subprocess lane for independent native adapters.
 - `flow_artifact_paths` — flow_artifact_paths
 - `flow_chip_inputs` — Generate native Chip inputs from the elaborated core and active PDK.
+- `flow_clock_geometry` — Derive native clock-wire repair length from the core capacitance budget.
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15).  _[Wave 91]_
 - `flow_condition_reachability_check` — the self-disabling-condition guard.
 - `flow_config` — Translate generated design documents into native LibreLane configuration.
