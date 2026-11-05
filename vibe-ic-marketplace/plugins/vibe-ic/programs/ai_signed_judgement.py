@@ -68,6 +68,8 @@ def _role_citations(project: Path, rows, allowed: set[Path]) -> list[str]:
 
 
 def _reset_role_facts(project: Path, facts: dict, request: dict) -> dict:
+    if not isinstance(facts, dict):
+        raise ValueError("reset-role facts must be an object")
     records = facts.get("reset_roles")
     candidates = {r["state"]: r for r in request["candidates"]}
     if not isinstance(records, list) or len(records) != len(candidates):
