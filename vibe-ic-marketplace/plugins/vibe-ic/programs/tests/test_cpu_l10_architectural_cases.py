@@ -4,14 +4,14 @@ import pytest
 import phase1_doc_one_shot_runner as runner
 
 
-def emit(project, class_path, isa):
+def emit(project, class_path, isa, no_wake=True):
     docs = project / 'phase1/generated_docs'
     docs.mkdir(parents=True)
     l1 = {'class_path': class_path}
     if isa:
         l1['isa_base'] = ['RV32I']
     (docs / 'L1_DATASHEET.json').write_text(json.dumps(l1))
-    l3 = {'opcode_synthesis_skipped_reason': 'source HDL instruction enum',
+    l3 = {'opcode_synthesis_skipped_reason': 'source HDL instruction enum' if no_wake else None,
         'opcodes': [{'name':'OP_ALPHA', 'hex':'0x13', 'width_bits':7},
                     {'name':'OP_BETA', 'hex':'0x33', 'width_bits':7}]}
     runner.gen_l10_test_cases(project, {'spec.md':'Selected implementation executes the declared ISA through its instruction interface.'}, l3)
@@ -29,9 +29,10 @@ def test_selected_cpu_isa_cases_keep_identity_and_architectural_obligations(tmp_
     assert all('host sends' not in c['stimulus'] and 'response_payload' not in c['expected'] for c in cases)
 
 
-@pytest.mark.parametrize('class_path,isa', [('uart',True),('processor_cpu',False)])
-def test_other_protocols_and_missing_isa_facts_keep_existing_scope(tmp_path, class_path, isa):
-    cases = emit(tmp_path, class_path, isa)
-    assert len(cases) == 2
-    assert all(c['kind'] == 'happy_path' for c in cases)
-    assert all(c['stimulus'].startswith('host sends') for c in cases)
+@pytest.mark.parametrize('class_path,isa,no_wake', [('uart',True,True),('processor_cpu',False,True),('processor_cpu',True,False)])
+def test_other_protocols_and_missing_isa_facts_keep_existing_scope(tmp_path, class_path, isa, no_wake):
+    cases = emit(tmp_path, class_path, isa, no_wake)
+    happy = [c for c in cases if c['name'].endswith('_happy')]
+    assert len(happy) == 2
+    assert all(c['kind'] == 'happy_path' for c in happy)
+    assert all(c['stimulus'].startswith('host sends') for c in happy)

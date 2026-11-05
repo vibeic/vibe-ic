@@ -56030,7 +56030,8 @@ def gen_l10_test_cases(project: Path,
     # pre_wake_false cases are still emitted and still FAIL without a TB.
     _no_wake_protocol = bool(l3.get("opcode_synthesis_skipped_reason"))
     l1 = _try_load_l_doc(project, 'L1_DATASHEET') or {}
-    cpu_isa = (_v1_6_331_provisional_class_path(project, extracted) == 'processor_cpu'
+    cpu_isa = (_no_wake_protocol
+               and _v1_6_331_provisional_class_path(project, extracted) == 'processor_cpu'
                and bool(l1.get('isa_base') or l1.get('isa_extensions')))
     for op in opcodes[:24]:
         if not isinstance(op, dict) or op.get("hex") == "__TODO__":
