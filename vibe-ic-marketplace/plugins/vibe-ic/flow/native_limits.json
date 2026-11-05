@@ -1300,9 +1300,9 @@
       "gap": "Native pad, bond geometry and test-readiness consumers are not adapted to current LibreLane State; selected readiness is NOT_MEASURED."
     },
     "tapeout_precheck": {
-      "program": null,
-      "function": null,
-      "gap": "Native IC precheck is not adapted to current LibreLane State; selected tapeout precheck is NOT_MEASURED, with provider-specific checks conditional on their declared deck."
+      "adapter": "tapeout_precheck",
+      "program": "tapeout_precheck.py",
+      "parallel": true
     }
   },
   "deleted_metrics": {
@@ -4313,6 +4313,17 @@
       "adapter": "mixed",
       "native_step": "M08",
       "parallel": true
+    },
+    "post_route_timing_repair": {
+      "kind": "librelane",
+      "imports": [
+        "librelane_plugins.librelane_plugin_vibeic.postroute_repair"
+      ],
+      "steps": [
+        "Vibeic.PostRouteRepair",
+        "OpenROAD.RCX",
+        "OpenROAD.STAPostPNR"
+      ]
     }
   },
   "report_check_readers": {

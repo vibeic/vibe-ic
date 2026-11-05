@@ -1,5 +1,4 @@
 """Final declaration orchestration; native KLayout is exercised by the real row."""
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,5 +35,7 @@ def test_measurement_writes_final_declaration_and_preserves_initial_contract(tmp
     assert record['measurement']['bbox_um'] == [0, 0, 100, 100]
     assert record['declared_contract']['answers']['die_area_um'] == [0, 0, 200, 200]
     assert source.read_bytes() == original
-    assert record['gds_sha256'] == hashlib.sha256(gds.read_bytes()).hexdigest()
+    assert record['gds'] == 'design.gds'
+    assert record['exit_code'] == 0
+    assert 'gds_sha256' not in record
     assert json.loads((tmp_path / declaration.FINAL_REL).read_text()) == record

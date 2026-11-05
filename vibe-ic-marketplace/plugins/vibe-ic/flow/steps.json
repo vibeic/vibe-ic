@@ -2830,7 +2830,11 @@
       "when": "digital_physical",
       "tool": {
         "kind": "librelane",
+        "imports": [
+          "librelane_plugins.librelane_plugin_vibeic.postroute_repair"
+        ],
         "steps": [
+          "Vibeic.PostRouteRepair",
           "OpenROAD.RCX",
           "OpenROAD.STAPostPNR"
         ]
@@ -5238,9 +5242,9 @@
       "when": "ic",
       "tool": {
         "kind": "adapter",
-        "program": null,
-        "function": null,
-        "gap": "Native IC precheck is not adapted to current LibreLane State; selected tapeout precheck is NOT_MEASURED, with provider-specific checks conditional on their declared deck."
+        "adapter": "tapeout_precheck",
+        "program": "tapeout_precheck.py",
+        "parallel": true
       },
       "checks": [
         {

@@ -748,6 +748,22 @@ def execute(project, directory, tool, route, *, state=None, config=None):
         import importlib
         native = importlib.import_module("flow_native_" + tool["adapter"])
         return native.execute(project, work, tool, commands, state=state, config=config or {})
+    if tool.get("adapter") == "tapeout_precheck":
+        import tapeout_precheck
+        if state is None or not state.get("gds"):
+            return commands.result(detail="Tapeout precheck needs the final GDS in native State.")
+        started = time.perf_counter()
+        result = tapeout_precheck.execute(project, gds=state.get("gds"),
+                                          config=config or {}, directory=work)
+        code = result.get("exit_code")
+        metrics = result.get("measurement") or {}
+        return {"ran": code is not None, "exit_code": code, "metrics": metrics,
+                "reports": [str(path) for path in work.rglob("*") if path.is_file()],
+                "tool_seconds": time.perf_counter() - started,
+                "detail": result.get("reason", ""),
+                "native_steps": [{"name": "KLayout tapeout precheck", "ran": code is not None,
+                                  "exit_code": code, "status": result["verdict"],
+                                  "checks": result.get("checks", [])}]}
     if tool.get("adapter") == "physical_declarations":
         return physical_declarations(project, work, tool, commands, route)
     if tool.get("adapter") == "functional_activity":
