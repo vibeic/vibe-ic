@@ -56,3 +56,44 @@ def test_missing_supply_is_not_a_design_failure(tmp_path):
     report = tmp_path / "emit.json"
     assert emitter.main([str(tmp_path), "--json", str(report)]) == 2
     assert json.loads(report.read_text())["verdict"] == "NOT_MEASURED"
+
+
+@pytest.mark.parametrize("code,output,expected", [
+    (0, "ORACLE_TB_DONE pass=4/4", "PASS"),
+    (0, "ORACLE_TB_DONE pass=3/4", "FAIL"),
+    (0, "Simulation finished", "NOT_MEASURED"),
+    (1, "** Fatal: incorrect isolation", "FAIL"),
+    (None, "", "NOT_MEASURED"),
+])
+def test_power_simulation_reads_native_assertions(tmp_path, monkeypatch, code, output, expected):
+    rtl, bench, upf = [tmp_path / name for name in ("core.sv", "tb_power.sv", "power.upf")]
+    rtl.write_text("module core; endmodule\n")
+    bench.write_text("module tb_power; core dut(); endmodule\n")
+    upf.write_text("create_power_domain MAIN -elements {.}\n")
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L21_POWER_INTENT.json").write_text(json.dumps({"upf_path": "power.upf"}))
+    monkeypatch.setattr(adapters, "inputs", lambda *args: ([rtl], "core"))
+    monkeypatch.setattr(adapters, "simulation_sources", lambda *args: ([rtl], []))
+    calls = []
+
+    def run(self, argv, **kwargs):
+        calls.append(list(map(str, argv)))
+        assert "--upf" in calls[-1] and "--error-exit" in calls[-1]
+        if code is None:
+            return None
+        self.records.append({"exit_code": code, "log": str(self.directory / "xezim.log")})
+        return subprocess.CompletedProcess(argv, code, output, "")
+
+    monkeypatch.setattr(adapters.Commands, "run", run)
+    row = next(row for row in engine.read_json(engine.TABLE)["steps"]
+               if row["name"] == "power_aware_state_transitions")
+    tool = {**row["tool"], "testbenches": [str(bench)]}
+    native = engine.ToolResult(**adapters.execute(tmp_path, tmp_path / "step", tool, {}))
+    assert len(calls) == 1
+    measured = engine.measure(row["checks"], native.metrics, {}, {"has_power_intent": True, "has_digital": True})
+    assert engine.evaluate(native, measured) == expected
+    if "ORACLE_TB_DONE" in output:
+        assert native.metrics["isolation_retention_behavior_errors"] == (0 if "4/4" in output else 1)
+    else:
+        assert "isolation_retention_behavior_errors" not in native.metrics

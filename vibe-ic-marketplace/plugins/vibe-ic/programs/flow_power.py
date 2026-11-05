@@ -21,3 +21,40 @@ def intent(project, directory, tool):
     result["native_steps"] = [{"name": "l21_to_upf_emit", "ran": process is not None,
                                "exit_code": process.returncode if process else None, "status": status}]
     return result
+
+
+def simulation(project, directory, tool):
+    from flow_native_adapters import Commands, inputs, simulation_sources, testbenches
+    from l_doc_consumer_contract import load_l_doc, l_doc_fields
+    from sdf_gate_sim import parse_l10_case_stdout
+    from verilator_coverage_measure import _tb_top_module
+
+    commands = Commands(directory)
+    try:
+        files, top = inputs(project, tool)
+    except FileNotFoundError as exc:
+        return commands.result(detail=str(exc))
+    _, document = load_l_doc(project, "L21")
+    upf = project / (l_doc_fields(document).get("upf_path") or f"phase2/stage2/constraints/{top}.upf")
+    benches = [path for path in testbenches(project, tool) if path.suffix in {".v", ".sv"}]
+    if not upf.is_file() or not benches:
+        return commands.result(detail="Power simulation needs UPF and a produced HDL power testbench.")
+    files, includes = simulation_sources(project, files, top, benches)
+    failures, steps = [], []
+    for bench in benches:
+        process = commands.run(["xezim", "--simulate", "--no-cache", "--error-exit",
+            "-s", _tb_top_module(bench), "--upf", upf,
+            *[arg for path in includes for arg in ("-I", path)], *files, bench], cwd=bench.parent)
+        parsed = parse_l10_case_stdout(process.stdout + process.stderr) if process else {}
+        measured = parsed.get("verdict") is not None and parsed.get("total", 0) > 0
+        if measured:
+            failures.append(parsed["total"] - parsed["passed"])
+        status = ("NOT_MEASURED" if process is None else "FAIL" if process.returncode
+                  else "PASS" if measured else "NOT_MEASURED")
+        steps.append({"name": "xezim " + bench.name, "ran": process is not None,
+                      "exit_code": process.returncode if process else None, "status": status})
+    metrics = {"isolation_retention_behavior_errors": sum(failures)} if len(failures) == len(benches) else {}
+    result = commands.result(metrics, [upf, *benches],
+        "Power-aware RTL simulation covers the assertions in the supplied benches; no implemented supply or timing signoff.")
+    result["native_steps"] = steps
+    return result

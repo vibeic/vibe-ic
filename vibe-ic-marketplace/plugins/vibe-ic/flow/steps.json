@@ -970,9 +970,7 @@
       "when": "has_power_intent and has_digital",
       "tool": {
         "kind": "adapter",
-        "program": "power_domain_crossing_check.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "power_simulation"
       },
       "checks": [
         {
