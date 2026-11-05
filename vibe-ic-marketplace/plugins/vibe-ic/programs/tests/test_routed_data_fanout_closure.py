@@ -266,3 +266,125 @@ def test_fanout_reroute_antenna_residue_is_repaired_and_reclosed(tmp_path):
                          capture_output=True, check=False)
     assert run.returncode == 0, run.stderr
     assert "REPAIRS 1 CLOSURES 1 ROUNDS 1" in run.stdout, run.stdout
+
+
+@pytest.mark.parametrize("loads,spread", [(2, False), (12, True), (12, False)])
+def test_native_routed_repair_honors_excluded_buffers(tmp_path, loads, spread):
+    """Run shipped repair stages on native routed objects and linked Liberty.
+
+    Collinear loads expose native region partitioning's one-row limitation:
+    that violation remains real; it does not permit an excluded-cell fallback.
+    The spread and light-load cases distinguish repair from a universal no-op.
+    """
+    import shutil
+    from _postroute_fanout_fixture import write_fixture
+
+    tool = shutil.which("openroad")
+    if not tool:
+        pytest.skip("native OpenROAD required")
+    write_fixture(tmp_path, loads, spread)
+    source = (STEP / "postroute_repair.tcl").read_text()
+
+    def region(start, end):
+        return source[source.index(start):source.index(end)]
+
+    script = r'''
+set_thread_count 2
+read_lef cells.lef
+read_liberty cells.lib
+read_def input.def
+foreach layer {M1 M2 M3} { make_tracks $layer -x_offset 0.1 -y_offset 0.1 }
+set_routing_layers -signal M1-M3
+set_wire_rc -signal -layer M1
+set_input_transition 0.1 [all_inputs]
+create_clock -name virtual -period 10
+set_input_delay 0 -clock virtual [all_inputs]
+set_output_delay 0 -clock virtual [all_outputs]
+set_max_fanout 4 [current_design]
+set_max_transition 3 [current_design]
+set_dont_use excluded
+report_dont_use
+estimate_parasitics -placement
+estimate_parasitics -detailed_routing
+check_placement -verbose
+set ::block [ord::get_db_block]
+set ::env(STEP_DIR) [pwd]
+set ::env(SYNTH_BUFFER_CELL) excluded/A/Z
+set ::env(VIBEIC_PRR_MAX_FANOUT) 4
+set ::env(VIBEIC_PRR_SETUP_SEQUENCE) default
+set ::env(VIBEIC_PRR_SETUP_MARGIN) 0
+set ::env(VIBEIC_PRR_HOLD_MARGIN) 0
+set ::env(VIBEIC_PRR_SETUP_MAX_BUFFER_PCT) 100
+set ::env(VIBEIC_PRR_HOLD_MAX_BUFFER_PCT) 100
+set ::env(PL_MAX_DISPLACEMENT_X) 100
+set ::env(PL_MAX_DISPLACEMENT_Y) 40
+set ::env(VIBEIC_PRR_ANTENNA_REPAIR) 0
+set ::vic_ant_before 0
+set ::vic_before [dict create]
+foreach inst [$::block getInsts] {
+    dict set ::vic_before [$inst getName] [[$inst getMaster] getName]
+}
+proc log_cmd {args} { uplevel 1 $args }
+proc append_if_exists_argument {args} {}
+proc vic_say {line} { puts "PRR: $line" }
+proc vic_metric {name value} { puts "METRIC $name $value" }
+# This component test uses native global routing after legalization; the
+# separate ECO lifecycle test covers production scoped detailed routing.
+proc vic_eco_route {varname tag} {
+    global_route
+    estimate_parasitics -global_routing
+    write_guides ${tag}.guide
+    return 1
+}
+proc observe {tag} {
+    report_check_types -max_fanout -max_slew -max_capacitance -violators > ${tag}.rpt
+    puts "OBS $tag fanout [sta::max_fanout_violation_count] slew [sta::max_slew_violation_count] cap [sta::max_capacitance_violation_count]"
+    foreach inst [$::block getInsts] {
+        puts "MASTER $tag [$inst getName] [[$inst getMaster] getName]"
+    }
+}
+observe before
+'''
+    script += region("proc vic_census {", "vic_annotate before")
+    script += region("# ---- the fanout limit", "# ---- 4. repair")
+    script += region("# ---- 4. repair", "# ---- 5. what changed")
+    script += r'''
+set ::vic_created [list]
+set ::vic_changed 0
+foreach inst [$::block getInsts] {
+    if {![dict exists $::vic_before [$inst getName]]} {
+        lappend ::vic_created $inst
+        incr ::vic_changed
+    }
+}
+if {$::vic_changed} {
+    detailed_placement
+    check_placement -verbose
+    vic_eco_route unused initial
+}
+observe native
+'''
+    script += region("# ---- 6c. the limits", "# ---- 7. re-verify")
+    script += r'''
+check_placement -verbose
+observe after
+write_db repaired.odb
+write_verilog repaired.v
+puts NATIVE_FANOUT_COMPLETE
+'''
+    path = tmp_path / "exercise.tcl"
+    path.write_text(script)
+    run = subprocess.run([tool, "-exit", "-no_splash", str(path)], cwd=tmp_path,
+                         capture_output=True, text=True, timeout=90)
+    (tmp_path / "native.log").write_text(run.stdout + run.stderr)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "NATIVE_FANOUT_COMPLETE" in run.stdout, run.stdout
+    rows = [line.split() for line in run.stdout.splitlines() if line.startswith("MASTER after ")]
+    excluded = [row[2] for row in rows if row[3] == "excluded"]
+    print(run.stdout)
+    assert len(excluded) == 0, f"excluded inserted masters: {excluded}; count={len(excluded)}"
+    assert f"OBS before fanout {int(loads > 4)} slew 0 cap 0" in run.stdout
+    assert "OBS after fanout 0 slew 0 cap 0" in run.stdout, run.stdout
+    added = [row for row in rows if row[2] != "driver" and not row[2].startswith("load")]
+    assert bool(added) is (loads > 4), rows
+    assert all(row[3] == "allowed" for row in added)
