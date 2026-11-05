@@ -244,6 +244,75 @@ def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
     assert "yosys-witness cannot execute" in result["detail"] and "/usr/bin/env" in result["detail"]
 
 
+@pytest.mark.parametrize("change", ["none", "unused_models", "renamed_core_ports", "open_pad_pins", "unknown_core",
+    "inline_unknown_core", "inline_z_core", "inline_undriven_core", "core", "core_pin", "terminal", "instance", "type"])
+def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    core, gold, gate, cells = [tmp_path / name for name in
+                              ("core.v", "wrapper.v", "gate.v", "cells.lib")]
+    models = tmp_path / "models"
+    models.mkdir()
+    pads = models / "pads.v"
+    core.write_text("module core(input clk,rst_n,a,output reg q);\n"
+                    "always @(posedge clk) if(!rst_n) q<=1; else q<=a;\nendmodule\n")
+    wrapper = ("module unit(inout clk,rst_n,a,q);\nwire ic,ir,ia,oq;\n"
+               "INPAD pclk(.PAD(clk),.Y(ic));\nINPAD prst(.PAD(rst_n),.Y(ir));\n"
+               "INPAD pa(.PAD(a),.Y(ia));\nOUTPAD pq(.A(oq),.PAD(q));\n")
+    gold.write_text(wrapper + "core u_core(.clk(ic),.rst_n(ir),.a(ia),.q(oq));\nendmodule\n")
+    if change == "renamed_core_ports":
+        core.write_text(core.read_text().replace("clk", "core_clk").replace("rst_n", "core_rst_n"))
+        gold.write_text(gold.read_text().replace(".clk(", ".core_clk(").replace(".rst_n(", ".core_rst_n("))
+    behavior = "~ia" if change == "core" else "ir" if change == "core_pin" else "ia"
+    implemented = (wrapper + "reg state;\nassign oq=state;\n"
+                   f"always @(posedge ic) if(!ir)state<=1;else state<={behavior};\nendmodule\n")
+    if change == "terminal":
+        implemented = implemented.replace(".PAD(a)", ".PAD(rst_n)")
+    elif change == "instance":
+        implemented = implemented.replace("INPAD pa(", "INPAD renamed(")
+    elif change == "type":
+        implemented = implemented.replace("INPAD pa(", "INPAD_ALT pa(")
+    gate.write_text(implemented)
+    if change == "unknown_core":
+        core.write_text("module core(input clk,rst_n,a,output q); assign q=1'bx; endmodule\n")
+        gate.write_text(wrapper + "assign oq=1'bx;\nendmodule\n")
+    elif change in {"inline_unknown_core", "inline_z_core", "inline_undriven_core"}:
+        assignment = {"inline_unknown_core": "assign oq=1'bx;\n", "inline_z_core": "assign oq=1'bz;\n"}.get(change, "")
+        gold.write_text(wrapper + assignment + "endmodule\n")
+        gate.write_text(gold.read_text())
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *)\nmodule INPAD(inout PAD,output Y); endmodule\n"
+                    "(* blackbox *)\nmodule INPAD_ALT(inout PAD,output Y); endmodule\n"
+                    "(* blackbox *)\nmodule OUTPAD(input A,inout PAD); endmodule\n")
+    if change == "open_pad_pins":
+        pads.write_text(pads.read_text().replace("inout PAD", "inout UNUSED,inout PAD"))
+    if change == "unused_models":
+        (models / "functional.v").write_text(
+            "module INPAD(inout PAD,output Y); assign Y=PAD; endmodule\n"
+            "module INPAD_ALT(inout PAD,output Y); assign Y=PAD; endmodule\n"
+            "module OUTPAD(input A,inout PAD); assign PAD=A; endmodule\n"
+            "module UNUSED(inout A,Y); rnmos (Y,A,1'b1); endmodule\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(core), str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(cells)]},
+              "PAD_VERILOG_MODELS": [str(pads)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
+    assert rows.get("Yosys.Wrapper") == ("FAIL" if change in {"terminal", "instance", "type"} else "PASS"), result
+    if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin"}:
+        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin"} else "PASS"), result
+    if change in {"unknown_core", "inline_unknown_core", "inline_z_core", "inline_undriven_core"}:
+        assert rows.get("Yosys.EQY.Core") == "NOT_MEASURED", result
+        assert not result["metrics"], result
+    elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins"}:
+        assert result["metrics"]["unproved_equivalence"] == 0, result
+    else:
+        assert result["metrics"].get("unproved_equivalence", 0) > 0, result
+    for side in ("gold", "gate"):
+        module = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]
+        assert not any(cell["type"] in {"INPAD", "INPAD_ALT", "OUTPAD"} for cell in module["cells"].values())
+
+
 def test_xor_reuses_native_state_number(tmp_path):
     state = SimpleNamespace(metrics={"design__xor_difference__count": 3})
     commands = Commands(tmp_path)

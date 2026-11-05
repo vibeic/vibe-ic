@@ -193,6 +193,12 @@ SITE IO_SITE
 END IO_SITE
 """)
     lib = _write(tmp_path / "pads.lib", """library (fixture) {
+ time_unit : "1ns";
+ default_max_transition : 1;
+ lu_table_template (input_edge) {
+  variable_1 : input_net_transition;
+  index_1 ("0.08, 1.0");
+ }
  cell (fixture_io__input) {
   pin (PAD) {
    direction : input;
@@ -201,6 +207,12 @@ END IO_SITE
   pin (Y) {
    direction : output;
    function : "PAD";
+   timing () {
+    related_pin : "PAD";
+    cell_rise (input_edge) {
+     values ("0.1, 0.2");
+    }
+   }
   }
  }
  cell (fixture_io__output) {
@@ -253,7 +265,8 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     for key in ("PDN_CFG", "PDN_VOFFSET", "PDN_HOFFSET", "PDN_SKIPTRIM"):
         assert result[key] == config[key]
     wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
-    assert "inout wire [5:2] data" in wrapper
+    assert "input wire [5:2] data" in wrapper
+    assert "output wire result" in wrapper
     assert "wire [5:2] _core_port_2;" in wrapper
     assert ".PAD(data[5])" in wrapper
     assert ".Y(_core_port_2[5])" in wrapper
@@ -272,6 +285,69 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert report["assumptions"]
     assert result["DIE_AREA"][2] >= 84
     assert result["CORE_AREA"][0] == 22
+
+
+def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
+    project, config, native, _, _ = inputs
+    native.update(CLOCK_UNCERTAINTY_CONSTRAINT=0.25, CLOCK_TRANSITION_CONSTRAINT=0.15,
+                  TIME_DERATING_CONSTRAINT=5, MAX_FANOUT_CONSTRAINT=4,
+                  MAX_TRANSITION_CONSTRAINT=3, MAX_CAPACITANCE_CONSTRAINT=0.2, OUTPUT_CAP_LOAD=10)
+    result = chip.prepare(project, config)
+    text = Path(result["PNR_SDC_FILE"]).read_text()
+    assert "set_timing_derate -late 1.05" in text
+    assert "set_timing_derate -early 0.949999" in text
+    assert "set_clock_uncertainty 0.25" in text
+    assert "set_clock_transition 0.15" in text
+    assert "set_max_transition 3 [current_design]" in text
+    assert "set_max_capacitance 0.2 [current_design]" in text
+    assert "set_load 0.01" in text
+    assert "set _chip_pad_max 1" in text
+    assert "set _chip_pad_min 0.08" in text
+
+
+@pytest.mark.parametrize("linked, maximum, minimum", [("fast_view", "0.8", "0.04"),
+                                                       ("slow_view", "1.3", "0.1")])
+def test_pad_edges_follow_the_native_linked_corner(inputs, tmp_path, linked, maximum, minimum):
+    import shutil
+    import subprocess
+
+    interpreter = shutil.which("tclsh")
+    command = [interpreter] if interpreter else [shutil.which("openroad"), "-no_init", "-no_splash", "-exit"]
+    if command[0] is None:
+        pytest.skip("A native Tcl interpreter is required")
+    project, config, native, _, _ = inputs
+    original = Path(native["PAD_LIBS"]["*"][0]).read_text()
+    paths = []
+    for name, bounds in (("fast_view", "0.04, 0.8"), ("slow_view", "0.10, 1.3")):
+        path = tmp_path / (name + ".lib")
+        text = original.replace("library (fixture)", f"library ({name})")
+        text = text.replace("0.08, 1.0", bounds).replace("default_max_transition : 1;", "default_max_transition : 2;")
+        path.write_text(text)
+        paths.append(str(path))
+    native["PAD_LIBS"] = {"*": paths}
+    result = chip.prepare(project, config)
+    script = tmp_path / "read.sdc.tcl"
+    script.write_text('''proc get_ports args {return PORTS}
+proc get_clocks args {return CLOCKS}
+proc create_clock args {}
+proc set_units args {}
+proc set_input_delay args {}
+proc set_output_delay args {}
+proc set_input_transition args {puts "EDGE $args"}
+proc get_libs args {
+    if {[lindex $args end] eq $::linked} {return LIB}
+    return {}
+}
+''' + f"set ::linked {linked}\nsource {{{result['PNR_SDC_FILE']}}}\n")
+    completed = subprocess.run([*command, str(script)], capture_output=True, text=True, check=True)
+    assert f"EDGE -max {maximum} PORTS" in completed.stdout
+    assert f"EDGE -min {minimum} PORTS" in completed.stdout
+
+
+def test_input_pad_edge_coverage_cannot_omit_a_selected_master(inputs):
+    project, config, native, ports, _ = inputs
+    with pytest.raises(FileNotFoundError, match="characterized off-chip"):
+        chip._sdc(project, {**native, **config}, ports, {"fixture_io__input", "missing_receiver"})
 
 
 def test_bus_order_offset_and_single_index_are_preserved():
@@ -449,6 +525,6 @@ def test_escaped_core_identifiers_have_legal_verilog_names(inputs):
     ports[2]["name"] = "data.value"
     result = chip.prepare(project, config)
     wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
-    assert "inout wire [5:2] \\data.value " in wrapper
+    assert "input wire [5:2] \\data.value " in wrapper
     assert ".\\data.value (_core_port_2)" in wrapper
     assert ".PAD(\\data.value [5])" in wrapper
