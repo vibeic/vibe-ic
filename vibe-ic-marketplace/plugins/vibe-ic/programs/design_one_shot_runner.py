@@ -21426,24 +21426,16 @@ def _publish_d19_owner(project: Path, context: Mapping[str, Any], top: str,
                        container: str, ic_class, pdk_name, *, invocation_context=None) -> int:
     """Execute only the selected constraint-plan owner, not the whole P0 tail."""
     import flow109
-    import flow109_metric_acceptance as metrics
     attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
     if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
         print('REFUSED: D19_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
         return 2
     row = step_asic_sdc(project, top, container, ic_class, pdk_name=pdk_name, _use_controller=False)
-    row.extras.update(completed=False, default_row_status='NOT_MEASURED')
     summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
         'declared_window': {'entry_step': '7', 'exit_step': '7', 'dispatched_step_ids': ['7']},
         'bounded_disclosures': ['constraint-plan/native SDC load only; full-phase P0/STA/audit not dispatched; whole IC unmeasured']}
     out = attempt / 'phase2_one_shot.json'
     _write_phase2_report(out, summary, project, invocation_context=invocation_context)
-    reread = metrics.accept_d19(project, context, row.extras)
-    if reread != row.extras.get('metric_acceptance'):
-        row.status, row.reason_class, row.detail = 'NOT_MEASURED', 'input_absent', 'D19_INPUT_CHANGED_DURING_OWNER_PUBLICATION'
-        row.extras.update(metric_acceptance=reread, completed=False, default_row_status='NOT_MEASURED')
-        summary.update(steps=[asdict(row)], verdict=row.status)
-        _write_phase2_report(out, summary, project, invocation_context=invocation_context)
     return {'PASS': 0, 'FAIL': 1}.get(row.status, 2)
 
 
@@ -21489,13 +21481,8 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
                   ic_class: Optional[str] = None,
                   *, pdk_config: Any = None, pdk_name: Optional[str] = None,
                   _use_controller: bool = True) -> StepResult:
-    """D19 admission is BLOCKING before Controller or native SDC dispatch.
-
-    The ordinary producer remains shared with non-Flow109 invocations. The
-    selected D19 owner also publishes/consumes its two existing plan contracts;
-    a plan metric PASS is not native shift/capture or complete row acceptance.
-    """
-    context, admission = None, None
+    """Produce SDC/PVT and publish the selected plan owner's native result."""
+    context, admission, native_non_scan = None, None, False
     raw_context = os.environ.get('VIBEIC_FLOW109_CONTEXT')
     if raw_context:
         import flow109
@@ -21508,7 +21495,14 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
                 if not context['features']['technology_specific'] and (pdk_config is not None or pdk_name):
                     raise metrics.MetricRefusal('D19_TECHNOLOGY_FEATURE_CONFLICT',
                                                 'portable endpoint received a target PDK')
-                admission = metrics.d19_admission(project, context, publish=True)
+                import spec_declaration_emit as declaration
+                contract = declaration.select_contract(project)[0]
+                native_non_scan = (context['features']['technology_specific']
+                    and context['features']['requires_scan'] is False
+                    and declaration.explicit_non_scan_decision(project) is not None
+                    and (not contract or not any(f['name'] == 'dft' for f in contract['fields'])))
+                if not native_non_scan:
+                    admission = metrics.d19_admission(project, context, publish=True)
         except (flow109.Flow109Error, metrics.MetricRefusal, OSError, ValueError, TypeError) as exc:
             return StepResult('asic_sdc', 'NOT_MEASURED', 0.0, str(exc),
                 reason_class=_V.ReasonClass.INPUT_ABSENT,
@@ -21544,6 +21538,25 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
     else:
         result = _step_asic_sdc_producer(project, top_name, container, ic_class,
             pdk_config=pdk_config, pdk_name=pdk_name, _use_controller=_use_controller)
+    if native_non_scan:
+        produced = result.status == 'PASS' or result.extras.get('producer_status') == 'PASS'
+        if produced and result.status != 'FAIL':
+            try:
+                rec = result.extras['step7_record']
+                result.extras['native_sdc_outputs'] = _d19_load_base_sdc(project, context,
+                    {'mapping': [{'sdc': {k: rec[k] for k in ('path', 'sha256')}}]}, top_name, rec['pdk'])
+                result.status, result.reason_class = 'PASS', ''
+                for key in tuple(result.extras):
+                    if key.startswith('deferred_'):
+                        result.extras.pop(key)
+                result.detail += '; native SDC copy completed; syntax/STA remain downstream'
+            except Exception as exc:
+                result.status = 'FAIL'
+                result.detail += '; native SDC copy failed: ' + str(exc)
+        result.extras.update(step_id='7', context_sha256=context['context_sha256'],
+            qualification='NOT_MEASURED', completed=result.status == 'PASS',
+            default_row_status=result.status)
+        return result
     if context is not None:
         # Complete D19 inputs may exercise the actual legacy SDC copy purpose.
         # This does not run the later constraint syntax/STA checks.

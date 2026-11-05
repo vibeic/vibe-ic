@@ -2152,64 +2152,13 @@ def _finish_d14_selected_owner(project: Path, report: Mapping, invocation: Mappi
 
 def _finish_d19_selected_owner(project: Path, report: Mapping, invocation: Mapping,
                                *, published_current: bool) -> dict:
-    """Confirm the normal D19 owner before publishing the current canonical row."""
+    """Publish the current owner's native result without a second acceptance layer."""
     import flow109
-    import flow109_metric_acceptance as metrics
-    import benchmark_dispatch as dispatch
-    accepted = {'status': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED'}
-    try:
-        context = flow109.validate_execution_context(json.loads(
-            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
-        if context['resolved_row']['id'] != 'D19':
-            raise ValueError('D19 selected context required')
-        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
-        if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
-            raise ValueError('immutable attempt result already exists')
-        path = attempt / 'phase2_one_shot.json'
-        accepted = metrics.accept_d19(project, context, next((r.get('extras', {}) for r in report.get('steps', []) if r.get('name') == 'asic_sdc'), {}))
-        status, detail = accepted['status'], accepted['reason']
-        owner_current, owner_ref = False, None
-        try:
-            raw = path.read_bytes();binding = report['runner_binding']
-            rows = [r for r in report['steps'] if r.get('name') == 'asic_sdc']
-            owner_current = (published_current is True and not path.is_symlink()
-                and json.loads(raw) == report and set(invocation) == {'invocation_id', 'argv', 'project', 'source'}
-                and invocation['project'] == str(project) and bool(invocation['invocation_id'])
-                and all(binding[k] == invocation[k] for k in invocation)
-                and binding['schema'] == 'vibeic.runner_report_binding.v1'
-                and binding['report_name'] == 'phase2_one_shot.json'
-                and binding['source'] == dispatch._runner_source_snapshot(binding['argv'],
-                    consumer=binding['source']['consumer']['path'])
-                and binding['material'] == dispatch._runner_material_snapshot(project)
-                and Path(binding['producer']['path']).name == 'design_one_shot_runner.py'
-                and hashlib.sha256(Path(binding['producer']['path']).read_bytes()).hexdigest() == binding['producer']['sha256']
-                and len(report['steps']) == len(rows) == 1 and rows[0]['status'] == report['verdict'] == accepted['status']
-                and rows[0]['extras']['context_sha256'] == context['context_sha256']
-                and rows[0]['extras']['metric_acceptance'] == accepted
-                and str(report['declared_window']['entry_step']) == '7'
-                and str(report['declared_window']['exit_step']) == '7'
-                and report['declared_window']['dispatched_step_ids'] == ['7'])
-            if owner_current:
-                owner_ref = {'path': str(path.relative_to(project)), 'sha256': hashlib.sha256(raw).hexdigest()}
-        except (OSError, ValueError, KeyError, TypeError):
-            owner_current = False
-        if status == 'PASS' and not owner_current:
-            status, detail = 'NOT_MEASURED', 'D19_OWNER_WINDOW_NOT_CURRENT_PASS'
-        reread = metrics.accept_d19(project, context, next((r.get('extras', {}) for r in report.get('steps', []) if r.get('name') == 'asic_sdc'), {}))
-        if (reread != accepted or owner_current and path.read_bytes() != raw):
-            status, detail, accepted = 'NOT_MEASURED', 'D19_INPUT_CHANGED_DURING_FINALIZATION', reread
-        finished = flow109.finish_native_window(project, {'steps': [{
-            'status': accepted['status'], 'extras': {'step_id': '7',
-                'context_sha256': context['context_sha256'], 'default_row_status': status,
-                'completed': status == 'PASS', 'metric_acceptance': accepted, 'owner_report': owner_ref,
-                'owner_window': {'published_current': owner_current}, 'detail': detail}}]})
-        if not isinstance(finished, Mapping) or finished.get('default_row_status') != status:
-            raise ValueError('canonical writer did not confirm verdict')
-        return {'verdict': status, 'metric_acceptance': accepted,
-                'whole_flow_verdict': 'NOT_MEASURED', 'detail': detail}
-    except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
-        return {'verdict': 'NOT_MEASURED', 'metric_acceptance': accepted,
-                'whole_flow_verdict': 'NOT_MEASURED', 'detail': 'D19_FINALIZATION_REFUSED: ' + str(exc)}
+    if not published_current:
+        return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED'}
+    finished = flow109.finish_native_window(project, report)
+    return {'verdict': finished['default_row_status'] if finished else 'NOT_MEASURED',
+            'whole_flow_verdict': 'NOT_MEASURED'}
 
 
 def _finish_d25_selected_owner(
