@@ -351,12 +351,21 @@ def liberty_pin_roles(text: str) -> dict[str, dict[str, dict]]:
         _, end = _liberty_group(text, cell.end() - 1)
         block, pins = text[cell.end() - 1:end + 1], {}
         for pin in re.finditer(r'\bpin\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', block):
-            body, _ = _liberty_group(block, pin.end() - 1)
+            body, pin_end = _liberty_group(block, pin.end() - 1)
+            pin_block, arcs = block[pin.end():pin_end], []
+            for timing in re.finditer(r'\btiming\s*\([^)]*\)\s*\{', pin_block):
+                arc, _ = _liberty_group(pin_block, timing.end() - 1)
+                fields = [re.search(r'\b' + key + r'\s*:\s*"?([\w$]+)', arc)
+                          for key in ("related_pin", "timing_sense")]
+                arcs.append(tuple(f.group(1) if f else None for f in fields))
             direction = re.search(r'\bdirection\s*:\s*"?(\w+)', body)
             pins[pin.group(1)] = {
                 "direction": direction.group(1) if direction else None,
                 "clock": bool(re.search(r'\bclock\s*:\s*"?true', body)),
-                "is_pad": bool(re.search(r'\bis_pad\s*:\s*"?true', body))}
+                "is_pad": bool(re.search(r'\bis_pad\s*:\s*"?true', body)),
+                "timing_arcs": arcs,
+                **{key: bool(re.search(r"\b" + key + r'\s*:\s*"?true', body))
+                   for key in ("clock_gate_clock_pin", "clock_gate_out_pin")}}
         roles[cell.group(1)] = pins
     return roles
 
