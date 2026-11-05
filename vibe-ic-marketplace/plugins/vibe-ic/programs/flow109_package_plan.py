@@ -729,9 +729,9 @@ def execute(project: Path, context: Mapping) -> dict:
             generated = step_io_pad_chip_top_gen(project, pdk=io_pdk)
             record["checks"].append({"check": "io_pad_chip_top_gen_producer",
                                       "status": generated.status,
-                                      "detail": generated.note})
+                                      "detail": generated.detail})
             if generated.status != "PASS":
-                raise D06Refusal("D06_PAD_PIN_PRODUCER_REFUSED", generated.note,
+                raise D06Refusal("D06_PAD_PIN_PRODUCER_REFUSED", generated.detail,
                                  failed=generated.status == "FAIL")
         io = _read(io_path)
         record["inputs"].append(_record(project, io_path))

@@ -133,7 +133,6 @@ def test_functional_unscanned_route_uses_l7_l10_and_native_pad_map(tmp_path, mon
 def test_missing_io_report_runs_existing_wrapper_producer(tmp_path, monkeypatch, writes_report):
     import design_one_shot_runner as design
     import phase3_one_shot_runner as backend
-    from types import SimpleNamespace
     _producer(monkeypatch, "WROTE", 0)
     project = tmp_path / "project"
     _early_docs(project)
@@ -146,7 +145,7 @@ def test_missing_io_report_runs_existing_wrapper_producer(tmp_path, monkeypatch,
         assert (p / "phase3/stage3/pnr/pad_assignment.json").is_file()
         if writes_report:
             _io(p)
-        return SimpleNamespace(status="PASS", note="controlled wrapper result")
+        return backend.StepResult("io_pad_chip_top_gen", "PASS", detail="controlled wrapper result")
     monkeypatch.setattr(backend, "step_io_pad_chip_top_gen", run)
     result = d06.execute(project, _context())
     assert calls == [(project, selected)]
@@ -159,7 +158,6 @@ def test_missing_io_report_runs_existing_wrapper_producer(tmp_path, monkeypatch,
 def test_wrapper_producer_refusal_preserves_native_status(tmp_path, monkeypatch, status):
     import design_one_shot_runner as design
     import phase3_one_shot_runner as backend
-    from types import SimpleNamespace
     _producer(monkeypatch, "WROTE", 0)
     project = tmp_path / "project"
     _early_docs(project)
@@ -167,7 +165,8 @@ def test_wrapper_producer_refusal_preserves_native_status(tmp_path, monkeypatch,
     monkeypatch.setattr(design, "_phase2_pdk_config", lambda p, name: object())
     def run(p, *, pdk):
         _io(p)
-        return SimpleNamespace(status=status, note="controlled native refusal")
+        return backend.StepResult("io_pad_chip_top_gen", status, detail="controlled native refusal",
+            reason_class=backend._V.ReasonClass.NOT_EXECUTED.value if status == "NOT_MEASURED" else "")
     monkeypatch.setattr(backend, "step_io_pad_chip_top_gen", run)
     result = d06.execute(project, _context())
     assert result["component_status"] == status
