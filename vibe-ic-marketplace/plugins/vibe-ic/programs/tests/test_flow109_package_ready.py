@@ -25,13 +25,16 @@ import test_flow109_package_electrical as D67T  # noqa: E402
 from programs.tests._hostpaths import require_repo  # noqa: E402
 
 
-def test_d75_adapter_loads_by_path_with_existing_consumers():
+def test_d75_adapter_loads_by_path_with_existing_consumers(tmp_path):
     spec = importlib.util.spec_from_file_location(
         "flow109_package_ready_path_control", PROGRAMS / "flow109_package_ready.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.STEP == "D75"
-    assert module.operation_sources()["programs/provider_bond_pad_edge.py"]
+    project = _project(tmp_path)
+    result = module.execute(project, def_path=project / module.PAD_DEF,
+        tech_lef=project / "input/pdk/tech.tlef", io_lefs=[project / "input/pdk/io.lef"])
+    assert result["component_status"] == "PASS"
 
 
 def _write(path: Path, value) -> None:
