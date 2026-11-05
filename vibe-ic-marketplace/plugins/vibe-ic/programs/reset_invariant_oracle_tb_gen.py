@@ -452,14 +452,20 @@ def declared_retention_memory(project: Path, dut: str,
     single_port = protocol is not None and protocol["kind"] == "sp"
     expected_roles = ({"addr", "rdata", "wdata", "we"} if single_port else
                       {"raddr", "rdata", "waddr", "wdata", "we"})
-    if (protocol is None or protocol["width"] != 8 or protocol["read_latency"] != 0
-            or {"we" if role == "wen" else role for role in protocol["stated_roles"]}
-            != expected_roles):
+    latency = protocol["read_latency"] if protocol is not None else None
+    stated = ({"we" if role == "wen" else role for role in protocol["stated_roles"]}
+              if protocol is not None else set())
+    populations = [expected_roles]
+    if latency == 1 and not single_port:
+        populations += [expected_roles | {"ren"}, {"waddr", "raddr", "we", "ren"}]
+    if (protocol is None or protocol["width"] != 8 or latency not in (0, 1)
+            or stated not in populations):
         return None, "NOT_MEASURED: unsupported or unstated external memory commit protocol"
     roles = decl.get("sram_interface")
     if (not isinstance(roles, dict) or type(roles.get("read_latency_cycles", 0)) is not int
-            or roles.get("read_latency_cycles", 0) != 0 or "read_enable" in roles):
-        return None, "NOT_MEASURED: selected protocol needs explicit SRAM roles and asynchronous read"
+            or roles.get("read_latency_cycles", 0) != latency
+            or ("read_enable" in roles) != ("ren" in stated)):
+        return None, "NOT_MEASURED: selected protocol needs matching explicit SRAM roles and read timing"
     if single_port:
         if decl["sram_interface_protocol"] == SINGLE_PORT_RETENTION_PROTOCOL:
             if ("address" in roles or "read_address" not in roles or "write_address" not in roles
@@ -489,6 +495,12 @@ def declared_retention_memory(project: Path, dut: str,
             or bits(outs[memory["wdata"]]) != 8 or bits(ins[memory["rdata"]]) != 8
             or bits(outs[memory["we"]]) != 1):
         return None, "NOT_MEASURED: unsupported or unknown byte-memory port widths"
+    if latency == 1:
+        enable = roles.get("read_enable")
+        if "ren" in stated and (not isinstance(enable, str) or enable not in outs or bits(outs[enable]) != 1
+                                or enable in memory.values()):
+            return None, "NOT_MEASURED: selected SRAM read enable does not bind to a scalar output"
+        memory.update(read_latency_cycles=latency, read_enable=enable)
     memory.update(protocol=decl["sram_interface_protocol"], depth=1 << abits, dut=dut,
                   declaration_sha256=hashlib.sha256(raw).hexdigest())
     preload, refusal = _declared_retention_preload(decl, memory["depth"])
@@ -523,13 +535,18 @@ def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
     for n, w in outputs + inouts:
         lines.append(f"  wire {w + ' ' if w else ''}{n};")
     conns = ", ".join(f".{n}({n})" for n, _ in inputs + outputs + inouts)
+    read_model = f"  always @(*) {rdata} = retention_mem[{raddr}];"
+    if memory.get("read_latency_cycles") == 1:
+        enable = memory.get("read_enable")
+        condition = f" if ({enable})" if enable else ""
+        read_model = f"  always @(posedge {clk}){condition} {rdata} <= retention_mem[{raddr}];"
     lines += [f"  {dut} u_dut ({conns});", f"  always #5 {clk} = ~{clk};",
               f"  reg [7:0] retention_mem [0:{depth - 1}];",
               f"  reg [7:0] retention_before [0:{depth - 1}];",
               "  integer errors = 0; integer _i; integer edge_number; integer active_cycles;",
               "  reg pending_found;",
               "  reg checking_transactions = 0;",
-              f"  always @(*) {rdata} = retention_mem[{raddr}];",
+              read_model,
               "  // Consume the previous registered transaction on EVERY rising edge.",
               "  // Never gate the external memory commit on reset or discard a launched write.",
               f"  always @(posedge {clk}) if ({we} === 1'b1)",
