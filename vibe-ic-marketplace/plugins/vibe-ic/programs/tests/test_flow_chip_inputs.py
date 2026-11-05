@@ -385,6 +385,21 @@ def test_current_geometry_reaches_floorplan_and_reserves_both_ring_rails(inputs,
     assert geometry["core_inset_um"] >= 8.4 + geometry["pad_depth_um"]
 
 
+def test_nonconverging_current_geometry_stops_with_plain_error(inputs, monkeypatch):
+    import flow_pdn_current
+    project, config, _, _, _ = inputs
+    calls = []
+
+    def changing_settings(*args):
+        calls.append(args)
+        return {"PDN_VWIDTH": len(calls)}
+
+    monkeypatch.setattr(flow_pdn_current, "current_settings", changing_settings)
+    with pytest.raises(ValueError, match="did not converge after eight"):
+        chip.prepare(project, config)
+    assert len(calls) == 9
+
+
 def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
     project, config, native, _, _ = inputs
     native.update(CLOCK_UNCERTAINTY_CONSTRAINT=0.25, CLOCK_TRANSITION_CONSTRAINT=0.15,
