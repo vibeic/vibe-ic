@@ -216,7 +216,7 @@ def test_early_report_cannot_replace_current_registered_owner(
         assert not (tmp_path / f'reports/flow109/default_rows/{step}.json').exists()
 
 
-@pytest.mark.parametrize('step', ['D13', 'D14', 'D22', 'D25', 'D26', 'D30'])
+@pytest.mark.parametrize('step', ['D13', 'D14', 'D22', 'D25', 'D26'])
 def test_public_frontend_reads_native_reports_without_a_producer_rerun(tmp_path, monkeypatch, step):
     args, _ = case(tmp_path, step)
     monkeypatch.setattr(flow109, 'dft_source_intent', lambda *a: pytest.fail(
@@ -229,6 +229,25 @@ def test_public_frontend_reads_native_reports_without_a_producer_rerun(tmp_path,
     assert row['default_row_status'] == expected
     assert row['native_started'] is False
     assert row['native_measurements']
+
+
+@pytest.mark.parametrize('native_status', ['PASS', 'FAIL'])
+def test_d30_synthesis_gate_does_not_replace_its_canonical_owner(tmp_path, monkeypatch, native_status):
+    args, _ = case(tmp_path, 'D30')
+    report = tmp_path / 'phase3/librelane/02-yosys-synthesis/handoff_netlist_gate.json'
+    put(report, {'verdict': native_status})
+    saved = report.read_bytes()
+    context = flow109.execution_context(flow109.resolve_plan(profile()), 'D30', 'D30')
+    assert flow109._retained_native_result(tmp_path, context) is None
+
+    def owner(*_):
+        raise flow109.Flow109Error('FLOW109_D25_RESULT_NOT_ACCEPTED', 'normal D30 owner reached')
+
+    monkeypatch.setattr(flow109, 'dft_source_intent', owner)
+    with pytest.raises(flow109.Flow109Error, match='normal D30 owner reached'):
+        flow109.prepare_front_door(args, tmp_path)
+    assert report.read_bytes() == saved
+    assert not (tmp_path / 'reports/flow109/default_rows/D30.json').exists()
 
 
 @pytest.mark.parametrize('status', ['PASS', 'FAIL'])
@@ -264,7 +283,7 @@ def test_changed_rtl_returns_to_the_normal_producer(tmp_path, monkeypatch, step)
     assert not (tmp_path / f'reports/flow109/default_rows/{step}.json').exists()
 
 
-@pytest.mark.parametrize('step', ['D13', 'D14', 'D22', 'D25', 'D26', 'D30'])
+@pytest.mark.parametrize('step', ['D13', 'D14', 'D22', 'D25', 'D26'])
 def test_native_report_failure_is_published_with_the_original_limit(tmp_path, monkeypatch, step):
     args, _ = case(tmp_path, step)
     if step in ('D11', 'D30'):
