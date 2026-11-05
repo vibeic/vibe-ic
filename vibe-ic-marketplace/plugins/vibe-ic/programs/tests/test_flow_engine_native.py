@@ -116,6 +116,29 @@ def test_failed_chip_preparation_charges_native_time_once(tmp_path):
     assert len(chain.preparation_runs) == 1
 
 
+def test_restoring_native_state_replaces_cached_metrics(tmp_path):
+    if importlib.util.find_spec("librelane") is None:
+        pytest.skip("LibreLane runtime is required")
+    import flow_engine as engine
+    import librelane.flows
+    from librelane.state import State, DesignFormat
+    from librelane.common import Path as NativePath
+
+    database = tmp_path / "current.odb"
+    database.touch()
+    native = State({DesignFormat.ODB: NativePath(str(database))},
+                   metrics={"native_tool_count": 0, "upstream_area": 5})
+    (tmp_path / "state_out.json").write_text(native.dumps())
+    chain = engine.NativeChain(tmp_path, {"delivery_target": "rtl"})
+    chain.state = State(metrics={"cached_tool_count": 1, "upstream_area": 9})
+
+    chain.restore(tmp_path)
+
+    assert "cached_tool_count" not in chain.state.metrics
+    assert dict(chain.state.metrics) == {"native_tool_count": 0, "upstream_area": 5}
+    assert chain.state.get_by_df(DesignFormat.ODB) == str(database)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=Path, required=True)

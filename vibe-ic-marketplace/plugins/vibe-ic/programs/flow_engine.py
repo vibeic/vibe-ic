@@ -271,7 +271,7 @@ class NativeChain:
         path = directory / "state_out.json"
         if path.is_file():
             restored = State.load(read_json(path))
-            self.state = State(restored, metrics={**dict(self.state.metrics), **dict(restored.metrics)})
+            self.state = restored
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
         error = self.prepare()
