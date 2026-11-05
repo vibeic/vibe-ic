@@ -402,6 +402,16 @@ class NativeChain:
                 missing.append(name)
                 continue
             shutil.copyfile(str(value), destination / (self.config["DESIGN_NAME"] + extension))
+            if name == "lib" and self.state.get("def"):
+                from digital_hardmacro_gen import liberty_with_pg_pins, read_interface
+                from hardmacro_supply_intent import liberty_pg_pins
+                library = destination / (self.config["DESIGN_NAME"] + extension)
+                text = library.read_text()
+                if not liberty_pg_pins(text):
+                    pins = read_interface(Path(str(self.state["def"])).read_text())
+                    exported_library = liberty_with_pg_pins(text, self.config["DESIGN_NAME"], pins)
+                    if exported_library is not None:
+                        library.write_text(exported_library)
             exported.append(name)
         text = [f"# {self.config['DESIGN_NAME']} integration views", "",
                 "Views and reports were exported by LibreLane from its final State.",

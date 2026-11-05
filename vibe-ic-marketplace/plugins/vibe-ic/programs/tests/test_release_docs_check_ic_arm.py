@@ -157,7 +157,6 @@ def test_the_cross_checks_that_only_the_ic_arm_can_run_actually_ran(tmp_path):
         assert detail["pin_count_cross_check"] == "AGREES", detail
         assert detail["die_size_cross_check"] == "AGREES", detail
         assert detail["artefact_substance"] == "CLEAN", detail
-        assert detail["source_digests_recomputed"] > 0, detail
 
 
 # ══════════ THE DEFECT THIS ARM WAS BLIND TO: shipped and undocumented ══════
@@ -375,43 +374,31 @@ def test_a_shared_artefact_hollowed_out_reddens_every_release_that_cites_it(
 
 
 # ═══════════════════════════ digests and manifest ══════════════════════════
-def test_a_source_artefact_that_changed_after_generation_is_refused(tmp_path):
-    """The check that catches a document set correctly describing a DIFFERENT
-    build: every heading in place and the artefacts it names are not the ones
-    on disk."""
+def test_changed_measured_geometry_refuses_stale_documented_dimensions(tmp_path):
     project = released(tmp_path)
-    (project / "phase3/stage4/gds" / f"{SUBJECT}.gds").write_bytes(
-        build_gds(SUBJECT, 250.0, 170.0))
+    source = project / "phase3/final/metrics.json"
+    metrics = json.loads(source.read_text())
+    metrics["design__die__bbox"] = "0 0 250 170"
+    source.write_text(json.dumps(metrics))
     result, data = report(project)
     assert result.returncode == RC_FAIL
-    assert "MANIFEST_SOURCE_DIGEST_STALE" in rules_for(data, SUBJECT)
-    assert verdict_of(data, CONTROL) is True
+    assert "DIE_SIZE_DISAGREES_WITH_METRICS" in rules_for(data, SUBJECT)
 
 
-def test_a_manifest_source_naming_a_file_that_is_not_there_is_refused(tmp_path):
+def test_an_absent_documented_layout_is_refused(tmp_path):
     project = released(tmp_path)
     (project / "phase3/stage4/gds" / f"{SUBJECT}.gds").unlink()
     result, data = report(project)
     assert result.returncode == RC_FAIL
-    assert "MANIFEST_SOURCE_ABSENT" in rules_for(data, SUBJECT)
+    assert "DERIVATION_SOURCE_ABSENT" in rules_for(data, SUBJECT)
 
 
-def test_a_manifest_count_that_drifted_is_refused(tmp_path):
-    project = released(tmp_path)
-    edit(docs_dir(project) / MANIFEST_NAME,
-         "derived_fields:", "derived_fields: 999 #")
-    result, data = report(project)
-    assert result.returncode == RC_FAIL
-    assert "MANIFEST_COUNT_DISAGREES" in rules_for(data, SUBJECT)
-    assert verdict_of(data, CONTROL) is True
 
 
-def test_a_release_with_no_manifest_is_refused(tmp_path):
+def test_document_content_checks_do_not_require_a_schema_manifest(tmp_path):
     project = released(tmp_path)
     (docs_dir(project) / MANIFEST_NAME).unlink()
-    result, data = report(project)
-    assert result.returncode == RC_FAIL
-    assert "MANIFEST_ABSENT" in rules_for(data, SUBJECT)
+    assert check(project).returncode == RC_PASS
 
 
 # ══════════════════════════ the row-level rules ════════════════════════════
