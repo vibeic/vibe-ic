@@ -50,8 +50,6 @@ import _docker_memory as _dmem
 from metal_fill_config_gen import (build_metal_fill_config,
                                    density_rule_layer_identifiers)
 import die_level_deck_rule_attribution as _dla
-import step_preflight as _spf
-import flow_artifact_paths as _artifact_paths
 import librelane_contract as _lc
 from librelane_contract import (PDK_GUEST_ROOT, PROBE_DEADLINE_S, Refusal, _load, digest,  # noqa: E402
                                 DECLARATION_REL, declaration_config, resolve_step_configs,
@@ -1624,8 +1622,6 @@ def _validate_fill_stream_authority(project: Path, record: dict) -> None:
             raise Refusal('LL_FILL_STREAM_AUTHORITY_CHANGED', 'derived mapping recipe')
 
 
-@_artifact_paths.with_top
-@_spf.retained_step('37')
 def default_stream(project: Path, top: str, pdk: Any, container: str) -> dict:
     """One Default KLayout stream of the current filled DEF, then real fill.
 
@@ -1841,106 +1837,3 @@ def via_agreement(def_single: int, def_resolved: int,
         out['reason'] = (f"router single-cut {router['singlecut']} != DEF recount "
                          f'{def_single} on the same {total} vias')
     return out
-
-
-def execute(project: Path, context: dict) -> dict:
-    """Public stream, seal-ring and DFM rows use their existing native owners."""
-    import phase3_one_shot_runner as runner
-    project = Path(project).resolve()
-    step = context['requested_step']
-    result = {'step_id': step, 'component_status': 'NOT_MEASURED',
-              'default_row_status': 'NOT_MEASURED', 'completed': False,
-              'native_started': False, 'context_sha256': context.get('context_sha256')}
-    try:
-        if step == 'D60':
-            try:
-                record = validate_default_stream(project)
-            except (Refusal, OSError, ValueError, KeyError, TypeError):
-                pdk = runner._detect_pdk(project)
-                if pdk is None:
-                    raise ValueError('project PDK not available')
-                parameters = _artifact_paths.acceptance_parameters(project) or {}
-                top = parameters.get('top')
-                if not top:
-                    raise ValueError('project output top unavailable')
-                result['native_started'] = True
-                record = default_stream(project, top, pdk, '')
-            result.update(component_status='PASS', native_step=record.get('stream_step', 'KLayout.StreamOut'),
-                          native_report=record['stream_state'])
-        elif step == 'D61':
-            import librelane_ir_antenna as seal
-            promotion = validate_default_stream(project)
-            report = project / 'reports/phase3/die_finishing_librelane.json'
-            record = (_load(report).get('tool') or {}) if report.is_file() else {}
-            die, _, sources, why, _ = _lc._runner_floorplan(project)
-            if die is None:
-                raise ValueError('native seal-ring die unavailable: ' + why)
-            pre = _lc.project_path(project, promotion['stream'])
-            current = False
-            if record.get('state'):
-                try:
-                    before, after = _current_stage(project, _lc.project_path(project, record['state']),
-                                                    'KLayout.SealRing')
-                    output = _lc.project_path(project, after['gds'])
-                    current = (digest(_lc.project_path(project, before['gds'])) == digest(pre)
-                               and output.is_file() and record.get('die_area') == die
-                               and digest(output) == digest(Path(promotion['sealed'])))
-                except (Refusal, OSError, ValueError, KeyError, TypeError):
-                    current = False
-            if not current:
-                pdk = runner._detect_pdk(project)
-                if pdk is None:
-                    raise ValueError('project PDK not available')
-                image, root = runner._librelane_step_ctx(project, '26.5ic', pdk.name)
-                result['native_started'] = True
-                record = seal.run_sealring(project, image, root, pdk.name, gds_in=pre,
-                                           die_rect=die, die_source=sources['DIE_AREA'])
-                write_json(report, {'step': '26.5ic', 'mode': 'librelane',
-                                    'tool': record, 'image': image})
-                output = Path(record['sealed_gds'])
-                for key in ('sealed', 'prefill'):
-                    target = _lc.project_path(project, promotion[key])
-                    if target != output:
-                        shutil.copyfile(output, target)
-                    promotion[key + '_sha256'] = digest(target)
-                write_json(project / DEFAULT_STREAM_REL, promotion)
-                update_record(project, 'default_stream', promotion)
-            result.update(component_status='PASS', native_step='KLayout.SealRing',
-                          native_report=str(_lc.project_path(project, record['state'])))
-        elif step == 'D63':
-            import dfm_screen_check
-            report = project / 'reports/phase3/dfm_screen.json'
-            prior = _load(report) if report.is_file() else {}
-            arm = prior.get('density_native')
-            density = tool_density(project) or {}
-            count = density.get('errors') if density.get('status') == 'MEASURED' else None
-            if _count(count) is None:
-                promotion = validate_default_stream(project)
-                final = _lc.project_path(project, promotion['canonical'])
-                row = validate_density_result(project, arm, layout=final) if arm else {}
-                count = _count(row.get('value'))
-                if count is None:
-                    pdk = runner._detect_pdk(project)
-                    if pdk is None:
-                        raise ValueError('project PDK not available')
-                    image, root = runner._librelane_step_ctx(project, '35', pdk.name)
-                    result['native_started'] = True
-                    arm = run_density(project, image, root, pdk.name, gds=final, lane='35-dfm')
-                    count = _count(arm.get(DENSITY_METRIC))
-                density = {'state': arm['state']}
-            record = dfm_screen_check.audit(project)
-            if arm:
-                record['density_native'] = arm
-            write_json(report, record)
-            status = 'NOT_MEASURED' if _count(count) is None else 'PASS' if count == 0 else 'FAIL'
-            result.update(component_status=status, native_step='KLayout.Density',
-                          native_report=density.get('state'), advisory_report=str(report),
-                          metrics={DENSITY_METRIC: count}, advisories=record.get('findings', []))
-        else:
-            raise ValueError('unsupported finishing owner row: ' + step)
-        status = result['component_status']
-        result.update(default_row_status=status, flow109_acceptance=status, completed=status == 'PASS')
-    except (Refusal, OSError, ValueError, KeyError, TypeError) as exc:
-        result.update(reason='NATIVE_FINISHING_UNAVAILABLE', detail=str(exc))
-    write_json(project / 'reports/flow109' / step / 'result.json', result)
-    return result

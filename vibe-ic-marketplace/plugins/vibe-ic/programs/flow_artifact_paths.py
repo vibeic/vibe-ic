@@ -42,10 +42,6 @@ def current_parameters(project):
     scoped = _gate_parameters.get()
     if scoped is not None and scoped[0] == project and scoped[1] is not None:
         return scoped[1]
-    import execution_policy
-    runtime = execution_policy._ordinary_runtime
-    if runtime is not None and Path(runtime['project']).resolve() == project:
-        return runtime.get('parameters')
     return None
 
 
@@ -72,7 +68,7 @@ def acceptance_parameters(project, top=None):
 
 
 def top_arguments(project):
-    parameters = current_parameters(project)
+    parameters = acceptance_parameters(project)
     if parameters is None or 'top' not in parameters:
         return []
     resolve(project, GDS_SPEC, parameters)
@@ -87,7 +83,6 @@ def resolve(project, pattern, parameters=None):
     if row.get('required_output_selectors', {}).get(pattern) != 'invocation_top':
         raise ValueError('OUTPUT_TOP_SELECTOR_UNBOUND: ' + pattern)
 
-    import execution_policy
     project = Path(project).resolve()
     sources = []
     if parameters is not None:
@@ -95,11 +90,10 @@ def resolve(project, pattern, parameters=None):
     scoped = _gate_parameters.get()
     if scoped is not None and scoped[0] == project and scoped[1] is not None:
         sources.append(scoped[1])
-    runtime = execution_policy._ordinary_runtime
-    if runtime is not None and Path(runtime['project']).resolve() == project:
-        runtime_parameters = runtime.get('parameters', {})
-        if 'top' in runtime_parameters:
-            sources.append(runtime_parameters)
+    if not sources:
+        selected = acceptance_parameters(project)
+        if selected is not None:
+            sources.append(selected)
     tops = [source.get('top') for source in sources]
     if not tops or any(not isinstance(top, str) or not re.fullmatch(
             r'[A-Za-z_][A-Za-z0-9_$.-]*', top) for top in tops):
