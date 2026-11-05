@@ -377,9 +377,9 @@
       "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "analog_a1_spec_emit.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A01",
+        "parallel": true
       },
       "checks": [],
       "legacy_id": {
@@ -395,9 +395,9 @@
       "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "pdk_analog_completeness_check.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A02",
+        "parallel": true
       },
       "checks": [],
       "legacy_id": {
@@ -413,9 +413,9 @@
       "when": "mixed",
       "tool": {
         "kind": "adapter",
-        "program": "spec_analog_iface_extract.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "mixed",
+        "native_step": "M01",
+        "parallel": true
       },
       "checks": [
         {
@@ -448,9 +448,9 @@
       "when": "analog_testability",
       "tool": {
         "kind": "adapter",
-        "program": "spec_calibration_extract.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A03",
+        "parallel": true
       },
       "checks": [
         {
@@ -480,9 +480,9 @@
       "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "analog_a2_topology_emit.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A04",
+        "parallel": true
       },
       "checks": [
         {
@@ -514,9 +514,9 @@
       "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "analog_a3_netlist_emit.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A05",
+        "parallel": true
       },
       "checks": [
         {
@@ -549,9 +549,9 @@
       "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "analog_acceptance_tb_gen.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A06",
+        "parallel": true
       },
       "checks": [
         {
@@ -608,9 +608,9 @@
       "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "analog_real_corner_sweep.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A07",
+        "parallel": true
       },
       "checks": [
         {
@@ -623,8 +623,10 @@
             "line": 3364
           },
           "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "nominal_performance"
+            "kind": "declared_analog_specs",
+            "paths": [
+              "phase1/generated_docs/L5_ADI_SPEC.json#/analog_blocks"
+            ]
           },
           "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
@@ -1132,9 +1134,9 @@
       "when": "mixed",
       "tool": {
         "kind": "adapter",
-        "program": "mixed_signal_m3_run.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "mixed",
+        "native_step": "M02",
+        "parallel": true
       },
       "checks": [
         {
@@ -1182,9 +1184,9 @@
       "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "analog_real_corner_sweep.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A08",
+        "parallel": true
       },
       "checks": [
         {
@@ -1197,8 +1199,10 @@
             "line": 5414
           },
           "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "prelayout_performance"
+            "kind": "declared_analog_specs",
+            "paths": [
+              "phase1/generated_docs/L5_ADI_SPEC.json#/analog_blocks"
+            ]
           },
           "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         }
@@ -1216,9 +1220,9 @@
       "when": "analog_statistics",
       "tool": {
         "kind": "adapter",
-        "program": "analog_real_corner_sweep.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A09",
+        "parallel": true
       },
       "checks": [
         {
@@ -1250,9 +1254,9 @@
       "when": "analog_trim",
       "tool": {
         "kind": "adapter",
-        "program": "spec_calibration_extract.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A10",
+        "parallel": true
       },
       "checks": [
         {
@@ -1742,9 +1746,9 @@
       "when": "analog_physical",
       "tool": {
         "kind": "adapter",
-        "program": "analog_a5_layout_emit.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A11",
+        "parallel": true
       },
       "checks": [
         {
@@ -1775,15 +1779,10 @@
       "title": "Analog block physical verification",
       "when": "analog_physical",
       "tool": {
-        "kind": "librelane",
-        "steps": [
-          "KLayout.DRC",
-          "Checker.KLayoutDRC",
-          "Magic.SpiceExtraction",
-          "Checker.IllegalOverlap",
-          "Netgen.LVS",
-          "Checker.LVS"
-        ]
+        "kind": "adapter",
+        "adapter": "analog",
+        "native_step": "A12",
+        "parallel": true
       },
       "checks": [
         {
@@ -1850,10 +1849,10 @@
       "title": "Analog parasitic extraction",
       "when": "analog_physical",
       "tool": {
-        "kind": "librelane",
-        "steps": [
-          "Magic.RCX"
-        ]
+        "kind": "adapter",
+        "adapter": "analog",
+        "native_step": "A13",
+        "parallel": true
       },
       "checks": [
         {
@@ -1885,9 +1884,9 @@
       "when": "analog_physical",
       "tool": {
         "kind": "adapter",
-        "program": "analog_a7_post_layout_emit.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A14",
+        "parallel": true
       },
       "checks": [
         {
@@ -1900,8 +1899,10 @@
             "line": 7945
           },
           "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "postlayout_pvt_performance"
+            "kind": "declared_analog_specs",
+            "paths": [
+              "phase1/generated_docs/L5_ADI_SPEC.json#/analog_blocks"
+            ]
           },
           "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
         },
@@ -1934,9 +1935,9 @@
       "when": "analog_physical and analog_statistics",
       "tool": {
         "kind": "adapter",
-        "program": "analog_a7_post_layout_emit.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A15",
+        "parallel": true
       },
       "checks": [
         {
@@ -1983,9 +1984,9 @@
       "when": "analog_physical",
       "tool": {
         "kind": "adapter",
-        "program": "thermal_screen_check.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A16",
+        "parallel": true
       },
       "checks": [
         {
@@ -2033,10 +2034,10 @@
       "title": "Analog characterized views",
       "when": "analog_physical",
       "tool": {
-        "kind": "librelane",
-        "steps": [
-          "Magic.WriteLEF"
-        ]
+        "kind": "adapter",
+        "adapter": "analog",
+        "native_step": "A17",
+        "parallel": true
       },
       "checks": [
         {
@@ -2069,9 +2070,9 @@
       "when": "mixed_physical",
       "tool": {
         "kind": "adapter",
-        "program": "mixed_signal_top_lvs_run.py",
-        "function": "run",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "mixed",
+        "native_step": "M03",
+        "parallel": true
       },
       "checks": [
         {
@@ -2106,9 +2107,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "flow109_analog_floorplan.py",
-              "function": "native produce",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D31",
+              "parallel": true
             }
           },
           {
@@ -2184,9 +2185,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "pad_ring_gen.py",
-              "function": "execute existing pad ring",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D32",
+              "parallel": true
             }
           },
           {
@@ -2228,9 +2229,9 @@
       "when": "mixed_physical",
       "tool": {
         "kind": "adapter",
-        "program": "mixed_signal_power_domain_run.py",
-        "function": "main",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "mixed",
+        "native_step": "M04",
+        "parallel": true
       },
       "checks": [
         {
@@ -2785,9 +2786,9 @@
       "when": "analog_physical and not digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "analog_macro_top_gen.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "analog",
+        "native_step": "A18",
+        "parallel": true
       },
       "checks": [
         {
@@ -2891,11 +2892,10 @@
           {
             "when": "analog_physical and not digital_physical",
             "tool": {
-              "kind": "librelane",
-              "steps": [
-                "KLayout.DRC",
-                "KLayout.LVS"
-              ]
+              "kind": "adapter",
+              "adapter": "analog",
+              "native_step": "D42",
+              "parallel": true
             }
           },
           {
@@ -2991,11 +2991,10 @@
           {
             "when": "analog_physical and not digital_physical",
             "tool": {
-              "kind": "librelane",
-              "steps": [
-                "KLayout.Antenna",
-                "Checker.KLayoutAntenna"
-              ]
+              "kind": "adapter",
+              "adapter": "analog",
+              "native_step": "D43",
+              "parallel": true
             }
           },
           {
@@ -3192,9 +3191,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "magic_extract_spice_emit.py",
-              "function": "execute native candidate extraction",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D47",
+              "parallel": true
             }
           },
           {
@@ -3252,9 +3251,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "analog_bound_measurements.py",
-              "function": "run_measurements",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D48",
+              "parallel": true
             }
           },
           {
@@ -3521,9 +3520,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "analog_native_physical.py",
-              "function": "_resim existing A14 results",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D54",
+              "parallel": true
             }
           },
           {
@@ -3625,9 +3624,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "analog_native_interconnect_run.py",
-              "function": "execute retained native capture",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D56",
+              "parallel": true
             }
           },
           {
@@ -3693,9 +3692,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "analog_bound_measurements.py",
-              "function": "source-bound native voltage capture",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D57",
+              "parallel": true
             }
           },
           {
@@ -3761,9 +3760,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "analog_native_interconnect_run.py",
-              "function": "run native interconnect capture",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D58",
+              "parallel": true
             }
           },
           {
@@ -3915,9 +3914,9 @@
       "when": "mixed_physical",
       "tool": {
         "kind": "adapter",
-        "program": "mixed_signal_interface_si_check.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "mixed",
+        "native_step": "M05",
+        "parallel": true
       },
       "checks": [
         {
@@ -3947,9 +3946,9 @@
       "when": "mixed_physical",
       "tool": {
         "kind": "adapter",
-        "program": "mixed_signal_m3_run.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "mixed",
+        "native_step": "M06",
+        "parallel": true
       },
       "checks": [
         {
@@ -3987,9 +3986,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "analog_hardmacro_gds_emit.py",
-              "function": "execute Magic native stream",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D60",
+              "parallel": true
             }
           },
           {
@@ -4080,9 +4079,9 @@
       "when": "mixed_physical",
       "tool": {
         "kind": "adapter",
-        "program": "mixed_signal_top_lvs_run.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "mixed",
+        "native_step": "M07",
+        "parallel": true
       },
       "checks": [],
       "legacy_id": {
@@ -4490,9 +4489,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "flow109_final_extract.py",
-              "function": "execute",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D69",
+              "parallel": true
             }
           },
           {
@@ -4547,9 +4546,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "analog_bound_measurements.py",
-              "function": "explicit final analog mission",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "native_step": "D70",
+              "parallel": true
             }
           },
           {
@@ -4820,9 +4819,9 @@
       "when": "mixed_physical",
       "tool": {
         "kind": "adapter",
-        "program": "mixed_signal_m3_run.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "mixed",
+        "native_step": "M08",
+        "parallel": true
       },
       "checks": [
         {
@@ -4954,10 +4953,9 @@
       "when": "has_analog",
       "tool": {
         "kind": "adapter",
-        "program": "analog_real_corner_sweep.py",
-        "function": "run_block",
-        "native_report": "phase3/analog/*/corner_results.json#/spec_results",
-        "gap": "Direct L-document spec to SPICE-number comparator is not wired. Missing declared numbers must be NOT_MEASURED."
+        "adapter": "analog",
+        "native_step": "A19",
+        "parallel": true
       },
       "checks": [
         {
@@ -4993,9 +4991,9 @@
       "when": "mixed",
       "tool": {
         "kind": "adapter",
-        "program": null,
-        "function": null,
-        "gap": "Native invocation of mixed_signal_signoff_run and mixed_signal_signoff_check against current LibreLane State is missing. Existing programs still require the retired M1-M3 bound records; selected mixed-signal signoff is NOT_MEASURED."
+        "adapter": "mixed",
+        "native_step": "M09",
+        "parallel": true
       },
       "checks": [],
       "legacy_id": {

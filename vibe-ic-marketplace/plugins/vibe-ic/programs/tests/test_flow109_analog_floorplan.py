@@ -163,13 +163,13 @@ def test_incomplete_or_stale_input_refuses_before_native(carrier, fault, reason)
     assert row["native_started"] is False and row["executions"] == []
 
 
-def test_other_analog_profiles_still_refuse_full_window():
+def test_connected_analog_profiles_resolve_full_window():
     registry = flow109.load_registry()
     features = next(p["features"] for p in registry["reference_profiles"] if p["name"] == "Analog IC external trim")
     plan = flow109.resolve_plan(features)
-    with pytest.raises(flow109.Flow109Error) as error:
-        flow109.resolve_execution_window(plan, "D31", "D32")
-    assert error.value.code == "FLOW109_PRODUCER_UNIMPLEMENTED"
+    window = flow109.resolve_execution_window(plan, "D31", "D32")
+    assert [row["id"] for row in window["resolved_rows"]] == ["D31", "D32"]
+    assert all(row["profile"]["id"] == "analog_die" for row in window["resolved_rows"])
 
 
 def test_d31_digital_owner_is_unchanged():

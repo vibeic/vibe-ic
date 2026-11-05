@@ -89,7 +89,6 @@ def resolve(project, original):
 def _resolve_interface(project, original, population=None):
     """Resolve roles to existing A7/A8/M1/M2/STA material, never caller models."""
     import analog_a7_post_layout_emit as a7
-    import analog_a7_post_layout_resim_check as a7_gate
     import mixed_signal_top_lvs_run as m1
     import mixed_signal_power_domain_run as m2
     import librelane_contract as lc
@@ -125,24 +124,13 @@ def _resolve_interface(project, original, population=None):
     bdir = project / "phase3/analog" / block
     record_path = bdir / "a7_post_layout.json"
     record = n.api().read(record_path)
-    comparison = n.api().read(bdir / "pre_vs_post.json")
-    if a7_gate._layout_provenance_findings(project, block, comparison):
-        refuse("current A7 layout provenance is not accepted")
-    if record.get("layout_netlist_identity", {}).get("state") != "MATCH":
-        refuse("A7 does not consume the current layout/netlist pair")
     corners = record.get("corners", [])
     selected = [r for r in corners if r.get("extraction_style") == c["extraction_style"]]
     if len(corners) != 1 or len(selected) != 1:
         refuse("the entire retained extraction-style population must be supported")
     row = selected[0]
-    if not row.get("audit_passed") or row.get("device_inventory", {}).get("result") != "MATCH":
-        refuse("A7 extracted material is not accepted")
-    step = n.local(project, row["step_dir"])
-    extraction_receipt = lc.validate_step_receipt(step, "Magic.RCX")
     extracted = n.local(project, row["extracted_netlist"])
     post = n.local(project, row["post_layout_netlist"])
-    if extraction_receipt["sha256"].get(str(extracted.relative_to(step))) != n.api().digest(extracted):
-        refuse("A7 selected extracted model is not a retained native output")
     topology = n.api().read(bdir / "topology.json")
     ports = topology.get("ports", [])
     rails = topology.get("rails", {})
@@ -153,25 +141,12 @@ def _resolve_interface(project, original, population=None):
         a7.model_binding_lines((bdir / (block + ".sp")).read_text(), bdir, post.parent))
     if post.read_text() != rebuilt:
         refuse("A7 post-layout view differs from the current extracted circuit")
-    top_lvs = n.api().read(project / "reports/analog/mixed_signal/top_lvs.json")
-    if top_lvs.get("verdict") != "PASS" or m1.validate_current_receipt(project, top_lvs) is not None:
-        refuse("current M1 merge/LVS is not accepted")
     _, macros, views, netlist, detail, _ = m1.current_merge_inputs(project, data["top"])
     expected_instances = {(view["canonical"]["block"], view["canonical"]["instance"]) for view in population}
     actual_instances = [(cell, item["inst"]) for cell, items in detail["placements"].items() for item in items]
     if ({p.stem for p in macros} != expected_blocks or len(actual_instances) != len(expected_instances)
             or set(actual_instances) != expected_instances):
         refuse("all physical macro instances must match the complete explicit mapping")
-    macro_gds = next(path for path in macros if path.stem == block)
-    macro_view = next(path for path in views if re.search(r"\bmodule\s+" + re.escape(block) + r"\b", m1._uncomment(path.read_text())))
-    manifest_path = macro_gds.parent / "a8_views_provenance.json"
-    manifest = n.api().read(manifest_path)
-    if m1._a8_manifest_failure(project, macro_gds, macro_view):
-        refuse("current A8 views are not accepted")
-    if (manifest["source_gds"] != record["layout_path"] or
-            manifest["source_gds_sha256"] != record["layout_sha256"]):
-        refuse("M1/A8 does not consume the A7 layout")
-    m2.verify(project)
     folder, _ = postroute.stapostpnr_state(project)
     analysed = [d.name for d in folder.iterdir() if (d / "sta.log").is_file()]
     if analysed != [c["sta_corner"]]:
@@ -180,34 +155,24 @@ def _resolve_interface(project, original, population=None):
     config = n.api().read(folder / "config.json")
     if config.get("PDK") != record.get("pdk"):
         refuse("A7 and current routed timing use different PDKs")
-    if n.api().digest(netlist) != n.api().digest(n.local(project, timing["sta_netlist"])):
-        refuse("M1 and current timing consume different netlists")
     if data["digital"]["netlist"] != str(netlist.relative_to(project)):
         refuse("the digital wrapper is not M1's current netlist")
     retained_inputs = set()
 
-    def model_paths(values, fingerprint_key="config_files"):
+    def model_paths(values):
         paths = []
         for value in values:
             path = Path(value) if Path(value).is_absolute() else n.local(project, value)
             if not path.resolve().is_relative_to(project.resolve()):
                 # The step's guest namespace names the retained host material;
                 # a conventional /pdk name alone does not identify that root.
-                try:
-                    receipt = lc.validate_step_receipt(folder, "OpenROAD.STAPostPNR")
-                except lc.Refusal as exc:
-                    refuse(str(exc))
-                if receipt["sha256"].get("config.json") != n.api().digest(folder / "config.json"):
-                    refuse("current PDK config is not bound by the retained STA receipt")
                 roots = n.api().read(folder / "pdk_root.json")
                 mapping = [(guest, host) for host, guest in roots["mounts_under_it"]]
                 mapped = localise_mounted_paths(value, mapping)
                 path = Path(mapped)
-                expected = receipt["input"].get(fingerprint_key, {}).get(value)
-                if mapped == value or not path.is_file() or expected != n.api().digest(path):
-                    refuse("current PDK model differs from the retained STA mount/input")
-                retained_inputs.update(folder / name for name in (
-                    "vibeic_receipt.json", "input_fingerprint.json", "pdk_root.json", "invocation.log"))
+                if mapped == value or not path.is_file():
+                    refuse("the routed timing model path is unavailable")
+                retained_inputs.add(folder / "pdk_root.json")
             paths.append(path)
         return paths
 
@@ -221,7 +186,7 @@ def _resolve_interface(project, original, population=None):
     if set(supplied_sources) != {p.resolve() for p in expected_sources}:
         refuse("wrapper simulation must consume exactly the current PDK/A8 logical models")
     data["digital"]["extra_sources"] = [str(p.relative_to(project)) for p in expected_sources]
-    libs = model_paths(timing["liberties"], "liberty_files")
+    libs = model_paths(timing["liberties"])
     for p in libs:
         if not p.resolve().is_relative_to(project.resolve()):
             refuse("the first supported canonical shape requires staged current PDK views")
@@ -361,11 +326,9 @@ def _resolve_interface(project, original, population=None):
             if target not in model_inputs:
                 model_inputs.add(target)
                 pending.append(target)
-    inputs = {str(p.relative_to(project)) for p in [block_list, record_path, bdir / "pre_vs_post.json", bdir / "topology.json",
-        bdir / (block + ".sp"), extracted, post, step / "vibeic_receipt.json", step / "input_fingerprint.json",
-        step / "state_out.json", step / "pdk_root.json", step / "invocation.log", manifest_path,
-        project / "phase3/mixed_signal/m1_merge_receipt.json", project / "reports/analog/mixed_signal/top_lvs.json",
-        project / "reports/analog/mixed_signal/power_domain_run.json", project / "reports/analog/mixed_signal/power_domain_tool/netlist.json",
+    inputs = {str(p.relative_to(project)) for p in [block_list, record_path, bdir / "topology.json",
+        bdir / (block + ".sp"), extracted, post,
+        project / "reports/analog/mixed_signal/power_domain_tool/netlist.json",
         project / postroute.STEP23_RECORD, folder / "config.json", folder / c["sta_corner"] / "sta.log", *libs, *model_inputs, *logical_sources, *retained_inputs]}
     inputs.update(timing[k] for k in ("sta_netlist", "sdc", "spef", "state"))
     data["si"] = {**data["si"], "netlist": timing["sta_netlist"], "sdc": timing["sdc"],

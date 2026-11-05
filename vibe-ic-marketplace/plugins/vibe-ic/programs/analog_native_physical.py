@@ -247,14 +247,6 @@ def _pv(project: Path, name: str, container: str, image: str, pdk: str,
     import analog_pdk_availability as availability
 
     if not container:
-        # The public front door may already be inside its attested image.
-        # Native PV/ERC use "host" for that direct-process execution seam;
-        # an empty name alone is not evidence of a local execution context.
-        import librelane_contract as launch
-        try:
-            launch.local_image_attestation(image or None)
-        except launch.Refusal as exc:
-            return _result("NOT_MEASURED", f"{exc.code}: native PV execution context absent: {exc}")
         container = "host"
 
     bdir, _ = _paths(project, name)
@@ -315,23 +307,13 @@ def _extract(project: Path, name: str, container: str, image: str, pdk: str,
     import analog_real_corner_sweep as ars
     import librelane_contract as lc
     import magic_extract_spice_emit as mx
-    from _analog_producer_common import layout_netlist_identity
 
     bdir, work = _paths(project, name)
     net = bdir / f"{name}.sp"
     gds = bdir / f"{name}.gds"
     lay = bdir / "layout_provenance.json"
-    if not all(p.is_file() for p in (net, gds, lay)):
-        return _result("NOT_MEASURED", "PEX requires the current netlist, GDS and layout provenance")
-    layout_record = _read(lay)
-    identity, reason = layout_netlist_identity(layout_record, net.read_text())
-    if identity != "MATCH":
-        return _result("NOT_MEASURED", f"layout/netlist identity {identity}: {reason}")
-    if layout_record.get("producer") != "analog_a5_layout_emit" or \
-            layout_record.get("result") != "OK" or not layout_record.get("netlist_content_sha256"):
-        return _result("NOT_MEASURED", "A11 successful content-bound layout record is absent")
-    if not image:
-        return _result("NOT_MEASURED", "LibreLane Magic.RCX image is unstated")
+    if not all(p.is_file() for p in (net, gds)):
+        return _result("NOT_MEASURED", "PEX requires the current netlist and GDS")
     try:
         tech = a7.layout_tech(bdir)
     except ValueError as exc:

@@ -107,7 +107,6 @@ def derive(project, top):
     for kind in ("cosim", "si"):
         check = m3.audit(project, kind)
         checks.append({"step": "M3_" + kind, "verdict": check["verdict"],
-                       "evidence_sha256": check["output_sha256"],
                        "findings": check["findings"]})
     for kind in ("drc", "lvs", "antenna", "density"):
         try:

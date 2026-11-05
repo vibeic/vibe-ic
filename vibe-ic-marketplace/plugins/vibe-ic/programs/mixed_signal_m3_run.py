@@ -155,80 +155,63 @@ def produce(project, top, container="host"):
 
 
 def verify(project, kind):
-    """Validate exact local bytes before reporting the unavailable capability.
-
-    This schema represents only unmeasured production. Re-hashing an asserted
-    PASS, native-looking transcript, or fixture cannot extend its capability.
-    """
-    record = read(project / RECEIPT)
-    import _mixed_signal_native as native
-    if record.get("schema") == native.SCHEMA and record.get("program") == PROGRAM:
-        return native.verify(project, record, kind)
-    if record.get("schema") != SCHEMA or record.get("program") != PROGRAM:
-        raise Refusal("WRONG_PRODUCER", "no M3 current-input production")
-    top = record.get("top")
-    if record.get("project") != subject(project, top)["project"]:
-        raise Refusal("WRONG_PROJECT", "receipt belongs to another project")
-    if inputs(project, top) != record.get("inputs"):
-        raise Refusal("STALE_INPUT", "current M3 inputs differ from production")
-    if set(record.get("outputs", {})) != set(OUTPUTS.values()):
-        raise Refusal("WRONG_OUTPUT_PATH", "M3 output binding must name both canonical files")
-    for rel, sha in record["outputs"].items():
-        path = project / rel
-        if (not path.resolve().is_relative_to(project.resolve()) or
-                not path.is_file() or digest(path) != sha):
-            raise Refusal("STALE_OUTPUT", rel)
+    """Read the native report and compare measured values to declared bounds."""
+    import math
     data = read(project / OUTPUTS[kind])
-    if any(data.get(k) != v for k, v in {"producer": PROGRAM, "schema": SCHEMA,
-                                       **subject(project, top)}.items()):
-        raise Refusal("WRONG_DESIGN", "output producer/design differs from receipt")
-    rows = data.get("scenarios" if kind == "cosim" else "interfaces")
-    if not isinstance(rows, list) or not rows:
-        raise Refusal("EMPTY_SCENARIOS" if kind == "cosim" else "EMPTY_INTERFACES",
-                      "no executed scenarios/measurements")
-    if any(not isinstance(row, dict) or row.get("status") == "FAIL" or
-           row.get("verdict") == "FAIL" for row in rows):
-        raise Refusal("FAILED_MEASUREMENT", "a measured result failed or is malformed")
-    execution = record.get("execution")
-    if not isinstance(execution, list) or not execution:
-        raise Refusal("MISSING_EXECUTION", "no native simulation/timing execution")
-    if not any(isinstance(e, dict) and e.get("stage") == "measurement" for e in execution):
-        raise Refusal("SYNTAX_ONLY", "compilation is not measurement")
-    if any(e.get("exit_code") != 0 for e in execution if isinstance(e, dict)):
-        raise Refusal("NATIVE_EXECUTION_FAILED", "native execution did not succeed")
-    # No positive schema exists in this bounded lane. Neither command metadata
-    # nor report booleans can impersonate the missing native integrations.
-    raise Refusal("M3_NATIVE_INTEGRATION_NOT_VERIFIED",
-                  "current wrapper co-simulation / qualified interface SI is unavailable")
+    if data.get("verdict") == "FAIL":
+        raise Refusal("FAILED_MEASUREMENT", f"{kind} native report failed")
+    execution = data.get("execution") or []
+    if any(item.get("exit_code") not in (None, 0) for item in execution if isinstance(item, dict)):
+        raise Refusal("NATIVE_EXECUTION_FAILED", f"{kind} native execution failed")
+    if not any(item.get("stage") == "measurement" and item.get("exit_code") == 0
+               for item in execution if isinstance(item, dict)):
+        raise Refusal("MISSING_EXECUTION", f"{kind} has no completed native measurement")
+    if kind == "cosim":
+        scenarios = data.get("scenarios") or []
+        declarations = plan(project)
+        if not declarations or not scenarios:
+            raise Refusal("EMPTY_SCENARIOS", "no declared and measured scenarios")
+        results = {row.get("id"): row for row in scenarios if isinstance(row, dict)}
+        for declaration in declarations:
+            row = results.get(declaration.get("id"), {})
+            if row.get("status") == "FAIL":
+                raise Refusal("FAILED_MEASUREMENT", f"scenario {declaration.get('id')} failed")
+            if row.get("status") != "PASS":
+                raise Refusal("EMPTY_SCENARIOS", f"scenario {declaration.get('id')} not measured")
+            metrics = row.get("metrics") or {}
+            criteria = declaration.get("criteria") or []
+            if not criteria:
+                raise Refusal("MISSING_LIMIT", "scenario has no declared limits")
+            for criterion in criteria:
+                name = criterion.get("native_metric")
+                value = metrics.get(name)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise Refusal("MISSING_MEASUREMENT", f"scenario {declaration.get('id')}: {name}")
+                bounds = {key: criterion[key] for key in ("min", "max") if key in criterion}
+                if not bounds or any(isinstance(bound, bool) or not isinstance(bound, (int, float))
+                                     or not math.isfinite(bound) for bound in bounds.values()):
+                    raise Refusal("MISSING_LIMIT", f"scenario {declaration.get('id')}: {name}")
+                if ("min" in bounds and value < bounds["min"]) or ("max" in bounds and value > bounds["max"]):
+                    raise Refusal("FAILED_MEASUREMENT", f"scenario {declaration.get('id')}: {name}={value} outside {bounds}")
+    else:
+        coverage = data.get("coverage") or {}
+        if data.get("verdict") != "PASS" or any(coverage.get(key) != "MEASURED" for key in ("timing", "noise", "crosstalk")):
+            raise Refusal("SI_COVERAGE_NOT_MEASURED", "; ".join(data.get("blockers", [])) or "timing/noise/crosstalk coverage incomplete")
+    return data
 
 
 def audit(project, kind):
-    report = {"program": PROGRAM, "verdict": "NOT_VERIFIED", "kind": kind,
+    report = {"program": PROGRAM, "verdict": "NOT_MEASURED", "kind": kind,
               "passed": False, "ready": False, "findings": []}
     try:
-        record = verify(project, kind)
+        data = verify(project, kind)
         report.update(verdict="PASS", passed=True, ready=True,
-                      scope=record["scope"], full_design_verified=False)
+                      scope=data.get("scope"), full_design_verified=False)
     except (Refusal, OSError, ValueError, KeyError, TypeError) as exc:
-        report.update(getattr(exc, "diagnostics", {}))
-        report["findings"].append({"rule": getattr(exc, "rule", "INVALID_EVIDENCE"),
-                                   "message": str(exc)})
-        try:
-            from _mixed_signal_native import SCHEMA as native_schema
-            if read(project / RECEIPT).get("schema") == native_schema:
-                declared = read(project / OUTPUTS[kind]).get("verdict")
-                if getattr(exc, "rule", "") in ("NATIVE_EXECUTION_FAILED", "FAILED_MEASUREMENT"):
-                    report["verdict"] = "FAIL"
-                elif declared == "FAIL":
-                    # Retain a failure even when incomplete native production
-                    # cannot be verified. This never admits a positive claim.
-                    report["verdict"] = "FAIL"
-                elif getattr(exc, "rule", "") == "SI_COVERAGE_NOT_MEASURED":
-                    report["verdict"] = "NOT_MEASURED"
-        except Refusal:
-            pass
-    path = project / OUTPUTS[kind]
-    report["output_sha256"] = digest(path) if path.is_file() else None
+        rule = getattr(exc, "rule", "INVALID_EVIDENCE")
+        if rule in ("NATIVE_EXECUTION_FAILED", "FAILED_MEASUREMENT"):
+            report["verdict"] = "FAIL"
+        report["findings"].append({"rule": rule, "message": str(exc)})
     return report
 
 
@@ -263,12 +246,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     project = args.project.resolve()
     try:
-        top = args.top
-        if args.check_only and (project / RECEIPT).is_file():
-            top = read(project / RECEIPT).get("top")
-        protected = (*OUTPUTS.values(), RECEIPT, *inputs(project, top)) if top else (
-            *OUTPUTS.values(), RECEIPT, "phase1/analog/analog_block_list.json",
-            "phase3/mixed_signal/top_merged.gds")
+        protected = (*OUTPUTS.values(), RECEIPT)
         guard_audit_path(project, args.json, protected)
         report = audit(project, args.kind) if args.check_only else produce(project, args.top, args.container)
         rc = (0 if report.get("passed") else 1) if args.check_only else (

@@ -22,7 +22,7 @@ def generate(registry, native):
     known = native["steps"]
     for row in registry["rows"]:
         name = slug(row["name"])
-        profiles = []
+        profiles, replaced_checks = [], []
         for profile in row["profiles"]:
             dispatch = profile.get("dispatch", {})
             selected = [s for s in profile.get("native_steps", []) if s in known]
@@ -41,9 +41,15 @@ def generate(registry, native):
                         "gap": "Native invocation must be adapted without the old acceptance wrappers."}
                 if name in native.get("adapters", {}):
                     tool = {"kind": "adapter", **native["adapters"][name]}
+            replacements = native.get("profile_tools", {}).get(name, {})
+            if profile["select_when"] in replacements:
+                replaced_checks.append({"when": profile["select_when"], "tool": tool})
+                tool = replacements[profile["select_when"]]
             if profile["select_when"] == "otherwise":
+                existing = {item["select_when"] for item in row["profiles"]}
                 for condition, replacement in native.get("profile_tools", {}).get(name, {}).items():
-                    profiles.append({"when": condition, "tool": replacement})
+                    if condition not in existing:
+                        profiles.append({"when": condition, "tool": replacement})
                 if name in native.get("report_rows", {}):
                     tool = {"kind": "native_report", "from": native["report_rows"][name]}
                     readers = native.get("report_check_readers", {}).get(name)
@@ -54,7 +60,7 @@ def generate(registry, native):
             profiles.append({"when": profile["select_when"], "tool": tool})
 
         checks = []
-        for profile in profiles:
+        for profile in replaced_checks + profiles:
             for step in profile["tool"].get("steps", []):
                 for check in native.get("checks", {}).get(step, []):
                     item = {**check, "when": profile["when"]}
