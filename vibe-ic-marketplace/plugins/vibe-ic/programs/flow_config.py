@@ -25,6 +25,11 @@ SETTINGS = {
     "PDN_CORE_RING_CONNECT_TO_PADS", "PDN_VWIDTH", "PDN_HWIDTH",
     "PDN_VPITCH", "PDN_HPITCH", "PDN_VSPACING", "PDN_HSPACING",
 }
+IMPLEMENTATION_SETTINGS = {"RUN_POST_GRT_RESIZER_TIMING", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT"}
+
+
+def implementation_setting(key: str) -> bool:
+    return key in IMPLEMENTATION_SETTINGS or key.startswith("CTS_")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -74,10 +79,8 @@ def _chip_pdn(project: Path, pdk: str) -> dict:
     registry = _load(PROGRAMS / "pdk_registry.json")
     ring = next((row.get("pdn_ring", {}) for row in registry.get("pdks", [])
                  if row.get("name") == pdk), {})
-    result: dict[str, Any] = {"PDN_SKIPTRIM": True}
-    if ring:
-        result.update(PDN_CORE_RING=True,
-                      PDN_CORE_RING_CONNECT_TO_PADS=bool(ring.get("connect_to_pad_layers")))
+    result: dict[str, Any] = {"PDN_SKIPTRIM": True, "PDN_CORE_RING": True,
+                              "PDN_CORE_RING_CONNECT_TO_PADS": True}
     for field, keys in {
         "layers": ("PDN_CORE_VERTICAL_LAYER", "PDN_CORE_HORIZONTAL_LAYER"),
         "widths": ("PDN_CORE_RING_VWIDTH", "PDN_CORE_RING_HWIDTH"),
@@ -220,7 +223,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
         config.update(_chip_pdn(project, pdk))
     implementation = _load(project / "plugin_output/declaration.json")
     config.update({key: value for key, value in implementation.items()
-                   if key == "RUN_POST_GRT_RESIZER_TIMING" or key.startswith("CTS_")})
+                   if implementation_setting(key) or key.startswith("PDN_")})
     config.update(_settings(fields, pdk))
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
@@ -256,8 +259,34 @@ def main() -> int:
     parser.add_argument("--project", required=True, type=Path)
     parser.add_argument("--route", choices=("ic", "ip", "DIE", "HARDMACRO"))
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=JSON",
+                        help="Record an implementation setting in the existing declaration.")
     args = parser.parse_args()
-    print(write_config(args.project, route=args.route, output=args.output))
+    previous = None
+    if args.set:
+        declaration = args.project.resolve() / "plugin_output/declaration.json"
+        previous = declaration.read_bytes() if declaration.exists() else None
+        choices = _load(declaration)
+        for item in args.set:
+            key, separator, raw = item.partition("=")
+            if not separator or not implementation_setting(key):
+                parser.error(f"Unsupported implementation setting: {item}")
+            try:
+                choices[key] = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                parser.error(f"Invalid JSON for {key}: {exc}")
+        declaration.parent.mkdir(parents=True, exist_ok=True)
+        declaration.write_text(json.dumps(choices, indent=2) + "\n")
+    try:
+        output = write_config(args.project, route=args.route, output=args.output)
+    except Exception:
+        if args.set:
+            if previous is None:
+                declaration.unlink()
+            else:
+                declaration.write_bytes(previous)
+        raise
+    print(output)
     return 0
 
 

@@ -10,6 +10,8 @@ NEGATIVES (§4.05 NO-LEAK): >=5 fixtures JUST outside the proven envelope that M
 return None (a wrong sample is strictly worse than a SKIP).
 """
 import os
+import shutil
+import subprocess
 import sys
 
 import pytest
@@ -153,15 +155,62 @@ def test_edge_capture_set_and_hold():
     assert "out <= out | (~in & d_last);" in rtl
 
 
-def test_dual_edge_flip_flop():
-    rtl = M.synth(_prompt("Prob078_dualedge"))
+@pytest.mark.parametrize("width", [1, 5])
+def test_dual_edge_flip_flop_passes_lint_and_samples_both_edges(tmp_path, width):
+    tools = {name: shutil.which(name) for name in ("verilator", "iverilog", "vvp")}
+    if not all(tools.values()):
+        pytest.skip("Verilator and Icarus are required for the generated RTL check")
+    prompt = (
+        f"module EdgeSampler(input clock, input [{width - 1}:0] d, "
+        f"output reg [{width - 1}:0] sampled); endmodule\n"
+        "Implement a dual-edge triggered flip-flop. Sample d on both edges of "
+        "the clock and hold the sampled value between edges. There is no reset."
+    )
+    rtl = M.synth(prompt, top="EdgeSampler")
     assert rtl is not None
-    assert "always @(posedge clk)" in rtl
-    assert "always @(negedge clk)" in rtl
-    assert "qp <= d;" in rtl
-    assert "qn <= d;" in rtl
-    # the delta-cycle mux on clk
-    assert "q <= clk ? qp : qn;" in rtl
+    design = tmp_path / "EdgeSampler.sv"
+    design.write_text(rtl)
+    lint = subprocess.run(
+        [tools["verilator"], "--lint-only", "--top-module", "EdgeSampler", str(design)],
+        capture_output=True, text=True, check=False,
+    )
+    assert lint.returncode == 0, lint.stdout + lint.stderr
+    challenge = tmp_path / "challenge.sv"
+    challenge.write_text(f"""
+module challenge;
+  reg clock = 0;
+  reg [{width - 1}:0] d = 0;
+  wire [{width - 1}:0] sampled;
+  reg [{width - 1}:0] expected;
+  integer value;
+  EdgeSampler dut(clock, d, sampled);
+  initial begin
+    for (value = 0; value < {1 << width}; value = value + 1) begin
+      d = value;
+      #2; clock = 1; expected = d;
+      #1; if (sampled !== expected) $fatal(1, "rising-edge sample");
+      d = ~d;
+      #1; if (sampled !== expected) $fatal(1, "hold during high clock");
+      #2; clock = 0; expected = d;
+      #1; if (sampled !== expected) $fatal(1, "falling-edge sample");
+      d = ~d;
+      #1; if (sampled !== expected) $fatal(1, "hold during low clock");
+    end
+    $display("EDGE_SAMPLING_PASS");
+    $finish;
+  end
+endmodule
+""")
+    executable = tmp_path / "simulation"
+    compiled = subprocess.run(
+        [tools["iverilog"], "-g2012", "-s", "challenge", "-o", str(executable),
+         str(design), str(challenge)], capture_output=True, text=True, check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    simulated = subprocess.run([tools["vvp"], str(executable)],
+                               capture_output=True, text=True, check=False)
+    assert simulated.returncode == 0, simulated.stdout + simulated.stderr
+    assert "EDGE_SAMPLING_PASS" in simulated.stdout
 
 
 # --------------------------------------------------------------------------- #

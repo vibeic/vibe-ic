@@ -149,12 +149,13 @@ def _library(native: dict):
     lefs = _paths(_required(native, "PAD_LEFS"))
     libs = _paths(_required(native, "PAD_LIBS"))
     configs = pads.discover_io_library_configs(root, pdk)
-    sizes, classes, roles, sources = {}, {}, {}, {}
+    sizes, classes, roles, sources, pin_ports = {}, {}, {}, {}, {}
     for path in lefs:
         text = path.read_text()
         sizes.update(pads.parse_lef_macros(text))
         classes.update(pads.parse_lef_macro_classes(text))
         roles.update(pads.parse_lef_pin_roles(text))
+        pin_ports.update(pads.parse_lef_pin_ports(text))
         for master in pads.parse_lef_macros(text):
             sources.setdefault(master, []).append(path)
     corners = _required(native, "PAD_CORNER")
@@ -171,7 +172,7 @@ def _library(native: dict):
             "prefix": prefix, "terminals": terminals, "cells": cells,
             "conflicts": conflicts, "lefs": lefs, "libs": libs,
             "configs": configs, "root": root, "pdk": pdk, "verilog": verilog,
-            "pg_pins": pg_pins}
+            "pg_pins": pg_pins, "pin_ports": pin_ports}
 
 
 def _ring(project: Path, native: dict, ports: list[dict], library: dict):
@@ -466,6 +467,32 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
                   FP_SIZING="absolute", DIE_AREA=die, CORE_AREA=core,
                   PDN_ENABLE_PINS=False, MAGIC_EXT_USE_GDS=True,
                   VDD_NETS=[power], GND_NETS=[ground], PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+    if native.get("PDN_CORE_RING") and native.get("PDN_CORE_RING_CONNECT_TO_PADS"):
+        ring_layers = {native.get(f"PDN_CORE_{axis}_LAYER") or native[f"PDN_{axis}_LAYER"]
+                       for axis in ("VERTICAL", "HORIZONTAL")}
+        connected_layers = ring_layers | {native[f"PDN_{axis}_LAYER"]
+                                         for axis in ("VERTICAL", "HORIZONTAL")}
+        if native.get("PDN_ENABLE_RAILS"):
+            connected_layers.add(native["PDN_RAIL_LAYER"])
+        access_layers = {layer for entry in chosen.values()
+                         for key in ("power_connections", "supply_connections")
+                         for pin, net in entry.get(key, {}).items()
+                         if net in (power, ground)
+                         and library["roles"].get(entry["master"], {}).get(pin, (None, None))[1]
+                         in ("POWER", "GROUND")
+                         for layer, _ in library["pin_ports"].get(entry["master"], {}).get(pin, [])}
+        access_layers -= connected_layers
+        if access_layers:
+            text = Path(str(_required(native, "PDN_CFG"))).read_text()
+            ring_layer = native.get("PDN_CORE_VERTICAL_LAYER") or native["PDN_VERTICAL_LAYER"]
+            for layer in sorted(access_layers):
+                command = "add_pdn_connect -grid stdcell_grid -layers {" + layer + " " + ring_layer + "}"
+                reverse = "add_pdn_connect -grid stdcell_grid -layers {" + ring_layer + " " + layer + "}"
+                if command not in text and reverse not in text:
+                    text += "\n" + command + "\n"
+            pdn = destination / "pdn_cfg.tcl"
+            pdn.write_text(text)
+            result["PDN_CFG"] = str(pdn)
     result.update({"PAD_" + full: ordered[side] for side, full in SIDES.items()})
     tool_seconds = sum(run["tool_seconds"] for run in runs)
     report = {"ports": ports, "pads": chosen, "pad_sides": ordered,
