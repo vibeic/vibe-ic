@@ -138,6 +138,11 @@ def test_actual_consumer_rejects_changed_or_incomplete_evidence(case, change):
         reseal(project, mode='bmc')
     answer = metrics.accept_d14(project, ctx)
     assert answer['status'] == 'NOT_MEASURED', answer
+    if change == 'owner':
+        assert rows(answer)['unproved_required_properties']['status'] == 'PASS', answer
+        assert rows(answer)['proof_partition_coverage']['status'] == 'PASS', answer
+        assert rows(answer)['vacuous_required_proofs']['status'] == 'NOT_MEASURED', answer
+        return
     assert rows(answer)['unproved_required_properties']['status'] == 'NOT_MEASURED', answer
     assert rows(answer)['proof_partition_coverage']['status'] == 'NOT_MEASURED', answer
 

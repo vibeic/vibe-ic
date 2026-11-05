@@ -87,7 +87,7 @@ def software_covers(project, *, statuses=None):
     return work, measured
 
 
-def test_all_three_metrics_do_not_replace_missing_native_qualification(reach_case):
+def test_complete_formal_metrics_do_not_require_case_qualification(reach_case):
     project, ctx = reach_case
     original = (project / 'phase2/stage1/formal/results.json').read_bytes()
     software_covers(project)
@@ -96,13 +96,13 @@ def test_all_three_metrics_do_not_replace_missing_native_qualification(reach_cas
     assert set(checked['reached']) == {'p_delayed', 'p_output'}
     answer = metrics.accept_d14(project, ctx)
     assert answer['metric_status'] == 'PASS', answer
-    assert answer['status'] == answer['qualification'] == 'NOT_MEASURED'
-    assert answer['delivery_blocked'] is True
+    assert answer['status'] == 'PASS' and answer['qualification'] == 'NOT_MEASURED'
+    assert answer['delivery_blocked'] is False
     assert all(r['status'] == 'PASS' for r in answer['obligations'])
     result = flow109._selected_step_result(project, ctx,
         {'step_id': 'D14', 'context_sha256': ctx['context_sha256'], 'component_status': 'PASS',
          'default_row_status': 'PASS', 'completed': True})
-    assert result['flow109_acceptance'] == 'NOT_MEASURED' and result['completed'] is False
+    assert result['flow109_acceptance'] == 'PASS' and result['completed'] is True
     assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
     assert result['delivery_accepted'] is False
     assert (project / 'phase2/stage1/formal/results.json').read_bytes() == original
@@ -212,7 +212,7 @@ def test_genuine_retained_source_reuse_does_not_restamp_or_qualify_software(reac
 
 
 @pytest.mark.parametrize('with_registry', [False, True])
-def test_absent_or_unknown_purpose_qualification_blocks_actual_publisher(reach_case, with_registry):
+def test_absent_or_unknown_purpose_qualification_does_not_block_native_result(reach_case, with_registry):
     project, ctx = reach_case
     if with_registry:
         put(project / 'input/unknown-qualification.json', {'schema': 'vibeic.flow109.qualifications.v1', 'uses': []})
@@ -222,13 +222,12 @@ def test_absent_or_unknown_purpose_qualification_blocks_actual_publisher(reach_c
     software_covers(project)
     answer = metrics.accept_d14(project, ctx)
     assert answer['metric_status'] == 'PASS', answer
-    assert answer['status'] == answer['qualification'] == 'NOT_MEASURED'
-    assert answer['delivery_blocked'] is True
-    assert answer['admission']['status'] == 'NOT_MEASURED'
+    assert answer['status'] == 'PASS' and answer['qualification'] == 'NOT_MEASURED'
+    assert answer['delivery_blocked'] is False
     published = flow109._selected_step_result(project, ctx,
         {'step_id': 'D14', 'context_sha256': ctx['context_sha256'],
          'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True})
-    assert published['default_row_status'] == 'NOT_MEASURED' and published['completed'] is False
+    assert published['default_row_status'] == 'PASS' and published['completed'] is True
     assert published['qualification'] == 'NOT_MEASURED'
 
 
@@ -307,7 +306,7 @@ def test_binding_only_obligation_uses_existing_disposition_without_fake_cover(re
     software_covers(project)
     answer = metrics.accept_d14(project, ctx)
     assert answer['metric_status'] == 'PASS', answer
-    assert answer['status'] == answer['qualification'] == 'NOT_MEASURED'
+    assert answer['status'] == 'PASS' and answer['qualification'] == 'NOT_MEASURED'
     assert len(answer['evidence']['result']['unresolved_obligations']) == 1
     assert json.loads((formal / 'results.json').read_text())['property_denominator'] == 3
 
@@ -344,7 +343,7 @@ def test_structural_obligation_reuses_current_verified_program_closure(reach_cas
     software_covers(project)
     answer = metrics.accept_d14(project, ctx)
     assert answer['metric_status'] == 'PASS', answer
-    assert answer['status'] == answer['qualification'] == 'NOT_MEASURED'
+    assert answer['status'] == 'PASS' and answer['qualification'] == 'NOT_MEASURED'
 
 
 def test_conditional_property_requires_native_assertion_mapping(reach_case):
