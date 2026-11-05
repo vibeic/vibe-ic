@@ -315,8 +315,8 @@
       "title": "Package load and test-interface feasibility",
       "when": "package_interface",
       "tool": {
-        "kind": "adapter",
-        "adapter": "package_interface"
+        "kind": "native_report",
+        "from": "die_floorplan_and_macros"
       },
       "checks": [
         {
