@@ -100,12 +100,14 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
 def testbenches(project, tool):
     if tool.get("testbenches"):
         return [Path(p) if Path(p).is_absolute() else project / p for p in tool["testbenches"]]
+    from testbench_gen import is_unit_tb
     paths = []
     for name in ("sim", "sim_unit", "sim_full_stack", "sim_professional"):
         root = project / "phase2/stage1" / name
-        for pattern in ("tb*.v", "tb*.sv", "tb*.py"):
+        for pattern in ("*.v", "*.sv", "tb*.py"):
             paths.extend(p for p in sorted(root.rglob(pattern))
-                         if not any(part in {"build", "obj_dir", "sim_build", "cov_build"} for part in p.parts))
+                         if not any(part in {"build", "obj_dir", "sim_build", "cov_build"} for part in p.parts)
+                         and (p.name.startswith("tb") or is_unit_tb(p)))
     return list(dict.fromkeys(paths))
 
 
@@ -129,8 +131,15 @@ def cocotb_run(directory, tb, files, top, commands, simulator):
 def simulation(project, directory, tool, commands):
     import verilator_coverage_measure as coverage
     from _sim_results_bridge import parse_junit
-    from sdf_gate_sim import parse_self_check_stdout, parse_sim_stdout
+    from sdf_gate_sim import parse_l10_case_stdout, parse_sim_stdout
     files, top = inputs(project, tool)
+    if files:
+        from testbench_gen import emit_unit_tbs
+        scenarios = {}
+        emitted = emit_unit_tbs(project, top=top, report=scenarios, scaffold=False, case_stated=True)
+        if emitted == -2 or scenarios.get("arithmetic_scenario_requests"):
+            return commands.result(detail="Declared scenario producer needs author input: "
+                                   + json.dumps(scenarios))
     benches = testbenches(project, tool)
     if files and not benches:
         from arith_oracle_tb_gen import generate as arithmetic
@@ -152,6 +161,7 @@ def simulation(project, directory, tool, commands):
     for index, tb in enumerate(benches):
         run = directory / f"testbench_{index + 1}"
         run.mkdir()
+        failures = None
         if tb.suffix == ".py":
             if not top or not shutil.which("cocotb-config"):
                 return commands.result(reports=reports, detail="Cocotb and the declared top are required.")
@@ -159,7 +169,7 @@ def simulation(project, directory, tool, commands):
             report = run / "functional/results.xml"
             summary = parse_junit(report)
             if summary and summary["tests"] > 0 and not summary["skipped"]:
-                assertions.append(summary["failures"] + summary["errors"])
+                failures = summary["failures"] + summary["errors"]
             completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator")
             data = run / "coverage/coverage.dat"
             if report.is_file():
@@ -175,11 +185,11 @@ def simulation(project, directory, tool, commands):
             functional = (commands.run(["vvp", executable], cwd=tb.parent)
                           if compiled is not None and compiled.returncode == 0 else compiled)
             if functional is not None and compiled is not None and compiled.returncode == 0:
-                parsed = parse_self_check_stdout(functional.stdout + functional.stderr)
+                parsed = parse_l10_case_stdout(functional.stdout + functional.stderr)
                 if parsed["verdict"] is None:
                     parsed = parse_sim_stdout(functional.stdout + functional.stderr)
                 if parsed["verdict"] is not None and parsed["total"] > 0:
-                    assertions.append(parsed["total"] - parsed["passed"])
+                    failures = parsed["total"] - parsed["passed"]
             try:
                 data = coverage.verilate_tb_and_run(list(map(str, files)), str(tb),
                     str(run / "build"), str(run), exec_fn=invoke, build_jobs=8)
@@ -187,11 +197,13 @@ def simulation(project, directory, tool, commands):
                 completed = True
             except SystemExit:
                 completed = None
+        if failures is not None:
+            assertions.append(failures)
         native_steps.extend([
             {"name": "Icarus.Functional", "ran": functional is not None,
              "exit_code": functional.returncode if functional is not None else None,
-             "status": ("PASS" if functional.returncode == 0 and len(assertions) == index + 1
-                        else "FAIL" if functional.returncode else "NOT_MEASURED") if functional is not None else "NOT_MEASURED"},
+             "status": ("FAIL" if functional.returncode or failures
+                        else "PASS" if failures == 0 else "NOT_MEASURED") if functional is not None else "NOT_MEASURED"},
             {"name": "Verilator.Coverage", "ran": completed is not None,
              "exit_code": (getattr(completed, "returncode", 0) if completed is not None else None),
              "status": "PASS" if completed is not None and not getattr(completed, "returncode", 0)

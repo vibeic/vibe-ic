@@ -1,3 +1,4 @@
+import json
 import shutil
 from pathlib import Path
 
@@ -27,3 +28,47 @@ def test_icarus_result_judges_functional_checks_when_exit_is_zero(tmp_path, four
     assert result["native_steps"][0]["name"] == "Icarus.Functional"
     measured = [{"status": "PASS" if failures == 0 else "FAIL"}]
     assert flow_engine.evaluate(flow_engine.ToolResult(**result), measured) == ("PASS" if failures == 0 else "FAIL")
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_declared_scenarios_run_beside_existing_sample_bench(tmp_path, different):
+    if not all(shutil.which(name) for name in ("iverilog", "vvp", "verilator", "verilator_coverage")):
+        pytest.skip("Native Icarus and Verilator tools are required")
+    from test_serial_parallel_declared_function_oracle import _declared_scenario_project
+    import arith_oracle_tb_gen as arithmetic
+
+    project = tmp_path / "design"
+    cases = _declared_scenario_project(project, mode="wrong_product" if different else "good")
+    cases[1].update(name="random_pairs", stimulus="At least 10000 random operand pairs",
+                    coverage_scope="At least 10000 random operand pairs")
+    docs = project / "phase1/generated_docs/L10_TEST_CASES.json"
+    docs.write_text(json.dumps({"test_cases": cases}))
+    sample, code = arithmetic.generate(project, "digital_arithmetic_primitive")
+    assert code == 0 and sample["vector_count"] == 28
+    result = execute(project, project / "output", {"adapter": "simulation"}, {})
+    logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
+                     if str(path).endswith(".log"))
+    assert "ARITH_SCENARIO_DONE transactions=10000 comparisons=80000" in logs
+    assert "ARITH_SCENARIO_DONE transactions=9 comparisons=72" in logs
+    assert "ARITH_SCENARIO_DONE transactions=180 comparisons=1440" in logs
+    statuses = [row["status"] for row in result["native_steps"] if row["name"] == "Icarus.Functional"]
+    assert len(statuses) == 4
+    assert set(statuses) == ({"FAIL"} if different else {"PASS"})
+    if different:
+        assert result["exit_code"] != 0
+    else:
+        assert result["metrics"]["assertion_failures"] == 0
+        assert result["exit_code"] == 0
+
+
+def test_unresolved_declared_scenario_does_not_use_sample_success(tmp_path):
+    from test_serial_parallel_declared_function_oracle import _public_scenario_input
+    import arith_oracle_tb_gen as arithmetic
+
+    project, _ = _public_scenario_input(tmp_path, "Consecutive transactions", choices=False)
+    _, code = arithmetic.generate(project, "digital_arithmetic_primitive")
+    assert code == 0
+    result = execute(project, project / "output", {"adapter": "simulation"}, {})
+    assert result["metrics"] == {}
+    assert not result["ran"]
+    assert "transaction_rearm" in result["detail"]
