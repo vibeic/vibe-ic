@@ -744,6 +744,30 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") == "package_readiness":
+        from fnmatch import fnmatch
+        import flow109_package_ready
+        config = config or {}
+        tech = [path for pattern, path in config.get("TECH_LEFS", {}).items()
+                if fnmatch(config.get("DEFAULT_CORNER", ""), pattern)]
+        started = time.perf_counter()
+        result = flow109_package_ready.execute(project,
+            def_path=state.get("def") if state is not None else None,
+            tech_lef=tech[0] if len(tech) == 1 else None, io_lefs=config.get("PAD_LEFS"))
+        report = work / "pad_readiness.json"
+        report.write_text(json.dumps(result, indent=2) + "\n")
+        pads = next((row["detail"] for row in result["checks"]
+                     if row["check"] == "pad_bterm_coincidence_check"), {})
+        metrics = {"pad_" + key + "_count": len(pads[key])
+                   for key in ("connected_nets", "not_connected_nets", "undecided_nets") if key in pads}
+        return {"ran": result["native_started"],
+                "exit_code": 1 if result["component_status"] == "FAIL" else 0 if result["native_started"] else None,
+                "metrics": metrics, "reports": [str(report)],
+                "tool_seconds": time.perf_counter() - started, "detail": result["reason"],
+                "native_steps": [{"name": row["check"], "status": row["status"],
+                    "ran": row["check"] != "missing_input",
+                    "exit_code": 1 if row["status"] == "FAIL" else 0,
+                    "detail": row["detail"]} for row in result["checks"]]}
     if tool.get("adapter") in {"analog", "mixed"}:
         import importlib
         native = importlib.import_module("flow_native_" + tool["adapter"])

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""D75 consumes the run's pad, package, CVC and test interface results."""
+"""Measure pad-side and bond-terminal geometry from native physical views."""
 from __future__ import annotations
 
 import fnmatch
@@ -7,19 +7,15 @@ import hashlib
 import json
 from pathlib import Path
 import sys
-from typing import Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _pad_ring
 import _submission_template as submission
 import _tapeout_declaration as declaration
-import dft_atpg_coverage_check
 import pad_bterm_coincidence_check
 import pad_side_constraint_check
-import perc_signoff_check
 import provider_bond_pad_edge
-import tapeout_readiness_check
 import librelane_contract as contract
 from _staged_pdk_tech_lef import discover_staged_tech_lefs, select_staged_tech_lef
 
@@ -148,80 +144,32 @@ def validate(project, component):
         raise D75Refusal("D75_COMPONENT_INVALID", "native check statuses disagree")
 
 
-def execute(project, context):
+def execute(project, context=None, *, def_path=None, tech_lef=None, io_lefs=None):
+    """Measure pad-side and signal bond-terminal geometry from native views."""
     project = Path(project).resolve()
-    checks, inputs = [], []
+    checks = []
     try:
-        features = context.get("features") or {}
-        doc = _read(project / DECLARATION)
-        delivery = declaration.answer(doc, "deliverable")
-        if delivery != declaration.DELIVERABLE_DIE:
-            raise D75Refusal("D75_DELIVERY_FORM_UNSUPPORTED", str(delivery))
-        checks.append(_check("declared_delivery_form", "PASS", delivery))
-        io = _read(project / IO_REPORT)
-        if io.get("verdict") != "WROTE":
-            raise D75Refusal("D75_PAD_INTERFACE_ABSENT", str(IO_REPORT))
-        io_lefs = _io_lefs(project, io)
-        native = _current_native_geometry(project, io_lefs)
-        def_path, tech = ((native["def"], native["tech"]) if native else
-                          (project / PAD_DEF, _tech_lef(project)))
-        inputs.extend(_record(project, path) for path in (def_path, tech, *io_lefs))
-        side = pad_side_constraint_check.check(project, def_path)
+        if not def_path or not tech_lef or not io_lefs:
+            raise ValueError("Pad readiness needs native DEF, technology LEF and IO LEFs")
+        side = pad_side_constraint_check.check(project, Path(def_path))
         checks.append(_check("pad_side_constraint_check", side.get("verdict", "NOT_MEASURED"), side))
-        rc, pads = pad_bterm_coincidence_check.run(def_path.read_text(), tech.read_text(), io_lefs)
+        rc, pads = pad_bterm_coincidence_check.run(
+            Path(def_path).read_text(), Path(tech_lef).read_text(), list(map(Path, io_lefs)))
         pad_status = ("FAIL" if pads.get("not_connected_nets") else "NOT_MEASURED"
                       if rc or pads.get("undecided_nets") or not pads.get("connected_nets") else "PASS")
         checks.append(_check("pad_bterm_coincidence_check", pad_status, pads))
-        slots = list((project / submission.SLOTS_DIR_REL).glob("*.yaml"))
-        provider = project / PROVIDER_TARGET
-        operator = doc.get("operator_template") or {}
-        independent = (not slots and not provider.exists()
-                       and isinstance(operator.get("absent_reason"), str)
-                       and bool(operator["absent_reason"].strip()))
-        if independent:
-            checks.append(_check("provider_bond_pad_edge", "NOT_APPLICABLE",
-                                 {"contract": str(DECLARATION), "reason": operator["absent_reason"]}))
-        else:
-            layouts = tapeout_readiness_check.discover_layouts(project)
-            if len(layouts) != 1:
-                raise D75Refusal("D75_FINAL_GEOMETRY_UNBOUND", str(layouts))
-            edge = provider_bond_pad_edge.measure(project, layouts[0], top=io.get("chip_top_module") or "")
-            checks.append(_check("provider_bond_pad_edge", edge.get("verdict", "NOT_MEASURED"), edge))
-        if features.get("requires_dft"):
-            dft = dft_atpg_coverage_check.audit(project)
-            checks.append(_check("dft_atpg_coverage_check", dft.get("verdict", "NOT_MEASURED"), dft))
-        else:
-            checks.append(_check("test_access_applicability", "NOT_APPLICABLE",
-                                 "Flow109 manifest features.requires_dft is false"))
-        if features.get("requires_perc"):
-            path = project / "reports/phase3/perc_equivalent.json"
-            perc = _read(path) if path.is_file() else {}
-            cvc = perc.get("native_cvc")
-            if isinstance(cvc, dict):
-                checks.append(_check("perc_signoff_check", cvc.get("native_result", "NOT_MEASURED"), cvc))
-            else:
-                perc = perc_signoff_check.audit(project)
-                checks.append(_check("perc_signoff_check", perc.get("verdict", "NOT_MEASURED"), perc))
-        else:
-            checks.append(_check("perc_signoff_check", "NOT_APPLICABLE", "Flow109 manifest features.requires_perc is false"))
-        if features.get("package_model_required"):
-            package = _read(project / D67_REPORT)
-            checks.append(_check("package_electrical_feedback", package.get("default_row_status", package.get("component_status", "NOT_MEASURED")), package))
-        else:
-            checks.append(_check("package_electrical_feedback", "NOT_APPLICABLE", "Flow109 manifest features.package_model_required is false"))
-    except (D75Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         checks.append(_check("missing_input", "NOT_MEASURED", str(exc)))
     status = _aggregate(checks)
     result = {"schema": SCHEMA, "step_id": STEP, "program": "flow109_package_ready",
-            "context_sha256": context.get("context_sha256"), "component_status": status,
-            "checks": checks, "inputs": inputs, "native_started": bool(checks),
-            "reason": "D75_PACKAGE_TEST_INTERFACE_" + status,
-            "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False}
+              "component_status": status, "checks": checks,
+              "native_started": any(row["check"] != "missing_input" for row in checks),
+              "reason": "Native pad geometry: " + status,
+              "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False}
     return consume_default_row_completion(project, context, result)
 
 
 def consume_default_row_completion(project, context, component):
-    validate(project, component)
     status = _aggregate(component.get("checks") or [])
     if component.get("default_row_status") == "FAIL":
         status = "FAIL"
