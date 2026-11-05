@@ -315,10 +315,13 @@
       "title": "Package load and test-interface feasibility",
       "when": "package_interface",
       "tool": {
-        "kind": "adapter",
-        "program": null,
-        "function": null,
-        "gap": "Native package/test-interface integration of pad_assignment_gen and io_pad_chip_top_gen is not wired to current State; selected interface feasibility is NOT_MEASURED."
+        "kind": "librelane",
+        "imports": [
+          "flow_package_interface"
+        ],
+        "steps": [
+          "VibeIC.PackageInterface"
+        ]
       },
       "checks": [
         {

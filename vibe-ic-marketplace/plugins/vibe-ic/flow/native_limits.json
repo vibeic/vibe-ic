@@ -1289,11 +1289,6 @@
       "parallel": true,
       "timing_group": "other"
     },
-    "package_load_and_test_interface_feasibility": {
-      "program": null,
-      "function": null,
-      "gap": "Native package/test-interface integration of pad_assignment_gen and io_pad_chip_top_gen is not wired to current State; selected interface feasibility is NOT_MEASURED."
-    },
     "package_and_test_readiness": {
       "program": null,
       "function": null,
@@ -4404,6 +4399,15 @@
         "gds": ".gds",
         "nl": ".v"
       }
+    },
+    "package_load_and_test_interface_feasibility": {
+      "kind": "librelane",
+      "imports": [
+        "flow_package_interface"
+      ],
+      "steps": [
+        "VibeIC.PackageInterface"
+      ]
     }
   },
   "report_check_readers": {
