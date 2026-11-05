@@ -741,7 +741,7 @@ def keep_author_failure(directory: Path) -> None:
 
 def run(project: Path | str, *, table: dict | None = None, route: dict | None = None,
         from_name: str | None = None, to_name: str | None = None,
-        budget_seconds: float | None = None, pdk: str | None = None) -> dict:
+        pdk: str | None = None) -> dict:
     invocation_started_at = time.time()
     project = Path(project).resolve()
     table = table or read_json(TABLE)
@@ -827,7 +827,7 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                    "common_tools_complete": common_names <= set(results),
                    "timing_scope": "selected_subwindow" if from_name or to_name else "full_router_window",
                    "pending_steps": [row["name"] for row in selected if row["name"] not in results],
-                   "background_pending": jobs.pending, "budget_seconds": budget_seconds}
+                   "background_pending": jobs.pending}
         summary.update(timing_summary(summary))
         write_json(project / "reports/flow_engine.json", summary)
         return summary
@@ -1022,7 +1022,7 @@ def record_review(project: Path, name: str, seconds: float, finding: str | None 
     write_json(path, result)
 
 
-def refresh_report(project: Path, budget_seconds: float | None = None) -> dict:
+def refresh_report(project: Path) -> dict:
     path = project / "reports/flow_engine.json"
     report = read_json(path)
     names = report.get("selected_names", [row["name"] for row in report["steps"]])
@@ -1031,8 +1031,11 @@ def refresh_report(project: Path, budget_seconds: float | None = None) -> dict:
     report.update(steps=rows, run=len(rows), updated_at=time.time(),
                   **{key: sum(row["status"] == value for row in rows)
                      for key, value in (("pass", "PASS"), ("fail", "FAIL"), ("not_measured", "NOT_MEASURED"))})
-    if budget_seconds is not None:
-        report["budget_seconds"] = budget_seconds
+    legacy_completed_at = report.pop("common_budget_completed_at", None)
+    if report.get("common_completed_at") is None and legacy_completed_at is not None:
+        report["common_completed_at"] = legacy_completed_at
+    for key in ("budget_seconds", "runtime_status"):
+        report.pop(key, None)
     report.update(timing_summary(report))
     report["slowest_steps"] = [row["name"] for row in sorted(rows, key=lambda row: row.get("tool_seconds", 0), reverse=True)[:5]]
     write_json(path, report)
@@ -1046,7 +1049,6 @@ def main() -> int:
     command.add_argument("--project", type=Path, required=True)
     command.add_argument("--from", dest="from_name")
     command.add_argument("--to", dest="to_name")
-    command.add_argument("--budget-seconds", type=float)
     command.add_argument("--pdk")
     review = sub.add_parser("review")
     review.add_argument("--project", type=Path, required=True)
@@ -1055,17 +1057,15 @@ def main() -> int:
     review.add_argument("--finding")
     report = sub.add_parser("report")
     report.add_argument("--project", type=Path, required=True)
-    report.add_argument("--budget-seconds", type=float)
     args = parser.parse_args()
     try:
         if args.action == "review":
             record_review(args.project, args.step, args.seconds, args.finding)
             return 0
         if args.action == "report":
-            print(json.dumps(refresh_report(args.project, args.budget_seconds), default=str))
+            print(json.dumps(refresh_report(args.project), default=str))
             return 0
-        result = run(args.project, from_name=args.from_name, to_name=args.to_name,
-                     budget_seconds=args.budget_seconds, pdk=args.pdk)
+        result = run(args.project, from_name=args.from_name, to_name=args.to_name, pdk=args.pdk)
     except (ValueError, FileNotFoundError, KeyError) as exc:
         print(f"NOT_MEASURED: {exc}", file=sys.stderr)
         return 2
