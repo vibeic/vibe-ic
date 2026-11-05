@@ -7,6 +7,12 @@ from pathlib import Path
 import time
 
 
+NATIVE_STEPS = dict(zip((
+    "mixed_signal_interface_contract", "pre_layout_mixed_signal_verification", "analog_macro_integration",
+    "mixed_signal_power_domains", "substrate_and_supply_coupling", "candidate_mixed_signal_scenarios",
+    "complete_top_level_layout_assembly", "final_geometry_mixed_signal_scenarios", "mixed_signal_signoff",
+), (f"M{number:02d}" for number in range(1, 10))))
+
 def _result(name, ran=False, status="NOT_MEASURED", detail="", metrics=None, reports=(), steps=(), elapsed=0):
     code = 1 if status == "FAIL" else 0 if ran else None
     native = list(steps) or [{"name": name, "ran": ran, "exit_code": code,
@@ -21,6 +27,12 @@ def _top(project, tool, config):
     top = tool.get("top") or config.get("DESIGN_NAME")
     if top:
         return top
+    document = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    if document.is_file():
+        data = json.loads(document.read_text())
+        top = data.get("top_module") or data.get("fields", {}).get("top_module")
+        if top:
+            return top
     try:
         _, top = resolve_rtl_inputs(project)
         if top:
@@ -227,10 +239,10 @@ def _signoff(project, state):
     status = "FAIL" if failed else "NOT_MEASURED"
     return _result("mixed_signal_signoff", ran, status, "; ".join(reasons), numbers, reports, steps)
 
-def execute(project, directory, tool, commands, *, state=None, config=None):
+def execute(project, directory, tool, commands, *, state=None, config=None, route=None):
     project, directory, config = Path(project).resolve(), Path(directory).resolve(), config or {}
     directory.mkdir(parents=True, exist_ok=True)
-    step = tool.get("native_step", "")
+    step = NATIVE_STEPS.get(tool.get("step", ""), "")
     start = time.monotonic()
     try:
         if step == "M01":

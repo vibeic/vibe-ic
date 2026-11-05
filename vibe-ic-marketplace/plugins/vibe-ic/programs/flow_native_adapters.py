@@ -747,7 +747,7 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if tool.get("adapter") in {"analog", "mixed"}:
         import importlib
         native = importlib.import_module("flow_native_" + tool["adapter"])
-        return native.execute(project, work, tool, commands, state=state, config=config or {})
+        return native.execute(project, work, tool, commands, state=state, config=config or {}, route=route)
     if tool.get("adapter") == "dfm":
         from dfm_screen_check import execute as dfm
         return dfm(project, work, tool, route, state=state, config=config)

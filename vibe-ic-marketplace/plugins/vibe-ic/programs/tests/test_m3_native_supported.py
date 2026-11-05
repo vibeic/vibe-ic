@@ -123,7 +123,7 @@ def test_native_adapter_runs_real_scenarios_and_both_reports(project):
     from flow_native_adapters import execute
     from flow_engine import ToolResult, evaluate
     top = read(project / "input/mixed_signal/native.json")["top"]
-    tool = {"adapter": "mixed", "native_step": "M02", "top": top}
+    tool = {"adapter": "mixed", "step": "pre_layout_mixed_signal_verification", "top": top}
     result = execute(project, project / "adapter_work", tool, "")
     assert result["ran"] and evaluate(ToolResult(**result), []) == "NOT_MEASURED"
     scenario = read(project / m3.COSIM)["scenarios"][0]

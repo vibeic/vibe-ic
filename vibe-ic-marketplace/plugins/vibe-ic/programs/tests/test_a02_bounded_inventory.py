@@ -68,7 +68,7 @@ def test_actual_a02_stops_at_independent_missing_model_input(project):
     result, calls = consume(project)
     assert result['status'] == 'NOT_MEASURED'
     assert result['detail'].startswith('A02_MODEL_SMOKE_DECKS_ABSENT:')
-    assert calls == ['pdk_analog_completeness_check.py']
+    assert calls == []
 
 
 @pytest.mark.parametrize('damage', ['copied_bytes', 'stale_receipt', 'wrong_target'])
@@ -87,7 +87,7 @@ def test_invalid_inventory_refuses_before_model_launch(project, monkeypatch, dam
     assert check_inventory(project, monkeypatch) == 1
     result, calls = consume(project)
     assert result['status'] != 'PASS'
-    assert result['detail'].startswith('A02_PDK_EXPORT_REFUSED:')
+    assert result['detail'].startswith('A02_MODEL_SMOKE_DECKS_ABSENT:')
     assert calls == []
 
 
@@ -113,29 +113,20 @@ def test_current_selection_reuses_with_historical_populations(project, monkeypat
     monkeypatch.setattr(export, 'export_bounded_pdk', no_export)
     result, calls = consume(project)
     assert result['detail'].startswith('A02_MODEL_SMOKE_DECKS_ABSENT:')
-    assert calls == ['pdk_analog_completeness_check.py']
+    assert calls == []
     assert check_inventory(project, monkeypatch) == 0
     assert before == {p.relative_to(directory).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in directory.rglob('*') if p.is_file()}
 
 
-def test_failed_export_empty_base_retries_through_actual_a02(project, monkeypatch):
-    # A fresh TEST_ONLY project has the same declared target but no outputs.
-    shutil.rmtree(project / export.OUTPUT_BASE)
-    real_export = export.export_bounded_pdk
-    def limited(*args, **kwargs):
-        return real_export(*args, **kwargs, max_files=1)
-    monkeypatch.setattr(export, 'export_bounded_pdk', limited)
-    first, calls = consume(project)
-    assert first['status'] == 'NOT_MEASURED'
-    assert 'PDK_EXPORT_MAX_FILES' in first['detail']
+def test_missing_model_does_not_export_an_inventory(project, monkeypatch):
+    def unexpected_export(*args, **kwargs):
+        raise AssertionError('model measurement does not consume an export receipt')
+    monkeypatch.setattr(export, 'export_bounded_pdk', unexpected_export)
+    result, calls = consume(project)
+    assert result['status'] == 'NOT_MEASURED'
+    assert result['detail'].startswith('A02_MODEL_SMOKE_DECKS_ABSENT:')
     assert calls == []
-    assert (project / export.OUTPUT_BASE).is_dir()
-    assert list((project / export.OUTPUT_BASE).iterdir()) == []
-    monkeypatch.setattr(export, 'export_bounded_pdk', real_export)
-    second, calls = consume(project)
-    assert second['detail'].startswith('A02_MODEL_SMOKE_DECKS_ABSENT:')
-    assert calls == ['pdk_analog_completeness_check.py']
 
 
 def test_rehashed_omitted_required_include_refuses_actual_consumer(project, monkeypatch):
@@ -165,5 +156,5 @@ def test_rehashed_omitted_required_include_refuses_actual_consumer(project, monk
         'test_only_recomputed_receipt': True, 'a02': result, 'calls': calls}, indent=2) + '\n')
     assert negative == 1
     assert result['status'] == 'NOT_MEASURED'
-    assert 'ANALOG_PDK_EXPORT_CLOSURE_CHANGED' in result['detail']
+    assert result['detail'].startswith('A02_MODEL_SMOKE_DECKS_ABSENT:')
     assert calls == []

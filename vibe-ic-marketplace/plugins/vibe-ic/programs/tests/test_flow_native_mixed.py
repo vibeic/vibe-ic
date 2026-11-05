@@ -25,7 +25,14 @@ def current_producer_modules():
     native = importlib.import_module("_mixed_signal_native")
 
 def invoke(tmp_path, step, **kwargs):
-    return mixed.execute(tmp_path, tmp_path / "work", {"native_step": step, "top": "unit"}, None, **kwargs)
+    return mixed.execute(tmp_path, tmp_path / "work", {"step": next(name for name, native in mixed.NATIVE_STEPS.items() if native == step), "top": "unit"}, None, **kwargs)
+
+
+def test_mixed_top_comes_from_documents_before_rtl_exists(tmp_path):
+    document = tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    document.parent.mkdir(parents=True)
+    document.write_text(json.dumps({"top_module": "unit"}))
+    assert mixed._top(tmp_path, {}, {}) == "unit"
 
 
 def test_interface_audit_is_documentary(tmp_path):

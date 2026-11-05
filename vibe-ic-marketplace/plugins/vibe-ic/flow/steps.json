@@ -378,8 +378,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A01",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_specifications"
       },
       "checks": [],
       "legacy_id": {
@@ -396,8 +396,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A02",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_model_qualification"
       },
       "checks": [],
       "legacy_id": {
@@ -414,8 +414,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M01",
-        "parallel": true
+        "parallel": true,
+        "step": "mixed_signal_interface_contract"
       },
       "checks": [
         {
@@ -449,8 +449,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A03",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_testability_and_trim_plan"
       },
       "checks": [
         {
@@ -481,8 +481,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A04",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_topology"
       },
       "checks": [
         {
@@ -515,8 +515,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A05",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_netlist_and_sizing"
       },
       "checks": [
         {
@@ -550,8 +550,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A06",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_measurement_testbench"
       },
       "checks": [
         {
@@ -609,8 +609,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A07",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_pre_layout_nominal_performance"
       },
       "checks": [
         {
@@ -1135,8 +1135,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M02",
-        "parallel": true
+        "parallel": true,
+        "step": "pre_layout_mixed_signal_verification"
       },
       "checks": [
         {
@@ -1185,8 +1185,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A08",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_pre_layout_pvt_and_operating_range"
       },
       "checks": [
         {
@@ -1221,8 +1221,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A09",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_pre_layout_statistics"
       },
       "checks": [
         {
@@ -1255,8 +1255,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A10",
-        "parallel": true
+        "parallel": true,
+        "step": "calibration_algorithm_verification"
       },
       "checks": [
         {
@@ -1747,8 +1747,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A11",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_layout"
       },
       "checks": [
         {
@@ -1781,8 +1781,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A12",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_block_physical_verification"
       },
       "checks": [
         {
@@ -1851,8 +1851,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A13",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_parasitic_extraction"
       },
       "checks": [
         {
@@ -1885,8 +1885,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A14",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_post_layout_performance"
       },
       "checks": [
         {
@@ -1936,8 +1936,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A15",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_post_layout_statistics"
       },
       "checks": [
         {
@@ -1985,8 +1985,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A16",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_reliability"
       },
       "checks": [
         {
@@ -2036,8 +2036,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A17",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_characterized_views"
       },
       "checks": [
         {
@@ -2071,8 +2071,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M03",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_macro_integration"
       },
       "checks": [
         {
@@ -2108,7 +2108,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D31",
+              "step": "die_floorplan_and_macros",
               "parallel": true
             }
           },
@@ -2186,7 +2186,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D32",
+              "step": "io_pad_ring_and_power_distribution",
               "parallel": true
             }
           },
@@ -2230,8 +2230,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M04",
-        "parallel": true
+        "parallel": true,
+        "step": "mixed_signal_power_domains"
       },
       "checks": [
         {
@@ -2787,8 +2787,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A18",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_top_interconnect_pads_and_power"
       },
       "checks": [
         {
@@ -2898,7 +2898,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D42",
+              "step": "routed_candidate_physical_checks",
               "parallel": true
             }
           },
@@ -2997,7 +2997,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D43",
+              "step": "antenna_checks",
               "parallel": true
             }
           },
@@ -3196,7 +3196,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D47",
+              "step": "candidate_parasitic_extraction",
               "parallel": true
             }
           },
@@ -3256,7 +3256,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D48",
+              "step": "candidate_signal_integrity",
               "parallel": true
             }
           },
@@ -3525,7 +3525,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D54",
+              "step": "post_layout_spice_correlation",
               "parallel": true
             }
           },
@@ -3629,7 +3629,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D56",
+              "step": "candidate_power_analysis",
               "parallel": true
             }
           },
@@ -3696,9 +3696,9 @@
             "when": "analog_physical and not digital_physical",
             "tool": {
               "kind": "adapter",
-              "program": "analog_bound_measurements.py",
-              "function": "source-bound native voltage capture",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+              "adapter": "analog",
+              "step": "candidate_ir_drop",
+              "parallel": true
             }
           },
           {
@@ -3775,7 +3775,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D58",
+              "step": "candidate_electromigration",
               "parallel": true
             }
           },
@@ -3929,8 +3929,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M05",
-        "parallel": true
+        "parallel": true,
+        "step": "substrate_and_supply_coupling"
       },
       "checks": [
         {
@@ -3961,8 +3961,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M06",
-        "parallel": true
+        "parallel": true,
+        "step": "candidate_mixed_signal_scenarios"
       },
       "checks": [
         {
@@ -4001,7 +4001,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D60",
+              "step": "stream_out",
               "parallel": true
             }
           },
@@ -4094,8 +4094,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M07",
-        "parallel": true
+        "parallel": true,
+        "step": "complete_top_level_layout_assembly"
       },
       "checks": [],
       "legacy_id": {
@@ -4504,7 +4504,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D69",
+              "step": "final_geometry_rc_and_pex",
               "parallel": true
             }
           },
@@ -4561,7 +4561,7 @@
             "tool": {
               "kind": "adapter",
               "adapter": "analog",
-              "native_step": "D70",
+              "step": "final_electrical_analysis",
               "parallel": true
             }
           },
@@ -4835,8 +4835,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M08",
-        "parallel": true
+        "parallel": true,
+        "step": "final_geometry_mixed_signal_scenarios"
       },
       "checks": [
         {
@@ -4969,8 +4969,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "analog",
-        "native_step": "A19",
-        "parallel": true
+        "parallel": true,
+        "step": "analog_block_signoff"
       },
       "checks": [
         {
@@ -5007,8 +5007,8 @@
       "tool": {
         "kind": "adapter",
         "adapter": "mixed",
-        "native_step": "M09",
-        "parallel": true
+        "parallel": true,
+        "step": "mixed_signal_signoff"
       },
       "checks": [],
       "legacy_id": {

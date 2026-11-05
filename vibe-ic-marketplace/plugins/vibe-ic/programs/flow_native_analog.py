@@ -12,33 +12,20 @@ from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 ANALOG_STEPS = tuple(f"A{number:02d}" for number in range(1, 20))
+NATIVE_STEPS = dict(zip((
+    "analog_specifications", "analog_model_qualification", "analog_testability_and_trim_plan",
+    "analog_topology", "analog_netlist_and_sizing", "analog_measurement_testbench",
+    "analog_pre_layout_nominal_performance", "analog_pre_layout_pvt_and_operating_range",
+    "analog_pre_layout_statistics", "calibration_algorithm_verification", "analog_layout",
+    "analog_block_physical_verification", "analog_parasitic_extraction", "analog_post_layout_performance",
+    "analog_post_layout_statistics", "analog_reliability", "analog_characterized_views",
+    "analog_top_interconnect_pads_and_power", "analog_block_signoff",
+), ANALOG_STEPS))
 BRANCHES = {
-    "D31": ("flow109_analog_floorplan.native", "input/flow109/D31.json",
-            "declared die/core rectangles, macro GDS/LEF views and placements are required"),
-    "D32": ("pad_ring_gen.main", "phase3/stage3/pnr/floorplan.def",
-            "native die floorplan DEF and pad assignment are required"),
-    "D42": ("analog_a6_native_pv.run_block_pv", "",
-            "die-level routed GDS, LVS reference and installed-PDK DRC/LVS decks are required"),
-    "D43": ("gds_antenna_deck_check.run", "",
-            "streamed die GDS and a PDK antenna deck are required"),
-    "D47": ("magic_extract_spice_emit.emit", "",
-            "routed die geometry and a declared Magic extraction technology/style are required"),
-    "D48": ("analog_bound_measurements.run_measurements", "input/flow109/D48.json",
-            "coupled extracted netlist, aggressor/victim testbench and measurement limits are required"),
-    "D54": ("analog_native_physical._resim", "",
-            "native A14 post-layout measurements and original pre/post correlation limits are required"),
-    "D56": ("analog_native_em.supply_wave_statistics", "input/flow109/D56.json",
-            "native supply-current waveforms, supply voltages and declared mission windows are required"),
-    "D57": ("ir_drop_budget_check.evaluate", "input/flow109/D57.json",
-            "native rail-voltage measurements, supply voltage and original IR-drop budget are required"),
-    "D58": ("analog_native_em.grade_case", "input/flow109/D58.json",
-            "native branch currents, routed conductor dimensions and PDK EM limits are required"),
-    "D60": ("analog_hardmacro_gds_emit.run", "",
-            "die-level Magic layout with pad/power integration is required for die stream-out"),
-    "D69": ("flow109_final_extract._execute_analog", "input/flow109/D69.json",
-            "final filled die GDS, logical net census and declared extraction technology/corners are required"),
-    "D70": ("flow109_final_electrical._execute_analog", "input/flow109/D70.json",
-            "final extracted die netlist, mission testbench and original electrical limits are required"),
+    "die_floorplan_and_macros", "io_pad_ring_and_power_distribution", "routed_candidate_physical_checks",
+    "antenna_checks", "candidate_parasitic_extraction", "candidate_signal_integrity",
+    "post_layout_spice_correlation", "candidate_power_analysis", "candidate_ir_drop",
+    "candidate_electromigration", "stream_out", "final_geometry_rc_and_pex", "final_electrical_analysis",
 }
 
 
@@ -247,86 +234,52 @@ def declared_spec_checks(project, *, config=None, metrics=None):
     return checks
 
 
-def _branch(step, project, directory, options, run):
-    native, prerequisite, reason = BRANCHES[step]
-    if step == "D31":
-        report = directory / "D31_native.json"
-        script = (
-            "import json,sys\nfrom pathlib import Path\n"
-            "sys.path.insert(0,sys.argv[1])\nimport flow109_analog_floorplan as native\n"
-            "project,output,report=map(Path,sys.argv[2:])\n"
-            "try:\n native.native(project,output,True)\n result=native.native(project,output,False)\n"
-            "except (OSError,ValueError,ImportError,KeyError) as exc:\n"
-            " result={'status':'NOT_MEASURED','reason':str(exc)}\n"
-            "report.write_text(json.dumps(result))\n"
-            "sys.exit(1 if result.get('status')=='FAIL' else 0)\n")
-        execution = run("@" + sys.executable, ["-c", script, str(HERE), str(project),
-                        str(directory), str(report)], outputs=[str(report)])
-        result = _read(report, {}) or {}
-        return {"status": result.get("status", "NOT_MEASURED"),
-                "detail": result.get("reason") or "KLayout native die floorplan placement and geometry",
-                "metrics": {key: value for key, value in result.items() if _number(value)},
-                "outputs": [str(report), str(directory / "floorplan.gds")], "executions": [execution],
-                "native_ran": result.get("status") in ("PASS", "FAIL")}
-    if step == "D54":
+def _branch(name, project, directory, options, run):
+    if name == "post_layout_spice_correlation":
         from analog_a7_post_layout_resim_check import _check_specs, DEFAULT_MAX_DELTA_PCT
-
         rows, outputs, deltas = [], [], []
         for block in declared_blocks(project):
-            name = block.get("name") or block.get("block")
-            prior = options["previous_results"].get("A14", {}).get(name, {})
-            values = prior.get("metrics") or {}
-            measured, _ = _check_specs(values.get("specs") or [])
+            block_name = block.get("name") or block.get("block")
+            prior = options["previous_results"].get("A14", {}).get(block_name, {})
+            measured, _ = _check_specs((prior.get("metrics") or {}).get("specs") or [])
             status = prior.get("status", "NOT_MEASURED")
             if not measured:
                 status = "NOT_MEASURED"
             elif any(delta > DEFAULT_MAX_DELTA_PCT for delta in measured):
                 status = "FAIL"
-            rows.append({"block": name, "status": status, "max_delta_pct": max(measured) if measured else None})
+            rows.append({"block": block_name, "status": status,
+                         "max_delta_pct": max(measured) if measured else None})
             deltas.extend(measured)
             outputs.extend(prior.get("outputs") or [])
         status = ("FAIL" if any(row["status"] == "FAIL" for row in rows) else
                   "PASS" if rows and all(row["status"] == "PASS" for row in rows) else "NOT_MEASURED")
-        return {"status": status, "detail": "Read existing A14 native pre/post comparisons" if deltas else reason,
+        return {"status": status,
+                "detail": "Existing native pre/post comparison" if deltas else
+                          "No native post-layout SPICE comparison was produced by the earlier analog step.",
                 "metrics": {"max_delta_pct": max(deltas) if deltas else None, "blocks": rows},
                 "outputs": outputs, "reused_native": bool(deltas)}
-    if step in ("D32", "D43"):
-        program = "pad_ring_gen.py" if step == "D32" else "gds_antenna_deck_check.py"
-        report = directory / (step + "_native.json")
-        execution = run(program, [str(project), "--json", str(report)], outputs=[str(report)])
-        doc = _read(report, {}) or {}
-        status = doc.get("verdict") or doc.get("status") or doc.get("result")
-        status = status if status in ("PASS", "FAIL") else "NOT_MEASURED"
-        if execution["returncode"] and status == "PASS":
-            status = "NOT_MEASURED"
-        return {"status": status, "detail": doc.get("reason") or doc.get("detail") or reason,
-                "metrics": doc.get("metrics") or doc.get("summary") or {},
-                "outputs": [str(report)], "executions": [execution]}
-    absent = prerequisite and not (project / prerequisite).is_file()
-    detail = f"{step}: {reason}"
-    if absent:
-        detail += "; missing " + prerequisite
-    else:
-        detail += f"; {native} has no direct die-level invocation without the legacy flow context"
-    return {"status": "NOT_MEASURED", "detail": detail, "outputs": []}
+    from flow_native_analog_die import execute as die
+    return die(name, project, directory, run, state=options["state"],
+               config=options["native_config"], route=options["route"])
 
 
-def execute(project, directory, tool, commands, *, state=None, config=None):
+def execute(project, directory, tool, commands, *, state=None, config=None, route=None):
     import analog_native_flow as native
     from analog_one_shot_runner import _effective_analog_pdk
 
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    step = str(tool.get("native_step") or "").split(".")[-1]
-    if step not in (*ANALOG_STEPS, *BRANCHES):
-        return commands.result(detail="unsupported native analog step: " + step)
-    settings = _read(project / "input/analog_flow.json", {}) or {}
-    features = {**_features(project), **settings.get("features", {}), **tool.get("features", {})}
-    options = {"container": "", "image": "", "transport": "HOST", "config": settings,
+    name = tool.get("step", "")
+    step = NATIVE_STEPS.get(name, name)
+    if name not in NATIVE_STEPS and name not in BRANCHES:
+        return commands.result(detail="unsupported native analog step: " + name)
+    features = {**_features(project), **tool.get("features", {})}
+    options = {"container": "", "image": "", "transport": "HOST", "config": {},
                "features": features, "previous_results": _previous_results(project),
-               "pdk": _effective_analog_pdk(SimpleNamespace(pdk=settings.get("pdk", "")), project),
-               "cpus": min(8, int(settings.get("cpus", 4))), "workers": 1,
-               "attempt_dir": str(directory), "active_blocks": settings.get("active_blocks", [])}
+               "pdk": str((config or {}).get("PDK") or _effective_analog_pdk(SimpleNamespace(pdk=""), project)),
+               "cpus": 8, "workers": 1,
+               "attempt_dir": str(directory), "active_blocks": [],
+               "state": state, "native_config": config or {}, "route": route or {}}
     run = command_bridge(commands, project)
     rows, reports, metrics, native_steps = [], [], {}, []
     try:
@@ -346,30 +299,32 @@ def execute(project, directory, tool, commands, *, state=None, config=None):
             for block in population:
                 before = len(commands.records)
                 result = (native._dispatch(step, project, block, options, run) if block is not None
-                          else _branch(step, project, directory, options, run))
-                name = block.get("name") or block.get("block") if block is not None else "die"
-                row = {"step": step, "block": name, **result}
+                          else _branch(name, project, directory, options, run))
+                block_name = block.get("name") or block.get("block") if block is not None else "die"
+                row = {"step": step, "block": block_name, **result}
                 rows.append(row)
                 ran = result.get("native_ran", len(commands.records) > before or result.get("reused_native") is True)
                 status = result.get("status", "NOT_MEASURED")
                 if not ran and status == "PASS":
                     status = "NOT_MEASURED"
-                native_steps.append({"name": f"{step}.{name}", "ran": ran, "status": status,
+                native_steps.append({"name": f"{step}.{block_name}", "ran": ran, "status": status,
                                      "exit_code": next((r["exit_code"] for r in commands.records[before:]
                                                         if r["exit_code"]), 0) if ran else None,
                                      "reused": result.get("reused_native", False),
                                      "reason": result.get("detail", "")})
                 reports.extend(result.get("outputs") or [])
                 values = result.get("metrics")
+                if isinstance(values, list):
+                    values = {"measurements": values}
                 if isinstance(values, dict):
-                    metrics[name] = {**values, "native_executed": ran,
+                    metrics[block_name] = {**values, "native_executed": ran,
                                      "native_step": step,
                                      "native_report": str(directory / "analog_results.json")}
                     if len(population) == 1:
                         metrics.update(values)
                     for key, value in values.items():
                         if _number(value):
-                            metrics[f"{name}.{key}"] = value
+                            metrics[f"{block_name}.{key}"] = value
             if not population:
                 native_steps.append({"name": step, "ran": False, "exit_code": None,
                                      "status": "NOT_MEASURED", "reason": "declared analog blocks are absent"})
@@ -377,10 +332,13 @@ def execute(project, directory, tool, commands, *, state=None, config=None):
         native_steps.append({"name": step, "ran": False, "exit_code": None,
                              "status": "NOT_MEASURED", "reason": str(exc)})
     report = directory / "analog_results.json"
-    report.write_text(json.dumps({"step": step, "blocks": rows}, indent=2) + "\n")
+    from flow_engine import write_json
+    write_json(report, {"step": step, "blocks": rows})
     result = commands.result(metrics, [report, *reports], "; ".join(row.get("reason", "") for row in native_steps))
     result["native_steps"] = native_steps
-    if step == "A19" or any(row.get("reused") for row in native_steps):
-        result["ran"] = any(row["ran"] for row in native_steps)
-        result["exit_code"] = 0 if result["ran"] else None
+    result["ran"] = any(row["ran"] for row in native_steps)
+    if not result["ran"]:
+        result["exit_code"] = None
+    elif result["exit_code"] is None:
+        result["exit_code"] = 0
     return result

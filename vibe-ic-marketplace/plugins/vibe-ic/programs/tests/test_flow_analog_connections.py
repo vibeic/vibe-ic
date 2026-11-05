@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import importlib
 import sys
 
 import pytest
@@ -26,16 +27,21 @@ def test_selected_connection_returns_native_numbers(tmp_path, monkeypatch, posit
     features = engine.design_features(tmp_path, {'delivery_target': 'ip_hardmacro'}, table)
     features.update(analog_physical=True, digital_physical=False)
     tool = engine.choose_tool(row['tool'], features)
+    native = importlib.import_module('flow_native_' + family)
+    if native_step.startswith('D'):
+        assert row['name'] in native.BRANCHES
+    else:
+        assert native.NATIVE_STEPS[row['name']] == native_step
     calls = []
 
-    def execute(project, directory, selected, commands, *, state=None, config=None):
-        calls.append((selected['native_step'], project))
+    def execute(project, directory, selected, commands, *, state=None, config=None, route=None):
+        calls.append((selected['step'], project))
         return {'ran': True, 'exit_code': 0, 'metrics': {'native_voltage_v': 1.25},
                 'reports': [], 'detail': 'native measurement'}
 
     monkeypatch.setitem(sys.modules, 'flow_native_' + family, SimpleNamespace(execute=execute))
     result = adapters.execute(tmp_path, tmp_path / 'work', tool, {'delivery_target': 'ip_hardmacro'})
-    assert calls == [(native_step, tmp_path)]
+    assert calls == [(row['name'], tmp_path)]
     assert result['ran'] is True
     assert result['metrics']['native_voltage_v'] == 1.25
 

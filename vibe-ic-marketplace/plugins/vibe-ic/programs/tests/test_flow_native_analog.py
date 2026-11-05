@@ -54,7 +54,7 @@ def test_each_analog_connection_calls_existing_native_dispatch(tmp_path, monkeyp
 
     monkeypatch.setattr(analog_native_flow, "_dispatch", dispatch)
     commands = CapturedCommands(output)
-    result = analog.execute(project, output, {"native_step": step}, commands)
+    result = analog.execute(project, output, {"step": next(name for name, native in analog.NATIVE_STEPS.items() if native == step)}, commands)
     assert result["ran"] is True
     assert result["metrics"]["output_voltage"] == 1.2
     assert result["native_steps"][0]["status"] == "PASS"
@@ -91,7 +91,7 @@ def test_a03_preserves_exact_native_unsupported_reason(tmp_path):
     project = project_at(tmp_path)
     output = tmp_path / "output"
     output.mkdir()
-    result = analog.execute(project, output, {"native_step": "A03"}, Commands(output))
+    result = analog.execute(project, output, {"step": next(name for name, native in analog.NATIVE_STEPS.items() if native == "A03")}, Commands(output))
     assert result["ran"] is False
     assert result["native_steps"][0]["status"] == "NOT_MEASURED"
     assert result["detail"] == "A03_TESTABILITY_IMPLEMENTATION_ABSENT: applicability is undeclared"
@@ -103,7 +103,7 @@ def test_a06_without_a_native_command_does_not_become_pass(tmp_path, monkeypatch
     output.mkdir()
     monkeypatch.setattr(analog_native_flow, "_dispatch", lambda *args: {
         "status": "PASS", "detail": "testbench already covers measurements", "metrics": {}})
-    result = analog.execute(project, output, {"native_step": "A06"}, Commands(output))
+    result = analog.execute(project, output, {"step": next(name for name, native in analog.NATIVE_STEPS.items() if native == "A06")}, Commands(output))
     assert result["ran"] is False
     assert result["native_steps"][0]["status"] == "NOT_MEASURED"
 
@@ -123,7 +123,7 @@ def test_plain_previous_native_output_is_available_to_dependent_steps(tmp_path, 
         return {"status": "NOT_MEASURED", "detail": "source corner deck absent"}
 
     monkeypatch.setattr(analog_native_flow, "_dispatch", dispatch)
-    analog.execute(project, output, {"native_step": "A08"}, Commands(output))
+    analog.execute(project, output, {"step": "analog_pre_layout_pvt_and_operating_range"}, Commands(output))
     assert seen[0]["metrics"]["output_voltage"] == 1.2
 
 
@@ -136,7 +136,7 @@ def test_a19_preserves_original_resolution_limit(tmp_path, value, expected):
         "corners": [{"name": "nominal", "simulator_run": True, "enob": value}]}))
     output = tmp_path / "output"
     output.mkdir()
-    result = analog.execute(project, output, {"native_step": "A19"}, Commands(output))
+    result = analog.execute(project, output, {"step": next(name for name, native in analog.NATIVE_STEPS.items() if native == "A19")}, Commands(output))
     check = result["metrics"]["spec_results"][0]
     assert check["limit"] == {"min": 14}
     assert check["value"] == value
@@ -162,23 +162,16 @@ def test_declared_spec_checks_keep_all_corners_unknown_specs_and_missing_numbers
     assert rows[0]["source"] == str(project / "phase1/generated_docs/L5_ADI_SPEC.json")
 
 
-@pytest.mark.parametrize("step", analog.BRANCHES)
-def test_each_analog_die_branch_reports_native_result_or_exact_required_input(tmp_path, step):
+@pytest.mark.parametrize("name", sorted(analog.BRANCHES))
+def test_each_analog_die_branch_reports_missing_native_products(tmp_path, name):
     project = project_at(tmp_path)
     output = tmp_path / "output"
     output.mkdir()
-    commands = CapturedCommands(output, {"verdict": "PASS", "status": "PASS", "violations": 0,
-                                         "metrics": {"violations": 0}})
-    result = analog.execute(project, output, {"native_step": step}, commands)
-    row = result["native_steps"][0]
-    if step in ("D31", "D32", "D43"):
-        assert row["status"] == "PASS"
-        assert result["metrics"]["violations"] == 0
-        assert result["ran"] is True
-    else:
-        assert row["status"] == "NOT_MEASURED"
-        assert result["ran"] is False
-        assert analog.BRANCHES[step][2] in result["detail"]
+    result = analog.execute(project, output, {"step": name}, Commands(output))
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED"
+    assert result["ran"] is False
+    assert result["detail"]
+    assert "hand-written" not in result["detail"]
     assert "unsupported native analog step" not in result["detail"]
 
 
@@ -248,9 +241,10 @@ def test_d31_reports_the_actual_missing_native_input(tmp_path):
     project = project_at(tmp_path)
     output = tmp_path / "output"
     output.mkdir()
-    result = analog.execute(project, output, {"native_step": "D31"}, Commands(output))
+    result = analog.execute(project, output, {"step": "die_floorplan_and_macros"}, Commands(output))
     assert result["native_steps"][0]["status"] == "NOT_MEASURED"
-    assert "D31.json" in result["detail"] or "pya" in result["detail"]
+    assert "State" in result["detail"]
+    assert "D31.json" not in result["detail"]
 
 
 def test_d31_native_file_paths_do_not_require_a_digest(tmp_path):
