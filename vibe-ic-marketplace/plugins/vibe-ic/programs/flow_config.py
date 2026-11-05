@@ -298,6 +298,7 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
     config.update({key: value for key, value in implementation.items()
                    if implementation_setting(key)})
     config.update(_settings(fields, pdk))
+    config.update({key: value for key, value in implementation.items() if key.startswith("PDN_")})
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
         from sdc_constraints import create_clocks_in_text
@@ -323,6 +324,14 @@ def build_native_config(project: Path | str, *, route: str | None = None, pdk: s
         from flow_chip_inputs import prepare
         config = prepare(Path(project).resolve(), config,
                          **({"on_tool_run": on_tool_run} if on_tool_run is not None else {}))
+    elif (Path(project) / "steps/pre_layout_timing/result.json").is_file():
+        from librelane.flows import Flow
+        from flow_pdn_current import current_settings
+        import os
+        owner = Flow.factory.get("Classic")(config, design_dir=str(Path(project).resolve()),
+                                            pdk_root=os.environ.get("PDK_ROOT"))
+        resolved = owner.config.to_raw_dict()
+        config.update(current_settings(Path(project).resolve(), resolved))
     return config
 
 
