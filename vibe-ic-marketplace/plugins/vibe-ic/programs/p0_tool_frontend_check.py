@@ -91,17 +91,18 @@ def _diagnostic_codes(log: str) -> list[dict[str, str]]:
             for match in _DIAGNOSTIC.finditer(log)]
 
 
-def _top(project: Path) -> str | None:
+def _top(project: Path, *, include_runtime: bool = True) -> str | None:
     import _path_layout as layout
     if layout.rtl_input(project) == "original":
         from design_one_shot_runner import _v661_resolve_dut_module
         return _v661_resolve_dut_module(project, "", None)
-    import execution_policy as execution
-    runtime = execution._ordinary_runtime
-    if runtime is not None and runtime['project'] == Path(project).resolve():
-        selected = runtime['parameters'].get('top')
-        if selected:
-            return selected
+    if include_runtime:
+        import execution_policy as execution
+        runtime = execution._ordinary_runtime
+        if runtime is not None and runtime['project'] == Path(project).resolve():
+            selected = runtime['parameters'].get('top')
+            if selected:
+                return selected
     for name in ("L9_INTEGRATION_SPEC.json", "L9_INTEGRATION.json"):
         path = project / "phase1/generated_docs" / name
         if path.is_file():
