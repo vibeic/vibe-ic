@@ -1299,32 +1299,21 @@
     {
       "name": "constraint_validation",
       "title": "Constraint validation",
-      "when": "digital_netlist or (soft_ip and has_digital)",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "design_one_shot_runner.py",
         "function": "step_sdc_validation",
         "gap": "Native invocation must be adapted without the old acceptance wrappers."
       },
-      "checks": [
-        {
-          "metric": "invalid_timing_exceptions",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 1032
-          },
-          "tool_gap": "OpenSTA native exception diagnostics; wire invalid/unmatched object diagnostics without requirement traces."
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D20",
         "native": [
           "8"
         ]
-      }
+      },
+      "applicability_reason": "SDC validation runs with native pre-layout STA, where the synthesis netlist exists; duplicate pre-netlist wrapper removed."
     },
     {
       "name": "soft_ip_synthesis_and_constraints",
@@ -1533,6 +1522,12 @@
           "OpenROAD.CheckSDCFiles",
           "OpenROAD.CheckMacroInstances",
           "OpenROAD.STAPrePNR"
+        ],
+        "report_readers": [
+          {
+            "reader": "flow_native_timing.read_sta_reports",
+            "native_step": "OpenROAD.STAPrePNR"
+          }
         ]
       },
       "checks": [
@@ -1544,8 +1539,7 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1832
-          },
-          "tool_gap": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
+          }
         },
         {
           "metric": "unconstrained_endpoints",
@@ -1555,8 +1549,18 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 1838
+          }
+        },
+        {
+          "metric": "invalid_timing_exceptions",
+          "operator": "==",
+          "limit": 0,
+          "unit": "count",
+          "source": {
+            "file": "programs/flow109_metric_acceptance.py",
+            "line": 1032
           },
-          "tool_gap": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
+          "tool_gap": "OpenSTA native exception diagnostics; wire invalid/unmatched object diagnostics without requirement traces."
         }
       ],
       "legacy_id": {
@@ -3011,9 +3015,8 @@
       "when": "digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "cdc_crossing_check.py",
-        "function": null,
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "implemented_cdc",
+        "program": "flow_native_adapters.py"
       },
       "checks": [
         {
@@ -3344,26 +3347,31 @@
       "when": "digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "gls",
+        "program": "flow_native_verification.py",
+        "metric": "gls_failures",
+        "native_limits": [
+          {
+            "metric": "sdf_delays_applied",
+            "operator": ">",
+            "limit": 0,
+            "source": {
+              "file": "programs/sdf_gate_sim.py",
+              "line": 2749
+            }
+          },
+          {
+            "metric": "sdf_annotation_errors",
+            "operator": "==",
+            "limit": 0,
+            "source": {
+              "file": "programs/sdf_gate_sim.py",
+              "line": 2751
+            }
+          }
+        ]
       },
       "checks": [
-        {
-          "metric": "candidate_sdf_annotation",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 12665
-          },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "Native simulator SDF annotated and unannotated delay counts"
-          },
-          "tool_gap": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool."
-        },
         {
           "metric": "gls_failures",
           "operator": "==",
@@ -3373,8 +3381,7 @@
             "file": "flow/flow109.json",
             "line": 12686
           },
-          "unit": "count",
-          "tool_gap": "Icarus/Verilator gate-level simulation with native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -4558,9 +4565,30 @@
       "when": "digital_physical",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_final_gls.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "gls",
+        "program": "flow_native_verification.py",
+        "metric": "final_gls_function_timing_errors",
+        "native_limits": [
+          {
+            "metric": "sdf_delays_applied",
+            "operator": ">",
+            "limit": 0,
+            "source": {
+              "file": "programs/sdf_gate_sim.py",
+              "line": 2749
+            }
+          },
+          {
+            "metric": "sdf_annotation_errors",
+            "operator": "==",
+            "limit": 0,
+            "source": {
+              "file": "programs/sdf_gate_sim.py",
+              "line": 2751
+            }
+          }
+        ],
+        "corners": "all"
       },
       "checks": [
         {
@@ -4571,23 +4599,7 @@
           "source": {
             "file": "programs/flow109_metric_acceptance.py",
             "line": 199
-          },
-          "tool_gap": "Icarus gate-level simulation and native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
-        },
-        {
-          "metric": "final_sdf_annotation",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 16702
-          },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "Native simulator SDF annotated and unannotated delay counts"
-          },
-          "tool_gap": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool."
+          }
         }
       ],
       "legacy_id": {
