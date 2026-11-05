@@ -1043,6 +1043,19 @@
         },
         "missing_number_status": "NOT_MEASURED"
       }
+    ],
+    "rtl_validation_and_lint": [
+      {
+        "metric": "design__inferred_latch__count",
+        "operator": "==",
+        "limit": 0,
+        "when": "has_digital",
+        "source": {
+          "file": "flow/flow109.json",
+          "line": 6278
+        },
+        "unit": "count"
+      }
     ]
   },
   "adapters": {
@@ -1981,6 +1994,14 @@
         ]
       },
       {
+        "old_name": "design__inferred_latch__count",
+        "class": "N",
+        "native_metrics": [
+          "design__inferred_latch__count"
+        ],
+        "reason": "Native Verilator inferred-latch number; same original zero-defect limit moved to its producing lint row."
+      },
+      {
         "old_name": "required_lint_violations",
         "class": "D",
         "reason": "Existing design__lint_error__count and timing-construct check in this row."
@@ -2232,11 +2253,8 @@
       },
       {
         "old_name": "unexpected_latch_blackbox",
-        "class": "N",
-        "reason": "Native emitted metric with original numeric limit unchanged.",
-        "native_metrics": [
-          "design__inferred_latch__count"
-        ]
+        "class": "D",
+        "reason": "Read the same inferred-latch count where native Verilator emits it at rtl_validation_and_lint; synthesis native checkers retain their original limits."
       },
       {
         "old_name": "synthesis_constraints",
