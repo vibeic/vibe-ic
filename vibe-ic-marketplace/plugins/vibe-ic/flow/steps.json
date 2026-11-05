@@ -3883,7 +3883,6 @@
                 "Magic.StreamOut",
                 "KLayout.StreamOut",
                 "KLayout.Render",
-                "Odb.CheckDesignAntennaProperties",
                 "KLayout.XOR",
                 "Checker.XOR"
               ]
