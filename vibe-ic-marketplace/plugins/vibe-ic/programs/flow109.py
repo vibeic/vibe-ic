@@ -3090,14 +3090,18 @@ def prepare_front_door(args, project: Path) -> int | None:
         if _container_exec.no_container_route():
             current = component_context(context, requested_step='D53')
             import librelane_postroute
-            native = librelane_postroute.gate_level_sim(project, args.top_name,
-                os.environ.get('VIBEIC_EDA_IMAGE'),
-                Path(os.environ['VIBEIC_LIBRELANE_PDK_ROOT']), args.pdk)
+            try:
+                native = librelane_postroute.gate_level_sim(project, args.top_name,
+                    os.environ.get('VIBEIC_EDA_IMAGE'),
+                    Path(os.environ['VIBEIC_LIBRELANE_PDK_ROOT']), args.pdk)
+            except librelane_postroute.Refusal as exc:
+                native = {'verdict': 'NOT_MEASURED', 'reason': exc.code,
+                          'detail': str(exc), 'native_started': False}
             status = native['verdict'] if native['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
             _selected_step_result(project, current, {'step_id': 'D53',
                 'context_sha256': current['context_sha256'],
                 'component_status': status, 'default_row_status': status, 'completed': status == 'PASS',
-                'native_started': True, 'reason': 'NATIVE_DEADLINE_GLS_' + status,
+                'native_started': native.get('native_started', True), 'reason': 'NATIVE_DEADLINE_GLS_' + status,
                 'wall_seconds': native.get('wall_seconds'), 'native_result': native})
             return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[status]
     try:
