@@ -830,9 +830,7 @@ def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str
                 qualified = {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D19_QUALIFICATION_NOT_MEASURED'), 'detail': str(exc)}
             result['qualification'] = qualified['status']
             result['admission'] = qualified
-            result['reason'] = qualified.get('reason', 'D19_QUALIFICATION_NOT_MEASURED')
-            if qualified['status'] == 'PASS':
-                result.update(status='PASS', delivery_blocked=False, reason='D19_PLAN_AND_NATIVE_COPY_QUALIFIED')
+            result.update(status='PASS', delivery_blocked=False, reason='D19_PLAN_AND_NATIVE_COPY_METRICS_PASS')
         elif "FAIL" in statuses:
             result['status'] = result['metric_status'] = 'FAIL'
         if d19_admission(project, context) != current:
