@@ -10679,7 +10679,12 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
         return StepResult("professional_tb_gen", "NOT_MEASURED", time.time() - t0,
                           detail=f"generator import failed: {e}", reason_class=_V.ReasonClass.EXECUTION_ERROR)
     try:
-        gen = _ptb.generate(project)
+        import inspect
+        parameters = inspect.signature(_ptb.generate).parameters.values()
+        accepts_top = any(p.name == "top_name" or p.kind == p.VAR_KEYWORD
+                          for p in parameters)
+        gen = (_ptb.generate(project, top_name=top_name or None)
+               if accepts_top else _ptb.generate(project))
     except Exception as e:
         _write({"status": "SKIP", "reason": f"generate raised: {e}"})
         return StepResult("professional_tb_gen", "NOT_MEASURED", time.time() - t0,

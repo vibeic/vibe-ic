@@ -67,6 +67,28 @@ def test_classify_serial_stream(tmp_path):
     assert shape["operator"] == "*"
 
 
+def test_explicit_top_uses_that_rtl_port_surface(tmp_path):
+    proj = _mk_spm_project(tmp_path)
+    rtl = proj / "phase2" / "stage1" / "rtl"
+    (rtl / "wrapper.sv").write_text(
+        "module wrapper(input clk, input rst, input [3:0] req, "
+        "output [3:0] rsp); endmodule\n")
+    shape, why = T.classify_dut(proj, "crypto_accelerator", top_name="wrapper")
+    assert shape is not None, why
+    assert shape["top"] == "wrapper"
+    assert {p["name"] for p in shape["ports"]} == {"clk", "rst", "req", "rsp"}
+
+
+def test_step4_forwards_the_requested_top(tmp_path, monkeypatch):
+    import types
+    seen = {}
+    fake = types.SimpleNamespace(generate=lambda project, **kwargs: (
+        seen.update(kwargs) or {"status": "SKIP", "reason": "fixture"}))
+    monkeypatch.setitem(sys.modules, "professional_tb_gen", fake)
+    D.step_professional_tb_gen(tmp_path, "wrapper", "unavailable")
+    assert seen.get("top_name") == "wrapper"
+
+
 def test_width_resolves_from_rtl_param(tmp_path):
     proj = _mk_spm_project(tmp_path)
     _, ports = T._aog._load_top_ports(proj)

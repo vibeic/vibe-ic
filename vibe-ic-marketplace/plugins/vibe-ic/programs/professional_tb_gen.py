@@ -309,7 +309,30 @@ def _resolve_tb_width(project: Path, ports: List[dict]) -> int:
 # --------------------------------------------------------------------------
 # DUT shape classification
 # --------------------------------------------------------------------------
-def classify_dut(project: Path, ic_class: str
+def _load_top_ports(project: Path, top_name: Optional[str] = None):
+    if not top_name:
+        return _aog._load_top_ports(project)
+    rtl_dir = _pl.rtl_dir(project)
+    try:
+        import reset_clock_variant_alias as _rcv
+    except Exception:
+        return None, []
+    for ext in (".v", ".sv"):
+        for path in sorted(rtl_dir.rglob(f"*{ext}")) if rtl_dir.is_dir() else ():
+            ports = _rcv.parse_module_ports(path.read_text(errors="replace"), top_name)
+            if ports:
+                result = []
+                for direction, width, name in ports:
+                    raw = {"name": name, "dir": direction, "width_decl": width}
+                    result.append({"name": name, "dir": direction, "raw": raw,
+                                  "numeric_width": _aog._port_numeric_width(raw),
+                                  "is_parametric": _aog._port_is_parametric(raw)})
+                return top_name, result
+    declared_top, declared_ports = _aog._load_top_ports(project)
+    return ((top_name, declared_ports) if declared_top == top_name else (None, []))
+
+
+def classify_dut(project: Path, ic_class: str, top_name: Optional[str] = None
                  ) -> Tuple[Optional[dict], Optional[str]]:
     """Return (shape, reason_if_none). shape kinds:
       * "parallel_arith"  — c = a OP b, all full-width  (closed-form ref)
@@ -317,7 +340,7 @@ def classify_dut(project: Path, ic_class: str
                             1-bit serial result (bounded-latency scoreboard)
       * "generic"         — reference hook (dual-track)
     """
-    top, ports = _aog._load_top_ports(project)
+    top, ports = _load_top_ports(project, top_name)
     if not top or not ports:
         return None, "no usable L9 top ports"
     cr = _load_clock_reset(project, ports)
@@ -1219,9 +1242,10 @@ def _rtl_files(project: Path, top: str) -> List[str]:
     return out
 
 
-def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
+def generate(project: Path, out_dir: Optional[Path] = None,
+             top_name: Optional[str] = None) -> dict:
     ic_class = _detect_ic_class(project)
-    shape, why = classify_dut(project, ic_class)
+    shape, why = classify_dut(project, ic_class, top_name)
     if shape is None:
         if _memory_signature_rows(project):
             return {"status": "INCOMPLETE", "reason": why,
