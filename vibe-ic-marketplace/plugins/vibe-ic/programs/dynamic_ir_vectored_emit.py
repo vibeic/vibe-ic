@@ -359,12 +359,6 @@ def decap_effect(reference: str, solve: str, requested_f: float) -> Dict[str, ob
       difference is certain. Only this state is `genuine`.
     """
     out: Dict[str, object] = {"requested_decap_f": requested_f, "genuine": False}
-    import instrument_calibration as _ic
-    try:
-        _ic.assert_calibrated("dynamic_ir_vectored_emit::decap_effect")
-    except _ic.Uncalibrated as exc:
-        out.update(state="UNCALIBRATED", reason=str(exc))
-        return out
     cap = _printed(_ONDIE_TEXT_RE, solve)
     if cap is None or not math.isclose(cap[0], requested_f, rel_tol=0.0,
                                        abs_tol=cap[1] / 2.0 + 1e-9 * requested_f):

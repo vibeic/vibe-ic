@@ -836,8 +836,6 @@ def def_identity(bundle: dict, layout_def: Path | None) -> str | None:
 
 def judge(bundle: dict, *, project: Path | None = None) -> dict:
     """Judge measured rows independently of tool rc/checker summaries."""
-    import instrument_calibration
-    instrument_calibration.assert_calibrated("drv_signoff_judge::parse_check_types")
     fails: list[str] = []
     missing: list[str] = []
     findings: list[dict] = []

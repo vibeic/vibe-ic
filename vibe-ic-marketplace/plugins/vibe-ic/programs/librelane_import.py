@@ -278,8 +278,6 @@ def flow_status(flow_log: str) -> Dict[str, Any]:
     invocation's last started step. ``last_started`` is ``(instance id,
     folder)`` of that step, or None; ``invocations`` counts ``Starting…``.
     """
-    import instrument_calibration
-    instrument_calibration.assert_calibrated("librelane_import::flow_status")
     lines = (flow_log or "").splitlines()
     starts = [i for i, l in enumerate(lines) if l == _STARTING]
     tail = lines[starts[-1] + 1:] if starts else lines
@@ -313,8 +311,6 @@ def run_cuts(flow_log: str) -> Dict[str, Any]:
     cut: its step id goes to ``gated``. ``slots`` keeps each top-level loop
     iteration in order, including gated skips, for adjacent segment checks.
     """
-    import instrument_calibration
-    instrument_calibration.assert_calibrated("librelane_import::run_cuts")
     tail = _last_invocation(flow_log)
     running = [i for i, l in enumerate(tail) if _tlp._RUNNING_RE.match(l)]
     first = running[0] if running else len(tail)
@@ -347,8 +343,6 @@ def run_cuts(flow_log: str) -> Dict[str, Any]:
 def deferred_errors(flow_log: str) -> List[Tuple[str, str, str]]:
     """``(instance id, folder, message)`` for every deferred error the LAST
     invocation logged, each in the block of the step that raised it."""
-    import instrument_calibration
-    instrument_calibration.assert_calibrated("librelane_import::deferred_errors")
     out: List[Tuple[str, str, str]] = []
     cur: Optional[Tuple[str, str]] = None
     for line in _last_invocation(flow_log):

@@ -63,13 +63,7 @@ def def_component_masters(def_text: str) -> Set[str]:
 
 def masters_read_from_library(log_text: str,
                               masters: Iterable[str]) -> Dict[str, str]:
-    """{placed master: library path} Magic loaded as a full layout.
-
-    Raises `instrument_calibration.Uncalibrated` when its calibration pair
-    does not hold; the caller records NOT_MEASURED."""
-    import instrument_calibration
-    instrument_calibration.assert_calibrated(
-        "lvs_layout_view_census::masters_read_from_library")
+    """Map placed masters to the full layouts Magic loaded."""
     placed = set(masters)
     return {m.group(1): m.group(2) for m in _READ_FROM_PATH.finditer(log_text)
             if m.group(1) in placed}

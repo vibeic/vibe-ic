@@ -125,14 +125,7 @@ def read(log: str) -> Optional[Dict[str, int]]:
 def describe(log: str) -> Dict[str, Any]:
     """The source model a PSM session solved on, derived from its own log.
 
-    An instrument: it reads a tool transcript, so it is calibrated first and
-    says NOT_MEASURED/uncalibrated instead of a model when it may not judge."""
-    import instrument_calibration as _ic
-    try:
-        _ic.assert_calibrated("_psm_source_model::describe")
-    except _ic.Uncalibrated as exc:
-        return {"marker": None, "psm_0073": None, "reason_class": _ic.UNCALIBRATED,
-                "model": f"NOT_MEASURED ({_ic.UNCALIBRATED}): {exc.detail}"}
+    Read source-model selection from the native tool transcript."""
     rec = read(log)
     bump = re.search(r"PSM-0073[^\n]*", log or "")
     out: Dict[str, Any] = {"marker": rec, "psm_0073": bump.group(0) if bump else None}

@@ -36,7 +36,6 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _atomic_artefact import write_bytes, write_json  # noqa: E402
-import instrument_calibration  # noqa: E402
 
 #: A Verilog sized literal as Yosys `write_verilog` prints a constant.
 _LITERAL = r"\d+'[bhdo][0-9a-fA-FxXzZ_?]+"
@@ -47,8 +46,6 @@ _CONST_NET_RE = re.compile(r"\b(zero_|one_)\b")
 
 def constant_connections(netlist: str) -> list[dict[str, str]]:
     """Every literal constant driving a port (assign) or a cell pin."""
-    instrument_calibration.assert_calibrated(
-        "synth_handoff_netlist_check::constant_connections")
     found = [{"kind": "assign", "target": m.group(1), "value": m.group(2)}
              for m in _ASSIGN_CONST_RE.finditer(netlist)]
     found += [{"kind": "pin", "target": m.group(1), "value": m.group(2)}

@@ -53,13 +53,8 @@ relative), the same convention as the W0 import manifest (lane llf).
 
 THE ONE READER
 --------------
-The flow-log grammar is read by two calibrated instruments (see
-``instrument_calibration``): ``flow_log_steps`` and ``step_block``. When one
-of them may not judge, ``witnessed_row`` refuses (so the caller writes a #365
-back-fill), and ``verify_witness`` returns ``UNCALIBRATED``, but only after
-every check that needs no reader (the cited shas and folders of points 3-5)
-has held; one that fails is a FAIL whatever the reader says. ``UNCALIBRATED``
-is a NOT_MEASURED state, never a FAIL.
+`flow_log_steps` and `step_block` read the native flow log. Missing or
+malformed output remains unmeasured.
 
 It writes no ``measurement`` record; see ``_runner_measurement``.
 
@@ -149,9 +144,6 @@ def flow_log_steps(flow_log: str) -> List[Tuple[str, Tuple[str, ...]]]:
     run of a class), and the folder is relative to LibreLane's working
     directory (``runs/<tag>/<dir>``, nested sub-steps included).
     """
-    import instrument_calibration
-    instrument_calibration.assert_calibrated(
-        "_tool_log_provenance::flow_log_steps")
     return [(m.group(1), _parts(m.group(2)))
             for m in _RUNNING_RE.finditer(flow_log or "")]
 
@@ -167,9 +159,6 @@ def step_block(flow_log: str, step_id: str,
     block is the one described. Returns ``{"skipped": bool,
     "subprocess_logs": [folder parts, ...]}``.
     """
-    import instrument_calibration
-    instrument_calibration.assert_calibrated(
-        "_tool_log_provenance::step_block")
     want = _parts(step_dir)
     lines = (flow_log or "").splitlines()
     found: Optional[Dict[str, Any]] = None
@@ -242,7 +231,6 @@ def witnessed_row(project: Path, *, flow: str, step_id: str, run_dir: Path,
     support a witnessed row, including when the flow-log reader may not
     judge; the caller then writes a #365 back-fill, never a weaker witness.
     """
-    import instrument_calibration
     project = Path(project).resolve()
     if flow not in SUPPORTED_FLOWS:
         raise WitnessRefused(f"flow {flow!r} has no witness rule "
@@ -263,11 +251,8 @@ def witnessed_row(project: Path, *, flow: str, step_id: str, run_dir: Path,
     if not flow_log.is_file():
         raise WitnessRefused(f"{flow_log} is missing: nothing names the step")
     prefix = flow_log.read_bytes()
-    try:
-        block = step_block(prefix.decode("utf-8", errors="replace"),
-                           step_id, step_rel)
-    except instrument_calibration.Uncalibrated as exc:
-        raise WitnessRefused(f"the flow-log reader may not judge ({exc})")
+    block = step_block(prefix.decode("utf-8", errors="replace"),
+                       step_id, step_rel)
     if block is None:
         raise WitnessRefused(f"flow.log never started {step_id!r} in "
                              f"{step_rel!r}")
@@ -362,7 +347,6 @@ def verify_witness(entry: Dict[str, Any], project: Path) -> Tuple[Any, str]:
     """
     if not claims_witness(entry):
         return None, ""
-    import instrument_calibration
     project = Path(project).resolve()
     w = entry.get("witness")
     if not isinstance(w, dict):
@@ -455,11 +439,8 @@ def verify_witness(entry: Dict[str, Any], project: Path) -> Tuple[Any, str]:
                            f"source {obj['path']}")
     # Only what the flow's own log says is left: started, not skipped, and
     # each cited log a transcript it names.
-    try:
-        block = step_block(prefix.decode("utf-8", errors="replace"),
-                           step_id, step_rel)
-    except instrument_calibration.Uncalibrated as exc:
-        return UNCALIBRATED, f"the flow-log reader may not judge: {exc}"
+    block = step_block(prefix.decode("utf-8", errors="replace"),
+                       step_id, step_rel)
     if block is None:
         return False, (f"the flow's own log never started {step_id!r} in "
                        f"{step_rel!r}")

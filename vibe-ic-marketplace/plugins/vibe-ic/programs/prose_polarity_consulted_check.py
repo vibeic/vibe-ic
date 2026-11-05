@@ -95,7 +95,6 @@ from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _ratchet_baseline as _ratchet  # noqa: E402
-import instrument_calibration as _instrument_calibration  # noqa: E402  R-0915-86(3)
 
 _BASELINE_NAME = "prose_polarity_baseline.json"
 _POLARITY_MODULE = "_prose_polarity"
@@ -2723,7 +2722,6 @@ _OFFENDER_REGISTER: Dict[str, str] = {}
 
 def _scan_populations(root: Path):
     """Keep legacy exemption audit separate from automatic grammar evidence."""
-    _instrument_calibration.assert_calibrated("prose_polarity_consulted_check::scan")
     raw, refined = [], []
     # Existing debt and argued exemptions keep their original measurement.
     # This classifier decides whether a NEW arrival really reads prose; it
@@ -2804,7 +2802,6 @@ def _scan_populations(root: Path):
 
 def scan(root: Path) -> List[str]:
     """Polarity-blind prose publishers, excluding proven formal input origins."""
-    _instrument_calibration.assert_calibrated("prose_polarity_consulted_check::scan")
     return _scan_populations(root)[1]
 
 

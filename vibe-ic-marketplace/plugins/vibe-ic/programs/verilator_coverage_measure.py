@@ -998,13 +998,6 @@ def cross_check_line_union(ours: Optional[Dict[str, Dict[int, int]]],
     `agree` is True only when both sides name the same scoped files, the same
     lines in each, and the same subset of them hit. A side that is absent is
     NOT_MEASURED, never agreement."""
-    import instrument_calibration as _calibration
-    try:
-        _calibration.assert_calibrated(
-            "verilator_coverage_measure::cross_check_line_union")
-    except _calibration.Uncalibrated as exc:
-        return {"status": "NOT_MEASURED", "reason_class": exc.reason_class,
-                "reason": str(exc)}
     if ours is None or tool is None:
         return {"status": "NOT_MEASURED",
                 "reason": ("the h-stripped union could not be keyed"

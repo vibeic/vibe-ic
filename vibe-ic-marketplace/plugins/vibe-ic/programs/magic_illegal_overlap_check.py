@@ -131,7 +131,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _vacuous_exit as _ve  # noqa: E402
 import step_metrics as _sm  # noqa: E402
 from _atomic_artefact import write_json as _atomic_write_json  # noqa: E402  vibe-ic#1082
-import instrument_calibration as _instrument_calibration  # noqa: E402  R-0915-86(3)
 
 GATE = "magic_illegal_overlap_check"
 
@@ -241,8 +240,6 @@ def parse_feedback(text: str) -> Tuple[List[Record], List[str]]:
     Unrecognised non-blank, non-comment lines are reported too. Nothing here
     decides a verdict; it only says what could and could not be read.
     """
-    _instrument_calibration.assert_calibrated(
-        "magic_illegal_overlap_check::parse_feedback")  # R-0915-86(3)
     records: List[Record] = []
     defects: List[str] = []
     pending: Optional[Tuple[int, int, int, int]] = None

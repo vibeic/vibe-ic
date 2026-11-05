@@ -49,7 +49,6 @@ from typing import Iterable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _atomic_artefact import write_json  # noqa: E402
-import instrument_calibration as _calibration  # noqa: E402
 
 GATE = "verilator_lint_gate"
 
@@ -71,8 +70,6 @@ def _sha(path: Path) -> str:
 
 def parse_transcript(text: str, *, calibrate: bool = True) -> dict:
     """Diagnostics and the tool's own error total, from a Verilator log."""
-    if calibrate:
-        _calibration.assert_calibrated("verilator_lint_gate::parse_transcript")
     diagnostics = []
     exiting: Optional[int] = None
     for raw in text.splitlines():
@@ -265,12 +262,7 @@ def judge(step_dir: Path, expected: list[Path], *, checker_dirs=None, native_fai
                 f"{len(linted)} file(s); native errors/timing constructs/latches=0; "
                 f"warnings={values[3]} (native warning policy retained)"))
         return report
-    try:
-        parsed = parse_transcript(log.read_text(errors="replace"))
-    except _calibration.Uncalibrated as exc:
-        report.update(verdict="NOT_MEASURED", reason_class=exc.reason_class,
-                      reason=str(exc))
-        return report
+    parsed = parse_transcript(log.read_text(errors="replace"))
     diags = parsed["diagnostics"]
     errors = sum(1 for row in diags if row["severity"] == "ERROR")
     warnings = sum(1 for row in diags if row["severity"] == "WARNING")

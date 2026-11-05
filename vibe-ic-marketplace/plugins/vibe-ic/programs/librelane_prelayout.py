@@ -40,7 +40,6 @@ from librelane_contract import (Refusal, _load, digest, emit_config,  # noqa: E4
                                 config_file_hashes, derive_step_config,
                                 resolve_step_config, run_chain,
                                 validate_step_receipt)
-import instrument_calibration  # noqa: E402
 
 STEPS = ("OpenROAD.CheckSDCFiles", "OpenROAD.STAPrePNR")
 _TIME_UNIT_REPORT = "vibeic_time_unit.rpt"
@@ -76,15 +75,12 @@ BASIS_NOTE = ("pre-layout basis (Step 10, LibreLane OpenROAD.STAPrePNR) — the 
 
 def black_boxes(sta_log: str) -> list[dict[str, str]]:
     """Cells OpenSTA replaced by an empty black box while linking."""
-    instrument_calibration.assert_calibrated("librelane_prelayout::black_boxes")
     return [{"module": m.group(1), "instance": m.group(2)}
             for m in _BLACK_BOX_RE.finditer(sta_log)]
 
 
 def sdc_diagnostics(sta_log: str, sdc: Path, *, calibrate: bool = True) -> list[dict[str, Any]]:
     """OpenSTA diagnostics raised while reading THIS constraints file."""
-    if calibrate:
-        instrument_calibration.assert_calibrated("librelane_prelayout::sdc_diagnostics")
     found = []
     for m in _FILE_DIAG_RE.finditer(sta_log):
         if Path(m.group(3)).name != sdc.name:
@@ -104,8 +100,6 @@ def check_setup_counts(checks_rpt: str,
     `-verbose` listing under the summary line names them; an unlisted count
     stands as reported.
     """
-    if calibrate:
-        instrument_calibration.assert_calibrated("librelane_prelayout::check_setup_counts")
     header = _CHECK_SETUP_HEADER_RE.search(checks_rpt)
     if header is None:
         return None

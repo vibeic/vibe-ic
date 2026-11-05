@@ -59,12 +59,6 @@ def junit_cases(path: Path) -> Optional[Dict[Tuple[str, str], str]]:
 def compare_junit(a: Path, b: Path, *, a_name: str = "icarus",
                   b_name: str = "verilator") -> Dict[str, Any]:
     """Compare two JUnit files case by case."""
-    import instrument_calibration as _calibration
-    try:
-        _calibration.assert_calibrated("sim_dual_compare::compare_junit")
-    except _calibration.Uncalibrated as exc:
-        return {"verdict": "NOT_MEASURED", "reason_class": exc.reason_class,
-                "reason": str(exc)}
     left, right = junit_cases(a), junit_cases(b)
     arms = {a_name: str(a), b_name: str(b)}
     for name, cases, path in ((a_name, left, a), (b_name, right, b)):

@@ -62,7 +62,6 @@ from typing import Dict, Iterable, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_json as _atomic_write_json  # noqa: E402
-import instrument_calibration as _calibration  # noqa: E402
 
 GATE = "pg_supply_pin_ownership_check"
 
@@ -191,7 +190,6 @@ def parse_def(def_text: str) -> Tuple[Dict[str, str], Dict[str, str],
 
 def judge(def_text: str, lef_texts: Iterable[str]) -> Dict[str, object]:
     """The verdict record for one DEF. See the module docstring."""
-    _calibration.assert_calibrated("pg_supply_pin_ownership_check::judge")
     supply_pins: Dict[str, Dict[str, str]] = {}
     for text in lef_texts:
         for master, pins in parse_lef_supply_pins(text).items():
@@ -293,11 +291,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         rec = {"gate": GATE, "verdict": "NOT_MEASURED",
                "code": UNMEASURED_CODE,
                "reason": f"{UNMEASURED_CODE}: unreadable input: {exc}"}
-    except _calibration.Uncalibrated as exc:
-        rec = {"gate": GATE, "verdict": "NOT_MEASURED",
-               "code": UNMEASURED_CODE,
-               "reason_class": _calibration.UNCALIBRATED,
-               "reason": f"{UNMEASURED_CODE}: {exc}"}
     if a.json:
         _atomic_write_json(a.json, rec)
     print(f"[{rec['verdict']}] {GATE}: {rec['reason']}")

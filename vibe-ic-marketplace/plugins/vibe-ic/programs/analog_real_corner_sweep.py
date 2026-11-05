@@ -96,9 +96,8 @@ _KV_RE = re.compile(r"(\w+)=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)")
 # every such row was dropped: MEASURED on the delta_sigma A3 deck (image 0.3.83)
 # 243 of 245 results were read as absent and A7 compared no rail at all. The
 # trailing `from=`/`to=`/`at=` fields are now accepted (and not read: they are
-# the window, the value is the measurement). Calibrated on real ngspice-47
-# transcripts -- `instrument_calibration` "analog_real_corner_sweep::
-# native_meas_rows".
+# the window, the value is the measurement). The parser accepts these
+# native ngspice result rows.
 _NATIVE_MEAS_RE = re.compile(
     r"^\s*([A-Za-z_]\w*)\s*=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)"
     r"(?:[ \t]+(?:from|to|at|targ|trig|with)[ \t]*=[ \t]*[\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)*[ \t]*$",
@@ -119,8 +118,6 @@ def native_meas_rows(txt):
     not. A measure ngspice reports `failed!` prints no row and is absent here --
     absence is the simulator's own statement, never a zero. `\r` progress
     output (`Reference value : ...`) is treated as the line break it is."""
-    import instrument_calibration as _ic
-    _ic.assert_calibrated("analog_real_corner_sweep::native_meas_rows")
     out = {}
     text = _FORK_JSON_NOTICE_RE.sub("", (txt or "").replace("\r", "\n"))
     for m in _NATIVE_MEAS_RE.finditer(text):

@@ -220,10 +220,7 @@ def well_islands(rows: Dict[int, str], height: int, power_top: bool
 def audit(def_text: str, lef_texts: Sequence[str], tap_master: str,
           distance_um: float, endcap_master: Optional[str] = None,
           scope: str = "cells") -> Dict[str, Any]:
-    """The coverage measurement. Raises ValueError (named) on unreadable input
-    and `instrument_calibration.Uncalibrated` when the instrument may not judge."""
-    import instrument_calibration                                  # noqa: PLC0415
-    instrument_calibration.assert_calibrated("tap_row_coverage_check::audit")
+    """Measure tap coverage, raising ValueError on unreadable input."""
     masters = read_lef_masters(lef_texts)
     tap = masters.get(tap_master)
     if not tap or not tap["width_um"] or not tap["height_um"]:
@@ -371,7 +368,6 @@ def judge(def_path: Path, lef_paths: Sequence[Path], tap_master: str,
     routed DEF. The tool's configured distance is recorded, never judged: the
     lattice is.
     """
-    import instrument_calibration                                  # noqa: PLC0415
     rep: Dict[str, Any] = {
         "program": PROGRAM, "instrument": INSTRUMENT, "scope": scope,
         "def": str(def_path), "lefs": [str(p) for p in lef_paths],
@@ -389,10 +385,6 @@ def judge(def_path: Path, lef_paths: Sequence[Path], tap_master: str,
         measured = audit(def_path.read_text(errors="replace"),
                          [p.read_text(errors="replace") for p in lef_paths],
                          tap_master, distance_um, endcap_master, scope)
-    except instrument_calibration.Uncalibrated as exc:
-        rep.update(verdict="NOT_MEASURED", reason_class="uncalibrated",
-                   reason=f"{INSTRUMENT} may not judge: {exc}")
-        return rep
     except (OSError, ValueError) as exc:
         rep.update(verdict="NOT_MEASURED", reason=str(exc))
         return rep

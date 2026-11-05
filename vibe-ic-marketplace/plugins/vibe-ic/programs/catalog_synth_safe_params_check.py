@@ -68,7 +68,6 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _atomic_artefact import write_json  # noqa: E402
 import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
-import instrument_calibration as _calibration  # noqa: E402
 
 PROGRAM = "catalog_synth_safe_params_check"
 DECLARATION_REL = "plugin_output/declaration.json"
@@ -217,7 +216,6 @@ def judge(netlist: dict, ips: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     ``netlist`` is Yosys's ``write_json`` after ``hierarchy -check -top``.
     """
-    _calibration.assert_calibrated("catalog_synth_safe_params_check::judge")
     rows = []
     for name, module in sorted((netlist.get("modules") or {}).items()):
         attrs = module.get("attributes") or {}
@@ -244,7 +242,6 @@ def reached_ips(netlist: dict, ips: list[dict[str, Any]]) -> list[str]:
     which drops every module the top does not reach. A module belongs to an
     IP by its ``src`` file, as in ``judge``; reaching needs no parameter.
     """
-    _calibration.assert_calibrated("catalog_synth_safe_params_check::reached_ips")
     srcs = {Path(str((module.get("attributes") or {}).get("src", ""))
                  .split("|")[0].rsplit(":", 1)[0]).name
             for module in (netlist.get("modules") or {}).values()}

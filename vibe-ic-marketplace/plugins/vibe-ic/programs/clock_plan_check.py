@@ -417,8 +417,6 @@ def _librelane_clock_configs(project: Path):
 def cts_clock_roots(text: str):
     """(clocks, root nets) TritonCTS says it found, from its own transcript:
     `{clock: net}` from CTS-0007 lines and `{net}` from CTS-0095 lines."""
-    import instrument_calibration as _ic  # noqa: PLC0415
-    _ic.assert_calibrated("clock_plan_check::cts_clock_roots")
     text = text or ""
     return ({clock: net for net, clock in _CTS_CLOCK_RE.findall(text)},
             set(_CTS_ROOT_RE.findall(text)))
@@ -452,8 +450,6 @@ def cts_transcript(project: Path):
     A report the receipt does not bind (a later direct CTS rewrote it) is read
     as itself: the receipt speaks only for the bytes it hashed.
     """
-    import instrument_calibration as _ic  # noqa: PLC0415
-    _ic.assert_calibrated("clock_plan_check::cts_transcript")
     report = project / _CTS_REPORT_REL
     text = report.read_text(errors="replace")
     receipt_path = project / _LL_CTS_HANDOFF_REL

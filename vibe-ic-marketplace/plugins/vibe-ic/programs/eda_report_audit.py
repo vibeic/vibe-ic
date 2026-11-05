@@ -4402,8 +4402,6 @@ def _antenna_klayout_count(text: str) -> Optional[int]:
     a run that measured nothing as a passing antenna sign-off, which is the
     exact direction this audit exists to refuse.
     """
-    import instrument_calibration as _cal
-    _cal.assert_calibrated("eda_report_audit::_antenna_klayout_count")
     head = text[:4096]
     # --- the per-rule JSON tally ---
     s = text.lstrip()

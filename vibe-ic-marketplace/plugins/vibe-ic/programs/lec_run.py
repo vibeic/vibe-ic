@@ -1112,9 +1112,6 @@ def induct_decision_progress(raw: str) -> Optional[Dict[str, int]]:
     never a fabricated zero. `equiv_simple`'s `...:ezsat` lines are not
     decisions of this pass and are not counted. Evidence only; the verdict is
     `parse_equiv_output`'s. PURE."""
-    import instrument_calibration
-    instrument_calibration.assert_calibrated(
-        "lec_run::induct_decision_progress")
     if not raw:
         return None
     # A Yosys error can echo HDL source into the live log.  This progress

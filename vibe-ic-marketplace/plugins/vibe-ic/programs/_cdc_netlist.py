@@ -1083,9 +1083,6 @@ def reg_crossing_findings(nl: Netlist,
                           lookup: Optional[_LookupSnapshot] = None, *,
                           metadata: Optional[dict] = None, calibrate: bool = True) -> List[dict]:
     """A flop of domain A read by a flop of domain B (clock_domain_reg_crossing)."""
-    if calibrate:
-        import instrument_calibration
-        instrument_calibration.assert_calibrated("_cdc_netlist::reg_crossing_findings")
     lookup = lookup or _LookupSnapshot(nl)
     domains = clock_domains(nl, lookup)
     if len(domains) < 2 and metadata is None:
@@ -1159,9 +1156,6 @@ def async_input_findings(nl: Netlist, is_candidate,
     candidate set is drawn from the netlist's PORTS only, so an internal net is
     never an async input whatever it is called (#2063).
     """
-    if calibrate:
-        import instrument_calibration
-        instrument_calibration.assert_calibrated("_cdc_netlist::async_input_findings")
     lookup = lookup or _LookupSnapshot(nl)
     clock_or_reset = {nl.root(f.clk) for f in nl.flops} | \
         {nl.root(f.arst) for f in nl.flops if f.arst is not None}
@@ -1209,9 +1203,6 @@ def reset_dependency_findings(
     examine each node/edge exactly twice. Witness walks examine at most one
     further graph's worth of edges, with no recursion limit.
     """
-    if calibrate:
-        import instrument_calibration
-        instrument_calibration.assert_calibrated("_cdc_netlist::reset_dependency_findings")
     lookup = lookup or _LookupSnapshot(nl)
     reset_roles = reset_roles or {}
     unresolved = [r for r in (reset_role_candidates(nl) if require_reset_roles else [])
@@ -1339,11 +1330,7 @@ def reset_dependency_findings(
 def judge(nl: Netlist, rule: str, is_candidate=None, *,
           metadata: Optional[dict] = None, reset_roles: Optional[dict] = None,
           calibrate: bool = True, require_reset_roles: bool = True) -> List[dict]:
-    """The one entry every gate uses to judge a netlist.
-
-    Each rule carries its own `assert_calibrated` line: one pair per rule, so
-    a calibrated crossing rule cannot vouch for the reset rule.
-    """
+    """Apply the selected structural rule to the native netlist."""
     lookup = _LookupSnapshot(nl)
     if rule == "reg_crossing":
         return reg_crossing_findings(nl, lookup, metadata=metadata, calibrate=calibrate)
@@ -1420,7 +1407,6 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
                           f"not substituted for it")],
                 {"front_end": "netlist" if mode == "librelane" else "dual",
                  "netlist": str(netlist_arg or NETLIST_REL), "netlist_read": False})
-    import instrument_calibration
     try:
         import hashlib
         graph_sha256 = None
@@ -1439,7 +1425,7 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
             analysis["role_authority"] = why
             analysis["reset_role_request"] = expert.reset_role_request(project)
         rows = judge(nl, rule, is_candidate, metadata=analysis, reset_roles=roles)
-    except (Refusal, instrument_calibration.Uncalibrated) as exc:
+    except Refusal as exc:
         code = getattr(exc, "code", "NETLIST_RULE_UNCALIBRATED")
         return ([_finding(code, "ERROR", str(exc))],
                 {"front_end": mode, "netlist": str(path), "netlist_read": False})

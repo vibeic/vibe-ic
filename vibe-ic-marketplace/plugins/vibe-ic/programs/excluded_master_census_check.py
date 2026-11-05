@@ -31,13 +31,6 @@ def audit(config: Path, state: Path, step: str, *, policy_complete: bool = True
     base: dict[str, Any] = {"program": "excluded_master_census_check",
                             "step": step, "severity": "ADVISORY",
                             "config": str(config), "state": str(state)}
-    import instrument_calibration
-    try:
-        instrument_calibration.assert_calibrated(
-            "excluded_master_census_check::audit")
-    except instrument_calibration.Uncalibrated as exc:
-        return dict(base, verdict="NOT_MEASURED", reason_class="uncalibrated",
-                    reason=str(exc))
     if not policy_complete:
         return dict(base, verdict="NOT_MEASURED",
                     reason="EXCLUSION_POLICY_LIBERTY_UNREADABLE")

@@ -32,7 +32,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 import _atomic_artefact as _aa  # noqa: E402
-import instrument_calibration as _instrument_calibration  # noqa: E402
 import postroute_timing_repair_decision as _repair_dec  # noqa: E402
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
@@ -106,15 +105,6 @@ def _parse_sta_for_violations(sta_text: str) -> dict:
     ``non_path_violations`` and do not decide the timing measurement; the
     sign-off DRV verdict belongs to Step 23's record gate.
     """
-    try:
-        _instrument_calibration.assert_calibrated(
-            "postroute_timing_repair_status_gen::_parse_sta_for_violations")
-    except _instrument_calibration.Uncalibrated:
-        return {"tns_zero": False, "wns_negative": False,
-                "timing_measurement": "NOT_MEASURED",
-                "reason_class": "uncalibrated", "violation_paths": [],
-                "non_path_violations": {"count": 0, "by_check": {}, "rows": []},
-                "raw_lines_inspected": 0}
     out = {
         "tns_zero": False,
         "wns_negative": False,

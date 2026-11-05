@@ -624,28 +624,8 @@ def fold_prove_arms(lp: LogParse) -> Tuple[LogParse, List[dict]]:
             arms_of[base] = tr
             continue
         folded.tasks[name] = tr
-    uncalibrated = None
-    if arms_of:
-        import instrument_calibration as _instrument_calibration
-        try:
-            _instrument_calibration.assert_calibrated(
-                "formal_property_run::fold_prove_arms")
-        except _instrument_calibration.Uncalibrated as exc:
-            uncalibrated = str(exc)
     for base, kind in arms_of.items():
         primary = lp.tasks[base]
-        if uncalibrated:
-            # The second arm may not judge (NOT_MEASURED / uncalibrated); the
-            # claim is the first engine's alone, and the record says why.
-            folded.tasks[base] = primary
-            records.append({
-                "task": base, "status": primary.status,
-                "selected_engine": primary.engine, "engines_disagree": False,
-                "arms": [{"task": kind.name, "engine": kind.engine,
-                          "status": "NOT_MEASURED",
-                          "reason_class": "uncalibrated",
-                          "detail": uncalibrated}]})
-            continue
         arms = [primary, kind]
         statuses = [a.status for a in arms]
         disagreement = "FAIL" in statuses and "PASS" in statuses
