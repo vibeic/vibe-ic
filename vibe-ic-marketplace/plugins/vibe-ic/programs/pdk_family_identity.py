@@ -59,6 +59,7 @@ chip-AGNOSTIC and NDA-safe: names come from the registry, never from here.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -126,13 +127,15 @@ def match_strength(a: Optional[str], b: Optional[str]) -> int:
 def load_registry(path: Optional[Path] = None) -> Dict[str, Any]:
     """Parse the registry, or `{}` when it cannot be read.
 
+    VIBEIC_PDK_REGISTRY selects a run-local file; an explicit path wins.
+
     An unreadable registry is NOT an empty one, and no caller here supplies a
     default family for it: every lookup below returns None, which every caller
     already handles as "no family", rather than a wrong name.
     """
     try:
-        data = json.loads(Path(path or _REGISTRY_PATH).read_text(
-            encoding="utf-8"))
+        selected = path or os.environ.get("VIBEIC_PDK_REGISTRY") or _REGISTRY_PATH
+        data = json.loads(Path(selected).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
