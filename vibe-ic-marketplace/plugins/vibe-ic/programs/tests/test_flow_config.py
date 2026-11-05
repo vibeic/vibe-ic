@@ -630,10 +630,16 @@ def test_native_pdn_actuator_roundtrip_keeps_decimal_grid_exact(project, monkeyp
     assert owner.config["PDN_HPITCH"] == Decimal(str(horizontal))
 
 
-def test_scalar_native_clock_target_uses_the_fastest_declared_clock(project):
+@pytest.mark.parametrize("override", [None, 8])
+def test_scalar_native_clock_target_uses_the_fastest_declared_clock(project, override):
     (project / "phase1/generated_docs/L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
         {"domain_kind": "primary", "source_pin": "slow_clock", "period_ns": 50},
         {"domain_kind": "primary", "source_pin": "clk", "freq_mhz": 50}]}))
+    if override is not None:
+        path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+        document = json.loads(path.read_text())
+        document["fields"]["clock_target"] = {"period_ns": override}
+        path.write_text(json.dumps(document))
     config = build_config(project, route="ip")
     assert config["CLOCK_PORT"] == ["slow_clock", "clk"]
     assert config["CLOCK_PERIOD"] == 20

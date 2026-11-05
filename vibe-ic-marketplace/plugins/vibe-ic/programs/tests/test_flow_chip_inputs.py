@@ -812,18 +812,20 @@ def test_escaped_core_identifiers_have_legal_verilog_names(inputs):
 
 @pytest.mark.parametrize("override", [None, 12])
 @pytest.mark.parametrize("period_field", ["period_ns", "freq_mhz"])
-def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, override, period_field):
+@pytest.mark.parametrize("clock_count", [1, 2])
+def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, override, period_field, clock_count):
     from sdc_constraints import create_clocks_in_text
 
     project, config, _, ports, _ = inputs
-    config["CLOCK_PORT"] = ["clk", "other_clock"]
+    config["CLOCK_PORT"] = ["clk", "other_clock"][:clock_count]
     ports = [*ports, {"name": "other_clock", "direction": "input", "width": 1,
                      "indexed": False, "msb": 0, "lsb": 0}]
     docs = project / "phase1/generated_docs"
-    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+    clocks = [
         {"domain_kind": "primary", "source_pin": "clk", "period_ns": 20},
-        {"domain_kind": "primary", "source_pin": "other_clock", period_field: 50 if period_field == "period_ns" else 20},
-        {"domain_kind": "generated", "source_pin": "derived_clock", "period_ns": 2}]}))
+        {"domain_kind": "primary", "source_pin": "other_clock", period_field: 50 if period_field == "period_ns" else 20}]
+    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        *clocks[:clock_count], {"domain_kind": "generated", "source_pin": "derived_clock", "period_ns": 2}]}))
     if override is not None:
         path = docs / "L19_CONSTRAINTS_PDK.json"
         document = json.loads(path.read_text())
@@ -831,7 +833,8 @@ def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, over
         path.write_text(json.dumps(document))
     text = chip._sdc(project, config, ports)
     periods = [clock["period_ns"] for clock in create_clocks_in_text(text)]
-    assert periods == ([override, override] if override is not None else [20, 50])
-    budget = (override or 50) * 0.2
-    assert f"set_input_delay {budget:g} -clock core_clock_1 -add_delay" in text
-    assert f"set_output_delay {budget:g} -clock core_clock_1 -add_delay" in text
+    assert periods == ([override or 20] if clock_count == 1 else [20, 50])
+    budget = ((override or 20) if clock_count == 1 else 50) * 0.2
+    clock = f"core_clock_{clock_count - 1}" + (" -add_delay" if clock_count == 2 else "")
+    assert f"set_input_delay {budget:g} -clock {clock}" in text
+    assert f"set_output_delay {budget:g} -clock {clock}" in text

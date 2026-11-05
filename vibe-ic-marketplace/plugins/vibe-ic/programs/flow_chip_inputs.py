@@ -538,9 +538,10 @@ def _clock_periods(project: Path, config: dict) -> dict:
     path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
     document = json.loads(path.read_text()) if path.is_file() else {}
     override = document.get('fields', {}).get('clock_target', {}).get('period_ns')
+    clocks = declared_clocks(project, config['PDK'])
     return {clock.get('source_pin') or clock.get('name'):
-            override if override is not None else clock_period_ns(clock)
-            for clock in declared_clocks(project, config['PDK'])}
+            override if override is not None and len(clocks) == 1 else clock_period_ns(clock)
+            for clock in clocks}
 
 
 def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str] | None = None) -> str:

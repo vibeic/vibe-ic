@@ -298,7 +298,8 @@ def build_config(project: Path | str, *, route: str | None = None, pdk: str | No
         ports = [clock.get("source_pin") or clock.get("name") for clock in clocks]
         config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
         periods = [value for clock in clocks if (value := clock_period_ns(clock)) is not None]
-        period = fields.get("clock_target", {}).get("period_ns") or (min(periods) if periods else None)
+        override = fields.get("clock_target", {}).get("period_ns") if len(clocks) == 1 else None
+        period = override or (min(periods) if periods else None)
         if period is not None:
             config["CLOCK_PERIOD"] = period
     if "CLOCK_PERIOD" not in config:
