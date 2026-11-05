@@ -759,6 +759,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     if tool.get("adapter") == "safety_injection":
         from flow_safety import injection
         return injection(project, work, tool)
+    if tool.get("adapter") == "safety_case":
+        from flow_safety import safety_case
+        return safety_case(project, work, tool)
     if tool.get("adapter") == "system_scenarios":
         from flow_system_scenarios import execute as system_scenarios
         return system_scenarios(project, work, tool)

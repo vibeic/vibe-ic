@@ -4471,6 +4471,10 @@
           }
         }
       ]
+    },
+    "design_safety_case": {
+      "kind": "adapter",
+      "adapter": "safety_case"
     }
   },
   "report_check_readers": {
