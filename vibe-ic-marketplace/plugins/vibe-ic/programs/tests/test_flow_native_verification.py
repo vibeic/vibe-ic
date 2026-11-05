@@ -254,10 +254,25 @@ def test_gls_replays_every_state_corner(tmp_path):
     directory.mkdir()
     state, config = gls_fixture(project)
     state["sdf"]["second_corner"] = state["sdf"]["typical"]
-    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    result = gls(project, directory, {"corners": "all"}, Commands(directory), state=state, config=config)
     assert [row["corner"] for row in result["native_steps"]] == ["typical", "second_corner"]
     assert all(row["status"] == "PASS" and row["tests"] == 1 for row in result["native_steps"])
     assert result["metrics"]["gls_failures"] == 0
+
+
+def test_gls_default_matches_configured_single_corner(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    state["sdf"]["unselected_corner"] = str(project / "absent.sdf")
+    config["DEFAULT_CORNER"] = "typical"
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert [row["corner"] for row in result["native_steps"]] == ["typical"]
+    assert result["metrics"]["gls_failures"] == 0
+    report = json.loads((directory / "gls.json").read_text())
+    assert report["unmeasured_corners"] == ["unselected_corner"]
 
 
 def test_gls_requires_functional_evidence_even_with_annotation(tmp_path):

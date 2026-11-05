@@ -205,6 +205,19 @@ def gls(project, directory, tool, commands, *, state, config):
     if not top or not netlist or not Path(netlist).is_file() or not sdfs:
         return commands.result(detail="GLS needs the declared top, native State netlist and corner SDF files.")
     sdfs = sdfs if isinstance(sdfs, dict) else {"default": sdfs}
+    requested = tool.get("corners")
+    if requested == "all":
+        selected = list(sdfs)
+    elif requested is not None:
+        selected = [requested] if isinstance(requested, str) else list(requested)
+    else:
+        selected = [config.get("DEFAULT_CORNER") or next(iter(sdfs))]
+        if len(sdfs) == 1 and "default" in sdfs:
+            selected = ["default"]
+    if not selected or any(corner not in sdfs for corner in selected):
+        return commands.result(detail=f"GLS selected SDF corners are unavailable: {selected}; native corners: {list(sdfs)}.")
+    unmeasured = [corner for corner in sdfs if corner not in selected]
+    sdfs = {corner: sdfs[corner] for corner in selected}
     missing = [str(path) for path in sdfs.values() if not path or not Path(path).is_file()]
     if missing:
         return commands.result(detail="Native SDF files are absent: " + ", ".join(missing))
@@ -314,7 +327,10 @@ def gls(project, directory, tool, commands, *, state, config):
                        detail=detail + "Icarus does not implement SDF timing checks; setup/hold remain STA checks.")
             rows.append(row)
     summary = directory / "gls.json"
-    summary.write_text(json.dumps({"runs": rows, "cell_models": closure}, indent=2) + "\n")
+    summary.write_text(json.dumps({"runs": rows, "cell_models": closure,
+        "selected_corners": selected, "unmeasured_corners": unmeasured,
+        "corner_selection": "explicit tool selection" if requested is not None else "direct owner single-SDF default"},
+        indent=2) + "\n")
     metrics = {"sdf_delays_applied": sum(row.get("sdf_delays_applied", 0) for row in rows),
                "sdf_annotation_errors": sum(row.get("sdf_errors", 0) for row in rows)} if any(row["ran"] for row in rows) else {}
     if rows and all(row["status"] in {"PASS", "FAIL"} for row in rows):
@@ -323,6 +339,7 @@ def gls(project, directory, tool, commands, *, state, config):
         metrics.update(dict.fromkeys({"gls_failures", "final_gls_function_timing_errors",
                                      tool.get("metric", "gls_failures")}, failures))
     result = commands.result(metrics, [*reports, summary],
-        "Every native SDF corner replays the existing suite; no timing annotation means NOT_MEASURED.")
+        f"Selected GLS corners: {selected}; other native SDF corners unmeasured: {unmeasured}. "
+        "The full existing suite is replayed; no timing annotation means NOT_MEASURED.")
     result["native_steps"] = [{"name": "Icarus.GLS", **row} for row in rows]
     return result
