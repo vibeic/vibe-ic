@@ -385,19 +385,36 @@ def test_current_geometry_reaches_floorplan_and_reserves_both_ring_rails(inputs,
     assert geometry["core_inset_um"] >= 8.4 + geometry["pad_depth_um"]
 
 
-def test_nonconverging_current_geometry_stops_with_plain_error(inputs, monkeypatch):
+def test_current_sizing_uses_initial_die_before_final_floorplan(inputs, monkeypatch):
     import flow_pdn_current
-    project, config, _, _, _ = inputs
-    calls = []
+    project, config, native, _, _ = inputs
+    floorplan = chip._floorplan
+    events, plans = [], []
 
-    def changing_settings(*args):
-        calls.append(args)
-        return {"PDN_VWIDTH": len(calls)}
+    def observed_floorplan(*args):
+        events.append(("floorplan", dict(args[0]), args[6] if len(args) > 6 else None))
+        result = floorplan(*args)
+        plans.append(result)
+        return result
 
-    monkeypatch.setattr(flow_pdn_current, "current_settings", changing_settings)
-    with pytest.raises(ValueError, match="did not converge after eight"):
-        chip.prepare(project, config)
-    assert len(calls) == 9
+    def settings(root, resolved, parallel_length_um=0):
+        events.append(("pdn", root, parallel_length_um))
+        return {"PDN_VWIDTH": 3.2}
+
+    monkeypatch.setattr(chip, "_floorplan", observed_floorplan)
+    monkeypatch.setattr(flow_pdn_current, "current_settings", settings)
+    initial_width = native.get("PDN_VWIDTH")
+    result = chip.prepare(project, config)
+    assert [event[0] for event in events] == ["floorplan", "pdn", "floorplan"]
+    first_die = plans[0][0]
+    assert events[1] == ("pdn", project, max(first_die[2] - first_die[0], first_die[3] - first_die[1]))
+    assert events[0][1].get("PDN_VWIDTH") == initial_width
+    assert events[0][2] is None
+    assert events[2][1]["PDN_VWIDTH"] == 3.2
+    assert events[2][2] == {"PDN_VWIDTH": 3.2}
+    assert result["PDN_VWIDTH"] == 3.2
+    assert result["DIE_AREA"] == plans[1][0]
+    assert result["CORE_AREA"] == plans[1][1]
 
 
 def test_chip_forwards_generated_clock_wire_budget(inputs, monkeypatch):
