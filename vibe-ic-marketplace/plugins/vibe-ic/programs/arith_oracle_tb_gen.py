@@ -1314,7 +1314,7 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     conns = ", ".join(f".{p['name']}({pad_nets.get(p['name'], p['name'])})" for p in ports)
     L.append(f"  {top} dut ({conns});")
     L.append(f"  initial {clk} = 1'b0;")
-    L.append(f"  always #{clock_period_ns / 2:g} {clk} = ~{clk};")
+    L.append(f"  always #{clock_period_ns / 2:.12g} {clk} = ~{clk};")
     L.append(f"  localparam integer NV = {len(pairs)};")
     L.append("  reg [N-1:0] _av [0:NV-1];")
     L.append("  reg [N-1:0] _bv [0:NV-1];")
@@ -1335,7 +1335,7 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     if delayed:
         L.extend(["  integer pending_observers=0;",
                   "  task automatic observe(input integer inorder, v, k); begin",
-                  f"    #{sample_offset_ns:g};",
+                  f"    #{sample_offset_ns:.12g};",
                   f"    if(inorder==0) _capL[v][k]={sout}; else _capM[v][k]={sout};",
                   "    pending_observers=pending_observers-1;", "  end endtask"])
 
@@ -1371,7 +1371,7 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
         L.extend(["        pending_observers=pending_observers+1;",
                   "        fork observe(inorder,_vi,_k); join_none"])
     else:
-        L.append(f"        #{sample_offset_ns:g}; _word[_k] = {sout};  // sample after this edge settles")
+        L.append(f"        #{sample_offset_ns:.12g}; _word[_k] = {sout};  // sample after this edge settles")
     L.append(f"        @(negedge {clk});")
     L.append("      end")
     if not delayed:
