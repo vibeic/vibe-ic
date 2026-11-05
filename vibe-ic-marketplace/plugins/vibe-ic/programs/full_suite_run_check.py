@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional
 
 
 _PROGRAMS = Path(__file__).resolve().parent
