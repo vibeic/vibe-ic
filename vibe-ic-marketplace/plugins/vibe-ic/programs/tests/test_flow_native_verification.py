@@ -244,6 +244,51 @@ def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
     assert "yosys-witness cannot execute" in result["detail"] and "/usr/bin/env" in result["detail"]
 
 
+@pytest.mark.parametrize("change", ["none", "core", "core_pin", "terminal", "instance", "type"])
+def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    core, gold, gate, cells, pads = [tmp_path / name for name in
+                                   ("core.v", "wrapper.v", "gate.v", "cells.lib", "pads.v")]
+    core.write_text("module core(input clk,rst_n,a,output reg q);\n"
+                    "always @(posedge clk) if(!rst_n) q<=1; else q<=a;\nendmodule\n")
+    wrapper = ("module unit(inout clk,rst_n,a,q);\nwire ic,ir,ia,oq;\n"
+               "INPAD pclk(.PAD(clk),.Y(ic));\nINPAD prst(.PAD(rst_n),.Y(ir));\n"
+               "INPAD pa(.PAD(a),.Y(ia));\nOUTPAD pq(.A(oq),.PAD(q));\n")
+    gold.write_text(wrapper + "core u_core(.clk(ic),.rst_n(ir),.a(ia),.q(oq));\nendmodule\n")
+    behavior = "~ia" if change == "core" else "ir" if change == "core_pin" else "ia"
+    implemented = (wrapper + "reg state;\nassign oq=state;\n"
+                   f"always @(posedge ic) if(!ir)state<=1;else state<={behavior};\nendmodule\n")
+    if change == "terminal":
+        implemented = implemented.replace(".PAD(a)", ".PAD(rst_n)")
+    elif change == "instance":
+        implemented = implemented.replace("INPAD pa(", "INPAD renamed(")
+    elif change == "type":
+        implemented = implemented.replace("INPAD pa(", "INPAD_ALT pa(")
+    gate.write_text(implemented)
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *)\nmodule INPAD(inout PAD,output Y); endmodule\n"
+                    "(* blackbox *)\nmodule INPAD_ALT(inout PAD,output Y); endmodule\n"
+                    "(* blackbox *)\nmodule OUTPAD(input A,inout PAD); endmodule\n"
+                    "module UNUSED(inout A,Y); rnmos r(Y,A,1'b1); endmodule\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(core), str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(cells)]},
+              "PAD_VERILOG_MODELS": [str(pads)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
+    assert rows.get("Yosys.Wrapper") == ("FAIL" if change in {"terminal", "instance", "type"} else "PASS"), result
+    if change in {"none", "core", "core_pin"}:
+        assert rows.get("Yosys.EQY.Core") == ("PASS" if change == "none" else "FAIL"), result
+    if change == "none":
+        assert result["metrics"]["unproved_equivalence"] == 0, result
+    else:
+        assert result["metrics"].get("unproved_equivalence", 0) > 0, result
+    for side in ("gold", "gate"):
+        module = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]
+        assert not any(cell["type"] in {"INPAD", "INPAD_ALT", "OUTPAD"} for cell in module["cells"].values())
+
+
 def test_xor_reuses_native_state_number(tmp_path):
     state = SimpleNamespace(metrics={"design__xor_difference__count": 3})
     commands = Commands(tmp_path)
