@@ -139,6 +139,8 @@ def test_missing_native_tool_is_not_reported_as_timeout(monkeypatch):
 
 
 # Paired next-state controls use free, shared current Q/data in native Yosys.
+from formal_transition_api_test_helper import transition_check, transition_main
+
 import pytest  # noqa: E402
 
 _CONTROL_CASES = {
@@ -171,7 +173,7 @@ def test_complete_reset_mapping_normal_cli_preserves_force_priority_and_unknowns
     rtl = tmp_path/"m.v"
     rtl.write_text(_control_rtl(body))
     out = tmp_path/"mapping.json"
-    rc = fsc.main(["--rtl",str(rtl),"--top","m","--claim",
+    rc = transition_main(["--rtl",str(rtl),"--top","m","--claim",
         "reset_polarity:rst:active_high","--work-dir",str(tmp_path),"--json",str(out)])
     rec = json.loads(out.read_text())
     assert rec["verdict"] == expected and rc == (0 if expected == fsc.PASS else 1), rec
@@ -231,7 +233,7 @@ def test_post_reset_native_independence_requires_total_same_edge_premises(tmp_pa
         f"always @({target_edge}) if ({enable}) q <= rst ? d[1] : d[0];\nendmodule\n")
     out = tmp_path / "mapping.json"
     claim = "active_low" if low else "active_high"
-    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim", f"reset_polarity:rst:{claim}",
+    rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim", f"reset_polarity:rst:{claim}",
                    "--work-dir", str(tmp_path), "--json", str(out)])
     rec = json.loads(out.read_text())
     positive = case in {"high-zero", "high-one", "low-zero"}
@@ -292,7 +294,7 @@ def test_raw_feedback_retention_has_the_same_force_boundary_as_enable(tmp_path, 
             "always @(posedge clk) poison <= en ? 1'bx : d[2];\nendmodule\n")
     out = tmp_path / "mapping.json"
     claim = "active_low" if low else "active_high"
-    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim", f"reset_polarity:rst:{claim}",
+    rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim", f"reset_polarity:rst:{claim}",
                    "--work-dir", str(tmp_path), "--json", str(out)])
     rec = json.loads(out.read_text())
     expected = fsc.REFUTED if case == "opposite-force" else fsc.NOT_DISCHARGED if case in {"mixed-data", "vector-undef-kept"} else fsc.PASS
@@ -321,7 +323,7 @@ def test_native_reset_parameter_and_async_timing_controls(tmp_path, width, value
                                 "posedge clk or negedge rst"))
     claims = [{"rule":"reset_polarity","signal":"rst","value":"active_low"},
               {"rule":"reset_sync","signal":"rst","value":"synchronous"}]
-    rec = fsc.check([rtl],"m",claims,tmp_path)
+    rec = transition_check([rtl],"m",claims,tmp_path)
     assert rec["claims"][0]["verdict"] == fsc.PASS, rec
     assert rec["claims"][1]["verdict"] == fsc.REFUTED, rec
     mapping = rec["claims"][0].get("reset_control_mapping") or {}
@@ -334,7 +336,7 @@ def test_unknown_clock_is_explicit_not_full_polarity(tmp_path):
     _yosys()
     rtl = tmp_path/"m.v"
     rtl.write_text(_control_rtl("if(rst) q<=0; else q<=d;",edge="posedge (clk & en)"))
-    rec = fsc.check([rtl],"m",[{"rule":"reset_polarity","signal":"rst","value":"active_high"}],tmp_path)
+    rec = transition_check([rtl],"m",[{"rule":"reset_polarity","signal":"rst","value":"active_high"}],tmp_path)
     assert rec["verdict"] == fsc.NOT_DISCHARGED, rec
     mapping = rec["claims"][0].get("reset_control_mapping") or {}
     assert mapping.get("unresolved") and all(r["classification"] == "UNSUPPORTED"
@@ -365,7 +367,7 @@ def test_guarded_boolean_roles_normal_cli_has_actual_feasible_domains(tmp_path, 
     body, expected, classification = _GUARDED_ROLE_CASES[case]
     rtl, output = tmp_path / "m.v", tmp_path / "mapping.json"
     rtl.write_text(_control_rtl(body))
-    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+    rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
         "reset_polarity:rst:active_high", "--work-dir", str(tmp_path), "--json", str(output)])
     rec = json.loads(output.read_text())
     assert rec["verdict"] == expected and rc == (0 if expected == fsc.PASS else 1), rec
@@ -414,7 +416,7 @@ def test_data_mux_value_cannot_be_promoted_to_outer_mask_control(tmp_path):
     rtl, output = tmp_path / "m.v", tmp_path / "mapping.json"
     rtl.write_text("module m(input clk,rst,d,en,clear,output reg q);\n"
                    " always @(posedge clk) q <= (rst ? d : (d | en)) & clear;\nendmodule\n")
-    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+    rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
         "reset_polarity:rst:active_high", "--work-dir", str(tmp_path), "--json", str(output)])
     rec = json.loads(output.read_text())
     assert rc == 1 and rec["verdict"] == fsc.NOT_DISCHARGED, rec
@@ -436,7 +438,7 @@ def test_guarded_logical_and_reduction_masks_use_native_vector_truth(tmp_path, o
     rtl.write_text("module m #(parameter W=3)(input clk,rst,clear,input[W-1:0] d,output reg[1:0] q);\n"
         f"always @(posedge clk) begin q[0]<=d {logical} {predicate}; "
         f"q[1]<={reduction}{{d,{predicate}}}; end\nendmodule\n")
-    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+    rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
         "reset_polarity:rst:active_high", "--work-dir", str(tmp_path), "--json", str(output)])
     rec = json.loads(output.read_text())
     assert rc == 0 and rec["verdict"] == fsc.PASS, rec
@@ -465,7 +467,7 @@ def test_lowered_data_mux_cannot_select_shared_payload_for_force_guard(tmp_path)
     rtl, output = tmp_path / "m.v", tmp_path / "mapping.json"
     rtl.write_text("module m(input clk,rst,d,en,clear,output reg q);\n"
         " always @(posedge clk) q <= ((rst & d) | ((!rst) & (d | en))) & clear;\nendmodule\n")
-    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+    rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
         "reset_polarity:rst:active_high", "--work-dir", str(tmp_path), "--json", str(output)])
     rec = json.loads(output.read_text())
     assert rc == 1 and rec["verdict"] == fsc.NOT_DISCHARGED, rec
@@ -494,7 +496,7 @@ def test_shared_payload_correlations_are_classified_without_selecting_data_value
     rtl = tmp_path / "m.v"
     rtl.write_text(_control_rtl(body, width))
     output = tmp_path / "mapping.json"
-    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+    rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
         "reset_polarity:rst:active_high", "--work-dir", str(tmp_path), "--json", str(output)])
     rec = json.loads(output.read_text())
     actual_verdict = rec["verdict"]
@@ -519,7 +521,7 @@ def test_shared_payload_correlations_are_classified_without_selecting_data_value
                        for role in row["conditional_roles"]) for row in forced), mapping
     if case == "unsigned-mask":
         assert sum(row["classification"] == "NO_DEPENDENCE" for row in mapping["rows"]) == 1, mapping
-    wrong = fsc.check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst", "value": "active_low"}],
+    wrong = transition_check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst", "value": "active_low"}],
                       tmp_path / "wrong-sense")
     assert wrong["verdict"] == fsc.REFUTED, wrong
 
@@ -535,7 +537,7 @@ def test_correlated_role_candidates_preserve_data_and_undef_refusals(tmp_path):
         work.mkdir()
         rtl = work / "m.v"
         rtl.write_text(_control_rtl(body))
-        rec = fsc.check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst", "value": "active_high"}], work)
+        rec = transition_check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst", "value": "active_high"}], work)
         assert rec["verdict"] == fsc.NOT_DISCHARGED, rec
         mapping = rec["claims"][0]["reset_control_mapping"]
         assert len(mapping["raw_identities"]) == 2 and mapping["unresolved"], mapping
@@ -554,7 +556,7 @@ def test_masked_parity_reduction_normal_cli_matches_factored_reset_roles(tmp_pat
         rtl, output = work / "m.v", work / "mapping.json"
         rtl.write_text("module m #(parameter W=3)(input clk,rst,clear,input[W-1:0] d,output reg q);\n"
                        f"always @(posedge clk) q <= {expression};\nendmodule\n")
-        rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+        rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
             "reset_polarity:rst:active_high", "--work-dir", str(work), "--json", str(output)])
         rec = json.loads(output.read_text())
         observations.append((name, rc, rec["verdict"]))
@@ -579,7 +581,7 @@ def test_masked_parity_reduction_normal_cli_matches_factored_reset_roles(tmp_pat
         assert row["native_queries"]["undef0"] == row["native_queries"]["undef1"] == "NO_UNDEF", row
         if name == "masked":
             assert any(p["kind"] == "$reduce_xor" for p in row["role_provenance"]), row
-        wrong = fsc.check([work / "m.v"], "m", [
+        wrong = transition_check([work / "m.v"], "m", [
             {"rule": "reset_polarity", "signal": "rst", "value": "active_low"}], work / "wrong-sense")
         assert wrong["verdict"] == fsc.REFUTED, wrong
         print("PARITY_RESET_OBSERVATION " + json.dumps({"form": name, "payload": payload,
@@ -598,7 +600,7 @@ def test_parity_reduction_preserves_ordinary_data_current_q_and_undef_refusals(t
         rtl, output = work / "m.v", work / "mapping.json"
         rtl.write_text("module m #(parameter W=3)(input clk,rst,clear,input[W-1:0] d,output reg q);\n"
                        f"always @(posedge clk) q <= {expression};\nendmodule\n")
-        rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+        rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
             "reset_polarity:rst:active_high", "--work-dir", str(work), "--json", str(output)])
         rec = json.loads(output.read_text())
         assert rc == 1 and rec["verdict"] == fsc.NOT_DISCHARGED, rec
@@ -626,7 +628,7 @@ def test_derived_shared_payload_normal_cli_matches_factored_reset_roles(tmp_path
             rtl.write_text("module m #(parameter W=3)(input clk,rst,clear,input[W-1:0] d,output reg q);\n"
                            "wire p=^d;\n"
                            f"always @(posedge clk) q <= {expression};\nendmodule\n")
-            rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+            rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
                 f"reset_polarity:rst:{sense}", "--work-dir", str(work), "--json", str(output)])
             rec = json.loads(output.read_text())
             observations.append((name, sense, rc, rec["verdict"]))
@@ -673,7 +675,7 @@ def test_masked_xnor_reduction_normal_cli_matches_factored_reset_roles(tmp_path,
             rtl, output = work / "m.v", work / "mapping.json"
             rtl.write_text("module m #(parameter W=3)(input clk,rst,clear,input[W-1:0] d,output reg q);\n"
                            f"always @(posedge clk) q <= {expression};\nendmodule\n")
-            rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+            rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
                 f"reset_polarity:rst:{sense}", "--work-dir", str(work), "--json", str(output)])
             rec = json.loads(output.read_text())
             observations.append((name, sense, rc, rec["verdict"]))
@@ -721,7 +723,7 @@ def test_xnor_reduction_preserves_ordinary_data_current_q_and_undef_refusals(tmp
         rtl, output = work / "m.v", work / "mapping.json"
         rtl.write_text("module m #(parameter W=3)(input clk,rst,clear,input[W-1:0] d,output reg q);\n"
                        f"always @(posedge clk) q <= {expression};\nendmodule\n")
-        rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim",
+        rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim",
             "reset_polarity:rst:active_high", "--work-dir", str(work), "--json", str(output)])
         rec = json.loads(output.read_text())
         assert rc == 1 and rec["verdict"] == fsc.NOT_DISCHARGED, rec
@@ -746,7 +748,7 @@ def test_arithmetic_and_undefined_shift_use_exact_cones_without_new_credit(tmp_p
     _yosys()
     rtl=tmp_path/"m.v"
     rtl.write_text(_control_rtl(body))
-    rec=fsc.check([rtl], "m", [{"rule":"reset_polarity", "signal":"rst", "value":"active_high"}], tmp_path)
+    rec=transition_check([rtl], "m", [{"rule":"reset_polarity", "signal":"rst", "value":"active_high"}], tmp_path)
     mapping=rec["claims"][0]["reset_control_mapping"]
     assert mapping["native_row_cone"]["reason"] == "single-driver-total-boolean-dag", mapping["native_row_cone"]
     assert mapping["native_row_cone"]["eligible"] is True, mapping["native_row_cone"]
@@ -783,9 +785,9 @@ def test_native_cone_and_whole_model_answers_match_every_identity_and_arm(tmp_pa
     rtl=tmp_path/"m.v"
     rtl.write_text(_control_rtl(body))
     claim=[{"rule":"reset_polarity", "signal":"rst", "value":"active_high"}]
-    cone=fsc.check([rtl],"m",claim,tmp_path/"cone")
+    cone=transition_check([rtl],"m",claim,tmp_path/"cone")
     monkeypatch.setattr(fsc,"_reset_row_cone_eligibility",lambda model: {"eligible":False,"reason":"whole-model control"})
-    whole=fsc.check([rtl],"m",claim,tmp_path/"whole")
+    whole=transition_check([rtl],"m",claim,tmp_path/"whole")
     left=cone["claims"][0]["reset_control_mapping"]
     right=whole["claims"][0]["reset_control_mapping"]
     assert cone["verdict"] == whole["verdict"]
@@ -814,7 +816,7 @@ def test_issue3391_domain_query_uses_the_measured_reset_row_cone(tmp_path):
         + "\nassign noise = n64;\n"
         + "always @(posedge clk) if(rst) q<=1'b0; else q<=d[0];\nendmodule\n"
     )
-    rec = fsc.check(
+    rec = transition_check(
         [rtl], "m",
         [{"rule": "reset_polarity", "signal": "rst", "value": "active_high"}],
         tmp_path,
@@ -852,7 +854,7 @@ def test_issue3391_native_comparators_remain_exact_row_cones(tmp_path, operator,
         f"always @(posedge clk) if(rst) q<=1'b0; else q <= (a {operator} b);\n"
         "endmodule\n"
     )
-    rec = fsc.check(
+    rec = transition_check(
         [rtl], "m",
         [{"rule": "reset_polarity", "signal": "rst", "value": "active_high"}],
         tmp_path,
@@ -947,7 +949,7 @@ def test_raw_undef_requires_defined_total_reset_arm(tmp_path, reset_branch, norm
     rtl.write_text("module m(input clk,rst,en,d,output reg q);\n"
                    "always @(posedge clk) if(rst) q <= " + reset_branch +
                    "; else q <= " + normal_branch + ";\nendmodule\n")
-    rec = fsc.check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst", "value": declared}], tmp_path)
+    rec = transition_check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst", "value": declared}], tmp_path)
     assert rec["verdict"] == expected, rec
     mapping = rec["claims"][0]["reset_control_mapping"]
     assert len(mapping["raw_identities"]) == 1
@@ -970,7 +972,7 @@ def test_raw_undef_defined_force_honors_active_low_reset(tmp_path):
     rtl.write_text("module m(input clk,rst,en,output reg q);\n"
                    "always @(posedge clk) if(!rst) q<=1'b1; else if(en) q<=1'bx;\n"
                    "endmodule\n")
-    rec = fsc.check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst", "value": "active_low"}], tmp_path)
+    rec = transition_check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst", "value": "active_low"}], tmp_path)
     assert rec["verdict"] == fsc.PASS, rec
     mapping = rec["claims"][0]["reset_control_mapping"]
     assert len(mapping["raw_identities"]) == 1
@@ -986,7 +988,7 @@ def test_raw_pmux_unreachable_default_undef_does_not_replace_reset_proof(tmp_pat
     rtl.write_text("module m(input clk,rst,en,d,output reg q);\n"
                    "always @(posedge clk) if(rst) q<=0; else case(en)\n"
                    "1'b0:q<=q; 1'b1:q<=d; default:q<=1'bx; endcase\nendmodule\n")
-    rec = fsc.check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst",
+    rec = transition_check([rtl], "m", [{"rule": "reset_polarity", "signal": "rst",
                                 "value": "active_high"}], tmp_path)
     assert rec["verdict"] == fsc.PASS, rec
     mapping = rec["claims"][0]["reset_control_mapping"]
@@ -1016,7 +1018,7 @@ def test_raw_arithmetic_constant_force_cannot_be_reclassified_as_retention(tmp_p
     rtl = tmp_path / "m.v"
     rtl.write_bytes(source.read_bytes())
     out = tmp_path / "mapping.json"
-    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim", "reset_polarity:rst:active_high",
+    rc = transition_main(["--rtl", str(rtl), "--top", "m", "--claim", "reset_polarity:rst:active_high",
                    "--work-dir", str(tmp_path), "--json", str(out)])
     rec = json.loads(out.read_text())
     assert rec["verdict"] == fsc.REFUTED, rec
@@ -1061,7 +1063,7 @@ def test_priority_load_retention_normal_cli_keeps_unrestricted_q_and_data(tmp_pa
     rtl = tmp_path/'m.v'
     rtl.write_text(source)
     output = tmp_path/'mapping.json'
-    rc = fsc.main(['--rtl', str(rtl), '--top', 'm', '--claim',
+    rc = transition_main(['--rtl', str(rtl), '--top', 'm', '--claim',
                   'reset_polarity:rst:'+declared, '--work-dir', str(tmp_path), '--json', str(output)])
     rec = json.loads(output.read_text())
     assert rec['verdict'] == expected, rec
@@ -1182,7 +1184,7 @@ def test_constant_combinational_rom_preserves_array_reset_construction(tmp_path,
         {"rule": "reset_polarity", "signal": "rst_n", "value": "active_low"},
         {"rule": "reset_sync", "signal": "rst_n", "value": "synchronous"},
     ]
-    rec = fsc.check([rtl], "neutral", claims, tmp_path / "normal", None,
+    rec = transition_check([rtl], "neutral", claims, tmp_path / "normal", None,
                     klass={"clock": "clk", "resets": ["rst_n"]})
     assert [claim["verdict"] for claim in rec["claims"]] == [polarity, timing], rec
     if arm in ("rom-low", "rom-high"):
@@ -1206,7 +1208,7 @@ def test_unproven_rom_shapes_still_refuse_array_reset_construction(tmp_path, arm
         {"rule": "reset_polarity", "signal": "rst_n", "value": "active_low"},
         {"rule": "reset_sync", "signal": "rst_n", "value": "synchronous"},
     ]
-    rec = fsc.check([rtl], "neutral", claims, tmp_path / "normal", None,
+    rec = transition_check([rtl], "neutral", claims, tmp_path / "normal", None,
                     klass={"clock": "clk", "resets": ["rst_n"]})
     assert [claim["verdict"] for claim in rec["claims"]] == [
         "NOT_DISCHARGED", "NOT_DISCHARGED"], rec
@@ -1225,7 +1227,7 @@ def test_source_bound_array_reset_public_constructor(tmp_path, arm):
     claims = [{'rule': 'clock_edge', 'signal': 'clk', 'value': 'posedge'},
               {'rule': 'reset_polarity', 'signal': 'rst_n', 'value': 'active_low'},
               {'rule': 'reset_sync', 'signal': 'rst_n', 'value': 'synchronous'}]
-    rec = fsc.check([rtl], 'neutral', claims, tmp_path / 'normal', None,
+    rec = transition_check([rtl], 'neutral', claims, tmp_path / 'normal', None,
                     klass={'clock': 'clk', 'resets': ['rst_n']})
     (tmp_path / 'normal.json').write_text(json.dumps(rec, indent=2))
     actual = {c['rule']: c['verdict'] for c in rec['claims']}
@@ -1274,7 +1276,7 @@ endmodule
     rtl.write_text(text)
     claims = [{'rule': 'reset_polarity', 'signal': 'rst_n', 'value': 'active_low'},
               {'rule': 'reset_sync', 'signal': 'rst_n', 'value': 'synchronous'}]
-    rec = fsc.check([rtl], 'neutral', claims, tmp_path / 'normal', None,
+    rec = transition_check([rtl], 'neutral', claims, tmp_path / 'normal', None,
                     klass={'clock': 'clk', 'resets': ['rst_n']})
     (tmp_path / 'normal.json').write_text(json.dumps(rec, indent=2))
     assert [c['verdict'] for c in rec['claims']] == ['NOT_DISCHARGED'] * 2, rec
