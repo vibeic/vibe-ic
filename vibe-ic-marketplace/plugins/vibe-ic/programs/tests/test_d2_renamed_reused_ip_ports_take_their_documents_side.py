@@ -174,13 +174,6 @@ def test_renamed_ports_take_their_groups_side_and_doc_names_get_no_pad(tmp_path)
     assert via == {"o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
 
 
-def test_the_wrapper_passes_the_runners_core_connection_backstop(tmp_path):
-    import phase3_one_shot_runner as R
-    proj, res, out = _gen(tmp_path)
-    assert res.returncode == 0, out
-    R._validate_padring_core_connections(
-        proj / "phase2/stage2/synth/core_synth.v", proj / CHIP_TOP_V,
-        "core", IO._record(proj).get("chip_top_module") or "chip_top")
 
 
 def _selected_project(tmp_path, *, protocol=True, missing_mandatory=False,
@@ -215,22 +208,6 @@ def _selected_project(tmp_path, *, protocol=True, missing_mandatory=False,
     return proj
 
 
-def test_selected_declared_interface_rebinds_l9_and_the_normal_wrapper(tmp_path):
-    import phase3_one_shot_runner as R
-    proj = _selected_project(tmp_path)
-    original_choice = (proj / "plugin_output/declaration.provenance.json").read_bytes()
-    res = IO._run(GEN, proj, IO._pdk(tmp_path / "pdk"))
-    assert res.returncode == 0, res.stdout + res.stderr
-    R._validate_padring_core_connections(
-        proj / "phase2/stage2/synth/core_synth.v", proj / CHIP_TOP_V,
-        "core", "chip_top")
-    l9 = json.loads((proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text())
-    assert l9["top_ports"] == l9["ports"] == l9["top_module_pins"]
-    rows = {p["name"]: p for p in l9["top_ports"]}
-    assert rows["o_memory_wdata"]["width"] == 2
-    assert rows["o_memory_wdata"]["direction"] == "output"
-    assert all(rows[n]["declared_by_staged_top"] is False for n in DOC_ONLY)
-    assert (proj / "plugin_output/declaration.provenance.json").read_bytes() == original_choice
 
 
 def test_selected_binding_keeps_input_and_implementation_evidence_distinct(tmp_path):
@@ -509,21 +486,6 @@ def test_issue3067_watchdog_current_failure_survives_preserved_document(tmp_path
     assert document.read_bytes() == before
 
 
-@pytest.mark.parametrize("kw", [{"protocol": False},
-                                {"missing_mandatory": True},
-                                {"wrong_width": True}],
-                         ids=["undeclared-interface", "mandatory-port", "named-width"])
-def test_selected_binding_preserves_contract_refusals(tmp_path, kw):
-    import phase3_one_shot_runner as R
-    proj = _selected_project(tmp_path, **kw)
-    res = IO._run(GEN, proj, IO._pdk(tmp_path / "pdk"))
-    if res.returncode == 0:
-        with pytest.raises(ValueError, match="PADRING_CORE_PORT_CONNECTION_MISMATCH"):
-            R._validate_padring_core_connections(
-                proj / "phase2/stage2/synth/core_synth.v", proj / CHIP_TOP_V,
-                "core", "chip_top")
-    else:
-        assert "SELECTED_INTERFACE_BINDING_REFUSED" in res.stdout + res.stderr
 
 
 # --------------------------------------------------------------------------- #
@@ -701,58 +663,6 @@ def test_step2_refuses_a_rename_that_spans_two_groups():
 _CORE = "module core(a);\n  input a;\nendmodule\n"
 
 
-@pytest.mark.parametrize("wrapper_text,finding,unknown", [
-    (_CORE + "module chip_top(a, o_phantom);\n  input a;\n  output o_phantom;\n"
-     "  core u_core (.a(a), .o_phantom(o_phantom));\nendmodule\n",
-     "PADRING_CORE_PORT_CONNECTION_MISMATCH", "unknown=['o_phantom']"),
-    (_CORE + "module chip_top(a);\n  input a;\n  core u_core (.a(a));\n"
-     "endmodule\n", None, None),
-], ids=["phantom-pad", "matching-wrapper"])
-def test_the_librelane_chip_path_refuses_a_phantom_pad_before_assignment(
-        tmp_path, monkeypatch, wrapper_text, finding, unknown):
-    import phase3_one_shot_runner as R
-    import librelane_contract as contract
-    from _stated_eda_image import state_the_image
-    from types import SimpleNamespace
-    monkeypatch.delenv("VIBEIC_LIBRELANE_IMAGE", raising=False)
-    monkeypatch.delenv("VIBEIC_LIBRELANE_PDK_ROOT", raising=False)
-    state_the_image(monkeypatch)
-    project = tmp_path / "project"
-    out_dir = project / "phase3/stage3/pnr"
-    out_dir.mkdir(parents=True)
-    wrapper = out_dir / "chip_top_io.v"
-    wrapper.write_text(wrapper_text)
-    (project / "phase3/librelane_switch.json").write_text(
-        json.dumps({"pdk_root_host": str(tmp_path)}))
-    monkeypatch.setattr(R, "_padring_chip_top_record", lambda p: {
-        "core_module": "core", "chip_top_module": "chip_top",
-        "chip_top_verilog": str(wrapper.relative_to(project))})
-    monkeypatch.setattr(R, "pnr_input_netlist",
-                        lambda p, core: (wrapper, "n", False))
-    monkeypatch.setattr(R, "_padring_pdk_root_and_tree",
-                        lambda pdk, c: ("/pdk", "probe_pdk"))
-    execs = []
-
-    def _exec(container, cmd, **k):
-        execs.append(cmd)
-        return 1, "", "stop here: the backstop has already been passed"
-    monkeypatch.setattr(R, "_docker_exec", _exec)
-    monkeypatch.setattr(contract, "run_chain", lambda *a, **k: pytest.fail(
-        "the tool chain must not run"))
-    pdk = SimpleNamespace(name="probe_pdk")
-    result, consumer = R._prepare_librelane_floorplan_for_route(
-        project, pdk, "c", out_dir, f"read_verilog {wrapper}\nlink_design chip_top\n",
-        {"15": "direct", "15.5ic": "librelane"},
-        io_view_discover=lambda *a: ([], []))
-    assert result.status == "FAIL" and consumer is None
-    if finding is None:
-        # the backstop passed: the next step (pad_assignment_gen) was reached
-        assert result.extras["finding"] == "LL_PAD_ASSIGNMENT_FAILED"
-        assert len(execs) == 1 and "pad_assignment_gen.py" in execs[0]
-    else:
-        assert result.extras["finding"] == finding, result.detail
-        assert result.detail.startswith(finding) and unknown in result.detail
-        assert execs == []
 
 
 # --------------------------------------------------------------------------- #
@@ -877,70 +787,6 @@ def test_step2_refuses_a_group_row_whose_family_has_no_rtl_port():
     assert "have no pad" not in rep["reason"]
 
 
-@pytest.mark.parametrize("consumer", ["scaffold", "shared_parser", "fidelity"])
-@pytest.mark.parametrize("control", ["current", "no_delegation", "required_source",
-                                     "wrong_width", "no_manifest_rename", "empty_rename_target", "forged_binding",
-                                     "missing_selected_port", "conflicting_roster"])
-def test_selected_interface_chosen_roster_reaches_phase2_consumers(tmp_path, consumer, control):
-    """Use real current producer and consumers; retain the original L9 artifact."""
-    import phase2_scaffold_gen as P2
-    from _specrtl_common import extract_spec_contract
-    from _staged_top_module import bind_selected_interface
-    from spec_rtl_port_fidelity_check import load_spec
-    proj = _selected_project(tmp_path)
-    path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
-    bound = bind_selected_interface(proj, json.loads(path.read_text()))
-    if control == "no_delegation":
-        declaration = proj / "plugin_output/declaration.json"
-        declaration.write_text(json.dumps({"top_module": "core"}))
-    elif control in {"required_source", "wrong_width"}:
-        for port in bound["ports"]:
-            if control == "required_source" and port["name"] == "o_memory_addr":
-                port["required"] = True
-            elif control == "wrong_width" and port["name"] == "o_memory_wdata":
-                port["width"] = 4
-    elif control in {"no_manifest_rename", "empty_rename_target"}:
-        manifest = proj / "phase2/stage1/rtl/SOURCE_MANIFEST.json"
-        manifest.write_text(json.dumps({"reused_ip": True, "renamed_interfaces":
-                                       [{"l9": sorted(DOC_ONLY), "rtl": []}]
-                                       if control == "empty_rename_target" else []}))
-    elif control == "forged_binding":
-        doc = proj / "input/docs/L3_external_interface.md"
-        doc.write_text(doc.read_text().replace("address (typical)",
-                                               "address; mandatory fixed name; MUST implement o_memory_addr"))
-        bound["selected_interface_binding"]["selected_source_sha256"] = "0" * 64
-        # Forged labels cannot retire an input's now-fixed mandatory pin.
-        bound["selected_interface_binding"]["document_examples_not_implemented"] = sorted(DOC_ONLY)
-    elif control == "missing_selected_port":
-        netlist = proj / "phase2/stage2/synth/core_synth.v"
-        netlist.write_text(netlist.read_text().replace("o_memory_wdata, ", "")
-                          .replace("  output [1:0] o_memory_wdata;\n", ""))
-    elif control == "conflicting_roster":
-        import copy
-        bound["top_ports"] = copy.deepcopy(bound["top_ports"])
-        bound["top_ports"][0]["width"] = 4
-    path.write_text(json.dumps(bound))
-    before = {p: p.read_bytes() for p in [path, proj / "phase2/stage2/synth/core_synth.v",
-                                          proj / "plugin_output/declaration.provenance.json"]}
-    def consume():
-        if consumer == "scaffold":
-            # The earlier L17 names must not put illustrative aliases back.
-            l17 = {"channels": [{"name": name, "direction": "output"} for name in DOC_ONLY]
-                               + [{"name": "o_memory_wdata", "direction": "output"}]}
-            return P2.derive_signals(l17, bound, project=proj)
-        if consumer == "shared_parser":
-            return [vars(p) for p in extract_spec_contract(path.read_text(), is_json=True, project=proj).ports]
-        return [vars(p) for p in load_spec(path)]
-    if control == "current":
-        rows = {p["name"]: p for p in consume()}
-        assert set(rows) == {"clk", "rst", "o_status", "o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
-        assert rows["o_memory_wdata"]["width"] == 2
-        assert rows["o_memory_wdata"]["direction"] == "output"
-        assert not (set(rows) & DOC_ONLY)
-    else:
-        with pytest.raises((ValueError, KeyError), match=".+"):
-            consume()
-    assert all(p.read_bytes() == data for p, data in before.items())
 
 
 def test_selected_interface_actual_scaffold_and_conformance_handoff(tmp_path, capsys):

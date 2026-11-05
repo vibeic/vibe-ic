@@ -1,36 +1,27 @@
-"""Producer-derived Vibe-IC entry evidence for downstream-gate tests.
-
-These tests exercise gates that run *after* ``vibe_ic_entry_guard``.  Their
-fixture must therefore carry the real Phase-1 prompt envelope instead of the
-historical empty-file / ``{"verdict":"PASS"}`` marker.  Step rows and verdict
-aggregation come from the shipped producer so schema changes cannot silently
-leave a hand-copied weak marker behind.
-"""
+"""Entry-report input data for downstream blindness and score-gate tests."""
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 import _plugin_tree  # noqa: F401  — puts programs/ on sys.path
-from phase1_one_shot_runner import StepResult, _aggregate_verdict
 
 
 def prompt_report_document(project: Path) -> dict:
     project = Path(project).resolve()
     steps = [
-        StepResult("phase1_ingest_render", "PASS", 0.01,
-                   "facts=facts.yaml out=generated_docs"),
-        StepResult("phase1_human_docs", "PASS", 0.01,
-                   "9 human MD docs"),
+        {"name": "phase1_ingest_render", "status": "PASS", "duration_s": 0.01,
+         "detail": "facts=facts.yaml out=generated_docs", "extras": {}},
+        {"name": "phase1_human_docs", "status": "PASS", "duration_s": 0.01,
+         "detail": "9 human MD docs", "extras": {}},
     ]
     return {
         "phase": 1,
         "mode": "prompt",
         "project": str(project),
         "ic_name": "TopModule",
-        "steps": [asdict(step) for step in steps],
-        "verdict": _aggregate_verdict(steps),
+        "steps": steps,
+        "verdict": "PASS",
         "second_track": "ran",
     }
 

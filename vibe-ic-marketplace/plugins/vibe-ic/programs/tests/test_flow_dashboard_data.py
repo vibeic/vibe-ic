@@ -20,7 +20,7 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import flow_dashboard_data as D  # noqa: E402
-from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
+from _invocation_fixture import bind_invocation_top
 
 _PHASE_ORDER = ["phase1", "phase2", "phase3", "analog", "mixed", "manufacturing"]
 # Track the module's canonical status contract so this never silently drifts

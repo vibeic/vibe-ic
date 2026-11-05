@@ -206,7 +206,7 @@ from flow_matrix import waivers as W
 import flow_compliance_check as FCC
 import _tapeout_declaration as TD
 from _declared_design_inputs import consumes_declaration, declare_no_reuse
-from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
+from _invocation_fixture import bind_invocation_top
 
 DIM = 8
 

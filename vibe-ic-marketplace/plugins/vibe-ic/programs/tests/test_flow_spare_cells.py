@@ -1,15 +1,13 @@
 import json
 
 from flow_engine import choose_tool, design_features, predicate
-from flow_steps_generate import ROOT, classify_checks, generate
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def table():
-    native = json.loads((ROOT / "flow/native_limits.json").read_text())
-    registry = json.loads((ROOT / "flow/flow109.json").read_text())
-    result, _, _ = generate(registry, native)
-    classify_checks(result, native)
-    return result
+    return json.loads((ROOT / "flow/steps.json").read_text())
 
 
 def test_ic_keeps_native_spare_floor_and_zero_defects(tmp_path):

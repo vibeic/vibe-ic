@@ -61,7 +61,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import flow_compliance_check as FCC  # noqa: E402
-from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
+from _invocation_fixture import bind_invocation_top
 
 _PLUGIN = _PROGRAMS.parent
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"

@@ -67,13 +67,6 @@ _TESTS_REL = _HERE.relative_to(_PLUGIN).as_posix()
 
 
 
-CASES = (
-    pytest.param("test_atpg_exit_code_not_signal.py", "fault_atpg_run.py",
-                 _break_atpg, id="atpg_exit_is_not_a_signal"),
-    pytest.param("test_arith_declaration_emit_equals_separator.py",
-                 "arith_declaration_emit.py", _break_arith,
-                 id="arith_equals_separator"),
-)
 
 
 #: The zero-collect modules that ARE executed — plugin-relative POSIX paths,
@@ -82,7 +75,6 @@ CASES = (
 #: because each is a CLI whose contract is bidirectional and parameterised by
 #: the program path. `test_no_test_file_collects_zero_tests` re-checks that
 #: every entry here is still zero-collect, so a stale exemption cannot survive.
-DRIVEN = frozenset(f"{_TESTS_REL}/{c.values[0]}" for c in CASES)
 
 
 

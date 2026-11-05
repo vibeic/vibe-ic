@@ -8,14 +8,9 @@ import pytest
 PROGRAMS = Path(os.environ.get('VIBEIC_CANONICAL_RETENTION_PROGRAMS',
                               str(Path(__file__).resolve().parents[1])))
 sys.path.insert(0, str(PROGRAMS))
-import execution_policy as policy
 import step_output_collector as versions
 
 
-@pytest.fixture(autouse=True)
-def default_mode(monkeypatch):
-    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
-    monkeypatch.setattr(policy, '_ordinary_runtime', None)
 
 
 

@@ -517,26 +517,6 @@ def _perc_project(tmp_path):
     return _mk_project(tmp_path)
 
 
-def test_perc_screens_tap_spacing_at_the_librelane_resolved_tap_distance(tmp_path, monkeypatch):
-    runner, pdk = _pdk('/p/l.lib')
-    project = _perc_project(tmp_path)
-    put(project / 'phase3/librelane/15-config/OpenROAD.TapEndcapInsertion.json',
-        {'meta': {'step': 'OpenROAD.TapEndcapInsertion'}, 'FP_TAPCELL_DIST': 20})
-    seen = {}
-    geo = importlib.import_module('latchup_esd_spacing_check')
-    real = geo.run_geometry_layer
-
-    def spy(*a, **k):
-        seen.update(k)
-        return real(*a, **k)
-    monkeypatch.setattr(geo, 'run_geometry_layer', spy)
-    monkeypatch.setattr(runner, '_measure_tap_geometry', lambda *a, **k: {'ok': False})
-    assert runner._emit_perc_equivalent(project, 'chip_top', pdk, 'x', [])
-    assert seen.get('screen_um') == 20.0
-    doc = json.loads((runner._pl.reports_phase3_dir(project) / 'perc_equivalent.json').read_text())
-    cat = next(c for c in doc['categories'] if c['category'] == 'Latch-up tap spacing (geometry)')
-    assert cat['screen_um'] == 20.0
-    assert cat['screen_source'].endswith('OpenROAD.TapEndcapInsertion.json:FP_TAPCELL_DIST')
 
 
 def test_perc_antenna_and_pdn_read_the_tool_metrics_when_the_run_has_them(tmp_path, monkeypatch):

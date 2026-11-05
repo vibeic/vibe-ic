@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import execution_policy as policy
 
 
 def put(project, rel, data):
@@ -19,10 +18,6 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-@pytest.fixture(autouse=True)
-def default_mode(monkeypatch):
-    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
-    monkeypatch.setattr(policy, '_ordinary_runtime', None)
 
 
 

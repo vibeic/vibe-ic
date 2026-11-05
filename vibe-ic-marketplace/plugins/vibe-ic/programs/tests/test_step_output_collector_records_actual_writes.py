@@ -67,7 +67,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import step_output_collector as soc          # noqa: E402  (exists both sides)
-from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
+from _invocation_fixture import bind_invocation_top
 
 
 GDS_REL = "phase3/stage4/gds/chip.gds"       # matches step 37's required_outputs

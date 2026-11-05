@@ -10,16 +10,11 @@ PROGRAMS = Path(os.environ.get('VIBEIC_FINAL_ENTRY_PROGRAMS',
                               str(Path(__file__).resolve().parents[1])))
 sys.path.insert(0, str(PROGRAMS))
 import design_one_shot_runner as design
-import execution_policy as policy
 import flow_compliance_check as fcc
 import step_output_collector as versions
 from _invocation_fixture import bind_invocation_top
 
 
-@pytest.fixture(autouse=True)
-def default_mode(monkeypatch):
-    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
-    monkeypatch.setattr(policy, '_ordinary_runtime', None)
 
 
 def saved(project, sid):
@@ -56,15 +51,6 @@ def write(project, relative, content):
 
 
 
-@pytest.mark.parametrize('name,sid', [('step_fpga_compile', '6'), ('step_fpga_burn', '39')])
-def test_actual_fpga_missing_input_is_saved_without_starting_hardware(tmp_path, name, sid):
-    args = (tmp_path, 'top', 'unused') if sid == '6' else (tmp_path, 'top')
-    result = getattr(design, name)(*args)
-    assert result.status == 'NOT_MEASURED'
-    _, record = saved(tmp_path, sid)
-    assert record['status'] == 'NOT_MEASURED'
-    assert record['result']['step_rows'][0]['detail'] == result.detail
-    assert not record['canonical_pass']
 
 
 

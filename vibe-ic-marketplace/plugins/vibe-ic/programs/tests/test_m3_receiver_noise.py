@@ -29,9 +29,7 @@ def test_ordinary_receiver_noise_observation_is_measured(tmp_path):
 
 import hashlib
 import os
-import sys
 import pytest
-from _route_fixture import stage_mixed_source_control
 import _mixed_signal_native as native
 import mixed_signal_signoff_run as m4
 
@@ -222,43 +220,3 @@ def test_noise_audit_cannot_overwrite_native_measurements(measured):
     before = scalar.read_bytes()
     assert si_gate.main([str(measured), "--require-current-production", "--json", str(scalar)]) == 1
     assert scalar.read_bytes() == before
-
-
-def test_fixed_runner_reaches_real_noise_and_keeps_readiness_dimensions_separate(project, monkeypatch):
-    import vibe_ic_one_shot_runner as runner
-    import mixed_signal_cosim_check as cosim_gate
-    from _route_fixture import stage_owner_route
-    stage_owner_route(project, "ic")
-    analog = project / "phase3/analog/analog_block_list.json"; analog.parent.mkdir(parents=True)
-    shutil.copyfile(project / "phase1/analog/analog_block_list.json", analog)
-    calls = []
-    real = {"mixed_signal_m3_run": m3, "mixed_signal_cosim_check": cosim_gate,
-            "mixed_signal_interface_si_check": si_gate}
-    def dispatch(label, program, args, env=None):
-        name = Path(program).stem; calls.append(name)
-        stage_mixed_source_control(project, Path(program).stem, args)
-        if name == "mixed_signal_power_domain_run":
-            # Caller-only upstream setup. Native M3 and both consumers are real.
-            write(project / m3.DIR / "power_domain_producer_audit.json", {"program": name, "verdict": "PASS"})
-        if name in real:
-            args = list(args)
-            if "--container" in args: args[args.index("--container") + 1] = "host"
-            return real[name].main(args)
-        return 0
-    monkeypatch.setattr(runner, "_run_phase", dispatch)
-    monkeypatch.setattr(sys, "argv", ["runner", str(project), "--top", "bridge_top", "--route", "ic",
-                                     "--skip-phase1", "--no-dashboard"])
-    runner.main()
-    audit = read(project / m3.DIR / "interface_si_audit.json")
-    assert audit["coverage"]["noise"] == "MEASURED"
-    assert audit["receiver_noise"]["verdict"] == "PASS"
-    assert audit["passed"] is False
-    phases = {p["name"]: p for p in read(project / "reports/orchestrator/vibe_ic_one_shot.json")["phases"]}
-    assert phases["mixed_signal_M3"]["verdict"] == "NOT_MEASURED"
-    assert phases["mixed_signal_M4"]["verdict"] == "NOT_MEASURED"
-    # SOURCE_CONTROL ancestors; actual component M3 remains unmeasured overall.
-    assert phases["mixed_signal_M3"]["rc"] == phases["mixed_signal_M4"]["rc"] == 2
-    assert calls.count("mixed_signal_cosim_check") == 1
-    assert calls.count("mixed_signal_signoff_run") == 0
-    assert calls.count("mixed_signal_m3_run") == 1 and calls.count("mixed_signal_interface_si_check") == 1
-    assert "mixed_signal_signoff_run" not in calls

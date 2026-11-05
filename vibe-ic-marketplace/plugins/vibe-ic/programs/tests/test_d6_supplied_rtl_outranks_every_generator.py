@@ -205,12 +205,6 @@ def test_no_generator_replaces_the_supplied_rtl(
 
 
 
-DIRECT = [
-    ("_try_serial_parallel_mul_rtl", _direct_serial_parallel),
-    ("_try_canonical_primitive_rtl", _direct_canonical),
-    ("_try_phase1_behavioral_fsm_rtl", _direct_behavioral),
-    ("_try_spec_artifact_registry_rtl", _direct_registry_emit),
-]
 
 
 

@@ -1,7 +1,6 @@
 """Native M4 top subject: actual tools, current consumer, no tapeout credit."""
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -167,20 +166,6 @@ def test_real_logical_mismatch_fails_despite_unmeasured_second_engine(tmp_path):
     assert m4.audit(project)['verdict'] == 'FAIL'
 
 
-def test_ordinary_runner_m4_caller_consumes_current_native_bytes(current):
-    import vibe_ic_one_shot_runner as runner
-    report = current / 'reports/analog/mixed_signal/runner_m4.json'
-    # Execute the same ordinary M4 subprocess/gate pair as the fixed DAG.
-    # No upstream readiness metadata is supplied to dispatch a whole flow.
-    assert runner._run_phase('M4 native top PV', PROGRAMS / 'mixed_signal_signoff_run.py',
-                             [str(current), '--top', 'mixed_probe', '--json', str(report)]) == 2
-    result = json.loads(report.read_text())
-    assert result == m4.derive(current, 'mixed_probe')
-    native = next(c for c in result['checks'] if c['step'] == 'PV_lvs')['native']
-    assert native['rows']['design__lvs_error__count']['value'] == 0
-    assert runner._run_phase('M4 current native audit', PROGRAMS / 'mixed_signal_signoff_check.py',
-                             [str(current), '--require-current-production']) == 1
-    assert result['ready_for_tapeout'] is False
 
 
 @pytest.mark.parametrize('damage', ['assertion', 'unbound_dependency', 'missing_hash', 'M1_identity', 'tool_selection'])

@@ -8,6 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "librelane_plugins"))
+
 from librelane.state import DesignFormat
 from librelane.steps.step import StepError
 from librelane_plugin_vibeic import TestPatternReplay as PatternReplayStep

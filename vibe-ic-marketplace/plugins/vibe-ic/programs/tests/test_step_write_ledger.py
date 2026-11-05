@@ -44,7 +44,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import step_write_ledger as swl            # noqa: E402
-from _invocation_fixture import bind_invocation_top, preserve_invocation_runtime
+from _invocation_fixture import bind_invocation_top
 
 
 # --------------------------------------------------------------------------- #

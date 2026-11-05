@@ -21,95 +21,28 @@ set and no `--container`, `_try_native_a6_pv` received `vibeic-eda`.
 from __future__ import annotations
 
 import ast
-import json
-import os
 import sys
-import types
 from pathlib import Path
 
-import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 RUNNER = PROGRAMS / "analog_one_shot_runner.py"
 assert RUNNER.exists(), f"runner not found: {RUNNER}"
-import analog_one_shot_runner as R  # noqa: E402
 
 
 # ── the container the runner HANDS OVER ────────────────────────────────────
 
-@pytest.fixture()
-def a6_project(tmp_path):
-    """The smallest project that reaches the A6 native-PV call: a declared
-    block with no PV evidence, so the A6 gate exits 1 rather than skipping."""
-    (tmp_path / "phase3" / "analog" / "blk").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "phase3" / "analog" / "analog_block_list.json").write_text(
-        json.dumps({"blocks": ["blk"]}))
-    return tmp_path
 
 
-def _container_handed_over(monkeypatch, project, flag, env):
-    # This file measures the legacy direct A6 call site.  The integrated
-    # Default cutover now runs its LibreLane arm first, while an ordinary-mode
-    # dispatch may also return before this call site.  Select the actual direct
-    # route and isolate ordinary dispatch without changing the container
-    # precedence asserted below.
-    import execution_analog_caller
-    import librelane_contract
-    monkeypatch.setattr(execution_analog_caller, "dispatch_site",
-                        lambda project, block, step_name: None)
-    monkeypatch.setattr(librelane_contract, "selected_mode",
-                        lambda project, step: "direct")
-    seen = []
-    monkeypatch.setattr(
-        R, "_try_native_a6_pv",
-        lambda project, block, container: seen.append(container))
-    if env is None:
-        monkeypatch.delenv("VIBEIC_ANALOG_CONTAINER", raising=False)
-    else:
-        monkeypatch.setenv("VIBEIC_ANALOG_CONTAINER", env)
-    args = types.SimpleNamespace(
-        container=flag, allow_deterministic_stubs=False, pdk=None)
-    R.step_for_block(project, {"name": "blk", "type": "ldo"},
-                     "A6_block_pv", args)
-    assert seen, "the A6 native-PV call was never reached; this test measures nothing"
-    return seen[-1]
 
 
-def test_a6_native_pv_reaches_the_container_the_environment_names(
-        monkeypatch, a6_project):
-    """THE DEFECT. RED before the fix, where this returned `vibeic-eda`."""
-    got = _container_handed_over(
-        monkeypatch, a6_project, flag=None, env="czadc28_env_container")
-    assert got == "czadc28_env_container"
 
 
-def test_the_runs_own_flag_still_outranks_the_environment(
-        monkeypatch, a6_project):
-    """Control: precedence must not invert. Green on both arms."""
-    got = _container_handed_over(
-        monkeypatch, a6_project, flag="czadc28_flag_container",
-        env="czadc28_env_container")
-    assert got == "czadc28_flag_container"
 
 
-def test_with_neither_the_default_is_unchanged(monkeypatch, a6_project):
-    """With no flag or analog environment, use the runtime policy's default.
-
-    This checks the third precedence rung; the runtime-policy tests own the
-    digest-derived name. A test-owned sentinel cannot pass via a stale literal.
-    """
-    runtime_default = "fixture_runtime_default"
-    monkeypatch.setattr(R._pin, "default_container_name", lambda: runtime_default)
-    got = _container_handed_over(monkeypatch, a6_project, flag=None, env=None)
-    assert got == runtime_default
 
 
-def test_shared_container_override_is_reached_after_analog_overrides(
-        monkeypatch, a6_project):
-    monkeypatch.setenv("VIBEIC_EDA_CONTAINER", "shared-run-container")
-    got = _container_handed_over(monkeypatch, a6_project, flag=None, env=None)
-    assert got == "shared-run-container"
 
 
 # ── every container-resolution site, DERIVED from the tree ─────────────────

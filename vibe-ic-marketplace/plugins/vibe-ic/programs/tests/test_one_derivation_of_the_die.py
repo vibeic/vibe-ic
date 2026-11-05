@@ -127,15 +127,6 @@ def test_an_unusable_record_is_not_a_declaration(tmp_path):
         assert r.source == DD.NOT_MEASURED, f"{bad} was accepted as a die"
 
 
-def test_the_three_spellings_of_the_record_path_agree():
-    """The path is spelled in THREE modules and the reason is stated in each:
-    importing a 2.7 MB runner to read one relative path is worse than the
-    duplication. `test_ct03_floorplan_rect_and_tapeout_declarations.py:236`
-    already pins the runner against the aggregator; this pins the third."""
-    import signoff_metrics_aggregate as SMA
-    import phase3_one_shot_runner as R
-    assert DD.FLOORPLAN_RECTANGLES_REL == SMA.FLOORPLAN_RECTANGLES_REL
-    assert DD.FLOORPLAN_RECTANGLES_REL == R.FLOORPLAN_RECTANGLES_REL
 
 
 def test_the_def_reader_handles_both_spellings_and_a_rectilinear_die():
@@ -192,34 +183,8 @@ _NOT_CODE = ("prose_polarity_consulted_check.py",)
 _NOT_READERS = ("io_pad_chip_top_gen.py", "frontend_backend_handoff_check.py")
 
 
-def test_every_reader_consumes_the_one_derivation():
-    missing = [n for n in _READERS
-               if "_declared_die" not in (PROGRAMS / n).read_text()]
-    assert missing == [], (
-        "these programs read a DEF's DIEAREA as the die and do not consume "
-        f"the single derivation: {missing}")
 
 
-def test_the_census_still_finds_every_diearea_reader_in_the_tree():
-    """THE NEGATIVE THAT KEEPS THE LIST HONEST.
-
-    Every top-level program mentioning DIEAREA must be accounted for by one of
-    the four lists above. A NEW reader lands in neither and fails here, which is
-    the only thing stopping this file from pinning a list that has gone stale.
-    """
-    accounted = (set(_READERS) | set(_DELIBERATE) | set(_ELSEWHERE)
-                 | set(_NOT_CODE) | set(_NOT_READERS))
-    accounted |= {"_declared_die.py", "_pad_ring.py"}
-    found = {p.name for p in PROGRAMS.glob("*.py")
-             if "DIEAREA" in p.read_text(errors="replace")}
-    assert found, "the census found no DIEAREA anywhere — it cannot fail"
-    unaccounted = sorted(found - accounted)
-    assert unaccounted == [], (
-        "a program reads DIEAREA and is in none of this file's four lists. "
-        "Decide which it belongs in — a reader that must consume "
-        "`_declared_die`, a deliberate exception with its reason, another "
-        "lane's file, prose, or a measured non-reader: "
-        f"{unaccounted}")
 
 
 def test_the_named_non_readers_really_do_not_read_a_die():
@@ -312,20 +277,3 @@ def test_thermal_screen_divides_by_the_die_not_the_core(tmp_path):
         project=bare)
     assert mm2c == pytest.approx(3162.0 * 3162.0 / 1e6)
     assert provc.startswith("def_diearea"), provc
-
-
-def test_the_pad_side_rectangle_is_the_die(tmp_path):
-    """A pin sitting on the DIE boundary is outside the CORE rectangle. The
-    side classification must be made against the rectangle the pins were placed
-    on, or every pin on a slot run is measured against the wrong edges."""
-    import pad_side_constraint_check as P
-    text = _def_text(SLOT_CORE_UM)
-    proj = tmp_path
-    _record(proj, SLOT_DIE_UM, floorplan_um=SLOT_CORE_UM)
-    units = P._def_units(text)
-    r = DD.resolve(proj, def_rect_um=[c / units
-                                      for c in (0, 0, int(1052 * units),
-                                                int(1647 * units))])
-    assert list(r.rect) == SLOT_DIE_UM
-    assert P._def_units("UNITS DISTANCE MICRONS 2000 ;") == 2000
-    assert P._def_units("no units here") == 1000

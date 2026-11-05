@@ -10,14 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 import analog_native_flow as native
-import flow109
 
 
-@pytest.fixture(autouse=True)
-def _restore_native_frontdoor_environment(monkeypatch):
-    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
-        monkeypatch.setenv(name, os.environ.get(name, ""))
-        monkeypatch.delenv(name)
 
 
 def project(tmp_path):

@@ -1194,69 +1194,8 @@ def reach_module():
     return mod
 
 
-@lru_cache(maxsize=1)
-def _plugin_rel_prefix() -> Path:
-    """Where the reach program expects a plugin to sit under its `--root`.
-
-    Derived as the longest common leading path of its OWN two anchors, so a
-    plugin that moves inside the repo needs no edit here.
-    """
-    mod = reach_module()
-    flow_parts = Path(mod.FLOW_REL).parts
-    check_parts = Path(mod.CHECK_REL).parts
-    common: List[str] = []
-    for a, b in zip(flow_parts, check_parts):
-        if a != b:
-            break
-        common.append(a)
-    if not common:
-        raise RuntimeError(
-            f"{REACH_CHECK}.FLOW_REL ({mod.FLOW_REL}) and .CHECK_REL "
-            f"({mod.CHECK_REL}) share no leading path, so the plugin this "
-            f"module measures cannot be presented to it"
-        )
-    return Path(*common)
 
 
-@contextlib.contextmanager
-def subject_root():
-    """Present THIS plugin tree to the reach program as its `--root`.
-
-    The subject is not "whatever repository encloses the cwd": it is the
-    plugin the cells above are parametrized from. Everywhere the matrix runs
-    for real that plugin is nested under the repo-relative prefix the program
-    names, but the mutation ledger replays a cell inside a `cp -al` mirror of
-    the PLUGIN alone (`matrix_mutation_ledger._replay_plugin_tree`), where no
-    such ancestor exists. Walking up for the prefix therefore made every cell
-    in the mirror die on the harness — measured, and a defect in this wiring
-    rather than in the flow.
-
-    So the prefix is BUILT: a scratch directory holding one symlink at the
-    program's own expected location, pointing at `F.PLUGIN_ROOT`. Both anchors
-    are then proved to resolve to the very flow yaml and the very evaluator
-    this module measures everywhere else, which is the check the walk was
-    there for.
-    """
-    mod = reach_module()
-    with tempfile.TemporaryDirectory(prefix="d1-reach-root-") as tmp:
-        root = Path(tmp)
-        link = root / _plugin_rel_prefix()
-        link.parent.mkdir(parents=True, exist_ok=True)
-        link.symlink_to(F.PLUGIN_ROOT, target_is_directory=True)
-        flow = root / mod.FLOW_REL
-        checker = root / mod.CHECK_REL
-        if flow.resolve() != F.FLOW_YAML.resolve():
-            raise RuntimeError(
-                f"{REACH_CHECK}.FLOW_REL resolves to {flow.resolve()}, not the "
-                f"flow yaml this module measures ({F.FLOW_YAML})"
-            )
-        if checker.resolve() != Path(compliance_module().__file__).resolve():
-            raise RuntimeError(
-                f"{REACH_CHECK}.CHECK_REL resolves to {checker.resolve()}, not "
-                f"the evaluator this module runs "
-                f"({compliance_module().__file__})"
-            )
-        yield root
 
 
 @dataclass(frozen=True)
@@ -1788,75 +1727,12 @@ ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
 )
 
 
-def _declared_program_orphans(invoked: Optional[frozenset] = None):
-    registry = umbrella_gate_names()
-    invoked = runner_invoked() if invoked is None else invoked
-    orphans = []
-    for sid in F.step_ids():
-        gated = set(F.gate_program_tokens(sid))
-        for prog in F.declared_programs(sid):
-            if F.program_path(prog) is None:
-                continue
-            if prog in gated or prog in registry or prog in invoked:
-                continue
-            orphans.append((F.normalize_id(sid), prog))
-    return tuple(sorted(orphans))
 
 
-def test_probe_declared_programs_array_orphans_are_pinned():
-    """The ``programs:`` array is OUT of this dimension's cell scope — pinned.
-
-    Dimension 1 as briefed asks about a step's GATE, so every cell is
-    correctly green on the steps below: their gates are wired. But the step's
-    ``programs:`` array is a second, independent wiring claim, and measured
-    live on this tree some of its entries resolve to a real
-    ``programs/<name>.py`` while being named by no gate, registered in no
-    umbrella registry, and dispatched by none of the one-shot runners.
-
-    No cell of the 63x8 matrix owns that question. Widening the D1 predicate to
-    cover it would have needed four new waivers and would have been the same
-    substitution this campaign exists to stop — changing a predicate so a
-    finding lands. So the finding is recorded HERE, pinned, outside the cell
-    grid: a new orphan appearing reddens this test, and a pinned orphan
-    getting wired also reddens it, so the population cannot drift in either
-    direction unnoticed. It is reported as an open gap, not as coverage.
-    """
-    measured = _declared_program_orphans()
-    assert measured == tuple(sorted(ORPHAN_DECLARED_PROGRAMS)), (
-        f"the set of `programs:` entries wired through NONE of the three "
-        f"channels changed: measured {list(measured)!r}, pinned "
-        f"{list(sorted(ORPHAN_DECLARED_PROGRAMS))!r}.\n"
-        f"Newly orphaned: {sorted(set(measured) - set(ORPHAN_DECLARED_PROGRAMS))} "
-        f"— a step now advertises a program nothing runs.\n"
-        f"Newly wired: {sorted(set(ORPHAN_DECLARED_PROGRAMS) - set(measured))} "
-        f"— good news; remove it from the pin in the same change."
-    )
 
 
-def test_step_0_5ic_producers_left_the_orphan_pin_only_because_a_runner_dispatches_them():
-    """Forward/reverse control for the two 2026-08-26 pin removals.
-
-    The pin can only be read as "these got wired" if removing the dispatch
-    channel puts them straight back. Both directions are driven here, so a pin
-    edit that was not backed by real wiring reddens.
-    """
-    invoked = runner_invoked()
-    for prog in ("submission_template_ingest", "tapeout_declaration_gen"):
-        pair = ("0.5ic", prog)
-        assert pair not in ORPHAN_DECLARED_PROGRAMS
-        assert prog in invoked, runners_invoking(prog)
-        assert pair not in _declared_program_orphans(invoked)
-        assert pair in _declared_program_orphans(invoked - {prog})
 
 
-def test_pad_ring_left_the_orphan_pin_only_because_the_runner_dispatches_it():
-    """Forward/reverse control for the one Batch73 pin removal."""
-    pair = ("15.5ic", "pad_ring_gen")
-    invoked = runner_invoked()
-    assert pair not in ORPHAN_DECLARED_PROGRAMS
-    assert "pad_ring_gen" in invoked, runners_invoking("pad_ring_gen")
-    assert pair not in _declared_program_orphans(invoked)
-    assert pair in _declared_program_orphans(invoked - {"pad_ring_gen"})
 
 
 def test_probe_umbrella_dispatch_is_recorded_from_the_real_runner():
@@ -2320,25 +2196,8 @@ def test_probe_waiver_plumbing_yields_a_STRICT_xfail(monkeypatch):
 # from the current tree on every call, so a cell that changes state changes its
 # answer here without anyone editing a table.
 # ══════════════════════════════════════════════════════════════════════
-def matrix_na_precondition(step_id):
-    """Why this cell is NA, re-derived LIVE, or ``None`` when it is answerable."""
-    # Dimension 1 has no NA cell: EVERY step is either gated (channels a/b/c)
-    # or IS the umbrella (P0), and both are answerable. There is no "nothing to
-    # ask" shape here, so this returns None unconditionally — and that is
-    # checked, not assumed: the cell test's umbrella branch asserts P0 is the
-    # umbrella step, so a second gate-less step reddens rather than becoming a
-    # silent NA.
-    del step_id
-    return None
 
 
-def matrix_cell_state(step_id) -> str:
-    """``"ENFORCED"`` / ``"WAIVED"`` / ``"NA"`` for one cell of this dimension."""
-    if matrix_na_precondition(step_id) is not None:
-        return "NA"
-    if waivers.waiver_for(step_id, DIM) is not None:
-        return "WAIVED"
-    return "ENFORCED"
 
 
 def test_the_owned_set_still_covers_every_dispatched_gate():

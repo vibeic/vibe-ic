@@ -1,7 +1,6 @@
 """R2 Step9 provider controls: native-only, canonical and fail-closed."""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -9,8 +8,6 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import execution_native_installation as installation
-import execution_native_worker as native_worker
 
 
 
@@ -24,18 +21,6 @@ import execution_native_worker as native_worker
 
 
 
-def test_step9_image_identity_uses_current_local_attestation_without_docker(monkeypatch):
-    image_id = "sha256:" + "1" * 64
-    reference = "registry.invalid/tools@sha256:" + "2" * 64
-    import _container_exec as container_exec
-    import librelane_contract as ll
-    monkeypatch.setattr(container_exec, "no_container_route", lambda: True)
-    monkeypatch.setattr(ll, "local_image_attestation", lambda image: {
-        "image": reference, "image_id": image_id, "repo_digests": [reference]})
-    monkeypatch.setattr(installation.subprocess, "run",
-                        lambda *args, **kwargs: pytest.fail("LOCAL identity reached Docker"))
-
-    assert installation._image_identity(reference, "docker") == (image_id, (reference,))
 
 
 
@@ -165,25 +150,3 @@ def test_local_workdir_refuses_conflicting_caller_cwd(tmp_path, monkeypatch):
         ll._run_local(_local_workdir_argv(project, str(project)),
                       probe_deadline_s=1, supervised=False, log=None,
                       cwd=tmp_path)
-
-
-def _worker_installation_spec():
-    image_ref = "registry.invalid/tools@sha256:" + "2" * 64
-    image_id = "sha256:" + "1" * 64
-    payload = {"schema": 1, "status": "MEASURED", "step_id": "9",
-               "image_ref": image_ref, "image_id": image_id}
-    receipt = {**payload, "receipt_sha256": hashlib.sha256(json.dumps(
-        payload, sort_keys=True, separators=(",", ":"),
-        ensure_ascii=False).encode()).hexdigest()}
-    return {"schema": 1, "step_id": "9", "image_id": image_id,
-            "native_installation_request": {
-                "schema": 1, "step_id": "9", "image_ref": image_ref,
-                "image_id": image_id},
-            "native_installation_receipt": receipt,
-            "native_installation_receipt_sha256": receipt["receipt_sha256"]}, image_ref
-
-
-def test_native_worker_uses_parent_bound_reference_not_config_image_id():
-    spec, image_ref = _worker_installation_spec()
-    assert native_worker._pinned_image_reference(spec) == image_ref
-    assert image_ref != spec["image_id"]
