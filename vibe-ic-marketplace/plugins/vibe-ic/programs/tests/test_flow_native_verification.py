@@ -759,31 +759,43 @@ def test_late_arithmetic_observers_preserve_every_drive_edge(tmp_path):
     assert traces[0] == traces[1]
 
 
-def test_generated_serial_clock_preserves_picosecond_precision(tmp_path):
+@pytest.mark.parametrize("period,sample,literal", [
+    (2000.002, 1000.001, "1000.001"),
+    (2000000000.002, 1000000000.001, "1000000000.001"),
+])
+@pytest.mark.parametrize("scenario", [False, True])
+def test_generated_serial_clock_preserves_picosecond_precision(tmp_path, period, sample, literal, scenario):
     if not shutil.which("iverilog") or not shutil.which("vvp"):
         pytest.skip("Native Icarus is required")
     from test_serial_parallel_declared_function_oracle import _declared_scenario_project
     import arith_oracle_tb_gen as arithmetic
 
-    _declared_scenario_project(tmp_path)
+    cases = _declared_scenario_project(tmp_path)
     spec, why = arithmetic.extract_serial_arith_spec(tmp_path, "digital_arithmetic_primitive")
     assert spec, why
     bench, executable = tmp_path / "precision.v", tmp_path / "precision.vvp"
-    text = arithmetic.emit_serial_oracle_module("tb_precision", spec,
-        clock_period_ns=2000.002, sample_offset_ns=1000.001)
-    assert "#1000.001;" in text
-    bench.write_text(text + '\nmodule monitor; realtime first_edge; initial begin '
-        '@(posedge tb_precision.clk); first_edge=$realtime; @(posedge tb_precision.clk); '
-        'if (($realtime-first_edge)<2000.0015 || ($realtime-first_edge)>2000.0025) '
-        '$fatal(1,"Declared clock period changed: %0.3f",$realtime-first_edge); '
-        '$display("PERIOD_NS=%0.3f",$realtime-first_edge); $finish; end endmodule\n')
+    if scenario:
+        plan = arithmetic.arithmetic_scenario_plan(tmp_path, "digital_arithmetic_primitive", cases[1])
+        assert plan
+        plan["observation"].update(clock_period_ns=period, sample_offset_ns=sample)
+        text = arithmetic.emit_arithmetic_scenario_module("tb_precision", plan)
+    else:
+        text = arithmetic.emit_serial_oracle_module("tb_precision", spec,
+            clock_period_ns=period, sample_offset_ns=sample)
+    period_ps = round(period * 1000)
+    bench.write_text(text + '\n`timescale 1ps/1ps\nmodule monitor; time first_edge; initial begin '
+        '@(posedge tb_precision.clk); first_edge=$time; @(posedge tb_precision.clk); '
+        f'if (($time-first_edge)!=64\'d{period_ps}) '
+        '$fatal(1,"Declared clock period changed: %0d",$time-first_edge); '
+        '$display("PERIOD_PS=%0d",$time-first_edge); $finish; end endmodule\n')
     built = subprocess.run(["iverilog", "-g2012", "-s", "tb_precision", "-s", "monitor",
         "-o", str(executable), str(bench), str(tmp_path / "phase2/stage1/rtl/neutral_serial.v")],
         capture_output=True, text=True)
     assert built.returncode == 0, built.stderr
     run = subprocess.run(["vvp", str(executable)], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
-    assert "PERIOD_NS=2000.002" in run.stdout
+    assert f"#{literal};" in text
+    assert f"PERIOD_PS={period_ps}" in run.stdout
 
 
 @pytest.mark.parametrize("outcome,expected", [("skip", "NOT_MEASURED"), ("fail", "FAIL"), ("pass", "PASS")])
@@ -815,7 +827,7 @@ def test_native_cocotb_gls_distinguishes_skipped_reference(tmp_path, outcome, ex
 
 
 @pytest.mark.parametrize("outcome,expected", [("skip", "NOT_MEASURED"), ("fail", "FAIL"), ("pass", "PASS")])
-@pytest.mark.parametrize("period", [20, 2000.002])
+@pytest.mark.parametrize("period", [20, 24, 2000.002, 1000000000.002])
 def test_generated_cocotb_chip_clock_uses_native_sdc(tmp_path, outcome, expected, period):
     if not all(shutil.which(name) for name in ("iverilog", "vvp", "cocotb-config")):
         pytest.skip("Native Icarus and cocotb are required")

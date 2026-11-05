@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 import fnmatch
 import json
 from pathlib import Path
@@ -471,7 +472,7 @@ def gls(project, directory, tool, commands, *, state, config):
                         rows.append(row)
                         continue
                     if clocks["clocks_s"]:
-                        periods = {name: format(value / 1e-9, ".12g")
+                        periods = {name: format(Decimal(str(value)) / Decimal("1e-9"), "f")
                                    for name, value in clocks["clocks_s"].items()}
                         entry = work / "flow_clocked_suite.py"
                         entry.write_text("from decimal import Decimal\nfrom importlib import import_module\n"
