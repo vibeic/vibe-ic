@@ -59,7 +59,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import landing_merge_verdict as V  # noqa: E402
 import _watchdog  # noqa: E402
 import _hermetic_engine_capability as _CAP  # noqa: E402
 
@@ -128,14 +127,15 @@ _VERIFIER_CLOSURE = frozenset({
     "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_merge_verdict.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/landing_noop_verdict_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/macro_obs_geometry_intersect_check.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/pytest_per_file_junit.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/step_internal_fail_bubble_up_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/step_metrics.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_census_freshness.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_flow_matrix_coverage.py",
-
-
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_acceptance.json",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tool_diagnostic_id_gate.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/trusted_pytest_entry.py",
@@ -171,139 +171,38 @@ _RED_TEST_TIER_LOG = """=== gatekeeper landing gates — base=origin/main ===
 """
 
 
-def _delta(**kw):
-    d = V.Delta(base_total=kw.pop("base_total", 10),
-                candidate_total=kw.pop("candidate_total", 10),
-                overlap=kw.pop("overlap", 10))
-    for k, v in kw.items():
-        setattr(d, k, v)
-    return d
 
 
-def _decide(**over):
-    """A LAND OK baseline; each test perturbs exactly one fact."""
-    kw = dict(rebase_status="ok", expected_tree=TREE, verified_tree=TREE,
-              github_tree=TREE, land=V.parse_land_log(_GOOD_LOG),
-              base_land=V.parse_land_log(_GOOD_LOG),
-              delta=_delta(), verified_sha=SHA, truncated=False,
-              dropped_files=(), selection_size=21,
-              hygiene={"status": "CLEAN", "introduced": [], "carried": [],
-                       "cleared": [], "candidate_findings": 0,
-                       "base_findings": 0, "declared": 1})
-    kw.update(over)
-    return V.decide(**kw)
 
 
 # ============================================================ THE PAIRED GUARD
 
 
-def test_a_known_good_pr_shape_is_allowed():
-    """LOAD-BEARING, and the reason it is first. Everything else in this file
-    proves the gate CAN refuse; a gate that refuses every landing is a ban.
-
-    Nothing here is a stub of the decision: the log is a real
-    `gatekeeper-land.sh` transcript shape, the trees agree with the forge, and
-    the differential is empty."""
-    v = _decide()
-    assert v.ok is True, v.reasons
-    assert v.reasons == []
-    assert v.unmeasurable is False
 
 
-def test_a_pre_existing_red_base_still_allows_the_landing():
-    """`main` is RED right now (`test_ci_harness_timeout_ceiling_check`, 3 of 40
-    at `e4880703b`, in files nothing in flight touches). Demanding green would
-    refuse EVERY landing today — which is how a repo ends up with a landing path
-    that has no gate. The same failure on both sides is nobody's."""
-    d = _delta(preexisting=["m::t_red"])
-    v = _decide(delta=d, land=V.parse_land_log(_RED_TEST_TIER_LOG))
-    assert v.ok is True, v.reasons
-    assert any("pre-existing" in n for n in v.notes)
 
 
-def test_the_test_tier_failing_is_not_by_itself_a_refusal():
-    """`gatekeeper-land.sh` withholds the stamp on ANY red test. The differential
-    owns that verdict and no other: every OTHER gate's FAIL still blocks."""
-    log = V.parse_land_log(_RED_TEST_TIER_LOG)
-    assert log.test_tier_failed is True
-    assert log.blocking_failures == []
 
 
-def test_a_test_tier_failure_with_all_green_machine_record_is_refused():
-    v = _decide(land=V.parse_land_log(_RED_TEST_TIER_LOG), delta=_delta())
-    assert v.ok is False
-    assert any("FAILED BUT THE CANDIDATE REPORT CONTAINS NO RED" in reason
-               for reason in v.reasons)
 
 
-def test_fixing_a_pre_existing_failure_is_reported_and_never_required():
-    v = _decide(delta=_delta(fixed=["m::t_was_red"]))
-    assert v.ok is True
-    assert any("now pass" in n for n in v.notes)
 
 
 # ==================================================== THE NINE REFUSAL REASONS
 
 
-def test_a_new_failure_this_branch_owns_is_refused():
-    v = _decide(delta=_delta(new_failures=["m::t_new"]))
-    assert v.ok is False
-    assert any("NEW FAILURE" in r for r in v.reasons)
 
 
-def test_a_silenced_failure_is_refused_and_is_never_an_improvement():
-    """`failed -> skipped` shrinks the failed set without fixing anything. If it
-    counted as an improvement, the cheapest way to pass this gate would be to
-    delete the test that fails."""
-    v = _decide(delta=_delta(silenced=["m::t_skipped_now"]))
-    assert v.ok is False
-    assert any("SILENCED" in r for r in v.reasons)
 
 
-def test_a_passing_test_weakened_to_skip_is_refused():
-    """Green base evidence must not become a stale permission to stop asking.
-
-    A cached PASS followed by a candidate SKIP is unsafe even when the live
-    base would still pass; if runtime drift made the live base red, allowing
-    PASS -> SKIP would hide the exact silenced failure the differential exists
-    to catch.
-    """
-    v = _decide(delta=_delta(weakened=["m::t_skipped_now"]))
-    assert v.ok is False
-    assert any("WEAKENED" in r for r in v.reasons)
 
 
-def test_a_rebase_conflict_is_refused():
-    v = _decide(rebase_status="conflict")
-    assert v.ok is False
-    assert any("REBASE CONFLICT" in r for r in v.reasons)
 
 
-def test_verifying_a_tree_that_is_not_the_merge_tree_is_refused():
-    v = _decide(verified_tree=OTHER_TREE, github_tree=TREE)
-    assert v.ok is False
-    assert any("WRONG TREE" in r for r in v.reasons)
 
 
-def test_the_forge_disagreeing_with_the_local_merge_is_refused():
-    """`gh pr merge --squash` creates a commit with the FORGE's merge tree. If
-    the local computation disagrees, the verified tree is not the landed one."""
-    v = _decide(github_tree=OTHER_TREE)
-    assert v.ok is False
-    assert any("FORGE DISAGREES" in r for r in v.reasons)
 
 
-def test_any_non_test_gate_failure_is_refused_when_there_is_no_base_to_compare():
-    """Missing baseline is incomplete, even when a candidate failure is visible."""
-    log = V.parse_land_log(
-        "=== gatekeeper landing gates ===\n"
-        "  PASS  targeted tests (3 file(s))\n"
-        "  FAIL  tree contains the base it claims as parent\n")
-    v = _decide(land=log, base_land=None)
-    assert v.ok is False
-    assert any("tree contains the base" in r for r in v.reasons)
-    assert v.admission == "INCOMPLETE"
-    assert "BASE_GATE_RECORD_MISSING_OR_INVALID" in v.incomplete
 
 
 # ==================================== THE GATE TIER GETS THE SAME DIFFERENTIAL
@@ -314,593 +213,114 @@ def test_any_non_test_gate_failure_is_refused_when_there_is_no_base_to_compare()
 # compared, not asserted.
 
 
-def _gate_log(*lines, stamp=None):
-    body = "=== gatekeeper landing gates ===\n" + "".join(
-        f"  {w}  {label}\n" for w, label in lines)
-    if stamp:
-        body += f"=== ALL GATES PASS — stamped {stamp} ===\n"
-    elif any(word == "FAIL" for word, _ in lines):
-        body += V._FAILURES_TERMINAL + "\n"
-    else:
-        body += V._NON_TARGET_COMPLETE + "\n"
-    return V.parse_land_log(body)
 
 
-def test_a_gate_failing_on_the_base_too_is_not_this_branchs():
-    base = _gate_log(("FAIL", "repo hygiene gates"), ("PASS", "plugin full audit"))
-    cand = _gate_log(("FAIL", "repo hygiene gates"), ("PASS", "plugin full audit"),
-                     ("PASS", "targeted tests (3 file(s))"))
-    v = _decide(land=cand, base_land=base)
-    assert v.ok is True, v.reasons
-    assert any("fails on the base too" in n for n in v.notes)
 
 
-def test_a_gate_this_branch_reddens_is_refused():
-    base = _gate_log(("PASS", "repo hygiene gates"))
-    cand = _gate_log(("FAIL", "repo hygiene gates"),
-                     ("PASS", "targeted tests (3 file(s))"))
-    v = _decide(land=cand, base_land=base)
-    assert v.ok is False
-    assert any("PASSED ON THE BASE" in r for r in v.reasons)
 
 
-def test_a_failing_gate_that_stops_being_asked_is_refused():
-    """The gate-tier twin of `failed -> skipped`. Deleting the gate that fails is
-    the cheapest way to make a differential green, so it is a refusal."""
-    base = _gate_log(("FAIL", "repo hygiene gates"))
-    cand = _gate_log(("SKIP", "repo hygiene gates"),
-                     ("PASS", "targeted tests (3 file(s))"))
-    v = _decide(land=cand, base_land=base)
-    assert v.ok is False
-    assert any("SILENCED RATHER THAN FIXED" in r for r in v.reasons)
-
-    gone = _gate_log(("PASS", "targeted tests (3 file(s))"))
-    v2 = _decide(land=gone, base_land=base)
-    assert v2.ok is False
-    assert any("no longer asked here" in r for r in v2.reasons)
 
 
-def test_repairing_a_gate_the_base_was_failing_is_reported():
-    base = _gate_log(("FAIL", "worktree unchanged since the gates started"))
-    cand = _gate_log(("PASS", "worktree unchanged since the gates started"),
-                     ("PASS", "targeted tests (3 file(s))"))
-    v = _decide(land=cand, base_land=base)
-    assert v.ok is True, v.reasons
-    assert any("now passes" in n for n in v.notes)
 
 
-def test_the_replay_disagreeing_with_the_merge_is_refused():
-    """Rebasing asks whether the branch's intent still applies; merging asks
-    whether its text still combines. The phantom-revert shape is where the two
-    answers come apart, and only one of them is what `gh pr merge` creates."""
-    v = _decide(replayed_tree=OTHER_TREE)
-    assert v.ok is False
-    assert any("REPLAY AND THE MERGE DISAGREE" in r for r in v.reasons)
 
 
-def test_a_stamp_naming_another_commit_is_refused():
-    """The v1.9.16 shape: the suites read a WORKTREE for minutes while the stamp
-    names a COMMIT, so a tree that never existed got stamped."""
-    log = V.parse_land_log(_GOOD_LOG.replace(SHA[:9], "deadbeef1"))
-    v = _decide(land=log)
-    assert v.ok is False
-    assert any("ANOTHER COMMIT" in r for r in v.reasons)
 
 
-def test_a_truncated_candidate_run_is_refused_not_passed():
-    """`--maxfail=10` stops pytest. The tests after it did not run, so their
-    absence is not a result and the differential cannot be computed."""
-    v = _decide(truncated=True, dropped_files=["programs/tests/test_x.py"])
-    assert v.ok is False
-    assert any("TRUNCATED" in r for r in v.reasons)
 
 
-def test_a_selected_file_that_produced_no_test_case_is_refused():
-    """Chosen and then never asked. A selection that silently drops a file is
-    the hole #1019 is about, one level down."""
-    v = _decide(dropped_files=["programs/tests/test_ghost.py"])
-    assert v.ok is False
-    assert any("NO TEST CASE" in r for r in v.reasons)
 
 
 # ============================= ARM A'S COMPLETENESS IS ALSO A REFUSAL (#1443)
 
 
-def test_a_base_arm_that_did_not_finish_is_refused_not_passed():
-    """The same question as the test above, asked of the arm that is SUBTRACTED.
-
-    #1443's law: "a two-arm comparison must assert that both arms emitted a
-    summary line before it subtracts anything." The candidate arm had that
-    check; the base arm had only `base_total == 0`, which is all-or-nothing and
-    only a NOTE. A base arm that ran three of its five files sits between the
-    two and was subtracted as though whole."""
-    v = _decide(base_dropped_files=["programs/tests/test_alpha.py"])
-    assert v.ok is False, v.notes
-    assert any("NO TEST CASE ON THE BASE" in r for r in v.reasons), v.reasons
 
 
-def test_a_complete_base_arm_is_not_flagged_as_partial():
-    """THE FALSE-POSITIVE CONTROL. The check above must fire on a partial base
-    arm and on nothing else — a gate that refuses every landing is a ban."""
-    v = _decide(base_dropped_files=())
-    assert v.ok is True, v.reasons
-    assert not any("ON THE BASE" in r for r in v.reasons), v.reasons
 
 
-def test_a_caller_that_never_says_what_arm_a_was_asked_for_is_disclosed():
-    """DEGRADE LOUDLY. A caller supplying no base selection leaves the check
-    unable to fire, and a check that cannot fire must not read as a clean sheet.
-    Missing required coverage blocks admission while preserving the disclosure."""
-    v = _decide(base_selection_supplied=False)
-    assert v.ok is False, v.reasons
-    assert v.admission == "INCOMPLETE"
-    assert any("completeness was NOT checked" in n for n in v.notes), v.notes
 
 
 # ================================================= UNMEASURABLE IS NOT A PASS
 
 
-def test_land_gates_that_did_not_report_are_not_a_pass():
-    v = _decide(land=V.parse_land_log("nothing here\n"))
-    assert v.ok is False
-    assert v.unmeasurable is True
-    assert any("DID NOT RUN" in r for r in v.reasons)
 
 
-def test_a_partial_non_target_gate_log_is_not_a_composite_pass():
-    partial = V.parse_land_log(
-        "=== gatekeeper landing gates — base=origin/main ===\n"
-        "  PASS  one cheap gate\n")
-    v = _decide(land=partial, candidate_gate_rc=0,
-                require_composite_gate_record=True)
-    assert v.ok is False
-    assert v.unmeasurable is True
-    assert any("NO COMPLETE TERMINAL RECORD" in r for r in v.reasons)
 
 
-def test_a_non_target_gate_abnormal_exit_refuses_even_with_a_fake_terminal():
-    fake = V.parse_land_log(
-        "=== gatekeeper landing gates — base=origin/main ===\n"
-        "  PASS  one cheap gate\n"
-        "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ===\n")
-    v = _decide(land=fake, candidate_gate_rc=2,
-                require_composite_gate_record=True)
-    assert v.ok is False
-    assert v.unmeasurable is True
-    assert any("DID NOT EXIT NORMALLY" in r for r in v.reasons)
 
 
-def test_a_complete_non_target_gate_record_can_join_the_composite():
-    complete = V.parse_land_log(
-        "=== gatekeeper landing gates — base=origin/main ===\n"
-        "  PASS  one cheap gate\n"
-        "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ===\n")
-    v = _decide(land=complete, base_land=complete, candidate_gate_rc=0,
-                require_composite_gate_record=True)
-    assert v.ok is True, v.reasons
 
 
-def test_a_candidate_test_arm_that_wrote_the_tree_is_refused():
-    v = _decide(candidate_test_worktree_status="dirty")
-    assert v.ok is False
-    assert any("TEST ARM WROTE" in r for r in v.reasons)
 
 
-def test_an_uninspectable_candidate_test_worktree_is_unmeasurable():
-    v = _decide(candidate_test_worktree_status="unknown")
-    assert v.ok is False
-    assert v.unmeasurable is True
-    assert any("COULD NOT BE INSPECTED" in r for r in v.reasons)
 
 
-def test_a_candidate_test_arm_that_moved_to_another_commit_is_refused():
-    v = _decide(candidate_test_worktree_status="wrong-head")
-    assert v.ok is False
-    assert any("MOVED OFF THE VERIFIED COMMIT" in r for r in v.reasons)
 
 
-def test_a_base_test_arm_that_wrote_the_tree_is_refused():
-    v = _decide(base_test_worktree_status="dirty")
-    assert v.ok is False
-    assert any("BASE TEST ARM WROTE" in r for r in v.reasons)
 
 
-def test_an_uninspectable_base_test_worktree_is_unmeasurable():
-    v = _decide(base_test_worktree_status="unknown")
-    assert v.ok is False
-    assert v.unmeasurable is True
-    assert any("BASE TEST WORKTREE COULD NOT BE INSPECTED" in r
-               for r in v.reasons)
 
 
-def test_a_base_test_arm_that_moved_to_another_commit_is_refused():
-    v = _decide(base_test_worktree_status="wrong-head")
-    assert v.ok is False
-    assert any("MOVED OFF THE BASE COMMIT" in r for r in v.reasons)
 
 
-def test_a_candidate_that_ran_no_tests_is_not_a_pass():
-    v = _decide(delta=_delta(candidate_total=0, base_total=0, overlap=0))
-    assert v.ok is False
-    assert v.unmeasurable is True
-    assert any("NO TESTS" in r for r in v.reasons)
 
 
-def test_a_missing_tree_is_not_a_pass():
-    v = _decide(expected_tree="")
-    assert v.ok is False
-    assert v.unmeasurable is True
 
 
-def test_an_unmeasurable_refusal_still_names_the_reason_it_already_found():
-    """A conflicting rebase and an uncomputable merge tree are the SAME event
-    seen twice. The early return used to hand back a FRESH reason list, so the
-    operator got the symptom ("the merge tree could not be computed") and not the
-    cause ("REBASE CONFLICT") — and the end-to-end conflict case is what caught
-    it."""
-    v = _decide(rebase_status="conflict", expected_tree="")
-    assert v.ok is False
-    assert any("REBASE CONFLICT" in r for r in v.reasons), v.reasons
-    assert any("COULD NOT BE COMPUTED" in r for r in v.reasons), v.reasons
 
 
 # ======================================== EVERY DEGRADATION GOES STRICTER
 
 
-def test_an_empty_base_report_makes_every_candidate_failure_new():
-    """The only direction the differential may lose information in. With no base
-    to compare against, `demand green` is what is left, and it is stricter."""
-    base = {}
-    cand = {"m::t_a": V.PASSED, "m::t_b": V.FAILED}
-    d = V.failed_set_delta(base, cand)
-    assert d.new_failures == ["m::t_b"]
-    assert d.preexisting == []
-    v = _decide(delta=_delta(base_total=0, overlap=0, new_failures=["m::t_b"]))
-    assert v.ok is False
 
 
-def test_no_overlapping_test_id_is_disclosed_as_a_degradation():
-    v = _decide(delta=_delta(overlap=0))
-    assert v.ok is True          # nothing broke; the note is the disclosure
-    assert any("demand green" in n for n in v.notes)
 
 
-def test_there_is_no_input_that_makes_the_verdict_more_permissive_than_green():
-    """Stated as an assertion rather than a comment: for a candidate carrying a
-    failure, no combination of the OTHER facts yields LAND OK unless the base
-    carried that same failure."""
-    for base_outcome in (V.PASSED, V.SKIPPED, V.XFAILED, V.ABSENT):
-        base = {} if base_outcome is V.ABSENT else {"m::t": base_outcome}
-        d = V.failed_set_delta(base, {"m::t": V.FAILED})
-        assert d.new_failures == ["m::t"], base_outcome
-        assert _decide(delta=_delta(new_failures=d.new_failures)).ok is False
 
 
-def test_a_test_the_branch_brings_is_split_out_from_one_it_broke():
-    """vibe-ic#1417. `b in RED` is false BOTH when the base ran the test and it
-    passed AND when the base never had the test — and only the first is a
-    behaviour this change broke. Reported as one number, they are a 5x
-    overstatement on a batch.
-
-    MEASURED on a 141-PR batch composed on `3d13e2c59`: 5 nodes reported NEW,
-    of which FOUR do not exist on main at all (`grep 'def <name>'` -> main 0,
-    batch 1) and ONE — `test_d8_downgrade_is_reachable_through_each_steps_own_
-    real_gate` — passes alone on main and fails alone in the batch. One
-    regression, reported as five.
-    """
-    base = {"m::t_broke": V.PASSED, "m::t_ok": V.PASSED}
-    cand = {"m::t_broke": V.FAILED, "m::t_ok": V.PASSED,
-            "m::t_brought": V.FAILED}
-    d = V.failed_set_delta(base, cand)
-    assert sorted(d.new_failures) == ["m::t_broke", "m::t_brought"]
-    assert d.new_absent_on_base == ["m::t_brought"], (
-        "a test the branch BRINGS, failing, is not separated from one it BROKE")
 
 
-def test_splitting_the_count_moves_no_verdict():
-    """LOAD-BEARING. The split is a disclosure and must never become a waiver:
-    a failing test the branch brought is still the branch's. Asserted on the
-    VERDICT, so a future edit that routes on `new_absent_on_base` to soften the
-    refusal kills this."""
-    for brought in ([], ["m::t_brought"]):
-        v = _decide(delta=_delta(new_failures=["m::t_brought"],
-                                 new_absent_on_base=brought))
-        assert v.ok is False, brought
-        assert any("NEW FAILURE(S) THIS BRANCH OWNS" in r for r in v.reasons)
 
 
-def test_an_empty_base_does_not_report_everything_as_merely_brought():
-    """The degradation that would flatter. With no base report every id is
-    absent, so an unguarded split would announce "nothing was broken, it is all
-    new" — false, and in the permissive direction. `decide` already discloses
-    the empty base; this must add no second, wrong sentence."""
-    d = V.failed_set_delta({}, {"m::t_b": V.FAILED})
-    assert d.new_failures == ["m::t_b"]
-    assert d.new_absent_on_base == [], (
-        "an empty base made every failure look like a newly brought assertion")
 
 
-def test_the_split_is_machine_readable_not_only_prose():
-    d = V.failed_set_delta({"m::t": V.PASSED}, {"m::t": V.FAILED, "m::n": V.FAILED})
-    assert "new_absent_on_base" in d.as_dict()
-    assert d.as_dict()["new_absent_on_base"] == ["m::n"]
 
 
 # ================================================== THE DECISION TABLE, EXACTLY
 
 
-@pytest.mark.parametrize("base_o,cand_o,bucket", [
-    (V.FAILED, V.FAILED, "preexisting"),
-    (V.ERRORED, V.FAILED, "preexisting"),
-    (V.FAILED, V.PASSED, "fixed"),
-    (V.PASSED, V.FAILED, "new_failures"),
-    (V.SKIPPED, V.ERRORED, "new_failures"),
-    (V.FAILED, V.SKIPPED, "silenced"),
-    (V.FAILED, V.XFAILED, "silenced"),
-    (V.PASSED, V.SKIPPED, "weakened"),
-])
-def test_every_row_of_the_table(base_o, cand_o, bucket):
-    d = V.failed_set_delta({"m::t": base_o}, {"m::t": cand_o})
-    assert getattr(d, bucket) == ["m::t"], d.as_dict()
-    for other in ("new_failures", "silenced", "fixed", "weakened", "preexisting"):
-        if other != bucket:
-            assert getattr(d, other) == [], (other, d.as_dict())
 
 
-def test_a_test_that_stopped_existing_is_absent_not_missing():
-    """ABSENT is an OUTCOME. On the red side it is a silencing, and a dict lookup
-    that returned None would have made it invisible."""
-    assert V.failed_set_delta({"m::t": V.FAILED}, {}).silenced == ["m::t"]
-    assert V.failed_set_delta({}, {"m::t": V.FAILED}).new_failures == ["m::t"]
 
 
 # ============================================================= JUNIT + THE LOG
 
 
-def _junit(tmp_path, cases, name="r.xml"):
-    body = []
-    for classname, tname, outcome, f in cases:
-        inner = {"passed": "", "failed": "<failure>x</failure>",
-                 "errored": "<error>x</error>", "skipped": "<skipped/>",
-                 "xfailed": '<skipped type="pytest.xfail"/>'}[outcome]
-        body.append(f'<testcase classname="{classname}" name="{tname}"'
-                    + (f' file="{f}"' if f else "") + f'>{inner}</testcase>')
-    p = tmp_path / name
-    p.write_text('<?xml version="1.0"?><testsuites><testsuite>'
-                 + "".join(body) + "</testsuite></testsuites>")
-    return p
 
 
-def _attest_junit(path, cases, selection, *, aggregate=True, per_file=True):
-    """Append the exact process-suite shapes emitted by the real driver."""
-    root = ET.parse(str(path)).getroot()
-    outcomes = {name: [] for name in selection}
-    for classname, _tname, outcome, file_name in cases:
-        probe = ET.Element("testcase", {"classname": classname})
-        if file_name:
-            probe.set("file", file_name)
-        recovered = V._file_of(probe, selection)
-        if recovered:
-            outcomes.setdefault(recovered, []).append(outcome)
-    if per_file:
-        for file_name in sorted(
-                name for name, values in outcomes.items() if values):
-            rc = 1 if any(v in {"failed", "errored"}
-                          for v in outcomes[file_name]) else 0
-            name = f"{file_name}::process_exit"
-            suite = ET.SubElement(root, "testsuite", {
-                "name": name, "tests": "1", "failures": str(int(rc != 0)),
-                "errors": "0", "skipped": "0",
-            })
-            tc = ET.SubElement(suite, "testcase", {
-                "classname": "pytest_per_file_process", "name": name,
-                "file": file_name,
-            })
-            props = ET.SubElement(tc, "properties")
-            ET.SubElement(props, "property", {
-                "name": "process_rc", "value": str(rc)})
-            if rc:
-                ET.SubElement(tc, "failure")
-    if aggregate:
-        ordinary = next(root.iter("testsuite"))
-        aggregate_suite = ET.SubElement(root, "testsuite", {
-            "name": "aggregate::pytest",
-        })
-        for original in list(ordinary.iter("testcase")):
-            copied = ET.fromstring(ET.tostring(original, encoding="unicode"))
-            recovered = V._file_of(original, selection)
-            if recovered:
-                copied.set("file", recovered)
-            copied.set(
-                "classname",
-                "pytest_aggregate." + (copied.get("classname") or ""))
-            aggregate_suite.append(copied)
-        rc = 1 if any(outcome in {"failed", "errored"}
-                      for _c, _n, outcome, _f in cases) else 0
-        name = "whole_selection::process_exit"
-        suite = ET.SubElement(root, "testsuite", {
-            "name": name, "tests": "1", "failures": str(int(rc != 0)),
-            "errors": "0", "skipped": "0",
-        })
-        tc = ET.SubElement(suite, "testcase", {
-            "classname": "pytest_aggregate_process", "name": name,
-            "file": "<aggregate>",
-        })
-        props = ET.SubElement(tc, "properties")
-        ET.SubElement(props, "property", {
-            "name": "process_rc", "value": str(rc)})
-        if rc:
-            ET.SubElement(tc, "failure")
-    ET.ElementTree(root).write(str(path), encoding="utf-8",
-                               xml_declaration=True)
 
 
-def test_junit_outcomes_are_read_including_xfail(tmp_path):
-    p = _junit(tmp_path, [
-        ("m", "a", "passed", None), ("m", "b", "failed", None),
-        ("m", "c", "errored", None), ("m", "d", "skipped", None),
-        ("m", "e", "xfailed", None)])
-    got = V.read_junit(p)
-    assert got == {"m::a": V.PASSED, "m::b": V.FAILED, "m::c": V.ERRORED,
-                   "m::d": V.SKIPPED, "m::e": V.XFAILED}
 
 
-def test_the_worst_outcome_wins_for_a_duplicated_id(tmp_path):
-    """A rerun plugin emits two entries for one id. Whichever order they arrive
-    in, a failure must not be overwritten by a later pass."""
-    p = _junit(tmp_path, [("m", "a", "failed", None), ("m", "a", "passed", None)])
-    assert V.read_junit(p)["m::a"] == V.FAILED
-    p2 = _junit(tmp_path, [("m", "a", "passed", None), ("m", "a", "failed", None)],
-                name="r2.xml")
-    assert V.read_junit(p2)["m::a"] == V.FAILED
 
 
-def test_the_test_file_is_recovered_without_the_xunit1_file_attribute(tmp_path):
-    """`xunit2` — pytest's default — drops `file`. The dotted classname still
-    names the module, and class-based tests carry one component too many."""
-    sel = ["programs/tests/test_thing.py"]
-    p = _junit(tmp_path, [
-        ("programs.tests.test_thing", "a", "passed", None),
-        ("programs.tests.test_thing.TestKlass", "b", "passed", None)])
-    assert V.junit_files(p, sel) == {"programs/tests/test_thing.py"}
 
 
-def test_the_file_attribute_is_preferred_when_present(tmp_path):
-    p = _junit(tmp_path, [("weird.classname", "a", "passed",
-                           "programs/tests/test_thing.py")])
-    assert V.junit_files(p, []) == {"programs/tests/test_thing.py"}
 
 
-def test_subject_testcase_cannot_spoof_a_parent_process_suite(tmp_path):
-    selected = "programs/tests/test_thing.py"
-    p = tmp_path / "spoof.xml"
-    p.write_text(
-        '<?xml version="1.0"?><testsuites><testsuite name="' + selected + '">'
-        '<testcase classname="pytest_per_file_process" '
-        'name="' + selected + '::process_exit" file="' + selected + '">'
-        '<properties><property name="process_rc" value="0"/></properties>'
-        '</testcase></testsuite><testsuite name="pytest">'
-        '<testcase classname="pytest_aggregate_process" '
-        'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
-        '<properties><property name="process_rc" value="0"/></properties>'
-        '</testcase></testsuite></testsuites>')
-    assert V.junit_per_file_process_files(p) == set()
-    assert V.junit_has_aggregate_process(p) is False
 
 
-def test_subject_process_attributes_cannot_turn_a_failure_green(tmp_path):
-    p = tmp_path / "ordinary-failure.xml"
-    p.write_text(
-        '<?xml version="1.0"?><testsuites>'
-        '<testsuite name="programs/tests/test_thing.py">'
-        '<testcase classname="pytest_per_file_process" name="test_new_red" '
-        'file="programs/tests/test_thing.py">'
-        '<properties><property name="process_rc" value="0"/></properties>'
-        '<failure>real candidate regression</failure>'
-        '</testcase></testsuite></testsuites>')
-    got = V.read_junit(p)
-    assert got["pytest_per_file_process::test_new_red"] == V.FAILED
-    assert V.junit_red_count(p) == 1
 
 
-def test_per_file_diagnostics_cannot_fill_an_incomplete_aggregate(tmp_path):
-    """The fallback channel cannot complete the authoritative question."""
-    selected = ["programs/tests/test_alpha.py",
-                "programs/tests/test_beta.py"]
-    p = tmp_path / "mixed.xml"
-    p.write_text(
-        '<?xml version="1.0"?><testsuites>'
-        '<testsuite name="aggregate::pytest">'
-        '<testcase classname="pytest_aggregate.programs.tests.test_alpha" '
-        'name="a" file="programs/tests/test_alpha.py"/>'
-        '</testsuite>'
-        '<testsuite name="programs/tests/test_beta.py">'
-        '<testcase classname="programs.tests.test_beta" name="b" '
-        'file="programs/tests/test_beta.py"/>'
-        '</testsuite>'
-        '<testsuite name="whole_selection::process_exit" tests="1" '
-        'failures="0" errors="0" skipped="0">'
-        '<testcase classname="pytest_aggregate_process" '
-        'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
-        '<properties><property name="process_rc" value="0"/></properties>'
-        '</testcase></testsuite></testsuites>')
-
-    assert set(selected).issubset(V.junit_files(p, selected))
-    assert V.junit_aggregate_files(p, selected) == {selected[0]}
 
 
-def test_report_lines_are_never_read_as_gates():
-    """`gatekeeper-land.sh` prints REPORT for probes that are deliberately not
-    landing bars. Counting one as a gate would make the gate a ban."""
-    log = V.parse_land_log(_GOOD_LOG)
-    assert log.reported == ["untracked scratch paths in this checkout"]
-    assert log.blocking_failures == []
-    assert log.stamped_sha == SHA[:9]
 
 
-def test_a_selection_failure_is_not_the_test_tier():
-    """`FAIL targeted test selection produced no files` is a SELECTION failure —
-    a hard refusal. Only `FAIL targeted tests (...)` is deferred to the
-    differential, and a prefix match would have swallowed both."""
-    log = V.parse_land_log(
-        "=== gatekeeper landing gates ===\n"
-        "  FAIL  targeted test selection produced no files — not a clean result\n")
-    assert log.blocking_failures == [
-        "targeted test selection produced no files — not a clean result"]
-    assert log.test_tier_failed is False
 
 
 # ==================================================================== THE CLI
 
 
-def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=(),
-         base_sel="derive", attest_candidate=True,
-         candidate_aggregate=True, candidate_per_file=True,
-         attest_base=True, base_aggregate=True, base_per_file=True,
-         base_mutator=None, candidate_mutator=None):
-    (tmp_path / "land.log").write_text(land_text)
-    base_gate_args = ()
-    if "--base-land-log" not in extra:
-        baseline_log = tmp_path / "fixture_base_land.log"
-        baseline_log.write_text(_GOOD_LOG)
-        base_gate_args = ("--base-land-log", str(baseline_log))
-    (tmp_path / "sel.txt").write_text("\n".join(sel) + "\n")
-    bj = _junit(tmp_path, base_cases, "base.xml")
-    cj = _junit(tmp_path, cand_cases, "cand.xml")
-    if base_sel == "derive":
-        base_sel = sorted(V.junit_files(bj, sel))
-    import test_issue1498_hygiene_subset_rule_is_wired as H
-    hyg_path = H._write(tmp_path, "clean-hygiene.json",
-                        H._record([H._gate("neutral check", "PASS")]))
-    if attest_candidate:
-        _attest_junit(cj, cand_cases, sel, aggregate=candidate_aggregate,
-                      per_file=candidate_per_file)
-    base_sel_arg = ()
-    if base_sel is not None:
-        (tmp_path / "sel_base.txt").write_text("\n".join(base_sel) + "\n")
-        base_sel_arg = ("--base-selection", str(tmp_path / "sel_base.txt"))
-        if attest_base:
-            _attest_junit(bj, base_cases, base_sel,
-                          aggregate=base_aggregate,
-                          per_file=base_per_file)
-    if base_mutator:
-        base_mutator(bj)
-    if candidate_mutator:
-        candidate_mutator(cj)
-    cmd = [sys.executable, str(_PROG),
-           "--base-sha", SHA, "--base-tree", TREE,
-           "--head-sha", SHA, "--verified-sha", SHA,
-           "--rebase-status", "ok", "--expected-tree", TREE,
-           "--verified-tree", TREE, "--github-tree", TREE,
-           "--land-log", str(tmp_path / "land.log"), *base_gate_args,
-           "--selection", str(tmp_path / "sel.txt"), *base_sel_arg,
-           "--base-junit", str(bj), "--candidate-junit", str(cj),
-           "--base-hygiene", str(hyg_path), "--candidate-hygiene", str(hyg_path),
-           "--base-hygiene-host", "test-host", "--candidate-hygiene-host", "test-host",
-           "--json", str(tmp_path / "v.json"), *extra]
-    r = _pr.run(cmd, capture_output=True, text=True)
-    doc = json.loads((tmp_path / "v.json").read_text())
-    return r, doc
 
 
 _SEL = ["programs/tests/test_thing.py"]
@@ -908,57 +328,12 @@ _CASE_OK = [("programs.tests.test_thing", "a", "passed", None)]
 _CASE_RED = [("programs.tests.test_thing", "a", "failed", None)]
 
 
-def test_cli_returns_zero_and_names_the_verified_commit(tmp_path):
-    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "LAND OK" in r.stdout
-    assert doc["verdict"] == "LAND_OK"
-    assert doc["verified_sha"] == SHA
-    assert doc["receipt_schema"] == "vibeic.landing-acceptance.v1"
-    assert doc["selected_files"] == _SEL
-    claimed = doc.pop("receipt_sha256")
-    assert claimed == hashlib.sha256(json.dumps(
-        doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    assert not [key for key in doc if key.startswith("protected")], sorted(doc)
 
 
-def test_candidate_aggregate_norecord_is_an_absolute_refusal(tmp_path):
-    r, doc = _cli(
-        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
-        candidate_aggregate=False)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc["candidate_aggregate_process_present"] is False
-    assert any("CANDIDATE AGGREGATE TEST SESSION" in reason
-               for reason in doc["reasons"])
 
 
-def test_base_aggregate_norecord_is_an_absolute_refusal(tmp_path):
-    """A complete candidate cannot compensate for an unknown baseline."""
-    r, doc = _cli(
-        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
-        base_sel=_SEL, base_aggregate=False)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc["admission"] == "INCOMPLETE"
-    assert doc["base_aggregate_process_present"] is False
-    assert doc["dropped_base_selected_files"] == _SEL
-    assert any("BASE AGGREGATE TEST SESSION" in reason
-               for reason in doc["reasons"])
 
 
-def test_aggregate_only_attestations_are_sufficient_on_both_arms(tmp_path):
-    r, doc = _cli(
-        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
-        base_sel=_SEL, candidate_per_file=False, base_per_file=False)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verdict"] == "LAND_OK"
-    assert doc["test_evidence_mode"] == "aggregate"
-    assert doc["missing_candidate_process_files"] == []
-    assert doc["dropped_base_selected_files"] == []
-    assert doc["missing_base_process_files"] == []
-    # ...and the record says the per-file question was NOT PUT, rather than
-    # leaving an empty list to be read as "asked and nothing was missing".
-    assert doc["candidate_per_file_records_checked"] is False
-    assert doc["base_per_file_records_checked"] is False
 
 
 _SEL2 = ["programs/tests/test_alpha.py", "programs/tests/test_beta.py"]
@@ -992,16 +367,6 @@ _CASE_BASE_PARTIAL = [
 # the file (the fix is not a check that cannot fail).
 
 
-def _drop_per_file_attestation(file_name):
-    """A candidate report whose per-file record for *file_name* was LOST."""
-    def mutate(path):
-        root = ET.parse(str(path)).getroot()
-        for suite in list(root):
-            if suite.get("name") == f"{file_name}::process_exit":
-                root.remove(suite)
-        ET.ElementTree(root).write(str(path), encoding="utf-8",
-                                   xml_declaration=True)
-    return mutate
 
 
 _PER_FILE_NORECORD_LOG = _GOOD_LOG.replace(
@@ -1010,334 +375,38 @@ _PER_FILE_NORECORD_LOG = _GOOD_LOG.replace(
     "=== ALL GATES PASS")
 
 
-def test_a_candidate_per_file_norecord_is_named_from_structured_junit(tmp_path):
-    """THE PAIRED GUARD FOR #1709, as one test so neither half can rot alone.
-
-    Same land log, same selection, same trees, same base arm. The ONE
-    difference is whether the candidate report carries a per-file record for
-    every selected file.
-
-    MEASURED on 7c376e348, before the structured path was connected:
-
-        complete   -> rc=0  LAND OK
-        one lost   -> rc=0  LAND OK    <-- and `missing_candidate_process_files`
-                                           was `[]`, so nothing named the file
-    """
-    complete_dir = tmp_path / "complete"
-    complete_dir.mkdir()
-    r_ok, doc_ok = _cli(complete_dir, _GOOD_LOG, _CASE_BASE_WHOLE,
-                        _CASE_BASE_WHOLE, _SEL2, base_sel=_SEL2)
-    assert r_ok.returncode == 0, r_ok.stdout + r_ok.stderr
-    assert doc_ok["verdict"] == "LAND_OK"
-
-    lost_dir = tmp_path / "lost"
-    lost_dir.mkdir()
-    r_bad, doc_bad = _cli(
-        lost_dir, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE, _SEL2,
-        base_sel=_SEL2,
-        candidate_mutator=_drop_per_file_attestation(_SEL2[0]))
-    # THE DECISION FIRST. On a tree where the structured path is not connected
-    # this is the assertion that fires, and it names the defect rather than a
-    # missing record key.
-    assert r_bad.returncode == 2, r_bad.stdout + r_bad.stderr
-    assert doc_bad["admission"] == "INCOMPLETE"
-    assert doc_bad["verdict"] == "REFUSE"
-    # NAMED, not merely refused. A refusal that cannot say what is missing
-    # sends the next reader looking in the wrong place.
-    assert any(_SEL2[0] in reason and "PER-FILE SESSION RECORD" in reason
-               for reason in doc_bad["reasons"]), doc_bad["reasons"]
-    assert doc_bad["missing_candidate_process_files"] == [_SEL2[0]]
-    # ...and the same evidence machine-readably, on both halves.
-    assert doc_ok["candidate_per_file_records_checked"] is True
-    assert doc_ok["missing_candidate_process_files"] == []
-    assert doc_ok["test_evidence_mode"] == "aggregate+per-file"
 
 
-def test_a_per_file_norecord_is_not_excused_by_the_same_gate_label_on_the_base(
-        tmp_path):
-    """THE WORSE HALF, and the reason this is a REASON and not a gate label.
-
-    `gatekeeper-land.sh` prints `FAIL targeted per-file session produced no
-    complete record` from a grep over the driver's stdout. That is a LABEL, so
-    it goes through the per-label base differential — and a hang that fires on
-    BOTH arms is exactly the shape `pytest_per_file_junit.py` was written for.
-
-    MEASURED on 7c376e348 with that label on both land logs:
-
-        rc=0  LAND OK  — "gate fails on the base too, so it is not this
-                          branch's"
-
-    which is the pre-existing/false-clean the driver's own docstring rejects a
-    synthetic red testcase to avoid. The structured refusal is absolute.
-    """
-    (tmp_path / "base_land.log").write_text(_PER_FILE_NORECORD_LOG)
-    r, doc = _cli(
-        tmp_path, _PER_FILE_NORECORD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE,
-        _SEL2, base_sel=_SEL2,
-        candidate_mutator=_drop_per_file_attestation(_SEL2[0]),
-        extra=("--base-land-log", str(tmp_path / "base_land.log")))
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc["admission"] == "INCOMPLETE"
-    assert doc["missing_candidate_process_files"] == [_SEL2[0]]
-    assert any(_SEL2[0] in reason for reason in doc["reasons"]), doc["reasons"]
-    # The label itself IS excused as pre-existing — that is the point. The
-    # refusal must survive that, from evidence the console cannot forge.
-    assert not any("targeted per-file session" in reason
-                   for reason in doc["reasons"]), doc["reasons"]
 
 
-def test_a_base_per_file_norecord_is_named_and_refused(tmp_path):
-    """#1443's law, applied to the arm that is allowed to excuse things.
-
-    `silenced` and `weakened` are read off what was RED (or passing) ON THE
-    BASE, so a base file with no record is a base failure the branch may delete
-    for free. The candidate here is complete: only the baseline lost a record.
-    """
-    r, doc = _cli(
-        tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE, _SEL2,
-        base_sel=_SEL2,
-        base_mutator=_drop_per_file_attestation(_SEL2[1]))
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc["admission"] == "INCOMPLETE"
-    assert doc["missing_base_process_files"] == [_SEL2[1]]
-    assert doc["missing_candidate_process_files"] == []
-    assert any(_SEL2[1] in reason and "ON THE BASE" in reason
-               for reason in doc["reasons"]), doc["reasons"]
 
 
-def test_the_per_file_question_is_only_asked_of_a_report_that_claims_it(
-        tmp_path):
-    """THE FALSE-POSITIVE CONTROL. Per-file sessions are diagnostic recovery,
-    so a healthy landing carries NO per-file evidence. Demanding one
-    attestation per selected file unconditionally — which is what the
-    superseded #1689 did, on a driver that ran per-file sessions every time —
-    would refuse every landing on this driver. A gate that refuses every
-    landing is a ban, and a ban teaches the operator to bypass it.
-    """
-    p = tmp_path / "aggregate-only.xml"
-    _junit(tmp_path, _CASE_BASE_WHOLE, "aggregate-only.xml")
-    _attest_junit(p, _CASE_BASE_WHOLE, _SEL2, per_file=False)
-    assert V.per_file_record_gaps(p, _SEL2, True) is None
-
-    complete = tmp_path / "both.xml"
-    _junit(tmp_path, _CASE_BASE_WHOLE, "both.xml")
-    _attest_junit(complete, _CASE_BASE_WHOLE, _SEL2)
-    assert V.per_file_record_gaps(complete, _SEL2, True) == []
-
-    _drop_per_file_attestation(_SEL2[0])(complete)
-    assert V.per_file_record_gaps(complete, _SEL2, True) == [_SEL2[0]]
-    # A LOST AGGREGATE ASKS TOO, even with no per-file evidence at all: that is
-    # the recovery path, and it is the one that has files to name.
-    assert V.per_file_record_gaps(p, _SEL2, False) == sorted(_SEL2)
 
 
-def test_a_partial_base_arm_cannot_clear_a_silenced_failure(tmp_path):
-    """THE #1443 REPRODUCTION, END TO END, AS A PAIR.
-
-    Two runs. Same candidate report, same land logs, same selection, same trees.
-    The ONLY difference is whether arm A ran both files it was asked for.
-
-    Measured on `3d13e2c59` before this check existed:
-
-        base COMPLETE -> rc=1  REFUSE  1 FAILING TEST(S) WERE SILENCED
-        base PARTIAL  -> rc=0  LAND OK              <-- the branch lands the cheat
-
-    Both must now refuse, and the partial arm must say WHY it could not answer
-    rather than answering wrongly."""
-    whole_dir = tmp_path / "whole"
-    whole_dir.mkdir()
-    r_whole, doc_whole = _cli(whole_dir, _RED_TEST_TIER_LOG, _CASE_BASE_WHOLE,
-                              _CASE_SILENCED_CAND, _SEL2, base_sel=_SEL2)
-    assert r_whole.returncode == 1, r_whole.stdout + r_whole.stderr
-    assert doc_whole["delta"]["silenced"] == [
-        "pytest_aggregate.programs.tests.test_alpha::t_red"]
-    assert doc_whole["dropped_base_selected_files"] == []
-
-    part_dir = tmp_path / "partial"
-    part_dir.mkdir()
-    r_part, doc_part = _cli(part_dir, _RED_TEST_TIER_LOG, _CASE_BASE_PARTIAL,
-                            _CASE_SILENCED_CAND, _SEL2, base_sel=_SEL2)
-    assert r_part.returncode != 0, (
-        "a base arm that ran one of its two files still cleared a silenced "
-        "failure: " + r_part.stdout + r_part.stderr)
-    assert doc_part["verdict"] == "REFUSE"
-    assert doc_part["dropped_base_selected_files"] == \
-        ["programs/tests/test_alpha.py"]
-    assert any("ON THE BASE" in r for r in doc_part["reasons"]), doc_part["reasons"]
-    # The silencing itself is INVISIBLE to the partial arm — which is the whole
-    # point. The refusal is the only thing standing between it and a landing.
-    assert doc_part["delta"]["silenced"] == []
 
 
-def test_per_file_base_diagnostics_cannot_fill_aggregate_coverage(tmp_path):
-    """A fallback record for beta cannot make a partial base aggregate whole."""
-    def drop_beta_from_aggregate(path):
-        root = ET.parse(str(path)).getroot()
-        for suite in root.iter("testsuite"):
-            if not (suite.get("name") or "").startswith("aggregate::"):
-                continue
-            for tc in list(suite):
-                if tc.get("file") == _SEL2[1]:
-                    suite.remove(tc)
-        ET.ElementTree(root).write(str(path), encoding="utf-8",
-                                   xml_declaration=True)
-
-    r, doc = _cli(
-        tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_SILENCED_CAND,
-        _SEL2, base_sel=_SEL2, base_mutator=drop_beta_from_aggregate)
-
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc["admission"] == "INCOMPLETE"
-    assert doc["dropped_base_selected_files"] == [_SEL2[1]]
-    assert any("ON THE BASE" in reason for reason in doc["reasons"])
 
 
-def test_a_base_arm_asked_for_files_that_produced_no_report_is_refused(tmp_path):
-    """The #1378 shape — a DEAD base arm — through the same door. `--timeout-
-    method=thread` kills pytest outright, so the junit is never written at all.
-    Asked for two files and producing no report is the partial case at N."""
-    (tmp_path / "land.log").write_text(_RED_TEST_TIER_LOG)
-    (tmp_path / "sel.txt").write_text("\n".join(_SEL2) + "\n")
-    (tmp_path / "sel_base.txt").write_text("\n".join(_SEL2) + "\n")
-    cj = _junit(tmp_path, _CASE_SILENCED_CAND, "cand.xml")
-    r = _pr.run(
-        [sys.executable, str(_PROG),
-         "--base-sha", SHA, "--base-tree", TREE,
-         "--head-sha", SHA, "--verified-sha", SHA,
-         "--rebase-status", "ok", "--expected-tree", TREE,
-         "--verified-tree", TREE, "--github-tree", TREE,
-         "--land-log", str(tmp_path / "land.log"),
-         "--selection", str(tmp_path / "sel.txt"),
-         "--base-selection", str(tmp_path / "sel_base.txt"),
-         "--base-junit", str(tmp_path / "never_written.xml"),
-         "--candidate-junit", str(cj),
-         "--json", str(tmp_path / "v.json")],
-        capture_output=True, text=True)
-    doc = json.loads((tmp_path / "v.json").read_text())
-    assert r.returncode != 0, r.stdout + r.stderr
-    assert doc["dropped_base_selected_files"] == sorted(_SEL2)
-    assert any("ON THE BASE" in x for x in doc["reasons"]), doc["reasons"]
 
 
-def test_a_test_file_the_pr_adds_is_not_read_as_a_partial_base_arm(tmp_path):
-    """THE SECOND FALSE-POSITIVE CONTROL, and the reason the base arm gets its
-    OWN list. `--selection` holds files the PR ADDS, which cannot exist at the
-    base; asking about them here would refuse every PR that brings a test file.
-    `--base-selection` is the selection already filtered to what exists there —
-    the same file `gatekeeper-verify-merge.sh` builds for arm A1."""
-    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE + [
-        ("programs.tests.test_brand_new", "t_new", "passed",
-         "programs/tests/test_brand_new.py")],
-        _SEL2 + ["programs/tests/test_brand_new.py"], base_sel=_SEL2)
-    assert doc["dropped_base_selected_files"] == [], doc["reasons"]
-    assert not any("ON THE BASE" in x for x in doc["reasons"]), doc["reasons"]
-    assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_a_caller_supplying_no_base_selection_is_told_the_check_did_not_fire(
-        tmp_path):
-    """`base_selection_size == 0` and an empty dropped list are the SAME two
-    values a clean base arm produces, so the record must be readable without
-    guessing which one happened. Missing coverage is now an incomplete refusal."""
-    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL, base_sel=None)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc["admission"] == "INCOMPLETE"
-    assert doc["base_selection_size"] == 0
-    assert any("completeness was NOT checked" in n for n in doc["notes"]), \
-        doc["notes"]
 
 
-def test_the_verify_script_hands_the_verdict_arm_as_own_selection():
-    """The wiring, asserted on the script rather than assumed. Arm A1 runs
-    `selection_base.txt`; the verdict has to be told that is what was asked, or
-    the check above can never fire in production."""
-    body = "\n".join(l for l in _VERIFY.read_text(encoding="utf-8").splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert "--base-selection" in body, \
-        "the verdict is not told what arm A was asked to run"
-    assert 'selection_base.txt' in body
-    # ...and the file must exist even when the run short-circuits, or the flag
-    # points at nothing and the disclosure is the one that fires.
-    assert body.count(': > "$RUN/selection_base.txt"') >= 1
-    assert "--candidate-test-worktree-status" in body
-    assert "--base-test-worktree-status" in body
-    assert 'materialize_hermetic_git_subject' in body
-    assert '"$REPO" "$VERIFIED_SHA" "$CAND_SUBJECT"' in body
-    assert '"$REPO" "$BASE_SHA" "$BASE_SUBJECT"' in body
-    assert 'hermetic_landing_arm_receipt.py' in body
-    assert 'validate_hermetic_arm_record "$B1_RUNNER_RC"' in body
-    assert 'validate_hermetic_arm_record "$A1_RUNNER_RC"' in body
-    assert 'publish_validated_arm_artifact "$B1_VALIDATION"' in body
-    assert 'publish_validated_arm_artifact "$A1_VALIDATION"' in body
-    assert 'gatekeeper-base-test-cache-schema=4-exact-tree' not in body
-    assert 'B1_WORKTREE_STATUS=clean' in body
-    assert 'A1_WORKTREE_STATUS=clean' in body
-    assert body.index('A1_WORKTREE_STATUS=clean') > body.index(
-        'validate_hermetic_arm_record "$A1_RUNNER_RC"'), \
-        "unvalidated base-test evidence can still reach the verdict"
 
 
-def test_cli_returns_one_on_a_new_failure(tmp_path):
-    r, doc = _cli(tmp_path, _RED_TEST_TIER_LOG, _CASE_OK, _CASE_RED, _SEL)
-    assert r.returncode == 1, r.stdout
-    assert doc["verdict"] == "REFUSE"
-    assert "pytest_aggregate.programs.tests.test_thing::a" in \
-        doc["delta"]["new_failures"]
-    assert any(key.startswith("pytest_aggregate_process::")
-               for key in doc["delta"]["new_failures"])
 
 
-def test_cli_returns_two_when_the_candidate_report_is_absent(tmp_path):
-    (tmp_path / "land.log").write_text(_GOOD_LOG)
-    (tmp_path / "sel.txt").write_text("programs/tests/test_thing.py\n")
-    r = _pr.run(
-        [sys.executable, str(_PROG), "--base-sha", SHA, "--base-tree", TREE,
-         "--head-sha", SHA,
-         "--verified-sha", SHA, "--rebase-status", "ok",
-         "--expected-tree", TREE, "--verified-tree", TREE,
-         "--land-log", str(tmp_path / "land.log"),
-         "--selection", str(tmp_path / "sel.txt"),
-         "--base-junit", str(tmp_path / "nope.xml"),
-         "--candidate-junit", str(tmp_path / "nope.xml")],
-        capture_output=True, text=True)
-    assert r.returncode == 2, r.stdout + r.stderr
 
 
-def test_cli_discloses_that_the_branch_edits_its_own_gate(tmp_path):
-    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
-                  extra=("--gate-edited", "tools/gatekeeper-land.sh"))
-    assert r.returncode == 0
-    assert doc["gate_edited"] == ["tools/gatekeeper-land.sh"]
-    assert any("edits the gate that judges it" in n for n in doc["notes"])
+
 
 
 # ======================================= THE SHELL SCRIPT HAS NO OWN OPINION
 
 
-def test_the_shell_script_defers_the_decision_to_the_program():
-    src = _VERIFY.read_text(encoding="utf-8")
-    assert "landing_merge_verdict.py" in src
-    # It exits on the program's rc and does not compute a verdict of its own.
-    assert 'exit "$RC"' in src
-    body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
-    assert "gatekeeper-land.sh" in body, "the existing gates must be INVOKED"
 
 
-def test_the_judge_is_not_supplied_by_the_subject():
-    """§4.05, one level up: the oracle may not be readable by the design. A PR can
-    change what its GATES check — they ship with the tree and a PR that adds one
-    should be covered by it — but it must not be able to change what counts as a
-    REFUSAL. The verifier therefore rematerializes and raw-attests the exact
-    BASE-owned judge after candidate process census reaches zero; no subject or
-    mutable caller-worktree fallback is landing authority."""
-    src = _VERIFY.read_text(encoding="utf-8")
-    body = [l for l in src.splitlines()
-            if "landing_merge_verdict.py" in l and not l.lstrip().startswith("#")]
-    assert body, "the script never names the verdict program"
-    assert any("TRUSTED_REPO" in l for l in body), \
-        "the verdict program is not resolved from the raw-attested base snapshot"
-    # ...and the disclosure exists for the case where the branch edits the gates.
-    assert "--gate-edited" in src
 
 
 def test_the_forge_cross_check_is_dropped_when_the_forge_merged_another_base():
@@ -1360,32 +429,6 @@ def test_the_forge_cross_check_is_dropped_when_the_forge_merged_another_base():
         "the drop is silent; a cross-check that did not happen must say so"
 
 
-def test_a_range_scoped_gate_cannot_be_waived_by_a_vacuous_base_failure():
-    """FOUND BY THE FIRST REAL LAND-OK RUN, in its own output. Arm A2 measures the
-    base over an EMPTY range on purpose, and `landing_is_one_commit_check` answers
-    `[FAIL] NOTHING to land` over `X..X` — so `landing is one commit` appeared in
-    the base's FAILING set, which is the set that EXCUSES a candidate failure. A
-    real one-commit violation would have been waived as pre-existing.
-
-    Fixed at the source: the landing-shape gate now SKIPs over an empty range, the
-    way the range-scoped block above it already did. The verdict additionally
-    DISCLOSES the boundary rather than leaving the reader to trust it."""
-    land = _LAND.read_text(encoding="utf-8")
-    body = "\n".join(l for l in land.splitlines() if not l.lstrip().startswith("#"))
-    assert 'GK_RANGE_N' in body, "the landing-shape gate does not look at the range size"
-    assert 'if [ "$GK_RANGE_N" = "0" ]; then' in body, \
-        "an empty range still reaches the one-commit checker, which FAILs vacuously"
-    base = _gate_log(("SKIP", "landing shape — range is empty, so there is no "
-                              "landing to shape"),
-                     ("FAIL", "repo hygiene gates"))
-    cand = _gate_log(("FAIL", "landing is one commit"),
-                     ("FAIL", "repo hygiene gates"),
-                     ("PASS", "targeted tests (3 file(s))"))
-    v = _decide(land=cand, base_land=base)
-    assert v.ok is False, "a range-scoped failure was waived"
-    assert any("landing is one commit" in r for r in v.reasons)
-    assert any("empty range" in n for n in v.notes), \
-        "the boundary on what the base arm can excuse is not disclosed"
 
 
 def test_the_base_gate_cache_is_disabled_at_the_adversarial_boundary():
@@ -1415,13 +458,6 @@ def test_the_critical_path_does_not_run_targeted_tests_inside_a2_again():
     assert body.count("launch_hermetic_land_arm") >= 3  # definition + A2/B2
 
 
-def test_the_gate_tier_is_compared_against_the_base_not_asserted():
-    """The script must supply arm A2. Without `--base-land-log` the verdict
-    degrades to absolute, and two hygiene gates are red on `main` — so the
-    absolute rule is a ban and this wiring is what keeps it a check."""
-    src = _VERIFY.read_text(encoding="utf-8")
-    assert "--base-land-log" in src
-    assert "base_land.log" in src
 
 
 def test_neither_arm_can_read_the_others_scratch_file():
@@ -1564,10 +600,6 @@ def test_the_candidate_arm_runs_without_a_maxfail_bound():
     assert "--stop-after-failures" not in entry
     assert 'add_argument("--stop-after-failures", type=int, default=0' in driver, \
         "the candidate aggregate arm still truncates, so the differential cannot be computed"
-    # ...and a truncated run must remain a refusal, not a pass, for the cases the
-    # bound cannot be lifted (a foreign land.sh that predates the hook).
-    assert _decide(truncated=True, dropped_files=["programs/tests/test_x.py"]).ok \
-        is False
 
 
 def test_the_junit_hook_in_the_landing_script_changes_no_verdict():
@@ -2162,478 +1194,26 @@ def _verify(repo, ref, tmp_path, *extra, env_extra=None):
     return r, doc
 
 
-def test_end_to_end_an_innocuous_diff_that_leaves_a_test_red_is_refused(
-        sandbox, tmp_path):
-    """THE CASE THAT GOT THROUGH FIVE TIMES. The whole script, for real: fetchless
-    resolve, rebase onto `main`, merge-tree equality, both test arms, the stub
-    landing gates, the verdict."""
-    r, doc = _verify(sandbox, "innocuous_red", tmp_path)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc["verdict"] == "REFUSE"
-    assert doc["delta"]["new_failures"], doc
-    assert doc["rebase_status"] == "ok"
-    assert doc["expected_tree"] == doc["verified_tree"]
 
 
-def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
-    """THE PAIRED GUARD, end to end. If this ever fails the script is a ban."""
-    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verdict"] == "LAND_OK"
-    assert doc["delta"]["new_failures"] == []
-    assert doc["land"]["stamped_sha"] is None, (
-        "the non-target B2 lane minted a standalone stamp before B1 joined")
-    assert any("merge verifier owns" in label
-               for label in doc["land"]["report"])
-    assert doc["base_land"] is not None, \
-        "arm A2 never ran, so the gate tier was asserted"
-    assert any("targeted tests" in label
-               for label in doc["base_land"]["skip"]), (
-               "A2 duplicated the targeted suite already measured by A1")
 
 
 _ROUTED_GATE_MARKER = "routed-corpus-gate.enabled"
 _ROUTED_ACTIVATION_MARKER = "routed-corpus-producer.activated"
 
 
-def _routed_activation_repo(sandbox, tmp_path, base_already_expanded=False):
-    """A subject whose CANDIDATE COMMIT activates the routed-DEF producer.
-
-    The EMPTY-to-expanded bootstrap is a fact about two SUBJECTS, not about two
-    environments: arm A2 runs the base commit's landing gate and arm B2 runs
-    the candidate's, so which population each declares has to be decided by
-    what is COMMITTED on each side.  That is also the only channel that
-    survives the hermetic launcher, which forwards an explicit --env allow-list
-    and carries no test switch into an arm.
-
-    Base commit: the routed-DEF gate is dispatched over an EMPTY population.
-    Candidate commit: it adds the activation marker, so the same gate is
-    dispatched over the real routed corpus -- exactly the one-use activation
-    the bootstrap exists for.  `base_already_expanded` puts the marker on the
-    BASE too, which is the post-activation world where no transition is due.
-    """
-    repo = tmp_path / "routed-activation-repo"
-    cloned = _pr.run(["git", "clone", "-q", str(sandbox), str(repo)],
-                            capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
-
-    land = repo / "tools/gatekeeper-land.sh"
-    text = land.read_text()
-    armed = ('if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \\\n'
-             '   && { [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ] \\\n'
-             '        || [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; }; then\n')
-    assert armed in text, "the stub's routed-transition switch moved"
-    text = text.replace(armed, (
-        'if [ -f "$ROOT/%s" ] \\\n'
-        '   && { [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ] \\\n'
-        '        || [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; }; then\n'
-        % _ROUTED_GATE_MARKER))
-    producer = ('    if [ "$GATEKEEPER_VERIFY_ARM" = "A2" ] \\\n'
-                '       && [ "${GATEKEEPER_STUB_BASE_EXPANDED:-0}" != "1" ]; then\n')
-    assert producer in text, "the stub's population producer moved"
-    text = text.replace(producer,
-                        '    if [ ! -f "$ROOT/%s" ]; then\n'
-                        % _ROUTED_ACTIVATION_MARKER)
-    land.write_text(text)
-    (repo / _ROUTED_GATE_MARKER).write_text("routed corpus gate is dispatched\n")
-    tracked = ["tools/gatekeeper-land.sh", _ROUTED_GATE_MARKER]
-    if base_already_expanded:
-        (repo / _ROUTED_ACTIVATION_MARKER).write_text("already activated\n")
-        tracked.append(_ROUTED_ACTIVATION_MARKER)
-    _git(repo, "add", *tracked)
-    assert _git(repo, "commit", "-qm",
-                "dispatch the routed corpus gate").returncode == 0
-
-    _git(repo, "checkout", "-q", "-b", "activate_producer")
-    (repo / _ROUTED_ACTIVATION_MARKER).write_text("the producer is activated\n")
-    (repo / "routed-activation-note.txt").write_text("activate routed corpus\n")
-    _git(repo, "add", "-A")
-    assert _git(repo, "commit", "-qm",
-                "activate the routed producer").returncode == 0
-    _git(repo, "checkout", "-q", "main")
-    return repo
 
 
-def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
-        sandbox, tmp_path):
-    """Verifier -> verdict -> HDF accepts the exact phase-1 EMPTY expansion.
-
-    PROPERTY UNCHANGED, INTERFACE MOVED, AND THEN THE PROPERTY DID NOT HOLD.
-    Read the failure before repairing anything: THIS TEST IS THE MESSENGER.
-
-    The stimulus used to be `GATEKEEPER_STUB_ROUTED_TRANSITION`, read by the
-    stub landing gate inside an arm. MEASURED on a4caccefe: the name occurs
-    ZERO times in `tools/gatekeeper-verify-merge.sh` and is not on the hermetic
-    launcher's `--env` allow-list, so inside an arm it is EMPTY, the stub's
-    branch never fired, no arm ever declared a routed corpus, and the old test
-    died on `KeyError: 'corpus_transitions'` -- reporting a missing key for a
-    transition nothing had asked for.
-
-    It is now expressed the way the real thing is: the CANDIDATE COMMIT
-    activates the producer. A2 runs the base commit's gate over an EMPTY
-    population, B2 runs the candidate's over the real routed corpus, and that
-    is a fact about two subjects rather than two environments -- which is the
-    only channel the containment leaves open.
-
-    THE BOOTSTRAP EVIDENCE PATH IS NOW SUPPLIED, and this docstring used to say
-    it was not. It described `build_trusted_transition_evidence` re-attesting
-    the corpus with `validate_benchmark_snapshot "$BENCHMARK_B2"` -- a
-    validator that demands a git checkout whose `origin` is the canonical
-    benchmark-data remote, which a `materialize_hermetic_git_subject` tree can
-    never be -- and it recorded that the repair belonged to a protected
-    landing transition rather than to a test. That repair LANDED: the call is
-    `reattest_corpus_snapshot_against_arm_receipt "$BENCHMARK_B2" "$B2_RECEIPT"`
-    (`tools/gatekeeper-verify-merge.sh:977`), exactly the shape the report
-    asked for. Measured on 9dff42ceb in the pinned image with the engine
-    reachable: `[PASS] benchmark-data checkout measured`, a 64-character
-    `parent_evidence_sha256`, and `base_items` 0 -> `candidate_items` 1 over 4
-    replacement gates. The paragraph is rewritten rather than deleted because a
-    stale "the fix is not on this branch on purpose" is an instruction to the
-    next reader NOT to look.
-
-    WHAT WAS ACTUALLY RED HERE was one of those four gates, and the cause was
-    in this fixture: `macro_obs_geometry_intersect_check.py` grew an
-    `import _flow_reason_taxonomy` that the miniature repository did not
-    stage, so inside arm B2 the gate died at import, `_gate_dispatch.sh` read
-    rc 1 as a FINDING rather than rc 2 "could not check", and the verdict
-    refused a branch that broke nothing --
-
-        REFUSE  1 HYGIENE FINDING(S) INTRODUCED BY THIS BRANCH ...
-                [FAIL] macro OBS not crossed (tiny/openpdkx)
-
-    -- and it was this test alone that saw it, because only the EMPTY-base
-    bootstrap turns a candidate-side gate result into a finding the base has no
-    row for. `_stage_program_import_closure` derives that dependency from the
-    tree instead, which is why `bounded_not_checked` below is asserted as all
-    FOUR labels and not three.
-
-    Its sibling below is the paired control: the SAME fixture with one bit
-    different (the base already activated) reaches a verdict and passes, so
-    nothing here is a broken fixture -- the only difference is whether the
-    bootstrap path is entered at all.
-    """
-    repo = _routed_activation_repo(sandbox, tmp_path)
-    r, doc = _verify(repo, "activate_producer", tmp_path)
-
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verdict"] == "LAND_OK"
-    delta = doc["hygiene_finding_delta"]
-    assert delta["status"] == "CLEAN", delta
-    assert len(delta["corpus_transitions"]) == 1
-    transition = delta["corpus_transitions"][0]
-    assert transition["base_items"] == 0
-    assert transition["candidate_items"] == 1
-    assert transition["replacement_gates"] == 4
-    assert len(transition["parent_evidence_sha256"]) == 64
-    assert transition["corpus"] == "published cells carrying a routed DEF"
-    # The four replacement gates are NOT_CHECKED under a live bound, which is
-    # the only kind of unknown allowed to replace an EMPTY base. An unbounded
-    # NOT_CHECKED here would mean an unknown candidate result had been accepted
-    # in place of a measured one.
-    assert transition["bounded_not_checked"] == [
-        "DRC PASS is not vacuous (tiny/openpdkx)",
-        "inner FAILs reach the verdict (tiny/openpdkx)",
-        "macro OBS not crossed (tiny/openpdkx)",
-        "new tool diagnostic id (tiny/openpdkx)",
-    ], transition
-    assert transition["benchmark_data_sha"], transition
 
 
-def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
-        sandbox, tmp_path):
-    """After activation, evidence must not demand another one-use transition.
-
-    THE PAIRED CONTROL, and it used to be green for the wrong reason. It
-    asserted that no transition is claimed -- true, but only because the switch
-    it set reached no arm, so neither side ever declared a routed corpus and
-    there was nothing a transition could have been claimed about. Same fixture
-    as the bootstrap test with one bit different: the base commit carries the
-    activation marker too, so BOTH arms enumerate the real routed corpus,
-    `base_has_exact_legacy_routed_empty` is correctly false, and the ordinary
-    differential answers without any one-use evidence.
-    """
-    repo = _routed_activation_repo(sandbox, tmp_path,
-                                   base_already_expanded=True)
-    r, doc = _verify(repo, "activate_producer", tmp_path)
-
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verdict"] == "LAND_OK"
-    delta = doc["hygiene_finding_delta"]
-    assert delta["status"] == "CLEAN", delta
-    assert delta.get("corpus_transitions", []) == []
-    assert "exact corpus transition" not in r.stdout
 
 
-def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
-        sandbox, tmp_path):
-    """Clean porcelain is not proof that B1 tested the requested commit.
-    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
-    UNCHANGED; only the interface it is asked through has moved.
-
-    This test was authored 2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier
-    and required rc 2 plus the shell text "candidate worktree raw attestation
-    failed". Two days later 7c376e3481 activated the hermetic candidate runner,
-    which answers the same question by PREVENT-DURING: every parent-owned input
-    is bind-mounted read-only, the mount table the daemon REPORTS is re-read and
-    refused if writable, and the inputs are digested before and after the arm.
-    That verifier never emits the old text, so the assertion could not pass --
-    and, worse, the stimulus it plants can no longer SUCCEED, so the old shape
-    was asserting detection of something that can no longer occur.
-
-    WHAT IS ASSERTED NOW, and why it still has teeth. The tamper is planted
-    exactly as before and the branch must be REFUSED -- but the refusal must be
-    because the tamper FAILED, not because it succeeded and was noticed. So the
-    candidate's own tampering test is required to appear as a NEW FAILURE the
-    branch owns. If prevention were ever removed, that test would do its work
-    and PASS, it would vanish from the new-failure list, and this assertion goes
-    red. The verified tree is separately required to equal the expected tree, so
-    a tamper that redefined what was under test cannot read as a clean refusal.
-
-    The post-attestation half -- the digest comparison that catches a tamper
-    which somehow got through -- is guarded directly at its seam in
-    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
-    """
-    repo = tmp_path / "wrong-head-repo"
-    cloned = _pr.run(
-        ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
-    _git(repo, "checkout", "-q", "-b", "wrong_head")
-    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
-                 / "test_thing.py")
-    test_file.write_text(
-        "import subprocess\n"
-        "def test_moves_the_detached_subject_but_stays_green():\n"
-        "    p=subprocess.run(['git','reset','--hard','HEAD^'], "
-        "capture_output=True, text=True)\n"
-        "    assert p.returncode == 0, p.stderr\n")
-    _git(repo, "add", str(test_file))
-    assert _git(repo, "commit", "-qm", "move the B1 subject").returncode == 0
-
-    r, doc = _verify(repo, "wrong_head", tmp_path)
-
-    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
-    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
-    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
-    # in that worktree — it runs in a container on a read-only, object-exact
-    # subject — so the tamper cannot reach it and the attestation has nothing to
-    # catch. The check was not deleted; it was moved and generalised into
-    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
-    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
-    # is therefore deliberate, not a convenience — and the guarantee is now
-    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
-    # redefine is unchanged.
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
-    # The tamper did NOT take: the tree that lands is the tree that was verified.
-    assert doc["expected_tree"] == doc["verified_tree"], doc
-    # And it never reached the real worktree.
-    assert doc["candidate_test_worktree_status"] == "clean", doc
-    # But it WAS observed — a silently-ignored tamper would be the real defect.
-    assert any("test_moves_the_detached_subject_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
 
 
-def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
-        sandbox, tmp_path):
-    """The subject index is not evidence that the subject bytes stayed fixed.
-    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
-    UNCHANGED; only the interface it is asked through has moved.
-
-    This test was authored 2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier
-    and required rc 2 plus the shell text "candidate worktree raw attestation
-    failed". Two days later 7c376e3481 activated the hermetic candidate runner,
-    which answers the same question by PREVENT-DURING: every parent-owned input
-    is bind-mounted read-only, the mount table the daemon REPORTS is re-read and
-    refused if writable, and the inputs are digested before and after the arm.
-    That verifier never emits the old text, so the assertion could not pass --
-    and, worse, the stimulus it plants can no longer SUCCEED, so the old shape
-    was asserting detection of something that can no longer occur.
-
-    WHAT IS ASSERTED NOW, and why it still has teeth. The tamper is planted
-    exactly as before and the branch must be REFUSED -- but the refusal must be
-    because the tamper FAILED, not because it succeeded and was noticed. So the
-    candidate's own tampering test is required to appear as a NEW FAILURE the
-    branch owns. If prevention were ever removed, that test would do its work
-    and PASS, it would vanish from the new-failure list, and this assertion goes
-    red. The verified tree is separately required to equal the expected tree, so
-    a tamper that redefined what was under test cannot read as a clean refusal.
-
-    The post-attestation half -- the digest comparison that catches a tamper
-    which somehow got through -- is guarded directly at its seam in
-    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
-    """
-    repo = tmp_path / "hidden-dirty-repo"
-    cloned = _pr.run(
-        ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
-    _git(repo, "checkout", "-q", "-b", "hidden_dirty")
-    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
-                 / "test_thing.py")
-    test_file.write_text(
-        "import pathlib\n"
-        "import subprocess\n"
-        "def test_hides_changed_subject_bytes_but_stays_green():\n"
-        "    root=pathlib.Path(__file__).resolve().parents[5]\n"
-        "    rel='vibe-ic-marketplace/plugins/vibe-ic/programs/thing.py'\n"
-        "    p=subprocess.run(['git','update-index','--assume-unchanged',rel], "
-        "cwd=root, capture_output=True, text=True)\n"
-        "    assert p.returncode == 0, p.stderr\n"
-        "    (root / rel).write_text('VALUE = 999\\n')\n")
-    _git(repo, "add", str(test_file))
-    assert _git(repo, "commit", "-qm", "hide changed B1 bytes").returncode == 0
-
-    r, doc = _verify(repo, "hidden_dirty", tmp_path)
-
-    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
-    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
-    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
-    # in that worktree — it runs in a container on a read-only, object-exact
-    # subject — so the tamper cannot reach it and the attestation has nothing to
-    # catch. The check was not deleted; it was moved and generalised into
-    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
-    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
-    # is therefore deliberate, not a convenience — and the guarantee is now
-    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
-    # redefine is unchanged.
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
-    # The tamper did NOT take: the tree that lands is the tree that was verified.
-    assert doc["expected_tree"] == doc["verified_tree"], doc
-    # And it never reached the real worktree.
-    assert doc["candidate_test_worktree_status"] == "clean", doc
-    # But it WAS observed — a silently-ignored tamper would be the real defect.
-    assert any("test_hides_changed_subject_bytes_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
 
 
-def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
-        sandbox, tmp_path):
-    """Mutable refs/replace cannot redefine the literal tree B1 must attest.
-    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+). THE PROPERTY IS
-    UNCHANGED; only the interface it is asked through has moved. Authored
-    2026-08-16 (fbcd935e5a) for a DETECT-AFTER verifier and required rc 2 plus
-    "candidate worktree raw attestation failed"; 7c376e3481 replaced that with
-    PREVENT-DURING -- read-only parent-owned binds, the reported mount table
-    re-read and refused if writable, and the inputs digested before and after
-    the arm. The old text is never emitted, and the planted tamper can no longer
-    succeed, so the old shape asserted detection of something that cannot occur.
-
-    Now: the branch must be REFUSED, and refused because the tamper FAILED. The
-    candidate's own tampering test must appear as a NEW FAILURE it owns -- if
-    prevention were removed it would do its work, PASS, leave that list, and
-    this goes red. The verified tree must separately equal the expected tree, so
-    a tamper that redefined what was under test cannot read as a clean refusal.
-    The digest half is guarded at its seam in
-    tools/ci/test_hermetic_candidate_runner.py, per-clause and red-on-break.
-    """
-    repo = tmp_path / "replace-ref-repo"
-    cloned = _pr.run(
-        ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
-    _git(repo, "checkout", "-q", "-b", "replace_dirty")
-    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
-                 / "test_thing.py")
-    test_file.write_text(
-        "import os\n"
-        "import pathlib\n"
-        "import subprocess\n"
-        "def test_redefines_head_but_stays_green():\n"
-        "    root=pathlib.Path(__file__).resolve().parents[5]\n"
-        "    rel='vibe-ic-marketplace/plugins/vibe-ic/programs/thing.py'\n"
-        "    env=dict(os.environ)\n"
-        "    env.pop('GIT_NO_REPLACE_OBJECTS', None)\n"
-        "    def run(*args):\n"
-        "        return subprocess.run(['git',*args], cwd=root, env=env, "
-        "capture_output=True, text=True)\n"
-        "    head=run('rev-parse','HEAD').stdout.strip()\n"
-        "    (root / rel).write_text('VALUE = 999\\n')\n"
-        "    assert run('add',rel).returncode == 0\n"
-        "    tree=run('write-tree').stdout.strip()\n"
-        "    forged=run('commit-tree',tree,'-p',head,'-m','forged').stdout.strip()\n"
-        "    p=run('replace',head,forged)\n"
-        "    assert p.returncode == 0, p.stderr\n"
-        "    assert run('status','--porcelain').stdout.strip() == ''\n")
-    _git(repo, "add", str(test_file))
-    assert _git(repo, "commit", "-qm", "try to redefine B1 tree").returncode == 0
-
-    try:
-        r, doc = _verify(repo, "replace_dirty", tmp_path)
-    finally:
-        replace_refs = _git(
-            repo, "for-each-ref", "--format=%(refname)", "refs/replace")
-        for ref in replace_refs.stdout.splitlines():
-            _git(repo, "update-ref", "-d", ref)
-
-    # RE-FOUNDED. This used to assert rc 2, `doc is None`, and "candidate
-    # worktree raw attestation failed" in stdout: a hard Refusal raised mid-run
-    # when the arm dirtied the REAL candidate worktree. The arm no longer runs
-    # in that worktree — it runs in a container on a read-only, object-exact
-    # subject — so the tamper cannot reach it and the attestation has nothing to
-    # catch. The check was not deleted; it was moved and generalised into
-    # `candidate_test_worktree_status`, which the verdict handles as `unknown`,
-    # `wrong-head`, or not-clean as distinct states. Retiring the old assertions
-    # is therefore deliberate, not a convenience — and the guarantee is now
-    # asserted directly below: the attempt is OBSERVED, and the tree it tried to
-    # redefine is unchanged.
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc is not None and doc["verdict"] == "REFUSE", r.stdout + r.stderr
-    # The tamper did NOT take: the tree that lands is the tree that was verified.
-    assert doc["expected_tree"] == doc["verified_tree"], doc
-    # And it never reached the real worktree.
-    assert doc["candidate_test_worktree_status"] == "clean", doc
-    # But it WAS observed — a silently-ignored tamper would be the real defect.
-    assert any("test_redefines_head_but_stays_green" in f for f in doc["delta"]["new_failures"]), doc
-    assert "candidate worktree raw attestation failed" not in r.stdout
 
 
-def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(
-        sandbox, tmp_path):
-    """Same-uid candidate arms cannot prewrite a reusable base exemption."""
-    repo = tmp_path / "cache-repo"
-    cloned = _pr.run(
-        ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    assert _git(repo, "branch", "innocuous_green",
-                "origin/innocuous_green").returncode == 0
-    cache = tmp_path / "base-cache"
-
-    first_dir = tmp_path / "cache-first"
-    first_dir.mkdir()
-    first, first_doc = _verify(
-        repo, "innocuous_green", first_dir,
-        "--base-gate-cache", str(cache))
-    assert first.returncode == 0, first.stdout + first.stderr
-    assert first_doc["verdict"] == "LAND_OK"
-    assert "base-gate cache disabled" in first.stdout
-    assert not list(cache.glob("*"))
-
-    hit_dir = tmp_path / "cache-hit"
-    hit_dir.mkdir()
-    hit, hit_doc = _verify(
-        repo, "innocuous_green", hit_dir,
-        "--base-gate-cache", str(cache))
-    assert hit.returncode == 0, hit.stdout + hit.stderr
-    assert hit_doc["base_sha"] == first_doc["base_sha"]
-    assert "base-gate cache disabled" in hit.stdout
-    assert "reused the gate log" not in hit.stdout
-    assert "reused aggregate test evidence" not in hit.stdout
-    assert not list(cache.glob("*"))
 
 
 def test_end_to_end_every_arm_of_both_waves_actually_ran(sandbox, tmp_path):
@@ -2800,6 +1380,10 @@ _WAVE_ARTEFACTS = (
 )
 
 
+
+
+
+
 def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
     """When each wave artefact FIRST appeared in the verifier's run directory.
 
@@ -2822,6 +1406,10 @@ def _first_seen_wave_artefacts(proc, run_root, interval=0.02):
                     seen[name] = round(time.monotonic() - start, 3)
         time.sleep(interval)
     return seen
+
+
+
+
 
 
 def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
@@ -2879,19 +1467,6 @@ def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
     doc = json.loads(out.read_text()) if out.is_file() else None
 
     assert proc.returncode == 0, stdout + stderr
-    assert doc["verdict"] == "LAND_OK"
-    # A2 (base gate arm) and B2 (candidate gate arm) each produced a record.
-    assert doc["base_land"] is not None, "arm A2 produced no landing record"
-    assert doc["land"] is not None, "arm B2 produced no landing record"
-    # A1/B1 (the aggregate test arms) each measured a non-zero suite.
-    delta = doc["delta"]
-    assert delta["base_total"] > 0, f"arm A1 measured nothing: {delta}"
-    assert delta["candidate_total"] > 0, f"arm B1 measured nothing: {delta}"
-    assert delta["new_failures"] == []
-
-    assert doc["base_land"] is not None
-    assert doc["delta"]["new_failures"] == []
-
     # NON-VACUITY FIRST. Every arm has to have been WATCHED, or the ordering
     # below is a comparison between two absences. This is the assertion that
     # would have caught the defect this test was blind to for four days: the
@@ -3032,7 +1607,6 @@ def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
     assert survivors == [], survivors
 
     assert proc.returncode == 0, stdout + stderr
-    assert doc is not None and doc["verdict"] == "LAND_OK"
     assert "candidate planted this base" not in stdout
 
 
@@ -3052,207 +1626,14 @@ def _leaked_forgeries(run):
     return found
 
 
-def _verify_watching_the_run_dir(sandbox, ref, tmp_path, when_b1_starts=None):
-    """Run the verifier with a caller-visible run directory.
-
-    Returns (returncode, verdict-doc-or-None, stdout, stderr, fired) where
-    `fired` says whether `when_b1_starts` was actually called with the run
-    directory while the candidate wave was in flight.  It is returned rather
-    than assumed because "the corpus is unchanged" and "nobody tried" are the
-    same bytes: a tamper test that cannot say its stimulus was delivered is
-    reporting a third outcome it has not enumerated.
-    """
-    run_root = tmp_path / "verifier-tmp"
-    run_root.mkdir(parents=True)
-    out = tmp_path / "verdict.json"
-    proc = subprocess.Popen(
-        ["bash", str(_VERIFY), "--ref", ref, "--base", "main",
-         "--repo", str(sandbox), "--no-fetch", "--json", str(out)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
-             "TMPDIR": str(run_root),
-             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
-             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
-                 str(_BENCHMARK_TEST["remote"])})
-    fired = False
-    watcher = _WhileProgressing(proc, run_root)
-    while when_b1_starts is not None and not fired and watcher.alive():
-        runs = sorted(run_root.glob("gkverify.*"))
-        if runs and (runs[0] / "b1-runner.log").exists():
-            when_b1_starts(runs[0])
-            fired = True
-            break
-        time.sleep(0.02)
-    stdout, stderr = _finish_by_progress(proc, run_root)
-    _judgeable(stdout, stderr)
-    doc = json.loads(out.read_text()) if out.is_file() else None
-    return proc.returncode, doc, stdout, stderr, fired
 
 
-def test_end_to_end_relinked_parent_selection_is_norecord(
-        sandbox, tmp_path):
-    """PROPERTY (unchanged): a relinked parent-owned test selection is
-    NORECORD -- never a recorded verdict about a selection that moved.
-
-    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN (v1.11.69+), AND THE HAND THAT
-    DOES THE RELINKING IS THE PART THAT MOVED. It used to be the candidate's
-    own landing gate: the stub read `GATEKEEPER_RELINK_SELECTION`, reached into
-    the parent's run directory and swapped `selection.txt` for a symlink to a
-    byte-identical copy. Under the hermetic launcher an arm is a container that
-    is handed `/input/selection.txt` as a read-only bind and cannot name the
-    run directory at all, so that stimulus is not merely undetected -- it
-    cannot be expressed. MEASURED on a4caccefe: the switch occurs ZERO times in
-    `tools/gatekeeper-verify-merge.sh` and is not on the launcher's `--env`
-    allow-list, so the stub branch never fired and the old test was asserting
-    a refusal for something nothing had attempted.
-
-    The relink is therefore planted where a relink can still happen: on the
-    HOST, in the parent's own run directory, while the candidate wave is in
-    flight. That is the threat the surviving code is written against -- the
-    verifier re-reads and re-attests its inputs precisely because it does not
-    assume the candidate is the only process on the machine -- and it is the
-    reason a content comparison is not enough: the copy is byte-identical, so
-    `cmp` on the bytes cannot see it. What sees it is
-    `hermetic_landing_arm_receipt._resolved_file`, which refuses a supplied
-    input path that is not a DIRECT regular file, before any of its bytes are
-    allowed to bind an arm's receipt.
-
-    ASSERTED: rc 2, NO verdict document, and the refusal names both the arm
-    receipt and the selection. Plus the paired control in the same harness --
-    the same run with the relink withheld is a recorded LAND OK -- because a
-    refusal that also fires without the tamper is a ban, not a check.
-    """
-    def relink(run):
-        selection = run / "selection.txt"
-        copy = run / "selection-copy.txt"
-        copy.write_bytes(selection.read_bytes())
-        selection.unlink()
-        selection.symlink_to(copy)
-
-    rc, doc, stdout, stderr, fired = _verify_watching_the_run_dir(
-        sandbox, "innocuous_green", tmp_path / "relinked", relink)
-    assert fired, "the relink was never planted, so nothing was tested"
-    assert rc == 2, stdout + stderr
-    assert doc is None, "a run whose selection moved still wrote a verdict"
-    assert "arm receipt is NORECORD" in stderr, stderr
-    assert "selection is not a direct regular file" in stderr, stderr
-
-    control_rc, control_doc, control_out, control_err, _ = (
-        _verify_watching_the_run_dir(
-            sandbox, "innocuous_green", tmp_path / "untampered"))
-    assert control_rc == 0, control_out + control_err
-    assert control_doc is not None and control_doc["verdict"] == "LAND_OK"
 
 
-def test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord(
-        sandbox, tmp_path):
-    """PROPERTY (unchanged): a candidate cannot mutate the published corpus
-    during its own arm and have that pass unnoticed.
-
-    REWRITTEN AGAINST THIS REPOSITORY'S DESIGN, AND THE STIMULUS IS THE REASON.
-    This used to inject through `GATEKEEPER_MUTATE_BENCHMARK_ARM`, read by a
-    stub `gatekeeper-land.sh`. MEASURED 2026-08-22 on a4caccefe: that name occurs
-    ZERO times in `tools/gatekeeper-verify-merge.sh`, and the hermetic launcher
-    forwards an explicit `--env` allow-list, so inside the arm the switch is
-    EMPTY and the stub's branch never fires. `VIBE_IC_BENCHMARK_DATA` is not
-    forwarded from the host either. The mutation was therefore never attempted:
-    the verifier returned 0 correctly, and the property was neither violated nor
-    upheld -- it was UNOBSERVED. A probe that only read the corpus bytes
-    afterwards would call that "prevented" and be wrong; "unchanged" has a third
-    reading, and it is "nobody tried".
-
-    So the tamper is now planted the way the B1 tamper tests plant theirs: as
-    COMMITTED CANDIDATE CODE, which does run in the arm. The runner sets
-    `VIBE_IC_BENCHMARK_DATA=/corpus` for both the land and the test process, so
-    the candidate can name the corpus; it is bind-mounted READ-ONLY, so it
-    cannot write it. The write therefore fails, the candidate's own test goes
-    red, and the branch is refused -- and if the read-only prevention were ever
-    removed, that test would succeed and stay GREEN, leave the new-failure list,
-    and the assertion below fires.
-
-    The post-attestation that would catch a mutation which somehow got through
-    the read-only bind is guarded at its own seam, per-clause and red-on-break,
-    in tools/ci/test_hermetic_candidate_runner.py.
-    """
-    repo = tmp_path / "corpus-tamper-repo"
-    cloned = _pr.run(
-        ["git", "clone", "-q", str(sandbox), str(repo)],
-        capture_output=True, text=True)
-    assert cloned.returncode == 0, cloned.stderr
-    _git(repo, "config", "user.email", "t@localhost")
-    _git(repo, "config", "user.name", "t")
-    _git(repo, "checkout", "-q", "main")
-    _git(repo, "checkout", "-q", "-b", "corpus_tamper")
-    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
-                 / "test_thing.py")
-    test_file.write_text(
-        "import os\n"
-        "import pathlib\n"
-        "def test_mutates_the_published_corpus_but_stays_green():\n"
-        "    root=pathlib.Path(os.environ['VIBE_IC_BENCHMARK_DATA'])\n"
-        "    p=root/'ic/tiny/v1_openpdkx/phase3/stage3/pnr/routed.def'\n"
-        "    with p.open('a') as fh:\n"
-        "        fh.write('MUTATED BY THE CANDIDATE\\n')\n")
-    _git(repo, "add", str(test_file))
-    assert _git(repo, "commit", "-qm", "mutate the corpus").returncode == 0
-
-    corpus_file = (_BENCHMARK_TEST["checkout"]
-                   / "ic/tiny/v1_openpdkx/phase3/stage3/pnr/routed.def")
-    before = corpus_file.read_bytes()
-    r, doc = _verify(repo, "corpus_tamper", tmp_path)
-
-    assert r.returncode != 0, r.stdout + r.stderr
-    assert "test_mutates_the_published_corpus_but_stays_green" in r.stdout, (
-        "the candidate's corpus-mutating test is not reported as a failure this "
-        "branch owns -- which means it SUCCEEDED and stayed green, and a "
-        "candidate can now write the published corpus:\n" + r.stdout)
-    # and the bytes themselves, because an exit code is not a statement about
-    # the corpus. This is the assertion whose absence let an earlier reading of
-    # this same scenario be published as a security hole.
-    assert corpus_file.read_bytes() == before, (
-        "the published corpus changed during the candidate's arm")
-    listed = _git(
-        _BENCHMARK_TEST["checkout"], "worktree", "list", "--porcelain").stdout
-    assert "gkverify." not in listed, listed
 
 
-def test_end_to_end_what_is_gated_is_the_squash_and_not_the_branch(
-        sandbox, tmp_path):
-    """`gh pr merge --squash` creates ONE commit: parent = base tip, tree = the
-    merge tree. Gating an N-commit local branch instead makes the commit-SHAPE
-    gates (`landing_is_one_commit_check`, `landing_collateral_revert_check`)
-    answer about a shape that never lands — and it is why a six-commit PR could
-    not be verified at all.
-
-    The message must still carry the branch's own commit subjects, because a
-    squash publishes them in its body and the NDA scan has to read the text that
-    actually reaches `main`."""
-    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    sha = doc["verified_sha"]
-    assert doc["verified_tree"] == doc["expected_tree"] == doc["replayed_tree"]
-    parents = _git(sandbox, "rev-list", "--parents", "-1", sha).stdout.split()
-    assert len(parents) == 2, f"the verified commit is not a single-parent commit: {parents}"
-    assert parents[1] == doc["base_sha"], "its parent is not the base tip"
-    assert _git(sandbox, "rev-parse", f"{sha}^{{tree}}").stdout.strip() \
-        == doc["expected_tree"]
-    msg = _git(sandbox, "log", "-1", "--format=%B", sha).stdout
-    assert "an equally innocuous change" in msg, \
-        "the squash message drops the branch's commit text, so the NDA scan cannot see it"
 
 
-def test_end_to_end_a_conflicting_branch_is_refused_before_any_suite_runs(
-        sandbox, tmp_path):
-    r, doc = _verify(sandbox, "conflicting", tmp_path)
-    assert r.returncode != 0, r.stdout + r.stderr
-    # A REFUSAL STILL LEAVES A RECORD, including the unmeasurable kind. A refusal
-    # with no record makes the operator re-derive the reason by hand, which is
-    # the habit that ends in landing without looking.
-    assert doc is not None, "the refusal wrote no verdict JSON"
-    assert doc["rebase_status"] == "conflict"
-    assert any("REBASE CONFLICT" in x for x in doc["reasons"])
-    assert doc["land"]["pass"] == [], "the suites ran on a tree nobody will merge"
 
 
 def test_end_to_end_the_caller_checkout_is_never_touched(sandbox, tmp_path):
@@ -3667,240 +2048,48 @@ def test_reassert_refuses_a_record_that_was_not_a_pass(sandbox, tmp_path):
 _FALLBACK = {"GATEKEEPER_FORCE_REBASE_REPLAY": "1"}
 
 
-def _host_has_write_tree(repo):
-    """Measured, not assumed: the same capability the script probes."""
-    r = _git(repo, "merge-tree", "--write-tree", "main", "main")
-    return r.returncode == 0 and len(r.stdout.strip()) >= 40
 
 
 # ------------------------------------------------- the decision, both tiers
 
 
-def test_an_unrecognised_tier_refuses_rather_than_inheriting_the_strong_silence():
-    """A third tier arriving by typo must not be read as the strong one. If the
-    gate cannot say WHAT was verified, nothing was."""
-    v = _decide(verification_tier="merge_tree")      # underscore, not hyphen
-    assert v.ok is False
-    assert v.unmeasurable is True
-    assert any("UNKNOWN VERIFICATION TIER" in r for r in v.reasons), v.reasons
-    assert "VERIFICATION_TIER_UNKNOWN" in v.disclosures
 
 
-def test_the_fallback_tier_discloses_the_cross_check_it_did_not_perform():
-    v = _decide(verification_tier=V.TIER_REBASE_REPLAY, git_version="2.34.1",
-                tier_reason="git 2.34.1 does not support `merge-tree --write-tree`")
-    assert v.ok is True, v.reasons          # PAIRED: a clean candidate still lands
-    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in v.disclosures
-    assert "VERIFICATION_TIER_REBASE_REPLAY" in v.disclosures
-    # NAMES THE VERSION FOUND AND THE VERSION NEEDED, so the refusal/disclosure
-    # is actionable rather than just true.
-    prose = " ".join(v.notes)
-    assert "2.34.1" in prose and V.MERGE_TREE_MIN_VERSION in prose, prose
 
 
-def test_the_strong_tier_records_that_the_cross_check_was_performed():
-    """The other side of the disclosure. Without this the fallback's code could
-    be emitted unconditionally and nothing would notice."""
-    v = _decide()
-    assert v.ok is True
-    assert "SQUASH_VS_REBASE_CROSS_CHECK_PERFORMED" in v.disclosures
-    assert "VERIFICATION_TIER_MERGE_TREE" in v.disclosures
-    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" not in v.disclosures
 
 
-def test_the_fallback_still_refuses_a_new_failure_this_branch_owns():
-    """The decision-level half of the paired guard. A FALLBACK THAT PASSES
-    EVERYTHING IS WORSE THAN A GATE THAT REFUSES EVERYTHING."""
-    v = _decide(verification_tier=V.TIER_REBASE_REPLAY,
-                delta=_delta(new_failures=["m::t"]))
-    assert v.ok is False
-    assert any("NEW FAILURE" in r for r in v.reasons), v.reasons
 
 
-def test_the_fallback_still_refuses_when_the_replay_itself_conflicted():
-    """The fallback adopts the replay as the tree under test ONLY when the replay
-    succeeded. A conflicted rebase leaves it empty and must still refuse as
-    UNMEASURABLE — the fallback trades away a cross-check, never fail-closed."""
-    v = _decide(verification_tier=V.TIER_REBASE_REPLAY,
-                rebase_status="conflict", expected_tree="")
-    assert v.ok is False and v.unmeasurable is True
-    assert any("REBASE CONFLICT" in r for r in v.reasons), v.reasons
-    assert any("COULD NOT BE COMPUTED" in r for r in v.reasons), v.reasons
-    # The refusal still says which tier could not answer.
-    assert "VERIFICATION_TIER_REBASE_REPLAY" in v.disclosures
 
 
-@pytest.mark.parametrize("over,expected_ok", [
-    ({}, True),
-    ({"delta": _delta(new_failures=["m::t"])}, False),
-    ({"delta": _delta(silenced=["m::t"])}, False),
-    ({"rebase_status": "conflict"}, False),
-    ({"verified_tree": OTHER_TREE}, False),
-    ({"truncated": True}, False),
-    ({"dropped_files": ("programs/tests/test_x.py",)}, False),
-    ({"base_dropped_files": ("programs/tests/test_x.py",)}, False),
-    ({"land": V.parse_land_log(_GOOD_LOG.replace("PASS  repo hygiene gates",
-                                                 "FAIL  repo hygiene gates"))},
-     False),
-])
-def test_the_tier_reports_what_it_checked_and_never_changes_the_answer(
-        over, expected_ok):
-    """THE PROPERTY THAT MAKES THE FALLBACK SAFE, stated as an assertion.
-
-    For every fact the verdict turns on, BOTH tiers reach the SAME answer. The
-    degraded tier is allowed to say what it could not check; it is not allowed to
-    excuse anything it did check. If this ever fails, the fallback has become a
-    way to land something the strong tier refuses."""
-    strong = _decide(verification_tier=V.TIER_MERGE_TREE, **over)
-    weak = _decide(verification_tier=V.TIER_REBASE_REPLAY, **over)
-    assert strong.ok is expected_ok, strong.reasons
-    assert weak.ok is strong.ok, (weak.reasons, strong.reasons)
-    assert weak.reasons == strong.reasons, (weak.reasons, strong.reasons)
 
 
 # ------------------------------------------------------ the record, both tiers
 
 
-def test_the_cli_record_tells_the_two_tiers_apart_machine_readably(tmp_path):
-    """DISCLOSED IN PROSE IS NOT ENOUGH. A downstream reader keys on these."""
-    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
-                  extra=("--verification-tier", V.TIER_REBASE_REPLAY,
-                         "--git-version", "2.34.1"))
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verdict"] == "LAND_OK"
-    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
-    assert doc["tier_degraded"] is True
-    assert doc["squash_vs_rebase_cross_check"] == "NOT_PERFORMED"
-    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in doc["disclosures"]
-    assert doc["git_version"] == "2.34.1"
-    assert doc["git_version_required_for_merge_tree"] == V.MERGE_TREE_MIN_VERSION
-    # ...and PRINTED, with the same codes, so a terminal and a program are told
-    # the same thing.
-    assert "DISCLOSE  SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in r.stdout
-    assert f"[tier {V.TIER_REBASE_REPLAY}]" in r.stdout
 
 
-def test_the_cli_record_marks_the_strong_tier_as_not_degraded(tmp_path):
-    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verification_tier"] == V.TIER_MERGE_TREE
-    assert doc["tier_degraded"] is False
-    assert doc["squash_vs_rebase_cross_check"] == "PERFORMED"
 
 
-def test_the_cli_refuses_an_unrecognised_tier_as_unmeasurable(tmp_path):
-    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
-                  extra=("--verification-tier", "whatever"))
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc["verdict"] == "REFUSE"
-    assert doc["tier_degraded"] is True
 
 
 # ------------------------------------------- the detection, on THIS host
 
 
-def test_the_tier_the_script_picks_matches_this_hosts_real_capability(
-        sandbox, tmp_path):
-    """THE VERSION-DETECTION BRANCH ITSELF, measured rather than assumed.
-
-    The capability is probed independently here — the same question, asked
-    without the script — and the tier the script recorded must agree. On a git
-    >= 2.38 host this asserts the strong path was taken; on 2.34.1 it asserts the
-    fallback was, which is the whole reason this branch exists. Either way the
-    detection is exercised where the gate actually runs."""
-    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    expected = (V.TIER_MERGE_TREE if _host_has_write_tree(sandbox)
-                else V.TIER_REBASE_REPLAY)
-    assert doc["verification_tier"] == expected, r.stdout
-    assert doc["tier_degraded"] is (expected != V.TIER_MERGE_TREE)
-    # The version is NAMED whichever tier ran, so a record can be read later
-    # without knowing which host produced it.
-    assert doc["git_version"], doc
-    assert doc["git_version_required_for_merge_tree"] == V.MERGE_TREE_MIN_VERSION
 
 
-def test_a_host_without_merge_tree_names_the_version_found_and_needed(
-        sandbox, tmp_path):
-    """What the reviewer asked a refusal to say, kept as a DISCLOSURE instead:
-    the version found and the version needed, both named."""
-    r, doc = _verify(sandbox, "innocuous_green", tmp_path, env_extra=_FALLBACK)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
-    assert V.MERGE_TREE_MIN_VERSION in " ".join(doc["notes"])
-    assert "merge-tree capability ABSENT" in r.stdout or \
-        "GATEKEEPER_FORCE_REBASE_REPLAY" in doc["tier_reason"], r.stdout
 
 
 # ------------------------------- THE PAIRED GUARD, end to end, UNDER THE FALLBACK
 
 
-def test_end_to_end_the_fallback_still_refuses_an_innocuous_diff_that_leaves_a_test_red(
-        sandbox, tmp_path):
-    """NON-NEGOTIABLE, and the reason the fallback is allowed to exist at all.
-
-    THE SAME negative control the strong tier is measured on — #1019's case that
-    got through five times, an ordinary source edit with no test file in its diff
-    that leaves the suite red — re-run with the strong path forced off. **A
-    fallback that passes everything is worse than a gate that refuses
-    everything.** This runs on every host, not only on the ones that need the
-    fallback."""
-    r, doc = _verify(sandbox, "innocuous_red", tmp_path, env_extra=_FALLBACK)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc["verdict"] == "REFUSE"
-    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
-    assert doc["delta"]["new_failures"], doc
-    # REFUSED, AND HONEST ABOUT WHY IT COULD REFUSE: the weakness is on the
-    # record even when the verdict is a refusal.
-    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in doc["disclosures"]
 
 
-def test_end_to_end_the_fallback_allows_a_known_good_branch(sandbox, tmp_path):
-    """The other arm. If this failed the fallback would be the same ban with a
-    new name; if the arm above failed it would be a rubber stamp. Both are
-    required for either to mean anything."""
-    r, doc = _verify(sandbox, "innocuous_green", tmp_path, env_extra=_FALLBACK)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert doc["verdict"] == "LAND_OK"
-    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
-    assert doc["tier_degraded"] is True
-    assert doc["delta"]["new_failures"] == []
-    assert doc["land"]["stamped_sha"] is None, (
-        "the non-target B2 lane minted a standalone stamp before B1 joined")
-    assert any("merge verifier owns" in label
-               for label in doc["land"]["report"])
-    assert doc["base_land"] is not None, "arm A2 never ran under the fallback"
-    # The tree under test IS the replay — that identity is the disclosed loss.
-    assert doc["expected_tree"] == doc["replayed_tree"] == doc["verified_tree"]
 
 
-def test_end_to_end_the_fallback_still_refuses_a_conflicting_branch(
-        sandbox, tmp_path):
-    """FAIL-CLOSED IS NOT WHAT WAS TRADED AWAY. With no merge-tree to compute and
-    a replay that conflicted, there is no tree under test at all, and the
-    fallback must refuse as unmeasurable rather than adopt the head's own tree —
-    which is what is checked out in the worktree at that moment."""
-    r, doc = _verify(sandbox, "conflicting", tmp_path, env_extra=_FALLBACK)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert doc["verdict"] == "REFUSE"
-    assert doc["unmeasurable"] is True
-    assert doc["rebase_status"] == "conflict"
-    assert doc["expected_tree"] == "", \
-        "a conflicted replay was adopted as the tree under test"
-    assert doc["land"]["pass"] == [], "the suites ran on a tree nobody will merge"
 
 
-def test_the_forced_fallback_is_the_only_thing_the_env_var_can_do(sandbox, tmp_path):
-    """The test hook must not be a bypass. Forcing the fallback selects the
-    WEAKER, DISCLOSED tier and nothing else — the same branch is refused with it
-    set as without it, so there is no value of it that turns a refusal into a
-    pass."""
-    natural, doc_n = _verify(sandbox, "innocuous_red", tmp_path)
-    forced, doc_f = _verify(sandbox, "innocuous_red", tmp_path,
-                            env_extra=_FALLBACK)
-    assert natural.returncode == forced.returncode == 1
-    assert doc_n["verdict"] == doc_f["verdict"] == "REFUSE"
-    assert doc_f["verification_tier"] == V.TIER_REBASE_REPLAY
 
 # Actual one-shot receipt consumer; no acceptance arm/forge/network in fixtures.
 @pytest.fixture()

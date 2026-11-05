@@ -209,7 +209,6 @@ def test_the_run_states_the_clause_reach_not_only_the_findings():
 #: v1.13.69 removed the way a FIXTURE could move this boundary. This is the
 #: other way it moves: the member stays and its subject changes.
 REACH_AND_WHAT_BINDS_IT = {
-    "gate_red_since_check.py": ("gate_red_since.json",),
 }
 
 

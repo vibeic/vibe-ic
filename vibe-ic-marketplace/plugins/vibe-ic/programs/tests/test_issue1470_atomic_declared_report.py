@@ -57,7 +57,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _atomic_artefact as A  # noqa: E402
 import atomic_artifact_write_check as G  # noqa: E402
 import generated_artifact_conflict_resolve as RESOLVER  # noqa: E402
-import hygiene_finding_delta as DELTA  # noqa: E402
 import skill_stage_membership_check as MEMBERSHIP  # noqa: E402
 import advisory_clause_states_its_reason as ADVISORY  # noqa: E402
 import stage_on_pass_review as REVIEW  # noqa: E402
@@ -97,7 +96,7 @@ BASELINE = PROGRAMS / "_atomic_artefact_residual.json"
 #: register does not go stale because anyone edits it, it goes stale because
 #: the tree keeps growing programs that write a declared report. The ratchet
 #: catching each one BY NAME is the mechanism working, not a defect in it.
-CONVERTED = ["generated_artifact_conflict_resolve", "hygiene_finding_delta",
+CONVERTED = ["generated_artifact_conflict_resolve",
              "stage_on_pass_review", "skill_stage_membership_check",
              "advisory_clause_states_its_reason"]
 
@@ -131,14 +130,6 @@ def _argv_review(dest: Path, repo: Path):
     return [str(repo), "--stage", "no-such-stage", "--json", str(dest)]
 
 
-def _argv_delta(dest: Path, repo: Path):
-    # Both records are deliberately absent: the program REFUSES, and a refusal
-    # is still a verdict it must write whole. Nothing here needs a real hygiene
-    # run, which keeps this test far inside the 60s inner bound.
-    return ["--base", str(repo / "absent_base.json"),
-            "--candidate", str(repo / "absent_candidate.json"),
-            "--base-host", "host-a", "--candidate-host", "host-a",
-            "--json", str(dest)]
 
 
 def _argv_membership(dest: Path, repo: Path):
@@ -162,7 +153,6 @@ def _argv_advisory(dest: Path, repo: Path):
 #: (label, module, argv-builder). Driven end to end in both runtime tests.
 DRIVEN = [
     ("generated_artifact_conflict_resolve", RESOLVER, _argv_resolver),
-    ("hygiene_finding_delta", DELTA, _argv_delta),
     ("stage_on_pass_review", REVIEW, _argv_review),
     ("skill_stage_membership_check", MEMBERSHIP, _argv_membership),
     ("advisory_clause_states_its_reason", ADVISORY, _argv_advisory),

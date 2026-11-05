@@ -403,7 +403,6 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # is NAMED after it, so MEASURED with the selector on exactly the
     # one-file diff that switches the mechanism off (`max_commits:
     # 9999999`): 16 tests selected, this guard NOT among them. ~3 s.
-    "test_gate_red_since_check.py",
     # vibe-ic#1734 — same reachability argument, MEASURED twice on this tree
     # with the real selector, at 7c376e348, one throwaway commit each:
     #

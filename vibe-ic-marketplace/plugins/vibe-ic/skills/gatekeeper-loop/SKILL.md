@@ -102,7 +102,7 @@ This is the load-bearing idea, and it mirrors the rest of the plugin's
 
 | Layer | What it is | How it runs | Who/what decides |
 |-------|------------|-------------|------------------|
-| **Machine gates** | The **required status checks** — the full deterministic gate set (`gatekeeper_review.py`: the plugin test suite the CI way, `source_chip_agnostic_check.py`, `version_bump_monotonic_check.py`, `git_prohibition_guard.py`, `full_suite_run_check.py`, the per-step compliance checkers, …) | DETERMINISTICALLY, cadence-aware (see §Cadence) | a PROGRAM exit code — no LLM |
+| **Machine gates** | The **required status checks** — the full deterministic gate set (`gatekeeper_review.py`: the plugin test suite the CI way, `source_chip_agnostic_check.py`, `version_bump_monotonic_check.py`, `git_prohibition_guard.py`, the per-step compliance checkers, …) | DETERMINISTICALLY, cadence-aware (see §Cadence) | a PROGRAM exit code — no LLM |
 | **The one agent gate** | **Step-2.7 adversarial review** — the *irreducible* judgement: General-not-overfit / §4.05 no-leak / root-cause-not-bypass | the gatekeeper agent reads the diff and tries to BREAK it | an LLM, but ONLY blocks on a **reproducible HIGH** |
 
 Everything that **can** reduce to a program **is** a machine gate; the
@@ -617,13 +617,6 @@ fully programmable; only Step 2.7 is genuine LLM judgment):
   `programs/gatekeeper_assign_version.py`
 - PR machine gate used by bounded preparation; exact accepted bytes then enter
   the service manifest: `programs/gatekeeper_review.py`
-- Full-suite (not subset) test run: `programs/full_suite_run_check.py`. It
-  classifies an invocation by the POPULATION IT COVERS (git-derived), not by
-  its shape or its name: `./run_tests.sh` is FULL because the tiers it prints
-  cover every tracked test file; a bare `pytest` and an explicit
-  `pytest programs/tests` are SUBSETS, because `pytest.ini` names one tree of
-  five (owner ruling, 2026-08-31). At an x.y.0 milestone the cadence gate
-  requires the first and refuses the others.
 - Issue-fix counterpart (the other half of the contribution model):
   `vibe-ic:core-agent-loop`
 - Adversarial-review skill used at Step 2.7: `vibe-ic:codex-adversarial-review`

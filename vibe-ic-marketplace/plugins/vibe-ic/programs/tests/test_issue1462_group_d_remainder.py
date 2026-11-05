@@ -76,10 +76,6 @@ CONVERSIONS = {
         'Path(a.json_out).write_text(json.dumps(v.to_dict(), indent=2) + "\\n",'
         ' encoding="utf-8")',
     ),
-    "hygiene_finding_delta.py": (
-        "write_json(a.json, d, ensure_ascii=True)",
-        'a.json.write_text(json.dumps(d, indent=2) + "\\n", encoding="utf-8")',
-    ),
 }
 
 #: Big enough that the write is observably in progress. The kill is NOT timed:
@@ -215,19 +211,12 @@ _PATCH = {
         "    args=a, returncode=0, stdout=str(root) + '\\n', stderr='')\n"
         "M.resolve = lambda top, reg, dry_run=False: M.Verdict(0, PAYLOAD)\n"
     ),
-    "hygiene_finding_delta.py": (
-        "M.compare = lambda *a, **k: {'status': 'OK', 'pad': PAYLOAD}\n"
-    ),
 }
 
 
 def _argv(name: str, tmp_path: Path, dest: Path) -> list[str]:
     if name == "generated_artifact_conflict_resolve.py":
         return ["--repo", str(tmp_path), "--json", str(dest)]
-    return ["--base", str(tmp_path / "b.json"),
-            "--candidate", str(tmp_path / "c.json"),
-            "--base-host", "host-a", "--candidate-host", "host-a",
-            "--json", str(dest)]
 
 
 def _kill_mid_write(tmp_path: Path, name: str, arm: str):

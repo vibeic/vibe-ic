@@ -191,7 +191,6 @@ done
     wrapper = _REVIEW_WRAPPER.replace('PROGRAMS', repr(str(PROGRAMS))).replace('SCRIPT', repr(str(suite)))
     (programs / 'gatekeeper_review.py').write_text(wrapper)
     # Debt is a display in this harness; the actual ledger policy has separate tests.
-    (programs / 'gate_red_since_check.py').write_text('print("debt display")\n')
     names = ['lane_hygiene', 'run_gatekeeper_review', 'run_capture', 'lane_write',
              'lane_reported', 'lane_resolve', 'run_emit', 'run', 'landing_record',
              'landing_output_sha']

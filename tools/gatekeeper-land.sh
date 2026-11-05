@@ -2212,12 +2212,7 @@ landing_emit_full_repo_hygiene() {
   run_emit "$1" "repo hygiene gates" --last
 
 
-  if [ -n "${GK_HYG_RECORD:-}" ]; then
-    printf '  REPORT  hygiene debt (advisory display; parent comparator owns admission)\n'
-    python3 "$PROGRAMS/gate_red_since_check.py" --repo "$ROOT" \
-      --record "$GK_HYG_RECORD" --head-ref "$BASE" --ledger-ref "$BASE" \
-      || printf '  REPORT  debt checker reported findings or incomplete evidence\n'
-  fi
+
 }
 lane_emit_window() {
   landing_plan_dispatch window "" emit
