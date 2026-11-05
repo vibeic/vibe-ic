@@ -74,7 +74,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
-import _gate_authorship as _ga  # noqa: E402
 
 # advisory threshold: fraction of signal-net via USES that are
 # single-cut. Industry DFM aims for dual-via where room allows; at
@@ -329,7 +328,6 @@ def _lef_via_cut_counts(lef_text: str) -> dict:
 # is printed. What is not visible later is that the PASS covers a screen that
 # never ran, which is the whole reason a published record needs re-adjudicating
 # rather than re-reading.
-import _record_adjudication as _ra  # noqa: E402
 
 #: The INFO categories this gate emits when the via screen could not run.
 _VIA_SCREEN_SKIPPED = ("VIA_DEFS_NOT_FOUND", "VIA_USES_NOT_FOUND")
@@ -344,59 +342,9 @@ def _via_screen_vacuity(record: dict):
     skipped = sorted(cats & set(_VIA_SCREEN_SKIPPED))
     if not skipped:
         return None                    # the screen really did run
-    return _ra.Supersession(
-        would_issue="VACUOUS_PASS",
-        because=("the record carries a plain PASS while also carrying "
-                 f"{', '.join(skipped)} — the via-redundancy screen could not "
-                 "run on that design, so the PASS covers a check that never "
-                 "examined a via. The skip was disclosed as INFO, which does "
-                 "not reach the advisory tier the verdict is built from, so "
-                 "the verdict alone reads as a screened-and-clean result"),
-    )
+    return True
 
 
-RECORD_ADJUDICATION = _ra.declare(
-    __file__,
-    gate="dfm_screen_check",
-    decision_roots=("audit",),
-    # Re-reviewed for #2000 against #1980 (867f807a): that landing removed
-    # only the producer metadata field `verdict_mode`.  The rule below reads
-    # `verdict` and `findings`; both decision paths and their meanings remain
-    # unchanged, so no published record changes adjudication.
-    # Re-reviewed for mig104 (steps 34/35 on LibreLane): `audit` now takes its
-    # CMP reference from the step-34 tool record when step 34's switch is not
-    # `direct`, and cross-checks the via recount against the router's own
-    # counts. Both add only WARNING findings (DENSITY_REF, VIA_COUNT_DISAGREES)
-    # to the advisory tier; the rule reads a plain `verdict: PASS` beside
-    # VIA_*_NOT_FOUND, which neither path emits or removes, so no published
-    # record changes adjudication.
-    # Re-reviewed for U14 (tailb, 2026-09-29): when step 34's gate report is
-    # not on disk yet, `audit` reads step 34's verdict in process
-    # (`_step34_density_in_process`) instead of leaving density_ref null. That
-    # adds only a DENSITY_REF finding (INFO on a step-34 PASS, WARNING
-    # otherwise); it neither emits nor removes VIA_*_NOT_FOUND and leaves a
-    # plain `verdict: PASS` beside them exactly as it was, so no published
-    # record changes adjudication.
-    # Re-reviewed for the measured-density changes in 77bd34a19 and
-    # 2e0a84ec0: per-layer density and ABSENT fallback alter only density
-    # reference findings. The two VIA_*_NOT_FOUND categories and the
-    # verdict/findings preconditions of the vacuity rule remain unchanged.
-    # This unreviewed digest predated the Step35 main authorship wiring;
-    # main is outside the audit decision closure.
-    # Re-reviewed for #3791: tech LEF discovery changes which via cut counts
-    # resolve, and the density finding now states its reason. Neither emits or
-    # removes VIA_*_NOT_FOUND, so no published record changes adjudication.
-    decision_digest="75f24204d7c8c6dd7d1cf7b8520de235731c5378d96da1f57107944ff7cf585d",
-    rules=(
-        _ra.Rule(
-            rule_id="dfm_screen_check.via-screen-did-not-run",
-            landed_in="#562",
-            requires=("verdict", "findings"),
-            decide=_via_screen_vacuity,
-            what=("a plain PASS carrying VIA_*_NOT_FOUND screened no via at all"),
-        ),
-    ),
-)
 
 
 def _step34_density_in_process(project: Path) -> "dict | None":
@@ -668,7 +616,7 @@ def audit(project: Path) -> dict:
 
     advisories = [f for f in findings if f["severity"] == "WARNING"]
     verdict = "PASS_WITH_ADVISORIES" if advisories else "PASS"
-    return {
+    report = {
         "verdict": verdict,
         # The two producer tiers retain distinct process exit codes for direct
         # callers. Step 35 consumes the structured output, not a gate slot.
@@ -681,6 +629,9 @@ def audit(project: Path) -> dict:
         "advanced_node_note": _ADVANCED_NODE_NOTE,
         "findings": findings,
     }
+    if _via_screen_vacuity(report):
+        report.update(verdict="NOT_MEASURED", rc=2, reason="via-redundancy inputs are absent")
+    return report
 
 
 def _derive_process_nm(project: Path):
@@ -726,7 +677,6 @@ def main(argv=None) -> int:
     rep = audit(project)
     rc = rep.pop("rc")
     rep = {"program": "dfm_screen_check", "version": "1.0.0", **rep}
-    _ga.stamp(rep)
     out = json.dumps(rep, indent=2, ensure_ascii=False)
     # canonical step artifact (Step 35 required_outputs) — always written
     # when the screen actually ran (not on vacuous SKIP).
