@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,7 @@ def test_declared_power_reads_direct_tt_table_ceiling_with_original_source(proje
     check, = declared_power_checks(project)
     assert check["metric"] == "power__total__corner:*tt*"
     assert check["operator"] == "within_declared_bounds"
-    assert check["limit"] == {"max": 0.005, "max_exclusive": True}
+    assert check["limit"] == {"max": Decimal("0.005"), "max_exclusive": True}
     assert check["unit"] == "W"
     assert check["source"] == {
         "file": "input/docs/verification_plan.md", "line": 2, "text": row,
@@ -59,14 +60,14 @@ def test_declared_power_reads_direct_tt_table_ceiling_with_original_source(proje
 
 
 @pytest.mark.parametrize(("bound", "limit"), [
-    ("under 5000 uW", {"max": 0.005, "max_exclusive": True}),
-    ("below 5000 µW", {"max": 0.005, "max_exclusive": True}),
-    ("< 5000 μW", {"max": 0.005, "max_exclusive": True}),
-    ("<= 5 mW", {"max": 0.005}),
-    ("≤ 5 mW", {"max": 0.005}),
-    ("at most 0.005 W", {"max": 0.005}),
-    ("no more than 5e-3 W", {"max": 0.005}),
-    ("> 1 mW and <= 5 mW", {"min": 0.001, "min_exclusive": True, "max": 0.005}),
+    ("under 5000 uW", {"max": Decimal("0.005"), "max_exclusive": True}),
+    ("below 5000 µW", {"max": Decimal("0.005"), "max_exclusive": True}),
+    ("< 5000 μW", {"max": Decimal("0.005"), "max_exclusive": True}),
+    ("<= 5 mW", {"max": Decimal("0.005")}),
+    ("≤ 5 mW", {"max": Decimal("0.005")}),
+    ("at most 0.005 W", {"max": Decimal("0.005")}),
+    ("no more than 5e-3 W", {"max": Decimal("0.005")}),
+    ("> 1 mW and <= 5 mW", {"min": Decimal("0.001"), "min_exclusive": True, "max": Decimal("0.005")}),
 ])
 def test_declared_power_converts_explicit_units_and_retains_strictness(project, bound, limit):
     power_document(project, f"Total power target {bound}.\n")
@@ -86,14 +87,70 @@ def test_tt_power_declaration_selects_only_tt_corner_metrics(project):
     assert not fnmatch.fnmatchcase("power__total__corner:max_ss_100C_1v60", check["metric"])
 
 
+@pytest.mark.parametrize("bound", ["41.6 mW", "41600 uW", "0.0416 W"])
+def test_strict_power_bound_preserves_exact_decimal_unit_scaling(project, bound):
+    power_document(project, f"Total power < {bound} at TT.\n")
+    check, = declared_power_checks(project)
+    assert check["limit"] == {"max": Decimal("0.0416"), "max_exclusive": True}
+    assert Decimal(str(0.0416)) == check["limit"]["max"]
+    assert not Decimal(str(0.0416)) < check["limit"]["max"]
+
+
+def test_total_power_including_core_and_pads_keeps_its_limit(project):
+    text = "Total power (including core power and pads) < 5 mW at TT."
+    power_document(project, text + "\n")
+    check, = declared_power_checks(project)
+    assert check["limit"] == {"max": Decimal("0.005"), "max_exclusive": True}
+    assert check["source"]["text"] == text
+
+
+def test_structured_total_scope_including_core_and_pads_keeps_its_limit(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"scope": "total netlist including core and pads", "power_budget_mw": 5}))
+    check, = declared_power_checks(project)
+    assert check["limit"] == {"max": Decimal("0.005")}
+
+
+def test_ambiguous_declared_total_scope_keeps_a_missing_limit(project):
+    text = "Total power target (core power scope unclear) < 5 mW."
+    power_document(project, text + "\n")
+    check, = declared_power_checks(project)
+    assert check["limit"] is None
+    assert check["source"]["text"] == text
+
+
+def test_ambiguous_structured_total_scope_keeps_a_missing_limit(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"scope": "total netlist core scope unclear", "power_budget_mw": 5}))
+    check, = declared_power_checks(project)
+    assert check["limit"] is None
+
+
+def test_large_finite_power_literal_is_preserved_without_float_overflow(project):
+    power_document(project, "Total power target < 1e999 W.\n")
+    check, = declared_power_checks(project)
+    assert check["limit"] == {"max": Decimal("1e999"), "max_exclusive": True}
+
+
+def test_structured_decimal_power_literal_is_not_rounded_through_float(project):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text('{"power_budget_mw":{"max":41.60000000000000000000000000001,"max_exclusive":true}}')
+    check, = declared_power_checks(project)
+    assert check["limit"] == {"max": Decimal("0.04160000000000000000000000000001"),
+                              "max_exclusive": True}
+    assert check["source"]["bound"]["max"] == Decimal("41.60000000000000000000000000001")
+
+
 @pytest.mark.parametrize("text", [
     "Total power target < 5 mW, informational only.\n",
     "| total power(TT) | < 5 mW | ❌ 否 |\n",
     "Total power target < 5 mW is not a sign-off gate.\n",
     "Core power budget < 5 mW.\n",
     "Core-only total power < 5 mW.\n",
+    "Rail-only total power < 5 mW.\n",
     "Core total power < 5 mW.\n",
     "Total power(core) < 5 mW.\n",
+    "Total power(rail) < 5 mW.\n",
     "Per-rail power budget < 5 mW.\n",
     "VDDIO power budget < 5 mW.\n",
     "Power budget for core < 5 mW.\n",
@@ -118,7 +175,7 @@ def test_declared_power_returns_no_checks_without_a_declaration(project):
     "| total power(TT) | (0, baseline × 1.3] | — | ✅ |\n",
     "Total power target < TBD mW.\n",
     "Total power target < 5.\n",
-    "Total power target < 1e999 W.\n",
+    "Total power target < Infinity W.\n",
 ])
 def test_known_unparsed_power_declaration_keeps_an_absent_limit(project, text):
     power_document(project, text)
@@ -129,14 +186,14 @@ def test_known_unparsed_power_declaration_keeps_an_absent_limit(project, text):
 
 
 @pytest.mark.parametrize(("field", "raw", "limit"), [
-    ("power_budget_uw", 5000, {"max": 0.005}),
-    ("power_budget_mw", 5, {"max": 0.005}),
-    ("power_budget_mw", "< 5 mW", {"max": 0.005, "max_exclusive": True}),
-    ("power_budget_mw", "< 5", {"max": 0.005, "max_exclusive": True}),
-    ("power_budget_mw", "5 mW", {"max": 0.005}),
-    ("power_budget_mw", {"max": 5000, "unit": "uW"}, {"max": 0.005}),
+    ("power_budget_uw", 5000, {"max": Decimal("0.005")}),
+    ("power_budget_mw", 5, {"max": Decimal("0.005")}),
+    ("power_budget_mw", "< 5 mW", {"max": Decimal("0.005"), "max_exclusive": True}),
+    ("power_budget_mw", "< 5", {"max": Decimal("0.005"), "max_exclusive": True}),
+    ("power_budget_mw", "5 mW", {"max": Decimal("0.005")}),
+    ("power_budget_mw", {"max": 5000, "unit": "uW"}, {"max": Decimal("0.005")}),
     ("total_power_mw", {"min": 1, "max": 5, "min_exclusive": True},
-     {"min": 0.001, "max": 0.005, "min_exclusive": True}),
+     {"min": Decimal("0.001"), "max": Decimal("0.005"), "min_exclusive": True}),
 ])
 def test_declared_power_reads_structured_total_budget_fields(project, field, raw, limit):
     path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
@@ -211,7 +268,7 @@ def test_power_reader_uses_original_prompt_without_tools_or_artifact_writes(proj
 
     monkeypatch.setattr(subprocess, "run", unexpected_tool)
     check, = declared_power_checks(project)
-    assert check["limit"] == {"max": 0.005, "max_exclusive": True}
+    assert check["limit"] == {"max": Decimal("0.005"), "max_exclusive": True}
     assert check["source"]["file"] == "input/phase1_prompt.md"
     after = {str(path.relative_to(project)): path.read_bytes()
              for path in project.rglob("*") if path.is_file()}
