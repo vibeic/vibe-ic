@@ -141,6 +141,11 @@ def simulation(project, directory, tool, commands):
             return commands.result(detail="Declared scenario producer needs author input: "
                                    + json.dumps(scenarios))
     benches = testbenches(project, tool)
+    if files and emitted > 0 and tool.get("testbenches"):
+        from testbench_gen import is_unit_tb
+        unit_dir = project / "phase2/stage1/sim/tb"
+        benches = list(dict.fromkeys([*benches, *(path for pattern in ("*.v", "*.sv")
+            for path in sorted(unit_dir.glob(pattern)) if is_unit_tb(path))]))
     if files and not benches:
         from arith_oracle_tb_gen import generate as arithmetic
         from professional_tb_gen import generate, _detect_ic_class

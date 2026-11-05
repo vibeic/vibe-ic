@@ -45,7 +45,10 @@ def test_declared_scenarios_run_beside_existing_sample_bench(tmp_path, different
     docs.write_text(json.dumps({"test_cases": cases}))
     sample, code = arithmetic.generate(project, "digital_arithmetic_primitive")
     assert code == 0 and sample["vector_count"] == 28
-    result = execute(project, project / "output", {"adapter": "simulation"}, {})
+    tool = {"adapter": "simulation"}
+    if not different:
+        tool["testbenches"] = [sample["tb"]]
+    result = execute(project, project / "output", tool, {})
     logs = "\n".join(Path(path).read_text(errors="replace") for path in result["reports"]
                      if str(path).endswith(".log"))
     assert "ARITH_SCENARIO_DONE transactions=10000 comparisons=80000" in logs
