@@ -5,8 +5,10 @@ import test_r48_the_reset_invariants_get_a_real_oracle as base
 
 @pytest.mark.parametrize('good', [True, False], ids=['retained', 'first-edge-corruption'])
 @pytest.mark.parametrize('protocol', ['sdp8_waddr_raddr_wdata_rdata_wen_ren_sync1r',
-                                     'sdp8_waddr_raddr_wen_ren_sync1r'])
-def test_native_retention_selected_sync_read_enable(tmp_path, monkeypatch, good, protocol):
+                                     'sdp8_waddr_raddr_wen_ren_sync1r',
+                                     'sdp8_waddr_wdata_wen_raddr_rdata_sync1r'])
+@pytest.mark.parametrize('role_style', ['long', 'short'])
+def test_native_retention_selected_sync_read_enable(tmp_path, monkeypatch, good, protocol, role_style):
     original = base.prepare
     def prepare(project, good=False):
         rtl = original(project, good)
@@ -32,7 +34,14 @@ def test_native_retention_selected_sync_read_enable(tmp_path, monkeypatch, good,
         path = project / 'plugin_output/declaration.json'
         decl = json.loads(path.read_text())
         decl['sram_interface_protocol'] = protocol
-        decl['sram_interface'].update(read_latency_cycles=1, read_enable='o_store_ren')
+        decl['sram_interface'].update(read_latency_cycles=1)
+        if '_ren_' in protocol:
+            decl['sram_interface']['read_enable'] = 'o_store_ren'
+        if role_style == 'short':
+            aliases = dict(read_address='raddr', write_address='waddr', read_data='rdata',
+                           write_data='wdata', write_enable='we', read_enable='ren')
+            decl['sram_interface'] = {aliases.get(key, key): value
+                                      for key, value in decl['sram_interface'].items()}
         path.write_text(json.dumps(decl))
         l9 = project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
         doc = json.loads(l9.read_text())
