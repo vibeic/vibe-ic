@@ -1119,6 +1119,23 @@
           "line": 132
         }
       }
+    ],
+    "seal_ring_and_die_identification": [
+      {
+        "metric": "seal_dieid_rules",
+        "operator": "==",
+        "limit": 1,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/klayout.py",
+          "symbol": "SealRing.run / SealRing.METRIC",
+          "note": "Native verifier emits 1 only when the output layout contains a measured ring around DIE_AREA; a missing script emits 0.",
+          "line": 1040
+        },
+        "unavailable_values": [
+          0
+        ],
+        "unavailable_reason": "Native seal-ring producer reports skipped: no PDK script produced a verified ring."
+      }
     ]
   },
   "adapters": {
@@ -1256,6 +1273,7 @@
           "Magic.StreamOut",
           "KLayout.StreamOut",
           "KLayout.Render",
+
           "KLayout.XOR",
           "Checker.XOR"
         ]
@@ -3188,13 +3206,17 @@
     "seal_ring_and_die_identification": [
       {
         "old_name": "seal_dieid_rules",
-        "class": "T",
-        "reason": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
+        "class": "N",
+        "native_metrics": [
+          "design__seal_ring__verified"
+        ],
+        "reason": "Use the native measured seal-ring result against its existing verified value 1."
       },
       {
         "old_name": "seal_core_clearance",
-        "class": "T",
-        "reason": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
+        "class": "R",
+        "native_metrics": [],
+        "reason": "Native seal verification checks the ring geometry and final DRC retains PDK spacing limits. No separate clearance target is enforced without a document declaration; a declared bound with no native clearance number remains NOT_MEASURED."
       }
     ],
     "metal_density_fill": [
