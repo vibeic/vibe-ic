@@ -558,3 +558,43 @@ def test_retained_acceptance_cannot_export_unmeasured_gates(tmp_path, monkeypatc
     except SystemExit:
         accepted = False
     assert accepted == (status == "PASS")
+
+
+@pytest.mark.parametrize("engine,child_status,endpoint,expected", [
+    ("native", "PASS", "PASS", "ELIGIBLE"),
+    ("legacy", "PASS", "PASS", "NOT_MEASURED"),
+    ("native", "FAIL", "PASS", "INELIGIBLE"),
+    ("native", "NOT_MEASURED", "PASS", "NOT_MEASURED"),
+    ("native", "PASS", "FAIL", "INELIGIBLE"),
+    ("native", None, None, "NOT_MEASURED"),
+    ("native", "PASS", None, "NOT_MEASURED"),
+    ("native", "FAIL", None, "INELIGIBLE"),
+    ("native", "PASS", "NOT_MEASURED", "NOT_MEASURED"),
+    ("native", "PASS", "NOT_APPLICABLE", "NOT_MEASURED"),
+])
+def test_native_owner_report_gate_eligibility(tmp_path, monkeypatch, engine,
+                                             child_status, endpoint, expected):
+    from types import SimpleNamespace
+    import design_one_shot_runner as owner
+    import flow_engine_frontend as frontend
+
+    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
+    rtl = tmp_path / "phase2/stage1/rtl/cell.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module cell(input wire value, output wire result); assign result = value; endmodule\n")
+    rows = [owner.StepResult("rtl_gen", "PASS", 0.0, "Program authored RTL")]
+    if child_status is not None:
+        rows.append(owner._required_site_row(tmp_path, "rtl_validate",
+            owner.StepResult("determinism_gates", child_status, 0.0, "Native child result", reason_class="inconclusive")))
+    if endpoint is not None:
+        rows.append(owner._required_site_row(tmp_path, "rtl_validate",
+            owner.StepResult("rtl_validate", endpoint, 0.0, "Native lint result",
+                reason_class="inconclusive", declared_by="native input applicability")))
+    frontend.finish_frontend(tmp_path, rows,
+        SimpleNamespace(entry_step="1", exit_step="2"), "generic", "public input")
+    report = json.loads((tmp_path / "reports/orchestrator/phase2_one_shot.json").read_text())
+    ledger = BD._required_gate_ledger({"exit": "2", "phases": {
+        "phase3_verifying": FPA.phase3_verifying(report, None)}})
+    assert ledger["eligibility"] == expected, ledger
+    if child_status == "FAIL" or endpoint == "FAIL":
+        assert ledger["failed_required"] == ["rtl_validate"]

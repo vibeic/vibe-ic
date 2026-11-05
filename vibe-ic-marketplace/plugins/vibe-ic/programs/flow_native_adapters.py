@@ -37,14 +37,13 @@ class Commands:
 
 
 def inputs(project, tool):
-    from _specrtl_common import rtl_source_files
+    from flow_config import resolve_rtl_inputs
     files = [Path(p) if Path(p).is_absolute() else project / p for p in tool.get("rtl", [])]
     top = tool.get("top")
-    for name in ("L9_INTEGRATION_SPEC.json", "L9_INTEGRATION.json"):
-        path = project / "phase1/generated_docs" / name
-        if top is None and path.is_file():
-            top = json.loads(path.read_text()).get("top_module")
-    return files or rtl_source_files(project / "phase2/stage1/rtl"), top
+    if files and top:
+        return files, top
+    produced, declared = resolve_rtl_inputs(project)
+    return files or produced, top or declared
 
 
 def cdc(project, directory, tool, commands):

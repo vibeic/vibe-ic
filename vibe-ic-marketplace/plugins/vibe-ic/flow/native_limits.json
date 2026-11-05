@@ -970,6 +970,52 @@
           "line": 199
         }
       }
+    ],
+    "signoff_aggregation": [
+      {
+        "metric": "non_passing_steps",
+        "operator": "==",
+        "limit": 0,
+        "unit": "count",
+        "source": {
+          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+          "line": 54,
+          "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+        }
+      }
+    ],
+    "compliance_and_final_adoption": [
+      {
+        "metric": "non_passing_steps",
+        "operator": "==",
+        "limit": 0,
+        "unit": "count",
+        "source": {
+          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+          "line": 54,
+          "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+        }
+      }
+    ],
+    "analog_block_signoff": [
+      {
+        "metric": "spec_results",
+        "operator": "within_declared_bounds",
+        "limit": null,
+        "when": "has_analog",
+        "source": {
+          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
+          "line": 54,
+          "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
+        },
+        "limit_from": {
+          "kind": "declared_analog_specs",
+          "paths": [
+            "phase1/generated_docs/L5_ADI_SPEC.json#/analog_blocks"
+          ]
+        },
+        "missing_number_status": "NOT_MEASURED"
+      }
     ]
   },
   "adapters": {
@@ -1013,6 +1059,29 @@
         "gds": ".gds",
         "nl": ".v"
       }
+    },
+    "design_release": {
+      "kind": "snapshot",
+      "destination": "phase3/stage5/release",
+      "formats": {
+        "lef": ".lef",
+        "lib": ".lib",
+        "gds": ".gds",
+        "nl": ".v"
+      },
+      "metric": "release_required_items"
+    },
+    "signoff_aggregation": {
+      "kind": "aggregate"
+    },
+    "compliance_and_final_adoption": {
+      "kind": "aggregate"
+    },
+    "analog_block_signoff": {
+      "program": "analog_real_corner_sweep.py",
+      "function": "run_block",
+      "native_report": "phase3/analog/*/corner_results.json#/spec_results",
+      "gap": "Direct L-document spec to SPICE-number comparator is not wired. Missing declared numbers must be NOT_MEASURED."
     }
   },
   "deleted_metrics": {
@@ -1601,5 +1670,1753 @@
       "metric": "required_macro_views"
     }
   },
-  "declared_bounds": {}
+  "declared_bounds": {},
+  "check_classifications": {
+    "requirements_and_delivery_route": [
+      {
+        "old_name": "unresolved_route_facts",
+        "class": "P",
+        "reason": "Route-fact accounting is paper. The unchanged Router owns delivery selection."
+      },
+      {
+        "old_name": "observed_vs_declared_features",
+        "class": "P",
+        "reason": "Feature-consistency paperwork. Unchanged Router and native tool input errors remain."
+      },
+      {
+        "old_name": "requirements_trace",
+        "class": "P",
+        "reason": "Requirements trace is paper. Router selection and tool results remain."
+      }
+    ],
+    "submission_and_implementation_interface": [
+      {
+        "old_name": "unassigned_requirements",
+        "class": "P",
+        "reason": "Requirements allocation is paper. L documents and AI review remain."
+      },
+      {
+        "old_name": "endpoint_delivery_items",
+        "class": "P",
+        "reason": "Delivery checklist is paper. Native output files and release snapshot remain."
+      }
+    ],
+    "pdk_library_deck_and_tool_use_qualification": [],
+    "functional_safety_plan_and_tool_confidence": [
+      {
+        "old_name": "safety_goals_allocation",
+        "class": "P",
+        "reason": "Safety allocation trace is paper. Fault injection and diagnostic coverage remain."
+      }
+    ],
+    "power_intent_and_domain_rules": [
+      {
+        "old_name": "semantic_demand_coverage",
+        "class": "P",
+        "reason": "UPF requirement trace is paper. Power-state and crossing analysis remain."
+      },
+      {
+        "old_name": "illegal_power_states",
+        "class": "T",
+        "reason": "Native engineering tool report for power intent and domain rules; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "supply_cell_assignments",
+        "class": "P",
+        "reason": "Supply assignment inventory is paper. Native PDN connectivity and LVS remain."
+      }
+    ],
+    "package_load_and_test_interface_feasibility": [
+      {
+        "old_name": "pad_bump_interface_constraints",
+        "class": "D",
+        "reason": "OpenROAD.PadRing rejects invalid geometry; native final DRC and LVS check the physical interface."
+      },
+      {
+        "old_name": "package_escape_feasibility",
+        "class": "T",
+        "reason": "Bare die has no package escape obligation (P). A declared package requires the native package routing/escape solver; wire its report.",
+        "when": "package_declared"
+      },
+      {
+        "old_name": "test_access_plan",
+        "class": "P",
+        "reason": "Test-access planning is paper. Native scan/ATPG coverage and gate-level test replay remain."
+      }
+    ],
+    "multi_die_partition_and_interface_budget": [
+      {
+        "old_name": "child_ownership",
+        "class": "P",
+        "reason": "Child ownership trace is paper. Assembly connectivity and timing remain."
+      },
+      {
+        "old_name": "d2d_budgets",
+        "class": "T",
+        "reason": "Native engineering tool report for multi die partition and interface budget; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "unassigned_links",
+        "class": "P",
+        "reason": "Link ownership accounting is paper. Native assembly connectivity remains."
+      }
+    ],
+    "analog_specifications": [
+      {
+        "old_name": "analog_specs_with_units",
+        "class": "P",
+        "reason": "Spec-document completeness is paper. SPICE measurements against declared specs remain."
+      },
+      {
+        "old_name": "required_measurements",
+        "class": "P",
+        "reason": "Measurement checklist is paper. Native SPICE measurements remain."
+      }
+    ],
+    "analog_model_qualification": [
+      {
+        "old_name": "device_model_load_errors",
+        "class": "X",
+        "reason": "ngspice model load failure stops native simulation."
+      },
+      {
+        "old_name": "model_corner_statistics_coverage",
+        "class": "P",
+        "reason": "Model/corner inventory trace is paper. Native SPICE model-load errors and PVT/statistical measurement results remain."
+      }
+    ],
+    "mixed_signal_interface_contract": [
+      {
+        "old_name": "noise_supply_budgets",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "unowned_crossings",
+        "class": "P",
+        "reason": "Crossing ownership trace is paper. Electrical and CDC crossing checks remain."
+      }
+    ],
+    "analog_testability_and_trim_plan": [
+      {
+        "old_name": "observable_test_nodes",
+        "class": "P",
+        "reason": "Test-node inventory is paper. Native test-access simulation remains."
+      },
+      {
+        "old_name": "trim_range_resolution",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "test_access_unreachable",
+        "class": "P",
+        "reason": "Test-plan reachability checklist is paper. Native trim/test simulation remains."
+      }
+    ],
+    "analog_topology": [
+      {
+        "old_name": "allocated_gain_noise_power_budgets",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "topology_constraints",
+        "class": "P",
+        "reason": "Topology choice justification is paper. SPICE performance and LVS remain."
+      }
+    ],
+    "analog_netlist_and_sizing": [
+      {
+        "old_name": "operating_point_targets",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "netlist_connectivity_errors",
+        "class": "X",
+        "reason": "ngspice connectivity errors stop simulation; block LVS verifies connectivity."
+      }
+    ],
+    "analog_measurement_testbench": [
+      {
+        "old_name": "measurement_window_errors",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "known_stimulus_calibration",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "unit_mismatches",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "analog_pre_layout_nominal_performance": [
+      {
+        "old_name": "nominal_performance",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "early_model_correlation",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "macro_logical_and_timing_views": [
+      {
+        "old_name": "required_macro_views",
+        "class": "P",
+        "reason": "Macro view inventory is paper. Native elaboration, STA and physical-tool input requirements remain."
+      },
+      {
+        "old_name": "unresolved_macro_instances",
+        "class": "X",
+        "reason": "OpenROAD.CheckMacroInstances and Yosys hierarchy reject unresolved macro instances."
+      }
+    ],
+    "rtl_authoring": [
+      {
+        "old_name": "rtl_requirement_mapping",
+        "class": "P",
+        "reason": "RTL requirement trace is paper. Lint, simulation, coverage, formal and LEC remain."
+      }
+    ],
+    "structural_rtl_preflight": [
+      {
+        "old_name": "elaboration_errors",
+        "class": "X",
+        "reason": "Yosys/Verilator parse and hierarchy errors stop the native command."
+      },
+      {
+        "old_name": "unexpected_blackboxes",
+        "class": "X",
+        "reason": "Yosys hierarchy checking and synthesis unmapped-cell checker reject unresolved cells."
+      }
+    ],
+    "rtl_validation_and_lint": [
+      {
+        "old_name": "design__lint_timing_construct__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__lint_timing_construct__count"
+        ]
+      },
+      {
+        "old_name": "design__lint_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__lint_error__count"
+        ]
+      },
+      {
+        "old_name": "design__lint_warning__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__lint_warning__count"
+        ]
+      },
+      {
+        "old_name": "required_lint_violations",
+        "class": "D",
+        "reason": "Existing design__lint_error__count and timing-construct check in this row."
+      }
+    ],
+    "rtl_cdc_and_rdc": [
+      {
+        "old_name": "unresolved_crossings",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "unresolved_crossings"
+        ]
+      },
+      {
+        "old_name": "clock_reset_crossing_census",
+        "class": "P",
+        "reason": "Declared-to-observed crossing trace is paper. Native CDC findings remain."
+      },
+      {
+        "old_name": "cdc_protocol_results",
+        "class": "P",
+        "reason": "Protocol-result inventory is paper. Native CDC findings and protocol assertions remain."
+      }
+    ],
+    "functional_simulation_and_coverage": [
+      {
+        "old_name": "assertion_failures",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "assertion_failures"
+        ]
+      },
+      {
+        "old_name": "coverage_line_pct",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "coverage_line_pct"
+        ]
+      },
+      {
+        "old_name": "coverage_toggle_pct",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "coverage_toggle_pct"
+        ]
+      },
+      {
+        "old_name": "coverage_branch_pct",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "coverage_branch_pct"
+        ]
+      },
+      {
+        "old_name": "required_function_scenarios",
+        "class": "P",
+        "reason": "Requirements-to-scenario trace is paper. Native assertion failures and numeric coverage goals remain."
+      },
+      {
+        "old_name": "coverage_targets",
+        "class": "T",
+        "reason": "Ruling 208 has not accepted the duplicate classification. Verify actual old-step callers and published SPM coverage limits; enforce stricter declared targets. Existing numeric checks are unchanged pending that verification."
+      }
+    ],
+    "formal_verification": [
+      {
+        "old_name": "unproved_required_properties",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "unproved_required_properties"
+        ]
+      },
+      {
+        "old_name": "vacuous_required_proofs",
+        "class": "T",
+        "reason": "SymbiYosys prove and antecedent reachability cover tasks; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "proof_partition_coverage",
+        "class": "T",
+        "reason": "SymbiYosys task listing and native per-task status reports. Wire only this native report; both sides must come from the tool.",
+        "native_population": "SymbiYosys task listing and native per-task status reports"
+      }
+    ],
+    "power_aware_state_transitions": [
+      {
+        "old_name": "required_power_transitions",
+        "class": "P",
+        "reason": "Transition requirement trace is paper. Power-aware simulation failures remain."
+      },
+      {
+        "old_name": "isolation_retention_behavior_errors",
+        "class": "T",
+        "reason": "Native engineering tool report for power aware state transitions; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "system_and_software_scenarios": [
+      {
+        "old_name": "required_fullchip_scenarios",
+        "class": "P",
+        "reason": "Required-scenario trace is paper. Native simulation/assertion failures remain."
+      },
+      {
+        "old_name": "boot_workload_protocol_errors",
+        "class": "T",
+        "reason": "Native engineering tool report for system and software scenarios; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "blocking_system_scenario_failures",
+        "class": "T",
+        "reason": "Native engineering tool report for system and software scenarios; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "system_signoff_required_scenarios",
+        "class": "P",
+        "reason": "Scenario-signoff trace is paper. Native system simulation failures remain."
+      }
+    ],
+    "requirement_derived_security_verification": [
+      {
+        "old_name": "threat_requirements_coverage",
+        "class": "P",
+        "reason": "Threat-to-property requirement trace is paper. Native security proofs and counterexamples remain."
+      },
+      {
+        "old_name": "security_counterexample_failures",
+        "class": "T",
+        "reason": "SymbiYosys security property and reachability tasks; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "security_metric_targets",
+        "class": "T",
+        "reason": "SymbiYosys security property and reachability tasks; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "early_fpga_verification": [
+      {
+        "old_name": "prototype_scenarios",
+        "class": "P",
+        "reason": "Prototype scenario checklist is paper. Native FPGA test results remain."
+      }
+    ],
+    "pre_layout_mixed_signal_verification": [
+      {
+        "old_name": "ams_scenarios",
+        "class": "P",
+        "reason": "Required AMS scenario trace is paper. Native AMS simulation results and performance bounds remain."
+      },
+      {
+        "old_name": "prelayout_interface_performance",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "model_correlation",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "analog_pre_layout_pvt_and_operating_range": [
+      {
+        "old_name": "pvt_load_modes",
+        "class": "P",
+        "reason": "Required PVT/mode inventory trace is paper. Native PVT performance measurements remain."
+      },
+      {
+        "old_name": "prelayout_performance",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "analog_pre_layout_statistics": [
+      {
+        "old_name": "mismatch_confidence_targets",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "calibration_algorithm_verification": [
+      {
+        "old_name": "finite_code_convergence",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "calibration_time_error",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "oracle_code_selection",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "mode_corner_and_constraint_plan": [
+      {
+        "old_name": "scenario_constraints",
+        "class": "P",
+        "reason": "Scenario-to-document trace is paper. Native SDC parsing and STA remain."
+      },
+      {
+        "old_name": "exception_justification",
+        "class": "P",
+        "reason": "Exception justification is paper. Native SDC parsing, STA and AI review remain."
+      }
+    ],
+    "constraint_validation": [
+      {
+        "old_name": "invalid_timing_exceptions",
+        "class": "T",
+        "reason": "OpenSTA native exception diagnostics; wire invalid/unmatched object diagnostics without requirement traces."
+      }
+    ],
+    "soft_ip_synthesis_and_constraints": [
+      {
+        "old_name": "portable_sdc_coverage",
+        "class": "P",
+        "reason": "Portable SDC completeness trace is paper. Native SDC parsing and synthesis remain."
+      },
+      {
+        "old_name": "required_config_synthesis_errors",
+        "class": "T",
+        "reason": "Native engineering tool report for soft ip synthesis and constraints; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "synthesis": [
+      {
+        "old_name": "design__instance_unmapped__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__instance_unmapped__count"
+        ]
+      },
+      {
+        "old_name": "synthesis__check_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "synthesis__check_error__count"
+        ]
+      },
+      {
+        "old_name": "unexpected_latch_blackbox",
+        "class": "N",
+        "reason": "Native emitted metric with original numeric limit unchanged.",
+        "native_metrics": [
+          "design__inferred_latch__count"
+        ]
+      },
+      {
+        "old_name": "synthesis_constraints",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "design__instance__area"
+        ]
+      }
+    ],
+    "dft_architecture_and_insertion": [
+      {
+        "old_name": "dft_architecture_coverage",
+        "class": "P",
+        "reason": "DFT architecture trace is paper. Scan simulation and ATPG coverage remain."
+      },
+      {
+        "old_name": "scan_test_protocol_integrity",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "post_dft_optimization": [
+      {
+        "old_name": "scan_preservation_errors",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "netlist_equivalence": [
+      {
+        "old_name": "unproved_equivalence",
+        "class": "T",
+        "reason": "Yosys.EQY native partition status; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "required_lec_partitions",
+        "class": "D",
+        "reason": "EQY itself determines partitions and fails when a native partition proof fails; unproved_equivalence remains a real LEC check."
+      }
+    ],
+    "pre_layout_timing": [
+      {
+        "old_name": "unconstrained_required_paths",
+        "class": "T",
+        "reason": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "unconstrained_endpoints",
+        "class": "T",
+        "reason": "Native engineering tool report for pre layout timing; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "prelayout_timing_targets",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "timing__setup__ws",
+          "timing__hold__ws"
+        ]
+      }
+    ],
+    "safety_fault_injection_and_diagnostic_coverage": [
+      {
+        "old_name": "fault_population_coverage",
+        "class": "T",
+        "reason": "Native fault simulator total faults and graded faults report. Wire only this native report; both sides must come from the tool.",
+        "native_population": "Native fault simulator total faults and graded faults report"
+      },
+      {
+        "old_name": "diagnostic_coverage_latency",
+        "class": "T",
+        "reason": "Native fault-injection simulation and diagnostic coverage report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "fmeda_fault_classification",
+        "class": "P",
+        "reason": "FMEDA classification trace is paper. Native fault injection and diagnostic measurements remain."
+      }
+    ],
+    "early_transition_atpg": [
+      {
+        "old_name": "early_fault_coverage",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "final_fpga_verification": [
+      {
+        "old_name": "required_onboard_scenarios",
+        "class": "P",
+        "reason": "Onboard scenario checklist is paper. Native FPGA test results remain."
+      }
+    ],
+    "netlist_handoff": [
+      {
+        "old_name": "post_synth_crossing_power_changes",
+        "class": "P",
+        "reason": "Change accounting is paper. Implemented CDC and power-domain analysis remain."
+      }
+    ],
+    "analog_layout": [
+      {
+        "old_name": "matching_symmetry_guard_constraints",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "analog_layout_connectivity",
+        "class": "X",
+        "reason": "Native block LVS compares extracted and schematic connectivity."
+      }
+    ],
+    "analog_block_physical_verification": [
+      {
+        "old_name": "klayout__drc_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "klayout__drc_error__count"
+        ]
+      },
+      {
+        "old_name": "magic__illegal_overlap__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "magic__illegal_overlap__count"
+        ]
+      },
+      {
+        "old_name": "design__lvs_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__lvs_error__count"
+        ]
+      },
+      {
+        "old_name": "block_drc_lvs_erc_errors",
+        "class": "D",
+        "reason": "Native DRC/LVS/illegal-overlap checks in this row. ERC remains in native extraction/LVS reports."
+      },
+      {
+        "old_name": "device_extraction_coverage",
+        "class": "X",
+        "reason": "Native extractor reports devices and LVS gates mismatched device populations."
+      }
+    ],
+    "analog_parasitic_extraction": [
+      {
+        "old_name": "pex_annotation_coverage",
+        "class": "T",
+        "reason": "OpenSTA report_parasitic_annotation annotated and unannotated native nets. Wire only this native report; both sides must come from the tool.",
+        "native_population": "OpenSTA report_parasitic_annotation annotated and unannotated native nets"
+      }
+    ],
+    "analog_post_layout_performance": [
+      {
+        "old_name": "postlayout_pvt_performance",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "calibration_replay",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "analog_post_layout_statistics": [
+      {
+        "old_name": "postlayout_statistical_targets",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "required_sample_coverage",
+        "class": "T",
+        "reason": "Native Monte Carlo solver requested sample count and completed sample count. Wire only this native report; both sides must come from the tool.",
+        "native_population": "Native Monte Carlo solver requested sample count and completed sample count"
+      }
+    ],
+    "analog_reliability": [
+      {
+        "old_name": "device_stress_lifetime",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "analog_ir_em_aging",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "analog_characterized_views": [
+      {
+        "old_name": "postlayout_view_correlation",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "model_corner_coverage",
+        "class": "P",
+        "reason": "Characterized-view corner inventory is paper. Native view correlation and SPICE PVT measurements remain."
+      }
+    ],
+    "analog_macro_integration": [
+      {
+        "old_name": "unresolved_top_interfaces",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "die_floorplan_and_macros": [
+      {
+        "old_name": "illegal_macro_overlap",
+        "class": "X",
+        "reason": "OpenROAD detailed placement check_placement rejects overlapping placement; final DRC remains."
+      },
+      {
+        "old_name": "floorplan_boundary_pin_feasibility",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "design__core__area",
+          "design__die__area"
+        ]
+      }
+    ],
+    "io_pad_ring_and_power_distribution": [
+      {
+        "old_name": "pad_io_esd_pg_inventory",
+        "class": "P",
+        "reason": "Pad inventory trace is paper. Native PG checks, DRC, LVS and PERC remain."
+      },
+      {
+        "old_name": "pg_supply_connectivity_errors",
+        "class": "N",
+        "reason": "OpenROAD.GeneratePDN emits the native power grid violation count. Original zero limit unchanged.",
+        "native_metrics": [
+          "design__power_grid_violation__count"
+        ]
+      },
+      {
+        "old_name": "pad_access_spacing",
+        "class": "T",
+        "reason": "Native engineering tool report for io pad ring and power distribution; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "mixed_signal_power_domains": [
+      {
+        "old_name": "crossdomain_integration_errors",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "assembly_placement_and_redistribution": [
+      {
+        "old_name": "bump_alignment_rules",
+        "class": "T",
+        "reason": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "assembly_connectivity_errors",
+        "class": "T",
+        "reason": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "assembly_drc_errors",
+        "class": "T",
+        "reason": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "clock_planning": [
+      {
+        "old_name": "skew_insertion_targets",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "clock__skew__worst_setup",
+          "clock__skew__worst_hold"
+        ]
+      }
+    ],
+    "placement_and_optimization": [
+      {
+        "old_name": "design__power_grid_violation__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__power_grid_violation__count"
+        ]
+      },
+      {
+        "old_name": "design__power_grid_violation__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__power_grid_violation__count"
+        ]
+      },
+      {
+        "old_name": "placement_legality_errors",
+        "class": "X",
+        "reason": "OpenROAD DetailedPlacement calls check_placement; a legality defect stops the tool."
+      },
+      {
+        "old_name": "pre_cts_setup_drv_targets",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "timing__setup__ws",
+          "design__max_slew_violation__count",
+          "design__max_cap_violation__count"
+        ]
+      },
+      {
+        "old_name": "congestion_targets",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "gpl__routability__congestion",
+          "global_route__wirelength"
+        ]
+      }
+    ],
+    "physical_scan_stitching": [
+      {
+        "old_name": "scan_flush_errors",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "spare_cells_and_eco_preparation": [
+      {
+        "old_name": "required_spare_distribution",
+        "class": "T",
+        "reason": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "spare_tie_connectivity_errors",
+        "class": "T",
+        "reason": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "clock_tree_synthesis": [
+      {
+        "old_name": "clock_tree_sink_coverage",
+        "class": "T",
+        "reason": "OpenROAD CTS native clock-net loads and connected sink counts. Wire only this native report; both sides must come from the tool.",
+        "native_population": "OpenROAD CTS native clock-net loads and connected sink counts"
+      },
+      {
+        "old_name": "clock_skew_insertion_drv",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "clock__skew__worst_setup",
+          "clock__skew__worst_hold"
+        ]
+      }
+    ],
+    "post_cts_timing_repair": [
+      {
+        "old_name": "post_cts_setup_hold_drv",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "timing__setup__ws",
+          "timing__hold__ws",
+          "design__max_slew_violation__count",
+          "design__max_cap_violation__count"
+        ]
+      },
+      {
+        "old_name": "repair_stagnation_iterations",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": []
+      }
+    ],
+    "routing_and_cell_filler": [
+      {
+        "old_name": "routed_net_coverage",
+        "class": "X",
+        "reason": "OpenROAD detailed routing rejects unfinished routing; native disconnected-pin checks remain."
+      },
+      {
+        "old_name": "routing_drc_errors",
+        "class": "N",
+        "reason": "Native emitted metric with original numeric limit unchanged.",
+        "native_metrics": [
+          "route__drc_errors"
+        ]
+      }
+    ],
+    "analog_top_interconnect_pads_and_power": [
+      {
+        "old_name": "analog_top_pad_core_connectivity_errors",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "analog_sensitive_route_constraints",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "post_route_timing_repair": [
+      {
+        "old_name": "post_repair_timing_drv",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "timing__setup__ws",
+          "timing__hold__ws",
+          "design__max_slew_violation__count",
+          "design__max_cap_violation__count"
+        ]
+      },
+      {
+        "old_name": "filler_restore_errors",
+        "class": "X",
+        "reason": "Native FillInsertion command failures and final DRC/LVS cover fill restoration defects."
+      },
+      {
+        "old_name": "repair_iteration_budget",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": []
+      }
+    ],
+    "routed_candidate_physical_checks": [
+      {
+        "old_name": "route__drc_errors",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "route__drc_errors"
+        ]
+      },
+      {
+        "old_name": "design__critical_disconnected_pin__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__critical_disconnected_pin__count"
+        ]
+      },
+      {
+        "old_name": "route__wirelength__max",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "route__wirelength__max"
+        ]
+      },
+      {
+        "old_name": "disconnected_required_pins",
+        "class": "D",
+        "reason": "Existing design__critical_disconnected_pin__count in this row."
+      },
+      {
+        "old_name": "route_short_overlap_errors",
+        "class": "D",
+        "reason": "Native route__drc_errors and final native DRC/LVS/illegal overlap checks."
+      }
+    ],
+    "antenna_checks": [
+      {
+        "old_name": "klayout__antenna_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "klayout__antenna_error__count"
+        ]
+      },
+      {
+        "old_name": "route__antenna_violation__count",
+        "class": "D",
+        "reason": "Native antenna__violating__nets and antenna__violating__pins in this row."
+      },
+      {
+        "old_name": "antenna_net_pin_violations",
+        "class": "N",
+        "reason": "Native emitted metric with original numeric limit unchanged.",
+        "native_metrics": [
+          "antenna__violating__nets",
+          "antenna__violating__pins"
+        ]
+      },
+      {
+        "old_name": "antenna_rule_coverage",
+        "class": "P",
+        "reason": "Deck-coverage paperwork. Native antenna violating nets/pins and applicable PDK deck remain."
+      }
+    ],
+    "final_adopted_netlist_equivalence": [
+      {
+        "old_name": "final_lec_unproved",
+        "class": "T",
+        "reason": "Yosys.EQY native final partition status; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "implemented_netlist_cdc_and_rdc": [
+      {
+        "old_name": "implemented_crossing_census",
+        "class": "P",
+        "reason": "Crossing inventory trace is paper. Implemented native CDC findings remain."
+      },
+      {
+        "old_name": "new_unexplained_crossings",
+        "class": "T",
+        "reason": "Yosys implemented-netlist CDC graph and protocol assertions; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "implemented_power_intent_consistency": [
+      {
+        "old_name": "implemented_upf_semantics",
+        "class": "P",
+        "reason": "UPF semantic trace is paper. Power-aware simulation, supply connectivity and STA remain."
+      },
+      {
+        "old_name": "aon_supply_path_errors",
+        "class": "T",
+        "reason": "Native engineering tool report for implemented power intent consistency; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "power_sequence_behavior_errors",
+        "class": "T",
+        "reason": "Native engineering tool report for implemented power intent consistency; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "multivoltage_timing",
+        "class": "T",
+        "reason": "Native engineering tool report for implemented power intent consistency; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "candidate_parasitic_extraction": [
+      {
+        "old_name": "candidate_parasitic_coverage",
+        "class": "T",
+        "reason": "OpenSTA report_parasitic_annotation annotated and unannotated native nets. Wire only this native report; both sides must come from the tool.",
+        "native_population": "OpenSTA report_parasitic_annotation annotated and unannotated native nets"
+      },
+      {
+        "old_name": "si_applicability_evidence",
+        "class": "P",
+        "reason": "SI applicability evidence is paper. Router predicates and native SI analysis remain."
+      }
+    ],
+    "candidate_signal_integrity": [
+      {
+        "old_name": "si_required_windows",
+        "class": "P",
+        "reason": "Required SI window trace is paper. Native coupling noise/delay bounds remain."
+      },
+      {
+        "old_name": "coupling_noise_delay_bounds",
+        "class": "T",
+        "reason": "Native engineering tool report for candidate signal integrity; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "candidate_timing_closure": [
+      {
+        "old_name": "candidate_setup_hold_drv",
+        "class": "D",
+        "reason": "Final electrical native setup/hold/slew/cap checks retain the unchanged signoff limits."
+      },
+      {
+        "old_name": "candidate_sdf_generation",
+        "class": "D",
+        "reason": "Native OpenSTA writes SDF. Final SDF replay checks simulator annotation; a missing SDF remains a real missing input there."
+      }
+    ],
+    "path_delay_atpg": [
+      {
+        "old_name": "path_fault_coverage",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "small_delay_defect_atpg": [
+      {
+        "old_name": "sdd_graded_fault_coverage",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "final_test_patterns_and_test_activity": [
+      {
+        "old_name": "final_test_pattern_coverage",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "test_protocol_errors",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "candidate_gate_level_simulation": [
+      {
+        "old_name": "candidate_gls_scenarios",
+        "class": "P",
+        "reason": "Required GLS scenario trace is paper. Native GLS failures and SDF annotation counts remain."
+      },
+      {
+        "old_name": "candidate_sdf_annotation",
+        "class": "T",
+        "reason": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool.",
+        "native_population": "Native simulator SDF annotated and unannotated delay counts"
+      },
+      {
+        "old_name": "gls_failures",
+        "class": "T",
+        "reason": "Icarus/Verilator gate-level simulation with native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "post_layout_spice_correlation": [
+      {
+        "old_name": "postlayout_spice_targets",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "critical_path_correlation",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "functional_activity_and_external_loads": [
+      {
+        "old_name": "functional_mission_modes",
+        "class": "P",
+        "reason": "Mission-mode checklist is paper. Native simulation activity and power analysis remain."
+      }
+    ],
+    "candidate_power_analysis": [
+      {
+        "old_name": "power_activity_coverage",
+        "class": "P",
+        "reason": "Activity inventory trace is paper. Native activity-annotated power report remains."
+      },
+      {
+        "old_name": "per_mode_rail_average_peak_power",
+        "class": "T",
+        "reason": "Native engineering tool report for candidate power analysis; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "candidate_ir_drop": [
+      {
+        "old_name": "ir__drop__worst__pct",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "ir__drop__worst__pct"
+        ]
+      },
+      {
+        "old_name": "rail_source_coverage",
+        "class": "P",
+        "reason": "Supply-source inventory trace is paper. Native IR net analysis and PG connectivity remain."
+      },
+      {
+        "old_name": "static_dynamic_ir_limits",
+        "class": "T",
+        "reason": "OpenROAD PDNSim static and dynamic IR native analysis; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "candidate_electromigration": [
+      {
+        "old_name": "em_violations",
+        "class": "T",
+        "reason": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "em_current_lifetime_limits",
+        "class": "T",
+        "reason": "Native current-density/EM solver against PDK current and lifetime limits; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "current_temperature_model_coverage",
+        "class": "P",
+        "reason": "EM model coverage trace is paper. Native EM measurements against PDK limits remain."
+      }
+    ],
+    "candidate_reliability_and_esd": [
+      {
+        "old_name": "candidate_esd_supply_paths",
+        "class": "P",
+        "reason": "ESD supply-path inventory is paper. Native PERC topology violations remain."
+      },
+      {
+        "old_name": "candidate_perc_latchup_errors",
+        "class": "T",
+        "reason": "Native PERC/ERC and reliability solver reports; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "substrate_and_supply_coupling": [
+      {
+        "old_name": "substrate_supply_model_coverage",
+        "class": "P",
+        "reason": "Model inventory trace is paper. Native coupling/noise analysis remains."
+      },
+      {
+        "old_name": "noise_budget_limits",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "candidate_mixed_signal_scenarios": [
+      {
+        "old_name": "candidate_ams_scenarios",
+        "class": "P",
+        "reason": "Required AMS scenario trace is paper. Native AMS performance measurements remain."
+      },
+      {
+        "old_name": "candidate_ams_performance",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "stream_out": [
+      {
+        "old_name": "design__xor_difference__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__xor_difference__count"
+        ]
+      },
+      {
+        "old_name": "design__xor_difference__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__xor_difference__count"
+        ]
+      },
+      {
+        "old_name": "unresolved_gds_cells",
+        "class": "X",
+        "reason": "Native stream-out tools reject missing referenced layouts."
+      }
+    ],
+    "complete_top_level_layout_assembly": [
+      {
+        "old_name": "missing_duplicate_macro_instances",
+        "class": "X",
+        "reason": "Native final LVS compares instances and connections."
+      }
+    ],
+    "seal_ring_and_die_identification": [
+      {
+        "old_name": "seal_dieid_rules",
+        "class": "T",
+        "reason": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "seal_core_clearance",
+        "class": "T",
+        "reason": "Native engineering tool report for seal ring and die identification; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "metal_density_fill": [
+      {
+        "old_name": "klayout__density_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "klayout__density_error__count"
+        ]
+      },
+      {
+        "old_name": "fill_density_rules",
+        "class": "D",
+        "reason": "Ruling 208 conditional D. klayout__density_error__count retains PDK limits and must measure the same final GDS passed to final_physical_verification. No density limit change."
+      },
+      {
+        "old_name": "fill_keepout_violations",
+        "class": "D",
+        "reason": "Native filler obeys PDK exclusion rules; final DRC and LVS check actual geometry."
+      }
+    ],
+    "design_for_manufacturability": [
+      {
+        "old_name": "dfm_density_lithography_cmp_targets",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": [
+          "klayout__density_error__count"
+        ]
+      },
+      {
+        "old_name": "advanced_dfm_provider_targets",
+        "class": "R",
+        "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
+        "native_metrics": []
+      }
+    ],
+    "finishing_geometry_fidelity": [
+      {
+        "old_name": "unexplained_stream_xor",
+        "class": "T",
+        "reason": "KLayout XOR of pre/post-finishing geometry with native difference count; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "final_physical_verification": [
+      {
+        "old_name": "magic__drc_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "magic__drc_error__count"
+        ]
+      },
+      {
+        "old_name": "klayout__drc_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "klayout__drc_error__count"
+        ]
+      },
+      {
+        "old_name": "magic__illegal_overlap__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "magic__illegal_overlap__count"
+        ]
+      },
+      {
+        "old_name": "design__lvs_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__lvs_error__count"
+        ]
+      },
+      {
+        "old_name": "final_drc_lvs_erc_antenna_errors",
+        "class": "D",
+        "reason": "Native final DRC/LVS/illegal overlap checks and antenna_checks retain zero limits."
+      },
+      {
+        "old_name": "full_device_coverage",
+        "class": "X",
+        "reason": "Netgen reports unmatched devices and native LVS error count gates zero."
+      },
+      {
+        "old_name": "final_density_targets",
+        "class": "D",
+        "reason": "Ruling 208 conditional D. klayout__density_error__count retains PDK limits and must measure the same final GDS passed to final_physical_verification. No density limit change."
+      }
+    ],
+    "final_perc_esd_and_latch_up": [
+      {
+        "old_name": "final_perc_latchup_errors",
+        "class": "T",
+        "reason": "Native PERC/ERC and reliability solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "final_esd_supply_topology",
+        "class": "P",
+        "reason": "ESD topology inventory is paper. Native final PERC violations remain."
+      }
+    ],
+    "package_and_external_load_electrical_models": [
+      {
+        "old_name": "package_rc_thermal_validity",
+        "class": "T",
+        "reason": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "assembly_parasitic_extraction": [
+      {
+        "old_name": "interdie_rc_rlc_thermal_coverage",
+        "class": "T",
+        "reason": "Native assembly extractor/model solver extracted and unannotated interconnect population. Wire only this native report; both sides must come from the tool.",
+        "native_population": "Native assembly extractor/model solver extracted and unannotated interconnect population"
+      },
+      {
+        "old_name": "assembly_model_correlation",
+        "class": "T",
+        "reason": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "final_geometry_rc_and_pex": [
+      {
+        "old_name": "fill_sensitive_reference_correlation",
+        "class": "T",
+        "reason": "OpenRCX/Magic extraction and native parasitic annotation report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "final_parasitic_corner_coverage",
+        "class": "T",
+        "reason": "OpenSTA per-corner native parasitic annotation reports. Wire only this native report; both sides must come from the tool.",
+        "native_population": "OpenSTA per-corner native parasitic annotation reports"
+      }
+    ],
+    "final_electrical_analysis": [
+      {
+        "old_name": "timing__setup_vio__count__corner:*",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "timing__setup_vio__count__corner:*"
+        ]
+      },
+      {
+        "old_name": "timing__hold_vio__count__corner:*",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "timing__hold_vio__count__corner:*"
+        ]
+      },
+      {
+        "old_name": "design__max_slew_violation__count__corner:*",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__max_slew_violation__count__corner:*"
+        ]
+      },
+      {
+        "old_name": "design__max_cap_violation__count__corner:*",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "design__max_cap_violation__count__corner:*"
+        ]
+      },
+      {
+        "old_name": "final_mission_scenario_coverage",
+        "class": "P",
+        "reason": "Mission scenario trace is paper. Native final timing and selected engineering analyses remain."
+      },
+      {
+        "old_name": "final_timing_si_targets",
+        "class": "D",
+        "reason": "Native final setup/hold/slew/cap checks; selected candidate_signal_integrity retains native SI work."
+      },
+      {
+        "old_name": "final_analog_mission_targets",
+        "class": "T",
+        "reason": "Native OpenSTA, SPICE, thermal and aging solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "final_ir_em_thermal_aging_targets",
+        "class": "D",
+        "reason": "candidate_ir_drop, candidate_electromigration, and final thermal/aged margin checks retain limits."
+      },
+      {
+        "old_name": "final_sdf_annotation",
+        "class": "D",
+        "reason": "Final SDF gate-level replay owns simulator annotation measurement."
+      },
+      {
+        "old_name": "thermal_temperature_gradient_targets",
+        "class": "T",
+        "reason": "Native OpenSTA, SPICE, thermal and aging solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "thermal_aware_em_timing_feedback",
+        "class": "P",
+        "reason": "Thermal/EM/timing feedback binding is paper. Native thermal, EM and timing limits remain."
+      },
+      {
+        "old_name": "aged_timing_margin_targets",
+        "class": "T",
+        "reason": "Native OpenSTA, SPICE, thermal and aging solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "aged_analog_margin_targets",
+        "class": "T",
+        "reason": "Native OpenSTA, SPICE, thermal and aging solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "aging_mission_coverage",
+        "class": "P",
+        "reason": "Aging mission trace is paper. Native aging margin measurements remain."
+      }
+    ],
+    "final_sdf_gate_level_replay": [
+      {
+        "old_name": "final_gls_function_timing_errors",
+        "class": "T",
+        "reason": "Icarus gate-level simulation and native SDF annotation report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "final_sdf_annotation",
+        "class": "T",
+        "reason": "Native simulator SDF annotated and unannotated delay counts. Wire only this native report; both sides must come from the tool.",
+        "native_population": "Native simulator SDF annotated and unannotated delay counts"
+      },
+      {
+        "old_name": "final_gls_scenarios",
+        "class": "P",
+        "reason": "Final scenario trace is paper. Native final GLS failures and SDF annotation counts remain."
+      }
+    ],
+    "final_geometry_mixed_signal_scenarios": [
+      {
+        "old_name": "final_ams_scenarios",
+        "class": "P",
+        "reason": "Final AMS scenario trace is paper. Native final noise, settling and calibration bounds remain."
+      },
+      {
+        "old_name": "final_ams_noise_settling_calibration",
+        "class": "T",
+        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "final_test_pattern_replay": [
+      {
+        "old_name": "final_pattern_good_machine_errors",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "export_roundtrip_errors",
+        "class": "T",
+        "reason": "Fault/Atalanta native ATPG coverage and scan simulation report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "implemented_security_and_debug_access": [
+      {
+        "old_name": "final_security_requirements",
+        "class": "P",
+        "reason": "Implemented security requirement trace is paper. Native final security proofs and access violations remain."
+      },
+      {
+        "old_name": "scan_debug_access_violations",
+        "class": "T",
+        "reason": "SymbiYosys security property and reachability tasks; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "final_analog_security_targets",
+        "class": "T",
+        "reason": "SymbiYosys security property and reachability tasks; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "analog_block_signoff": [
+      {
+        "old_name": "spec_results",
+        "class": "T",
+        "reason": "Read every analog spec declared in L documents and compare its bound/unit with native ngspice/Xyce corner_results.json spec_results measurements. Any declared spec without a SPICE number is NOT_MEASURED. Reuse analog_real_corner_sweep.run_block; no new emitter."
+      },
+      {
+        "old_name": "analog_endpoint_evidence",
+        "class": "P",
+        "reason": "Endpoint evidence aggregation is paper. Native analog PV and post-layout performance remain."
+      }
+    ],
+    "mixed_signal_signoff": [
+      {
+        "old_name": "mixed_requirement_evidence",
+        "class": "P",
+        "reason": "Mixed-signal requirement trace is paper. Native AMS scenarios and PV remain."
+      }
+    ],
+    "assembly_physical_and_cross_die_signoff": [
+      {
+        "old_name": "crossdie_system_dft_coverage",
+        "class": "T",
+        "reason": "Native ATPG detected faults and total modeled faults report. Wire only this native report; both sides must come from the tool.",
+        "native_population": "Native ATPG detected faults and total modeled faults report"
+      },
+      {
+        "old_name": "assembly_pv_errors",
+        "class": "T",
+        "reason": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "interdie_timing_pi_thermal_targets",
+        "class": "T",
+        "reason": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "assembly_alignment_stackup_errors",
+        "class": "T",
+        "reason": "Native package/assembly DRC, LVS, extraction and electrical solver reports; wire the report/input adapter without population emitters or requirement traces."
+      },
+      {
+        "old_name": "whole_assembly_connectivity_pv_coverage",
+        "class": "D",
+        "reason": "Native assembly LVS and assembly_pv_errors already compare all extracted connections and devices."
+      }
+    ],
+    "package_and_test_readiness": [
+      {
+        "old_name": "escape_bond_feasibility",
+        "class": "T",
+        "reason": "Bare die duplicates native DRC/LVS (D). A declared package requires native package/bond geometry analysis.",
+        "when": "package_declared"
+      },
+      {
+        "old_name": "package_feedback_unresolved",
+        "class": "P",
+        "reason": "Feedback closure paperwork. Native package connectivity and electrical analysis remain."
+      },
+      {
+        "old_name": "test_access_ready",
+        "class": "P",
+        "reason": "Test readiness checklist is paper. Native scan/ATPG and gate-level test replay remain."
+      },
+      {
+        "old_name": "package_electrical_feedback_coverage",
+        "class": "P",
+        "reason": "Package feedback trace is paper. Package native electrical analysis remains."
+      }
+    ],
+    "design_safety_case": [
+      {
+        "old_name": "safety_evidence_trace",
+        "class": "P",
+        "reason": "Safety evidence trace is paper. Fault injection and diagnostic coverage remain."
+      },
+      {
+        "old_name": "redundancy_separation_dfa",
+        "class": "T",
+        "reason": "Native fault-injection simulation and diagnostic coverage report; wire the report/input adapter without population emitters or requirement traces."
+      }
+    ],
+    "signoff_aggregation": [
+      {
+        "old_name": "non_passing_steps",
+        "class": "N",
+        "native_metrics": [
+          "non_passing_steps"
+        ],
+        "reason": "Ruling 208 generic count of earlier Router-selected steps whose result is not PASS."
+      }
+    ],
+    "compliance_and_final_adoption": [
+      {
+        "old_name": "non_passing_steps",
+        "class": "N",
+        "native_metrics": [
+          "non_passing_steps"
+        ],
+        "reason": "Ruling 208 generic count of earlier Router-selected steps whose result is not PASS."
+      }
+    ],
+    "ip_release_views_and_documentation": [
+      {
+        "old_name": "ip_endpoint_views",
+        "class": "N",
+        "reason": "Ruling 208 reverses P. Native snapshot reports both required and exported views; missing required views are a real defect.",
+        "native_metrics": [
+          "ip_endpoint_views"
+        ],
+        "native_population": "LibreLane State snapshot required views and exported views"
+      },
+      {
+        "old_name": "ip_integration_limits_documented",
+        "class": "P",
+        "reason": "Documentation-completeness trace is paper. Native timing/electrical limits remain."
+      }
+    ],
+    "tapeout_precheck": [
+      {
+        "old_name": "provider_design_rule_errors",
+        "class": "T",
+        "reason": "Without a provider deck this duplicates final native DRC (D). A declared provider deck requires its native DRC run.",
+        "when": "provider_deck_declared"
+      },
+      {
+        "old_name": "provider_delivery_items",
+        "class": "P",
+        "reason": "Provider delivery checklist is paper. Native provider DRC and handoff outputs remain."
+      }
+    ],
+    "design_release": [
+      {
+        "old_name": "release_required_items",
+        "class": "N",
+        "reason": "Ruling 208 reverses P. Native snapshot reports both required and exported views; missing required views are a real defect.",
+        "native_metrics": [
+          "release_required_items"
+        ],
+        "native_population": "LibreLane State snapshot required views and exported views"
+      }
+    ]
+  },
+  "classification_ruling": 208,
+  "row_applicability": {
+    "package_load_and_test_interface_feasibility": {
+      "when": "package_interface and package_declared",
+      "reason": "Owner ruling 207 accepted package checks apply only to a declared package."
+    },
+    "package_and_test_readiness": {
+      "when": "package_interface and package_declared",
+      "reason": "Owner ruling 207 bare-die geometry is checked by final native PV; package checks require a declared package."
+    },
+    "tapeout_precheck": {
+      "when": "ic and provider_deck_declared",
+      "reason": "Owner ruling 207 provider checks duplicate native DRC unless a provider deck is declared."
+    },
+    "pdk_library_deck_and_tool_use_qualification": {
+      "when": "False",
+      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+    },
+    "functional_safety_plan_and_tool_confidence": {
+      "when": "False",
+      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+    },
+    "macro_logical_and_timing_views": {
+      "when": "False",
+      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+    },
+    "netlist_handoff": {
+      "when": "False",
+      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+    },
+    "functional_activity_and_external_loads": {
+      "when": "False",
+      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+    },
+    "mixed_signal_signoff": {
+      "when": "False",
+      "reason": "No native engineering command or remaining numeric check. Native downstream tools consume the documents and State directly."
+    }
+  },
+  "classification_decision": {
+    "ruling": 208,
+    "resolved": "All 13 R lines and P lines accepted subject to the explicit conditions. ip_endpoint_views and release_required_items reversed to N.",
+    "conditions": [
+      "Analog signoff reads every declared L-document spec and its SPICE number directly. A missing number is NOT_MEASURED; comparator remains T until wired.",
+      "R native numbers remain visible in results; declared bounds are compared when present.",
+      "Density D applies only when the native density metric measures the same final GDS as final physical verification."
+    ],
+    "unresolved": [
+      "Coverage only. Determine the old step caller limits and the published SPM thresholds, then apply the stricter declared target. The previous coverage_targets D is suspended as T; no numeric limit is changed by this delta."
+    ]
+  }
 }

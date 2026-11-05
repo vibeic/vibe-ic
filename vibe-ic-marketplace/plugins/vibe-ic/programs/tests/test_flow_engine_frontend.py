@@ -131,6 +131,19 @@ def test_owner_log_does_not_change_the_project_during_generation(tmp_path):
     assert str(directory / "owner.log") in result["reports"]
 
 
+def test_owner_lint_numbers_are_read_from_its_report(tmp_path):
+    report = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    report.parent.mkdir(parents=True)
+    numbers = {"design__lint_error__count": 0, "design__lint_timing_construct__count": 0}
+    report.write_text(json.dumps({"steps": [{"name": "rtl_validate", "status": "PASS",
+        "extras": {"exit_code": 0, "metrics": numbers}}]}))
+    selected = {"delivery_target": "rtl", "input_contract": "original"}
+    session = frontend.OwnerSession(tmp_path, selected)
+    session.executed = True
+    result = session.result(tmp_path / "steps/lint", "rtl_validate")
+    assert all(result["metrics"].get(key) == value for key, value in numbers.items())
+
+
 def test_public_entry_retains_the_existing_router_closure(tmp_path, monkeypatch):
     route = {"entry_step": "1", "verify_through": "2", "answer_step": "1",
              "delivery_target": "rtl", "input_contract": "original",

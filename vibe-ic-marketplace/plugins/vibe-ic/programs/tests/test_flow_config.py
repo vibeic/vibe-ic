@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from flow_config import build_config, write_config
+from flow_config import build_config, resolve_rtl_inputs, write_config
 
 
 @pytest.fixture
@@ -161,3 +161,38 @@ def test_missing_declared_top_is_not_replaced_by_an_unrelated_module(project):
         '{"top_module":"missing"}')
     with pytest.raises(FileNotFoundError, match="Declared top module missing"):
         build_config(project)
+
+
+def test_root_module_precedes_nested_copy_and_needed_nested_module_survives(project):
+    rtl = project / "phase2/stage1/rtl"
+    nested = rtl / "syn/rtl"
+    nested.mkdir(parents=True)
+    (nested / "unit.v").write_text("module unit; endmodule\n")
+    leaf = nested / "leaf.v"
+    leaf.write_text("module leaf; endmodule\n")
+    files, top = resolve_rtl_inputs(project)
+    assert top == "unit"
+    assert files == [rtl / "unit.v", leaf]
+    assert not (project / "work").exists()
+    assert build_config(project)["VERILOG_FILES"] == [str(path) for path in files]
+
+
+def test_nested_file_with_overlapping_and_unique_modules_is_not_silently_dropped(project):
+    rtl = project / "phase2/stage1/rtl"
+    nested = rtl / "syn"
+    nested.mkdir()
+    mixed = nested / "mixed.v"
+    mixed.write_text("module unit; endmodule\nmodule leaf; endmodule\n")
+    files, _ = resolve_rtl_inputs(project)
+    assert mixed in files
+
+
+def test_shared_input_resolver_recovers_declared_top_without_config_side_effects(project):
+    (project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").write_text(
+        '{"top_module":"missing"}')
+    (project / "input").mkdir()
+    (project / "input/phase1_prompt.md").write_text("- Top module: `unit`.\n")
+    files, top = resolve_rtl_inputs(project)
+    assert top == "unit"
+    assert files == [project / "phase2/stage1/rtl/unit.v"]
+    assert not (project / "work").exists()
