@@ -302,7 +302,7 @@ def test_actual_eqy_uses_documented_reset_state(tmp_path, different, domain_alia
 
 
 @pytest.mark.parametrize("different", [False, True])
-@pytest.mark.parametrize("physical", [False, True])
+@pytest.mark.parametrize("physical", [None, "CORE SPACER", "CORE WELLTAP"])
 def test_actual_eqy_detects_unequal_logic(tmp_path, different, physical):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
@@ -316,7 +316,7 @@ def test_actual_eqy_detects_unequal_logic(tmp_path, different, physical):
     if physical:
         gate.write_text(gate.read_text().replace("endmodule", "\nFRAME frame();\nendmodule"))
         lef = tmp_path / "cells.lef"
-        lef.write_text("MACRO FRAME\n CLASS CORE SPACER ;\nEND FRAME\n")
+        lef.write_text(f"MACRO FRAME\n CLASS {physical} ;\nEND FRAME\n")
         config["CELL_LEFS"] = {"typical": [str(lef)]}
     result = eqy(tmp_path, tmp_path, {"metric": "final_lec_unproved"}, Commands(tmp_path),
                  state={"nl": str(gate)}, config=config)
