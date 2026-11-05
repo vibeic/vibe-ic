@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from flow_native_adapters import Commands
-from flow_native_verification import eqy, eqy_partitions, reset_boundary, xor
+from flow_native_verification import eqy, eqy_partitions, gls, reset_boundary, xor
 
 
 def partition(tmp_path, name, word, flags=""):
@@ -184,3 +184,91 @@ def test_original_klayout_xor_invocation(tmp_path, different):
     assert result["ran"], result
     assert result["metrics"]["design__xor_difference__count"] == int(different), result
     assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
+
+
+def gls_fixture(project, *, different=False, annotated=True, cocotb=False):
+    project.mkdir(parents=True, exist_ok=True)
+    netlist, model, sdf = [project / name for name in ("netlist.v", "model.v", "timing.sdf")]
+    operation = "~a" if different else "a"
+    model.write_text("`timescale 1ns/1ps\nmodule delay_cell(input a, output y);\n"
+                     f"assign y={operation}; specify (a=>y)=(1,1); endspecify endmodule\n")
+    netlist.write_text("module unit(input a, output y);\ndelay_cell gate(.a(a),.y(y));\nendmodule\n")
+    delays = "(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1))))" if annotated else ""
+    connection = ('(CELL (CELLTYPE "unit") (INSTANCE) (DELAY (ABSOLUTE '
+                  '(INTERCONNECT a gate/a (0.5:0.5:0.5)))))\n') if annotated else ""
+    sdf.write_text('(DELAYFILE (SDFVERSION "3.0") (DESIGN "unit") (DIVIDER /) (TIMESCALE 1ns)\n'
+                   + connection + f'(CELL (CELLTYPE "delay_cell") (INSTANCE gate) {delays}))\n')
+    benches = project / "phase2/stage1/sim"
+    benches.mkdir(parents=True)
+    if cocotb:
+        tb = benches / "tb_unit.py"
+        tb.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+            "@cocotb.test()\nasync def function(dut):\n"
+            "    dut.a.value=0\n    await Timer(3,unit='ns')\n"
+            "    dut.a.value=1\n    await Timer(3,unit='ns')\n    assert int(dut.y.value)==1\n")
+    else:
+        tb = benches / "tb_unit.v"
+        tb.write_text("`timescale 1ns/1ps\nmodule tb_unit;\nreg a=0; wire y;\nunit dut(a,y);\n"
+            "initial begin #5; a=1; #5;\n"
+            "if(y!==1) begin $display(\"ORACLE_TB_DONE pass=0/1\"); $fatal(1,\"functional mismatch\"); end\n"
+            "$display(\"ORACLE_TB_DONE pass=1/1\"); $finish; end\nendmodule\n")
+    class NativeState(dict):
+        metrics = {}
+    state = NativeState(nl=str(netlist), sdf={"typical": str(sdf)})
+    config = {"DESIGN_NAME": "unit", "CELL_VERILOG_MODELS": [str(model)]}
+    return state, config
+
+
+@pytest.mark.parametrize("different,annotated,expected", [
+    (False, True, "PASS"), (True, True, "FAIL"), (False, False, "NOT_MEASURED"),
+])
+@pytest.mark.parametrize("cocotb", [False, True])
+def test_native_gls_annotations_and_function(tmp_path, different, annotated, expected, cocotb):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    if cocotb and not shutil.which("cocotb-config"):
+        pytest.skip("Native cocotb is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different, annotated=annotated, cocotb=cocotb)
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == expected, result
+    if expected == "NOT_MEASURED":
+        assert "gls_failures" not in result["metrics"]
+    else:
+        assert result["metrics"]["gls_failures"] == int(different), result
+        assert result["metrics"]["final_gls_function_timing_errors"] == int(different), result
+        assert result["metrics"]["sdf_delays_applied"] > 0, result
+    assert not (directory / "result.json").exists()
+
+
+def test_gls_names_missing_native_inputs(tmp_path):
+    result = gls(tmp_path, tmp_path, {}, Commands(tmp_path), state={}, config={})
+    assert not result["ran"] and "State netlist" in result["detail"]
+
+
+def test_gls_replays_every_state_corner(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    state["sdf"]["second_corner"] = state["sdf"]["typical"]
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert [row["corner"] for row in result["native_steps"]] == ["typical", "second_corner"]
+    assert all(row["status"] == "PASS" and row["tests"] == 1 for row in result["native_steps"])
+    assert result["metrics"]["gls_failures"] == 0
+
+
+def test_gls_requires_functional_evidence_even_with_annotation(tmp_path):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project)
+    bench = project / "phase2/stage1/sim/tb_unit.v"
+    bench.write_text(bench.read_text().replace('$display("ORACLE_TB_DONE pass=1/1");', ""))
+    result = gls(project, directory, {}, Commands(directory), state=state, config=config)
+    assert result["metrics"]["sdf_delays_applied"] > 0
+    assert "gls_failures" not in result["metrics"]
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED"
