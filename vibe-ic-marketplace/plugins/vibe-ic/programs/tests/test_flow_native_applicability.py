@@ -176,3 +176,56 @@ def test_only_actual_merged_rows_are_unconditionally_unselected():
         'constraint_validation', 'netlist_handoff'}
     reason = row('netlist_handoff')['applicability_reason']
     assert all(name in reason for name in ('LibreLane State', 'Synthesis', 'Netlist equivalence', 'Pre-layout timing'))
+
+
+@pytest.mark.parametrize('name,condition,target', [
+    ('package_load_and_test_interface_feasibility', 'package_interface', 'shippable_gds'),
+    ('package_and_test_readiness', 'package_interface', 'shippable_gds'),
+    ('tapeout_precheck', 'ic', 'shippable_gds'),
+])
+def test_interface_and_ic_prechecks_do_not_require_optional_package_or_provider_deck(tmp_path, name, condition, target):
+    source = row(name)
+    assert source['when'] == condition
+    table = engine.read_json(engine.TABLE)
+    route = {'entry_step': name, 'verify_through': name, 'delivery_target': target}
+    report = engine.run(tmp_path, table=table, route=route)
+    assert report['selected'] == 1
+    assert report['steps'][0]['status'] == 'NOT_MEASURED'
+    assert 'State' in report['steps'][0]['detail']
+    features = engine.design_features(tmp_path, route, table)
+    assert not features.get('package_declared')
+    assert not features.get('provider_deck_declared')
+
+
+def test_macro_audit_does_not_reuse_a_pass_after_a_view_disappears(tmp_path):
+    docs = tmp_path / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L1_DATASHEET.json').write_text(json.dumps({'uses_macros': True}))
+    macro = tmp_path / 'input/pdk_local/neutral/block'
+    macro.mkdir(parents=True)
+    for ext in ('lef', 'gds', 'lib'):
+        (macro / ('block.' + ext)).write_text('neutral view-set fixture')
+    name = 'macro_logical_and_timing_views'
+    route = {'entry_step': name, 'verify_through': name, 'delivery_target': 'ip_hardmacro'}
+    table = engine.read_json(engine.TABLE)
+    assert engine.run(tmp_path, table=table, route=route)['steps'][0]['status'] == 'PASS'
+    (macro / 'block.lib').unlink()
+    result = engine.run(tmp_path, table=table, route=route)['steps'][0]
+    assert result['status'] == 'FAIL'
+    assert result['retained'] is False
+
+
+def test_missing_native_technology_package_is_not_a_design_failure(tmp_path, monkeypatch):
+    import flow109_technology_qualification as technology
+    root = tmp_path / 'pdk'
+    root.mkdir()
+    monkeypatch.setenv('PDK_ROOT', str(root))
+    config = tmp_path / 'phase3/librelane/config.json'
+    config.parent.mkdir(parents=True)
+    config.write_text('{}')
+    with patch.object(technology, 'declared_distribution', return_value=('neutral_pdk', [])), patch.object(
+            technology, '_resolve', side_effect=ImportError('Native Python tool package unavailable')):
+        result = technology.execute(tmp_path, tmp_path / 'step')
+    assert engine.evaluate(engine.ToolResult(**result), []) == 'NOT_MEASURED'
+    assert result['ran'] is False
+    assert result['exit_code'] is None

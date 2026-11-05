@@ -128,7 +128,10 @@ def execute(project: Path, directory: Path) -> dict:
         return {"ran": failed or started, "exit_code": 1 if failed else None,
                 "metrics": metrics, "reports": reports, "tool_seconds": time.perf_counter() - before,
                 "detail": str(exc)}
-    except (ImportError, FileNotFoundError) as exc:
+    except ImportError as exc:
+        return {"ran": False, "exit_code": None, "detail": str(exc),
+                "tool_seconds": 0.0}
+    except FileNotFoundError as exc:
         return {"ran": started, "exit_code": 1 if started else None, "detail": str(exc),
                 "tool_seconds": time.perf_counter() - before}
     except Exception as exc:

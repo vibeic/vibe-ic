@@ -313,12 +313,12 @@
     {
       "name": "package_load_and_test_interface_feasibility",
       "title": "Package load and test-interface feasibility",
-      "when": "package_interface and package_declared",
+      "when": "package_interface",
       "tool": {
         "kind": "adapter",
-        "program": "pad_assignment_gen.py",
-        "function": "main",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "program": null,
+        "function": null,
+        "gap": "Native package/test-interface integration of pad_assignment_gen and io_pad_chip_top_gen is not wired to current State; selected interface feasibility is NOT_MEASURED."
       },
       "checks": [
         {
@@ -337,7 +337,7 @@
         "registry": "D06",
         "native": []
       },
-      "applicability_reason": "Owner ruling 207 accepted package checks apply only to a declared package."
+      "applicability_reason": "Package/test interfaces apply to bare-die and packaged delivery; the existing program includes bare-die load and functional-access analysis. Package absence does not remove the interface obligation."
     },
     {
       "name": "multi_die_partition_and_interface_budget",
@@ -5080,12 +5080,12 @@
     {
       "name": "package_and_test_readiness",
       "title": "Package and test readiness",
-      "when": "package_interface and package_declared",
+      "when": "package_interface",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_package_ready.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "program": null,
+        "function": null,
+        "gap": "Native pad, bond geometry and test-readiness consumers are not adapted to current LibreLane State; selected readiness is NOT_MEASURED."
       },
       "checks": [
         {
@@ -5108,7 +5108,7 @@
         "registry": "D75",
         "native": []
       },
-      "applicability_reason": "Owner ruling 207 bare-die geometry is checked by final native PV; package checks require a declared package."
+      "applicability_reason": "Package/test readiness includes bare-die pad, bond geometry and test access in the existing program; no package declaration is required for row applicability."
     },
     {
       "name": "design_safety_case",
@@ -5237,12 +5237,12 @@
     {
       "name": "tapeout_precheck",
       "title": "Tapeout precheck",
-      "when": "ic and provider_deck_declared",
+      "when": "ic",
       "tool": {
         "kind": "adapter",
-        "program": "tapeout_precheck.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "program": null,
+        "function": null,
+        "gap": "Native IC precheck is not adapted to current LibreLane State; selected tapeout precheck is NOT_MEASURED, with provider-specific checks conditional on their declared deck."
       },
       "checks": [
         {
@@ -5264,7 +5264,7 @@
           "37.5ic"
         ]
       },
-      "applicability_reason": "Owner ruling 207 provider checks duplicate native DRC unless a provider deck is declared."
+      "applicability_reason": "IC delivery requires precheck. A provider-specific deck can select additional checks but its absence does not remove the IC precheck obligation."
     },
     {
       "name": "design_release",

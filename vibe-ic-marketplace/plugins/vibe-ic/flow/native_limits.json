@@ -1299,6 +1299,21 @@
       "program": null,
       "function": null,
       "gap": "Native invocation of mixed_signal_signoff_run and mixed_signal_signoff_check against current LibreLane State is missing. Existing programs still require the retired M1-M3 bound records; selected mixed-signal signoff is NOT_MEASURED."
+    },
+    "package_load_and_test_interface_feasibility": {
+      "program": null,
+      "function": null,
+      "gap": "Native package/test-interface integration of pad_assignment_gen and io_pad_chip_top_gen is not wired to current State; selected interface feasibility is NOT_MEASURED."
+    },
+    "package_and_test_readiness": {
+      "program": null,
+      "function": null,
+      "gap": "Native pad, bond geometry and test-readiness consumers are not adapted to current LibreLane State; selected readiness is NOT_MEASURED."
+    },
+    "tapeout_precheck": {
+      "program": null,
+      "function": null,
+      "gap": "Native IC precheck is not adapted to current LibreLane State; selected tapeout precheck is NOT_MEASURED, with provider-specific checks conditional on their declared deck."
     }
   },
   "deleted_metrics": {
@@ -3878,16 +3893,16 @@
   "classification_ruling": 208,
   "row_applicability": {
     "package_load_and_test_interface_feasibility": {
-      "when": "package_interface and package_declared",
-      "reason": "Owner ruling 207 accepted package checks apply only to a declared package."
+      "when": "package_interface",
+      "reason": "Package/test interfaces apply to bare-die and packaged delivery; the existing program includes bare-die load and functional-access analysis. Package absence does not remove the interface obligation."
     },
     "package_and_test_readiness": {
-      "when": "package_interface and package_declared",
-      "reason": "Owner ruling 207 bare-die geometry is checked by final native PV; package checks require a declared package."
+      "when": "package_interface",
+      "reason": "Package/test readiness includes bare-die pad, bond geometry and test access in the existing program; no package declaration is required for row applicability."
     },
     "tapeout_precheck": {
-      "when": "ic and provider_deck_declared",
-      "reason": "Owner ruling 207 provider checks duplicate native DRC unless a provider deck is declared."
+      "when": "ic",
+      "reason": "IC delivery requires precheck. A provider-specific deck can select additional checks but its absence does not remove the IC precheck obligation."
     },
     "pdk_library_deck_and_tool_use_qualification": {
       "when": "technology_specific",
