@@ -187,6 +187,30 @@
         "file": "programs/flow_spare_cells.py",
         "note": "Ruling212 retains the published native IC spare-cell checks."
       }
+    },
+    "requires_si": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_ic_checks.py",
+        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+      }
+    },
+    "requires_spice": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_ic_checks.py",
+        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+      }
+    },
+    "requires_perc": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_ic_checks.py",
+        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+      }
     }
   },
   "steps": [
@@ -932,17 +956,6 @@
             "file": "programs/flow109_metric_acceptance.py",
             "line": 6599
           }
-        },
-        {
-          "metric": "vacuous_required_proofs",
-          "operator": "==",
-          "limit": 0,
-          "unit": "count",
-          "source": {
-            "file": "programs/flow109_metric_acceptance.py",
-            "line": 6600
-          },
-          "tool_gap": "SymbiYosys prove and antecedent reachability cover tasks; wire the report/input adapter without population emitters or requirement traces."
         },
         {
           "metric": "proof_partition_coverage",
@@ -3252,6 +3265,18 @@
             }
           },
           {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "VibeIC.SignalIntegrity"
+              ],
+              "imports": [
+                "flow_ic_checks"
+              ]
+            }
+          },
+          {
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
@@ -3264,10 +3289,28 @@
       },
       "checks": [
         {
+          "metric": "si_setup_slack_ns",
+          "operator": ">=",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/flow_ic_checks.py"
+          }
+        },
+        {
+          "metric": "si_hold_slack_ns",
+          "operator": ">=",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/flow_ic_checks.py"
+          }
+        },
+        {
           "metric": "coupling_noise_delay_bounds",
           "operator": "within_declared_bounds",
           "limit": null,
-          "when": "physical and requires_si",
+          "when": "not ic or analog_physical",
           "source": {
             "file": "flow/flow109.json",
             "line": 11894
@@ -3276,7 +3319,7 @@
             "kind": "design_or_pdk",
             "metric": "coupling_noise_delay_bounds"
           },
-          "tool_gap": "Native engineering tool report for candidate signal integrity; wire the report/input adapter without population emitters or requirement traces."
+          "tool_gap": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool."
         }
       ],
       "legacy_id": {
@@ -3481,6 +3524,18 @@
             }
           },
           {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "VibeIC.SpiceCorrelation"
+              ],
+              "imports": [
+                "flow_ic_checks"
+              ]
+            }
+          },
+          {
             "when": "otherwise",
             "tool": {
               "kind": "adapter",
@@ -3493,10 +3548,19 @@
       },
       "checks": [
         {
+          "metric": "spice_correlation_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/flow_ic_checks.py"
+          }
+        },
+        {
           "metric": "postlayout_spice_targets",
           "operator": "within_declared_bounds",
           "limit": null,
-          "when": "physical and requires_spice",
+          "when": "not ic or analog_physical",
           "source": {
             "file": "flow/flow109.json",
             "line": 12852
@@ -3505,13 +3569,13 @@
             "kind": "design_or_pdk",
             "metric": "postlayout_spice_targets"
           },
-          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+          "tool_gap": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool."
         },
         {
           "metric": "critical_path_correlation",
           "operator": "within_declared_bounds",
           "limit": null,
-          "when": "physical and requires_spice",
+          "when": "not ic or analog_physical",
           "source": {
             "file": "flow/flow109.json",
             "line": 12873
@@ -3520,7 +3584,7 @@
             "kind": "design_or_pdk",
             "metric": "critical_path_correlation"
           },
-          "tool_gap": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+          "tool_gap": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool."
         }
       ],
       "legacy_id": {
@@ -3764,23 +3828,72 @@
       "title": "Candidate reliability and ESD",
       "when": "physical and requires_perc",
       "tool": {
-        "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "Magic.StreamOut",
+                "Magic.SpiceExtraction",
+                "Checker.IllegalOverlap",
+                "VibeIC.ElectricalRules"
+              ],
+              "imports": [
+                "flow_ic_checks"
+              ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
       },
       "checks": [
+        {
+          "metric": "magic__illegal_overlap__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 248
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_ILLEGAL_OVERLAPS",
+          "enabled_default": true,
+          "when": "ic"
+        },
+        {
+          "metric": "cvc_electrical_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/flow_ic_checks.py"
+          }
+        },
         {
           "metric": "candidate_perc_latchup_errors",
           "operator": "==",
           "limit": 0,
-          "when": "physical and requires_perc",
+          "when": "not ic or analog_physical",
           "source": {
             "file": "flow/flow109.json",
             "line": 13814
           },
           "unit": "count",
-          "tool_gap": "Native PERC/ERC and reliability solver reports; wire the report/input adapter without population emitters or requirement traces."
+          "tool_gap": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool."
         }
       ],
       "legacy_id": {
@@ -4280,10 +4393,30 @@
       "title": "Final PERC ESD and latch-up",
       "when": "physical and requires_perc",
       "tool": {
-        "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "VibeIC.ElectricalRules"
+              ],
+              "imports": [
+                "flow_ic_checks"
+              ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
       },
       "checks": [
         {
@@ -4295,7 +4428,17 @@
             "file": "programs/flow109_metric_acceptance.py",
             "line": 7013
           },
-          "tool_gap": "Native PERC/ERC and reliability solver reports; wire the report/input adapter without population emitters or requirement traces."
+          "when": "not ic or analog_physical",
+          "tool_gap": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool."
+        },
+        {
+          "metric": "cvc_electrical_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/flow_ic_checks.py"
+          }
         }
       ],
       "legacy_id": {

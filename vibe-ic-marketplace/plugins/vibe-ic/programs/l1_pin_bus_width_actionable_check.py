@@ -569,6 +569,8 @@ def evaluate(project: Path) -> Dict[str, Any]:
     for pin in pin_table:
         if not isinstance(pin, dict):
             continue
+        if (pin.get("mode") or pin.get("direction")) == "interface" and pin.get("interface_type") == "req_rsp":
+            continue
         name = pin.get("name")
         if not isinstance(name, str) or not name.strip():
             continue
