@@ -995,6 +995,15 @@
           "file": "programs/flow109_metric_acceptance.py",
           "line": 7013
         }
+      },
+      {
+        "metric": "cvc_electrical_errors",
+        "operator": "==",
+        "limit": 0,
+        "when": "ic",
+        "source": {
+          "file": "programs/flow_ic_checks.py"
+        }
       }
     ],
     "final_sdf_gate_level_replay": [
@@ -1120,6 +1129,23 @@
         }
       }
     ],
+    "metal_density_fill": [
+      {
+        "metric": "*__density_error__count",
+        "operator": "<=",
+        "limit": 0,
+        "source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 113
+        },
+        "metric_source": {
+          "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+          "line": 471
+        },
+        "unit": "count",
+        "when": "ic"
+      }
+    ],
     "seal_ring_and_die_identification": [
       {
         "metric": "seal_dieid_rules",
@@ -1135,6 +1161,48 @@
           0
         ],
         "unavailable_reason": "Native seal-ring producer reports skipped: no PDK script produced a verified ring."
+      }
+    ],
+    "candidate_signal_integrity": [
+      {
+        "metric": "si_setup_slack_ns",
+        "operator": ">=",
+        "limit": 0,
+        "when": "ic",
+        "source": {
+          "file": "programs/flow_ic_checks.py"
+        }
+      },
+      {
+        "metric": "si_hold_slack_ns",
+        "operator": ">=",
+        "limit": 0,
+        "when": "ic",
+        "source": {
+          "file": "programs/flow_ic_checks.py"
+        }
+      }
+    ],
+    "post_layout_spice_correlation": [
+      {
+        "metric": "spice_correlation_errors",
+        "operator": "==",
+        "limit": 0,
+        "when": "ic",
+        "source": {
+          "file": "programs/flow_ic_checks.py"
+        }
+      }
+    ],
+    "candidate_reliability_and_esd": [
+      {
+        "metric": "cvc_electrical_errors",
+        "operator": "==",
+        "limit": 0,
+        "when": "ic",
+        "source": {
+          "file": "programs/flow_ic_checks.py"
+        }
       }
     ]
   },
@@ -1284,8 +1352,7 @@
         "steps": [
           "KLayout.Filler",
           "KLayout.Density",
-          "VibeIC.DensityTopUp",
-          "Checker.KLayoutDensity"
+          "VibeIC.DensityTopUp"
         ],
         "imports": [
           "flow_density_topup"
@@ -1311,6 +1378,53 @@
         ],
         "imports": [
           "flow_spare_cells"
+        ]
+      }
+    },
+    "candidate_signal_integrity": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "VibeIC.SignalIntegrity"
+        ],
+        "imports": [
+          "flow_ic_checks"
+        ]
+      }
+    },
+    "post_layout_spice_correlation": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "VibeIC.SpiceCorrelation"
+        ],
+        "imports": [
+          "flow_ic_checks"
+        ]
+      }
+    },
+    "candidate_reliability_and_esd": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "Magic.StreamOut",
+          "Magic.SpiceExtraction",
+          "Checker.IllegalOverlap",
+          "VibeIC.ElectricalRules"
+        ],
+        "imports": [
+          "flow_ic_checks"
+        ]
+      }
+    },
+    "final_perc_esd_and_latch_up": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "VibeIC.ElectricalRules"
+        ],
+        "imports": [
+          "flow_ic_checks"
         ]
       }
     }
@@ -1803,6 +1917,30 @@
         "file": "programs/flow_spare_cells.py",
         "note": "Ruling212 retains the published native IC spare-cell checks."
       }
+    },
+    "requires_si": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_ic_checks.py",
+        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+      }
+    },
+    "requires_spice": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_ic_checks.py",
+        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+      }
+    },
+    "requires_perc": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_ic_checks.py",
+        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+      }
     }
   },
   "report_scopes": {
@@ -2185,8 +2323,8 @@
       },
       {
         "old_name": "vacuous_required_proofs",
-        "class": "T",
-        "reason": "SymbiYosys prove and antecedent reachability cover tasks; wire the report/input adapter without population emitters or requirement traces."
+        "class": "X",
+        "reason": "Native SymbiYosys cover tasks enforce zero unreached targets for existing covers and conditional assertion enables. When the native model contains neither, no cover count is invented and this absent observation does not block a proof."
       },
       {
         "old_name": "proof_partition_coverage",
@@ -2983,6 +3121,22 @@
     ],
     "candidate_signal_integrity": [
       {
+        "old_name": "si_setup_slack_ns",
+        "class": "N",
+        "native_metrics": [
+          "si_setup_slack_ns"
+        ],
+        "reason": "Native tool result against the original published comparator."
+      },
+      {
+        "old_name": "si_hold_slack_ns",
+        "class": "N",
+        "native_metrics": [
+          "si_hold_slack_ns"
+        ],
+        "reason": "Native tool result against the original published comparator."
+      },
+      {
         "old_name": "si_required_windows",
         "class": "P",
         "reason": "Required SI window trace is paper. Native coupling noise/delay bounds remain."
@@ -2990,7 +3144,8 @@
       {
         "old_name": "coupling_noise_delay_bounds",
         "class": "T",
-        "reason": "Native engineering tool report for candidate signal integrity; wire the report/input adapter without population emitters or requirement traces."
+        "reason": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool.",
+        "when": "not ic or analog_physical"
       }
     ],
     "candidate_timing_closure": [
@@ -3053,14 +3208,24 @@
     ],
     "post_layout_spice_correlation": [
       {
+        "old_name": "spice_correlation_errors",
+        "class": "N",
+        "native_metrics": [
+          "spice_correlation_errors"
+        ],
+        "reason": "Native tool result against the original published comparator."
+      },
+      {
         "old_name": "postlayout_spice_targets",
         "class": "T",
-        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+        "reason": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool.",
+        "when": "not ic or analog_physical"
       },
       {
         "old_name": "critical_path_correlation",
         "class": "T",
-        "reason": "ngspice/Xyce native measurements or native mixed-signal simulator report; wire the report/input adapter without population emitters or requirement traces."
+        "reason": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool.",
+        "when": "not ic or analog_physical"
       }
     ],
     "functional_activity_and_external_loads": [
@@ -3138,6 +3303,22 @@
     ],
     "candidate_reliability_and_esd": [
       {
+        "old_name": "magic__illegal_overlap__count",
+        "class": "N",
+        "native_metrics": [
+          "magic__illegal_overlap__count"
+        ],
+        "reason": "Native tool result against the original published comparator; CVC measures electrical errors, not ESD or latch-up device physics."
+      },
+      {
+        "old_name": "cvc_electrical_errors",
+        "class": "N",
+        "native_metrics": [
+          "cvc_electrical_errors"
+        ],
+        "reason": "Native tool result against the original published comparator; CVC measures electrical errors, not ESD or latch-up device physics."
+      },
+      {
         "old_name": "candidate_esd_supply_paths",
         "class": "P",
         "reason": "ESD supply-path inventory is paper. Native PERC topology violations remain."
@@ -3145,7 +3326,8 @@
       {
         "old_name": "candidate_perc_latchup_errors",
         "class": "T",
-        "reason": "Native PERC/ERC and reliability solver reports; wire the report/input adapter without population emitters or requirement traces."
+        "reason": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool.",
+        "when": "not ic or analog_physical"
       }
     ],
     "substrate_and_supply_coupling": [
@@ -3220,11 +3402,11 @@
     ],
     "metal_density_fill": [
       {
-        "old_name": "klayout__density_error__count",
+        "old_name": "*__density_error__count",
         "class": "N",
-        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "reason": "Native backend density error count and zero-error limit unchanged.",
         "native_metrics": [
-          "klayout__density_error__count"
+          "*__density_error__count"
         ]
       },
       {
@@ -3244,7 +3426,7 @@
         "class": "R",
         "reason": "Intermediate target has no native enforcement or declared document limit; report native values, final signoff limits remain. Compare a document-declared bound when present.",
         "native_metrics": [
-          "klayout__density_error__count"
+          "*__density_error__count"
         ]
       },
       {
@@ -3314,7 +3496,16 @@
       {
         "old_name": "final_perc_latchup_errors",
         "class": "T",
-        "reason": "Native PERC/ERC and reliability solver reports; wire the report/input adapter without population emitters or requirement traces."
+        "reason": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool.",
+        "when": "not ic or analog_physical"
+      },
+      {
+        "old_name": "cvc_electrical_errors",
+        "class": "N",
+        "native_metrics": [
+          "cvc_electrical_errors"
+        ],
+        "reason": "Native tool result against the original published comparator; CVC measures electrical errors, not ESD or latch-up device physics."
       },
       {
         "old_name": "final_esd_supply_topology",

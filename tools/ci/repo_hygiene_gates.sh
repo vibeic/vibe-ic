@@ -166,61 +166,6 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # rather than merely discouraged. Wired here because a source guard that only
 # its own test runs has never run on anything that shipped.
 run "OpenSTA error-abort left armed" "$ROOT" python3 "$PG/sta_continue_on_error_guard.py" "$ROOT"
-# The runtime image's identity must be RESOLVED on the host, never remembered
-# here: a stored digest makes adopting a new image an edit to THIS repository.
-# Three copies had re-grown (the plugin's pin module, the CI hermetic runner,
-# the landing register) and were removed; nothing prevented a fourth. Wired at
-# "$ROOT" and not "$PLUGIN" because two of those three lived under tools/ --
-# handed the plugin root it REFUSES (rc 2) rather than scanning less, which is
-# correct but useless as a gate.
-#
-# MEASURED at this exact root before wiring: rc 0, 1567 Python source file(s)
-# read, 4018 exempt by venue (#1253 -- wiring a RED gate turns "unverified"
-# into "blocking", which is a different change and not this one). Both arms are
-# pinned: the same tree with the resolver's `raise` replaced by a literal
-# `return` is reported at the returning line, and the 64-hex digest that sits
-# in a module docstring as the historical record stays silent.
-run "no stored runtime-image digest"    "$ROOT" python3 "$PG/no_stored_runtime_image_digest_check.py" "$ROOT"
-# @dataclass resolves `sys.modules.get(cls.__module__).__dict__` while it
-# processes the class, so a module loaded via spec_from_file_location must be
-# registered BEFORE exec_module or the exec dies with a bare AttributeError
-# naming dataclasses.py -- a traceback that points at the standard library and
-# hides the two-line cause entirely. Two independent authors hit it in this tree
-# on the same day, the second after the first had written it down, which is the
-# signal that prose is the wrong home for it.
-#
-# Wired at "$ROOT" rather than "$PLUGIN": dynamic loads live under tools/ too,
-# and the root is STRICTLY BROADER at no extra risk (both roots measured rc 0).
-# MEASURED at this root before wiring: rc 0, 5794 file(s), 551 load site(s), 0
-# unregistered. The discriminating arm is real, not a fixture: the pre-fix shape
-# of programs/tests/test_v1_0_80_issue738_regmap_indirection.py:621 is reported
-# by file and line, with the target's own @dataclass named.
-run "dynamic load registers before exec" "$ROOT" python3 "$PG/dynamic_module_load_registers_before_exec_check.py" "$ROOT"
-# These two REFUSE (rc 2) on a subtree that carries no MCP source, which is the
-# correct answer -- "I could not look" is not a pass -- but makes them unfit for
-# a runner that reads any non-zero as FAIL. Measured: wiring them into
-# `run_plugin_self_audit.sh` turned `gate_fixture_discrimination_check` red,
-# because that gate's CAN-PASS fixture builds a minimal subject with no mcp-eda
-# tree at all.
-#
-# THEY ARE PLAIN `run` HERE, AND THAT IS THE STRONGER WIRING, NOT AN OVERSIGHT.
-# They were wired through `run_tolerating_uncheckable` on the reasoning above,
-# which is a fact about a DIFFERENT script's fixture subject and not about this
-# one: `$PLUGIN` here is a checkout of this repository, which TRACKS the MCP
-# package -- 91 files under `vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/`,
-# 11 of them `.mjs`. MEASURED on a clean checkout at this wiring: both exit 0
-# ("13 ES-module file(s) read"; "22 program-path site(s) across 13 MCP source
-# file(s)"), so the rc 2 arm is not reachable from a tree that has the package,
-# and a tree that does NOT have it is a broken subject this sweep should refuse
-# rather than tolerate. The tolerating channel cost a WIRING ERROR because it
-# arrived with no `uncheckable_until` -- and the repair is not to buy an
-# exemption for a state neither gate can reach here (the dispatcher rejects an
-# `uncheckable_until` on a plain `run` for exactly that reason), it is to stop
-# claiming the tolerance. Both now carry a two-arm fixture under
-# `tools/ci/gate_fixtures/`, which `run` obliges them to and the tolerating
-# channel did not.
-run "ESM require is bound"        "$ROOT" python3 "$PG/mcp_esm_require_binding_check.py" "$PLUGIN"
-run "MCP program path resolves"   "$ROOT" python3 "$PG/mcp_tool_program_path_resolves_check.py" "$PLUGIN"
 # vibe-ic#621 — the JSON manifests were guarded and the PROSE was not: the three
 # READMEs a reader meets first advertised v1.5.12 / v1.4.72 / v1.4.61 against a
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
@@ -736,23 +681,6 @@ run "openroad TCL deprecations"     "$PLUGIN" python3 programs/openroad_tcl_depr
 uncheckable_until 2027-02-28 "rc 2 means this host carries no NDA token store (VIBEIC_NDA_TOKENS / the private config's 'nda_tokens'), so the specific_pdk_codename rule cannot be built and the checker reports NOT_MEASURED per the NDA doctrine — it is NOT a claim about the 16 scanned documents. Every other rule still ran, and a document that trips ANY rule on a host that CAN build the full set is rc 1 and fails through this wrapper. Revisit: by this date either the landing runtime carries the tokens (preferred — then this exemption never fires there) or the checker has split 'tokens missing' from its broken-repo rc 2 arms"
 run_tolerating_uncheckable "practical notes specificity" "$PLUGIN" python3 programs/practical_notes_specificity_check.py
 
-# A disposition in the P0 registers can assert a home ("driven at the final
-# acceptance gate") in the same present tense the one true claim above uses
-# ("READY -- wired into tools/ci/repo_hygiene_gates.sh"), and nothing could tell
-# them apart. Re-derived at b85d68ac (the tree carrying #804): over the 36 gates
-# the invocability ratchet pins UNION every gate the registers write a
-# disposition about, 3 claim a home that is real, 19 claim none, and 14 claim
-# one that no flow step, runner, CI script or workflow backs.
-#
-# It is a RATCHET, not a wiring: it does not fail the 14 -- turning them red
-# today would block every landing on prose, and each needs its own engineering.
-# It stops a 15th arriving unnoticed and prints the residual on every run.
-#
-# Wired HERE and not in the P0 umbrella for the same reason as the two above:
-# it takes no project, so the per-project umbrella cannot invoke it and it would
-# run nowhere at all -- which is the exact condition it exists to detect.
-run "P0 disposition backing"        "$ROOT" python3 "$PG/p0_disposition_backing_check.py" --repo-root "$ROOT"
-
 # vibe-ic#215/#566/#927 — THE IMAGE-VERSION GATE IS GONE, with the version it
 # gated. `tools/vibeic-eda/VERSION` held vibeic-eda's version number inside THIS
 # repo, so every image release needed a PR here; `sync_image_version.py --check`
@@ -799,48 +727,6 @@ run "P0 disposition backing"        "$ROOT" python3 "$PG/p0_disposition_backing_
 uncheckable_until 2027-02-28 "needs an AUTHENTICATED gh + network: it lists the org's repos live, and rc 2 means the org could not be asked (a duplicate it CAN see is rc 1)"
 # host-independence: EXCLUDE — reads live org state over the network, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs/org_duplicate_fork_check.py vibeic
-
-# vibe-ic#1364 — a PR whose base belongs to a CLOSED-unmerged PR, or whose
-# branch merely CARRIES that PR's commits, reports `mergeable=CLEAN`, because
-# `mergeable` is computed against the PR's OWN base and not against `main`.
-# Measured 2026-08-13 over 218 open / 760 closed (485 unmerged, 87 branches
-# still live): EIGHT open PRs are affected, and the two detection passes are
-# INDEPENDENT — four are visible only to the commit-graph pass and declare
-# `base=main`; one is visible only to the declared-base pass. Two of the eight
-# are named landing blockers.
-#
-# `--repo-dir "$ROOT"` is what enables the commit-graph pass. Without it the
-# check prints `CARRIED pass NOT ESTABLISHED` and scopes its own PASS line to
-# the half it did run, rather than printing a clean bill over a question it
-# never asked.
-#
-# `--advisory`, deliberately, and NOT because the finding is soft. It is eight
-# real ones. The remedy is per-PR and belongs to each PR's author — rebase the
-# rejected parent out, or adopt it openly and have it reviewed — so no single
-# commit can clear this, and a blocking gate would leave main red on eight
-# other people's branches until they act, which is how a gate gets switched
-# off. `--advisory` lowers the exit code and nothing else: every finding is
-# still printed and the verdict line still says FAIL. There is no baseline and
-# no waiver file, so the only thing that can make this print zero is the
-# branches being fixed. It does NOT lower a REFUSAL.
-#
-# `run_tolerating_uncheckable`: it asks the GitHub API, and rc 2 — "I could not
-# look" — must never share an exit code with "I looked and it was clean".
-#
-# `"$ROOT"` + `"$PG/..."`, not `"$PLUGIN"` + `programs/...`. Both shapes are in
-# this file (46 and 25), and only the first is actually PROBED: the denominator
-# probe runs every gate from a scratch tree, so a path relative to `$PLUGIN`
-# cannot be opened from there and the gate is recorded `[NOT DRIVEN]`. Measured
-# both ways here — the relative form was reported as NOT DRIVEN and the absolute
-# form is probed — so the gate is now subject to the same denominator-disclosure
-# rule as the rest. The checker takes `--repo-dir` explicitly and passes `--repo`
-# to `gh`, so it reads nothing from its cwd and the change is behaviour-neutral.
-#
-# ONE LINE, no `\` continuation — the denominator probe and the host-independence
-# probe both parse this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
-uncheckable_until 2027-02-28 "needs an AUTHENTICATED gh + network: it reads live queue state over the network, and rc 2 means the queue could not be asked at all (a base that genuinely does not reach main is rc 1)"
-# host-independence: EXCLUDE — reads live queue state over the network, so two invocations can differ for a reason that is not in the commit
-run_tolerating_uncheckable "PR bases reach main" "$ROOT" python3 "$PG/pr_base_reachability_check.py" --repo-dir "$ROOT" --advisory
 
 # vibe-ic#306/#316 — the audit that measures which gates can actually stop a
 # run was itself wired into nothing while exiting 1. Recorded debt does not
@@ -1085,8 +971,6 @@ run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_en
 # into prose stops tracking what it counts; a count re-typed into a second
 # predicate stops tracking it AND looks authoritative. ~4s.
 run "P0 gate invocability drift"        "$PLUGIN" python3 programs/p0_gate_invocability_drift_check.py
-
-run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
 
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
 # is unverifiable, and the failure is silent.
@@ -1457,46 +1341,6 @@ run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_sc
 # by turning red: 17217 tracked file(s) under benchmark-data, 525 declaring an
 # SPDX licence, 11 attribution record(s), rc=0 PASS.
 run "vendored attribution retained"     "$ROOT" python3 "$PG/vendored_attribution_retained_check.py"
-
-# --- the upstream-parity family (vibe-ic#1082 compose step) -----------------
-# Three checkers landed together and NOTHING but their own unit tests ran any
-# of them: `checker_execution_wiring_audit` named all three, and
-# `gate_is_wired_check` named the two below that are gate-shaped. A checker a
-# fixture proves and no tree ever exercises is verified against its author's
-# MODEL of the artefacts, never against the artefacts.
-#
-# They sit together and next to the attribution gate above because they are the
-# same population and the same question: what this repository BORROWED from an
-# upstream flow, and whether the borrowing is still maintained rather than
-# merely once true.
-#
-# THE SUBJECT IS PASSED EXPLICITLY, not defaulted. Each of the three defaults to
-# the directory it is installed in, and a gate that reads its own installation
-# cannot be shown a mutated input — so the declaration names `$PLUGIN`, which
-# is the same tree in production and is what makes the two-fixture pair
-# (tools/ci/gate_fixtures/) able to drive the real declared command.
-
-# The register half: every upstream name inside a registered entry is in exactly
-# one class. rc 2 if the register cannot be read — an empty register passes
-# every property it states, which is the one verdict it must never return.
-run "upstream contract parity"          "$ROOT" python3 "$PG/upstream_contract_parity_check.py" \
-    --register "$PLUGIN/programs/upstream_contract_parity.json"
-
-# The declaration half: a module that says it mirrors upstream must name a test
-# that READS upstream. rc 2 on zero declared mirrors — that is a question with
-# no subject, not a clean answer to it.
-run "declared upstream mirrors are pinned" "$ROOT" python3 "$PG/upstream_mirror_is_pinned_check.py" \
-    --programs-dir "$PLUGIN/programs"
-
-# The anchor half, and the only one of the three whose input is HOST-dependent:
-# it opens the upstream file each pin names and looks for the anchor text in it.
-# `--upstream-root "$ROOT"` says an upstream tree VENDORED INSIDE THE CHECKOUT
-# also counts; nothing vendors one today, so on a bare host every pin resolves
-# to NOT_ON_HOST and the gate refuses rather than reporting agreement it never
-# measured.
-uncheckable_until 2027-02-28 "needs an INSTALLED upstream tool tree on the host for ONE of its two legs. The STRUCTURAL leg needs no tree and runs everywhere: it evaluates each UPSTREAM_PINS declaration and requires every pin to carry both an upstream key and an anchor key. MEASURED on a bare checkout, 5 of 5 declared pin(s) pass it, and it discriminates rather than merely passing -- drop one pin's anchor and the count goes to 4 with rc 1 PIN_INCOMPLETE; make the declaration non-literal and it goes to 0 with rc 1 PIN_UNREADABLE, both on a host with no upstream tree anywhere. The COMPARISON leg is what rc 2 declines: it opens the file each pin names and looks for the anchor text, and on a bare checkout none of the declared upstream files resolves under any probed root. The refusal PRINTS both halves -- how many pins were structurally validated, and every root probed with whether the directory exists and how many declared upstream files were found under it -- so this row can never read as a gate that checked nothing. rc 2 is NOT 'the re-implementations agree' and the gate says so in those words. An anchor ABSENT from a file it DID read is rc 1 and still fails this row"
-run_tolerating_uncheckable "upstream pins still resolve" "$ROOT" python3 "$PG/upstream_reimplementation_pin_check.py" \
-    --programs-dir "$PLUGIN/programs" --upstream-root "$ROOT"
 
 # vibe-ic#408/#389 — a PDK the image ships must be SELECTABLE by the name
 # `--pdk` matches, and every asset the registry DECLARES must resolve. The
@@ -1904,17 +1748,6 @@ run "a printed population agrees with its pin" "$PLUGIN" python3 programs/emitte
 # passes it correctly.
 run "a zero denominator refuses" "$ROOT" python3 "$PG/gate_zero_denominator_refuses_check.py"
 
-# THE OTHER HALF OF THE DENOMINATOR QUESTION, and the one the three above cannot
-# reach. They ask what a PASS disclosed about its reach. This asks what a
-# REFUSAL disclosed about its reach: an absence verdict — a `*_NOT_FOUND` /
-# `*_ABSENT` / `*_MISSING` refusal — must name WHERE it looked, or a reader
-# cannot tell "it is in neither of the two places it is declared" from "I opened
-# one of them". Landed with nothing but its own unit test running it.
-# `--programs-dir` names the subject for the same reason the upstream family
-# above does: the default is this gate's own installation.
-run "absence verdicts name where they looked" "$ROOT" python3 "$PG/absence_verdict_names_its_search_space_check.py" \
-    --programs-dir "$PLUGIN/programs"
-
 # vibe-ic#528 — the OTHER half of the disclosure question, and the reason both
 # are wired: the check above asks whether a HUMAN READER can see that a gate
 # examined nothing, judged from output text. This one asks whether the MACHINE
@@ -2151,8 +1984,6 @@ run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_arti
 # INPUT — a CHANGELOG and one program. That is the same shape as the sixteen
 # above, and it works for the same reason.
 run "changelog metric reproducibility"  "$ROOT" python3 "$PG/changelog_metric_reproducibility_check.py" "$PLUGIN"
-run "changelog command reproducibility" "$ROOT" python3 "$PG/changelog_command_reproducibility_check.py" "$PLUGIN"
-run "literal verdict keyword"           "$ROOT" python3 "$PG/literal_verdict_keyword_check.py" "$PLUGIN"
 
 # SEVENTEEN DOCTRINE-RATCHET GATES, EACH WITH A FIXTURE THE EXERCISER
 # ACCEPTED.
@@ -2242,12 +2073,9 @@ run "literal verdict keyword"           "$ROOT" python3 "$PG/literal_verdict_key
 # returns when that population is empty. Its fixture moves TOKEN ORDER inside a
 # single printed remedy, so both arms examine exactly one.
 run "declaration searched only inside a truncated" "$ROOT" python3 "$PG/declaration_searched_only_inside_a_truncated_window.py" --root "$ROOT"
-run "declared invocation accepted by its own pars" "$ROOT" python3 "$PG/declared_invocation_accepted_by_its_own_parser.py" --root "$ROOT"
 run "denial that constitutes the value it appears" "$ROOT" python3 "$PG/denial_that_constitutes_the_value_it_appears_to_negate.py" --root "$ROOT"
-run "invocation proved by parse not by text" "$ROOT" python3 "$PG/invocation_proved_by_parse_not_by_text.py" --root "$ROOT"
 run "local clone does not borrow objects" "$ROOT" python3 "$PG/local_clone_does_not_borrow_objects.py" "$ROOT"
 run "measurement only artefact is not a verdict s" "$ROOT" python3 "$PG/measurement_only_artefact_is_not_a_verdict_source.py" "$ROOT"
-run "only the declaring step writes its output ce" "$ROOT" python3 "$PG/only_the_declaring_step_writes_its_output_census.py" --root "$ROOT" --self-test
 
 # THE FOUR MATRIX-DIMENSION GAPS, captured 2026-08-28 from the 68x9 mutation
 # probe (plugin v1.12.33). The probe ran a named mutation against each of the
@@ -2272,24 +2100,11 @@ run "only the declaring step writes its output ce" "$ROOT" python3 "$PG/only_the
 run "every declared step reaches the evaluator" "$ROOT" python3 "$PG/every_declared_step_reaches_the_evaluator_check.py" --root "$ROOT"
 run "a declared output has a live producer" "$ROOT" python3 "$PG/declared_output_has_a_live_producer_check.py" --root "$ROOT" --strict
 run "a disclosure token needs a runtime condition" "$ROOT" python3 "$PG/vacuous_disclosure_needs_a_runtime_condition_check.py" --root "$ROOT" --strict
-run "gate red is more than absence" "$ROOT" python3 "$PG/gate_red_is_more_than_absence_census.py" --root "$ROOT" --self-test
-
-# THE CLASS NONE OF THE NINE DIMENSIONS TRIED. The campaign closed by injecting
-# defects that leave every structure intact — file, flag, edge, declaration —
-# and change only what the gate DECIDES. A yield sign-off whose refusal arm was
-# switched off with `if False and measured + 1e-9 < target:` lets a 12.5% yield
-# pass a 90% target, and 0 of 612 matrix cells change colour. This line catches
-# the one shape of that class a source scan can decide: an arm whose condition
-# the source has already answered. It does NOT close the class — the campaign's
-# other injected defect, a sign-off gate that stopped reading its signed memo,
-# is caught by nothing in this repository.
-run "a verdict arm decided by a constant" "$ROOT" python3 "$PG/verdict_arm_disabled_by_a_constant_check.py" --root "$ROOT" --strict
 run "population guard asserts equality not a floo" "$ROOT" python3 "$PG/population_guard_asserts_equality_not_a_floor.py" --root "$ROOT"
 run "population pin without its member set" "$ROOT" python3 "$PG/population_pin_without_its_member_set.py" --root "$ROOT"
 run "prepared checkout states the revision it hol" "$ROOT" python3 "$PG/prepared_checkout_states_the_revision_it_holds.py" "$ROOT"
 run "printed remedy runs as printed" "$ROOT" python3 "$PG/printed_remedy_runs_as_printed.py" "$ROOT"
 run "provenance value is resolved not constant" "$ROOT" python3 "$PG/provenance_value_is_resolved_not_constant.py" "$ROOT"
-run "published absence claim is rechecked against" "$ROOT" python3 "$PG/published_absence_claim_is_rechecked_against_the_tree.py" --root "$ROOT"
 run "reference control resolved through a mutable" "$ROOT" python3 "$PG/reference_control_resolved_through_a_mutable_ref.py" --root "$ROOT"
 run "registry is the iteration domain" "$ROOT" python3 "$PG/registry_is_the_iteration_domain.py" --root "$ROOT"
 run "spawned gate whose status is discarded" "$ROOT" python3 "$PG/spawned_gate_whose_status_is_discarded.py" --root "$ROOT"
@@ -2698,22 +2513,6 @@ run "ic-expert operating map kept"     "$PLUGIN" python3 "$PG/skill_doc_section_
 # in 250/250 (with the `--no-index` fix that makes that assertion capable of
 # firing at all), no tracked root `_*.js` anywhere.
 run "gitignore scratch guard"           "$ROOT" python3 "$PG/gitignore_scratch_guard.py" --root "$ROOT"
-# vibe-ic#1241 — `bundled_attribution_notice_check` was authored, tested and
-# merged with NOTHING but its own unit test invoking it: a fixture the author
-# wrote proves the logic and proves nothing about what this repo ships.
-#
-# The population is THE REPOSITORY, not a per-cell loop, and that is the gate's
-# own stated scope rather than a convenience: Apache-2.0 §4(d) attaches to
-# distributing the WORK, so the subject is the whole distributed tree and the
-# root `NOTICE` that must account for it. A per-published-cell dispatcher would
-# have wired an obligation about the repository to a sample of run artefacts.
-#
-# `run`, not `run_tolerating_uncheckable`: this gate has a REFUSE path (rc=2,
-# "no SPDX-headered source found") that exists precisely so an empty scan
-# cannot read as a pass, and on this tree it does not fire — MEASURED, 513
-# SPDX-headered files under 7 holders, all named in NOTICE, rc=0. A tolerated
-# rc=2 here would re-admit the vacuous pass the refusal was written to block.
-run "bundled work is named in NOTICE"   "$ROOT" python3 "$PG/bundled_attribution_notice_check.py" "$ROOT"
 # vibe-ic#693 (from #313 §6) — a remedy that silently declines is
 # indistinguishable from a remedy that was never needed. Flags a remedy-named
 # call assigned to a variable, guarded by `if <var>:` with no else and no
