@@ -27,18 +27,21 @@ def test_unpacked_sv_structural_read_keeps_native_clock_verdict(tmp_path, edge, 
     ('rst_n', 'active_low', 'synchronous', fsc.REFUTED),
     ('!rst_n', 'active_low', 'asynchronous', fsc.REFUTED),
 ])
+@pytest.mark.parametrize('variable_write', [False, True])
 def test_native_sv_memory_reset_uses_the_existing_lowering(
-        tmp_path, reset_test, polarity, timing, expected):
+        tmp_path, reset_test, polarity, timing, expected, variable_write):
     if shutil.which('yosys') is None:
         pytest.skip('native yosys required')
     rtl = tmp_path / 'neutral.sv'
-    rtl.write_text('module neutral(input logic clk,rst_n,input logic [1:0] addr,'
+    load = ('else if(we) words[addr]<=d[0];' if variable_write else
+            "else begin words[0]<=d[0];words[1]<=d[0]^4'h1;"
+            "words[2]<=d[0]^4'h2;words[3]<=d[0]^4'h3;end")
+    rtl.write_text('module neutral(input logic clk,rst_n,we,input logic [1:0] addr,'
                    'input logic [3:0] d[2],output logic [3:0] y);'
                    'logic [3:0] words[0:3]; always_ff @(posedge clk) begin '
                    f'if({reset_test}) begin '
                    'words[0]<=0;words[1]<=0;words[2]<=0;words[3]<=0;end '
-                   "else begin words[0]<=d[0];words[1]<=d[0]^4'h1;"
-                   "words[2]<=d[0]^4'h2;words[3]<=d[0]^4'h3;end end "
+                   + load + ' end '
                    'assign y=words[addr];endmodule\n')
     result = fsc.check([rtl], 'neutral', [
         {'rule': 'reset_polarity', 'signal': 'rst_n', 'value': polarity},
@@ -97,3 +100,27 @@ def test_native_reset_scope_keeps_unclassified_data_paths_open(tmp_path, memory)
     ], tmp_path, klass={'clock': 'clk', 'resets': ['rst_n']})
     assert result['verdict'] == fsc.NOT_DISCHARGED, result
     assert all(claim['verdict'] != fsc.PASS for claim in result['claims']), result
+
+
+@pytest.mark.parametrize('partial', ['word', 'bit'])
+def test_native_memory_reset_requires_each_actual_bus_bit(tmp_path, partial):
+    if shutil.which('yosys') is None:
+        pytest.skip('native yosys required')
+    reset_last = '' if partial == 'word' else 'words[3][3:1]<=0;'
+    rtl = tmp_path / 'neutral.sv'
+    rtl.write_text('module neutral(input logic clk,rst_n,we,input logic [1:0] addr,'
+                   'input logic [3:0] d[2],output logic [3:0] y);'
+                   'logic [3:0] words[0:3]; always_ff @(posedge clk) begin '
+                   'if(!rst_n) begin words[0]<=0;words[1]<=0;words[2]<=0;'
+                   + reset_last + 'end else if(we) words[addr]<=d[0];end '
+                   'assign y=words[addr];endmodule\n')
+    result = fsc.check([rtl], 'neutral', [
+        {'rule': 'reset_polarity', 'signal': 'rst_n', 'value': 'active_low'},
+        {'rule': 'reset_sync', 'signal': 'rst_n', 'value': 'synchronous'},
+    ], tmp_path, klass={'clock': 'clk', 'resets': ['rst_n']})
+    assert result['verdict'] == fsc.NOT_DISCHARGED, result
+    construction, = result['reset_memory_construction']
+    assert not construction['inside'], construction
+    assert all(view['q_count'] == 16 for view in construction['views'].values())
+    assert any('without a known reset control' in failure
+               for failure in construction['failed_preconditions']), construction
