@@ -182,6 +182,31 @@ def test_submit_captures_state_tool_route_and_precise_config_before_mutation(
         lane.close(cancel=True)
 
 
+def test_cleanup_error_preserves_native_failure_and_queue_progress(tmp_path, controlled_worker, monkeypatch):
+    unlink = Path.unlink
+
+    def fail_cleanup(path, *args, **kwargs):
+        if path.name.startswith(".adapter-result-") and path.parent == tmp_path / "first":
+            raise PermissionError("controlled output cleanup failure")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_cleanup)
+    lane = jobs_module.AdapterJobs(tmp_path, {})
+    try:
+        lane.submit("first", tmp_path / "first", {"name": "first", "native_exit": 1})
+        lane.submit("later", tmp_path / "later", {"name": "later"})
+        wait_for(tmp_path / "later.done")
+        packets = list(lane.drain())
+        assert [packet["name"] for packet in packets] == ["first", "later"]
+        assert packets[0]["native"]["exit_code"] == 1
+        assert packets[0]["timing_complete"] is True
+        assert "controlled output cleanup failure" in packets[0]["native"]["detail"]
+        assert packets[1]["native"]["exit_code"] == 0
+        assert lane.pending == []
+    finally:
+        lane.close(cancel=True)
+
+
 @pytest.mark.parametrize(("action", "exit_code"), [("crash", 7), ("crash_group", 7), ("missing", 0)])
 def test_transport_failure_is_explicit_and_next_job_still_runs(
         tmp_path, controlled_worker, action, exit_code):

@@ -152,7 +152,12 @@ class AdapterJobs:
                                 f"{type(exc).__name__}: {exc}. Log: {log}", "native_steps": []}
         finally:
             if output is not None:
-                output.unlink(missing_ok=True)
+                try:
+                    output.unlink(missing_ok=True)
+                except OSError as exc:
+                    native["detail"] = (native.get("detail", "")
+                        + f" Worker temporary output cleanup: {type(exc).__name__}: {exc}")
+                    native.setdefault("reports", []).append(str(output))
         if completed_at is None:
             completed_at = time.time()
             wall_seconds = time.perf_counter() - started_clock if started_clock is not None else 0.0
