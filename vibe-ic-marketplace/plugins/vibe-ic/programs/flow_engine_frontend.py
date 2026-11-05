@@ -416,7 +416,8 @@ def run_public(args):
         estimate = flow_engine.run(project, route=route, to_name="pre_layout_timing", **forwarded)
         if estimate.get("common_wall_seconds") is not None:
             original_common = time.perf_counter() - estimate["common_wall_seconds"]
-        forwarded.pop("from_name", None)
+        if forwarded.get("from_name"):
+            forwarded["from_name"] = "die_floorplan_and_macros"
     summary = flow_engine.run(project, route=route, **forwarded)
     if original_common is not None:
         summary["common_wall_seconds"] = time.perf_counter() - original_common
