@@ -124,7 +124,7 @@ def test_selected_formal_still_invokes_generator_and_native_runner(
     def generate(**kwargs):
         calls.append(("generate", kwargs["top"], kwargs["container"]))
         return {"verdict": "EMITTED", "harness_path": str(harness),
-                "rtl_files": [str(source)], "harness_module": "unit_formal"}
+                "rtl_files": [str(source)], "top": "unit", "harness_module": "unit_formal"}
 
     def run(project, **kwargs):
         calls.append(("run", kwargs["top"], kwargs["container"]))
@@ -145,7 +145,7 @@ def test_selected_formal_still_invokes_generator_and_native_runner(
 
     assert result.status == "PASS"
     assert calls == [("generate", "unit", "pinned-image"),
-                     ("run", "unit_formal", "pinned-image")]
+                     ("run", "unit", "pinned-image")]
     expected = (runner._pl.formal_dir(tmp_path) / "results.json").relative_to(
         tmp_path).as_posix()
     assert expected in result.output_files

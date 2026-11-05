@@ -404,8 +404,9 @@ def test_missing_formal_result_reaches_the_native_producer(tmp_path, monkeypatch
     monkeypatch.setattr(frontend, '_top', lambda *a: 'neutral')
     monkeypatch.setattr(generator, 'generate', lambda **kw: {
         'verdict': 'EMITTED', 'harness_path': str(tmp_path / 'neutral.sv'),
-        'rtl_files': [], 'harness_module': 'neutral'})
+        'rtl_files': [], 'top': 'neutral', 'harness_module': 'formal_neutral'})
     def native(*a, **kw):
+        assert kw['top'] == 'neutral'
         raise RuntimeError('native producer reached')
     def old_reader(*a, **kw):
         raise RuntimeError('read-only path reached before native producer')
