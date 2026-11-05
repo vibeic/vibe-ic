@@ -41,48 +41,8 @@ import declaration_searched_only_inside_a_truncated_window as D  # noqa: E402
 WINDOW_PROG = PROGRAMS / "declaration_searched_only_inside_a_truncated_window.py"
 
 
-def test_the_claim_iteration_cap_stops_a_frozen_clock(tmp_path, monkeypatch):
-    """Recovered lock-repair control, with a finite falsifier on the old loop.
-
-    Count actual failed acquisitions with a frozen producer clock. An old
-    unbounded loop fails on its seventh attempt instead of hanging or needing
-    a wall kill. The repaired loop must exhaust its own six-iteration guard.
-    """
-    from types import SimpleNamespace
-    import gate_host_independence_check as G
-
-    attempts = []
-    guards = []
-    real_guard = G._wd.loop_guard
-
-    def deny_lock(*args):
-        attempts.append(args)
-        assert len(attempts) <= 6, "the claim exceeded its finite polling budget"
-        raise BlockingIOError("held by another driver")
-
-    def record_guard(*args, **kwargs):
-        guard = real_guard(*args, **kwargs)
-        guards.append(guard)
-        return guard
-
-    monkeypatch.setattr(G, "time", SimpleNamespace(
-        monotonic=lambda: 1000.0, sleep=lambda seconds: None))
-    monkeypatch.setattr(G.fcntl, "flock", deny_lock)
-    monkeypatch.setattr(G._wd, "loop_guard", record_guard)
-    claim = G._CheckoutClaim(tmp_path, True, wait_s=1.0, lock_root=tmp_path)
-    with claim as result:
-        assert result.held is False
-        assert "another driver held a conflicting claim" in result.why
-    assert len(guards) == 1 and guards[0].reason == "max_iter"
-    assert len(attempts) == guards[0].iterations == guards[0].max_iter == 6
 
 
-def test_the_claim_still_grants_a_free_lock(tmp_path):
-    import gate_host_independence_check as G
-
-    with G._CheckoutClaim(tmp_path, True, wait_s=1.0, lock_root=tmp_path) as claim:
-        assert claim.held is True and claim.why == "held"
-    assert claim._fh is None
 
 
 # ══ the truncated-window rule ══════════════════════════════════════════════

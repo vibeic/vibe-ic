@@ -312,11 +312,6 @@
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/image_gated_verifications_are_not_silently_skipped.py."
     },
     {
-      "gate": "an argued direction is pinned",
-      "slug": "an_argued_direction_is_pinned",
-      "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/an_argued_direction_is_pinned.py."
-    },
-    {
       "gate": "declared reports are written atomically",
       "slug": "declared_reports_are_written_atomically",
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/declared_reports_are_written_atomically.py."

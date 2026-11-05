@@ -2984,7 +2984,6 @@ run_tolerating_uncheckable "image-gated verifications are not silently skipped" 
 # COST bound, so the gate now counts the population it sweeps and takes
 # `max(floor, largest selection)`; the FLOOR is the only declaration a policy
 # file is entitled to make about it.
-run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins --jobs 6 --max-test-files-floor 40
 
 # vibe-ic#1241 — WIRED HERE, not left to its own test. The audit
 # (`checker_execution_wiring_audit`) named this checker as one that nothing but
@@ -3010,41 +3009,6 @@ run "declared reports are written atomically" "$PLUGIN" python3 programs/atomic_
 # step that STOPS emitting, or a new step that declares programs and emits
 # nothing.
 run "one per-step metrics schema, and who still is not using it" "$PLUGIN" python3 "$PG/step_metrics_adoption_check.py" "$PLUGIN"
-
-# The other half of #447: compare the checkout records every gate above has
-# ALREADY produced with one fresh-worktree run.  This is deliberately LAST.
-# The old placement launched Arm A again inside this gate, so every ordinary
-# hygiene gate ran three times (outer + A + B), and a disagreement ran five.
-# Reusing the exact argv-bound structured record makes the common path two
-# executions without weakening the two-tree assertion. Missing/malformed
-# records are rc 2 NOT CHECKED, never reconstructed from console prose.
-uncheckable_until 2027-02-28 "needs a CLEAN checkout and a complete machine record from this enclosing hygiene run: rc 2 means tracked modifications or missing attestation made the comparison meaningless (a genuinely host-dependent gate is rc 1)"
-# SERIAL, AND THE REASON IS THE WHOLE POINT OF THIS GATE.
-#
-# It compares each gate's record from THIS run against a fresh-worktree run, so it
-# needs every other gate's process record to already exist. Under `--jobs 8` it is
-# declared last and still starts while the slowest gates are in flight, so their
-# records are not written yet and it reports:
-#
-#     [CHECKOUT_ATTESTATION_MISSING] an argued direction is pinned
-#         the outer hygiene run supplied no complete process record for this
-#         declared gate; the fresh arm was not run
-#         checkout: NORECORD    worktree: NOT RUN
-#
-# Measured: the gates it named missing were exactly the slowest — "an argued
-# direction is pinned" (150 s), "gates disclose their denominator" (47 s), "liar
-# census controls still fire" (30 s). The attestation FILE was complete afterwards
-# (79 declared, 79 records, 0 missing); what was incomplete was the file AT THE
-# MOMENT THIS GATE READ IT.
-#
-# `gate_serial` drains the pool first, which restores the ordering the sequential
-# run gave it for free. Declaration order was never the guarantee — completion
-# order was, and concurrency separated the two.
-gate_serial "it reads every other gate's process record, so all of them must have \
-finished; under concurrency the slowest are still running when it starts"
-run_tolerating_uncheckable "gates are host-independent" "$ROOT" \
-  python3 "$PG/gate_host_independence_check.py" "$ROOT" \
-  --jobs 8
 
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.

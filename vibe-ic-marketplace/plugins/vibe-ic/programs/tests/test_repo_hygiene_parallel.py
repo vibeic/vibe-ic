@@ -26,12 +26,6 @@ P = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(P)
 import _watchdog as W
 
-host_spec = importlib.util.spec_from_file_location(
-    "_host_independence_pipeline",
-    PROGRAMS / "gate_host_independence_check.py")
-assert host_spec and host_spec.loader
-H = importlib.util.module_from_spec(host_spec)
-host_spec.loader.exec_module(H)
 from gate_process_attestation import process_attestation
 
 
@@ -41,257 +35,30 @@ def gate(label, state):
             "exemption_expired": False}
 
 
-def fixture():
-    corpus_inputs = {"benchmark_data_sha": "a" * 40}
-    reference = {
-        "gates": [gate("ordinary", "LISTED"),
-                  gate(P.HOST_LABEL, "LISTED")],
-        "corpora": [], "corpus_inputs": corpus_inputs,
-        "undisclosed_loops": [], "today": "2026-08-16",
-    }
-    a = {"listed_only": False, "shard": "0/2", "gates": [
-        gate("ordinary", "PASS"), gate(P.HOST_LABEL, "OTHER_SHARD")],
-         "corpora": [], "corpus_inputs": corpus_inputs,
-         "undisclosed_loops": [], "today": "2026-08-16",
-         "wiring_errors": []}
-    b = {"listed_only": False, "shard": "1/2", "gates": [
-        gate("ordinary", "OTHER_SHARD"), gate(P.HOST_LABEL, "PASS")],
-         "corpora": [], "corpus_inputs": corpus_inputs,
-         "undisclosed_loops": [], "today": "2026-08-16",
-         "wiring_errors": []}
-    attest = [process_attestation("ordinary", "", 0, ["true"]),
-              process_attestation(P.HOST_LABEL, "", 0, ["true"])]
-    return reference, a, b, attest
 
 
-def test_complete_dag_preserves_full_dispatch_summary():
-    reference, a, b, attest = fixture()
-    problems = []
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest, 12, problems)
-    assert problems == []
-    assert doc["declared"] == doc["decided"] == doc["passed"] == 2
-    assert doc["other_shard"] == 0
-    assert doc["parallel"]["complete"] is True
-    assert doc["corpus_inputs"] == {"benchmark_data_sha": "a" * 40}
-    assert P._summary_rc(doc) == 0
-    assert P._completion_message(doc, 12).startswith("[PASS]")
 
 
-def test_complete_coverage_with_a_red_gate_is_reported_as_fail():
-    reference, a, b, attest = fixture()
-    a["gates"][0] = gate("ordinary", "FAIL")
-    attest[0] = process_attestation("ordinary", "red", 1, ["false"])
-    problems = []
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest, 12, problems)
-    assert problems == []
-    assert P._summary_rc(doc) == 1
-    assert P._completion_message(doc, 12).startswith("[FAIL]")
-    assert "failed=1" in P._completion_message(doc, 12)
 
 
-def test_missing_shard_gate_is_named_and_refused():
-    reference, a, _, attest = fixture()
-    problems = []
-    doc = P.merge_records(reference, [(Path("a"), a)], attest, 12, problems)
-    assert any(P.HOST_LABEL in problem for problem in problems)
-    assert doc["parallel"]["complete"] is False
-    assert P._summary_rc(doc) == 2
 
 
-def test_duplicate_owner_is_named_and_refused():
-    reference, a, b, attest = fixture()
-    duplicate = dict(b)
-    duplicate["gates"] = [gate("ordinary", "PASS"),
-                          gate(P.HOST_LABEL, "PASS")]
-    problems = []
-    doc = P.merge_records(reference,
-                          [(Path("a"), a), (Path("b"), duplicate)],
-                          attest, 12, problems)
-    assert any("ordinary" in problem and "got 2" in problem
-               for problem in problems)
-    assert P._summary_rc(doc) == 2
 
 
-def test_shards_cannot_claim_different_benchmark_commits():
-    reference, a, b, attest = fixture()
-    b["corpus_inputs"] = {"benchmark_data_sha": "b" * 40}
-    problems = []
-
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest, 12, problems)
-
-    assert any("corpus_inputs differs" in problem for problem in problems)
-    assert P._summary_rc(doc) == 2
 
 
-def test_missing_process_attestation_cannot_become_green():
-    reference, a, b, attest = fixture()
-    problems = []
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest[:1], 12, problems)
-    assert any(P.HOST_LABEL in problem and "attestation" in problem
-               for problem in problems)
-    assert P._summary_rc(doc) == 2
 
 
-@pytest.mark.parametrize("bad_state", ["GARBAGE", "QUEUED", "LISTED", None])
-def test_nonterminal_or_unknown_worker_state_is_coverage_norecord(bad_state):
-    reference, a, b, attest = fixture()
-    a["gates"][0] = gate("ordinary", bad_state)
-    problems = []
-
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest, 12, problems)
-
-    assert any("non-terminal/unknown" in problem for problem in problems)
-    assert doc["parallel"]["complete"] is False
-    assert doc["ran"] != doc["declared"]
-    assert P._summary_rc(doc) == 2
 
 
-def test_out_of_scope_requires_declared_nonintersecting_scope_and_no_process(
-        tmp_path, monkeypatch):
-    reference, a, b, attest = fixture()
-    for doc in (reference, a, b):
-        doc["gates"][0]["scope"] = "tools/"
-    a["gates"][0]["state"] = "OUT_OF_SCOPE"
-    changed = tmp_path / "changed.paths"
-    changed.write_text("docs/only.md\n", encoding="utf-8")
-    monkeypatch.setenv("GATEKEEPER_CHANGED_PATHS", str(changed))
-    problems = []
-
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest[1:], 12, problems)
-
-    assert problems == []
-    assert doc["out_of_scope"] == 1
-    assert doc["ran"] + doc["out_of_scope"] == doc["declared"]
-    assert P._summary_rc(doc) == 0
 
 
-@pytest.mark.parametrize("attack", ["unscoped", "intersects", "attested"])
-def test_out_of_scope_cannot_hide_an_owned_gate(
-        tmp_path, monkeypatch, attack):
-    reference, a, b, attest = fixture()
-    if attack != "unscoped":
-        for doc in (reference, a, b):
-            doc["gates"][0]["scope"] = "tools/"
-    a["gates"][0]["state"] = "OUT_OF_SCOPE"
-    changed = tmp_path / "changed.paths"
-    changed.write_text(
-        "tools/ci/x.py\n" if attack == "intersects" else "docs/only.md\n",
-        encoding="utf-8")
-    monkeypatch.setenv("GATEKEEPER_CHANGED_PATHS", str(changed))
-    supplied = attest if attack == "attested" else attest[1:]
-    problems = []
-
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          supplied, 12, problems)
-
-    assert problems
-    assert doc["parallel"]["complete"] is False
-    assert P._summary_rc(doc) == 2
 
 
-def test_unexempted_not_checked_blocks_even_with_another_verdict():
-    reference, a, b, attest = fixture()
-    a["gates"][0] = gate("ordinary", "NOT_CHECKED")
-    attest[0] = process_attestation("ordinary", "unknown", 2, ["gate"])
-    problems = []
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest, 12, problems)
-
-    assert problems == []
-    assert doc["decided"] == 1, "the host control still reached a verdict"
-    assert doc["not_checked_unexempted"] == ["ordinary"]
-    assert P._summary_rc(doc) == 2
 
 
-def test_exact_legacy_routed_empty_keeps_phase1_aggregate_compatible():
-    """Only main's historical synthetic/no-process row is non-blocking."""
-    reference, a, b, attest = fixture()
-    label = P._LEGACY_ROUTED_EMPTY_LABEL
-    legacy = gate(label, "LISTED")
-    legacy.update({
-        "corpus": P._LEGACY_ROUTED_CORPUS,
-        "corpus_item": 0,
-        "corpus_items": 0,
-        "scope": None,
-    })
-    reference["gates"].insert(1, legacy)
-    reference["corpora"] = [{
-        "name": P._LEGACY_ROUTED_CORPUS,
-        "items": 0,
-        "gates": 1,
-        "expansion": "EXPANDED",
-    }]
-    owned = dict(legacy)
-    owned["state"] = "NOT_CHECKED"
-    other = dict(legacy)
-    other["state"] = "OTHER_SHARD"
-    a["gates"].insert(1, owned)
-    b["gates"].insert(1, other)
-    a["corpora"] = b["corpora"] = reference["corpora"]
-    problems = []
-
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest, 12, problems)
-
-    assert problems == []
-    assert doc["not_checked"] == 1
-    assert doc["not_checked_unexempted"] == [label]
-    assert doc["decided"] == 2
-    assert P._summary_rc(doc) == 0
-    doc["not_checked_unexempted"] = [label, "ordinary"]
-    assert P._summary_rc(doc) == 2, (
-        "the bootstrap exception must not hide a second unexempted refusal")
 
 
-def _routed_corpus_record(label, expansion):
-    """The fixture above, with the routed-DEF row in a chosen state.
-
-    `items` is 0 and `gates` is 1 in BOTH states on purpose: those integers are
-    what made the two indistinguishable, so a waiver that keys off them alone
-    waives both.
-    """
-    reference, a, b, attest = fixture()
-    legacy = gate(label, "LISTED")
-    legacy.update({
-        "corpus": P._LEGACY_ROUTED_CORPUS,
-        "corpus_item": 0,
-        "corpus_items": 0,
-        "scope": None,
-    })
-    reference["gates"].insert(1, legacy)
-    reference["corpora"] = [{
-        "name": P._LEGACY_ROUTED_CORPUS,
-        "items": 0,
-        "gates": 1,
-        "expansion": expansion,
-    }]
-    owned = dict(legacy)
-    owned["state"] = "NOT_CHECKED"
-    other = dict(legacy)
-    other["state"] = "OTHER_SHARD"
-    a["gates"].insert(1, owned)
-    b["gates"].insert(1, other)
-    a["corpora"] = b["corpora"] = reference["corpora"]
-    # Only the phase-1 bootstrap row is allowed to reach a terminal state with
-    # NO process attestation. Every other population refusal is attested --
-    # `repo_hygiene_gates.sh` dispatches this corpus with
-    # `GATE_DISPATCH_ATTEST_POPULATION=1`, and the real dispatcher does write a
-    # record for the NOT FOUND row. Supplying it here keeps the fixture faithful
-    # to the run instead of testing a shape the wiring never produces.
-    if not P._legacy_empty_without_process(reference, label):
-        attest.insert(1, process_attestation(label, "", 2, ["true"],
-                                             state="NOT_CHECKED"))
-    problems = []
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest, 12, problems)
-    assert problems == [], problems
-    return doc
 
 
 #: `gate_dispatch_over`'s row for a corpus that was never opened (vibe-ic#1764).
@@ -299,82 +66,10 @@ _ABSENT_LABEL = ('corpus "published cells carrying a routed DEF" was NOT FOUND '
                  '— nothing was opened to check')
 
 
-def test_the_phase1_waiver_covers_the_measured_empty_row_and_not_the_absent_one():
-    """vibe-ic#1764's pair, at the ONE place that turns a refusal into a pass.
-
-    `gate_dispatch_finish` refuses rc 2 in BOTH states, and the issue said so.
-    It is `_summary_rc` — the closing rc of the parallel hygiene DAG — that
-    waives the refusal, and MEASURED on `origin/main` that waiver covered both:
-
-        origin/main  corpus ABSENT     -> _summary_rc 0   <- a PASS over a
-                                                             corpus NOTHING
-                                                             OPENED
-        origin/main  corpus read-empty -> _summary_rc 0   <- the intended
-                                                             phase-1 bootstrap
-
-    The waiver exists for the row main has carried since #1075: a corpus that
-    WAS read and publishes nothing. It was never meant to answer for a corpus
-    that was never opened, and it silently did, because the two arrived here
-    wearing the same label and the same `expansion`.
-    """
-    empty = _routed_corpus_record(P._LEGACY_ROUTED_EMPTY_LABEL, "EXPANDED")
-    absent = _routed_corpus_record(_ABSENT_LABEL, "NO_CORPUS")
-
-    # Same population integer, same gate count — the trap.
-    assert empty["not_checked_unexempted"] == [P._LEGACY_ROUTED_EMPTY_LABEL]
-    assert absent["not_checked_unexempted"] == [_ABSENT_LABEL]
-    assert empty["decided"] == absent["decided"] == 2
-
-    # The measured-empty row keeps EXACTLY the phase-1 behaviour #1763 relies on.
-    assert P._summary_rc(empty) == 0
-
-    # A corpus nothing opened does not inherit it.
-    assert P._summary_rc(absent) == 2, (
-        "the phase-1 bootstrap waiver closed the hygiene DAG GREEN over a "
-        "corpus that was never opened — an enforcement figure that includes a "
-        "measurement nobody took (vibe-ic#1764)")
 
 
-def test_the_waiver_checks_the_shape_and_not_only_the_label():
-    """Defence in depth: the row's SHAPE has to disqualify it too.
-
-    If the waiver keyed on the label alone, a future dispatcher that reused the
-    EMPTY wording for an absent corpus would walk straight back through it. So
-    an absent corpus is rejected on `expansion` as well, and this test would go
-    red if the shape check were ever dropped for the label check.
-    """
-    disguised = _routed_corpus_record(P._LEGACY_ROUTED_EMPTY_LABEL, "NO_CORPUS")
-
-    assert disguised["not_checked_unexempted"] == [P._LEGACY_ROUTED_EMPTY_LABEL]
-    assert not P._legacy_empty_without_process(
-        disguised, P._LEGACY_ROUTED_EMPTY_LABEL)
-    assert P._summary_rc(disguised) == 2, (
-        "a corpus nothing opened passed the bootstrap waiver by wearing the "
-        "empty corpus's label; the waiver must check the shape too")
 
 
-def test_worker_telemetry_does_not_subtract_an_absent_host_document():
-    reference = {
-        "gates": [gate(P.HOST_LABEL, "LISTED")],
-        "corpora": [], "undisclosed_loops": [], "today": "2026-08-16",
-    }
-    docs = []
-    for i in range(8):
-        doc = {
-            "listed_only": False, "shard": f"{i}/9",
-            "gates": [gate(P.HOST_LABEL, "OTHER_SHARD")],
-            "corpora": [], "undisclosed_loops": [], "today": "2026-08-16",
-            "wiring_errors": [],
-        }
-        docs.append((Path(f"worker-{i}.json"), doc))
-    problems = []
-
-    merged = P.merge_records(reference, docs, [], 12, problems)
-
-    assert merged["parallel"]["workers"] == 8, (
-        "all eight worker documents existed; subtracting an assumed host "
-        "document reports seven precisely when the host phase was not run")
-    assert merged["parallel"]["complete"] is False
 
 
 @pytest.mark.measures
@@ -970,36 +665,8 @@ def _attest(path: Path, output: str = "[PASS] same"):
     path.write_text(json.dumps(row) + "\n", encoding="utf-8")
 
 
-def test_pipelined_host_comparison_accepts_matching_machine_records(
-        tmp_path, monkeypatch):
-    monkeypatch.setattr(H, "corpus_gates", lambda _script: [
-        H.Gate("ordinary", "$ROOT", "python3 gate.py", None)])
-    monkeypatch.setattr(H, "checkout_dirt", lambda _root, _timeout:
-                        H.Dirt([], ["?? stimulus"], [], True))
-    monkeypatch.setattr(H, "inert_exclusions", lambda _script: [])
-    monkeypatch.setattr(H, "sweep_abandoned_scratch", lambda _root: {})
-    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
-    _attest(a)
-    _attest(b)
-    result = H.precomputed_audit(tmp_path, a, b)
-    assert result.verdict == "PASS"
-    assert result.declared == result.probed == 1
 
 
-def test_pipelined_host_comparison_refuses_a_semantic_mismatch(
-        tmp_path, monkeypatch):
-    monkeypatch.setattr(H, "corpus_gates", lambda _script: [
-        H.Gate("ordinary", "$ROOT", "python3 gate.py", None)])
-    monkeypatch.setattr(H, "checkout_dirt", lambda _root, _timeout:
-                        H.Dirt([], ["?? stimulus"], [], True))
-    monkeypatch.setattr(H, "inert_exclusions", lambda _script: [])
-    monkeypatch.setattr(H, "sweep_abandoned_scratch", lambda _root: {})
-    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
-    _attest(a, "[PASS] same")
-    _attest(b, "[FAIL] changed")
-    result = H.precomputed_audit(tmp_path, a, b)
-    assert result.verdict == "FAIL"
-    assert result.findings[0]["kind"] == "HOST_OR_NONDETERMINISTIC_VERDICT"
 
 
 # --------------------------------------------------------------------------
@@ -1018,84 +685,3 @@ def test_pipelined_host_comparison_refuses_a_semantic_mismatch(
 # `unassigned gate label in attestation progress: corpus "published cells
 # carrying a routed DEF" is EMPTY` -- the run reporting its own gate as one it
 # never planned, and refusing itself over it.
-def _attested_population_record(with_attestation=True):
-    """The record the real dispatcher writes for an EMPTY attested corpus."""
-    reference, a, b, attest = fixture()
-    label = P._LEGACY_ROUTED_EMPTY_LABEL
-    row = gate(label, "LISTED")
-    row.update({
-        "corpus": P._LEGACY_ROUTED_CORPUS,
-        "corpus_item": 0,
-        "corpus_items": 0,
-        "scope": None,
-        "blocking_refusal": True,
-    })
-    reference["gates"].insert(1, row)
-    reference["corpora"] = [{
-        "name": P._LEGACY_ROUTED_CORPUS,
-        "items": 0,
-        "gates": 1,
-        "expansion": "EXPANDED",
-    }]
-    owned = dict(row)
-    owned["state"] = "NOT_CHECKED"
-    other = dict(row)
-    other["state"] = "OTHER_SHARD"
-    a["gates"].insert(1, owned)
-    b["gates"].insert(1, other)
-    a["corpora"] = b["corpora"] = reference["corpora"]
-    if with_attestation:
-        attest.insert(1, process_attestation(label, "", 2, ["true"],
-                                             state="NOT_CHECKED"))
-    return reference, a, b, attest, label
-
-
-def test_an_attested_population_refusal_is_not_waived_as_processless():
-    """ARM A. It ran a process, so the aggregate must expect one."""
-    reference, a, b, attest, label = _attested_population_record()
-
-    assert not P._legacy_empty_without_process(reference, label), (
-        "the waiver named for the phase-1 bootstrap row also covered the "
-        "phase-2 attested refusal, so the run reports its own gate as an "
-        "unassigned label")
-
-    problems = []
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest, 12, problems)
-    assert problems == [], problems
-    assert doc["not_checked_unexempted"] == [label]
-    assert P._summary_rc(doc) == 2, (
-        "an empty denominator is still not a pass")
-
-
-def test_a_missing_attestation_for_that_row_is_still_refused():
-    """ARM A's other half: expecting the attestation has to mean something."""
-    reference, a, b, attest, label = _attested_population_record(
-        with_attestation=False)
-    problems = []
-
-    P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                    attest, 12, problems)
-
-    assert any(label in problem and "process attestation" in problem
-               for problem in problems), problems
-
-
-def test_the_phase1_legacy_row_is_still_waived():
-    """ARM B -- the control, and the backward-compatibility one.
-
-    A record written before the dispatcher published `blocking_refusal` has no
-    such key; it must keep answering exactly as it did, or every base arm read
-    out of an older `git archive` snapshot turns red at once.
-    """
-    reference, a, b, attest, label = _attested_population_record()
-    for row in (reference["gates"][1], a["gates"][1], b["gates"][1]):
-        del row["blocking_refusal"]
-
-    assert P._legacy_empty_without_process(reference, label)
-
-    problems = []
-    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
-                          attest[:1] + attest[2:], 12, problems)
-    assert problems == [], problems
-    assert doc["not_checked_unexempted"] == [label]

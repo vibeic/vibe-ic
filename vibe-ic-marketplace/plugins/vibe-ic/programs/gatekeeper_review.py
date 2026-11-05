@@ -839,8 +839,6 @@ def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
 # convention applied one level up.
 # --------------------------------------------------------------------------
 _HYGIENE_SCRIPT_REL = "tools/ci/repo_hygiene_gates.sh"
-_HYGIENE_PARALLEL_REL = (
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py")
 
 #: No runtime estimate.  This is the maximum interval with neither captured
 #: output nor a completed gate record before the shared progress watchdog calls
@@ -1069,76 +1067,8 @@ def repo_hygiene_gate(repo: Path,
         path = Path(script)
         command = ["bash", str(path)]
     else:
-        parallel = repo / _HYGIENE_PARALLEL_REL
-        path = parallel if parallel.is_file() else (repo / _HYGIENE_SCRIPT_REL)
-        # `--stall-grace`, FORWARDED, because there are two watchdogs and only
-        # one of them was told the number (vibe-ic#1789).
-        #
-        # `_HYGIENE_STALL_GRACE_S` calls itself "the shared progress watchdog"
-        # and it was not shared. It reached `run_supervised` below, which
-        # supervises the COORDINATOR; the coordinator supervises each SHARD with
-        # `repo_hygiene_parallel.DEFAULT_STALL_GRACE_S` = 300 s, a number nobody
-        # here chose and nobody there reconciled — a 6x disagreement, already
-        # written down in `tools/gatekeeper-land.sh` on 2026-08-22 and never
-        # closed.
-        #
-        # It matters because of what the inner watchdog accepts as progress. The
-        # shard is launched with `--progress`, so `_owned_process_supervisor`
-        # sets `output_progress=False`: stdout cannot renew the lease and the
-        # ONLY signal is one attestation row per COMPLETED GATE. So the bound is
-        # not "the shard is idle for 300 s", it is "one gate takes longer than
-        # 300 s" — and this repo's own shipped cost profile records single gates
-        # at 646 s (`an argued direction is pinned`) and 2556 s (`gates are
-        # host-independent`). MEASURED on clean main fd8dec469 in the pinned
-        # image: 2 of 8 shards killed at rc 199, and 75 of the 80 "wiring
-        # errors" the run then reported were the fallout of those two kills.
-        #
-        # The shell script has no such flag and must not be given one here; only
-        # the parallel runner is passed the number.
-        # `-B`, AND THE VARIABLE, BECAUSE THE COORDINATOR IS A PYTHON PROCESS
-        # INSIDE THE TREE IT AUDITS (vibe-ic#1893).
-        #
-        # `repo_hygiene_gates.sh:52` exports `PYTHONDONTWRITEBYTECODE=1` and
-        # says why: a `.pyc` "lands inside the tree the later attestation and
-        # host-independence gates re-derive and compare. `git status
-        # --porcelain` cannot see it (`.gitignore`) and `_run_isolation.
-        # snapshot` can, and that asymmetry is the measured 13-of-39
-        # differential failure `attestation_preflight_check` was written from."
-        #
-        # That export protects every gate the SHELL spawns. It cannot protect
-        # THIS process: `repo_hygiene_parallel.py` imports ten modules out of
-        # `programs/` at startup — before any shard, before that shell exists —
-        # so its own import phase writes the residue the shell was told to
-        # prevent. MEASURED on a pristine worktree of a4604d3fa, one DAG run:
-        #
-        #   programs/__pycache__/ holds exactly this module's import list
-        #   (_atomic_artefact, _crash_safe_scratch, _owned_process_supervisor,
-        #   _progress_run, _semantic_child_progress, _watchdog,
-        #   gate_process_attestation, hygiene_shard_plan,
-        #   policy_direction_pin_check, + hygiene_shard_aggregate from the
-        #   lazy call-site import at the end of the run)
-        #
-        #   attestation preflight      checkout rc=1  fresh worktree rc=0
-        #   gates are host-independent FAIL — 1 of 140 probed gates did not give
-        #                              one reproducible verdict across two trees,
-        #                              and it is `attestation preflight`
-        #
-        # So one unguarded interpreter reddens TWO gates, and the second one
-        # reports it as host dependence when the difference is residue this
-        # process wrote a few seconds earlier.
-        #
-        # BOTH HALVES, which is the lesson `tools/gatekeeper-land.sh:1169`
-        # already records for the pytest lanes: `-B` freezes THIS interpreter
-        # and does not propagate, the variable propagates and does not reach an
-        # isolated child. Supplying only one "is what shipped, and it wrote 500+
-        # `.pyc` into $ROOT in 7 minutes of one landing."
-        #
-        # NOTHING IS CHECKED LESS. The stimulus for host-independence becomes
-        # the checkout's PRE-EXISTING dirt, which `gate_host_independence_check`
-        # states is its subject; what is removed is dirt this run manufactured.
-        command = ([sys.executable, "-B", str(path),
-                    "--stall-grace", str(stall_grace)] if path == parallel
-                   else ["bash", str(path)])
+        path = repo / _HYGIENE_SCRIPT_REL
+        command = ["bash", str(path)]
     if not path.is_file():
         # An honest SKIP that states its denominator: this tree wires no
         # hygiene set, so 0 gates were consulted. Never dressed up as a pass
