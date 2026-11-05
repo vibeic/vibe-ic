@@ -730,14 +730,15 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
              'reports/lec_eqy_execution.json')
     generic = not intent['requires_scan'] and (project / 'reports/lec_eqy.json').is_file()
     if generic or any((project / name).exists() or (project / name).is_symlink() for name in named):
-        # The original native consumer binds its independent execution adoption,
-        # full partition census, mode, models and launch. Do not manufacture a
-        # legacy proof_identity or fall back to lec_run after a native refusal.
         import flow109_metric_acceptance as metrics
         current = execution_context(resolve_plan(context['features'], context['step_profiles']),
                                     'D25', 'D25')
-        accepted = metrics.accept_d25(project, current)
-        if intent['requires_scan'] or accepted.get('status') != 'PASS':
+        accepted = (_retained_native_result(project, current)
+                    if not intent['requires_scan'] and not generic
+                    and not (project / 'input/flow109/D25.json').exists() else None)
+        if accepted is None:
+            accepted = metrics.accept_d25(project, current)
+        if intent['requires_scan'] or accepted.get('status', accepted.get('component_status')) != 'PASS':
             raise Flow109Error('FLOW109_D25_PROOF_NOT_ACCEPTED', accepted.get('reason', 'native scope'))
         if 'native_execution' in accepted:
             native_proof = accepted['native_execution']
@@ -2907,18 +2908,40 @@ def _retained_native_result(project: Path, context: Mapping) -> dict | None:
                 error_counts = [v for k, v in measurements.items() if k != 'report']
             elif method == 'equivalence':
                 import librelane_eqy
+                import tempfile
                 execution = project / 'reports/lec_eqy_execution.json'
                 if not execution.is_file():
                     return None
                 native = json.loads(execution.read_text())
-                if any(_file_digest(project / item['path']) != item['sha256']
-                       for item in [*native['subject']['rtl'], native['subject']['gate_netlist']]):
+                if ({(project / item['path']).resolve() for item in native['subject']['rtl']}
+                        != {p.resolve() for p in [*sources.rtl_source_files(project),
+                            *sources.rtl_source_files(project, exts=('*.vh', '*.svh'))]}
+                        or any(_file_digest(project / item['path']) != item['sha256']
+                               for item in [*native['subject']['rtl'], native['subject']['gate_netlist']])):
+                    return None
+                config = json.loads((project / 'phase3/librelane/02-yosys-synthesis/config.json').read_text())
+                libraries = config.get('CELL_LIBS') or config['LIB']
+                if {native['subject']['liberty']['sha256']} != {
+                        _file_digest(Path(name)) for group in libraries.values() for name in group}:
+                    return None
+                models = [Path(name) for name in (config.get('CELL_VERILOG_MODELS') or [])
+                          + (config.get('EXTRA_VERILOG_MODELS') or [])]
+                recorded = native['subject']['models']
+                recorded_hashes = {item['sha256'] for item in recorded}
+                if (not models or not recorded
+                        or any(_file_digest(path) not in recorded_hashes for path in models)
+                        or any(not any((path.parent / Path(item['path']).name).is_file()
+                                   and _file_digest(path.parent / Path(item['path']).name) == item['sha256']
+                                   for path in models) for item in recorded)):
                     return None
                 folder = project / native['native_directory']
-                proof = librelane_eqy.judge_eqy(folder,
-                    project / 'reports/flow109/components/D25-native.json')
+                with tempfile.TemporaryDirectory() as temporary:
+                    proof = librelane_eqy.judge_eqy(folder, Path(temporary) / 'D25-native.json')
                 measurements.update(proof)
                 status = proof['verdict'] if proof['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
+                result['native_execution'] = {'subject': native['subject'],
+                    'execution_record': {'path': execution.relative_to(project).as_posix(),
+                                         'sha256': _file_digest(execution)}}
             else:
                 import librelane_prelayout as sta
                 if context['features'].get('requires_scan'):
