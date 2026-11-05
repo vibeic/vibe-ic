@@ -3132,15 +3132,18 @@ def _d09_source_owned_metrics(project: Path, author: Mapping, *, publish=False, 
             node = track.subtree_at(doc, path, layer)
             scope = track._normalise_field_path(str(path).strip('/').replace('/', '.'), layer)
             spellings = track._field_path_spellings(scope)
+            interface_field = (layer == 'L9_INTEGRATION_SPEC' and node is not None
+                and any(p.split('.')[0] in ('top_module','top_ports','ports','parameters')
+                        for p in spellings))
             if not supplied_author and not (
-                    (layer == 'L9_INTEGRATION_SPEC' and any(p.split('.')[0] in ('top_module','top_ports','parameters') for p in spellings))
+                    interface_field
                     or (isinstance(node, list) and len(node) == 1 and witness(node[0], shape_only=True))):
                 owners = next((owners for fields, owners in later.items() if layer in fields
                     or (layer == 'L9_INTEGRATION_SPEC' and set(scope.split('.')) & set(fields))), ['D13','D14'])
                 trace.append({'id':demand['id'], 'normal_owner':owners, 'status':'NOT_MEASURED'})
                 continue
             own = True
-            ok = interface and ((layer == 'L9_INTEGRATION_SPEC' and path in ('top_module','top_ports','parameters'))
+            ok = interface and (interface_field
                                 or (layer == 'L2_FRS' and isinstance(node, list) and len(node) == 1
                                     and isinstance(node[0], dict) and node[0].get('id') == demand['id']
                                     and node[0].get('text') == demand['requirement'] and witness(node[0])))
