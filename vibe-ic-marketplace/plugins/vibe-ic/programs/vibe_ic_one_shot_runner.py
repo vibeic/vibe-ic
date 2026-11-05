@@ -2921,11 +2921,14 @@ def _complete_step8_postcheck(project: Path, top: str) -> dict:
     import execution_backend_gates as gates
     import librelane_contract as contract
     import step_output_collector as versions
-    import synth_handoff_netlist_check as handoff
 
     canonical = {str(row['id']): row for row in _flow_yaml.load()['steps']}
     selected = {str(row['id']): row for row in versions._read_index(project)['steps']}
-    for sid in ('9', '10'):
+    synthesis, error = _current_step9_checkpoint(project)
+    if error:
+        return {'verdict': 'FAIL' if (selected.get('9') or {}).get('status') == 'FAIL' else 'NOT_MEASURED',
+                'detail': 'Step8 ' + error}
+    for sid in ('10',):
         prior = versions.latest_pass(project, sid)
         latest = selected.get(sid) or {}
         if (not prior or not prior.get('current_inputs')
@@ -2942,11 +2945,7 @@ def _complete_step8_postcheck(project: Path, top: str) -> dict:
                 or outputs != consumer['outputs']):
             return {'verdict': 'NOT_MEASURED',
                     'detail': f'Step{sid} outputs no longer match its complete consumer'}
-    bound = handoff.bound_handoff(project)
-    if not bound or bound.get('verdict') != 'PASS':
-        return {'verdict': (bound or {}).get('verdict', 'NOT_MEASURED'),
-                'detail': '; '.join((bound or {}).get('findings', ()))
-                          or 'Step8 requires the current native synthesis handoff'}
+    bound = synthesis['native_handoff']
     if Path(bound['mapped']).name != f'{top}_synth.v':
         return {'verdict': 'NOT_MEASURED', 'detail': 'Step8 top differs from the synthesis handoff'}
     try:

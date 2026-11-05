@@ -1483,6 +1483,44 @@ def test_default_entry15_refreshes_step7_before_physical_handoff(
         assert p.read_bytes() == raw, p
 
 
+@pytest.mark.parametrize('state,expected', [
+    ('area_unmeasured', 'PASS'), ('changed_netlist', 'NOT_MEASURED'),
+    ('missing_netlist', 'NOT_MEASURED'), ('producer_failed', 'FAIL')])
+def test_postcheck_uses_native_synthesis_when_area_is_unmeasured(
+        tmp_path, monkeypatch, cross_phase_transport, state, expected):
+    import json
+    import design_one_shot_runner as design
+    import step_output_collector as versions
+    import vibe_ic_one_shot_runner as front
+
+    project, _rtl, pdk = _entry10_retained_checkpoint(tmp_path, monkeypatch)
+    monkeypatch.setattr(design, '_phase2_pdk_config', lambda *_: pdk)
+    observed = {'native_resolution': [], 'native_prelayout': []}
+    _entry10_prelayout_transport(project, pdk, monkeypatch, 'current', observed)
+    seeded = front._complete_step10_prelayout(project, 'top', pdk.name, '')
+    assert seeded['verdict'] == 'PASS', seeded
+    index = versions._read_index(project)
+    pointer = next(row for row in index['steps'] if row['id'] == '9')
+    path = versions._versions_root(project) / pointer['folder'] / 'outputs.json'
+    record = json.loads(path.read_text())
+    record.update(status='NOT_MEASURED', canonical_pass=False)
+    record['result']['canonical_consumer']['status'] = 'NOT_MEASURED'
+    pointer['status'] = 'NOT_MEASURED'
+    netlist = project / 'phase2/stage2/synth/netlist.v'
+    if state == 'changed_netlist':
+        netlist.write_text(netlist.read_text() + '\n')
+    elif state == 'missing_netlist':
+        netlist.unlink()
+    elif state == 'producer_failed':
+        record['status'] = pointer['status'] = 'FAIL'
+    path.write_text(json.dumps(record))
+    (project / 'steps/index.json').write_text(json.dumps(index))
+    before = list(observed['native_prelayout'])
+    result = front._complete_step8_postcheck(project, 'top')
+    assert result['verdict'] == expected, result
+    assert observed['native_prelayout'] == before
+
+
 @pytest.mark.parametrize('case', ['current', 'changed9', 'changed10',
                                   'missing_gate', 'failed_gate', 'entry10'])
 def test_default_postcheck8_consumes_saved_prelayout_without_native_replay(
