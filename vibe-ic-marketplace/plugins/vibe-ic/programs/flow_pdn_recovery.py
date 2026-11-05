@@ -159,6 +159,9 @@ def _plan_recovery(project: Path, route: dict, summary: dict) -> RecoveryPlan | 
     if len(configs) != 1:
         return None
     config = json.loads(configs[0].read_text())
+    for supply in ("VDD", "GND"):
+        if config.get(f"{supply}_NETS") is None:
+            config[f"{supply}_NETS"] = [config[f"{supply}_PIN"]]
     script = config.get("PDN_CFG")
     if script is not None and Path(script).resolve() != (project / "work/flow/pdn_cfg.tcl").resolve():
         return None
