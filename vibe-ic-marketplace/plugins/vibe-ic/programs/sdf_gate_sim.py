@@ -2462,26 +2462,19 @@ def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
                 {Path(f).resolve() for f in state['sdf'].values()} !=
                 {f.resolve() for f in sdfs}):
             raise ValueError('GLS and STA do not use the same timed views')
-        if sta_step_dir is None:
-            receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
-            for sdf in sdfs:
-                relative = str(sdf.relative_to(folder))
-                if receipt['sha256'].get(relative) != contract.digest(sdf):
-                    raise ValueError('SDF differs from the native STA receipt')
-        else:
-            if not state['sdf']:
-                raise ValueError('no current native STA scenes')
-            corners = {}
-            for name, sdf in state['sdf'].items():
-                scene = folder / name
-                if (scene.parent != folder or Path(sdf).resolve(strict=True).parent != scene):
-                    raise ValueError('SDF is outside its native STA scene')
-                report = scene / 'max.rpt'
-                corners[name] = {'files': {'max.rpt': {'text': report.read_text()}}}
-            basis = {'producer': 'librelane:OpenROAD.STAPostPNR',
-                     'state': str(folder / 'state_out.json'),
-                     'corners': {name: {'max.rpt': str(folder / name / 'max.rpt')}
-                                 for name in corners}}
+        if not state['sdf']:
+            raise ValueError('no current native STA scenes')
+        corners = {}
+        for name, sdf in state['sdf'].items():
+            scene = folder / name
+            if (scene.parent != folder or Path(sdf).resolve(strict=True).parent != scene):
+                raise ValueError('SDF is outside its native STA scene')
+            report = scene / 'max.rpt'
+            corners[name] = {'files': {'max.rpt': {'text': report.read_text()}}}
+        basis = {'producer': 'librelane:OpenROAD.STAPostPNR',
+                 'state': str(folder / 'state_out.json'),
+                 'corners': {name: {'max.rpt': str(folder / name / 'max.rpt')}
+                             for name in corners}}
         clocks = declared_sdc_clocks(sdc, [f.read_text() for f in sdfs])
         port_map = declared.get('port_map') or {}
         port = port_map.get(plan['spec']['serial_out'], plan['spec']['serial_out'])

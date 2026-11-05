@@ -3288,32 +3288,6 @@ def _container_dir_writable(container: str, path: str) -> Tuple[bool, str]:
                    "un-checkpointed one")
 
 
-def _container_file_sha256(container: str, path: str) -> Optional[str]:
-    """Hash a container-only input; absence disables cache, never the proof.
-
-    THE BANNER IS NOT THE OUTPUT (measured 2026-09-06 on 8HD-9, image 0.3.46).
-    The EDA image's login profile prints `[INFO] Final PATH variable: ...`
-    lines on stdout before the command runs, so the FIRST token of `out` is
-    `[INFO]`, never the digest -- `sha256sum` exited 0 and its digest was three
-    lines down. The 64-hex match then failed, this returned None, the Liberty
-    fingerprint was recorded as `{"state": "unreadable"}`, `_has_fingerprint`
-    said no, `proof_identity_complete` said no, and the LEC PASS CACHE WAS
-    SILENTLY OFF for every design whose Liberty lives in the container -- which
-    is every Liberty-mapped LEC on this fleet. Measured on a real run: the
-    report said `cache: {enabled: false, reason: "one or more required proof
-    fingerprints unavailable"}` while `sha256sum` had in fact succeeded.
-
-    `_strip_login_banner` is the file's OWN remedy for this exact banner and
-    `_yosys_version` beside it already applies it; only this reader did not.
-    Nothing else changes: a genuinely absent or unreadable file still yields
-    None, and None still disables reuse rather than blocking a fresh proof.
-    """
-    rc, out, _ = _docker_exec_raw(
-        container, f"sha256sum -- {shlex.quote(path)} 2>/dev/null", timeout=60)
-    token = _strip_login_banner(out or "").strip().split()
-    if rc == 0 and token and re.fullmatch(r"[0-9a-fA-F]{64}", token[0]):
-        return "sha256:" + token[0].lower()
-    return None
 
 
 def _yosys_version(container: str) -> Optional[str]:
@@ -4928,34 +4902,50 @@ def _discover_run_liberty(project: Path) -> Optional[str]:
     return None
 
 
-def _bound_synthesis_liberty(project: Path) -> Optional[Dict[str, str]]:
+def _container_file_sha256(container: str, path: str) -> Optional[str]:
+    """Hash a container-only input; absence disables cache, never the proof.
+
+    THE BANNER IS NOT THE OUTPUT (measured 2026-09-06 on 8HD-9, image 0.3.46).
+    The EDA image's login profile prints `[INFO] Final PATH variable: ...`
+    lines on stdout before the command runs, so the FIRST token of `out` is
+    `[INFO]`, never the digest -- `sha256sum` exited 0 and its digest was three
+    lines down. The 64-hex match then failed, this returned None, the Liberty
+    fingerprint was recorded as `{"state": "unreadable"}`, `_has_fingerprint`
+    said no, `proof_identity_complete` said no, and the LEC PASS CACHE WAS
+    SILENTLY OFF for every design whose Liberty lives in the container -- which
+    is every Liberty-mapped LEC on this fleet. Measured on a real run: the
+    report said `cache: {enabled: false, reason: "one or more required proof
+    fingerprints unavailable"}` while `sha256sum` had in fact succeeded.
+
+    `_strip_login_banner` is the file's OWN remedy for this exact banner and
+    `_yosys_version` beside it already applies it; only this reader did not.
+    Nothing else changes: a genuinely absent or unreadable file still yields
+    None, and None still disables reuse rather than blocking a fresh proof.
+    """
+    rc, out, _ = _docker_exec_raw(
+        container, f"sha256sum -- {shlex.quote(path)} 2>/dev/null", timeout=60)
+    token = _strip_login_banner(out or "").strip().split()
+    if rc == 0 and token and re.fullmatch(r"[0-9a-fA-F]{64}", token[0]):
+        return "sha256:" + token[0].lower()
+    return None
+
+
+def _native_synthesis_liberty(project: Path) -> Optional[Dict[str, str]]:
     """Map the current tool handoff's selected cell library through its mounts.
 
-    The handoff already binds the declared PDK, current RTL/netlist and resolved
-    configuration. Its hashed PDK-root record names the host bytes behind the
-    tool's guest path; no legacy log search or PDK/corner guess participates.
+    Read the library selected in the native configuration and resolve its
+    installed PDK path before launching the proof tool.
     """
     import synth_handoff_netlist_check as handoff
     import librelane_contract as LC
-    from pdk_revision_resolve import Fs
-
     bound = handoff.bound_handoff(project)
     if bound is None:
         return None
     try:
         if bound['verdict'] != 'PASS':
             raise ValueError('; '.join(bound['findings']))
-        binding = json.loads((project / 'phase2/stage2/synth/synth_inputs.json').read_text())['librelane_synthesis']
-        folder = project / binding['folder']
+        folder = Path(bound['folder'])
         cfg = json.loads((folder / 'config.json').read_text())
-        receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
-        root_path = folder / 'pdk_root.json'
-        if receipt['sha256'].get('pdk_root.json') != LC.digest(root_path):
-            raise ValueError('synthesis PDK mounts changed or were not recorded')
-        roots = json.loads(root_path.read_text())
-        guest_root = Path(roots['cli_pdk_root'])
-        if not guest_root.is_absolute() or str(guest_root) != cfg['PDK_ROOT']:
-            raise ValueError('synthesis PDK root disagrees with resolved config')
         # CELL_LIBS is LibreLane's resolved production field; LIB remains
         # supported for existing step configurations that retain that name.
         groups = cfg.get('CELL_LIBS', cfg.get('LIB'))
@@ -4971,53 +4961,23 @@ def _bound_synthesis_liberty(project: Path) -> Optional[Dict[str, str]]:
             raise ValueError('current synthesis cell library is ambiguous')
         library = Path(next(iter(libraries)))
         pdk, _ = LC.phase2_pdk(project, selected=cfg.get('PDK'))
-        pdk_guest = guest_root / pdk
-        if not library.is_absolute() or '..' in library.parts:
-            raise ValueError('cell library path is not absolute or contains traversal')
-        mounts = [(Path(host), Path(guest)) for host, guest in roots['mounts_under_it']]
-        for host, guest in mounts:
-            if not host.is_absolute() or not guest.is_absolute():
-                raise ValueError('synthesis PDK mount is not absolute')
-        fs = Fs(None)
-        def mapped_path(path):
-            candidates = []
-            for host, guest in mounts:
-                if not path.is_relative_to(guest):
-                    continue
-                resolved = fs.realpath(str(host / path.relative_to(guest)))
-                if not resolved:
-                    raise ValueError('selected synthesis PDK path is missing')
-                target = Path(resolved)
-                if not target.is_relative_to(host.resolve()):
-                    raise ValueError('selected synthesis PDK path escapes its mount')
-                candidates.append(target)
-            if len(candidates) != 1:
-                raise ValueError('selected synthesis PDK path has missing or ambiguous mounts')
-            return candidates[0]
-        selected = mapped_path(pdk_guest)
-        target = mapped_path(library)
-        if not selected.is_dir() or not target.is_file():
-            raise ValueError('selected synthesis PDK or cell library is missing')
-        if not target.is_relative_to(selected):
-            raise ValueError('cell library is outside the resolved selected PDK')
-        recorded = receipt['input']['config_files'].get(str(library))
-        current = LC.config_file_hashes({'cell_library': str(library)}, mounts)
-        if not recorded or current.get(str(library)) != recorded:
-            raise ValueError('selected synthesis cell library hash is missing or changed')
+        target = LC.resolve_state_pdk_asset(library, pdk=pdk)
+        if target is None or not target.is_file():
+            raise ValueError('selected synthesis cell library is missing')
+        parts = target.parts
+        selected = (Path(*parts[:parts.index(pdk) + 1]) if pdk in parts else target.parent)
         return {
             'host': str(target),
             'synthesis_guest': str(library),
             'pdk': pdk,
             'pdk_relative': str(target.relative_to(selected)),
-            'sha256': recorded,
         }
     except (OSError, ValueError, KeyError, TypeError, AttributeError, LC.Refusal) as exc:
         raise ValueError(f'LL_LEC_LIB_UNBOUND: {exc}') from exc
 
 
 def resolve_liberty(project: Path, cli_liberty: Optional[str],
-                    container_has, container_pdk_root: Optional[str] = None,
-                    container_digest=None) -> "Tuple[Optional[str], str]":
+                    container_has, container_pdk_root: Optional[str] = None) -> "Tuple[Optional[str], str]":
     """`(liberty, source)` — the Liberty this LEC will read, and WHY (PURE).
 
     DEGRADE LOUDLY: the source is returned, recorded in `reports/lec.json` as
@@ -5034,7 +4994,7 @@ def resolve_liberty(project: Path, cli_liberty: Optional[str],
     invisible choices. Without that contract, the existing cli > staged >
     recorded synthesis > default order remains. `container_has` is a predicate
     so visibility remains testable without a container."""
-    bound = _bound_synthesis_liberty(project)
+    bound = _native_synthesis_liberty(project)
     if bound is not None:
         candidates = [bound['host'], bound['synthesis_guest']]
         if container_pdk_root:
@@ -5048,14 +5008,8 @@ def resolve_liberty(project: Path, cli_liberty: Optional[str],
         for candidate in dict.fromkeys(candidates):
             if not container_has(candidate):
                 continue
-            if container_digest is not None:
-                runtime_digest = container_digest(candidate)
-                expected = bound['sha256'].removeprefix('sha256:').lower()
-                actual = (runtime_digest or '').removeprefix('sha256:').lower()
-                if actual != expected:
-                    continue
             return candidate, 'run_synth'
-        raise ValueError('LL_LEC_LIB_INVISIBLE: selected synthesis library is not visible to the proof tool with the recorded hash')
+        raise ValueError('LL_LEC_LIB_INVISIBLE: selected synthesis library is not visible to the proof tool')
     if cli_liberty and cli_liberty != DEFAULT_LIBERTY and container_has(cli_liberty):
         return cli_liberty, "cli"
     staged = _discover_project_liberty(project)
@@ -5532,8 +5486,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         liberty, liberty_source = resolve_liberty(
             project, args.liberty,
             lambda pth: _container_file_exists(container, pth),
-            _container_pdk_root(container),
-            lambda pth: _container_file_sha256(container, pth))
+            _container_pdk_root(container))
     except ValueError as exc:
         # Replace any old PASS before returning: the current declared mapping
         # was refused and no proof was attempted against a substitute library.

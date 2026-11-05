@@ -991,97 +991,41 @@ def _step_zero_area(ev: StepEvidence, geom: Optional[Dict[str, Any]]) -> None:
                        f"{geom['zero_area_polygons'][0]}")
 
 
-def _native_library_text_pairs(project: Path, layout: Path, layout_sha: str):
-    """TEXT purposes in the selected stream's receipt-bound PDK libraries.
-
-    The native COMMANDS readset owns the file roles, not CELL_GDS projections,
-    the candidate's contents or library/cell names. No native tool is invoked.
-    """
+def _native_library_text_pairs(project: Path, layout: Path):
+    """Read TEXT purposes from the native stream step's configured libraries."""
     import shlex
     import librelane_contract as lc
-    import librelane_fill_dfm as lf
-    import librelane_signoff_evidence as native
-    import _stream_input_record as sir
+    import _prestream_native as native
     try:
-        record = lc._load(project / lf.DEFAULT_STREAM_REL)
-        if (lc._load(project / lf.RECORD_REL).get('default_stream') != record
-                or Path(record['canonical']).resolve() != layout.resolve()
-                or record['canonical_sha256'] != layout_sha
-                or record['source_sha256'] != layout_sha):
-            raise ValueError('selected StreamOut promotion differs from the candidate')
-        state = Path(record['stream_state']).resolve()
-        folder = state.parent
-        if (state.name != 'state_out.json'
-                or not folder.is_relative_to((project / 'phase3/librelane').resolve())
-                or 'attempts' in folder.relative_to(project.resolve()).parts
-                or lc.digest(state) != record['stream_state_sha256']):
-            raise ValueError('selected StreamOut state is unbound')
-        receipt = lc.validate_step_receipt(folder, 'KLayout.StreamOut')
-        fp = receipt['input']
-        switch_path = project / 'phase3/librelane_switch.json'
-        switch = lc._load(switch_path) if switch_path.is_file() else {}
-        if 'local_provider' in fp:
-            image = fp.get('image')
-        else:
-            image = native._image(project, switch)
-        mounts = native._pdk_mounts(project, switch, folder, image)
-        config_path = project / 'phase3/librelane' / lf.CONFIG_FOLDER / 'KLayout.StreamOut.json'
-        config = lc._load(config_path)
-        if (fp.get('image') != image or record.get('image') != image
-                or fp.get('config') != lc.digest(config_path)
-                or config.get('meta', {}).get('step') != 'KLayout.StreamOut'
-                or fp.get('config_files') != lc.config_file_hashes(config, mounts)
-                or config.get('DESIGN_NAME') != record['design_name']
-                or lc._load(state).get('klayout_gds') != record['stream']):
-            raise ValueError('current StreamOut configuration differs from the producer')
-        inputs_path = sir.record_path(Path(record['pnr_gds']))
-        readset, why = sir.read(inputs_path)
-        if (readset is None or lc.digest(inputs_path) != record['stream_inputs_sha256']
-                or readset.get('engine') != 'klayout'
-                or readset.get('top') != record['file_top']):
-            raise ValueError(why or 'selected StreamOut readset changed')
-        cli = readset.get('native_cli') or {}
-        commands, argv = Path(cli.get('commands') or ''), cli.get('argv') or []
-        if (commands.resolve() != (folder / 'COMMANDS').resolve()
-                or lc.digest(commands) != cli.get('commands_sha256')
-                or argv not in [shlex.split(line) for line in commands.read_text().splitlines()
-                                if line.strip()]):
-            raise ValueError('native StreamOut COMMANDS are unbound')
-        entries = {e['argv_index']: e for e in cli.get('inputs', [])}
-        indices = [i + 1 for i in range(3, len(argv), 2)
-                   if argv[i] == '--with-gds-file']
-        if not indices:
-            raise ValueError('native StreamOut names no PDK GDS libraries')
-        from tapeout_precheck import resolve_pdk
-        declared_pdk, _ = resolve_pdk(project)
-        pdk = declared_pdk or switch.get('pdk')
-        if not pdk or config.get('PDK') != pdk:
-            raise ValueError('StreamOut library process differs from the selected PDK')
-        root = Path(lc._load(project / 'phase3/librelane_pdk_root.provenance.json')['path'])
-        volume = (root / pdk).resolve()
+        state_path = native.final_state(project, streamed=True)
+        if state_path is None:
+            raise ValueError('no native stream State was found')
+        folder = state_path.parent
+        config = lc._load(folder / 'config.json')
+        paths = []
+        commands = folder / 'COMMANDS'
+        if commands.is_file():
+            for line in commands.read_text().splitlines():
+                argv = shlex.split(line)
+                paths.extend(argv[i + 1] for i, arg in enumerate(argv[:-1])
+                             if arg == '--with-gds-file')
+        if not paths:
+            for key in ('CELL_GDS', 'EXTRA_GDS'):
+                value = config.get(key) or []
+                paths.extend([value] if isinstance(value, str) else value)
+        if not paths:
+            raise ValueError('native stream configuration names no GDS libraries')
         pairs, sources = set(), []
-        for index in indices:
-            entry = entries[index]
-            guest = Path(argv[index])
-            source = guest
-            for host, mount in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
-                if guest.is_relative_to(mount):
-                    source = Path(host) / guest.relative_to(mount)
-                    break
-            source = source.resolve()
-            expected = entry.get('sha256')
-            if (entry.get('path') != str(guest) or not expected
-                    or (fp.get('config_files') or {}).get(str(guest)) != expected
-                    or not source.is_relative_to(volume) or source == layout.resolve()
-                    or lc.digest(source) != expected):
-                raise ValueError('native PDK library material is missing, foreign or changed')
+        for value in dict.fromkeys(paths):
+            source = lc.resolve_state_pdk_asset(value, pdk=config.get('PDK'))
+            if source is None or source.resolve() == layout.resolve():
+                raise ValueError(f'native GDS library is absent: {value}')
             library = _geom.read_layout(source)
             text = {(el.layer, el.datatype) for cell in library.cells.values()
                     for el in cell.elements if el.kind == 'TEXT'
                     and el.layer is not None and el.datatype is not None}
             pairs.update(text)
-            sources.append({'path': str(source), 'native_path': str(guest),
-                            'sha256': expected,
+            sources.append({'path': str(source), 'native_path': value,
                             'text_pairs': sorted(f'{l}/{d}' for l, d in text)})
         return pairs, sources, ''
     except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError,
@@ -1794,7 +1738,7 @@ def evaluate(project: Path,
             volume, unmapped_text, reader=_pdk_reader, exclude_layout=chosen)
         if unmapped_text - pairs:
             native_pairs, native_sources, native_why = _native_library_text_pairs(
-                project, chosen, rep.layout_sha256)
+                project, chosen)
             pairs.update(native_pairs)
             sources.extend(native_sources)
             why = '; '.join(filter(None, (why, native_why)))

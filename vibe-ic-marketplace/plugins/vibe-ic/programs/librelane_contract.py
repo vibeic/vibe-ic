@@ -787,50 +787,6 @@ def project_path(project: Path, value: str | Path) -> Path:
     return path
 
 
-def postroute_repair_adoption(project: Path, layout: Path) -> dict:
-    """Resolve the existing repair record against the captured layout."""
-    def ref(path: Path) -> dict:
-        if not path.is_file():
-            raise ValueError(f'repair adoption input absent: {path}')
-        return {'path': str(path.resolve()), 'sha256': digest(path)}
-
-    def path(value: str) -> Path:
-        candidate = Path(value)
-        return candidate if candidate.is_absolute() else project / candidate
-
-    basis = {'adopted': False, 'layout': ref(layout), 'report': None}
-    report_path = project / 'reports/phase3/librelane_postroute_repair.json'
-    if not report_path.is_file():
-        return basis
-    basis['report'] = ref(report_path)
-    report = _load(report_path)
-    if not report.get('adopted'):
-        return basis
-    final = report.get('final') or {}
-    state_path = path(str(final.get('sta_state') or ''))
-    basis['sta_state'] = ref(state_path)
-    if basis['sta_state']['sha256'] != final.get('sta_state_sha256'):
-        raise ValueError('repair adoption STA state differs from producer record')
-    receipt_path = state_path.parent / 'vibeic_receipt.json'
-    receipt = _load(receipt_path)
-    basis['sta_receipt'] = ref(receipt_path)
-    if ((receipt.get('input') or {}).get('step') != 'OpenROAD.STAPostPNR' or
-            (receipt.get('sha256') or {}).get('state_out.json') != basis['sta_state']['sha256']):
-        raise ValueError('repair adoption STA state is not bound to native producer')
-    repair_def = path(str(_load(state_path).get('def') or ''))
-    basis['repair_def'] = ref(repair_def)
-    if ((receipt.get('input') or {}).get('state_files') or {}).get(str(repair_def)) != basis['repair_def']['sha256']:
-        raise ValueError('repair adoption DEF differs from native STA input')
-    basis['adopted'] = basis['repair_def']['sha256'] == basis['layout']['sha256']
-    if basis['adopted'] and report.get('site') == 'after_route':
-        handoff_path = project / 'reports/phase3/librelane_route_handoff.json'
-        handoff = _load(handoff_path)
-        if (handoff.get('postroute_repair') or {}).get('report_sha256') != basis['report']['sha256']:
-            raise ValueError('repair adoption report is not bound to route handoff')
-        basis['route_handoff'] = ref(handoff_path)
-    return basis
-
-
 def _set(out: dict, provenance: dict, key: str, value: Any, source: str) -> None:
     if value is None or value in ('NOT_DETERMINED', 'NOT_MEASURED', ''):
         return
@@ -987,15 +943,7 @@ def declaration_config(project: Path) -> tuple[dict[str, Any], dict[str, str]]:
 
 def settled_floorplan_geometry(project: Path) -> tuple[list[float | int],
                                                          list[float | int], str]:
-    """Return the run's settled die/core, bound to its Floorplan step.
-
-    The tape-out declaration is the owner input and remains authoritative when
-    it answers ``core_area_um``.  This helper is only the derived fallback for
-    consumers whose owner answer is ``NOT_DETERMINED``.  It deliberately binds
-    the runner record to the resolved LibreLane config and the actual
-    ``OpenROAD.Floorplan`` receipt; a rectangle copied from a stale report or
-    guessed from DIE_AREA alone is refused.
-    """
+    """Read settled die/core geometry from the native config, State and DEF."""
     project = Path(project).resolve()
     import _declared_die as DD
 
@@ -1065,25 +1013,19 @@ def settled_floorplan_geometry(project: Path) -> tuple[list[float | int],
                       f'{config_path}: invalid DESIGN_NAME {design_name!r}')
 
     step = Path(project) / 'phase3/librelane/15-floorplan/02-openroad-floorplan'
-    receipt_path = step / 'vibeic_receipt.json'
     state_path = step / 'state_out.json'
     resolved_config_path = step / 'config.json'
     try:
-        receipt = _load(receipt_path)
         state = _load(state_path)
         resolved = _load(resolved_config_path)
     except (OSError, ValueError, Refusal) as exc:
         raise Refusal('LL_FLOORPLAN_CORE_PROVENANCE',
-                      f'{step}: incomplete Floorplan receipt: '
+                      f'{step}: incomplete native Floorplan output: '
                       f'{type(exc).__name__}: {exc}') from exc
-    if (receipt.get('input', {}).get('step') != 'OpenROAD.Floorplan' or
-            not isinstance(receipt.get('sha256'), dict)):
-        raise Refusal('LL_FLOORPLAN_CORE_PROVENANCE',
-                      f'{receipt_path}: not an OpenROAD.Floorplan receipt')
     if resolved.get('DIE_AREA') != [int(v) if v.is_integer() else v for v in die] or \
             resolved.get('CORE_AREA') != [int(v) if v.is_integer() else v for v in core]:
         raise Refusal('LL_FLOORPLAN_CORE_PROVENANCE',
-                      f'{resolved_config_path}: resolved geometry is stale')
+                      f'{resolved_config_path}: resolved geometry differs')
     if resolved.get('DESIGN_NAME') != design_name:
         raise Refusal('LL_FLOORPLAN_CORE_PROVENANCE',
                       f'{resolved_config_path}: DESIGN_NAME {resolved.get("DESIGN_NAME")!r} '
@@ -1148,12 +1090,6 @@ def settled_floorplan_geometry(project: Path) -> tuple[list[float | int],
         raise Refusal('LL_FLOORPLAN_CORE_PROVENANCE',
                       f'{state_path}: settled metrics {state_die}/{state_core} '
                       f'do not fit {die}/{core}')
-    for path in (resolved_config_path, state_path, def_path):
-        name = path.name
-        want = receipt['sha256'].get(name)
-        if not path.is_file() or not isinstance(want, str) or digest(path) != want:
-            raise Refusal('LL_FLOORPLAN_CORE_PROVENANCE',
-                          f'{receipt_path}: {name} is missing or changed')
     if _def_design_name(def_path) != design_name:
         raise Refusal('LL_FLOORPLAN_CORE_PROVENANCE',
                       f'{def_path}: DESIGN does not match resolved DESIGN_NAME '
@@ -1162,11 +1098,8 @@ def settled_floorplan_geometry(project: Path) -> tuple[list[float | int],
     if def_die is None or _rect_differs(def_die, die):
         raise Refusal('LL_FLOORPLAN_CORE_PROVENANCE',
                       f'{def_path}: DIEAREA {def_die} differs from {die}')
-    source = (f'{basis}; bound to {config_path.relative_to(project)} '
-              f'(sha256:{digest(config_path)}) and '
-              f'{receipt_path.relative_to(project)} '
-              f'(DESIGN_NAME={design_name}, DEF={def_path.relative_to(project)}; '
-              f'state/config/DEF digests verified)')
+    source = (f'{basis}; native {resolved_config_path.relative_to(project)} '
+              f'(DESIGN_NAME={design_name}, DEF={def_path.relative_to(project)})')
     return _whole(die), _whole(core), source
 
 
@@ -1816,13 +1749,8 @@ def verify_synthesis_stat(stat_path: Path, state: dict, stats_path: Path,
             abs(value - area) > max(1e-6, abs(area) * 1e-9)
             for value in other_areas):
         raise Refusal('LL_STAT_MISMATCH', f'{stat_path} vs {stats_path}/state metrics')
-    native_hash = digest(native_netlist)
-    if stats.get('netlist_sha256') != 'sha256:' + native_hash:
-        raise Refusal('LL_STAT_NETLIST_MISMATCH', str(native_netlist))
     report = {'status': 'PASS', 'top': top, 'cell_count': count,
-              'area_um2': area, 'stat_sha256': digest(stat_path),
-              'native_netlist_sha256': native_hash,
-              'area_gate_input_sha256': digest(stats_path)}
+              'area_um2': area}
     if output is not None:
         write_json(output, report)
     return report
@@ -1837,23 +1765,6 @@ def _walk_paths(value: Any):
             yield from _walk_paths(item)
     elif isinstance(value, str) and value.startswith('/'):
         yield Path(value)
-
-
-def _detailed_route_drc_output(folder: Path, state: dict) -> Path:
-    """Return the canonical DRC report for this routed ODB subject.
-
-    DetailedRouting also keeps working copies below ``drt-run-*``.  The
-    invocation's canonical report is the top-level sibling whose basename is
-    the routed ODB basename; accepting an arbitrary ``*.drc`` could bind a
-    report for another subject.
-    """
-    odb = state.get('odb')
-    if not isinstance(odb, str) or Path(odb).suffix != '.odb':
-        raise Refusal('LL_DETAILED_ROUTE_DRC_UNIDENTIFIED', str(odb))
-    report = folder / (Path(odb).stem + '.drc')
-    if not report.is_file():
-        raise Refusal('LL_DETAILED_ROUTE_DRC_MISSING', str(report))
-    return report
 
 
 # Early steps consume only the views produced so far. Floorplan creates
@@ -1887,51 +1798,9 @@ _EARLY_STEP_INPUTS: dict[str, tuple[str, ...]] = {
     'Vibeic.FinishingXOR': ('gds',), 'Vibeic.DatabaseUnit': ('gds',)}
 
 
-def validate_step_receipt(folder: Path, step: str) -> dict:
-    """Validate retained tool bytes before reuse or downstream publication.
-
-    This checks a product boundary, not source landing. Missing execution
-    output is refused; computing a new digest cannot replace the producer's
-    recorded digest.
-    """
-    try:
-        folder = folder.resolve()
-        receipt = _load(folder / 'vibeic_receipt.json')
-        fp, hashes = receipt['input'], receipt['sha256']
-        if fp.get('step') != step or not isinstance(hashes, dict):
-            raise ValueError('wrong producer or missing hashes')
-        for name in ('state_out.json', 'input_fingerprint.json', 'pdk_root.json',
-                     'invocation.log'):
-            if name not in hashes:
-                raise ValueError(f'missing producer file: {name}')
-        for name, sha in hashes.items():
-            path = (folder / name).resolve()
-            if not path.is_relative_to(folder) or not re.fullmatch('[0-9a-f]{64}', str(sha)) \
-                    or not path.is_file() or digest(path) != sha:
-                raise ValueError(f'changed producer file: {name}')
-        if _load(folder / 'input_fingerprint.json') != fp:
-            raise ValueError('input fingerprint differs')
-        if not (folder / 'invocation.log').read_text().strip():
-            raise ValueError('tool execution log is empty')
-        state = _load(folder / 'state_out.json')
-        for path in _walk_paths({k: v for k, v in state.items() if k != 'metrics'}):
-            if path.is_relative_to(folder) and \
-                    hashes.get(str(path.relative_to(folder))) != digest(path):
-                raise ValueError(f'unbound output view: {path}')
-        if step == 'OpenROAD.DetailedRouting':
-            report = _detailed_route_drc_output(folder, state)
-            name = str(report.relative_to(folder))
-            if hashes.get(name) != digest(report):
-                raise ValueError(f'unbound canonical detailed-route DRC: {report}')
-        return receipt
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        raise Refusal('LL_STEP_OUTPUT_UNBOUND', f'{folder}: {exc}') from exc
-
-
 def resolve_state_pdk_asset(value: str | Path, *, pdk: str | None,
-                            fingerprint: dict | None = None,
                             mounts: list = ()) -> Path | None:
-    """Read an existing view or uniquely rebind a missing recorded PDK asset.
+    """Resolve an existing native view through PDK paths and mounts.
 
     No runtime discovery, cache writes, or changes to the recorded inputs.
     An unresolved asset must remain unmeasured by its consumer.
@@ -1958,11 +1827,6 @@ def resolve_state_pdk_asset(value: str | Path, *, pdk: str | None,
         suffix = parts[parts.index(pdk) + 1:]
         if len(suffix) < 2 or suffix[0] not in ('libs.ref', 'libs.tech'):
             return None
-        fp = (fingerprint or {}).get('input', fingerprint or {})
-        hashes = {group[str(path)] for key in ('config_files', 'liberty_files')
-                  if isinstance(group := fp.get(key), dict) and str(path) in group}
-        if len(hashes) != 1 or not re.fullmatch('[0-9a-f]{64}', str(next(iter(hashes)))):
-            return None
         declared = os.environ.get('PDK_ROOT', '')
         root = Path(declared)
         if not declared or not root.is_absolute() or '..' in root.parts:
@@ -1974,94 +1838,14 @@ def resolve_state_pdk_asset(value: str | Path, *, pdk: str | None,
         for selected in roots:
             candidate = selected.joinpath(*suffix)
             # Nix directory/file links may target a different store package.
-            # Containment is lexical; the recorded digest proves the content.
+            # Resolve the currently installed PDK tree, including Nix links.
             if candidate.is_relative_to(selected) and candidate.is_file():
                 candidates.append(candidate)
         if len(candidates) != 1:
             return None
-        # carrier moved images; content proven identical by recorded sha256
-        return candidates[0] if digest(candidates[0]) in hashes else None
+        return candidates[0]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-
-
-def resolve_io_lefs_through_pad_lefs(recorded: object, folder: Path) -> list[Path]:
-    """Candidate reading of unavailable IO LEF names as the current PAD_LEFS.
-
-    The IO report has no digest for these names, so nothing here proves their
-    historical bytes. The complete recorded set must equal the receipt-bound
-    PAD_LEFS by PDK-relative suffix, and each returned file must match the
-    PAD_LEFS fingerprint. Paths stay in the recorded order.
-    """
-    def refuse(detail: str):
-        raise Refusal('LL_IO_LEF_JOIN_REFUSED', f'{folder}: {detail}')
-
-    receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
-    if 'config.json' not in receipt['sha256']:
-        refuse('config.json is not bound by the receipt')
-    config = _load(folder / 'config.json')
-    pdk = config.get('PDK')
-    registry = json.loads(Path(__file__).with_name('pdk_registry.json').read_text())
-    if pdk not in {entry['name'] for entry in registry['pdks']}:
-        refuse(f'undeclared or unknown PDK: {pdk!r}')
-
-    def by_suffix(values: object, label: str) -> dict[tuple, str]:
-        if not isinstance(values, list) or not values:
-            refuse(f'{label} is not a non-empty list')
-        rows, roots = {}, set()
-        for raw in values:
-            path = Path(raw) if isinstance(raw, str) and raw else Path()
-            parts = path.parts
-            if not path.is_absolute() or '..' in parts or parts.count(pdk) != 1:
-                refuse(f'{label} has no unique PDK-relative path: {raw!r}')
-            at = parts.index(pdk)
-            suffix = parts[at + 1:]
-            if len(suffix) < 2 or suffix[0] not in ('libs.ref', 'libs.tech'):
-                refuse(f'{label} is not a PDK library path: {raw!r}')
-            if suffix in rows:
-                refuse(f'{label} repeats a PDK-relative suffix: {raw!r}')
-            rows[suffix] = raw
-            roots.add(parts[:at])
-        if len(roots) != 1:
-            refuse(f'{label} spans {len(roots)} PDK roots')
-        return rows
-
-    names = by_suffix(recorded, 'io_library_lefs')
-    pads = by_suffix(config.get('PAD_LEFS'), 'PAD_LEFS')
-    if names.keys() != pads.keys():
-        refuse('io_library_lefs and PAD_LEFS name different PDK-relative sets')
-    fingerprints = receipt['input'].get('config_files')
-    if not isinstance(fingerprints, dict):
-        refuse('the receipt has no config fingerprints')
-    resolved = []
-    for suffix, raw in names.items():
-        if Path(raw).is_file():
-            refuse(f'partly readable io_library_lefs: {raw}')
-        source = resolve_state_pdk_asset(pads[suffix], pdk=pdk, fingerprint=receipt)
-        # The resolver opens an existing path without comparing its digest.
-        if source is None or digest(source) != fingerprints.get(pads[suffix]):
-            refuse(f'PAD_LEFS is absent, ambiguous or changed: {pads[suffix]}')
-        resolved.append(source)
-    return resolved
-
-
-def config_file_hashes(config: dict, mounts: list, *,
-                       fingerprint: dict | None = None) -> dict[str, str]:
-    """Hash config files, retaining their recorded names across image moves."""
-    result = {}
-    for path in _walk_paths(config):
-        source = resolve_state_pdk_asset(path, pdk=config.get('PDK'),
-                                         fingerprint=fingerprint, mounts=mounts)
-        if source is not None:
-            result[str(path)] = digest(source)
-            # Density decks load their rule/layer definitions from Ruby siblings.
-            if str(path) == config.get('KLAYOUT_DENSITY_RUNSET'):
-                for dependency in sorted(source.parent.rglob('*.rb')):
-                    guest = path.parent / dependency.relative_to(source.parent)
-                    result[str(guest)] = digest(dependency)
-        elif fingerprint is not None and any(part in path.parts for part in ('libs.ref', 'libs.tech')):
-            raise Refusal('LL_PDK_ASSET_UNRESOLVED', str(path))
-    return result
 
 
 def _check_state(state: dict, *, outputs: bool = False,
@@ -2180,16 +1964,11 @@ def state_from_direct(project: Path, image: str, config_path: Path,
     output_dir.mkdir(parents=True, exist_ok=True)
     mounts = list(mounts or [])
     state: dict[str, Any] = {}
-    receipt: dict[str, Any] = {'step': step_id, 'image': image,
-                               'config': str(config_path), 'config_sha256': digest(config_path),
-                               'design_name': config.get('DESIGN_NAME'),
-                               'required': required, 'views': {}, 'derived': {}}
 
     def _file(view: str, value: Any) -> Path:
         path = Path(value)
         if not path.is_file():
             raise Refusal('LL_BRIDGE_VIEW_MISSING', f'{view}: {path}')
-        receipt['views'][view] = {'source': str(path.resolve()), 'sha256': digest(path)}
         return path.resolve()
 
     for view, value in views.items():
@@ -2201,10 +1980,8 @@ def state_from_direct(project: Path, image: str, config_path: Path,
                 _file(f'nl[{index}]', part)
             joined = output_dir / 'bridge.nl.v'
             joined.write_text(''.join(
-                f'// vibe-ic bridge: {part.resolve()} sha256:{digest(part)}\n'
+                f'// Native bridge source: {part.resolve()}\n'
                 + part.read_text(errors='replace') + '\n' for part in parts))
-            receipt['derived']['nl'] = {'from': [str(p.resolve()) for p in parts],
-                                        'sha256': digest(joined)}
             state['nl'] = str(joined.resolve())
         elif view == 'spef':
             if not isinstance(value, dict) or not value:
@@ -2220,25 +1997,21 @@ def state_from_direct(project: Path, image: str, config_path: Path,
     if 'odb' in required and 'odb' not in state and 'def' in state:
         odb = output_dir / 'bridge.odb'
         odb.unlink(missing_ok=True)
-        tcl = _openroad_convert(project, image, config,
+        _openroad_convert(project, image, config,
                                 [f"read_def {{{state['def']}}}", f'write_db {{{odb}}}'],
                                 output_dir, 'def_to_odb', mounts, docker)
         if not odb.is_file():
             raise Refusal('LL_BRIDGE_CONVERSION_FAILED', str(output_dir / 'def_to_odb.log'))
         state['odb'] = str(odb.resolve())
-        receipt['derived']['odb'] = {'from': state['def'], 'tcl_sha256': digest(tcl),
-                                     'sha256': digest(odb)}
     if 'def' in required and 'def' not in state and 'odb' in state:
         out_def = output_dir / 'bridge.def'
         out_def.unlink(missing_ok=True)
-        tcl = _openroad_convert(project, image, config,
+        _openroad_convert(project, image, config,
                                 [f"read_db {{{state['odb']}}}", f'write_def {{{out_def}}}'],
                                 output_dir, 'odb_to_def', mounts, docker)
         if not out_def.is_file():
             raise Refusal('LL_BRIDGE_CONVERSION_FAILED', str(output_dir / 'odb_to_def.log'))
         state['def'] = str(out_def.resolve())
-        receipt['derived']['def'] = {'from': state['odb'], 'tcl_sha256': digest(tcl),
-                                     'sha256': digest(out_def)}
     if 'pnl' in required and 'pnl' not in state and ('odb' in state or 'def' in state):
         # The powered netlist every LibreLane OpenROAD step writes with its
         # views (io.tcl SAVE_PNL: `write_verilog -include_pwr_gnd`), from the
@@ -2247,14 +2020,12 @@ def state_from_direct(project: Path, image: str, config_path: Path,
         pnl.unlink(missing_ok=True)
         load = (f"read_db {{{state['odb']}}}" if 'odb' in state
                 else f"read_def {{{state['def']}}}")
-        tcl = _openroad_convert(project, image, config,
+        _openroad_convert(project, image, config,
                                 [load, f'write_verilog -include_pwr_gnd {{{pnl}}}'],
                                 output_dir, 'to_pnl', mounts, docker)
         if not pnl.is_file():
             raise Refusal('LL_BRIDGE_CONVERSION_FAILED', str(output_dir / 'to_pnl.log'))
         state['pnl'] = str(pnl.resolve())
-        receipt['derived']['pnl'] = {'from': state.get('odb') or state['def'],
-                                     'tcl_sha256': digest(tcl), 'sha256': digest(pnl)}
     missing = [view for view in required if view not in state]
     if missing:
         raise Refusal('LL_BRIDGE_VIEW_MISSING', f'{step_id}: {missing}')
@@ -2262,22 +2033,15 @@ def state_from_direct(project: Path, image: str, config_path: Path,
     if metrics:
         if not metrics_source:
             raise Refusal('LL_BRIDGE_METRICS_UNSOURCED', step_id)
-        receipt['metrics_source'] = metrics_source
     path = output_dir / 'state_in.json'
     write_json(path, state)
-    receipt['state_sha256'] = digest(path)
-    write_json(output_dir / 'bridge_receipt.json', receipt)
     return path
 
 
 def _copy_state_views(state_path: Path, targets: dict[str, Path],
                       *, path_map: dict[str, str] | None = None) -> dict:
-    """Copy mapped state views and describe the bytes transferred.
+    """Copy the native State views to their requested destination paths.
 
-    This primitive establishes only a copy, never extraction measurement or
-    a producer receipt. The native whole-flow importer supplies its own
-    flow/step/source preflight and journal; direct RCX consumers must use
-    ``handoff_to_direct`` and its producing-receipt validation.
     """
     state = _load(state_path)
     rows: dict[str, Any] = {}
@@ -2296,46 +2060,23 @@ def _copy_state_views(state_path: Path, targets: dict[str, Path],
         if not source.is_file():
             raise Refusal('LL_HANDOFF_VIEW_MISSING', f'{view}: {source}')
         dest = Path(dest)
-        replaced = digest(dest) if dest.is_file() else None
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(dest.name + '.handoff.tmp')
         shutil.copyfile(source, tmp)
         os.replace(tmp, dest)
-        rows[view] = {'source': str(source), 'source_sha256': digest(source),
-                      'dest': str(dest), 'dest_sha256': digest(dest),
-                      'replaced_sha256': replaced}
+        rows[view] = {'source': str(source), 'dest': str(dest)}
         if source.suffix.lower() == '.def':
             # The top a later step judges is the one this DEF states, whatever
             # the view is called (`def`, `post_cts_def`, `post_hold_def`).
             rows[view]['design'] = _def_design_name(source)
-        if rows[view]['source_sha256'] != rows[view]['dest_sha256']:
-            raise Refusal('LL_HANDOFF_COPY_MISMATCH', view)
-    return {'state': str(state_path), 'state_sha256': digest(state_path),
-            'views': rows}
+    return {'state': str(state_path), 'views': rows}
 
 
-def handoff_to_direct(state_path: Path, targets: dict[str, Path], receipt: Path,
+def handoff_to_direct(state_path: Path, targets: dict[str, Path], output: Path,
                       *, path_map: dict[str, str] | None = None) -> dict:
-    """LibreLane -> direct: put named state views where the direct step reads them.
-
-    ``targets`` maps a state view (``def``, ``odb``, ``nl``, ``spef:<corner>``)
-    to the file path the direct consumer expects. ``path_map`` rewrites a
-    container prefix to its host path. Every handed file is bound by sha256
-    on both sides; RCX additionally requires its original producer receipt.
-    """
-    rcx_receipt = (validate_rcx_receipt(state_path.parent)
-                   if _state_step_id(state_path.parent) == 'OpenROAD.RCX' else None)
+    """Copy the native State's selected views to their downstream paths."""
     document = _copy_state_views(state_path, targets, path_map=path_map)
-    if rcx_receipt is not None:
-        for view, row in document['views'].items():
-            if view.partition(':')[0] != 'spef':
-                continue
-            source = Path(row['source'])
-            recorded = rcx_receipt['sha256'].get(
-                str(source.resolve().relative_to(state_path.parent.resolve())))
-            if not recorded or row['dest_sha256'] != recorded:
-                raise Refusal('LL_RCX_OUTPUT_UNBOUND', f'{view}: handoff bytes changed')
-    write_json(receipt, document)
+    write_json(output, document)
     return document
 
 
@@ -2806,7 +2547,7 @@ def pdk_root_resolution(project: Path | None = None, pdk: str | None = None, *,
     if answer is not None:
         # A declared root is a PDK_ROOT: the tree a consumer reads is
         # <path>/<pdk>. Record WHICH PDK when it is known, so a consumer of
-        # the receipt (gds_antenna_deck_check) does not have to guess it.
+        # native consumers can resolve the selected PDK paths.
         declared_pdk = pdk or switch.get('pdk')
         if declared_pdk and _PDK_NAME.match(str(declared_pdk)):
             answer['pdk'] = str(declared_pdk)
@@ -2833,7 +2574,7 @@ def pdk_root_resolution(project: Path | None = None, pdk: str | None = None, *,
         answer = {'path': str(root), 'source': 'resolved',
                   'derivation': {'image': image, 'image_id': found['image_id'],
                                  'image_pdk_root': found['pdk_root'],
-                                 'image_pdk_root_from': ('attested LOCAL environment PDK_ROOT'
+                                 'image_pdk_root_from': ('native environment PDK_ROOT'
                                                         if how == 'native' else
                                                         'docker image inspect Config.Env PDK_ROOT'),
                                  'pdk': str(pdk), 'pdk_from': pdk_source,
@@ -2963,34 +2704,20 @@ def image_capability(image: str, docker: str = 'docker') -> dict:
 
 
 def openroad_home(folder: Path, capability: dict | None,
-                  extra: list[str] | None = None,
-                  drv_probe: list[str] | None = None) -> Path | None:
-    """Write the init file that defines the probe's aliases (and a caller's
-    `extra` Tcl lines, e.g. a tool debug print the caller reads back), or
-    nothing when there is neither.
-
-    `drv_probe`: the DRV stage probe (`drv_stage_receipts.probe_lines`). It is
-    written to OpenROAD's init file AND to OpenSTA's (`.sta`), because the
-    sign-off STA step runs the `sta` binary, which reads only its own."""
+                  extra: list[str] | None = None) -> Path | None:
+    """Write native Tcl aliases and the caller's additional init lines."""
     aliases = (capability or {}).get('openroad_aliases') or {}
-    if not aliases and not extra and not drv_probe:
+    if not aliases and not extra:
         return None
     folder.mkdir(parents=True, exist_ok=True)
-    lines = ['# vibe-ic librelane_contract: abbreviation aliases derived from the image']
+    lines = ['# Native OpenROAD aliases derived from the installed tool']
     for short, full in sorted(aliases.items()):
         lines.append(f'if {{[llength [info commands ::{short}]] == 0}} '
                      f'{{ proc ::{short} {{args}} {{ return [::{full} {{*}}$args] }} }}')
     if extra:
-        lines += ['# vibe-ic librelane_contract: caller-declared init lines', *extra]
-    if drv_probe:
-        lines += ['# vibe-ic librelane_contract: DRV stage probe', *drv_probe]
+        lines.extend(extra)
     (folder / '.openroad').write_text('\n'.join(lines) + '\n')
-    sta_init = folder / '.sta'
-    if drv_probe:
-        sta_init.write_text('\n'.join(['# vibe-ic librelane_contract: DRV stage probe',
-                                        *drv_probe]) + '\n')
-    else:
-        sta_init.unlink(missing_ok=True)
+    (folder / '.sta').unlink(missing_ok=True)
     (folder / '.bashrc').write_text('')
     return folder
 
@@ -3150,109 +2877,8 @@ def _class_default(project: Path, step: str, named: dict[str, Any],
     return mode
 
 
-#: The flow-mode layer (llv1 W3): the mode of every switchable step under a
-#: project-wide implementation flow (`_impl_flow`, the `--librelane` record).
-#: It sits ABOVE the switch file, `PRODUCTION_DEFAULTS` and the class
-#: defaults, and exists only when the project carries a non-default record;
-#: a project without one never reaches it, so its answers are unchanged.
-#:
-#: Under `librelane` LibreLane produces the step, EXCEPT where the owner's
-#: ruling keeps vibe-ic's check because LibreLane's default is weaker (the
-#: eight places of COMMON.md). There the step is `dual` when its `librelane`
-#: mode would REPLACE vibe-ic's judgement, and `direct` when vibe-ic alone
-#: does the step:
-#:   2   direct  P0's blocking lint list (i). LibreLane's own lint is not lost:
-#:               Verilator.Lint + its three checkers are the first four steps
-#:               of segment 1 (MEASURED, spike 2026-09-28), so the phase-2 arm
-#:               is not run a second time.
-#:   3/4/5 direct  CDC, simulation and formal are vibe-ic's (no LibreLane step).
-#:   8   dual    `librelane` replaces the SDC semantic checks with OpenSTA's
-#:               read verdict; both must pass (a: the spec SDC is kept).
-#:   13  direct  vibe-ic LEC on the exact netlist segment 2 consumes (b); the
-#:               EQY arm is off by default and skips gf180 in LibreLane.
-#:   24  dual    LibreLane's IR is static and report-only; vibe-ic's budget
-#:               gates judge too (d).
-#:   25  direct  LibreLane has no EM step; vibe-ic runs it on the tool's ODB.
-#:   26  dual    Classic reports antenna violations without gating on them;
-#:               `librelane` would drop vibe-ic's own antenna re-read (h).
-#:   31  dual    LibreLane's reduced DRC deck, no ERC, LVS from a DEF
-#:               extraction; vibe-ic's step-31 decks stay (g).
-#:   23  librelane  vibe-ic's sta_report_check judges the tool's per-corner
-#:               reports in this mode (c).
-#:   32  librelane  Vibeic.PostRouteRepair inside the chain (e).
-#:   29  librelane  vibe-ic's own gate-level simulation (Vibeic.GateLevelSim)
-#:               over the tool's per-corner SDFs.
-#:   30  direct  LibreLane has no post-layout SPICE step; the tool arm is
-#:               only recorded beside vibe-ic's correlation.
-#: Steps absent here (the analog A6/A7 arms) keep the ordinary resolution;
-#: v1 refuses an analog design under the flag at the front door (decision 13).
-IMPL_STEP_MODES: dict[str, dict[str, str]] = {
-    'librelane': {
-        '2': 'direct', '3': 'direct', '4': 'direct', '5': 'direct',
-        '7': 'librelane', '8': 'dual', '9': 'librelane', '10': 'librelane',
-        '13': 'direct',
-        '15': 'librelane', '15.5ic': 'librelane', '17': 'librelane',
-        '18': 'librelane', '19': 'librelane', '20': 'librelane',
-        '21': 'librelane', '22': 'librelane', '23': 'librelane',
-        '24': 'dual', '25': 'direct', '26': 'dual', '26.5ic': 'librelane',
-        '29': 'librelane', '30': 'direct',
-        '31': 'dual', '32': 'librelane', '33': 'librelane', '34': 'librelane',
-        '37': 'librelane', 'DT2': 'librelane', 'DT3': 'librelane',
-    },
-}
-
-
-#: Every step some implementation-flow layer decides. A step outside it (the
-#: analog A6/A7 arms; v1 is digital only) never reads the record, so neither
-#: a damaged record nor a switch conflict can change its answer.
-IMPL_LAYER_STEPS: frozenset[str] = frozenset(
-    step for layer in IMPL_STEP_MODES.values() for step in layer)
-
-
-def impl_step_modes(project: Path) -> dict[str, str] | None:
-    """The flow-mode layer in force for `project`, or None (the default flow).
-
-    None whenever the project has no implementation-flow record, without
-    reading anything else. A record that cannot be read refuses by its own
-    reason class, never falls back to the per-step answers: guessing the
-    default for a flagged project is the in-place switch decision 20 refuses.
-    A switch file naming a step the layer decides refuses the run with
-    `IMPL_SWITCH_CONFLICT` (decision 18), whichever answer either gives.
-    """
-    import _impl_flow
-    if not _impl_flow.record_path(project).exists():
-        return None
-    try:
-        impl = _impl_flow.recorded_impl(project)
-    except _impl_flow.ImplRefusal as exc:
-        raise Refusal(exc.reason_class, exc.detail) from None
-    layer = IMPL_STEP_MODES.get(impl)
-    if layer is None:
-        raise Refusal(_impl_flow.IMPL_NOT_YET_SUPPORTED,
-                      f"no flow-mode layer for '{impl}' in this release")
-    path = project / 'phase3/librelane_switch.json'
-    named = _load(path).get('steps', {}) if path.is_file() else {}
-    clash = sorted(step for step in named if step in layer)
-    if clash:
-        raise Refusal('IMPL_SWITCH_CONFLICT',
-                      f"{path} names step(s) {clash}, which the project's "
-                      f"'{impl}' flow ({_impl_flow.FLAG_FOR[impl]}) decides; "
-                      'a step is chosen by the flag or by the switch file, '
-                      'never both. Remove them from the switch file, or run '
-                      'the default flow.')
-    return dict(layer)
-
-
 def selected_mode(project: Path, step: str) -> str:
-    """The flow-mode layer's answer when the project has an implementation
-    flow that decides the step (a step no layer decides never reads the
-    record), else the project's switch when it names the
-    step, else the production default for the step, else the design class's
-    default (when the steps it continues resolve to LibreLane too), else
-    `direct`. An invalid mode is refused, from either source."""
-    layer = impl_step_modes(project) if step in IMPL_LAYER_STEPS else None
-    if layer is not None and step in layer:
-        return layer[step]
+    """The step switch, production default, class default, or direct tool."""
     path = project / 'phase3/librelane_switch.json'
     steps = _load(path).get('steps', {}) if path.is_file() else {}
     if step in steps:
@@ -3270,16 +2896,13 @@ def class_defaults_in_force(project: Path) -> dict[str, str]:
     """The steps this project runs on a class default rather than its switch:
     `{step: mode}` for every class-default step the switch does not name and
     whose default survives `CLASS_DEFAULT_REQUIRES`. Empty for a project
-    outside every class, and for a project under an implementation flow,
-    whose layer decides every class-default step."""
-    layer = impl_step_modes(project)
+    outside every class."""
     path = project / 'phase3/librelane_switch.json'
     steps = _load(path).get('steps', {}) if path.is_file() else {}
     cls = design_class(project)
     return {step: selected_mode(project, step)
             for step in CLASS_PRODUCTION_DEFAULTS.get(cls or '', {})
             if step not in steps and step not in PRODUCTION_DEFAULTS
-            and step not in (layer or {})
             and _class_default(project, step, steps) is not None}
 
 
@@ -3288,12 +2911,10 @@ def class_defaults_in_force(project: Path) -> dict[str, str]:
 #: `librelane_plugin_*` module on `sys.path`; the contract mounts `programs/`
 #: read-only at its own path and adds the plugin root to `PYTHONPATH` only
 #: for a run that names such a step, so every other step's invocation and
-#: fingerprint are unchanged.
+#: are unchanged.
 PLUGIN_ROOT = Path(__file__).resolve().parent / 'librelane_plugins'
 PLUGIN_STEP_PREFIX = 'Vibeic.'
 #: The `programs/` modules the plugin's steps import (inputs of those steps).
-PLUGIN_HOST_MODULES = ('_spare_plan.py', 'dynamic_ir_vectored_emit.py',
-                       'librelane_fill_stream.py', 'librelane_fill_stream_native.py')
 
 
 def _plugin_args(step_ids: list[str]) -> list[str]:
@@ -3301,18 +2922,6 @@ def _plugin_args(step_ids: list[str]) -> list[str]:
         return []
     programs = PLUGIN_ROOT.parent.resolve()
     return ['-v', f'{programs}:{programs}:ro', '-e', f'PYTHONPATH={PLUGIN_ROOT.resolve()}']
-
-
-def _plugin_digests(step_id: str) -> dict[str, str]:
-    """The custom step's code is an input of that step: its files, and the
-    plan builder it imports, by sha256."""
-    if not step_id.startswith(PLUGIN_STEP_PREFIX):
-        return {}
-    files = sorted(PLUGIN_ROOT.rglob('*.py')) + sorted(PLUGIN_ROOT.rglob('*.tcl')) + sorted(
-        PLUGIN_ROOT.rglob('*.drc')) + [
-        PLUGIN_ROOT.parent / name for name in PLUGIN_HOST_MODULES]
-    return {str(path.relative_to(PLUGIN_ROOT.parent)): digest(path)
-            for path in files if path.is_file()}
 
 
 #: The steps whose config must carry the die the run itself settled on:
@@ -3361,14 +2970,7 @@ def _runner_floorplan(project: Path) -> tuple[list | None, list | None, dict[str
 def _derived_provisional_die_source(project: Path, record: dict,
                                     declared: list, settled: list
                                     ) -> str | None:
-    """Validate the runner's source-bound replacement for a provisional slot.
-
-    The ordinary declared-vs-derived conflict stays fail-closed.  Replacement
-    is admitted only when the existing floorplan record says the declaration
-    was an owner-delegated provisional selection, both old and new rectangles
-    match that record, and the selected slot contract still binds the current
-    source JSON bytes.  No dimension is recomputed here.
-    """
+    """Read a provisional slot replacement whose declared rectangles agree."""
     intent = record.get('die_intent')
     if not isinstance(intent, dict) or intent.get('intent') != 'DERIVED_PROVISIONAL_SLOT':
         return None
@@ -3385,15 +2987,12 @@ def _derived_provisional_die_source(project: Path, record: dict,
         return None
     slot = intent.get('resolved_slot')
     rel = intent.get('source_relpath')
-    expected = intent.get('source_sha256')
     if (not isinstance(slot, str) or not isinstance(rel, str)
-            or Path(rel).name != rel or not isinstance(expected, str)):
+            or Path(rel).name != rel):
         return None
-    source = project / 'input' / 'submission_template_source' / rel
     slot_file = project / 'input' / 'submission_template' / 'slots' / f'{slot}.yaml'
     try:
         contract = json.loads(slot_file.read_text(errors='replace'))
-        actual = digest(source)
         die_area = (contract.get('die_area') or {}).get('rect')
         if isinstance(die_area, str):
             die_area = die_area.split()
@@ -3402,14 +3001,11 @@ def _derived_provisional_die_source(project: Path, record: dict,
             return None
     except (OSError, ValueError, TypeError):
         return None
-    if (actual != expected or contract.get('slot') != slot
-            or contract.get('source_relpath') != rel
-            or contract.get('source_sha256') != expected
+    if (contract.get('slot') != slot
             or _rect_differs(_whole(die_area), new_rect)):
         return None
     return (f"reports/phase3/floorplan_rectangles.json.die_intent: "
-            f"source-bound provisional slot {intent.get('declared_slot')} -> "
-            f"{slot} ({rel} sha256 {expected})")
+            f"provisional slot {intent.get('declared_slot')} -> {slot} ({rel})")
 
 
 def _apply_runner_floorplan(project: Path, config: dict, sources: dict,
@@ -3530,53 +3126,18 @@ def _apply_layout_top(project: Path, config: dict, sources: dict) -> None:
          f"{source} (the pad-carrying top around the core {core!r})")
 
 
-def _check_synthesised_read(project: Path, config: dict, sources: dict) -> None:
-    """A layout chain reads the RTL the netlist was synthesised from, or refuses.
-
-    Phase-3 synthesis records the read it built (`chip_read_built.json`,
-    every file with its sha256 and the define decision) and binds it to the
-    netlist it produced. While that netlist stands, the chain's
-    VERILOG_FILES, minus the chip-top wrapper step 15.5ic wrote after
-    synthesis, must be that read exactly, and the chain carries synthesis's
-    define decision. A record that describes no netlist on disk is not
-    compared: the provenance says so, with the reason.
-    """
-    import _chip_synth_read as CSR
-    files = config.get('VERILOG_FILES')
-    if not files:
+def _apply_synthesis_defines(project: Path, config: dict, sources: dict) -> None:
+    """Carry the native synthesis configuration's preprocessing choices."""
+    configs = [path for path in (project / 'phase3/librelane').glob('**/config.json')
+               if (_load(path).get('meta') or {}).get('step') == 'Yosys.Synthesis'
+               and 'attempts' not in path.relative_to(project).parts
+               and (path.parent / 'state_out.json').is_file()]
+    if len(configs) != 1:
         return
-    built, why = CSR.built_record_for_current_netlist(project)
-    if built is None:
-        sources['VERILOG_FILES'] += (
-            f'; synthesised-read comparison NOT_MEASURED: {why}; '
-            f'VERILOG_DEFINES not carried for the same reason')
-        return
-    wrapper = 'phase3/stage3/pnr/chip_top_io.v'
-    paths = [project / str(f).removeprefix('dir::') for f in files]
-    read = [p for p in paths if p.resolve() != (project / wrapper).resolve()]
-    # The top is synthesis's own; the file read is this chain's to match.
-    differences = CSR.chip_read_differences(
-        {'files': built.get('files') or []},
-        {'files': [{'name': p.name, 'sha256': digest(p)} for p in read]})
-    rel = CSR.built_record_path(project).relative_to(project)
-    if differences:
-        raise Refusal('LL_LAYOUT_RTL_NOT_THE_SYNTHESISED_READ',
-                      f"VERILOG_FILES vs {rel}: {'; '.join(differences)}")
-    sources['VERILOG_FILES'] += (f"; equals {rel} (file names and sha256, "
-                                 f"bound to {built['netlist']['path']})")
-    define = built.get('define')
-    if not isinstance(define, dict) or not isinstance(define.get('simulation'), bool):
-        raise Refusal('LL_SYNTHESIS_DEFINE_UNRECORDED',
-                      f'{rel}.define.simulation is {define!r}')
-    # The defines of the read that PRODUCED the netlist: the record is
-    # rewritten at binding when a retry frontend read other defines than the
-    # decision (`_chip_synth_read.bind_built_record_netlist`).
-    defines = (['SIMULATION'] if define['simulation'] else []) + \
-        (['SYNTHESIS'] if define.get('synthesis') is True else [])
-    _set(config, sources, 'VERILOG_DEFINES', defines,
-         f"{rel}.define.simulation/.synthesis (the defines of the read that built "
-         f"{built['netlist']['path']}: {define.get('verdict')}, frontend "
-         f"{built.get('frontend', 'unrecorded')})")
+    native = _load(configs[0])
+    if 'VERILOG_DEFINES' in native:
+        _set(config, sources, 'VERILOG_DEFINES', native['VERILOG_DEFINES'],
+             f'{configs[0].relative_to(project)}.VERILOG_DEFINES')
 
 
 def native_supply_pdn_geometry(config: dict, record: dict) -> tuple[dict, list[list[str]], dict]:
@@ -3632,7 +3193,7 @@ def resolve_step_configs(project: Path, image: str, pdk: str,
     design = root / 'design.json'
     emitted = emit_config(project, pdk, design)
     sources = _load(design.with_suffix('.provenance.json'))
-    _check_synthesised_read(project, emitted, sources)
+    _apply_synthesis_defines(project, emitted, sources)
     _apply_runner_floorplan(project, emitted, sources, step_ids)
     _apply_layout_top(project, emitted, sources)
     for key, (value, source) in (overlay or {}).items():
@@ -3664,7 +3225,7 @@ def resolve_step_configs(project: Path, image: str, pdk: str,
     write_json(design.with_suffix('.provenance.json'), sources)
     requested = root / 'steps.json'
     write_json(requested, step_ids)
-    script = '''import json,sys,hashlib
+    script = '''import json,sys
 from pathlib import Path
 from librelane.flows.chip import Chip
 from librelane.steps import Step
@@ -3686,21 +3247,6 @@ for step_id in json.loads(Path(requested).read_text()):
                          if key in names and key not in selected})
     selected["meta"] = {"librelane_version": __import__("librelane.__version__", fromlist=["__version__"]).__version__, "step": step_id}
     Path(output, step_id + ".json").write_text(json.dumps(selected, indent=2, default=str) + "\\n")
-    if step_id == "KLayout.Density":
-        def walk(value):
-            if isinstance(value, dict):
-                for nested in value.values(): yield from walk(nested)
-            elif isinstance(value, (tuple, list)):
-                for nested in value: yield from walk(nested)
-            elif str(value).startswith("/"): yield Path(str(value))
-        # Image-owned common templates are real inputs too. Read them in the
-        # same pinned resolver container, never by guessing a host path.
-        owned = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
-                 for path in walk(selected) if path.is_file()
-                 and not path.is_relative_to("/pdk")
-                 and not path.is_relative_to(project)}
-        Path(output, step_id + ".image_files.json").write_text(
-            json.dumps({"image": image, "sha256": owned}, indent=2) + "\\n")
     # LibreLane's Meta refuses unknown keys, so the step's declared views live beside it.
     Path(output, step_id + ".views.json").write_text(json.dumps({
         "step": step_id,
@@ -4003,182 +3549,6 @@ def resolve_step_config(project: Path, image: str, source: Path, output: Path,
                       (result.stderr or result.stdout)[-1000:])
     return output
 
-def _sta_liberty_input_hashes(config: dict, project: Path,
-                              mounts: list[tuple[Path, str]]) -> dict[str, str | None]:
-    """Hash the host bytes mounted at each STAPostPNR Liberty guest path.
-
-    The scene log later establishes which of these declared inputs was read.
-    Unknown paths stay unbound; a consumer cannot sign off from a filename.
-    """
-    libraries: set[str] = set()
-    for field in ('CELL_LIBS', 'PAD_LIBS', 'EXTRA_LIBS'):
-        value = (config.get('LIB', config.get('CELL_LIBS'))
-                 if field == 'CELL_LIBS' else config.get(field)) or {}
-        groups = value.values() if isinstance(value, dict) else [value]
-        for group in groups:
-            if isinstance(group, str):
-                libraries.add(group)
-            elif isinstance(group, (list, tuple)):
-                libraries.update(v for v in group if isinstance(v, str))
-    roots = [(project.resolve(), project.resolve()),
-             *((Path(host).resolve(), Path(guest)) for host, guest in mounts)]
-    if _provider_route(project):
-        # Config resolution already projects guest paths onto the local PDK.
-        # Bind those same declared host roots as well as unprojected paths.
-        roots.extend((Path(host).resolve(), Path(host).resolve())
-                     for host, _ in mounts)
-    roots.sort(key=lambda item: len(str(item[1])), reverse=True)
-    result: dict[str, str | None] = {}
-    for library in sorted(libraries):
-        guest_path = Path(library)
-        host_path = None
-        for host_root, guest_root in roots:
-            try:
-                host_path = host_root / guest_path.relative_to(guest_root)
-                break
-            except ValueError:
-                continue
-        result[library] = digest(host_path) if host_path and host_path.is_file() else None
-    return result
-
-
-def _rcx_pdk_input_hashes(config: dict, project: Path,
-                          mounts: list[tuple[Path, str]]) -> dict[str, str | None]:
-    """RCX's declared rules and physical LEFs, at their mounted host bytes."""
-    paths = []
-    for field in ('RCX_RULESETS', 'TECH_LEFS', 'CELL_LEFS', 'EXTRA_LEFS'):
-        value = config.get(field) or []
-        groups = value.values() if isinstance(value, dict) else [value]
-        for group in groups:
-            paths.extend([group] if isinstance(group, str) else group)
-    return _sta_liberty_input_hashes({'CELL_LIBS': {'*': paths}}, project, mounts)
-
-
-def validate_rcx_receipt(folder: Path) -> dict:
-    """Require the producing receipt's bytes before sharing or reusing RCX.
-
-    Current path equality and a newly computed output hash cannot establish
-    which route was extracted or which SPEF the producer actually wrote.
-    """
-    try:
-        folder = Path(folder).resolve()
-        receipt = _load(folder / 'vibeic_receipt.json')
-        fingerprint, hashes = receipt['input'], receipt['sha256']
-        if fingerprint.get('step') != 'OpenROAD.RCX' or not isinstance(hashes, dict):
-            raise ValueError('not an RCX producer receipt')
-        for name in ('state_out.json', 'state_in.json', 'config.json',
-                     'input_fingerprint.json'):
-            if not hashes.get(name) or hashes[name] != digest(folder / name):
-                raise ValueError(f'{name}: producer bytes absent or changed')
-        if _load(folder / 'input_fingerprint.json') != fingerprint:
-            raise ValueError('producer input fingerprint differs')
-        before = _load(folder / 'state_in.json')
-        state = _load(folder / 'state_out.json')
-        for view in ('def', 'odb', 'nl', 'sdc'):
-            if before.get(view):
-                recorded = fingerprint['state_files'].get(before[view])
-                if not recorded or any(not doc.get(view) or
-                        digest(Path(doc[view])) != recorded for doc in (before, state)):
-                    raise ValueError(f'{view}: extraction input bytes changed')
-        spefs = state.get('spef')
-        if not isinstance(spefs, dict) or not spefs:
-            raise ValueError('producer SPEF population absent')
-        for pattern, source in spefs.items():
-            path = Path(source).resolve()
-            if not path.is_relative_to(folder):
-                raise ValueError(f'{pattern}: SPEF belongs to another producer')
-            recorded = hashes.get(str(path.relative_to(folder)))
-            if not recorded or recorded != digest(path):
-                raise ValueError(f'{pattern}: producer SPEF bytes absent or changed')
-        return receipt
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        raise Refusal('LL_RCX_OUTPUT_UNBOUND', f'{folder}: {exc}') from exc
-
-
-def _current_config_material(config: dict, mounts: list) -> dict:
-    """Hash the real files read through the caller's declared mounts."""
-    result = {}
-    for path in _walk_paths(config):
-        material = path
-        for host, guest in mounts:
-            if path.is_relative_to(guest):
-                material = Path(host) / path.relative_to(guest)
-                break
-        if material.is_dir():
-            continue
-        if not material.is_file():
-            raise Refusal('LL_CONFIG_MATERIAL_MISSING', str(path))
-        result[str(material)] = digest(material)
-    return result
-
-
-def xor_report_record(folder: Path) -> dict:
-    """Read the actual Step37.3 KLayout report and its compared subjects."""
-    import xml.etree.ElementTree as ET
-    report = folder / 'xor.xml'
-    if not report.is_file():
-        raise Refusal('LL_XOR_REPORT_MISSING', str(report))
-    try:
-        with report.open('rb') as stream:
-            root = ET.parse(stream).getroot()
-    except (OSError, ET.ParseError) as exc:
-        raise Refusal('LL_XOR_REPORT_UNREADABLE', str(report)) from exc
-    state = _load(folder / 'state_out.json')
-    design = _load(folder / 'config.json').get('DESIGN_NAME')
-    magic, klayout = state.get('mag_gds'), state.get('klayout_gds')
-    if (root.tag != 'report-database' or not design
-            or root.findtext('top-cell') != design
-            or root.findtext('description') != f'XOR {magic} vs. {klayout}'):
-        raise Refusal('LL_XOR_REPORT_SUBJECT_MISMATCH', str(report))
-    items = root.find('items')
-    value = (state.get('metrics') or {}).get('design__xor_difference__count')
-    if (items is None or type(value) is not int or value < 0
-            or len(items.findall('item')) != value
-            or any(item.tag != 'item' for item in items)):
-        raise Refusal('LL_XOR_REPORT_COUNT_MISMATCH', str(report))
-    return {'path': 'xor.xml', 'sha256': digest(report), 'design': design,
-            'magic_gds': {'path': magic, 'sha256': digest(Path(magic))},
-            'klayout_gds': {'path': klayout, 'sha256': digest(Path(klayout))},
-            'count': len(items.findall('item'))}
-
-
-def bind_xor_report(folder: Path, receipt: dict) -> dict:
-    """Complete producer metadata from retained real report bytes, without tools."""
-    record = xor_report_record(folder)
-    return {**receipt, 'sha256': {**receipt['sha256'], 'xor.xml': record['sha256']},
-            'xor_report': record}
-
-
-def check_xor_report(folder: Path, receipt: dict) -> dict:
-    """A missing binding or any changed bytes/subject/result blocks reuse."""
-    record = receipt.get('xor_report')
-    if (not isinstance(record, dict) or record.get('path') != 'xor.xml'
-            or receipt.get('sha256', {}).get('xor.xml') != record.get('sha256')):
-        raise Refusal('LL_XOR_REPORT_BINDING_MISSING', str(folder))
-    if not (folder / 'xor.xml').is_file():
-        raise Refusal('LL_XOR_REPORT_MISSING', str(folder / 'xor.xml'))
-    if digest(folder / 'xor.xml') != record['sha256']:
-        raise Refusal('LL_XOR_REPORT_CHANGED', str(folder / 'xor.xml'))
-    current = xor_report_record(folder)
-    if current != record:
-        raise Refusal('LL_XOR_REPORT_BINDING_MISMATCH', str(folder / 'xor.xml'))
-    return current
-
-
-def _step_input_identity(fingerprint: dict) -> dict:
-    """Compare scientific inputs while retaining full execution attestations.
-
-    LOCAL image authority is freshly verified before every lookup. Its CID
-    and launch-receipt location/hash describe that execution, not tool inputs.
-    Project a copy on both sides so older receipts remain byte-for-byte intact.
-    """
-    identity = dict(fingerprint)
-    local = identity.get('local_image')
-    if isinstance(local, dict):
-        identity['local_image'] = {key: value for key, value in local.items()
-            if key not in ('cid', 'attestation_path', 'attestation_sha256')}
-    return identity
-
 
 def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
               *, docker: str = 'docker', mounts: list[tuple[Path, str]] | None = None,
@@ -4309,9 +3679,6 @@ def post_pnr_timing_inputs(project: Path, state_path: Path, corner: str, *,
             raise Refusal('LL_STATE_OUTSIDE_PROJECT', f'{key}: {value}')
         result[key] = (str(resolved.relative_to(root))
                        if resolved.is_relative_to(root) else str(resolved))
-    result['sha256'] = {key: digest(Path(result[key]) if Path(result[key]).is_absolute()
-                                    else root / result[key])
-                        for key in ('sta_netlist', 'sdc', 'spef', 'state')}
     return result
 
 

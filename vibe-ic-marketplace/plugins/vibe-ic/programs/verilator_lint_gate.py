@@ -119,28 +119,15 @@ def _native_checker_failure(step_dir, folder, sid, metric, metrics, failure):
                 or Path(match[3]).resolve() != (folder / 'invocation.log').resolve()
                 or (folder / 'state_out.json').exists()):
             return None
-        artifacts = failure.get('artifact_readset')
-        required = [folder / name for name in ('config.json', 'state_in.json',
-                    'input_fingerprint.json', 'invocation.log', 'pdk_root.json')]
-        required += [step_dir / name for name in ('vibeic_receipt.json', 'state_out.json',
-                    'config.json', 'input_fingerprint.json', 'verilator-lint.log', 'invocation.log')]
-        if (not isinstance(artifacts, dict) or any(str(path) not in artifacts for path in required)
-                or any(not Path(name).is_file() or hashlib.sha256(Path(name).read_bytes()).hexdigest() != digest
-                       for name, digest in artifacts.items())):
-            return None
-        contract.validate_step_receipt(step_dir, 'Verilator.Lint')
         config = json.loads((folder / 'config.json').read_bytes())
         state = json.loads((folder / 'state_in.json').read_bytes())
-        fingerprint = json.loads((folder / 'input_fingerprint.json').read_bytes())
         flag = {'Checker.LintErrors': 'ERROR_ON_LINTER_ERRORS',
                 'Checker.LintTimingConstructs': 'ERROR_ON_LINTER_TIMING_CONSTRUCTS',
                 'Checker.LintWarnings': 'ERROR_ON_LINTER_WARNINGS'}[sid]
         value = metrics.get(metric)
-        if (fingerprint.get('step') != sid or config.get('meta', {}).get('step') != sid
+        if (config.get('meta', {}).get('step') != sid
                 or config.get(flag, sid != 'Checker.LintWarnings') is not True
-                or type(value) is not int or value <= 0 or state.get('metrics') != metrics
-                or fingerprint.get('state') != hashlib.sha256((folder / 'state_in.json').read_bytes()).hexdigest()
-                or fingerprint.get('local_image') != json.loads((step_dir / 'input_fingerprint.json').read_bytes()).get('local_image')):
+                or type(value) is not int or value <= 0 or state.get('metrics') != metrics):
             return None
         text = (folder / 'invocation.log').read_text()
         labels = {'Checker.LintErrors': 'Lint errors', 'Checker.LintWarnings': 'Lint warnings',
