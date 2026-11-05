@@ -178,3 +178,66 @@ def test_rtl_cdc_clock_ancestry_uses_native_latch_phase(tmp_path, kind, unresolv
         assert model.root(bit) == bit
         assert model.root(bit, clock=True) == model.ports["clk_i"][1][0]
         assert native.reg_crossing_findings(model, calibrate=False) == []
+
+
+@pytest.mark.parametrize("kind,unresolved", [
+    ("integrated", 0), ("opposite_phase", 1), ("other_latch_clock", 1),
+    ("raw_gate", 1), ("independent", 1), ("inverted_gate", 1),
+])
+@pytest.mark.parametrize("suffix", [".v", ".sv"])
+def test_implemented_cdc_clock_ancestry_uses_native_library_latch(tmp_path, kind, unresolved, suffix):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    import _cdc_netlist as native
+    liberty = tmp_path / "cells.lib"
+    liberty.write_text('library(neutral) { '
+        'cell(pulse_gate) { clock_gating_integrated_cell: "latch_posedge"; '
+        'pin(CK) { direction: input; clock: true; clock_gate_clock_pin: true; } '
+        'pin(E) { direction: input; clock_gate_enable_pin: true; } '
+        'pin(GCK) { direction: output; clock_gate_out_pin: true; state_function: "CK*held"; } '
+        'pin(held) { direction: internal; internal_node: "held"; } } '
+        'cell(hold_high) { latch(IQ,IQN) { enable: "CK"; data_in: "D"; } '
+        'pin(CK) { direction: input; } pin(D) { direction: input; } '
+        'pin(Q) { direction: output; function: "IQ"; } } '
+        'cell(hold_low) { latch(IQ,IQN) { enable: "!CK"; data_in: "D"; } '
+        'pin(CK) { direction: input; } pin(D) { direction: input; } '
+        'pin(Q) { direction: output; function: "IQ"; } } '
+        'cell(merge) { pin(A) { direction: input; } pin(B) { direction: input; } '
+        'pin(Y) { direction: output; function: "A*B"; } } '
+        'cell(invert) { pin(A) { direction: input; } '
+        'pin(Y) { direction: output; function: "!A"; } } '
+        'cell(storage) { ff(IQ,IQN) { clocked_on: "CK"; next_state: "D"; } '
+        'pin(CK) { direction: input; clock: true; } pin(D) { direction: input; } '
+        'pin(Q) { direction: output; function: "IQ"; } } }\n')
+    gate = {
+        "integrated": "pulse_gate gate(.CK(clk_i),.E(enable_i),.GCK(clocked));",
+        "opposite_phase": "wire held; hold_high latch(.CK(clk_i),.D(enable_i),.Q(held)); "
+                          "merge gate(.A(clk_i),.B(held),.Y(clocked));",
+        "other_latch_clock": "wire held; hold_low latch(.CK(other_i),.D(enable_i),.Q(held)); "
+                             "merge gate(.A(clk_i),.B(held),.Y(clocked));",
+        "raw_gate": "merge gate(.A(clk_i),.B(enable_i),.Y(clocked));",
+        "independent": "assign clocked=other_i;",
+        "inverted_gate": "wire held,inverted; hold_low latch(.CK(clk_i),.D(enable_i),.Q(held)); "
+                         "invert polarity(.A(clk_i),.Y(inverted)); "
+                         "merge gate(.A(inverted),.B(held),.Y(clocked));",
+    }[kind]
+    netlist = tmp_path / ("unit" + suffix)
+    netlist.write_text("module unit(input clk_i,other_i,enable_i,d,output q,r); wire clocked; "
+        + gate + " storage launch(.CK(clocked),.D(d),.Q(q)); "
+        "storage receive(.CK(clk_i),.D(q),.Q(r)); endmodule\n")
+    result = execute(tmp_path, tmp_path / "output", {"adapter": "implemented_cdc"}, {},
+        state={"nl": str(netlist)}, config={"DESIGN_NAME": "unit", "DEFAULT_CORNER": "typical",
+                                           "LIB": {"typical": [str(liberty)]}})
+    assert result["exit_code"] == 0, result
+    assert result["metrics"]["new_unexplained_crossings"] == unresolved, result
+    graph = next(Path(path) for path in result["reports"] if path.endswith("graph.json"))
+    model = native.load(graph, "unit")
+    assert len(model.flops) == 2
+    if kind == "integrated":
+        assert {"$_AND_", "$_DLATCH_N_"}.issubset({cell["type"] for cell in model.cells.values()})
+        assert native.reg_crossing_findings(model, calibrate=False)
+        native._load_latched_clock_gates(model)
+        bit = next(f.clk for f in model.flops if f.clk != model.ports["clk_i"][1][0])
+        assert model.root(bit) == bit
+        assert model.root(bit, clock=True) == model.ports["clk_i"][1][0]
+        assert native.reg_crossing_findings(model, calibrate=False) == []
