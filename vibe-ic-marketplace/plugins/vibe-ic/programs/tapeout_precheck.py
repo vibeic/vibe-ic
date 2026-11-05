@@ -1122,66 +1122,74 @@ def _write_non_run_record(out: Path, project: Path, pdk: Optional[str],
                       encoding="utf-8")
 
 
-def execute(project: Path, context: dict) -> dict:
-    """D80 measures the final stream and consumes completed native signoff."""
+def execute(project: Path, context: Optional[dict] = None, *,
+            gds: Optional[Path] = None, config: Optional[dict] = None,
+            directory: Optional[Path] = None) -> dict:
+    """Read the final stream and compare it with its original geometry limits."""
     import tapeout_declaration_gen as declaration_gen
     project = Path(project).resolve()
-    measured = declaration_gen.measure_final(project)
+    config = config or {}
+    options = {"directory": directory} if directory is not None else {}
+    measured = (declaration_gen.measure_final(project, gds, **options)
+                if gds is not None or options else declaration_gen.measure_final(project))
     checks = [{"check": "final_gds_measurement", "status": measured["verdict"],
-               "report": declaration_gen.FINAL_REL}]
+               "report": measured.get("report", declaration_gen.FINAL_REL)}]
     doc = measured.get("declared_contract") or {}
+    answers = doc.get("answers") or {}
     geometry = measured.get("measurement")
     if geometry is not None:
         geometry = {**geometry, "dbu_um": geometry["database_unit_um"],
                     "top_cells": [geometry["top_cell"]], "bbox_complete": True}
-        expected, _ = _ours._chosen_floorplan_expectations(project)
-        for name in ("database_unit", "top_cell", "die_origin_and_size"):
+        missing = _decl.NOT_DETERMINED
+        top = answers.get("top_cell")
+        if top in (None, missing):
+            top = config.get("DESIGN_NAME")
+        area = answers.get("die_area_um")
+        if area in (None, missing):
+            area = config.get("DIE_AREA")
+        origin = answers.get("die_origin_um")
+        if origin in (None, missing):
+            origin = area[:2] if area else None
+        deliverable = answers.get("deliverable")
+        if deliverable in (None, missing):
+            deliverable = _decl.DELIVERABLE_DIE
+        for name, expected in (("database_unit", answers.get("database_unit_um")),
+                               ("top_cell", top), ("die_origin_and_size", area)):
+            if expected in (None, missing):
+                continue
             evidence = _ours.StepEvidence(name, name, 0, "KLayout", "NOT_DETERMINED", "original contract")
             if name == "database_unit":
-                _ours._step_database_unit(evidence, geometry, _decl.answer(doc, "database_unit_um"))
+                _ours._step_database_unit(evidence, geometry, expected)
             elif name == "top_cell":
-                _ours._step_top_level(evidence, geometry, _decl.answer(doc, "top_cell"),
-                                     _ours._recorded_physical_top(project), chosen_top=expected.get("top_cell"))
+                _ours._step_top_level(evidence, geometry, top,
+                                     _ours._recorded_physical_top(project))
             else:
-                _ours._step_size(evidence, geometry, _decl.answer(doc, "deliverable"),
-                                 _decl.answer(doc, "die_origin_um"), _decl.answer(doc, "die_area_um"),
-                                 _decl.answer(doc, "macro_origin_um"), _decl.answer(doc, "macro_area_um"),
-                                 chosen_origin=expected.get("die_origin_um"), chosen_area=expected.get("die_area_um"))
-            checks.append({"check": name, "status": evidence.verdict, "detail": evidence.as_dict()})
-    for step, label in (("D65", "final_physical_verification"),
-                        ("D75", "package_test_readiness")):
-        path = project / "reports/flow109/components" / f"{step}.json"
-        try:
-            result = json.loads(path.read_text())
-            status = result.get("default_row_status", result.get("component_status", "NOT_MEASURED"))
-        except (OSError, ValueError, TypeError):
-            status = "NOT_MEASURED"
-        checks.append({"check": label, "status": status,
-                       "report": str(path.relative_to(project))})
-    route, evidence = delivery_route(project)
-    operator = doc.get("operator_template") or {}
-    independent = (not template_was_fetched(project)
-                   and not (project / "input/submission_template/provider_target.json").exists()
-                   and _decl.answer(doc, "deliverable") == _decl.DELIVERABLE_DIE
-                   and isinstance(operator.get("absent_reason"), str)
-                   and bool(operator["absent_reason"].strip()))
-    if not independent:
-        operator = evaluate(project)
-        checks.append({"check": "operator_precheck", "status": operator.verdict,
-                       "detail": operator.as_dict()})
-    else:
-        checks.append({"check": "operator_precheck", "status": "NOT_APPLICABLE",
-                       "contract": operator["absent_reason"], "route": route})
+                _ours._step_size(evidence, geometry, deliverable,
+                                 origin if origin is not None else missing, area,
+                                 answers.get("macro_origin_um", missing),
+                                 answers.get("macro_area_um", missing))
+            checks.append({"check": name,
+                           "status": "NOT_MEASURED" if evidence.verdict == NOT_DETERMINED else evidence.verdict,
+                           "detail": evidence.as_dict()})
+    provider = project / "input/submission_template/provider_target.json"
+    if provider.is_file() or template_was_fetched(project):
+        checks.append({"check": "operator_precheck", "status": "NOT_MEASURED",
+                       "detail": "The declared provider precheck needs its native DEF input and provider deck; "
+                                 "the legacy checker also publishes release views and cannot run as an independent stream check."})
     statuses = [row["status"] for row in checks]
     status = ("FAIL" if "FAIL" in statuses else "PASS"
-              if all(value in ("PASS", "NOT_APPLICABLE") for value in statuses) else "NOT_MEASURED")
-    result = {"program": "tapeout_precheck", "step_id": "D80",
-              "context_sha256": context.get("context_sha256"),
-              "verdict": status, "component_status": status,
-              "default_row_status": status, "completed": status == "PASS",
-              "checks": checks, "final_declaration": declaration_gen.FINAL_REL}
-    output = project / MERGED_ARTEFACT
+              if all(value == "PASS" for value in statuses) else "NOT_MEASURED")
+    result = {"program": "tapeout_precheck", "verdict": status,
+              "component_status": status, "default_row_status": status,
+              "completed": status == "PASS", "checks": checks,
+              "measurement": measured.get("measurement"),
+              "exit_code": measured.get("exit_code"),
+              "command": measured.get("command"), "log": measured.get("log"),
+              "reason": measured.get("reason", ""),
+              "final_declaration": measured.get("report", declaration_gen.FINAL_REL)}
+    output = Path(directory) / "tapeout_precheck.json" if directory is not None else project / MERGED_ARTEFACT
     output.parent.mkdir(parents=True, exist_ok=True)
+    result["report"] = str(output)
     atomic_write_text(output, json.dumps(result, indent=2) + "\n")
     return result
 
