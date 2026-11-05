@@ -3493,6 +3493,18 @@
             }
           },
           {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "VibeIC.IRDropCorners"
+              ],
+              "imports": [
+                "flow_ir_corners"
+              ]
+            }
+          },
+          {
             "when": "otherwise",
             "tool": {
               "kind": "librelane",

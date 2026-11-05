@@ -1103,6 +1103,17 @@
     "design_for_manufacturability": "final_electrical_analysis"
   },
   "profile_tools": {
+    "candidate_ir_drop": {
+      "ic": {
+        "kind": "librelane",
+        "steps": [
+          "VibeIC.IRDropCorners"
+        ],
+        "imports": [
+          "flow_ir_corners"
+        ]
+      }
+    },
     "die_floorplan_and_macros": {
       "ic": {
         "kind": "librelane",
