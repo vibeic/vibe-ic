@@ -159,3 +159,33 @@ def path_delay(project, directory, *, state, config):
             "detail": f"Native endpoint-anchored path sensitisation at {corner}; "
                       f"at-speed meaningful paths={data.get('at_speed_meaningful_paths', 'NOT_MEASURED')}. "
                       + "; ".join(data.get("reasons", []))}
+
+
+def small_delay(project, directory, *, config):
+    import sdd_atpg_run as producer
+
+    source = project / "reports/phase2/dft/path_delay_coverage.json"
+    clock = (config or {}).get("CLOCK_PORT")
+    clocks = [clock] if isinstance(clock, str) else clock or []
+    if not source.is_file() or len(clocks) != 1:
+        return {"ran": False, "exit_code": None,
+                "detail": "Small-delay grading needs the native path-delay report and one functional clock."}
+    args = SimpleNamespace(clock=clocks[0], top=config["DESIGN_NAME"], dt2_json=str(source),
+        dt1_json=None, no_run_dt1=True, margin_fraction=producer.SDD_MARGIN_FRACTION_DEFAULT, margin_ns=None)
+    started = time.perf_counter()
+    code, data = producer.run_sdd_atpg(project, args, None)
+    report = directory / "sdd_coverage.json"
+    report.write_text(json.dumps(data, indent=2) + "\n")
+    canonical = project / "reports/phase2/dft/sdd_coverage.json"
+    canonical.write_text(report.read_text())
+    metrics = {key: data[key] for key in ("graded_faults", "strong", "weak", "undetected_at_speed",
+               "sdd_binary_strong_coverage_pct", "sdd_slack_weighted_coverage_pct", "margin_ns", "clock_period_ns")
+               if data.get(key) is not None}
+    if data.get("sdd_slack_weighted_coverage_pct") is not None:
+        metrics["sdd_graded_fault_coverage"] = data["sdd_slack_weighted_coverage_pct"]
+    status = "NOT_MEASURED" if code == 2 or data.get("verdict") in {"NOT_APPLICABLE", "NOT_MEASURED", "BLOCKED"} else "FAIL" if code else "PASS"
+    return {"ran": True, "exit_code": code, "metrics": metrics, "reports": [str(source), str(report)],
+            "tool_seconds": time.perf_counter() - started,
+            "native_steps": [{"name": "sdd_atpg_run", "ran": True, "exit_code": code, "status": status}],
+            "detail": "Native descriptive SDD grade; optional absent DT1 context is not regenerated. "
+                      + "; ".join(data.get("reasons", []))}

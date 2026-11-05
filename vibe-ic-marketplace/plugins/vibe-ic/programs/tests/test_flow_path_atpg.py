@@ -79,3 +79,45 @@ def test_pdf_requires_native_grades_before_reporting_coverage(tmp_path, monkeypa
         assert "pdf_sensitised_coverage_pct" not in result
     else:
         assert result["pdf_sensitised_coverage_pct"] == 100
+
+
+@pytest.mark.parametrize("code,verdict,coverage,expected", [
+    (0, "PASS", 100, "PASS"), (0, "PASS", 70, "FAIL"),
+    (1, "ERROR", None, "FAIL"), (0, "NOT_APPLICABLE", None, "NOT_MEASURED"),
+])
+def test_sdd_row_reads_native_weighted_grade(tmp_path, monkeypatch, code, verdict, coverage, expected):
+    import sdd_atpg_run as sdd
+
+    source = tmp_path / "reports/phase2/dft/path_delay_coverage.json"
+    source.parent.mkdir(parents=True)
+    source.write_text("{}")
+    calls = []
+
+    def run(project, args, pdk_dir):
+        calls.append(args)
+        assert args.dt2_json == str(source)
+        assert args.margin_fraction == sdd.SDD_MARGIN_FRACTION_DEFAULT
+        assert args.no_run_dt1 and args.margin_ns is None
+        return code, {"verdict": verdict, "sdd_slack_weighted_coverage_pct": coverage,
+                      "sdd_binary_strong_coverage_pct": 0}
+
+    monkeypatch.setattr(sdd, "run_sdd_atpg", run)
+    row = next(row for row in engine.read_json(engine.TABLE)["steps"] if row["name"] == "small_delay_defect_atpg")
+    native = engine.ToolResult(**adapters.execute(tmp_path, tmp_path / "step", row["tool"], {},
+        config={"DESIGN_NAME": "core", "CLOCK_PORT": "clk"}))
+    assert len(calls) == 1
+    checks = [{**check, "limit": {"min": 80}} for check in row["checks"]]
+    measured = engine.measure(checks, native.metrics, {}, {"requires_sdd": True})
+    assert engine.evaluate(native, measured) == expected
+    if coverage is not None:
+        assert native.metrics["sdd_graded_fault_coverage"] == coverage
+
+
+def test_sdd_missing_upstream_measurement_is_unmeasured(tmp_path, monkeypatch):
+    import sdd_atpg_run as sdd
+
+    monkeypatch.setattr(sdd, "run_sdd_atpg", lambda *args: pytest.fail("No native timing report exists"))
+    row = next(row for row in engine.read_json(engine.TABLE)["steps"] if row["name"] == "small_delay_defect_atpg")
+    result = adapters.execute(tmp_path, tmp_path / "step", row["tool"], {},
+                              config={"DESIGN_NAME": "core", "CLOCK_PORT": "clk"})
+    assert not result["ran"]

@@ -3354,9 +3354,7 @@
       "when": "requires_sdd",
       "tool": {
         "kind": "adapter",
-        "program": "sdd_atpg_run.py",
-        "function": "main",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "small_delay_atpg"
       },
       "checks": [
         {
