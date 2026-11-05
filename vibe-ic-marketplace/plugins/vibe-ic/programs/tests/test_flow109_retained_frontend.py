@@ -473,7 +473,7 @@ def test_missing_lint_result_reaches_the_native_route(tmp_path, monkeypatch):
         owner.step_rtl_lint_tool(tmp_path)
 
 
-@pytest.mark.parametrize(('step', 'native_step'), [('D13', '4'), ('D14', '5')])
+@pytest.mark.parametrize(('step', 'native_step'), [('D14', '5')])
 @pytest.mark.parametrize('status', ['PASS', 'FAIL', 'NOT_MEASURED'])
 def test_completed_native_owner_uses_the_single_reader(tmp_path, monkeypatch, step, native_step, status):
     import vibe_ic_one_shot_runner as runner
@@ -495,6 +495,26 @@ def test_completed_native_owner_uses_the_single_reader(tmp_path, monkeypatch, st
     assert result['verdict'] == status
     assert seen == [{'status': status, 'extras': {
         'component_status': status, 'reason': 'native report read', 'step_id': native_step}}]
+
+
+@pytest.mark.parametrize('status,current', [('PASS', True), ('FAIL', True),
+    ('NOT_MEASURED', True), ('PASS', False)])
+def test_fresh_simulation_owner_uses_this_native_report_with_existing_synthesis(tmp_path, monkeypatch, status, current):
+    import vibe_ic_one_shot_runner as runner
+    context = flow109.execution_context(flow109.resolve_plan(profile()), 'D13', 'D13')
+    selected = tmp_path / 'context.json'; selected.write_text(json.dumps(context))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(selected))
+    attempt = flow109._new_attempt(tmp_path, context)
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    put(tmp_path / 'phase2/stage2/synth/synth_inputs.json', {})
+    observed = runner._finish_d13_selected_owner(tmp_path, {'verdict': status}, {}, published_current=current)
+    expected = status if current else 'NOT_MEASURED'
+    assert observed['verdict'] == expected
+    row = json.loads((tmp_path / 'reports/flow109/default_rows/D13.json').read_text())
+    assert row['default_row_status'] == expected
+    assert row['completed'] is (expected == 'PASS')
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED'
+    assert row['delivery_accepted'] is False
 
 
 def native_formal_case(project, *, status='PASS', later_synthesis=False):

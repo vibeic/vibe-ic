@@ -286,6 +286,25 @@ def test_reference_current_execution_cannot_bypass_pulse_gate(tmp_path, monkeypa
     assert result.status == 'FAIL'
 
 
+@pytest.mark.parametrize('damage,expected', [(None, 'PASS'), ('missing_witness', 'NOT_MEASURED'),
+    ('unexecuted_case', 'NOT_MEASURED'), ('functional_fail', 'FAIL'), ('coverage_missing', 'NOT_MEASURED')])
+def test_current_functional_consumer_discharges_only_connectivity_scaffold(tmp_path, monkeypatch, damage, expected):
+    project, producer, began = _current_professional_reference(tmp_path, monkeypatch)
+    if damage == 'missing_witness':
+        producer.extras.pop('reference_execution')
+    elif damage == 'unexecuted_case':
+        (project / 'phase1/generated_docs/L10_TEST_CASES.json').write_text(json.dumps({
+            'test_cases': [{'name': 'oracle_case', 'kind': 'functional_vector',
+                            'input': {'a': 1}, 'expected': {'y': 1}}]}))
+        producer = DOSR.step_professional_tb_gen(project, TOP, '')
+    plan = [DOSR.StepResult('full_stack_tb_gen', 'NOT_MEASURED', reason_class='no_population'),
+        producer, DOSR.StepResult('step4_functional_evidence', 'FAIL' if damage == 'functional_fail' else 'PASS')]
+    if damage == 'coverage_missing':
+        plan.append(DOSR.StepResult('verilator_coverage', 'NOT_MEASURED', reason_class='missing_artefact'))
+    assert DOSR._aggregate_verdict(plan, project=project, started_at=began) == expected
+    assert plan[0].status == 'NOT_MEASURED'
+
+
 @pytest.mark.parametrize('change', ['hook', 'l_doc', 'new_hook', 'new_l_doc'])
 @pytest.mark.parametrize('phase', ['generate', 'simulate'])
 def test_reference_execution_cannot_bind_inputs_changed_during_production(

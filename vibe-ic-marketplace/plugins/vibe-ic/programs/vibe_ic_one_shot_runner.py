@@ -2132,18 +2132,11 @@ def _finish_d13_selected_owner(project: Path, report: Mapping, invocation: Mappi
                                *, published_current: bool) -> dict:
     """Publish the completed native result through the shared frontend reader."""
     import flow109
-    context = flow109.validate_execution_context(json.loads(
-        Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
-    native = flow109._retained_native_result(project, context)
-    if native is None and not (project / 'phase2/stage2/synth/synth_inputs.json').exists():
-        status = report.get('verdict') if published_current else 'NOT_MEASURED'
-        if status not in ('PASS', 'FAIL', 'NOT_MEASURED'):
-            status = 'NOT_MEASURED'
-        native = {'component_status': status, 'default_row_status': status,
-                  'completed': status == 'PASS', 'reason': 'D13_CURRENT_OWNER_REPORT'}
-    if native is None:
-        return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
-                'detail': 'native report is unavailable'}
+    status = report.get('verdict') if published_current else 'NOT_MEASURED'
+    if status not in ('PASS', 'FAIL', 'NOT_MEASURED'):
+        status = 'NOT_MEASURED'
+    native = {'component_status': status, 'default_row_status': status,
+              'completed': status == 'PASS', 'reason': 'D13_CURRENT_OWNER_REPORT'}
     finished = flow109.finish_native_window(project, {'steps': [{
         'status': native['component_status'], 'extras': {**native, 'step_id': '4'}}]})
     return {'verdict': finished['default_row_status'], 'whole_flow_verdict': 'NOT_MEASURED',
@@ -6121,8 +6114,7 @@ def _main(args=None) -> int:
                 "PHASE 2 (= 2a + 2b)", runner, p2_args, env=p2_env,
                 invocation=d09_invocation if d09_selected or d11_selected or d12_selected or d13_selected or d14_selected or d19_selected else None)
             phase2_report = _phase_report_path(project, 'phase2_one_shot.json')
-            if (d11_selected or d12_selected or d14_selected or d19_selected
-                    or d13_selected and (project / 'phase2/stage2/synth/synth_inputs.json').exists()):
+            if d11_selected or d12_selected or d14_selected or d19_selected:
                 context = flow109.validate_execution_context(json.loads(
                     Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
                 phase2_report = flow109._bound_attempt(project, context,
