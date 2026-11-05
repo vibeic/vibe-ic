@@ -110,7 +110,7 @@ def execute(project: Path, directory: Path) -> dict:
         if not root:
             return {"ran": False, "detail": "No installed PDK_ROOT for native technology resolution."}
         started = True
-        selected, pin = _resolve(config_path, Path(root).resolve(strict=True),
+        selected, pin = _resolve(config_path, Path(root).resolve(),
                                  pdk=declared_pdk, project=project)
         if selected["PDK"] != declared_pdk:
             raise D03Refusal("D03_PDK_DECLARATION_CONFLICT", "resolved PDK differs from design declaration")
@@ -128,7 +128,10 @@ def execute(project: Path, directory: Path) -> dict:
         return {"ran": failed or started, "exit_code": 1 if failed else None,
                 "metrics": metrics, "reports": reports, "tool_seconds": time.perf_counter() - before,
                 "detail": str(exc)}
-    except (ImportError, FileNotFoundError) as exc:
+    except ImportError as exc:
+        return {"ran": False, "exit_code": None, "detail": str(exc),
+                "tool_seconds": 0.0}
+    except FileNotFoundError as exc:
         return {"ran": started, "exit_code": 1 if started else None, "detail": str(exc),
                 "tool_seconds": time.perf_counter() - before}
     except Exception as exc:

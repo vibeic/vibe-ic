@@ -570,6 +570,20 @@ def formal(project, directory, tool, commands):
     return result
 
 
+def macro_views(project, directory, tool, commands):
+    """Use the existing pre-netlist macro integration component's own verdict."""
+    from ip_integration_check import audit
+    started = time.perf_counter()
+    report = audit(project)
+    path = directory / "macro_views.json"
+    path.write_text(json.dumps(report, indent=2) + "\n")
+    ran = report["rc"] != 2
+    return {"ran": ran, "exit_code": report["rc"] if ran else None,
+            "metrics": {"macro_count": len(report.get("macros", {}))} if ran else {},
+            "reports": [str(path)], "tool_seconds": time.perf_counter() - started,
+            "detail": report.get("reason", "Existing macro view-set integration audit; native PV and STA remain separate.")}
+
+
 def technology(project, directory, tool, commands):
     from flow109_technology_qualification import execute
     return execute(project, directory)
@@ -632,7 +646,7 @@ def physical_declarations(project, directory, tool, commands, route):
         "Supplied operator template and declarations evaluated; unanswered declarations do not require manual answers.")
 
 
-ADAPTERS = {"cdc": cdc, "simulation": simulation, "formal": formal, "technology": technology}
+ADAPTERS = {"cdc": cdc, "simulation": simulation, "formal": formal, "technology": technology, "macro_views": macro_views}
 
 
 def declared_electrical_checks(project):
@@ -726,6 +740,9 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     commands = Commands(work)
     if tool.get("adapter") == "physical_declarations":
         return physical_declarations(project, work, tool, commands, route)
+    if tool.get("adapter") == "functional_activity":
+        from flow_activity import execute as activity
+        return activity(project, work, tool, route, state=state, config=config)
     if tool.get("adapter") in {"eqy", "xor", "gls"}:
         import flow_native_verification
         return getattr(flow_native_verification, tool["adapter"])(
