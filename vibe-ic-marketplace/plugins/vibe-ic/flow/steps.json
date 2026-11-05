@@ -176,8 +176,16 @@
       "value": true,
       "when": "ic",
       "source": {
-        "file": "/mnt/ssd2/codex_tasks/in/flow-ic/leader.txt",
+        "file": "programs/flow_em_corners.py",
         "note": "Ruling211: retain published IC power-grid EM against PDK Jmax."
+      }
+    },
+    "requires_spares": {
+      "value": true,
+      "when": "ic",
+      "source": {
+        "file": "programs/flow_spare_cells.py",
+        "note": "Ruling212 retains the published native IC spare-cell checks."
       }
     }
   },
@@ -2484,17 +2492,87 @@
       "title": "Spare cells and ECO preparation",
       "when": "digital_physical and requires_spares",
       "tool": {
-        "kind": "adapter",
-        "program": "execution_backend_producers.py",
-        "function": "produce",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "profiles",
+        "profiles": [
+          {
+            "when": "ic",
+            "tool": {
+              "kind": "librelane",
+              "steps": [
+                "VibeIC.SpareCells"
+              ],
+              "imports": [
+                "flow_spare_cells"
+              ]
+            }
+          },
+          {
+            "when": "otherwise",
+            "tool": {
+              "kind": "adapter",
+              "program": "execution_backend_producers.py",
+              "function": "produce",
+              "gap": "Native invocation must be adapted without the old acceptance wrappers."
+            }
+          }
+        ]
       },
       "checks": [
+        {
+          "metric": "spare_density_fraction",
+          "operator": ">=",
+          "limit": 0.02,
+          "when": "ic",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
+        {
+          "metric": "spare_distribution_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
+        {
+          "metric": "spare_tie_connectivity_errors",
+          "operator": "==",
+          "limit": 0,
+          "when": "digital_physical and requires_spares",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
+        {
+          "metric": "spare_planned_mismatch",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
+        {
+          "metric": "vibeic__spare__pg__unconnected",
+          "operator": "==",
+          "limit": 0,
+          "when": "ic",
+          "source": {
+            "file": "programs/spare_cell_coverage_check.py",
+            "line": 132
+          }
+        },
         {
           "metric": "required_spare_distribution",
           "operator": "within_declared_bounds",
           "limit": null,
-          "when": "digital_physical and requires_spares",
+          "when": "digital_physical and requires_spares and not ic",
           "source": {
             "file": "flow/flow109.json",
             "line": 9854
@@ -2503,19 +2581,7 @@
             "kind": "design_or_pdk",
             "metric": "required_spare_distribution"
           },
-          "tool_gap": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
-        },
-        {
-          "metric": "spare_tie_connectivity_errors",
-          "operator": "==",
-          "limit": 0,
-          "when": "digital_physical and requires_spares",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 9876
-          },
-          "unit": "count",
-          "tool_gap": "Native engineering tool report for spare cells and eco preparation; wire the report/input adapter without population emitters or requirement traces."
+          "tool_gap": "Non-IC spare distribution remains an engineering measurement; the IC profile uses the native density and distribution numbers above."
         }
       ],
       "legacy_id": {

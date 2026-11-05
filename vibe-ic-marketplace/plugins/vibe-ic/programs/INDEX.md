@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1530
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1530)
+- **Total programs (excluding helpers / shims):** 1532
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1532)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1521 |
+| `any` | 1523 |
 
 ## Alphabetical listing
 
@@ -562,9 +562,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
 | `flow_ir_corners` | any | — | flow_ir_corners |
 | `flow_native_adapters` | any | — | flow_native_adapters |
+| `flow_native_timing` | any | — | Read OpenSTA's existing reports for the native flow selector. |
 | `flow_native_verification` | any | — | flow_native_verification |
 | `flow_output_substance` | any | — | did the run actually produce this output, or only a file? |
 | `flow_phase_attribution` | any | — | WHO did each of the four phases, and HOW. |
+| `flow_spare_cells` | any | — | flow_spare_cells |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
 | `flow_stage_membership_single_declaration_check` | any | — | stage membership is declared once. |
 | `flow_step_can_fail_check` | any | — | Ratchet flow steps whose declared gate cannot fail on output content. |
@@ -1602,7 +1604,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1521 programs)
+### `any` (1523 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2136,9 +2138,11 @@ _(no programs in this group)_
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
 - `flow_ir_corners` — flow_ir_corners
 - `flow_native_adapters` — flow_native_adapters
+- `flow_native_timing` — Read OpenSTA's existing reports for the native flow selector.
 - `flow_native_verification` — flow_native_verification
 - `flow_output_substance` — did the run actually produce this output, or only a file?
 - `flow_phase_attribution` — WHO did each of the four phases, and HOW.
+- `flow_spare_cells` — flow_spare_cells
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
 - `flow_stage_membership_single_declaration_check` — stage membership is declared once.
 - `flow_step_can_fail_check` — Ratchet flow steps whose declared gate cannot fail on output content.

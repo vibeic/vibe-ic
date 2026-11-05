@@ -16,7 +16,8 @@ def test_native_phase1_calls_document_owner_without_submission_admission(tmp_pat
             patch.object(owner, "_run_docs_mode", return_value=0) as extract, \
             patch.object(owner, "_run_step_0_5ic", side_effect=AssertionError("admission reached")):
         assert owner.main_recorded() == 0
-    extract.assert_called_once_with(tmp_path.resolve(), "UNNAMED_CHIP", ["--pdk", "sky130A"])
+    extract.assert_called_once_with(tmp_path.resolve(), "UNNAMED_CHIP",
+                                    ["--pdk", "sky130A", "--engine", "native"])
     report = json.loads((tmp_path / "reports/orchestrator/phase1_one_shot.json").read_text())
     assert report["expert_review"] == "PENDING"
 
