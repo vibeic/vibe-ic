@@ -5,18 +5,18 @@
   "populations": {
     "programs_top_level": {
       "definition": "Every *.py directly in plugins/vibe-ic/programs/ (top level, NOT recursive). Helpers (_*.py), DEPRECATED_* and *_shim.py ARE included. This is the population the shell glob `programs/*.py` expands to. NOTE: the git pathspec `programs/*.py` is NOT the same thing \u2014 git's `*` crosses `/`, so `git ls-files 'programs/*.py'` returns the RECURSIVE population instead.",
-      "count": 1648,
-      "sha256_of_sorted_paths": "360e64d4f5bdb05f48fca0a3e04a2887086317c953c6beb74667a247c2a1de04"
+      "count": 1647,
+      "sha256_of_sorted_paths": "91ec6b9ea3d757966d91eca3312f1f7a610697aa11e53ee55e58b61b5d0eb8e5"
     },
     "programs_catalogued": {
       "definition": "programs_top_level minus helpers and deprecation shims (_*.py, DEPRECATED_*, *_shim.py, and any file whose first 2000 chars contain 'DEPRECATION SHIM'). This is the population catalogued in programs/INDEX.md by tools/gen_programs_index.py.",
-      "count": 1475,
-      "sha256_of_sorted_paths": "536a2b8b70bba0250f8577e7a99121797417706a339bbed7485e0f70f0f0e015"
+      "count": 1474,
+      "sha256_of_sorted_paths": "e5f43778db8912a58cd704e846fd4429b649680216741f2c6cb698538f134c28"
     },
     "programs_tree_all_py": {
       "definition": "Every *.py at ANY depth under plugins/vibe-ic/programs/, including programs/tests/ and the sub-packages. Roughly programs_top_level + test_files + sub-package modules.",
-      "count": 6686,
-      "sha256_of_sorted_paths": "c55fc79900f28ca05329be52d474626f2bb5f9128a783b1ef484d7175e33f6e3"
+      "count": 6685,
+      "sha256_of_sorted_paths": "9385f5c28af7c30120b2e33c2fb01798ad1116e0178ef85fef74ae38ee810a73"
     },
     "test_files": {
       "definition": "Every test_*.py at any depth under plugins/vibe-ic/programs/tests/.",
