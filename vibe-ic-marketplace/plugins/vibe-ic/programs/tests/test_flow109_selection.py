@@ -492,8 +492,9 @@ def test_d30_accepts_native_d24_d25_identity_and_chain_report(tmp_path, monkeypa
     assert result["pre_route_timing"]["applicable_modes"] == ["functional"]
 
 
+@pytest.mark.parametrize('incidental_eqy', [False, True])
 def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, incidental_eqy):
     import hashlib
     _write_dft_intent(tmp_path, monkeypatch, scan=False, route='ip')
     top = "neutral_unit"
@@ -513,6 +514,7 @@ def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
         "step_id": "D25", "default_row_status": "PASS", "completed": True}))
     features = profile("Mapped soft-IP with prestitched scan")
     features["requires_scan"] = False
+    assert features['requires_dft'] is True
     context = flow109.execution_context(flow109.resolve_plan(features), "D30", "D30")
     intent = flow109.dft_source_intent(tmp_path, context)
     timing = reports / "flow109/d26_scan_mode.json"
@@ -562,7 +564,15 @@ def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
     gate.parent.mkdir(parents=True)
     gate.write_text(json.dumps({'verdict': 'PASS', 'corners': {'tt': {}},
         'source': str(state_out.resolve()), 'state_out_sha256': hashlib.sha256(state_out.read_bytes()).hexdigest()}))
-    result = flow109.dft_preroute_admission(tmp_path, context)
+    if incidental_eqy:
+        (reports / 'lec_eqy.json').write_text(json.dumps({
+            'fixture': 'incidental report outside the generic no-DFT proof scope'}))
+    try:
+        result = flow109.dft_preroute_admission(tmp_path, context)
+        observed = result['functional_equivalence']['path']
+    except flow109.Flow109Error as exc:
+        observed = exc.code
+    assert observed == 'reports/lec.json'
     assert result['normalized_preroute_chain']['reason'] == 'D30_DELIVERY_ARTIFACT_UNBOUND'
     assert set(result['normalized_preroute_chain']['points']) == {'D22', 'D25', 'D26'}
 
@@ -617,6 +627,32 @@ def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
     refusal = json.loads((tmp_path / 'reports/flow109/admission.json').read_text())
     assert refusal['status'] == 'FAIL' and refusal['native_started'] is False
     assert refusal['reason'] == 'FLOW109_PREROUTE_NETLIST_MISMATCH'
+
+
+@pytest.mark.parametrize('status', ['FAIL', 'NOT_MEASURED'])
+def test_d30_generic_refusal_cannot_borrow_legacy_pass(tmp_path, monkeypatch, status):
+    """Native acceptance boundary doubles test routing, not a measured proof."""
+    import flow109_metric_acceptance as metrics
+    _write_dft_intent(tmp_path, monkeypatch, scan=False, route='ip')
+    features = profile('Digital hard-IP')
+    assert features['requires_dft'] is features['requires_scan'] is False
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D30', 'D30')
+    (tmp_path / 'input/flow109').mkdir(parents=True)
+    (tmp_path / 'input/flow109/D22.json').write_text(json.dumps({'top': 'neutral_unit'}))
+    reports = tmp_path / 'reports'
+    rows = reports / 'flow109/default_rows'
+    rows.mkdir(parents=True)
+    for sid in ('D25', 'D26'):
+        (rows / f'{sid}.json').write_text(json.dumps({
+            'step_id': sid, 'default_row_status': 'PASS', 'completed': True,
+            'fixture': 'accepted upstream boundary; no native qualification'}))
+    (reports / 'lec_eqy.json').write_text(json.dumps({'fixture': 'native reader boundary'}))
+    (reports / 'lec.json').write_text(json.dumps({
+        'verdict': 'PASS', 'equivalent': True, 'fixture': 'stale legacy boundary'}))
+    monkeypatch.setattr(metrics, 'accept_d25', lambda *_: {
+        'status': status, 'reason': 'EXPLICIT_NATIVE_REFUSAL_CONTROL'})
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_D25_PROOF_NOT_ACCEPTED'):
+        flow109.dft_preroute_admission(tmp_path, context)
 
 
 @pytest.mark.parametrize("damage, code", [
