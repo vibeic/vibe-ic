@@ -1239,6 +1239,12 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: signed integer divider — C-truncated semantics + spec-stated {remainder, quotient} packing
 
+Request admission follows the declared condition: internal busy or loading
+state cannot restrict a request that the input says to capture. Such a request
+must restart the operation with the new operands, including at a completion edge.
+Preserve an idle-only or ready restriction only when the input declares it for
+that request; test loading, in-flight restart, result backpressure and reset.
+
 **Pattern**: A spec-stated divider that handles "signed OR unsigned" operands and packs BOTH quotient and remainder into one result word fails the hidden TB in two silent ways even when the magnitude division is correct: (a) wrong SIGNED convention, and (b) wrong RESULT BIT-PACKING. Standard integer division is **C-truncated** (round toward zero): the quotient's sign is `dividend_sign XOR divisor_sign`, and the **remainder takes the DIVIDEND's sign** (not the divisor's). Authoring on the magnitudes and forgetting to re-apply these signs — or packing `{quotient, remainder}` when the spec says the remainder is in the UPPER bits and the quotient in the LOWER bits — self-verifies against a TB written with the same wrong convention yet mismatches the dataset TB whose `expected` is computed by the language's own signed `/` and `%`.
 
 **When to apply**: Any divider whose prose says "signed or unsigned" / has a `sign` input AND whose single result port carries both quotient and remainder (e.g. "result: remainder in the upper 8 bits, quotient in the lower 8 bits").

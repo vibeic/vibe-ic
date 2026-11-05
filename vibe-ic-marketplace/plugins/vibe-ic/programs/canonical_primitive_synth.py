@@ -1215,14 +1215,19 @@ def _is_traffic_light(desc: str, mod: Optional[str], ports: set) -> bool:
 
 
 def _is_radix2_div(desc: str, mod: Optional[str], ports: set) -> bool:
-    if mod != "radix2_div":
+    if not mod:
         return False
     need = {"clk", "rst", "sign", "dividend", "divisor", "opn_valid",
-            "res_valid", "result"}
+            "res_ready", "res_valid", "result"}
     if not need.issubset(ports):
         return False
-    if not _has_any(desc, "radix-2", "radix 2", "signed or unsigned",
-                    "signed and unsigned"):
+    directions = {p: "out" if p in {"result", "res_valid"} else "in" for p in need}
+    if _port_directions(desc) != directions:
+        return False
+    if any(_port_width(desc, p) != w for p, w in
+           (("dividend", 8), ("divisor", 8), ("result", 16))):
+        return False
+    if not _has_any(desc, "radix-2", "radix 2"):
         return False
     return True
 
@@ -1939,12 +1944,14 @@ module radix2_div (
             if (res_valid && res_ready)
                 res_valid <= 1'b0;
 
-            if (!start_cnt && !loading && opn_valid && !res_valid) begin
+            if (opn_valid && !res_valid) begin
                 // Accept request: latch raw operands. Compute happens next cycle
                 // from the registered values (no combinational race on abs()).
                 dividend_r <= dividend;
                 divisor_r  <= divisor;
                 sign_r     <= sign;
+                start_cnt  <= 1'b0;
+                cnt        <= 9'd0;
                 loading    <= 1'b1;
             end else if (loading) begin
                 // Initialize the division from the latched, now-stable operands.
@@ -3961,6 +3968,25 @@ def _contract_shape(desc_text: str) -> Optional[str]:
     return None
 
 
+def _radix2_idle_admission(desc_text: str) -> bool:
+    """An explicit restriction on this request, not another signal's busy state."""
+    request = r"(?:new\s+)?(?:requests?|operands|opn_valid)"
+    busy = r"(?:busy|loading|computing)"
+    for clause in re.split(r"[.;]", re.sub(r"\s+", " ", desc_text.lower())):
+        if re.search(r"\b(?:no|not|never)\s+" + request + r"\b", clause):
+            continue
+        subject = r"\b" + request + r"\s+(?:(?:are|is|must be)\s+)?"
+        if (re.search(subject + r"(?:(?:accepted|captured)\s+only|"
+                      r"only\s+(?:accepted|captured))\s+"
+                      r"(?:when|while)\s+(?:idle|not\s+busy)\b", clause)
+                or re.search(subject + r"(?:ignored|rejected|not\s+accepted)\s+"
+                             r"(?:when|while|during)\s+" + busy + r"\b", clause)
+                or re.search(r"(?<!not )(?<!never )\b(?:ignore|reject)\s+" + request
+                             + r"\s+(?:when|while|during)\s+" + busy + r"\b", clause)):
+            return True
+    return False
+
+
 def emit_rtl(shape: str, desc_text: str = "") -> str:
     """RTL for a shape key.
 
@@ -3970,6 +3996,13 @@ def emit_rtl(shape: str, desc_text: str = "") -> str:
     composed from the handshake/acceptance contract stated by `desc_text`, which
     is therefore required.
     """
+    if shape == "radix2_signed_divider" and desc_text:
+        rtl = _TPL_RADIX2
+        if _radix2_idle_admission(desc_text):
+            rtl = rtl.replace("if (opn_valid && !res_valid)",
+                              "if (!start_cnt && !loading && opn_valid && !res_valid)")
+        return re.sub(r"(?m)^module\s+\w+",
+                      "module " + (module_name_of(desc_text) or "radix2_div"), rtl, count=1)
     if shape == "odd_clock_divider" and desc_text:
         contract = _odd_clock_contract(desc_text)
         if contract is not None:
@@ -4023,6 +4056,8 @@ def emit_rtl(shape: str, desc_text: str = "") -> str:
 
 
 def module_of_shape(shape: str, desc_text: str = "") -> str:
+    if shape == "radix2_signed_divider" and desc_text:
+        return module_name_of(desc_text) or _SHAPE_MODULE[shape]
     if shape == "odd_clock_divider" and desc_text:
         contract = _odd_clock_contract(desc_text)
         if contract is not None:

@@ -40,6 +40,244 @@ _need_dataset = pytest.mark.skipif(
 sys.path.insert(0, str(PROGRAMS))
 import canonical_primitive_synth as rcs  # noqa: E402
 
+
+def _request_admission_desc(module="radix2_div", protocol=""):
+    return f"""Module name:
+{module}
+Implement an 8-bit radix-2 divider for signed or unsigned operands.
+Input ports:
+clk: rising-edge clock.
+rst: synchronous active-high reset.
+sign: signed operation when high.
+dividend: 8-bit numerator.
+divisor: 8-bit nonzero denominator.
+opn_valid: request valid.
+res_ready: consume the current result.
+Output ports:
+res_valid: result valid.
+result: 16-bit packed remainder in bits 15:8 and quotient in bits 7:0.
+Capture and initialize a request whenever opn_valid && !res_valid.
+Each accepted request replaces the previous operation with its new operands.
+{protocol}
+"""
+
+
+def _request_admission_native(tmp_path, rtl, module, scenario, delay=0):
+    """Independent language /,% values; no generated scoreboard or external data."""
+    body = {
+        "restart": f"""
+            request(201, 13, 0);
+            if ({delay} > 0) begin
+                @(negedge clk); opn_valid=0;
+                repeat ({delay}) begin @(posedge clk); #1; end
+            end
+            request(-93, 11, 1);
+            @(negedge clk); opn_valid=0;
+            answer(-93, 11, 1);
+        """,
+        "normal": """
+            for (integer s=0; s<2; s=s+1)
+                for (integer a=17; a<253; a=a+29)
+                    for (integer b=3; b<35; b=b+7) begin
+                        request(a, b, s);
+                        @(negedge clk); opn_valid=0;
+                        answer(a, b, s);
+                        consume;
+                    end
+        """,
+        "backpressure": """
+            request(181, 9, 0);
+            @(negedge clk); opn_valid=0;
+            answer(181, 9, 0);
+            repeat (4) begin
+                request(77, 6, 0);
+                if (!res_valid || result !== expected(181,9,0))
+                    $fatal(1,"held result changed under backpressure");
+            end
+            res_ready=1;
+            @(posedge clk); #1;
+            if (res_valid) $fatal(1,"result did not clear on consumption");
+            @(negedge clk); opn_valid=0; res_ready=0;
+            repeat (12) begin @(posedge clk); #1;
+                if (res_valid) $fatal(1,"request accepted while result valid");
+            end
+            request(77,6,0);
+            @(negedge clk); opn_valid=0;
+            answer(77,6,0);
+        """,
+        "reset": """
+            request(201,13,0);
+            @(negedge clk); opn_valid=0;
+            repeat (3) @(posedge clk);
+            @(negedge clk); rst=1;
+            @(posedge clk); #1;
+            if (res_valid || result !== 0) $fatal(1,"reset did not clear result");
+            @(negedge clk); rst=0;
+            repeat (12) begin @(posedge clk); #1;
+                if (res_valid) $fatal(1,"cancelled operation survived reset");
+            end
+            request(119,8,0);
+            @(negedge clk); opn_valid=0;
+            answer(119,8,0);
+        """,
+        "serialized": """
+            request(201,13,0);
+            request(77,6,0);
+            @(negedge clk); opn_valid=0;
+            repeat (3) @(posedge clk);
+            request(119,8,0);
+            @(negedge clk); opn_valid=0;
+            answer(201,13,0);
+        """,
+    }[scenario]
+    tb = f"""module request_monitor;
+        reg clk=0, rst=1, sign=0, opn_valid=0, res_ready=0;
+        reg [7:0] dividend=0, divisor=1;
+        wire res_valid;
+        wire [15:0] result;
+        integer checks=0;
+        {module} dut(.*);
+        always #5 clk=~clk;
+        function [15:0] expected(input integer a,b,s);
+            integer x,y,q,r;
+            begin
+                x=a & 255; y=b & 255;
+                if (s && x>=128) x=x-256;
+                if (s && y>=128) y=y-256;
+                q=x/y; r=x%y;
+                expected=((r & 255)<<8) | (q & 255);
+            end
+        endfunction
+        task request(input integer a,b,s);
+            begin
+                @(negedge clk); dividend=a; divisor=b; sign=s; opn_valid=1;
+                @(posedge clk); #1;
+            end
+        endtask
+        task answer(input integer a,b,s);
+            integer timeout;
+            begin
+                timeout=0;
+                while (!res_valid && timeout<16) begin
+                    @(posedge clk); #1; timeout=timeout+1;
+                end
+                if (!res_valid || result !== expected(a,b,s))
+                    $fatal(1,"VALUE request result got=%h expected=%h valid=%b",
+                           result,expected(a,b,s),res_valid);
+                checks=checks+1;
+            end
+        endtask
+        task consume;
+            begin
+                @(negedge clk); res_ready=1;
+                @(posedge clk); #1;
+                @(negedge clk); res_ready=0;
+            end
+        endtask
+        initial begin
+            repeat (2) @(posedge clk);
+            @(negedge clk); rst=0;
+            {body}
+            $display("PASS checks=%0d",checks);
+            $finish;
+        end
+        initial begin #200000; $fatal(1,"monitor timeout"); end
+    endmodule
+    """
+    (tmp_path / "request_dut.v").write_text(rtl)
+    (tmp_path / "request_monitor.v").write_text(tb)
+    compiled = subprocess.run([
+        "iverilog", "-g2012", "-s", "request_monitor", "-o", str(tmp_path / "sim"),
+        str(tmp_path / "request_dut.v"), str(tmp_path / "request_monitor.v")],
+        capture_output=True, text=True, timeout=45)
+    (tmp_path / "compile.log").write_text(compiled.stdout + compiled.stderr)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    result = subprocess.run(["vvp", str(tmp_path / "sim")],
+                            capture_output=True, text=True, timeout=45)
+    (tmp_path / "native.log").write_text(result.stdout + result.stderr)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS checks=" in result.stdout, result.stdout
+
+
+@pytest.mark.parametrize("delay", [0, 1, 4, 9],
+                         ids=["loading", "first_iteration", "inflight", "completion_edge"])
+def test_radix_request_replaces_operation_native(tmp_path, delay):
+    desc = _request_admission_desc()
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    _request_admission_native(tmp_path, rtl, "radix2_div", "restart", delay)
+
+
+@pytest.mark.parametrize("scenario", ["normal", "backpressure", "reset"])
+def test_radix_request_existing_protocol_native(tmp_path, scenario):
+    desc = _request_admission_desc()
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    _request_admission_native(tmp_path, rtl, "radix2_div", scenario)
+
+
+@pytest.mark.parametrize("protocol,serialized", [
+    ("Requests are accepted only when idle.", True),
+    ("Requests are ignored while busy.", True),
+    ("Requests are not accepted while busy.", True),
+    ("Requests are only accepted when not busy.", True),
+    ("Ignore requests while busy.", True),
+    ("Requests are accepted\nonly when idle.", True),
+    ("Requests are not ignored while busy.", False),
+    ("No requests are ignored while busy.", False),
+    ("Do not ignore requests while busy.", False),
+    ("The status monitor is busy while requests are accepted.", False),
+], ids=["only_idle", "ignore_busy", "not_accept_busy", "only_not_busy",
+        "ignore_requests_busy", "wrapped_idle", "not_ignore_busy",
+        "no_ignored_requests", "do_not_ignore", "other_busy_signal"])
+def test_radix_request_busy_restriction_is_source_bound_native(tmp_path, protocol, serialized):
+    desc = _request_admission_desc(protocol=protocol)
+    if serialized:
+        desc = desc.replace("whenever opn_valid && !res_valid",
+                            "when idle and opn_valid && !res_valid")
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    _request_admission_native(tmp_path, rtl, "radix2_div",
+                              "serialized" if serialized else "restart")
+
+
+def test_radix_request_renamed_ordinary_project_consumer_native(tmp_path):
+    desc = _request_admission_desc("arithmetic_capture_unit")
+    project = _mk_project(tmp_path / "project", desc)
+    result = _load_runner().step_rtl_gen(project, "digital_arithmetic_primitive")
+    assert result.status == "PASS", result
+    assert result.extras["deterministic_generator"] == "canonical_primitive_synth"
+    outputs = list((project / "phase2/stage1/rtl").glob("*.v"))
+    assert len(outputs) == 1
+    _request_admission_native(tmp_path, outputs[0].read_text(),
+                              "arithmetic_capture_unit", "restart", 9)
+
+
+def test_radix_request_admission_lesson_reaches_digest(tmp_path):
+    from _hostpaths import require_repo
+    import _lesson_digest
+    expert = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
+                          "agents", "ic-expert-agent.md")
+    assert _lesson_digest.render_lesson_digest(tmp_path, expert) > 0
+    digest = (tmp_path / "lessons.md").read_text()
+    assert "Request admission follows the declared condition" in digest
+    assert "loading" in digest and "restart" in digest
+
+
+@pytest.mark.parametrize("change", ["missing_ready", "other_algorithm", "wrong_width",
+                                    "wrong_direction", "extra_port"])
+def test_radix_request_renamed_shape_requires_complete_interface_and_algorithm(change):
+    desc = _request_admission_desc("independent_arithmetic_unit")
+    if change == "missing_ready":
+        desc = desc.replace("res_ready: consume the current result.\n", "")
+    elif change == "other_algorithm":
+        desc = desc.replace("radix-2 divider", "multiplier")
+    elif change == "wrong_width":
+        desc = desc.replace("dividend: 8-bit", "dividend: 12-bit")
+    elif change == "wrong_direction":
+        desc = desc.replace("divisor: 8-bit nonzero denominator.\n", "")
+        desc = desc.replace("Output ports:\n", "Output ports:\ndivisor: 8-bit denominator.\n")
+    else:
+        desc = desc.replace("Input ports:\n", "Input ports:\nextra_mode: mode input.\n")
+    assert rcs.detect_shape(desc) is None
+
 # spec-dir (relative to RTLLM) -> (expected_shape, expected_module)
 POSITIVE = {
     "Miscellaneous/Frequency divider/freq_divbyodd":
@@ -231,6 +469,7 @@ _INLINE_POS = {
         "operands.\n"
         " dividend: 8-bit dividend.\n divisor: 8-bit divisor.\n"
         " opn_valid: Operands are valid.\n"
+        " res_ready: Result consumption handshake.\n"
         "Output ports:\n res_valid: Result is valid.\n result: 16-bit "
         "result.\n"),
     "ieee754_single_multiplier": (
