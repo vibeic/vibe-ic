@@ -25899,7 +25899,7 @@ def _publish_d14_owner(project: Path, context: Mapping[str, Any], *, invocation_
         generated = generator.generate(project=project, top=frontend._top(project))
         if generated.get('verdict') == 'EMITTED':
             producer.run(project, harness=Path(generated['harness_path']),
-                rtl=[Path(path) for path in generated['rtl_files']], top=generated['harness_module'])
+                rtl=[Path(path) for path in generated['rtl_files']], top=generated['top'])
     row = step_d14_formal_read(project, context)
     summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
         'declared_window': {'entry_step': '4', 'exit_step': '5', 'dispatched_step_ids': ['5']},
@@ -26603,7 +26603,7 @@ def step_emit_phase2_manifests(project: Path,
                     project,
                     harness=Path(_gen["harness_path"]),
                     rtl=[Path(p) for p in _gen["rtl_files"]],
-                    top=_gen["harness_module"],
+                    top=_gen["top"],
                     container=(container or None),
                     timeout=300,
                     continuation_refresh_reason=_formal_refresh_reason)
