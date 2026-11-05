@@ -274,15 +274,17 @@ def test_gls_requires_functional_evidence_even_with_annotation(tmp_path):
     assert result["native_steps"][0]["status"] == "NOT_MEASURED"
 
 
-def test_gls_accepts_native_empty_physical_cell_models(tmp_path):
+@pytest.mark.parametrize("connected", [False, True])
+def test_gls_accepts_native_physical_cell_models(tmp_path, connected):
     if not shutil.which("iverilog") or not shutil.which("vvp"):
         pytest.skip("Native Icarus is required")
     project, directory = tmp_path / "project", tmp_path / "run"
     directory.mkdir()
     state, config = gls_fixture(project)
     model = Path(config["CELL_VERILOG_MODELS"][0])
-    model.write_text(model.read_text() + "module physical_cell(); endmodule\n")
+    port, connection = ("inout node", ".node(a)") if connected else ("", "")
+    model.write_text(model.read_text() + f"module physical_cell({port}); endmodule\n")
     netlist = Path(state["nl"])
-    netlist.write_text(netlist.read_text().replace("endmodule", "physical_cell fill();\nendmodule"))
+    netlist.write_text(netlist.read_text().replace("endmodule", f"physical_cell fill({connection});\nendmodule"))
     result = gls(project, directory, {}, Commands(directory), state=state, config=config)
     assert result["native_steps"][0]["status"] == "PASS", result

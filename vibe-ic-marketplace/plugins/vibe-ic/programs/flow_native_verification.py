@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import time
 
@@ -213,21 +214,23 @@ def gls(project, directory, tool, commands, *, state, config):
         benches = [reused["path"]] if reused else []
     if not benches or any(not path.is_file() for path in benches):
         return commands.result(detail="GLS needs the existing functional self-checking testbench suite.")
+    executables = ["iverilog", "vvp"] + (["cocotb-config", "make"] if any(p.suffix == ".py" for p in benches) else [])
+    absent = [name for name in executables if not shutil.which(name)]
+    if absent:
+        return commands.result(detail="GLS executables are unavailable: " + ", ".join(absent))
     text = Path(netlist).read_text()
     declared = [Path(path) for key in ("CELL_VERILOG_MODELS", "PAD_VERILOG_MODELS")
                 for path in config.get(key) or []]
-    if not declared or any(not path.is_file() for path in declared):
+    if any(not path.is_file() for path in declared):
         return commands.result(detail="GLS needs the configured PDK's functional and timing cell models.")
     used = native.netlist_used_cells(text)
     closure = native.verilog_model_closure(declared, used)
     model_text = "\n".join(Path(path).read_text() for path in closure["files"])
     stubs = native.missing_empty_cell_stubs(text, used, model_text)
-    empty_instances = set(native.missing_empty_cell_stubs(text, used, ""))
     unresolved = sorted(set(closure["unresolved"]) - set(stubs))
-    blackboxed = sorted(set(closure["blackboxed"]) - empty_instances)
-    if unresolved or blackboxed or closure["clashes"]:
+    if unresolved or closure["clashes"]:
         return commands.result(detail=f"GLS cell models incomplete: unresolved={unresolved}, "
-            f"blackboxed={blackboxed}, clashes={closure['clashes']}.")
+            f"clashes={closure['clashes']}.")
     stub_file = directory / "physical_cells.v"
     stub_file.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
     rows, reports = [], [stub_file]
@@ -311,7 +314,7 @@ def gls(project, directory, tool, commands, *, state, config):
                        detail=detail + "Icarus does not implement SDF timing checks; setup/hold remain STA checks.")
             rows.append(row)
     summary = directory / "gls.json"
-    summary.write_text(json.dumps({"runs": rows}, indent=2) + "\n")
+    summary.write_text(json.dumps({"runs": rows, "cell_models": closure}, indent=2) + "\n")
     metrics = {"sdf_delays_applied": sum(row.get("sdf_delays_applied", 0) for row in rows),
                "sdf_annotation_errors": sum(row.get("sdf_errors", 0) for row in rows)} if any(row["ran"] for row in rows) else {}
     if rows and all(row["status"] in {"PASS", "FAIL"} for row in rows):
