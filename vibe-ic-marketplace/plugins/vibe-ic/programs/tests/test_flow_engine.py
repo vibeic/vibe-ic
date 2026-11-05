@@ -110,6 +110,34 @@ def test_successful_tool_without_remaining_checks_passes(tmp_path):
     assert execute(tmp_path, [row])["steps"][0]["status"] == "PASS"
 
 
+def test_ic_stream_out_does_not_require_a_macro_lef():
+    pytest.importorskip("librelane")
+    from librelane.flows.chip import Chip
+    from librelane.flows.classic import Classic
+    from librelane.steps import Step
+    from flow_steps_generate import generate
+
+    root = engine.TABLE.parent.parent
+    table, _, _ = generate(
+        json.loads((root / "flow/flow109.json").read_text()),
+        json.loads((root / "flow/native_limits.json").read_text()))
+    features = {"ic": True, "analog_physical": False,
+                "digital_physical": True, "assembly_only": False}
+    available = {"gds", "def", "odb", "mag_gds", "klayout_gds"}
+    removed = {step.id for step in Classic.Steps} - {step.id for step in Chip.Steps}
+    for candidate in (table, engine.read_json(engine.TABLE)):
+        row = next(item for item in candidate["steps"] if item["name"] == "stream_out")
+        selected = engine.choose_tool(row["tool"], features)
+        missing = {name: [item.id for item in Step.factory.get(name).inputs
+                          if not item.optional and item.id not in available]
+                   for name in selected["steps"]}
+        assert {name: views for name, views in missing.items() if views} == {}
+
+        classic = engine.choose_tool(row["tool"], {**features, "ic": False})
+        assert [name for name in classic["steps"] if name in removed] == [
+            "Magic.WriteLEF", "Odb.CheckDesignAntennaProperties"]
+
+
 def test_aggregate_counts_earlier_selected_failures(tmp_path):
     row = command_row("summary")
     row["tool"] = {"kind": "aggregate"}
