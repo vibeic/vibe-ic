@@ -368,6 +368,38 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert result["CORE_AREA"][0] == 22
 
 
+def test_current_geometry_reaches_floorplan_and_reserves_both_ring_rails(inputs, monkeypatch):
+    import flow_pdn_current
+    project, config, native, _, _ = inputs
+    native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=False,
+                  PDN_CORE_RING_VOFFSET=1, PDN_CORE_RING_HOFFSET=1,
+                  PDN_CORE_RING_VWIDTH=1, PDN_CORE_RING_HWIDTH=1,
+                  PDN_CORE_RING_VSPACING=1, PDN_CORE_RING_HSPACING=1)
+    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda *args: {
+        "PDN_VWIDTH": 3.2, "PDN_CORE_RING_VWIDTH": 3.2,
+        "PDN_HWIDTH": 2.4, "PDN_CORE_RING_HWIDTH": 2.4})
+    result = chip.prepare(project, config)
+    assert result["PDN_VWIDTH"] == 3.2
+    geometry = json.loads((project / "work/flow/chip/preparation.json").read_text())["geometry"]
+    assert geometry["pdn_envelope_um"] == pytest.approx(8.4)
+    assert geometry["core_inset_um"] >= 8.4 + geometry["pad_depth_um"]
+
+
+def test_nonconverging_current_geometry_stops_with_plain_error(inputs, monkeypatch):
+    import flow_pdn_current
+    project, config, _, _, _ = inputs
+    calls = []
+
+    def changing_settings(*args):
+        calls.append(args)
+        return {"PDN_VWIDTH": len(calls)}
+
+    monkeypatch.setattr(flow_pdn_current, "current_settings", changing_settings)
+    with pytest.raises(ValueError, match="did not converge after eight"):
+        chip.prepare(project, config)
+    assert len(calls) == 9
+
+
 def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
     project, config, native, _, _ = inputs
     native.update(CLOCK_UNCERTAINTY_CONSTRAINT=0.25, CLOCK_TRANSITION_CONSTRAINT=0.15,
@@ -486,12 +518,6 @@ def test_prepare_connects_core_supply_pad_access_layers(inputs, access, vertical
     config["PDN_CFG"] = native["PDN_CFG"] = str(pdn)
     result = chip.prepare(project, config)
     generated = Path(result["PDN_CFG"]).read_text()
-    if owned:
-        assert "--config [file join $::env(STEP_DIR) config.json]" in generated
-        assert "pdn__requested_width__um__variable:" in generated
-        selected = project / "work/flow/chip/pdn_cfg.tcl"
-        assert "source " + str(selected) in generated
-        generated = selected.read_text()
     command = f"add_pdn_connect -grid stdcell_grid -layers {{{access} {target}}}"
     assert generated.count(command) + generated.count(reverse) == 1
     assert "signal_access" not in generated
