@@ -108,6 +108,15 @@ def test_missing_metadata_preserves_a_valid_native_database(tmp_path, lint_error
     assert engine.evaluate(result, observed) == "NOT_MEASURED"
     assert chain.state.get_by_df(DesignFormat.ODB) == str(odb)
     assert chain.state.metrics["upstream"] == 1
+    if lint_errors is not None:
+        chain.owner.config = chain.owner.config.copy(RUN_DRT=False)
+        chain.config = chain.owner.config.to_raw_dict()
+        disabled = chain.execute(tmp_path / "disabled", {"steps": [
+            "OpenROAD.DetailedRouting", "Checker.LintErrors"]})
+        assert disabled.native_steps[0]["native_config_disabled"]
+        assert disabled.native_steps[1]["ran"]
+        assert disabled.metrics["design__lint_error__count"] == lint_errors
+        assert engine.evaluate(disabled, []) == ("FAIL" if lint_errors else "PASS")
 
 
 def test_failed_chip_preparation_charges_native_time_once(tmp_path):

@@ -396,7 +396,8 @@ class NativeChain:
 
             step = ObservedStep(self.owner.config, self.state)
             metric_name = getattr(step, "metric_name", None)
-            if (metric_name and any(not item["ran"] or item.get("exit_code") for item in result.native_steps)
+            if (metric_name and any((not item["ran"] or item.get("exit_code"))
+                    and not item.get("native_config_disabled") for item in result.native_steps)
                     and not any(key == metric_name or key.startswith(metric_name + "__corner:")
                                 for key in result.metrics)):
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
