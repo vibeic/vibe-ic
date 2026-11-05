@@ -732,6 +732,17 @@
           "enabled_by": "ERROR_ON_LINTER_WARNINGS",
           "enabled_default": false,
           "when": "otherwise"
+        },
+        {
+          "metric": "design__inferred_latch__count",
+          "operator": "==",
+          "limit": 0,
+          "when": "has_digital",
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 6278
+          },
+          "unit": "count"
         }
       ],
       "legacy_id": {
@@ -1383,17 +1394,6 @@
           "enabled_by": "ERROR_ON_SYNTH_CHECKS",
           "enabled_default": true,
           "when": "otherwise"
-        },
-        {
-          "metric": "design__inferred_latch__count",
-          "operator": "==",
-          "limit": 0,
-          "when": "digital_netlist",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 6278
-          },
-          "unit": "count"
         }
       ],
       "legacy_id": {
