@@ -14688,7 +14688,8 @@ def _step_d11_original_engineering(project, context, *, pdk_name, bounded_rtl,
 def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
                        bounded_rtl: bool = False,
                        top_name: Optional[str] = None,
-                       container: str = _pin.default_container_name()) -> Optional[StepResult]:
+                       container: str = _pin.default_container_name(),
+                       native_engine: bool = False) -> Optional[StepResult]:
     """Flow Step 2 lint through the tool: LibreLane Verilator.Lint + its gate.
 
     A bounded RTL request with no PDK and no explicit implementation/step
@@ -14703,6 +14704,9 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
     and blocks on the union, recording which arm found what. The linted files
     are the step-9 synthesis input (`silicon_rtl_selection`), so a lint of a
     different or empty file set cannot pass."""
+    if native_engine:
+        from flow_engine_frontend import native_lint
+        return native_lint(project, top_name)
     import librelane_contract as _ll
     raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
     d11_context = None
@@ -28821,7 +28825,7 @@ def main() -> int:
     _bounded_rtl_lint = (
         args.skip_phase3 and str(args.entry_step) != "D1"
         and _lint_scope.is_rtl_only_evidence(exit_step=args.exit_step))
-    if (str(args.entry_step) == "2" and str(args.exit_step) == "2"
+    if (not _native_engine and str(args.entry_step) == "2" and str(args.exit_step) == "2"
             and (_lint_contract.selected_mode(project, "2") == "librelane"
                  or (_pl.rtl_input(project) == "original"
                      and os.environ.get("VIBEIC_FLOW109_CONTEXT")))):
@@ -28955,15 +28959,16 @@ def main() -> int:
     # 1, but it must SAY when the docs it reads are not the current
     # producer's; the front door demotes a PASS over them.
     _p1_note = ""
-    try:
-        import _phase1_producer_identity as _p1id_mod
-        _fr = (_p1id_mod.assess(project, PROGRAMS_DIR)
-               if args.rtl_input != "original" else {"state": _p1id_mod.REUSE})
-        if _fr.get("state") != _p1id_mod.REUSE:
-            _p1_note = (f"; STALE_GENERATED_DOCS: {_fr.get('state')} "
-                        f"({_fr.get('reason')}): {_fr.get('why')}")
-    except Exception:                                      # noqa: BLE001
-        pass
+    if not _native_engine:
+        try:
+            import _phase1_producer_identity as _p1id_mod
+            _fr = (_p1id_mod.assess(project, PROGRAMS_DIR)
+                   if args.rtl_input != "original" else {"state": _p1id_mod.REUSE})
+            if _fr.get("state") != _p1id_mod.REUSE:
+                _p1_note = (f"; STALE_GENERATED_DOCS: {_fr.get('state')} "
+                            f"({_fr.get('reason')}): {_fr.get('why')}")
+        except Exception:                                      # noqa: BLE001
+            pass
     if args.rtl_input == "original":
         plan.append(StepResult("phase1_precheck", "NOT_APPLICABLE", 0.0,
                                "bounded original-input RTL contract; D1 documents are not consumed",
@@ -29134,9 +29139,15 @@ def main() -> int:
     else:
         _tool_lint = step_rtl_lint_tool(
             project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
-            top_name=args.top_name, container=args.container)
+            top_name=args.top_name, container=args.container, native_engine=_native_engine)
         if _tool_lint is not None:
             plan.append(_required_site_row(project, "rtl_validate", _tool_lint))
+
+    if _native_engine and _after_exit("sim"):
+        from flow_engine_frontend import finish_frontend
+        result = finish_frontend(project, plan, args, ic_class, evidence)
+        _lock.release()
+        return result
 
     # Flow step 2 — pad-budget feasibility. Placed HERE, right after the RTL is
     # stable and long before synthesis/DFT/PnR, because the whole point of the

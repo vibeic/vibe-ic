@@ -661,6 +661,9 @@ def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
     fresh canonical report. Nonzero exits with usable reports keep the ordinary
     collection/gate contract. Logs alone never establish a successful gate.
     """
+    from flow_engine_frontend import native_diagnostics, selected_engine
+    if selected_engine(argv) == "native":
+        return native_diagnostics(process, argv, project, require_phase2)
     project = Path(project).resolve()
     diagnostic = {
         "invocation_id": getattr(process, "invocation_id", None),
