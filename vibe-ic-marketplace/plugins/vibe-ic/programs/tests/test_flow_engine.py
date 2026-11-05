@@ -218,7 +218,8 @@ def test_existing_native_results_survive_an_added_table_entry(tmp_path):
     assert result["pass"] == 2
 
 
-def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, monkeypatch):
+@pytest.mark.parametrize("input_contract", ["original", "structured"])
+def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, monkeypatch, input_contract):
     import flow_engine_frontend
     calls = []
 
@@ -235,8 +236,10 @@ def test_bounded_lint_resume_reads_owner_numbers_without_librelane(tmp_path, mon
     monkeypatch.setattr(engine.NativeChain, "initialize", unavailable)
     row = command_row("lint")
     row["tool"] = {"kind": "librelane", "steps": ["Verilator.Lint", "Checker.LintErrors"]}
-    assert execute(tmp_path, [row])["pass"] == 1
-    assert execute(tmp_path, [row])["pass"] == 1
+    route = {"entry_step": "lint", "verify_through": "lint",
+             "delivery_target": "rtl", "input_contract": input_contract}
+    assert engine.run(tmp_path, table={"steps": [row]}, route=route)["pass"] == 1
+    assert engine.run(tmp_path, table={"steps": [row]}, route=route)["pass"] == 1
     assert calls == ["rtl_validate", "rtl_validate"]
 
 
@@ -299,6 +302,33 @@ def test_from_does_not_restore_an_invalidated_later_state(tmp_path, monkeypatch)
     assert restored == ["first"]
 
 
+def test_resume_accounts_preparation_before_a_non_native_interval(tmp_path, monkeypatch):
+    import subprocess
+    import time
+    rows = [command_row(name) for name in ("previous", "resumed", "later")]
+    execute(tmp_path, rows)
+    (tmp_path / "steps/previous/state_out.json").write_text("{}")
+    observed = []
+    def initialize(chain):
+        started = time.perf_counter()
+        subprocess.run([sys.executable, "-c", "pass"], check=True)
+        elapsed = time.perf_counter() - started
+        observed.append(elapsed)
+        chain.observe_preparation({"name": "test-sizing-tool", "ran": True,
+            "exit_code": 0, "status": "PASS", "tool_seconds": elapsed,
+            "reports": str(tmp_path / "sizing")})
+    monkeypatch.setattr(engine.NativeChain, "initialize", initialize)
+    monkeypatch.setattr(engine.NativeChain, "restore", lambda chain, directory: None)
+    report = execute(tmp_path, rows, from_name="resumed")
+    first, later = report["steps"]
+    assert len(observed) == 1
+    assert first["native_steps"][0]["name"] == "test-sizing-tool"
+    assert first["tool_seconds"] >= observed[0] > 0
+    assert first["wall_seconds"] >= first["tool_seconds"]
+    assert first["program_seconds"] + first["tool_seconds"] == pytest.approx(first["wall_seconds"])
+    assert not later["native_steps"]
+
+
 @pytest.mark.parametrize("declared,status", [(False, "PASS"), (True, "FAIL")])
 def test_coverage_observes_numbers_and_enforces_declared_targets(tmp_path, declared, status):
     table = engine.read_json(engine.TABLE)
@@ -335,6 +365,44 @@ def test_empty_corner_filter_keeps_native_numbers_and_original_limit(filters):
     assert engine.evaluate(engine.ToolResult(True, 0), observed) == "FAIL"
     selected = engine.measure([check], metrics, {"CORNERS": ["nom_*"]}, {"always": True})
     assert [item["metric"] for item in selected] == ["slew__corner:nom_ss"]
+
+
+def test_report_reuse_cannot_hide_failed_resume_preparation(tmp_path, monkeypatch):
+    import subprocess
+    import time
+    previous, reused = command_row("previous"), command_row("reused")
+    reused.update(tool={"kind": "native_report", "from": "previous"}, checks=[])
+    execute(tmp_path, [previous, reused])
+    (tmp_path / "steps/previous/state_out.json").write_text("{}")
+    def initialize(chain):
+        started = time.perf_counter()
+        process = subprocess.run([sys.executable, "-c", "raise SystemExit(3)"])
+        chain.observe_preparation({"name": "test-sizing-tool", "ran": True,
+            "exit_code": process.returncode, "status": "FAIL",
+            "tool_seconds": time.perf_counter() - started,
+            "reports": str(tmp_path / "sizing")})
+        raise ValueError("preparation failed")
+    monkeypatch.setattr(engine.NativeChain, "initialize", initialize)
+    result = execute(tmp_path, [previous, reused], from_name="reused")["steps"][0]
+    assert result["status"] == "FAIL"
+    assert result["tool_exit_code"] == 3
+    assert result["tool_seconds"] > 0
+
+
+@pytest.mark.parametrize("value,status", [(1, "PASS"), (0, "NOT_MEASURED"), (None, "NOT_MEASURED")])
+def test_native_seal_skip_is_missing_measurement_and_verifier_failure_still_fails(value, status):
+    row = next(row for row in engine.read_json(engine.TABLE)["steps"]
+               if row["name"] == "seal_ring_and_die_identification")
+    measured = engine.measure(row["checks"], {"design__seal_ring__verified": value}, {},
+                              {"always": True, "ic": True, "owner_die": True})
+    assert len(measured) == 1
+    assert measured[0]["value"] == value
+    assert measured[0]["limit"] == 1
+    assert measured[0]["status"] == status
+    assert engine.evaluate(engine.ToolResult(True, 0), measured) == status
+    failed = engine.ToolResult(True, 1, native_steps=[{
+        "name": "KLayout.SealRing", "ran": True, "status": "FAIL", "exit_code": 1}])
+    assert engine.evaluate(failed, measured) == "FAIL"
 
 
 @pytest.mark.parametrize("target,nature,entry,exit_step,count", [

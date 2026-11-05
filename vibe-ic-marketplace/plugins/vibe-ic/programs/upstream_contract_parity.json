@@ -1,6 +1,6 @@
 {
  "_comment": [
-  "The register `upstream_contract_parity_check.py` enforces. One entry per",
+
   "place where this plugin RE-IMPLEMENTS a computation or a configuration",
   "contract that an upstream flow already owns.",
   "",

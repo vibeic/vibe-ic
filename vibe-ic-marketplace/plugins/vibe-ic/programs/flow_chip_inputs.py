@@ -48,11 +48,11 @@ def _bits(port: dict) -> list[str]:
     return [f"{port['name']}[{i}]" for i in range(port["msb"], port["lsb"] + step, step)]
 
 
-def _native_core(project: Path, core_config: dict, destination: Path):
+def _native_core(project: Path, core_config: dict, destination: Path, on_tool_run=None):
     from librelane.common import Toolbox
     from librelane.flows import Flow
     from librelane.state import DesignFormat, State
-    from librelane.steps import Step
+    from librelane.steps import Step, StepError, StepException
 
     os.environ["_OPENLANE_MAX_CORES"] = "8"
     owner = Flow.factory.get("Chip")(core_config, design_dir=str(project),
@@ -68,12 +68,29 @@ def _native_core(project: Path, core_config: dict, destination: Path):
             directory.mkdir(parents=True, exist_ok=True)
             started = time.monotonic()
             cwd = Path.cwd()
+            code, ran, status, detail = None, False, "NOT_MEASURED", ""
             try:
                 os.chdir(directory)
                 state = step.start(toolbox=toolbox, step_dir=str(directory))
+                code, ran, status = 0, True, "PASS"
+            except StepException as exc:
+                detail = str(exc)
+                raise
+            except StepError as exc:
+                code = getattr(getattr(exc, "underlying_error", None), "returncode", None)
+                ran, status, detail = True, "FAIL", str(exc)
+                raise
+            except Exception as exc:
+                detail = str(exc)
+                raise
             finally:
                 os.chdir(cwd)
-                runs.append({"name": name, "tool_seconds": time.monotonic() - started})
+                elapsed = time.monotonic() - started
+                runs.append({"name": name, "tool_seconds": elapsed})
+                if on_tool_run is not None:
+                    on_tool_run({"name": name, "ran": ran, "exit_code": code,
+                                 "status": status, "tool_seconds": elapsed,
+                                 "detail": detail, "reports": str(directory)})
     finally:
         (destination / "sizing.json").write_text(json.dumps({"runs": runs,
             "tool_seconds": sum(run["tool_seconds"] for run in runs)}, indent=2) + "\n")
@@ -473,13 +490,13 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
     return "\n".join(lines) + "\n"
 
 
-def prepare(project: Path, core_config: dict[str, Any]) -> dict[str, Any]:
+def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dict[str, Any]:
     """Return a native Chip config, with all generated inputs under work/flow/chip."""
     project = Path(project).resolve()
     destination = project / "work/flow/chip"
     destination.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    native, ports, area, runs = _native_core(project, core_config, destination)
+    native, ports, area, runs = _native_core(project, core_config, destination, on_tool_run)
     library = _library(native)
     chosen, ordered, supplies, power, ground, placement = _ring(project, native, ports, library)
     die, core, geometry = _floorplan(native, chosen, ordered, library, area, placement)

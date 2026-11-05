@@ -39,8 +39,99 @@ def test_native_formal_binds_retained_internal_state(tmp_path, reset_value):
     output.mkdir()
     result = formal(tmp_path, output, {}, Commands(output))
     assert result["metrics"].get("unproved_required_properties") == reset_value, result
-    assert [row["status"] for row in result["native_steps"]] == [
+    assert [row["status"] for row in result["native_steps"] if not row["name"].endswith(".Cover")] == [
         "FAIL" if reset_value else "PASS"] * 2, result
+
+
+@pytest.mark.parametrize("case", ["guard_reached", "guard_unreached", "cover_reached", "cover_unreached", "plain"])
+def test_formal_runs_native_cover_targets_without_inventing_absent_counts(tmp_path, case):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "yices-smt2")):
+        pytest.skip("Native SymbiYosys and Yosys cover tools are required")
+    import flow_engine
+    from formal_property_run import emit_invariant_sby
+
+    source = tmp_path / "phase2/stage1/formal"
+    source.mkdir(parents=True)
+    harness = source / "proof.sv"
+    unreachable = case.endswith("unreached")
+    statements = "assume(!req);\n" if unreachable else ""
+    statements += "if(req) assert(req);\n" if case.startswith("guard") else "assume(ack); assert(ack);\n"
+    if case.startswith("cover"):
+        statements += "cover(req);\n"
+    harness.write_text("module proof(input clk); (* anyseq *) reg req, ack;\n"
+                       "always @(posedge clk) begin\n" + statements + "end endmodule\n")
+    deck = source / "proof.sby"
+    deck.write_text(emit_invariant_sby([], str(harness), "proof", [], [], prove_depth=8, bmc_depth=8))
+    original = harness.read_bytes(), deck.read_bytes()
+    output = tmp_path / "output"
+    output.mkdir()
+    result = formal(tmp_path, output, {}, Commands(output))
+    cover_rows = [row for row in result["native_steps"] if row["name"].endswith(".Cover")]
+    assert result["metrics"]["unproved_required_properties"] == 0, result
+    table = json.loads((Path(__file__).resolve().parents[2] / "flow/steps.json").read_text())
+    row = next(row for row in table["steps"] if row["name"] == "formal_verification")
+    measured = flow_engine.measure(row["checks"], result["metrics"], {}, {"always": True, "has_digital": True}, tmp_path)
+    assert flow_engine.evaluate(flow_engine.ToolResult(**result), measured) == (
+        "FAIL" if unreachable else "PASS"), result
+    if case == "plain":
+        assert cover_rows == []
+        assert "vacuous_required_proofs" not in result["metrics"]
+        assert "No native cover targets were present" in result["detail"]
+    else:
+        assert len(cover_rows) == 2, result
+        assert {row["status"] for row in cover_rows} == ({"FAIL"} if unreachable else {"PASS"}), result
+        assert result["metrics"]["vacuous_required_proofs"] == (2 if unreachable else 0)
+    assert (harness.read_bytes(), deck.read_bytes()) == original
+
+
+@pytest.mark.parametrize("unreachable", [False, True])
+def test_formal_preserves_existing_native_cover_task(tmp_path, unreachable):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "yices-smt2")):
+        pytest.skip("Native SymbiYosys and Yosys cover tools are required")
+    source = tmp_path / "phase2/stage1/formal"
+    source.mkdir(parents=True)
+    harness = source / "proof.sv"
+    harness.write_text("module proof(input clk); (* anyseq *) reg req, ack;\n"
+        "always @(posedge clk) begin assume(ack); assert(ack);\n"
+        + ("assume(!req);\n" if unreachable else "") + "cover(req); end endmodule\n")
+    deck = source / "proof.sby"
+    deck.write_text("[tasks]\nsafety\nreach\n[options]\nsafety: mode prove\nreach: mode cover\n"
+        "depth 8\n[engines]\nsafety: abc pdr\nreach: smtbmc yices\n"
+        "[script]\nread_verilog -formal -sv proof.sv\nprep -top proof\n[files]\nproof.sv\n")
+    output = tmp_path / "output"
+    output.mkdir()
+    result = formal(tmp_path, output, {}, Commands(output))
+    native = next(row for row in result["native_steps"] if row["name"] == "SymbiYosys.reach")
+    assert native["status"] == ("FAIL" if unreachable else "PASS"), result
+    assert result["metrics"]["unproved_required_properties"] == 0
+    assert result["metrics"]["vacuous_required_proofs"] == (2 if unreachable else 0)
+
+
+@pytest.mark.parametrize("declared_top,proves_top", [("system", False), ("leaf", True)])
+def test_formal_scope_does_not_block_native_property_results(tmp_path, declared_top, proves_top):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "yices-smt2")):
+        pytest.skip("Native SymbiYosys and Yosys cover tools are required")
+    import flow_engine
+
+    rtl = tmp_path / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    source = rtl / "unit.v"
+    source.write_text("module system(input clk, rst_n, output q);\n"
+        "leaf component(.clk(clk),.rst_n(rst_n),.q(q)); endmodule\n"
+        "module leaf(input clk, rst_n, output reg q);\n"
+        "always @(posedge clk) if(!rst_n) q<=0; else q<=~q; endmodule\n")
+    output = tmp_path / "output"
+    output.mkdir()
+    result = formal(tmp_path, output, {"rtl": [str(source)], "top": declared_top}, Commands(output))
+    scope = json.loads((output / "formal_scope.json").read_text())
+    assert scope["declared_top"] == declared_top
+    assert scope["proves_declared_top"] is proves_top
+    assert scope["authoring"]["descended_to_leaf"] is not proves_top
+    assert scope["authoring"]["proves_declared_top"] is proves_top
+    assert {subject for task in scope["tasks"] for subject in task["subjects"]} == {"leaf"}
+    assert f"proves_declared_top={str(proves_top).lower()}" in result["detail"]
+    assert result["metrics"]["unproved_required_properties"] == 0, result
+    assert flow_engine.evaluate(flow_engine.ToolResult(**result), [{"status": "PASS"}]) == "PASS", result
 
 
 def partition(tmp_path, name, word, flags=""):
