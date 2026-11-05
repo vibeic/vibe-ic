@@ -485,7 +485,7 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
                     and type(points) is int and points == 0):
                 observed.append({**check, "metric": name, "value": None, "limit": limit,
                     "status": "NOT_APPLICABLE", "points": points,
-                    "reason": "Owner ruling: a measured category with zero coverage points has no percentage floor."})
+                    "reason": "A measured category with zero coverage points has no percentage floor."})
                 continue
             status = "NOT_MEASURED"
             compare = COMPARE.get(check.get("operator"))
