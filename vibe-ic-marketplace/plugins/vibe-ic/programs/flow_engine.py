@@ -236,7 +236,7 @@ class NativeChain:
             raise self.initialization_error
         if self.owner is not None:
             return
-        from flow_config import build_native_config as build_config
+        from flow_config import build_native_config as build_config, native_defaults
         from librelane.flows import Flow
         from librelane.state import State
         from librelane.common import Toolbox
@@ -247,8 +247,9 @@ class NativeChain:
         os.environ["_OPENLANE_MAX_CORES"] = "8"
         self.owner = Flow.factory.get(kind)(config, design_dir=str(self.project),
                                             pdk_root=os.environ.get("PDK_ROOT"))
-        self.config = self.owner.config.to_raw_dict()
         self.toolbox = Toolbox(str(self.project / "work/flow/tool_tmp"))
+        self.owner.config = native_defaults(self.owner.config)
+        self.config = self.owner.config.to_raw_dict()
         self.state = State()
 
     def prepare(self):
