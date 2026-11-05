@@ -1,61 +1,28 @@
-#!/usr/bin/env python3
-"""D06 Default adapter for the existing pad/package-interface producers.
-
-This adapter runs the source-owned ``pad_assignment_gen`` front door and then
-produces a missing ``io_pad_chip_top_gen`` record before checking it. It never substitutes the
-post-assembly packaging intake check for pre-tapeout planning.  Missing owner
-load, escape, or test-access facts remain NOT_MEASURED. BLOCKING: only the
-source-bound bare-die functional interface can complete this row; physical
-package and pending post-DFT access retain their unresolved scope.
-"""
+"""Native pad assignment, test access and bare-die output-load feasibility."""
 from __future__ import annotations
-
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
-import sys
 from typing import Mapping
 import uuid
 
-HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
-
 import pad_assignment_gen
 import sim_activity_dump
+from _atomic_artefact import write_json
 
-STEP = "D06"
-NATIVE_STEP = "flow109.D06"
-SCHEMA = "vibeic.flow109.package-plan-component.v1"
 IO_REPORT = Path("reports/phase3/io_pad_chip_top.json")
 L7_REPORT = Path("phase1/generated_docs/L7_TEST_DEBUG.json")
 L8_REPORT = Path("phase1/generated_docs/L8_TIMING_WAVEFORM.json")
 L10_REPORT = Path("phase1/generated_docs/L10_TEST_CASES.json")
 L20_REPORT = Path("phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json")
-TAPEOUT_DECLARATION = Path("input/submission_template/tapeout_declaration.json")
-CURRENT_REPAIR = Path("reports/phase3/librelane_postroute_repair.json")
 
 
 class D06Refusal(ValueError):
     def __init__(self, code: str, detail: str, *, failed: bool = False):
         self.code, self.detail, self.failed = code, detail, failed
         super().__init__(f"{code}: {detail}")
-
-
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def operation_sources() -> dict[str, str]:
-    paths = (Path(__file__), HERE / "pad_assignment_gen.py",
-             HERE / "io_pad_chip_top_gen.py", HERE / "sim_activity_dump.py",
-             HERE / "librelane_contract.py", HERE / "librelane_prelayout.py",
-             HERE / "_ppa/timing.py")
-    return {"programs/" + path.relative_to(HERE).as_posix(): _sha(path)
-            for path in paths}
 
 
 def _read(path: Path) -> dict:
@@ -68,49 +35,64 @@ def _read(path: Path) -> dict:
     return value
 
 
-def _record(project: Path, path: Path) -> dict:
-    path = path.resolve(strict=True)
-    return {"path": str(path.relative_to(project)), "sha256": _sha(path)}
+def _record(project, path):
+    path = Path(path).resolve(strict=True)
+    return {'path': str(path.relative_to(project)) if path.is_relative_to(project) else str(path)}
 
 
-def _bound_json(project: Path, rel: Path) -> tuple[dict, dict]:
-    """Read one canonical evidence file and bind the bytes actually parsed."""
+def _bound_json(project, rel):
     path = project / rel
-    if path.is_symlink():
-        raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", str(rel))
-    try:
-        raw = path.read_bytes()
-        value = json.loads(raw)
-    except (OSError, ValueError) as exc:
-        raise D06Refusal("D06_EVIDENCE_ABSENT_OR_INVALID", str(rel)) from exc
-    if not isinstance(value, dict):
-        raise D06Refusal("D06_EVIDENCE_ABSENT_OR_INVALID", str(rel))
-    return value, {"path": rel.as_posix(),
-                   "sha256": hashlib.sha256(raw).hexdigest()}
+    return _read(path), _record(project, path)
 
 
-def _project_path(project: Path, raw: object, label: str) -> Path:
+def _project_path(project, raw, label):
     if not isinstance(raw, str) or not raw:
-        raise D06Refusal("D06_CURRENT_STA_INPUT_INVALID", label)
+        raise D06Refusal('D06_NATIVE_INPUT_ABSENT', label)
     path = Path(raw)
-    if path.is_absolute():
-        try:
-            path = project / path.relative_to("/project")
-        except ValueError as exc:
-            raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", f"{label}: {raw}") from exc
-    else:
-        path = project / path
-    try:
-        relative = path.relative_to(project)
-    except ValueError as exc:
-        raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", f"{label}: {raw}") from exc
-    candidates = (project / relative, *(project / relative).parents)
-    if any(item.is_symlink() for item in candidates if item != project.parent):
-        raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", f"{label}: symlink")
-    try:
-        return path.resolve(strict=True)
-    except OSError as exc:
-        raise D06Refusal("D06_EVIDENCE_ABSENT_OR_INVALID", f"{label}: {raw}") from exc
+    path = path if path.is_absolute() else project / path
+    path = path.resolve()
+    if not path.is_file():
+        raise D06Refusal('D06_NATIVE_INPUT_ABSENT', str(path))
+    return path
+
+
+def _state_inputs(project, options):
+    state, config = options.get('state'), options.get('config')
+    state_path = None
+    if not isinstance(state, Mapping) or not isinstance(config, Mapping):
+        raw = options.get('native_state')
+        if raw is None:
+            report = _read(project / 'reports/phase3/sta_postpnr_signoff.json')
+            if (report.get('judgment') or {}).get('verdict') != 'PASS':
+                raise D06Refusal('D06_NATIVE_STA_INCOMPLETE', 'selected STA did not pass')
+            raw = report.get('sta_state')
+        state_path = _project_path(project, raw, 'native State')
+        state = _read(state_path)
+        config = _read(state_path.with_name('config.json'))
+    sdc = _project_path(project, config.get('SIGNOFF_SDC_FILE') or state.get('sdc'), 'native SDC')
+    netlist = _project_path(project, state.get('nl'), 'native netlist')
+    records = [_record(project, path) for path in (sdc, netlist)]
+    if state_path:
+        records.extend((_record(project, state_path), _record(project, state_path.with_name('config.json'))))
+    return state_path, config, sdc, netlist, records
+
+
+def _signoff_load_inputs(project):
+    return _state_inputs(project, {})
+
+
+def _scenario_load_inputs(project, selection, output):
+    import librelane_prelayout as timing_check
+    state_path, config, sdc, netlist, records = _state_inputs(project, selection)
+    if state_path is None:
+        raise D06Refusal('D06_NATIVE_STA_INPUT_ABSENT', 'native State path is required for timing reports')
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    sdc_gate = timing_check.judge_sdc(state_path.parent, config, sdc, output / 'selected_sdc.json')
+    slack_gate = timing_check.judge_slack(state_path.parent, output / 'selected_slack.json')
+    if sdc_gate.get('verdict') != 'PASS' or slack_gate.get('verdict') != 'PASS':
+        raise D06Refusal('D06_NATIVE_STA_INCOMPLETE', 'selected SDC/slack consumer did not pass')
+    return state_path, config, sdc, netlist, records
 
 
 def _expanded_outputs(ports: list[dict]) -> list[str]:
@@ -133,269 +115,19 @@ def _expanded_outputs(ports: list[dict]) -> list[str]:
     return sorted(result)
 
 
-def _signoff_load_inputs(project: Path) -> tuple[Path, dict, Path, Path, list[dict]]:
-    """Read the existing STA owner when no post-route repair was performed.
-
-    A retained owner may live at its original path. Only its exact hash-bound
-    native state/config are read there; netlist/SDC must also exist in THIS
-    project and match the native input receipt. No foreign load scene is adopted.
-    """
-    report, report_ref = _bound_json(project, Path("reports/phase3/sta_postpnr_signoff.json"))
-    judgment = report.get("judgment")
-    if (report.get("mode") != "librelane" or not isinstance(judgment, Mapping)
-            or judgment.get("verdict") != "PASS"):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "STA signoff result")
-    raw, expected = report.get("sta_state"), report.get("sta_state_sha256")
-    if not isinstance(raw, str) or not raw or not isinstance(expected, str):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "STA state binding")
-    state_path = Path(raw) if Path(raw).is_absolute() else project / raw
-    receipt_path, config_path = state_path.parent / "vibeic_receipt.json", state_path.parent / "config.json"
-    if any(p.is_symlink() or not p.is_file() for p in (state_path, receipt_path, config_path)):
-        raise D06Refusal("D06_EVIDENCE_ABSENT_OR_INVALID", "STA native state/config/receipt")
-    receipt, config = _read(receipt_path), _read(config_path)
-    producer, outputs = receipt.get("input"), receipt.get("sha256")
-    if (not isinstance(producer, Mapping) or not isinstance(outputs, Mapping)
-            or not isinstance(producer.get("state_files"), Mapping)
-            or not isinstance(config.get("meta"), Mapping)):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "native receipt/config shape")
-    if (producer.get("step") != "OpenROAD.STAPostPNR"
-            or (config.get("meta") or {}).get("step") != "OpenROAD.STAPostPNR"
-            or _sha(state_path) != expected or outputs.get("state_out.json") != expected
-            or outputs.get("config.json") != _sha(config_path)):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", "STA native producer binding")
-    state = _read(state_path)
-    owner = config.get("DESIGN_DIR")
-    if not isinstance(owner, str) or not Path(owner).is_absolute():
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "native DESIGN_DIR")
-    evidence = [report_ref, *({"path": str(p.resolve()), "sha256": _sha(p)}
-                             for p in (state_path, receipt_path, config_path))]
-    current = {}
-    for key in ("nl", "sdc"):
-        value = state.get(key)
-        if not isinstance(value, str) or not value:
-            raise D06Refusal("D06_CURRENT_STA_INPUT_INVALID", key)
-        original = Path(value) if Path(value).is_absolute() else Path(owner) / value
-        try:
-            relative = original.resolve().relative_to(Path(owner).resolve())
-        except ValueError as exc:
-            raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", key) from exc
-        path = _project_path(project, relative.as_posix(), "current STA " + key)
-        if (producer.get("state_files") or {}).get(value) != _sha(path):
-            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", "current " + key)
-        current[key] = path
-        evidence.append(_record(project, path))
-    return state_path, config, current["sdc"], current["nl"], evidence
-
-
-def _handoff_load_inputs(project: Path) -> tuple[Path, dict, Path, Path, list[dict]]:
-    """Reopen the delivered pre-layout load scene without claiming post-route STA."""
-    import librelane_contract as native
-    row, row_ref = _bound_json(project, Path("reports/flow109/default_rows/D30.json"))
-    evidence = [row_ref]
-
-    def bound(record):
-        if (not isinstance(record, Mapping) or set(record) != {"path", "sha256"}
-                or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", "")))):
-            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "handoff file binding")
-        raw = record["path"]
-        if isinstance(raw, str) and Path(raw).is_absolute():
-            try:
-                raw = Path(raw).relative_to(project).as_posix()
-            except ValueError as exc:
-                raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", str(raw)) from exc
-        path = _project_path(project, raw, "handoff load input")
-        if not path.is_relative_to(project) or _sha(path) != record["sha256"]:
-            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", str(raw))
-        evidence.append(_record(project, path))
-        return path
-
-    metrics = row.get("metric_acceptance") or {}
-    if (row.get("step_id") != "D30" or row.get("default_row_status") != "PASS"
-            or row.get("completed") is not True or metrics.get("status") != "PASS"
-            or not metrics.get("obligations")
-            or any(item.get("status") != "PASS" for item in metrics["obligations"])):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "current netlist handoff")
-    delivery = _read(bound(row.get("d30_delivery_receipt")))
-    timing = delivery.get("consumed_timing") or {}
-    if (delivery.get("schema") != "vibeic.flow109.d30-delivery.v1"
-            or delivery.get("step_id") != "D30"
-            or delivery.get("context_sha256") != row.get("context_sha256")
-            or timing.get("status") != "MEASURED"):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "delivered load scene")
-    record = _read(bound(delivery.get("handoff_record")))
-    if record.get("canonical_pass") is not True or record.get("status") != "PASS":
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "handoff canonical record")
-    netlist = bound(delivery.get("source_netlist"))
-    if _sha(bound(delivery.get("delivered_netlist"))) != _sha(netlist):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", "delivered netlist")
-    reads = timing.get("consumed_inputs")
-    if not isinstance(reads, Mapping) or not reads:
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "timing readset")
-    for raw, digest in reads.items():
-        path = project / raw
-        if not path.is_file() or _sha(path) != digest:
-            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", str(raw))
-        evidence.append({"path": raw, "sha256": digest})
-    records = timing.get("native_records") or {}
-    config_path, state_path = (bound(records.get(name)) for name in
-                               ("config.json", "state_out.json"))
-    receipt_path = bound(timing.get("native_receipt"))
-    if receipt_path.parent != state_path.parent or config_path.parent != state_path.parent:
-        raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", "native timing folder")
-    try:
-        receipt = native.validate_step_receipt(state_path.parent, "OpenROAD.STAPrePNR")
-    except native.Refusal as exc:
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", str(exc)) from exc
-    config, state = _read(config_path), _read(state_path)
-    if (config.get("meta", {}).get("step") != "OpenROAD.STAPrePNR"
-            or receipt["sha256"].get("config.json") != _sha(config_path)
-            or bound({"path": state.get("nl"), "sha256": _sha(netlist)}) != netlist):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "native netlist/config")
-    scenes = timing.get("value")
-    if (not isinstance(scenes, list) or not scenes
-            or any(scene.get("mode") != "functional" for scene in scenes)):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "functional load scenes")
-    sdcs = {bound(scene.get("sdc")) for scene in scenes}
-    if (receipt["input"].get("state_files", {}).get(str(netlist)) != _sha(netlist)
-            or len(sdcs) != 1 or any(
-                receipt["input"].get("config_files", {}).get(str(path)) != _sha(path)
-                or (reads.get(str(path)) != _sha(path)
-                    and reads.get(path.relative_to(project).as_posix()) != _sha(path))
-                for path in sdcs)):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "consumed load SDC")
-    return state_path, config, sdcs.pop(), netlist, evidence
-
-
-
-def _scenario_load_inputs(project: Path, selection: Mapping, output: Path):
-    """Consume an explicitly selected producer/native scene, without D30 reuse."""
-    import librelane_contract as native
-    import librelane_prelayout as timing_check
-    import phase3_one_shot_runner as phase3
-    import _path_layout as layout
-    from _ppa import timing
-    from types import SimpleNamespace
-
-    if not isinstance(selection, Mapping) or set(selection) != {"sdc_record", "native_state", "native_config"}:
-        raise D06Refusal("D06_LOAD_SCENARIO_SELECTION_INVALID", str(selection))
-    record_path = _project_path(project, selection["sdc_record"], "scenario producer record")
-    state_path = _project_path(project, selection["native_state"], "scenario native state")
-    input_config_path = _project_path(project, selection["native_config"], "scenario native input config")
-    input_config = _read(input_config_path)
-    record = _read(record_path)
-    sdc = _project_path(project, record.get("path"), "scenario SDC")
-    config_path = state_path.parent / "config.json"
-    config = _read(config_path)
-    state = _read(state_path)
-    raw_netlist = state.get("nl")
-    if isinstance(raw_netlist, str) and Path(raw_netlist).is_relative_to(project):
-        raw_netlist = Path(raw_netlist).relative_to(project).as_posix()
-    netlist = _project_path(project, raw_netlist, "scenario netlist")
-    mapped = layout.mapped_synth_netlist(project)
-    try:
-        receipt = native.validate_step_receipt(state_path.parent, "OpenROAD.STAPrePNR")
-        fp = receipt["input"]
-        if (record.get("schema") != "vibe-ic/step7-asic-sdc/1" or record.get("step") != 7
-                or record_path.parent != sdc.parent or record.get("sha256") != _sha(sdc)
-                or record.get("top") != config.get("DESIGN_NAME")
-                or record.get("pdk") != config.get("PDK")
-                or config.get("meta", {}).get("step") != "OpenROAD.STAPrePNR"
-                or Path(str(config.get("PNR_SDC_FILE"))).resolve() != sdc
-                or fp.get("config") != _sha(input_config_path)
-                or input_config.get("meta", {}).get("step") != "OpenROAD.STAPrePNR"
-                or {k: v for k, v in input_config.items() if k != "meta"}
-                   != {k: v for k, v in config.items() if k != "meta"}
-                or receipt["sha256"].get("config.json") != _sha(config_path)
-                or fp.get("state_files", {}).get(str(netlist)) != _sha(netlist)
-                or fp.get("config_files", {}).get(str(sdc)) != _sha(sdc)
-                or mapped is None or _sha(mapped) != _sha(netlist)):
-            raise ValueError("selected producer/native SDC or mapped netlist differs")
-        selected = SimpleNamespace(name=record["pdk"], liberty=record["inputs"]["@liberty"])
-        current_digest, inputs = timing.asic_sdc_input_digest(
-            phase3, project, record["top"], selected)
-        if record.get("input_digest") != current_digest or record.get("inputs") != inputs:
-            raise ValueError("selected scenario producer inputs/source changed")
-        evidence = [_record(project, p) for p in (record_path, sdc, netlist,
-                    state_path, input_config_path, config_path,
-                    state_path.parent / "vibeic_receipt.json")]
-        for raw, expected in {**fp.get("state_files", {}), **fp.get("config_files", {})}.items():
-            path = Path(raw) if Path(raw).is_absolute() else project / raw
-            if not path.is_file() or _sha(path) != expected:
-                raise ValueError("selected native input changed: " + raw)
-            evidence.append({"path": str(path), "sha256": expected})
-        local = fp.get("local_image")
-        if local:
-            attestation = Path(local["attestation_path"])
-            launch = _read(attestation)
-            if (_sha(attestation) != local.get("attestation_sha256")
-                    or launch.get("cid") != local.get("cid")
-                    or launch.get("container_inspect", {}).get("Image") != local.get("image_id")):
-                raise ValueError("selected native launch identity differs")
-            evidence.append({"path": str(attestation), "sha256": _sha(attestation)})
-        sdc_gate = timing_check.judge_sdc(state_path.parent, config, sdc, output / "selected_sdc.json")
-        slack_gate = timing_check.judge_slack(state_path.parent, output / "selected_slack.json")
-        if sdc_gate.get("verdict") != "PASS" or slack_gate.get("verdict") != "PASS":
-            raise ValueError("selected native SDC/slack consumer did not pass")
-    except (native.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
-        raise D06Refusal("D06_LOAD_SCENARIO_STALE_OR_UNMEASURED", str(exc)) from exc
-    return state_path, config, sdc, netlist, evidence
-
-
 def _current_bare_die_load(project: Path, io: Mapping,
-                          output_dir: Path | None = None) -> tuple[dict, list[dict]]:
+                          output_dir: Path | None = None, *, native: Mapping | None = None) -> tuple[dict, list[dict]]:
     """Bind the load scene consumed by the current STA state to current IO pads."""
-    if not (project / TAPEOUT_DECLARATION).is_file():
-        raise D06Refusal("D06_DELIVERY_SCOPE_OWNER_FACT_MISSING",
-                         str(TAPEOUT_DECLARATION))
-    declaration, declaration_ref = _bound_json(project, TAPEOUT_DECLARATION)
-    provenance = (declaration.get("answer_provenance") or {}).get("deliverable")
-    if (declaration.get("schema") != "vibe-ic/tapeout_declaration/1"
-            or (declaration.get("answers") or {}).get("deliverable") != "DIE"
-            or not isinstance(provenance, Mapping)
-            or provenance.get("answered_by") != "owner"
-            or not isinstance(provenance.get("citation"), str)
-            or not provenance["citation"].strip()):
-        raise D06Refusal("D06_DELIVERY_SCOPE_OWNER_FACT_MISSING",
-                         str(TAPEOUT_DECLARATION))
-
-    switch_path = Path("phase3/librelane_switch.json")
-    switch, switch_ref = (_bound_json(project, switch_path)
-                          if (project / switch_path).exists() else ({}, None))
-    if "package_load_scenario" in switch:
-        state_path, config, sdc_path, netlist_path, native_refs = _scenario_load_inputs(
-            project, switch["package_load_scenario"],
-            output_dir or project / "reports/flow109/D06" / uuid.uuid4().hex)
-        evidence = [declaration_ref, switch_ref, *native_refs]
-        state_ref = _record(project, state_path)
-    elif (project / CURRENT_REPAIR).exists() or (project / CURRENT_REPAIR).is_symlink():
-        repair, repair_ref = _bound_json(project, CURRENT_REPAIR)
-        final = repair.get("final")
-        if repair.get("verdict") != "PASS" or not isinstance(final, Mapping):
-            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", str(CURRENT_REPAIR))
-        state_path = _project_path(project, final.get("sta_state"), "current STA state")
-        expected = final.get("sta_state_sha256")
-        if not isinstance(expected, str) or _sha(state_path) != expected:
-            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", str(state_path))
-        state = _read(state_path)
-        config_path = state_path.parent / "config.json"
-        config = _read(config_path)
-        sdc_path = _project_path(project, state.get("sdc"), "current STA SDC")
-        netlist_path = _project_path(project, state.get("nl"), "current STA netlist")
-        state_ref = _record(project, state_path)
-        evidence = [declaration_ref, repair_ref, state_ref,
-                    _record(project, config_path), _record(project, sdc_path),
-                    _record(project, netlist_path)]
-    elif (project / "reports/flow109/default_rows/D30.json").exists():
-        state_path, config, sdc_path, netlist_path, native_refs = _handoff_load_inputs(project)
-        evidence = [declaration_ref, *native_refs]
-        state_ref = _record(project, state_path)
+    options = native or {}
+    if options.get('load_scenario'):
+        state_path, config, sdc_path, netlist_path, evidence = _scenario_load_inputs(
+            project, options['load_scenario'], output_dir or project / 'reports/native_tools/package_load')
     else:
-        state_path, config, sdc_path, netlist_path, native_refs = _signoff_load_inputs(project)
-        evidence = [declaration_ref, *native_refs]
-        state_ref = {"path": str(state_path.resolve()), "sha256": _sha(state_path)}
+        state_path, config, sdc_path, netlist_path, evidence = _state_inputs(project, options)
+    state_ref = _record(project, state_path) if state_path else None
     top = config.get("DESIGN_NAME")
-    if not isinstance(top, str) or not top or config.get("PDK") != _current_pdk(project):
-        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", str(state_path.parent / "config.json"))
+    if not isinstance(top, str) or not top or not config.get("PDK"):
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", str(state_path or "native configuration"))
 
     try:
         ports = sim_activity_dump.module_ports(netlist_path, top)
@@ -438,8 +170,8 @@ def _current_bare_die_load(project: Path, io: Mapping,
         raise D06Refusal("D06_BARE_DIE_LOAD_INTERFACE_INVALID", str((load, delay)))
 
     return {
-        "scope": "owner-attested bare-die interface; not physical package RLC/escape",
-        "deliverable": "DIE", "deliverable_authority": dict(provenance),
+        "scope": "native bare-die interface; not physical package RLC/escape",
+        "deliverable": "DIE",
         "sta_state": state_ref,
         "sdc": _record(project, sdc_path), "netlist": _record(project, netlist_path),
         "output_ports": outputs, "output_port_count": len(outputs),
@@ -465,7 +197,7 @@ def _l20_selected_architecture(l20: Mapping) -> bool:
 
 def _early_test_access(project: Path, context: Mapping,
                        io: Mapping) -> tuple[dict, list[dict]]:
-    """Qualify the early D06 boundary without requiring a post-DFT receipt."""
+    """Read the source-declared early functional or scan test-access plan."""
     evidence = []
     docs = {}
     for name, rel in (("l7", L7_REPORT), ("l8", L8_REPORT),
@@ -479,7 +211,8 @@ def _early_test_access(project: Path, context: Mapping,
 
     features = context.get("resolved_features") or context.get("features")
     if not isinstance(features, Mapping):
-        raise D06Refusal("D06_DFT_INTENT_UNKNOWN", "resolved Flow109 features absent")
+        present = _l20_selected_architecture(l20)
+        features = {"requires_dft": present, "requires_scan": present}
     dft_values = (features.get("requires_dft"), features.get("requires_scan"))
     if any(type(value) is not bool for value in dft_values):
         raise D06Refusal("D06_DFT_INTENT_UNKNOWN", "requires_dft/requires_scan unresolved")
@@ -568,253 +301,56 @@ def _early_test_access(project: Path, context: Mapping,
             "authority": "resolved Flow109 no-DFT route + matched L7/L10 + native IO map"}, evidence
 
 
-def _current_pdk(project: Path, *, evidence: list | None = None) -> str:
-    """Read PDK from the one current native state owner, not the old IO log."""
-    candidates = []
-    repair = project / "reports/phase3/librelane_postroute_repair.json"
-    if repair.is_file():
-        body = _read(repair)
-        final = body.get("final")
-        raw = final.get("sta_state") if isinstance(final, Mapping) else None
-        expected = final.get("sta_state_sha256") if isinstance(final, Mapping) else None
-        if body.get("verdict") == "PASS" and isinstance(raw, str) and raw \
-                and isinstance(expected, str) and expected:
-            state = Path(raw)
-            if state.is_absolute():
-                try:
-                    state = project / state.relative_to("/project")
-                except ValueError:
-                    state = Path("")
-            else:
-                state = project / state
-            if state.is_file() and _sha(state) == expected:
-                config = state.parent / "config.json"
-                if config.is_file():
-                    pdk = _read(config).get("PDK")
-                    if isinstance(pdk, str) and pdk:
-                        candidates.append(pdk)
-    for rel, key in (("reports/phase3/ir_drop.json", "tool_state"),
-                     ("reports/phase3/sta_postpnr_signoff.json", "sta_state")):
-        path = project / rel
-        if not path.is_file():
-            continue
-        raw = _read(path).get(key)
-        if not isinstance(raw, str) or not raw:
-            continue
-        state = Path(raw)
-        if state.is_absolute():
-            parts = state.parts
-            matches = [i for i, part in enumerate(parts)
-                       if part in ("phase3", "reports", "steps")]
-            relocated = [project.joinpath(*parts[i:]) for i in matches]
-            present = [item for item in relocated if item.is_file()]
-            if len(present) != 1:
-                continue
-            state = present[0]
-        else:
-            state = project / state
-        config = state.parent / "config.json"
-        if config.is_file():
-            pdk = _read(config).get("PDK")
-            if isinstance(pdk, str) and pdk:
-                candidates.append(pdk)
-    # D06 precedes STA/IR too: consume the current normal D03 publication,
-    # retaining its producer/config/file bindings instead of requiring a later row.
-    d03_path = Path("reports/flow109/default_rows/D03.json")
-    if (project / d03_path).exists():
-        d03, d03_ref = _bound_json(project, d03_path)
-        if (d03.get("schema") != "vibeic.flow109.technology-qualification.v1"
-                or d03.get("program") != "flow109_technology_qualification"
-                or d03.get("step_id") != "D03"
-                or d03.get("component_status") != "PASS"
-                or d03.get("default_row_status") != "PASS"
-                or d03.get("completed") is not True):
-            raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", str(d03_path))
-        inputs = d03.get("inputs")
-        if not isinstance(inputs, list) or not inputs:
-            raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", "D03 input bindings")
-        bound = []
-        for item in inputs:
-            if (not isinstance(item, Mapping) or not isinstance(item.get("path"), str)
-                    or not item["path"] or not isinstance(item.get("sha256"), str)):
-                raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", "D03 input binding")
-            path = Path(item["path"])
-            if not path.is_absolute():
-                path = project / path
-            if not path.is_file() or _sha(path) != item["sha256"]:
-                raise D06Refusal("D06_CURRENT_D03_AUTHORITY_STALE", str(path))
-            bound.append({"path": str(path), "sha256": item["sha256"]})
-        hashes = {item["path"]: item["sha256"] for item in bound}
-        producer = HERE / "flow109_technology_qualification.py"
-        config = project / "phase3/librelane/config.json"
-        resolved = project / "reports/flow109/D03/resolved.json"
-        if (not any(Path(item["path"]).name == producer.name
-                    and item["sha256"] == _sha(producer) for item in bound)
-                or not config.is_file() or hashes.get(str(config)) != _sha(config)
-                or not resolved.is_file() or hashes.get(str(resolved)) != _sha(resolved)):
-            raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", "D03 producer/config binding")
-        pdk = _read(resolved).get("PDK")
-        if not isinstance(pdk, str) or not pdk or _read(config).get("PDK") != pdk:
-            raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", "D03 PDK binding")
-        candidates.append(pdk)
-        if evidence is not None:
-            evidence.extend([d03_ref, *bound])
-    if len(set(candidates)) != 1:
-        raise D06Refusal("D06_CURRENT_PDK_AUTHORITY_UNRESOLVED",
-                         f"current PDK candidates: {candidates}")
-    return candidates[0]
+def _current_pdk(project, evidence=None):
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    pdk, source = declared_target(project)
+    if not isinstance(pdk, str) or not pdk:
+        raise D06Refusal('D06_PDK_UNAVAILABLE', 'design documents do not select a PDK')
+    return pdk
 
 
 def execute(project: Path, context: Mapping) -> dict:
     project = Path(project).resolve(strict=True)
-    attempt = project / "reports/flow109/D06" / uuid.uuid4().hex
+    attempt = project / 'reports/native_tools/package_plan' / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
-    record = {
-        "schema": SCHEMA, "step_id": STEP, "native_step_id": NATIVE_STEP,
-        "context_sha256": context.get("context_sha256"),
-        "component_status": "NOT_MEASURED", "native_started": False,
-        "flow109_acceptance": "NOT_MEASURED",
-        "whole_flow_acceptance": "NOT_MEASURED",
-        "metric_acceptance_status": "IMPLEMENTED_BARE_DIE_NATIVE",
-        "delivery_accepted": False,
-        "producer": "pad_assignment_gen",
-        "consumer": "io_pad_chip_top_gen report + owner fact checks",
-        "inputs": [], "checks": [],
-    }
+    record = {'component_status': 'NOT_MEASURED', 'checks': [], 'inputs': []}
     try:
-        row = context.get("resolved_row") or {}
-        if (context.get("requested_step") != STEP or row.get("id") != STEP
-                or context.get("native_step_id") != NATIVE_STEP
-                or not context.get("context_sha256")):
-            raise D06Refusal("D06_CONTEXT_INVALID", "current D06 context required")
-        pdk = _current_pdk(project, evidence=record["inputs"])
-        pdk_root = os.environ.get("PDK_ROOT", "/foss/pdks")
-        sources = operation_sources()
-        record["operation_sources"] = sources
-        report_path = attempt / "pad_assignment.json"
-        assignment = project / "phase3/stage3/pnr/pad_assignment.json"
-        before = _sha(report_path) if report_path.is_file() else None
-        rc = pad_assignment_gen.main([
-            str(project), "--json", str(report_path), "--out", str(assignment),
-            "--pdk-root", pdk_root, "--pdk", pdk,
-        ])
-        record["native_started"] = report_path.is_file() and _sha(report_path) != before
+        config = context.get('config') or {}
+        pdk = config.get('PDK') or _current_pdk(project)
+        root = config.get('PDK_ROOT') or context.get('pdk_root') or os.environ.get('PDK_ROOT', '/foss/pdks')
+        report_path = attempt / 'pad_assignment.json'
+        assignment = project / 'phase3/stage3/pnr/pad_assignment.json'
+        rc = pad_assignment_gen.main([str(project), '--json', str(report_path), '--out', str(assignment),
+                                       '--pdk-root', str(root), '--pdk', pdk])
         producer = _read(report_path)
-        if operation_sources() != sources:
-            raise D06Refusal("D06_OPERATION_SOURCE_CHANGED", "producer boundary")
-        record["producer_result"] = producer
-        record["inputs"].append(_record(project, report_path))
-        verdict = producer.get("verdict")
-        record["checks"].append({"check": "pad_assignment_gen",
-                                  "status": ("PASS" if rc == 0 and verdict == "WROTE"
-                                             else "FAIL" if rc == 1
-                                             else "NOT_MEASURED"),
-                                  "verdict": verdict, "rc": rc})
+        record['producer_result'] = producer
+        record['checks'].append({'check': 'pad_assignment_gen', 'verdict': producer.get('verdict'), 'rc': rc})
         if rc == 1:
-            raise D06Refusal("D06_PAD_ASSIGNMENT_PRODUCER_REFUSED",
-                             str(producer.get("reason")), failed=True)
-        if rc != 0 or verdict != "WROTE":
-            raise D06Refusal("D06_PAD_ASSIGNMENT_OWNER_FACT_MISSING",
-                             str(producer.get("reason")))
-
+            raise D06Refusal('D06_PAD_ASSIGNMENT_PRODUCER_REFUSED', str(producer.get('reason')), failed=True)
+        if rc != 0 or producer.get('verdict') != 'WROTE':
+            raise D06Refusal('D06_PAD_ASSIGNMENT_INCOMPLETE', str(producer.get('reason')))
+        import io_pad_chip_top_gen
         io_path = project / IO_REPORT
-        if not io_path.is_file():
-            from design_one_shot_runner import _phase2_pdk_config
-            from phase3_one_shot_runner import step_io_pad_chip_top_gen
-            from librelane_contract import Refusal
-            try:
-                io_pdk = _phase2_pdk_config(project, pdk)
-            except Refusal as exc:
-                raise D06Refusal("D06_PAD_PDK_UNRESOLVED", str(exc)) from exc
-            generated = step_io_pad_chip_top_gen(project, pdk=io_pdk)
-            record["checks"].append({"check": "io_pad_chip_top_gen_producer",
-                                      "status": generated.status,
-                                      "detail": generated.detail})
-            if generated.status != "PASS":
-                raise D06Refusal("D06_PAD_PIN_PRODUCER_REFUSED", generated.detail,
-                                 failed=generated.status == "FAIL")
+        io_rc = io_pad_chip_top_gen.main([str(project), '--pdk-root', str(root), '--pdk', pdk, '--json', str(io_path)])
         io = _read(io_path)
-        record["inputs"].append(_record(project, io_path))
-        if io.get("program") != "io_pad_chip_top_gen" or io.get("verdict") != "WROTE":
-            raise D06Refusal("D06_PAD_PIN_PRODUCER_INVALID", str(IO_REPORT), failed=True)
-        if not isinstance(io.get("pad_instances"), dict) or not io["pad_instances"]:
-            raise D06Refusal("D06_PAD_PIN_PLAN_EMPTY", str(IO_REPORT), failed=True)
-        record["checks"].append({"check": "io_pad_chip_top_gen", "status": "PASS",
-                                  "pad_instances": len(io["pad_instances"])})
-
-        test = io.get("test_access")
-        if not isinstance(test, Mapping) or not test:
-            test, early_inputs = _early_test_access(project, context, io)
-            record["inputs"].extend(early_inputs)
-        record["checks"].append({"check": "test_access_plan", "status": "PASS",
-                                  "detail": dict(test)})
-
-        features = context.get("resolved_features") or context.get("features") or {}
-        if features.get("package_interface") is not True:
-            raise D06Refusal("D06_PACKAGE_INTERFACE_CONTEXT_INVALID", str(features))
-        try:
-            load, load_inputs = _current_bare_die_load(project, io, attempt)
-        except D06Refusal as bare_die_error:
-            # A selected physical-package route still needs its real owner model;
-            # the generic profile flag is deliberately not package-scope authority.
-            declaration = project / TAPEOUT_DECLARATION
-            body = _read(declaration) if declaration.is_file() else {}
-            authority = (body.get("answer_provenance") or {}).get("deliverable")
-            declared = (body.get("answers") or {}).get("deliverable")
-            physical_owner_scope = (
-                body.get("schema") == "vibe-ic/tapeout_declaration/1"
-                and isinstance(declared, str) and declared and declared != "DIE"
-                and isinstance(authority, Mapping)
-                and authority.get("answered_by") == "owner"
-                and isinstance(authority.get("citation"), str)
-                and bool(authority["citation"].strip()))
-            if physical_owner_scope and bare_die_error.code == "D06_DELIVERY_SCOPE_OWNER_FACT_MISSING":
-                model = project / "input/package/package_model.json"
-                if not model.is_file():
-                    raise D06Refusal("D06_PACKAGE_LOAD_ESCAPE_OWNER_FACT_MISSING", str(model))
-                record["inputs"].append(_record(project, model))
-                raise D06Refusal("D06_PACKAGE_LOAD_ESCAPE_CONSUMER_UNIMPLEMENTED", str(model))
-            raise
-        record["inputs"].extend(load_inputs)
-        record["checks"].append({"check": "bare_die_external_load_interface",
-                                  "status": "PASS", "detail": load,
-                                  "profile_package_model_required":
-                                      features.get("package_model_required"),
-                                  "profile_flag_is_owner_scope_authority": False})
-        l1, l1_ref = _bound_json(project, Path("phase1/generated_docs/L1_DATASHEET.json"))
-        record["inputs"].append(l1_ref)
-        if l1.get("no_package_in_input") is not True or l1.get("package_info") is not None:
-            raise D06Refusal("D06_PHYSICAL_PACKAGE_SCOPE_UNRESOLVED",
-                             "bare-die metrics require the design's explicit absence of a package")
-        if any(_sha(project / item["path"]) != item["sha256"]
-               for item in record["inputs"]):
-            raise D06Refusal("D06_EVIDENCE_CHANGED_DURING_CONSUMPTION", "input readset")
-        # The early functional route owns its own complete L7/L8/L10/L20
-        # readset. A late scan record or an arbitrary IO test_access object
-        # cannot inherit this functional-only metric completion.
-        bound = {item["path"] for item in record["inputs"]}
-        if (test.get("mode") != "functional_unscanned"
-                or not {str(p) for p in (L7_REPORT, L8_REPORT, L10_REPORT, L20_REPORT)} <= bound):
-            raise D06Refusal("D06_TEST_ACCESS_METRIC_SCOPE_UNRESOLVED",
-                             "bare-die functional access requires its source-bound early plan")
-        record["metrics"] = {
-            "pad_bump_interface_constraints": {
-                "status": "PASS", "scope": "bare-die pad interface; no bumps",
-                "pad_assignment": record["inputs"][0],
-                "pad_instances": len(io["pad_instances"])},
-            "package_escape_feasibility": {"status": "PASS", **load},
-            "test_access_plan": {"status": "PASS", **test},
-        }
-        record.update(component_status="PASS", default_row_status="PASS",
-                      flow109_acceptance="PASS", completed=True,
-                      reason="D06_BARE_DIE_NATIVE_METRICS_PASS",
-                      scope="bare-die pad, external-load and functional-test-access feasibility",
-                      unsupported_scope="physical package RLC/escape/bumps and post-DFT access")
-    except D06Refusal as exc:
-        record["component_status"] = "FAIL" if exc.failed else "NOT_MEASURED"
-        record["reason"] = exc.code
-        record["detail"] = exc.detail
-    (attempt / "component.json").write_text(
-        json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if io_rc != 0 or io.get('verdict') != 'WROTE' or not io.get('pad_instances'):
+            raise D06Refusal('D06_PAD_PIN_PRODUCER_INCOMPLETE', str(io), failed=io_rc == 1)
+        test, test_inputs = _early_test_access(project, context, io)
+        load, load_inputs = _current_bare_die_load(project, io, attempt, native=context)
+        l1, l1_ref = _bound_json(project, Path('phase1/generated_docs/L1_DATASHEET.json'))
+        if l1.get('no_package_in_input') is not True or l1.get('package_info') is not None:
+            raise D06Refusal('D06_PHYSICAL_PACKAGE_SCOPE_UNRESOLVED', 'physical package RLC/escape is unmeasured')
+        if test.get('mode') != 'functional_unscanned':
+            raise D06Refusal('D06_POST_DFT_ACCESS_UNMEASURED', 'this native method covers early functional access')
+        record['inputs'] = [_record(project, report_path), _record(project, io_path), l1_ref, *test_inputs, *load_inputs]
+        record['metrics'] = {'pad_bump_interface_constraints': {'status': 'PASS', 'scope': 'bare-die pad interface; no bumps',
+                               'pad_instances': len(io['pad_instances'])},
+                             'package_escape_feasibility': {'status': 'PASS', **load},
+                             'test_access_plan': {'status': 'PASS', **test}}
+        record.update(component_status='PASS', scope='bare-die pad, external-load and functional-test-access feasibility',
+                      unsupported_scope='physical package RLC/escape/bumps and post-DFT access')
+    except (D06Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+        record.update(component_status='FAIL' if getattr(exc, 'failed', False) else 'NOT_MEASURED',
+                      reason=getattr(exc, 'code', 'D06_NATIVE_INPUT_ABSENT'), detail=str(exc))
+    write_json(attempt / 'result.json', record)
     return record
-
