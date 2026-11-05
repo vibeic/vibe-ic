@@ -678,6 +678,7 @@ def sdc_clock_constraints(text: str) -> List[Dict[str, Any]]:
     """Every create_clock / create_generated_clock in one SDC, as
     ``{"name", "period", "ports", "generated"}``."""
     body = _strip_comments(text)
+    body = _sdc._substitute_vars(body, _sdc._collect_tcl_vars(body))
     out: List[Dict[str, Any]] = []
     for rx, generated in ((_CREATE_CLOCK_RE, False),
                           (_CREATE_GEN_CLOCK_RE, True)):

@@ -400,3 +400,30 @@ def test_direction1_json_report_on_pass_keeps_its_shape(tmp_path):
     assert payload["verdict"] == "PASS"
     assert payload["issues"] == []
     assert len(payload["sdc_files_checked"]) == 1
+
+
+import pytest
+
+
+@pytest.mark.parametrize('period,pin,expected,message', [
+    (10, 'clk', 0, '[PASS]'),
+    (8, 'clk', 1, 'disagrees'),
+    (10, 'other', 1, 'no SDC constrains'),
+])
+def test_scalar_and_nested_tcl_clock_variables_preserve_clock_obligations(
+        tmp_path, period, pin, expected, message):
+    body = '''set clock_name primary_clock
+set pin_name PIN
+set clock_period PERIOD
+set clock_port [get_ports $pin_name]
+create_clock -name $clock_name -period ${clock_period} $clock_port
+set_input_delay 2 -clock $clock_name [all_inputs]
+set_output_delay 2 -clock $clock_name [all_outputs]
+'''.replace('PIN', pin).replace('PERIOD', str(period))
+    _seed_sdc(tmp_path, 'top.sdc', body)
+    l8 = _write_l8(tmp_path, {'clocks': [{
+        'name': 'clk', 'source_pin': 'clk', 'period_ns': 10,
+        'domain_kind': 'primary'}]})
+    actual = _run([str(tmp_path), '--l8', str(l8)])
+    assert actual.returncode == expected, actual.stdout + actual.stderr
+    assert message.lower() in actual.stdout.lower(), actual.stdout
