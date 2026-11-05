@@ -4110,6 +4110,12 @@
           }
         }
       ]
+    },
+    "design_for_manufacturability": {
+      "kind": "adapter",
+      "adapter": "dfm",
+      "program": "dfm_screen_check.py",
+      "parallel": true
     }
   },
   "report_check_readers": {

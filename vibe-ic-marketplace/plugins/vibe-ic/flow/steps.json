@@ -4731,9 +4731,10 @@
       "title": "Design for manufacturability",
       "when": "physical",
       "tool": {
-        "kind": "native_report",
-        "from": "final_electrical_analysis",
-        "scope": "Native summary is emitted after the final native checkers, following Classic and Chip."
+        "kind": "adapter",
+        "adapter": "dfm",
+        "program": "dfm_screen_check.py",
+        "parallel": true
       },
       "checks": [],
       "legacy_id": {

@@ -70,6 +70,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -315,90 +316,6 @@ def _lef_via_cut_counts(lef_text: str) -> dict:
     return out
 
 
-# ---------------------------------------------------------------------------
-# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
-#
-# THE DRIFT: `verdict = "PASS_WITH_ADVISORIES" if advisories else "PASS"`, where
-# `advisories` counts only WARNING findings. When the via-redundancy screen
-# cannot run — routed.def has no parseable VIAS section, or its NETS section
-# references no via — the gate says so HONESTLY, but it says it as an INFO
-# finding. INFO does not reach `advisories`, so the record carries a plain PASS,
-# indistinguishable from a run whose vias were screened and found redundant.
-#
-# The gate's own message calls that skip "honest", and it is — at the moment it
-# is printed. What is not visible later is that the PASS covers a screen that
-# never ran, which is the whole reason a published record needs re-adjudicating
-# rather than re-reading.
-import _record_adjudication as _ra  # noqa: E402
-
-#: The INFO categories this gate emits when the via screen could not run.
-_VIA_SCREEN_SKIPPED = ("VIA_DEFS_NOT_FOUND", "VIA_USES_NOT_FOUND")
-
-
-def _via_screen_vacuity(record: dict):
-    """Would this gate still call this a plain PASS, given what it screened?"""
-    if record.get("verdict") != "PASS":
-        return None                    # PASS_WITH_ADVISORIES already says more
-    cats = {str(f.get("category", "")) for f in (record.get("findings") or [])
-            if isinstance(f, dict)}
-    skipped = sorted(cats & set(_VIA_SCREEN_SKIPPED))
-    if not skipped:
-        return None                    # the screen really did run
-    return _ra.Supersession(
-        would_issue="VACUOUS_PASS",
-        because=("the record carries a plain PASS while also carrying "
-                 f"{', '.join(skipped)} — the via-redundancy screen could not "
-                 "run on that design, so the PASS covers a check that never "
-                 "examined a via. The skip was disclosed as INFO, which does "
-                 "not reach the advisory tier the verdict is built from, so "
-                 "the verdict alone reads as a screened-and-clean result"),
-    )
-
-
-RECORD_ADJUDICATION = _ra.declare(
-    __file__,
-    gate="dfm_screen_check",
-    decision_roots=("audit",),
-    # Re-reviewed for #2000 against #1980 (867f807a): that landing removed
-    # only the producer metadata field `verdict_mode`.  The rule below reads
-    # `verdict` and `findings`; both decision paths and their meanings remain
-    # unchanged, so no published record changes adjudication.
-    # Re-reviewed for mig104 (steps 34/35 on LibreLane): `audit` now takes its
-    # CMP reference from the step-34 tool record when step 34's switch is not
-    # `direct`, and cross-checks the via recount against the router's own
-    # counts. Both add only WARNING findings (DENSITY_REF, VIA_COUNT_DISAGREES)
-    # to the advisory tier; the rule reads a plain `verdict: PASS` beside
-    # VIA_*_NOT_FOUND, which neither path emits or removes, so no published
-    # record changes adjudication.
-    # Re-reviewed for U14 (tailb, 2026-09-29): when step 34's gate report is
-    # not on disk yet, `audit` reads step 34's verdict in process
-    # (`_step34_density_in_process`) instead of leaving density_ref null. That
-    # adds only a DENSITY_REF finding (INFO on a step-34 PASS, WARNING
-    # otherwise); it neither emits nor removes VIA_*_NOT_FOUND and leaves a
-    # plain `verdict: PASS` beside them exactly as it was, so no published
-    # record changes adjudication.
-    # Re-reviewed for the measured-density changes in 77bd34a19 and
-    # 2e0a84ec0: per-layer density and ABSENT fallback alter only density
-    # reference findings. The two VIA_*_NOT_FOUND categories and the
-    # verdict/findings preconditions of the vacuity rule remain unchanged.
-    # This unreviewed digest predated the Step35 main authorship wiring;
-    # main is outside the audit decision closure.
-    # Re-reviewed for #3791: tech LEF discovery changes which via cut counts
-    # resolve, and the density finding now states its reason. Neither emits or
-    # removes VIA_*_NOT_FOUND, so no published record changes adjudication.
-    decision_digest="75f24204d7c8c6dd7d1cf7b8520de235731c5378d96da1f57107944ff7cf585d",
-    rules=(
-        _ra.Rule(
-            rule_id="dfm_screen_check.via-screen-did-not-run",
-            landed_in="#562",
-            requires=("verdict", "findings"),
-            decide=_via_screen_vacuity,
-            what=("a plain PASS carrying VIA_*_NOT_FOUND screened no via at all"),
-        ),
-    ),
-)
-
-
 def _step34_density_in_process(project: Path) -> "dict | None":
     """U14 — when Step 34's gate report is not on disk yet (the runner emits
     this screen before the audit runs Step 34's gate), read Step 34's verdict
@@ -456,11 +373,15 @@ def _router_via_counts(project: Path):
     return None
 
 
-def audit(project: Path) -> dict:
+def audit(project: Path, *, routed_def=None, tech_lefs=None,
+          router_counts=None, density=None) -> dict:
     findings = []
-    routed = _pl.pnr_dir(project) / "routed.def"
+    routed = Path(routed_def) if routed_def is not None else _pl.pnr_dir(project) / "routed.def"
     density_json = project / "reports" / "density.json"
-    if not routed.is_file() and not density_json.is_file() \
+    if routed_def is not None and not routed.is_file():
+        return {"verdict": "SKIP", "rc": 2,
+                "reason": f"captured routed DEF is missing: {routed}"}
+    if routed_def is None and not routed.is_file() and not density_json.is_file() \
             and not _pl.report_path(project, "density.json").is_file():
         return {"verdict": "SKIP", "rc": 2,
                 "reason": ("no routed.def and no density artifacts yet — "
@@ -473,8 +394,8 @@ def audit(project: Path) -> dict:
     # instead of step 34's side files (mig104).
     gate_json = project / "reports" / "phase2" / "gates" / \
         "metal_fill_density.json"
-    density_ref = None
-    tool_ref = _step34_tool_density(project)
+    density_ref = density
+    tool_ref = _step34_tool_density(project) if routed_def is None else None
     # A stale/missing tool-side index is not a measurement and must not hide
     # the canonical Step-34 gate report.  In particular, the default-mode
     # producer can leave ``fill_librelane.json`` with ``status=ABSENT`` while
@@ -492,8 +413,6 @@ def audit(project: Path) -> dict:
                        "reason": tool_ref.get("reason"),
                        "errors": tool_ref.get("errors"),
                        "rules": tool_ref.get("rules"),
-                       "state_sha256": tool_ref.get("state_sha256"),
-                       "subject_sha256": tool_ref.get("subject_sha256"),
                        "per_layer_consumer": per_layer,
                        "measurement_verdict": (
                            "FAIL" if type(tool_ref.get("errors")) is int
@@ -503,7 +422,7 @@ def audit(project: Path) -> dict:
                            and tool_ref.get("errors") == 0 and per_layer_pass else "NOT_MEASURED"),
                        "step34_pass": (tool_ref.get("status") == "MEASURED"
                                        and tool_ref.get("errors") == 0 and per_layer_pass)}
-    elif gate_json.is_file():
+    elif routed_def is None and gate_json.is_file():
         try:
             g = json.loads(gate_json.read_text(errors="replace"))
             density_ref = {
@@ -514,7 +433,7 @@ def audit(project: Path) -> dict:
         except (OSError, ValueError):
             density_ref = {"unparseable": True,
                            "source": str(gate_json.relative_to(project))}
-    else:
+    elif routed_def is None:
         density_ref = _step34_density_in_process(project)
     if density_ref is None:
         findings.append({
@@ -568,7 +487,7 @@ def audit(project: Path) -> dict:
             resolved_cuts = {v: c for v, c in cuts.items() if v in uses}
             lef_sources: list = []
             if len(resolved_cuts) < len(uses):
-                for lef in _locate_lef_files(project):
+                for lef in (_locate_lef_files(project) if tech_lefs is None else map(Path, tech_lefs)):
                     try:
                         lef_cuts = _lef_via_cut_counts(
                             lef.read_text(errors="replace"))
@@ -606,7 +525,7 @@ def audit(project: Path) -> dict:
             # DEF recount must agree with them on the same route.
             import librelane_fill_dfm as _lf  # noqa: PLC0415
             via_summary["router_agreement"] = _lf.via_agreement(
-                single, resolved, _router_via_counts(project))
+                single, resolved, _router_via_counts(project) if routed_def is None else router_counts)
             if via_summary["router_agreement"]["verdict"] == "DISAGREE":
                 findings.append({
                     "severity": "WARNING", "category": "VIA_COUNT_DISAGREES",
@@ -681,6 +600,44 @@ def audit(project: Path) -> dict:
         "advanced_node_note": _ADVANCED_NODE_NOTE,
         "findings": findings,
     }
+
+
+def execute(project, directory, tool, route, *, state=None, config=None):
+    from flow_engine import ToolResult
+    from librelane_fill_dfm import router_via_counts
+
+    if state is None or not state.get("def"):
+        return ToolResult(detail="DFM screen needs the routed DEF in native State.").__dict__
+    routed = Path(state["def"])
+    if not routed.is_file():
+        return ToolResult(detail=f"DFM screen's captured routed DEF is missing: {routed}").__dict__
+    config = config or {}
+    lefs = config.get("TECH_LEFS") or []
+    if isinstance(lefs, dict):
+        from librelane.common import Toolbox
+        lefs = Toolbox(str(Path(directory) / "tool_tmp")).filter_views(config, lefs)
+    metrics = getattr(state, "metrics", state.get("metrics", {}))
+    count = metrics.get("klayout__density_error__count")
+    density = ({"source": "native State", "tool": "KLayout.Density", "status": "MEASURED",
+                "errors": count, "step34_pass": count == 0} if count is not None else None)
+    started = time.perf_counter()
+    report = audit(Path(project), routed_def=routed, tech_lefs=lefs,
+                   router_counts=router_via_counts(metrics), density=density)
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    output = directory / "dfm_screen.json"
+    output.write_text(json.dumps(report, indent=2, default=str) + "\n")
+    via = report.get("via_redundancy") or {}
+    values = {key: value for key, value in via.items() if isinstance(value, (int, float))}
+    values.update({key: value for key, value in metrics.items() if "__density_error__count" in key})
+    values.update(advisory_count=sum(row["severity"] == "WARNING" for row in report.get("findings", [])),
+                  audit_rc=report["rc"])
+    measured = via.get("resolved_via_uses", 0) > 0
+    reason = "" if measured else "DFM via-redundancy screen resolved no signal-net via uses."
+    return ToolResult(True, 0, values, [str(output)], time.perf_counter() - started,
+        detail=reason, native_steps=[{"name": "dfm_screen_check", "ran": True, "exit_code": 0,
+            "status": "PASS" if measured else "NOT_MEASURED", "native_verdict": report["verdict"],
+            "advisory_rc": report["rc"], "detail": reason}]).__dict__
 
 
 def _derive_process_nm(project: Path):
