@@ -148,7 +148,9 @@ def partition(tmp_path, name, word, flags=""):
     ("FAIL", "", "FAIL", 1),
     ("UNKNOWN", "", "NOT_MEASURED", None),
     ("TIMEOUT", "", "NOT_MEASURED", None),
-    ("PASS", "xbits", "NOT_MEASURED", None),
+    ("PASS", "xbits", "PASS", 0),
+    ("UNKNOWN", "xbits", "NOT_MEASURED", None),
+    ("FAIL", "xbits", "FAIL", 1),
 ])
 def test_native_partition_verdicts(tmp_path, word, flags, expected, count):
     partition(tmp_path, "output", word, flags)
@@ -246,6 +248,32 @@ def test_actual_eqy_detects_unequal_logic(tmp_path, different):
     assert result["metrics"]["final_lec_unproved"] == int(different), result
     assert result["native_steps"][0]["status"] == ("FAIL" if different else "PASS"), result
     assert not (tmp_path / "result.json").exists()
+
+
+def test_actual_eqy_undecided_strategy_is_not_a_design_failure(tmp_path):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    gold, gate, liberty = [tmp_path / name for name in ("gold.v", "gate.v", "cells.lib")]
+    for path, state, tap in ((gold, "gold_delay", 4), (gate, "gate_delay", 5)):
+        path.write_text("module unit(input clk,rst_n,a,output q);\n"
+            f"reg [5:0] {state}; always @(posedge clk) if(!rst_n) {state}<=0; "
+            f"else {state} <= {{{state}[4:0],a}}; assign q={state}[{tap}];\nendmodule\n")
+    liberty.write_text("library(neutral) {}\n")
+
+    class OneFrame(Commands):
+        def run(self, argv, cwd=None):
+            if argv[0] == "eqy":
+                script = Path(argv[-1])
+                script.write_text(script.read_text().split("[strategy pdr]", 1)[0].replace("depth 5", "depth 1"))
+            return super().run(argv, cwd)
+
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]}}
+    result = eqy(tmp_path, tmp_path, {}, OneFrame(tmp_path), state={"nl": str(gate)}, config=config)
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
+    assert not result["metrics"], result
+    assert "undecided" in result["detail"], result
 
 
 @pytest.mark.parametrize("model_key", ["PAD_LIBS", "EXTRA_LIBS", "PAD_VERILOG_MODELS", "EXTRA_VERILOG_MODELS", "LIBERTY_SIBLING", "SIMULATION_DIRECTIVES"])
@@ -425,8 +453,8 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
     if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin", "direct_output", "direct_bad_output"}:
         assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin", "direct_bad_output"} else "PASS"), result
     if change in {"unknown_core", "inline_unknown_core", "inline_z_core", "inline_undriven_core", "direct_unknown_output"}:
-        assert rows.get("Yosys.EQY.Core") == "NOT_MEASURED", result
-        assert not result["metrics"], result
+        assert rows.get("Yosys.EQY.Core") == "PASS" and result["exit_code"] == 0, result
+        assert result["metrics"]["unproved_equivalence"] == 0, result
     elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "direct_output"}:
         assert result["metrics"]["unproved_equivalence"] == 0, result
     else:

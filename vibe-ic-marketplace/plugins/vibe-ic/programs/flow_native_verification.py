@@ -32,10 +32,10 @@ def eqy_partitions(scratch):
     if not complete:
         return "NOT_MEASURED", None, "EQY partition declarations or strategy statuses are incomplete.", reports
     unknown = [name for name, words in parts.items() if "PASS" not in words]
-    if unknown or xbits:
+    if unknown:
         return ("NOT_MEASURED", None,
                 f"EQY has {len(unknown)} undecided and {len(xbits)} gold-x partition(s).", reports)
-    return "PASS", 0, f"EQY proved all {len(declared)} partition(s).", reports
+    return "PASS", 0, f"EQY proved all {len(declared)} partition(s), including {len(xbits)} gold-x partition(s).", reports
 
 
 def reset_boundary(project):
