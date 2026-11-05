@@ -1,261 +1,48 @@
 ---
 name: flow-change-acceptance
-description: "Validate changes to shared flow behavior, runners and verdict rules before landing: exercise actual consumers, known-good and known-bad cases, and retain honest evidence scope. Apply to flow-level implementation or review, not unrelated documentation edits. A repair does not automatically require a new checker, global gate or compliance template."
+description: "Verify a shared flow change through its actual consumers, native tool reports and unchanged original limits before the owner lands it."
 ---
 
-# flow-change-acceptance — the standard for changing the flow itself
+# Verify a flow change
 
-A fix to one cell is judged by that cell. **A change to the flow is judged by every
-cell that will ever run through it, including the ones nobody is watching.**
+Read `CHARTER.md`. A shared flow change affects every design that reaches its
+consumer. Verify that behavior directly without creating another permanent
+checker, receipt, identity, or approval layer.
 
-That asymmetry is the whole reason this skill exists:
+## Establish the changed behavior
 
-| | a fix to one design | a change to the flow |
-|---|---|---|
-| blast radius | that design | every design, and every future design |
-| failure mode | that design fails | every design agrees, and every design is wrong |
-| who notices | whoever ran it | **nobody** — a flow that lies is indistinguishable from a flow that works |
+1. Identify the producer, its actual consumer, and the failed behavior.
+2. Capture the current native report and original limit before changing the producer.
+3. For a bug fix, replay the reported failure on the old code and the fix on the new code. Verify the substantive disagreement, not merely an import error or an absent new field.
+4. Exercise representative valid inputs and the reported failure through the actual public entry. Do not plant errors or qualify the EDA tool again during an ordinary design run.
+5. Confirm that the tool ran on the intended design, produced its native report, and retained the original spec, PDK, or owner limit.
+6. Run relevant existing tests and inspect the actual artifact the consumer reads.
 
-Every criterion below is written from a **measured** failure in this repo. None of
-them is a style preference.
+Choose verification that can distinguish the claimed behavior. A compiling
+module or a report containing the expected word is insufficient when the
+claim concerns synthesis, simulation, routing, timing, or signoff. A missing
+measurement remains unmeasured. A native failure remains a failure until a
+real fix and tool rerun meet the original limit.
 
-## Choose the smallest sufficient verification change
+## Review generality and scope
 
-Verification protects a product contract; its growth is a cost, not a product
-outcome. A past incident does not automatically justify another permanent gate.
+Use design-supplied data rather than design, customer, vendor, or benchmark
+names as control logic. Synthetic fixtures should describe the general
+failure. Preserve the Router's bounded task window and the native engineering
+algorithms. Do not weaken assertions or move thresholds to make a change pass.
 
-Before adding machinery, identify the actual failed behavior and its consumer.
-Prefer fixing the producer or removing duplicate state, then extending the
-existing behavioral test for that contract. One maintained test implementation
-can cover many data cases; do not copy a checker or test module for each issue.
+Source completeness is a consumer question. Check that a fact reaches the
+field the consumer reads, with the same meaning and authority. Its presence
+elsewhere in a document set does not establish that contract.
 
-Separate these scopes:
+For a deletion or migration, verify surviving imports, actual dynamic calls,
+native tool invocation, and remaining test outcomes. Remove only obsolete
+contracts and their exclusive tests. Compare failure identities rather than
+only totals, and distinguish a pre-existing failure from a new one.
 
-* A local regression case proves a specific failure is repaired. Keep it with
-  the responsible component and use the existing selection mechanism.
-* A global release gate is justified only by a cross-cutting risk that cannot
-  be covered at its owning boundary. Review its applicability, existing overlap,
-  expected execution cost and maintenance owner before making it mandatory.
-* Report-format advice and documentation lint are not evidence that a design,
-  simulation, verifier or repair actually worked. Do not promote a preferred
-  heading or prose pattern into a product-admission requirement.
+## Hand back evidence
 
-When equivalent checks already exist, consolidate their implementation and
-retain the discriminating cases. Changing one declaration should not require
-hand-synchronizing its copies or adding a new checker to check their equality.
-Prove that genuine bad inputs still fail and legitimate changes no longer
-cause representation-only failures. Do not use blanket test deletion, assertion
-caps, weaker thresholds, hidden skips or rewritten baselines as substitutes.
-
-This is authoring/review guidance, NOT a request for another global policy
-checker. Existing checks are not automatically reclassified by this paragraph;
-change their actual producers/consumers with scoped behavioral evidence.
-
----
-
-## The six criteria
-
-### 1. Bidirectional negative control — a test that cannot fail proves nothing  <!-- measured: #298, #295 -->
-
-Every new gate ships a test that **FAILS against the pre-fix code** and **PASSES
-after**. Assert both directions explicitly; running only the post-fix direction
-measures nothing.
-
-**⚠️ The vacuous-pass trap.** When a check does not exist yet, a
-`test_..._clears_the_finding` assertion passes *vacuously* — the finding never fires
-because nothing can fire it. Such a test is only meaningful **paired** with its
-`test_..._fires` sibling. Never present a "clears" test as a standalone negative
-control.
-
-> *Measured:* an author of a Phase-1/Phase-3 supply gate wrote both directions,
-> then flagged in their own handoff that the `*_clears_the_finding` half passed
-> vacuously pre-fix and was only valid paired with `*_fires`. That self-caught
-> caveat is the standard, not an exception.
-
-### 2. Corpus sweep — zero false positives, or the gate is a bug  <!-- measured: #298, #309, #312 -->
-
-Run the new gate over the real existing runs available to you. **A gate that fires
-on a legitimately-complete design is a bug in the gate, not a finding.** Narrow it or
-drop it, and report what you swept and what you could not reach.
-
-The cost of a false positive is not noise — it is that people learn to ignore the
-gate, which is how a repo ends up with gates nobody acts on.
-
-### 3. Prove-by-run that a BLOCKING gate actually blocks  <!-- measured: #306 -->
-
-If you claim a gate blocks, **run it and show the flow stopped**. Do not infer it
-from reading the code.
-
-> *Measured, and the reason this criterion exists:* `cts_quality_check` is wired
-> into the flow, has a test, and returned `verdict: FAIL` with `waiver: None` on
-> three consecutive plugin versions of the same cell — while the flow went on to
-> ship a 44 MB `post_cts.def` and a 181 MB `routed.def` anyway. Eleven gates in that
-> same run carried FAIL and none stopped anything. A subsequent audit put the number
-> at **62 of 72 gates cannot block**.
->
-> A gate that fails without blocking differs from no gate only in being auditable
-> after the fact.
-
-### 4. No design, PDK, or vendor literals  <!-- enforced: source_chip_agnostic_check -->
-
-The flow is shared by every design. **The moment a flow-level program hardcodes a
-pin name, a cell name, a PDK name, or a vendor part number, it stops being flow and
-becomes that design's private patch** — and it will silently misbehave on the next
-design.
-
-Drive every decision from inputs the design itself supplies: a macro's own LEF `USE`
-records, the declared constraint files, the top-level port list, the design's own
-L-docs. Test fixtures must be **synthesized neutral data**, never a copy of a real
-design's files.
-
-**What that does NOT mean (vibe-ic#400).** "No copy of a real design's files" forbids
-HARDCODING a chip into a fixture. It does not forbid a test from READING a
-checked-in artefact — and read literally it pushed authors into a suite that is
-100 % synthetic, which is a different failure:
-
-> A change whose tests are all fixtures authored alongside it **cannot distinguish
-> itself from its own absence.** Measured: mutating a guard killed 10 of 31 tests —
-> every one of them hand-typed in the same commits — while all 4 tests that read a
-> checked-in artefact still passed. No document in the repo could tell that guard
-> from its absence.
-
-So, for a BEHAVIOURAL change: at least one test must be driven by a real in-repo
-artefact, through `programs/tests/_hostpaths.require_repo` / `repo_path` (which
-hardcodes nothing — `source_chip_agnostic_check` passes on trees that use it), or
-by sweeping a repo data root. `real_artefact_test_backing_check` reports the split
-per changed test module, ADVISORY.
-
-A real-artefact test is still not automatically non-vacuous — an implication whose
-antecedent is always false passes either way. What proves a test bites is the
-MUTATION RUN criterion 1 already asks for; the split report is what makes a
-reviewer ask for it.
-
-> *Measured:* a supply-intent gate was verified chip-agnostic by confirming the only
-> `VDD/VSS` occurrence in the new logic was inside a *comment*, and that the pin-type
-> decision came from the macro's LEF, not from a name list.
-
-### 5. Declare BLOCKING or ADVISORY — in the gate, not by default  <!-- measured: #306 -->
-
-State in the gate's own docstring/output whether a failure **stops the flow** or
-**records and continues**, and why. Silence is not neutral: an unstated default of
-"advisory" is how 62 of 72 gates ended up unable to stop anything, which is certainly
-not what their authors intended — nobody writes a check for "the clock tree was never
-built" and means it as a note.
-
-### 6. Degrade loudly, never silently  <!-- measured: #307, #312 -->
-
-A path that declines to act — a remedy refused, an optional track unavailable, a
-budget exceeded — must **emit a named record** saying so. A silent decline reads
-downstream as "nothing needed doing".
-
-> *Measured, twice:*
-> - The route-loosen call site was `if _lf is not None:` with **no else branch at
->   all**, while the upsize path returned a named FAIL for the same class of refusal.
->   The flow could decline its own rescue and tell nobody.
-> - The Phase-1 second track (Expert/AI) was **never executed**: its `ai_patches`
->   sidecar was read by three checks and **written by nothing**, so
->   `ai_captured_tokens_count` could only ever be `0`. A dual-track that silently
->   runs one track reports like a dual-track.
-
----
-
-## What a completeness check must actually measure
-
-A recurring, expensive mistake: measuring **presence somewhere** instead of
-**presence where it is consumed**.
-
-> *Measured:* the Phase-1 completeness model asked "does this vendor token appear in
-> ANY layer". A hard macro's supply pin name appeared in the descriptive datasheet
-> layer, so the check reported CAPTURED — while the layer the **backend actually
-> reads** contained it zero times. The PDN was therefore built with no rail for it,
-> synthesis tied the pin off with a TIEHI cell, a signal net landed on a POWER
-> terminal, and detailed routing aborted **entirely**: 3278 signal nets, 0 routed,
-> LVS unreachable — five steps downstream from where the information had been
-> available all along, surfacing as an opaque router error.
-
-So: identify **who consumes the artifact** and check for what that consumer needs, in
-the form it needs. "The token exists somewhere in the corpus" is not that.
-
----
-
-## Before you land
-
-- [ ] negative control fails pre-fix, passes post-fix, **both asserted**
-- [ ] the pre-fix control was **graded, not asserted** — capture it and hand it
-      to the program, because "the tests fail pre-fix" is true of every new file
-      ever written:
-
-      ```
-      PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest <the new tests> \
-          -q -p no:cacheprovider --junitxml=/tmp/control.xml     # on clean main
-      python3 programs/control_substance_check.py --junit /tmp/control.xml
-      ```
-
-      and pass the same file to the merge gate, which BLOCKS on a control whose
-      every failure is an absence:
-      `gatekeeper_review.py --base <b> --head <h> --control-junit /tmp/control.xml`
-- [ ] no `*_clears` assertion presented as a standalone control
-- [ ] corpus sweep run; zero false positives; coverage limits stated honestly
-- [ ] if BLOCKING: **prove-by-run**, with the stopped-flow evidence quoted
-- [ ] zero design/PDK/vendor literals; fixtures synthesized
-- [ ] BLOCKING or ADVISORY declared explicitly in the gate
-- [ ] every decline/skip path emits a named record
-- [ ] compare failure **name sets**, not counts — a truncating flag such as
-      `--maxfail` makes two runs stop at different points and their equal counts
-      mean nothing
-- [ ] the artifact you tested is the one that carries your fix — verify the plugin
-      cache actually contains the changed code before trusting any run
-
-## Reuse existing verification
-
-Program-first means automate useful repeated work. It does not mean convert
-every sentence, lesson or code shape into a new permanent admission gate.
-Use the relevant existing programs below; invoke them for their actual subject,
-and report what they measured. Extend an existing contract implementation when
-possible instead of adding another layer that checks the checker.
-
----
-
-## Which of these are now PROGRAMS (this doctrine obeys program-first)
-
-Landed, so the criterion is checked rather than remembered:
-
-| criterion | program | measured in |
-|---|---|---|
-| §3, §5 | `flow_gate_enforcement_audit` — ENFORCED / AUDIT_ONLY / ORPHANED, and flags a gate declaring blocking while wired advisory | #306 |
-| §6 | `silent_decline_audit` — AST audit for remedy call sites whose refusal discloses nothing | #307, #312 |
-| §4 | `source_chip_agnostic_check` | CI |
-| "empty vs clean" | `phase1_expert_track_evidence_check` — NEVER_RAN vs RAN_EMPTY | #312 |
-| §1 | `control_substance_check` — reads the pre-fix control's OWN pytest report and counts how many failures observed a VALUE, as against only noticing that something was absent. Composed by `gatekeeper_review --control-junit`, which BLOCKS on a tautological control | #381 |
-
-Keep corpus-sweep evidence as an artifact with its measured scope (§2). This
-requirement does not itself call for a new global checker.
-
-PROMOTED, and the reason it needed promoting: "every new gate's tests must
-contain at least one assertion that FAILS on the parent revision" is not the
-property that matters, and running them against `HEAD~1` does not measure it.
-Measured on two live PRs — one control collected NOTHING (a
-`ModuleNotFoundError` for the module the fix introduces; 551 lines of new test,
-zero assertions executed) and another reported "4 of 4 behavioural" when three
-of the four failed on the ABSENCE of a field the fix adds. Both "failed on the
-parent revision". `control_substance_check` grades the difference, and
-`gatekeeper_review --control-junit` is where it blocks.
-
-## Compliance gate scope
-
-This skill ships `compliance.yaml` and `tests/test_compliance.py`. They test
-the report-pattern machinery, not the feature, the stopped flow, or the truth of
-the report's claims. Run these tests when changing this skill's compliance
-contract, generator or shared checker:
-
-```bash
-python3 -m pytest -q \
-    plugins/vibe-ic/skills/flow-change-acceptance/tests/test_compliance.py
-```
-
-For a flow behavior change, the actual evidence is the observed behavior and
-the substantive positive/negative controls above. A regex-generated "good
-output" cannot certify them. Report lint may identify missing explanations;
-it must not replace execution evidence or require a new global gate merely
-because a skill exists. Existing explicitly declared artifact/receipt checks
-still require their real producer evidence; no scope is silently waived.
+Report the changed behavior, native command and report, unchanged limit,
+relevant tests, comparison revision, and remaining gaps. Keep run evidence
+outside the plugin repository. Follow the owner's current landing process;
+this skill grants no authority to publish, message others, open a PR, or land.
