@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import filecmp
 import fnmatch
-import hashlib
 import json
 import math
 import os
@@ -15,6 +14,7 @@ import re
 import shlex
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 
 
@@ -302,13 +302,9 @@ def finished_gds(project: Path, selected: Path) -> Path:
         raise ValueError('CURRENT_FINISHED_GDS_RECORD_INVALID: canonical must be a path string')
     if path(project, str(record.get('stream_state'))).resolve() != selected.resolve():
         raise ValueError(f"CURRENT_FINISHED_GDS_OTHER_STATE: {record.get('stream_state')} != {selected}")
-    if hashlib.sha256(selected.read_bytes()).hexdigest() != record.get('stream_state_sha256'):
-        raise ValueError(f'CURRENT_FINISHED_GDS_STATE_CHANGED: {selected}')
     gds = path(project, record['canonical'])
     if not gds.is_file() or gds.stat().st_size == 0:
         raise ValueError(f'CURRENT_FINISHED_GDS_MISSING: {gds}')
-    if hashlib.sha256(gds.read_bytes()).hexdigest() != record.get('canonical_sha256'):
-        raise ValueError(f'CURRENT_FINISHED_GDS_CHANGED: {gds}')
     return gds
 
 

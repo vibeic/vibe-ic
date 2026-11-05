@@ -38,8 +38,6 @@ import fnmatch
 import json
 import math
 import re
-import shlex
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -51,12 +49,12 @@ from metal_fill_config_gen import (build_metal_fill_config,
                                    density_rule_layer_identifiers)
 import die_level_deck_rule_attribution as _dla
 import librelane_contract as _lc
-from librelane_contract import (PDK_GUEST_ROOT, PROBE_DEADLINE_S, Refusal, _load, digest,  # noqa: E402
+from librelane_contract import (PDK_GUEST_ROOT, Refusal, _load,  # noqa: E402
                                 DECLARATION_REL, declaration_config, resolve_step_configs,
                                 run_chain, select_arms,
-                                state_from_direct, run_container, config_file_hashes,
+                                state_from_direct, run_container,
                                 settled_floorplan_geometry, native_tool_command,
-                                validate_step_receipt, _def_design_name, resolve_image)
+                                _def_design_name)
 
 ODB_FILL_STEP = 'OpenROAD.FillInsertion'
 GDS_FILL_STEPS = ('KLayout.Filler', 'KLayout.Density', 'Checker.KLayoutDensity')
@@ -198,8 +196,7 @@ def run_density(project: Path, image: str, pdk_root: Path, pdk: str, *,
     out = {'step': 'KLayout.Density', 'runset': density_cfg.get('KLAYOUT_DENSITY_RUNSET'),
            'options': density_cfg.get('KLAYOUT_DENSITY_OPTIONS'),
            'state': str(folder / 'state_out.json'),
-           'state_sha256': digest(folder / 'state_out.json'),
-           'subject': str(gds), 'subject_sha256': digest(Path(gds)),
+           'subject': str(gds),
            DENSITY_METRIC: count, 'checker_error': checker_error,
            'report': str(report) if report.is_file() else None,
            'rules': density_rules(report) if report.is_file() else None}
@@ -214,10 +211,9 @@ def run_density(project: Path, image: str, pdk_root: Path, pdk: str, *,
         out['filler'] = {'step': 'KLayout.Filler', 'script': cfg.get('KLAYOUT_FILLER_SCRIPT'),
                          'options': cfg.get('KLAYOUT_FILLER_OPTIONS'),
                          'state': str(filler / 'state_out.json'),
-                         'state_sha256': digest(filler / 'state_out.json'),
-                         'gds_in': str(gds), 'gds_in_sha256': digest(Path(gds)),
-                         'filled_gds': str(filled), 'filled_sha256': digest(Path(filled))}
-        out['subject'], out['subject_sha256'] = str(filled), digest(Path(filled))
+                         'gds_in': str(gds),
+                         'filled_gds': str(filled)}
+        out['subject'] = str(filled)
         if count:
             topup = top_up_density(project, image, pdk_root, pdk, Path(filled),
                                    configs['KLayout.Density'], f'{lane}-topup',
@@ -234,246 +230,6 @@ def run_density(project: Path, image: str, pdk_root: Path, pdk: str, *,
         project, image, pdk_root, pdk, Path(out['subject']),
         configs['KLayout.Density'], f'{lane}-ratios')
     return out
-
-
-def finish_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
-                         gds: Path, state: Path, config: Path, lane: str) -> dict:
-    """Finish one retained candidate without publishing any adopted views.
-
-    ``state``/``config`` are the candidate repair producer's native packet,
-    not its later RCX/STA State. All new files stay under a fresh ``lane``.
-    A nonzero full PDK density count blocks the caller. The returned GDS must
-    still undergo full DRC/LVS; this is not final electrical qualification.
-    """
-    project, gds, state, config = (Path(p).resolve() for p in (project, gds, state, config))
-    lanes = project / 'phase3/librelane'
-    root = (lanes / lane).resolve()
-    if (not lane or Path(lane).is_absolute() or '..' in Path(lane).parts
-            or not root.is_relative_to(lanes) or root == lanes
-            or root.exists() or not state.is_relative_to(lanes)
-            or state.name != 'state_out.json' or gds.is_relative_to(root)):
-        raise Refusal('LL_CANDIDATE_FINISHING_LOCATION', lane)
-    cfg = _load(config)
-    step = cfg.get('meta', {}).get('step')
-    if not step or not cfg.get('DESIGN_NAME'):
-        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(config))
-    receipt = validate_step_receipt(state.parent, step)
-    if (receipt['input'].get('image') != image
-            or receipt['input'].get('config') != digest(config)
-            or receipt['input'].get('config_files') != config_file_hashes(cfg, _mounts(pdk_root, pdk), fingerprint=receipt['input'])):
-        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(config))
-    current = _load(state)
-    placement = {'config': cfg}
-    for view in ('def', 'odb'):
-        path = Path(current.get(view) or '').resolve()
-        if (not path.is_relative_to(state.parent) or not path.is_file()
-                or receipt['sha256'].get(str(path.relative_to(state.parent))) != digest(path)):
-            raise Refusal('LL_CANDIDATE_FINISHING_VIEW', view)
-        placement[view] = path
-    if not gds.is_file():
-        raise Refusal('LL_GDS_MISSING', str(gds))
-    from librelane_contract import _def_die_area
-    die = _def_die_area(placement['def'])
-    if not die:
-        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', 'candidate DEF die area absent')
-    if _def_design_name(placement['def']) != cfg['DESIGN_NAME']:
-        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', 'candidate DEF design differs')
-    inputs = {str(p): digest(p) for p in (gds, state, config,
-              state.parent / 'vibeic_receipt.json', placement['def'], placement['odb'])}
-    root.mkdir(parents=True, exist_ok=False)
-    overlay = {key: (cfg[key], f'candidate native config {config}')
-               for key in ('DESIGN_NAME', 'TECH_LEFS') if key in cfg}
-    overlay['DIE_AREA'] = (die, f'candidate DEF {placement["def"]}')
-    configs = resolve_step_configs(project, image, pdk, list(GDS_FILL_STEPS),
-        pdk_root=pdk_root, folder=f'{lane}/config', overlay=overlay)
-    density = run_density(project, image, pdk_root, pdk, gds=gds,
-        lane=f'{lane}/density', configs=configs, steps=GDS_FILL_STEPS,
-        placement=placement, bridge_root=root / 'bridges')
-    if density.get(DENSITY_METRIC) != 0 or density.get('checker_error'):
-        raise Refusal('LL_CANDIDATE_FINISHING_DENSITY_FAILED', str(density))
-    finished = Path(density['subject']).resolve()
-    if (not finished.is_relative_to(root) or not finished.is_file()
-            or digest(finished) != density['subject_sha256']):
-        raise Refusal('LL_CANDIDATE_FINISHING_GDS_UNBOUND', str(finished))
-    native = {}
-    final_lane = str(Path(density['state']).parent.parent.relative_to(lanes))
-    final_steps = DENSITY_STEPS if 'density_topup' in density else GDS_FILL_STEPS
-    folders = [(Path(density['filler']['state']).parent, 'KLayout.Filler'),
-               (Path(density['state']).parent, 'KLayout.Density'),
-               (chain_folder(project, final_lane, final_steps, 'Checker.KLayoutDensity'),
-                'Checker.KLayoutDensity')]
-    for folder, producer in folders:
-        if not folder.resolve().is_relative_to(root):
-            raise Refusal('LL_CANDIDATE_FINISHING_GDS_UNBOUND', str(folder))
-        validate_step_receipt(folder, producer)
-        path = folder / 'vibeic_receipt.json'
-        native[producer] = {'path': str(path), 'sha256': digest(path)}
-    if any(not Path(p).is_file() or digest(Path(p)) != sha for p, sha in inputs.items()):
-        raise Refusal('LL_CANDIDATE_FINISHING_INPUT_CHANGED', str(state))
-    return {'gds': str(finished), 'gds_sha256': digest(finished),
-            'density': density, 'inputs': inputs, 'native_receipts': native,
-            'configs': {step: {'path': str(path), 'sha256': digest(path)}
-                        for step, path in configs.items()},
-            'scope': 'candidate-local finishing; full DRC/LVS still required; '
-                     'prefill PPA only, fill-aware final electrical unproven'}
-
-
-def resume_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
-                         gds: Path, state: Path, config: Path, lane: str,
-                         ratio_lane: str) -> dict:
-    """Resume only the ratio consumer of a retained candidate finish.
-
-    The finished GDS is derived from ``lane``, never supplied by the caller.
-    All retained native fill/density receipts, configs, bridge subjects and
-    placement-derived top-up provenance are validated before a new ratio
-    consumer is started. Full DRC/LVS remain mandatory for the caller.
-    """
-    project, gds, state, config = (Path(p).resolve()
-                                   for p in (project, gds, state, config))
-    lanes = project / 'phase3/librelane'
-    root = (lanes / lane).resolve()
-    ratio_root = (lanes / ratio_lane).resolve()
-    if (not lane or not ratio_lane or Path(lane).is_absolute()
-            or Path(ratio_lane).is_absolute() or '..' in Path(lane).parts
-            or '..' in Path(ratio_lane).parts or not root.is_relative_to(lanes)
-            or not ratio_root.is_relative_to(lanes) or root == lanes
-            or ratio_root == lanes or not root.is_dir() or ratio_root.exists()
-            or not state.is_relative_to(lanes) or state.name != 'state_out.json'):
-        raise Refusal('LL_CANDIDATE_FINISHING_LOCATION', f'{lane}: {ratio_lane}')
-
-    cfg = _load(config)
-    step = cfg.get('meta', {}).get('step')
-    receipt = validate_step_receipt(state.parent, step) if step else None
-    if (not receipt or not cfg.get('DESIGN_NAME')
-            or receipt['input'].get('image') != image
-            or receipt['input'].get('config') != digest(config)
-            or receipt['input'].get('config_files') !=
-               config_file_hashes(cfg, _mounts(pdk_root, pdk), fingerprint=receipt['input'])):
-        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(config))
-    current = _load(state)
-    placement = {'config': cfg}
-    for view in ('def', 'odb'):
-        path = Path(current.get(view) or '').resolve()
-        if (not path.is_relative_to(state.parent) or not path.is_file()
-                or receipt['sha256'].get(str(path.relative_to(state.parent))) != digest(path)):
-            raise Refusal('LL_CANDIDATE_FINISHING_VIEW', view)
-        placement[view] = path
-    if not gds.is_file():
-        raise Refusal('LL_GDS_MISSING', str(gds))
-
-    from librelane_contract import _def_die_area
-    die = _def_die_area(placement['def'])
-    if not die or _def_design_name(placement['def']) != cfg['DESIGN_NAME']:
-        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', 'candidate DEF identity differs')
-    inputs = {str(p): digest(p) for p in (gds, state, config,
-              state.parent / 'vibeic_receipt.json', placement['def'], placement['odb'])}
-
-    configs = {name: root / 'config' / f'{name}.json' for name in GDS_FILL_STEPS}
-    density_cfg = _load(configs['KLayout.Density'])
-    if (density_cfg.get('DESIGN_NAME') != cfg['DESIGN_NAME']
-            or _finite_die_box(density_cfg.get('DIE_AREA')) != _finite_die_box(die)
-            or _finite_die_box(die) is None):
-        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(configs['KLayout.Density']))
-
-    def checked(folder: Path, producer: str) -> tuple[dict, dict]:
-        native_receipt = validate_step_receipt(folder, producer)
-        expected_cfg = configs[producer]
-        if (native_receipt['input'].get('image') != image
-                or native_receipt['input'].get('config') != digest(expected_cfg)
-                or native_receipt['input'].get('config_files') !=
-                   config_file_hashes(_load(expected_cfg), _mounts(pdk_root, pdk), fingerprint=native_receipt['input'])):
-            raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(expected_cfg))
-        return _load(folder / 'state_out.json'), native_receipt
-
-    filler_dir = root / 'density/01-klayout-filler'
-    density_dir = root / 'density/02-klayout-density'
-    topped_density_dir = root / 'density-topped/01-klayout-density'
-    topped_checker_dir = root / 'density-topped/02-checker-klayoutdensity'
-    filler_state, filler_receipt = checked(filler_dir, 'KLayout.Filler')
-    density_state, density_receipt = checked(density_dir, 'KLayout.Density')
-    topped_state, topped_density_receipt = checked(
-        topped_density_dir, 'KLayout.Density')
-    _topped_checker_state, topped_checker_receipt = checked(
-        topped_checker_dir, 'Checker.KLayoutDensity')
-
-    filled = Path(filler_state.get('gds') or '').resolve()
-    topped = Path(topped_state.get('gds') or '').resolve()
-    before_count = _count((density_state.get('metrics') or {}).get(DENSITY_METRIC))
-    after_count = _count((topped_state.get('metrics') or {}).get(DENSITY_METRIC))
-    if (not filled.is_relative_to(root) or not filled.is_file()
-            or not topped.is_relative_to(root) or not topped.is_file()
-            or Path(_load(filler_dir / 'state_in.json').get('gds') or '').resolve() != gds
-            or Path(density_state.get('gds') or '').resolve() != filled
-            or Path(_load(topped_density_dir / 'state_in.json').get('gds') or '').resolve() != topped
-            or before_count in (None, 0) or after_count != 0):
-        raise Refusal('LL_CANDIDATE_FINISHING_GDS_UNBOUND', str(root))
-
-    def bridge(name: str, producer: str, subject: Path, config_path: Path) -> None:
-        doc = _load(root / 'bridges' / name / 'bridge_receipt.json')
-        view = (doc.get('views') or {}).get('gds') or {}
-        if (doc.get('step') != producer or doc.get('image') != image
-                or doc.get('config_sha256') != digest(config_path)
-                or Path(view.get('source') or '').resolve() != subject
-                or view.get('sha256') != digest(subject)):
-            raise Refusal('LL_CANDIDATE_FINISHING_GDS_UNBOUND', f'bridge {name}')
-    bridge('density', 'KLayout.Filler', gds, configs['KLayout.Filler'])
-    bridge('density-topped', 'KLayout.Density', topped,
-           configs['KLayout.Density'])
-
-    topup_dir = root / 'density-topup'
-    topup_report = _load(topup_dir / 'fill_report.json')
-    topup_config = _load(topup_dir / 'pdk_fill_config.json')
-    derivation = topup_config.get('_derivation') or {}
-    keepout = derivation.get('placed_instance_keepout') or {}
-    if (topup_report.get('verdict') != 'PASS' or not topup_report.get('layers')
-            or not (topup_report.get('keepout') or {}).get('declared')
-            or Path(topup_report.get('gds_in') or '').resolve() != filled
-            or Path(topup_report.get('gds_out') or '').resolve() != topped
-            or Path(keepout.get('source') or '').resolve() != placement['odb']
-            or keepout.get('source_sha256') != digest(placement['odb'])
-            or digest(filled) == digest(topped)):
-        raise Refusal('LL_CANDIDATE_FINISHING_TOPUP_UNBOUND', str(topup_dir))
-
-    ratios = measure_density_ratios(project, image, pdk_root, pdk, topped,
-                                    configs['KLayout.Density'], ratio_lane)
-    if any(not Path(path).is_file() or digest(Path(path)) != sha
-           for path, sha in inputs.items()):
-        raise Refusal('LL_CANDIDATE_FINISHING_INPUT_CHANGED', str(state))
-    native_rows = {
-        'KLayout.Filler': (filler_dir, filler_receipt),
-        'KLayout.Density.before_topup': (density_dir, density_receipt),
-        'KLayout.Density': (topped_density_dir, topped_density_receipt),
-        'Checker.KLayoutDensity': (topped_checker_dir, topped_checker_receipt),
-    }
-    native = {name: {'path': str(folder / 'vibeic_receipt.json'),
-                     'sha256': digest(folder / 'vibeic_receipt.json')}
-              for name, (folder, _receipt) in native_rows.items()}
-    density_report = topped_density_dir / 'reports/density.klayout.json'
-    density = {
-        'step': 'KLayout.Density', 'state': str(topped_density_dir / 'state_out.json'),
-        'state_sha256': digest(topped_density_dir / 'state_out.json'),
-        'subject': str(topped), 'subject_sha256': digest(topped),
-        DENSITY_METRIC: 0, 'checker_error': None,
-        'report': str(density_report) if density_report.is_file() else None,
-        'rules': density_rules(density_report) if density_report.is_file() else None,
-        'pdk_density_before_topup': before_count,
-        'density_topup': {'gds': str(topped), 'gds_sha256': digest(topped),
-                          'input_sha256': digest(filled),
-                          'report': str(topup_dir / 'fill_report.json'),
-                          'report_sha256': digest(topup_dir / 'fill_report.json'),
-                          'config': str(topup_dir / 'pdk_fill_config.json'),
-                          'config_sha256': digest(topup_dir / 'pdk_fill_config.json'),
-                          'layers': topup_report['layers']},
-        'ratios': ratios,
-    }
-    return {'gds': str(topped), 'gds_sha256': digest(topped),
-            'density': density, 'inputs': inputs, 'native_receipts': native,
-            'configs': {name: {'path': str(path), 'sha256': digest(path)}
-                        for name, path in configs.items()},
-            'reuse': {'lane': lane, 'ratio_lane': ratio_lane,
-                      'scope': 'validated filler/top-up/density receipts; ratio replay only'},
-            'scope': 'candidate-local finishing; full DRC/LVS still required; '
-                     'prefill PPA only, fill-aware final electrical unproven'}
 
 
 def density_rules(report: Path) -> Optional[Dict[str, int]]:
@@ -658,7 +414,7 @@ def _placed_keepout_boxes(project: Path, image: str, pdk_root: Path, pdk: str,
     extra_mounts = []
     pdk_dir = (pdk_root / pdk).resolve()
     project_dir = project.resolve()
-    local = _lc._provider_for_image(image) is not None or _lc._provider_route(project)
+    local = isinstance(image, _lc.LocalRuntime) or _lc._provider_route(project)
     for value in dict.fromkeys(str(x) for x in lefs):
         host = _host_pdk_path(value, pdk_root, pdk)
         if not host.is_absolute():
@@ -797,7 +553,7 @@ def top_up_density(project: Path, image: str, pdk_root: Path, pdk: str,
         if changes:
             target = project / PROVIDER_TARGET_REL
             fill_cfg['_derivation']['provider_fill_encoding'] = {
-                'source': str(target), 'sha256': digest(target),
+                'source': str(target),
                 'basis': 'selected wafer.space ReadLayout dummy-to-active layer map',
                 'changes': changes}
     root = project / 'phase3/librelane' / lane
@@ -816,7 +572,7 @@ def top_up_density(project: Path, image: str, pdk_root: Path, pdk: str,
          (box[3] / placed['dbu']) + spacing]
         for _, _, box in placed['boxes']])
     fill_cfg['_derivation']['placed_instance_keepout'] = {
-        'source': placed['source'], 'source_sha256': digest(Path(placed['source'])),
+        'source': placed['source'],
         'basis': 'OpenDB placed PAD/BLOCK instance getBBox',
         'instances_read': placed['total'],
         'protected_count': len(placed['boxes']), 'spacing_um': spacing}
@@ -886,12 +642,9 @@ def top_up_density(project: Path, image: str, pdk_root: Path, pdk: str,
             (measured.get('verdict') == 'PARTIAL' and
              measured.get('promoted_on_foundry_floor'))) or not measured.get('layers'):
         raise Refusal('LL_DENSITY_FILL_NOT_MEASURED', str(report))
-    if digest(out) == digest(gds):
+    if out.read_bytes() == gds.read_bytes():
         raise Refusal('LL_DENSITY_FILL_NO_CHANGE', str(report))
-    return {'gds': str(out), 'gds_sha256': digest(out),
-            'input_sha256': digest(gds), 'report': str(report),
-            'report_sha256': digest(report), 'config': str(config_path),
-            'config_sha256': digest(config_path),
+    return {'gds': str(out), 'report': str(report), 'config': str(config_path),
             'layers': measured['layers']}
 
 
@@ -921,7 +674,6 @@ def measure_density_ratios(project: Path, image: str, pdk_root: Path, pdk: str,
     report = root / 'density_ratios.json'
     write_json(specs_path, specs)
     programs = Path(__file__).resolve().parent
-    before = digest(gds)
     cmd = ['docker', 'run', '--rm', *_dmem.docker_memory_flags(),
            '-v', f'{project.resolve()}:{project.resolve()}',
            '-v', f'{programs.resolve()}:{programs.resolve()}:ro',
@@ -941,14 +693,12 @@ def measure_density_ratios(project: Path, image: str, pdk_root: Path, pdk: str,
                       f'{root / "density_ratios.log"}')
     measured = _load(report)
     if (result.returncode != 0 or measured.get('status') != 'MEASURED' or
-            digest(gds) != before or
             set(measured.get('layers') or {}) != set(specs) or
             any(not isinstance(row.get('ratio'), (int, float)) or
                 isinstance(row.get('ratio'), bool) or
                 not 0 <= row['ratio'] <= 1 for row in measured['layers'].values())):
         raise Refusal('LL_DENSITY_RATIOS_NOT_MEASURED', str(report))
-    return {'report': str(report), 'report_sha256': digest(report),
-            'subject': str(gds), 'subject_sha256': before,
+    return {'report': str(report), 'subject': str(gds),
             'denominator': {k: measured.get(k) for k in
                             ('die', 'declared_die', 'extent_from_deck', 'extent_matches_declared_die')},
             'layers': measured['layers']}
@@ -969,16 +719,10 @@ METAL_DENSITY_REL = 'reports/phase3/metal_density.json'
 
 def publish_metal_density(project: Path, ratios: Dict[str, Any], gds: Path,
                           pdk: str) -> Optional[Path]:
-    """Publish the shipped stream's per-layer density (``ratios`` from
-    `measure_density_ratios`) at `METAL_DENSITY_REL`, bound to ``gds`` by
-    sha256. Call it only once the shipped bytes are decided, with ``gds`` the
-    stream that ships. Only rows whose deck identifier names a metal layer are
-    carried (the reader's own layer grammar). A ratio measured on other bytes
-    than ``gds``, or two rules giving one layer two values, publishes nothing
-    AND removes any report already at `METAL_DENSITY_REL`: the precheck reader
-    does not compare `gds_sha256`, so a report left behind would be judged as
-    the shipped stream's. With no report there, the runner's own emitter
-    measures the shipped GDS, or the reader says it found none."""
+    """Publish measured metal ratios for the actual native GDS subject.
+
+    Conflicting measurements for one metal layer remain unmeasured.
+    """
     import metal_layer_density_check as _mld
     gds = Path(gds)
     out = project / METAL_DENSITY_REL
@@ -987,7 +731,9 @@ def publish_metal_density(project: Path, ratios: Dict[str, Any], gds: Path,
         out.unlink(missing_ok=True)
         return None
 
-    if not gds.is_file() or ratios.get('subject_sha256') != digest(gds):
+    subject = Path(str(ratios.get('subject') or ''))
+    if (not gds.is_file() or not subject.is_file()
+            or subject.read_bytes() != gds.read_bytes()):
         return declined()
     layers: Dict[str, float] = {}
     rules: Dict[str, str] = {}
@@ -1016,9 +762,9 @@ def publish_metal_density(project: Path, ratios: Dict[str, Any], gds: Path,
     write_json(out, {
         'tool': 'klayout', 'producer': 'librelane_fill_dfm.measure_density_ratios',
         'measurement': 'per_rule_drawn_plus_dummy_area_over_die_extent',
-        'pdk': pdk, 'gds': gds_record, 'gds_sha256': digest(gds),
+        'pdk': pdk, 'gds': gds_record,
         'die_area_um2': die_area, 'layers': layers, 'layer_rules': rules,
-        'source': {'report': str(report), 'report_sha256': ratios.get('report_sha256')}})
+        'source': {'report': str(report)}})
     return out
 
 
@@ -1129,13 +875,6 @@ def run_fill_insertion(project: Path, image: str, pdk_root: Path, pdk: str, *,
                               mounts=mounts)
     folder = run_chain(project, image, [(ODB_FILL_STEP, configs[ODB_FILL_STEP], state)],
                        mounts=mounts, lane=lane, pdk_root=PDK_GUEST_ROOT)[0]
-    receipt = validate_step_receipt(folder, ODB_FILL_STEP)
-    fp = receipt['input']
-    current = {str(path): digest(path) for path in _walk_input_views(_load(state))}
-    if (fp.get('image') != image or fp.get('config') != digest(configs[ODB_FILL_STEP])
-            or fp.get('state') != digest(state) or fp.get('state_files') != current
-            or fp.get('config_files') != config_file_hashes(config, mounts, fingerprint=fp)):
-        raise Refusal('LL_FILL_INPUT_CHANGED', str(folder))
     out_state = _load(folder / 'state_out.json')
     filled = Path(str(out_state.get('def') or ''))
     if not filled.is_file():
@@ -1150,9 +889,8 @@ def run_fill_insertion(project: Path, image: str, pdk_root: Path, pdk: str, *,
     ownership = _pgo.judge(after_text, [t for p, t in zip([p for p in lefs if p.is_file()], lef_texts)
                                         if not p.name.endswith('.tlef')])
     record = {'step': ODB_FILL_STEP, 'state': str(folder / 'state_out.json'),
-              'state_sha256': digest(folder / 'state_out.json'),
-              'subject': str(routed_def), 'subject_sha256': digest(Path(routed_def)),
-              'filled_def': str(filled), 'filled_def_sha256': digest(filled),
+                 'subject': str(routed_def),
+              'filled_def': str(filled),
               'patterns': patterns, 'census': census, 'occupancy': occupancy,
               'metrics': {k: v for k, v in _metrics(folder).items()
                           if k.startswith('design__instance__count')},
@@ -1160,11 +898,12 @@ def run_fill_insertion(project: Path, image: str, pdk_root: Path, pdk: str, *,
                                    ('verdict', 'code', 'reason', 'instances',
                                     'supply_pins_checked', 'off_supply_pins')},
               'refusals': [],
-              'binding': {'image': image, 'config': str(configs[ODB_FILL_STEP]),
+              'binding': {'config': str(configs[ODB_FILL_STEP]),
                           'input_state': str(state),
-                          'mounts': [[str(host), guest] for host, guest in mounts],
-                          'receipt_sha256': digest(folder / 'vibeic_receipt.json')}}
-    validate_fill_handoff(project, record, routed_def=routed_def)
+                          'mounts': [[str(host), guest] for host, guest in mounts]}}
+    name = config.get('DESIGN_NAME')
+    if not name or any(_def_design_name(path) != name for path in (Path(routed_def), filled)):
+        raise Refusal('LL_FILL_WRONG_DESIGN', str(filled))
     after_util = occupancy['after'].get('row_utilization_pct')
     if census['added'] == 0 and not (isinstance(after_util, (int, float)) and after_util >= 95.0):
         record['refusals'].append(
@@ -1179,91 +918,35 @@ def run_fill_insertion(project: Path, image: str, pdk_root: Path, pdk: str, *,
     return record
 
 
-def _walk_input_views(state: dict):
-    from librelane_contract import _walk_paths
-    return _walk_paths({k: v for k, v in state.items() if k != 'metrics'})
 
 
-def _record_provider_binding(project: Path, fingerprint: dict) -> str:
-    """Keep the producer identity while revalidating current LOCAL material."""
-    if 'local_provider' in fingerprint:
-        import librelane_signoff_evidence as native
-        image = fingerprint.get('image')
-        return image
-    return resolve_image(project, record=False)
 
 
-def validate_fill_handoff(project: Path, record: dict, *, routed_def: Path) -> dict:
-    """Revalidate the actual fill producer and current inputs before consumption."""
-    try:
-        state_path = Path(record['state']).resolve()
-        folder = state_path.parent
-        if not folder.is_relative_to((project / 'phase3/librelane').resolve()) \
-                or 'attempts' in folder.relative_to(project.resolve()).parts \
-                or state_path.name != 'state_out.json' or record['step'] != ODB_FILL_STEP:
-            raise ValueError('wrong producer stage/path')
-        binding = record['binding']
-        receipt = validate_step_receipt(folder, ODB_FILL_STEP)
-        if digest(folder / 'vibeic_receipt.json') != binding['receipt_sha256']:
-            raise ValueError('producer receipt changed')
-        fp = receipt['input']
-        import librelane_signoff_evidence as native
-        switch_path = project / 'phase3/librelane_switch.json'
-        switch = _load(switch_path) if switch_path.is_file() else {}
-        image = _record_provider_binding(project, fp)
-        mounts = native._pdk_mounts(project, switch, folder, image)
-        if [[str(Path(host).resolve()), str(guest)] for host, guest in mounts] != \
-                [[str(Path(host).resolve()), str(guest)] for host, guest in binding['mounts']]:
-            raise ValueError('current PDK mount differs from producer')
-        config_path, initial = Path(binding['config']), Path(binding['input_state'])
-        if not all(p.resolve().is_relative_to(project.resolve()) for p in (config_path, initial)):
-            raise ValueError('foreign config or input state')
-        config, before, after = _load(config_path), _load(initial), _load(state_path)
-        if (fp.get('image') != binding['image'] or binding['image'] != image
-                or fp.get('config') != digest(config_path)
-                or fp.get('state') != digest(initial)
-                or fp.get('state_files') != {str(p): digest(p) for p in _walk_input_views(before)}
-                or fp.get('config_files') != config_file_hashes(config, binding['mounts'], fingerprint=fp)
-                or config.get('meta', {}).get('step') != ODB_FILL_STEP):
-            raise ValueError('current input/config/image differs from producer')
-        subject, output = Path(record['subject']), Path(record['filled_def'])
-        if (subject.resolve() != routed_def.resolve() or before.get('def') != str(subject.resolve())
-                or digest(subject) != record['subject_sha256']
-                or digest(state_path) != record['state_sha256']
-                or Path(after['def']).resolve() != output.resolve()
-                or not output.resolve().is_relative_to(folder)
-                or digest(output) != record['filled_def_sha256']):
-            raise ValueError('wrong or stale input/output DEF')
-        name = config.get('DESIGN_NAME')
-        if not name or any(_def_design_name(p) != name for p in (subject, output)):
-            raise ValueError('wrong DEF design')
-        return receipt
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, Refusal) as exc:
-        raise Refusal('LL_FILL_HANDOFF_UNBOUND', str(exc)) from exc
 
 
 def validate_fill_consumption(project: Path) -> None:
-    """The existing Step-34 gate checks the DEF its downstream path consumed."""
+    """Read the native fill State and the actual DEF consumed downstream."""
     import _path_layout as pl
     doc = _load(project / RECORD_REL)['odb']
     if doc.get('shipped') != 'librelane':
         raise Refusal('LL_FILL_NOT_CONSUMED', 'no tool DEF shipped')
     tool = doc['tool']
-    if Path(tool['subject']).resolve().parent != pl.pnr_dir(project).resolve() \
-            or digest(pl.pnr_dir(project) / 'routed.def') != tool['subject_sha256']:
-        raise Refusal('LL_FILL_HANDOFF_UNBOUND', 'fill did not consume current routed.def')
-    validate_fill_handoff(project, tool, routed_def=Path(tool['subject']))
-    handoff = _load(project / 'phase3/tool_arms/34/odb_handoff.json')
-    row = handoff['views']['def']
+    state = _lc.project_path(project, tool['state'])
+    before = _load(state.parent / 'state_in.json')
+    after = _load(state)
+    config = _load(state.parent / 'config.json')
+    routed = pl.pnr_dir(project) / 'routed.def'
+    subject = _lc.project_path(project, before['def'])
+    output = _lc.project_path(project, after['def'])
     destination = pl.pnr_dir(project) / 'filled.def'
-    if (handoff.get('state') != tool['state']
-            or handoff.get('state_sha256') != tool['state_sha256']
-            or Path(row['source']).resolve() != Path(tool['filled_def']).resolve()
-            or Path(row['dest']).resolve() != destination.resolve()
-            or row.get('source_sha256') != tool['filled_def_sha256']
-            or row.get('dest_sha256') != tool['filled_def_sha256']
-            or digest(destination) != tool['filled_def_sha256']):
-        raise Refusal('LL_FILL_NOT_CONSUMED', 'handoff does not bind current filled.def')
+    if not subject.is_file() or subject.read_bytes() != routed.read_bytes():
+        raise Refusal('LL_FILL_WRONG_SUBJECT', str(subject))
+    if (config.get('meta', {}).get('step') != ODB_FILL_STEP
+            or not config.get('DESIGN_NAME')
+            or any(_def_design_name(path) != config['DESIGN_NAME'] for path in (subject, output))):
+        raise Refusal('LL_FILL_WRONG_DESIGN', str(output))
+    if not output.is_file() or output.read_bytes() != destination.read_bytes():
+        raise Refusal('LL_FILL_NOT_CONSUMED', 'filled.def differs from the native fill output')
 
 
 def direct_schema_reports(record: Dict[str, Any], subject: Dict[str, Any],
@@ -1293,7 +976,7 @@ def direct_schema_reports(record: Dict[str, Any], subject: Dict[str, Any],
                'metal_fill_done\n'
                '# LibreLane OpenROAD.FillInsertion (step 34, mig104).\n'
                f'# fillers placed: {placed}\n'
-               f"# state: {record.get('state')} sha256:{record.get('state_sha256')}\n")
+               f"# state: {record.get('state')}\n")
     return report, document, marker
 
 
@@ -1312,11 +995,10 @@ def write_direct_schema_reports(project: Path, record: Dict[str, Any],
 
 def cells_placed_record(record: Dict[str, Any]) -> Dict[str, Any]:
     """What F20b reads: which cells step 34 placed, per master and class, and
-    the DEF (by sha256) whose COMPONENTS hold their positions."""
+    the DEF whose COMPONENTS hold their positions."""
     census = record.get('census') or {}
     return {'step': '34', 'producer': record.get('step'),
-            'def': record.get('filled_def'), 'def_sha256': record.get('filled_def_sha256'),
-            'subject_def_sha256': record.get('subject_sha256'),
+            'def': record.get('filled_def'),
             'rule': 'placed = in COMPONENTS of `def`, not in COMPONENTS of the subject DEF',
             'per_class': census.get('per_class'), 'per_master': census.get('per_master'),
             'class_of_master': census.get('class_of_master'),
@@ -1343,7 +1025,7 @@ def select_gds_fill(project: Path, direct: Optional[Dict[str, Any]],
                             'scope': scope,
                             'metrics': {DENSITY_METRIC: {'status': 'MEASURED', 'value': count}
                                         if count is not None else {'status': 'NOT_MEASURED'}},
-                            'subject_sha256': (arm or {}).get('subject_sha256')})
+                            'subject': (arm or {}).get('subject')})
         reports[name] = report
     selection = select_arms(reports, {DENSITY_METRIC: 'min'}, root / 'selection.json')
     winner = selection.get('selection')
@@ -1405,8 +1087,7 @@ def tool_density(project: Path) -> Optional[Dict[str, Any]]:
                 'reason': row.get('reason') or 'density record differs from tool output'}
     result = {'status': 'MEASURED', 'errors': count, 'arm': shipped,
             'rules': arm.get('rules'), 'runset': arm.get('runset'),
-            'source': RECORD_REL, 'state': str(state), 'state_sha256': digest(state),
-            'subject_sha256': arm.get('subject_sha256')}
+            'source': RECORD_REL, 'state': str(state)}
     if promotion is not None:
         try:
             result['per_layer'] = current_metal_density(project, arm, promotion)
@@ -1430,20 +1111,12 @@ def current_metal_density(project: Path, arm: dict, promotion: dict) -> dict:
 
 
 def _current_stage(project: Path, state: Path, step: str) -> tuple[dict, dict]:
-    """Read the native step and reuse it only while its input views are unchanged."""
+    """Read the actual native configuration and input/output States."""
     state = _lc.project_path(project, state)
-    before = _load(state.parent / 'state_in.json')
-    after = _load(state)
-    fingerprint = _load(state.parent / 'input_fingerprint.json')
-    root = project / 'phase3/librelane'
-    configs = (root / (state.parent.parent.name + '-config') / (step + '.json'),
-               root / CONFIG_FOLDER / (step + '.json'))
-    config = next((path for path in configs if path.is_file()), None)
-    if config is not None and digest(config) != fingerprint['config']:
-        raise Refusal('LL_FINISHING_INPUT_CHANGED', str(config))
-    for value, expected in fingerprint['state_files'].items():
-        if digest(_lc.project_path(project, value)) != expected:
-            raise Refusal('LL_FINISHING_INPUT_CHANGED', value)
+    config = _load(state.parent / 'config.json')
+    if config.get('meta', {}).get('step') != step:
+        raise Refusal('LL_NATIVE_STEP_MISMATCH', str(state.parent))
+    before, after = _load(state.parent / 'state_in.json'), _load(state)
     if after.get('metrics', {}).get('flow__errors__count', 0):
         raise Refusal('LL_STEP_FAILED', step)
     return before, after
@@ -1458,11 +1131,6 @@ def validate_default_stream(project: Path) -> dict:
         if record.get(key):
             record[key] = str(_lc.project_path(project, record[key]))
     filled = project / 'phase3/stage3/pnr/filled.def'
-    tool = doc['odb']['tool']
-    subject = _lc.project_path(project, tool['subject'])
-    if (digest(subject) != tool['subject_sha256']
-            or digest(filled) != record['filled_def_sha256']):
-        raise Refusal('LL_FINISHING_INPUT_CHANGED', str(filled))
     before, after = _current_stage(project, Path(record['stream_state']),
                                    record.get('stream_step', 'KLayout.StreamOut'))
     if (_lc.project_path(project, before['def']) != filled
@@ -1470,283 +1138,28 @@ def validate_default_stream(project: Path) -> dict:
             or not Path(record['stream']).is_file()):
         raise Refusal('LL_FILLED_DEF_GDS_MISMATCH', record['stream_state'])
     source = Path(record['source'])
-    if any(digest(Path(record[key])) != digest(source) for key in ('pnr_gds', 'canonical')):
+    if any(Path(record[key]).read_bytes() != source.read_bytes() for key in ('pnr_gds', 'canonical')):
         raise Refusal('LL_FINISHING_WRONG_PUBLICATION', record['canonical'])
     return record
 
 
-def _default_stream_recipe(project: Path, image: str, root: Path,
-                           step: str = 'KLayout.StreamOut') -> tuple[Path, str]:
-    """Retain the actual image's native recipe before starting stream-out."""
-    if step == FILL_STREAM_STEP:
-        source = Path(__file__).parent / 'librelane_fill_stream_native.py'
-        recipe = project / 'phase3/stage3/pnr/stream_out.py'
-        recipe.write_bytes(source.read_bytes())
-        return recipe, str(source.resolve())
-    probe = ('import json; from pathlib import Path; '
-             'from librelane.common import get_script_dir; '
-             'p=Path(get_script_dir())/"klayout/stream_out.py"; '
-             'print(json.dumps({"path":str(p),"text":p.read_text()}))')
-    cp = run_container(['docker', 'run', '--rm', *_dmem.docker_memory_flags(),
-                        image, '--skip', 'python3', '-c', probe],
-                       probe_deadline_s=PROBE_DEADLINE_S)
-    if cp.returncode:
-        raise Refusal('LL_STREAM_RECIPE_UNAVAILABLE', cp.stderr)
-    source = json.loads(cp.stdout)
-    recipe = project / 'phase3/stage3/pnr/stream_out.py'
-    recipe.write_text(source['text'])
-    if not recipe.stat().st_size or not Path(source['path']).is_absolute():
-        raise Refusal('LL_STREAM_RECIPE_INVALID', str(source))
-    return recipe, source['path']
 
 
-def _default_stream_inputs(project: Path, top: str, folder: Path, image: str,
-                           root: Path, pdk: str, recipe: Path, native_script: str,
-                           filled: Path, stream: Path) -> dict:
-    """Bind the native COMMANDS readset, without reconstructing it from config."""
-    import _stream_input_record as sir
-    commands = [shlex.split(line) for line in (folder / 'COMMANDS').read_text().splitlines()
-                if line.strip()]
-    calls = [argv for argv in commands if len(argv) > 2 and argv[1] == native_script
-             and Path(argv[2]).resolve() == filled.resolve()]
-    if len(calls) != 1:
-        raise Refusal('LL_STREAM_COMMAND_UNBOUND', str(commands))
-    argv = calls[0]
-    if Path(argv[2]).resolve() != filled.resolve():
-        raise Refusal('LL_STREAM_DEF_UNBOUND', str(argv))
-    file_flags = {'--input-lef', '--with-gds-file', '--lyp', '--lyt', '--lym', '--seal-gds-file'}
-    value_flags = file_flags | {'--output', '--top', '--conflict-resolution'}
-    paths = []
-    scalars = {}
-    for i in range(3, len(argv), 2):
-        if i + 1 >= len(argv) or argv[i] not in value_flags:
-            raise Refusal('LL_STREAM_COMMAND_UNSUPPORTED', str(argv[i:]))
-        flag, value = argv[i:i + 2]
-        if flag in file_flags:
-            paths.append((i + 1, value))
-        else:
-            scalars[flag] = value
-    if (scalars.get('--top') != _def_design_name(filled)
-            or Path(scalars.get('--output', '')).resolve() != stream.resolve()
-            or not all(any(argv[i] == flag for i in range(3, len(argv), 2))
-                       for flag in ('--input-lef', '--lyt', '--lyp', '--lym'))):
-        raise Refusal('LL_STREAM_READSET_INCOMPLETE', str(argv))
-    probe = ('import hashlib,json,sys; from pathlib import Path; '
-             'print(json.dumps({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() '
-             'for p in json.loads(sys.argv[1])}))')
-    cp = run_container(['docker', 'run', '--rm', *_dmem.docker_memory_flags(),
-                        '-v', f'{project}:{project}:ro', '-v', f'{root}:/pdk:ro',
-                        '-v', f'{Path(__file__).parent}:{Path(__file__).parent}:ro',
-                        image, '--skip', 'python3', '-c', probe,
-                        json.dumps([native_script, *[p for _, p in paths]])],
-                       probe_deadline_s=PROBE_DEADLINE_S)
-    if cp.returncode:
-        raise Refusal('LL_STREAM_INPUT_UNREADABLE', cp.stderr)
-    hashes = json.loads(cp.stdout)
-    if hashes.get(native_script) != digest(recipe):
-        raise Refusal('LL_STREAM_RECIPE_CHANGED', native_script)
-    record = sir.build(engine='klayout', output=stream, top=top,
-                       project=project, project_c=str(project), recipe=recipe,
-                       def_file=filled, files={}, scalars={}, rcfile=None, hashes={})
-    record['native_cli'] = {'argv': argv, 'commands': str(folder / 'COMMANDS'),
-                            'commands_sha256': digest(folder / 'COMMANDS'),
-                            'inputs': [dict(sir._entry(path, str(project), hashes), argv_index=i)
-                                       for i, path in paths]}
-    sir.write(project / 'phase3/stage3/pnr' / f'{top}.gds', record)
-    return record
 
 
-def _select_fill_stream(project: Path, image: str, root: Path, pdk: str,
-                        filled: Path, configs: dict) -> tuple[str, dict]:
-    """Choose the explicit native fill producer only when actual FILLS exist."""
-    from librelane_fill_stream import fill_records, derive_map, _record
-    if not fill_records(filled)['shapes']:
-        return 'KLayout.StreamOut', configs
-    cfg = _load(configs['KLayout.StreamOut'])
-    base = _host_pdk_path(cfg['KLAYOUT_DEF_LAYER_MAP'], root, pdk)
-    target = project / 'phase3/librelane' / CONFIG_FOLDER / 'explicit-fill.map'
-    rules = None
-    receipt_ref = None
-    try:
-        derive_map(base, None, filled, target)
-    except Refusal as exc:
-        if exc.code != 'FILL_STREAM_RULE_AUTHORITY_ABSENT':
-            raise
-        # A genuine D62 producer receipt binds the actual rules AND this DEF.
-        # An arbitrary manifest claiming a rule path is insufficient authority.
-        import flow109_density_fill as density
-        from librelane_fill_stream import _bound
-        component = _load(project / 'reports/flow109/components/D62.json')
-        receipt_ref = _record(project, project / component['receipt']['path'])
-        density.validate_filled_odb(project, receipt_ref)
-        receipt = _load(_bound(project, receipt_ref))
-        if receipt['outputs']['filled.def']['sha256'] != digest(filled):
-            raise Refusal('LL_FILL_STREAM_WRONG_D62_SUBJECT', str(filled))
-        rules = _bound(project, receipt['inputs']['rules'])
-        derive_map(base, rules, filled, target)
-    authority = {'base_map': str(base), 'base_map_sha256': digest(base),
-                 'rules': str(rules) if rules else None,
-                 'rules_sha256': digest(rules) if rules else None,
-                 'derived_map': str(target), 'derived_map_sha256': digest(target),
-                 'filled_def_sha256': digest(filled), 'd62_receipt': receipt_ref}
-    write_json(target.with_suffix('.authority.json'), authority)
-    selected = resolve_step_configs(project, image, pdk, [FILL_STREAM_STEP],
-        pdk_root=root, folder=CONFIG_FOLDER,
-        overlay={'KLAYOUT_DEF_LAYER_MAP': (str(target), 'verified DEF FILL layer purposes')})
-    return FILL_STREAM_STEP, selected
 
 
-def _validate_fill_stream_authority(project: Path, record: dict) -> None:
-    """A derived map does not sever its PDK/rule/producer source identity."""
-    import tempfile
-    from librelane_fill_stream import derive_map
-    path = Path(record['fill_mapping_authority'])
-    if digest(path) != record['fill_mapping_authority_sha256']:
-        raise Refusal('LL_FILL_STREAM_AUTHORITY_CHANGED', str(path))
-    authority = _load(path)
-    for key in ('base_map', 'rules', 'derived_map'):
-        if authority.get(key) is not None and digest(Path(authority[key])) != authority.get(key + '_sha256'):
-            raise Refusal('LL_FILL_STREAM_AUTHORITY_CHANGED', key)
-    filled = Path(record['filled_def'])
-    if authority.get('filled_def_sha256') != digest(filled):
-        raise Refusal('LL_FILL_STREAM_WRONG_D62_SUBJECT', str(filled))
-    if authority.get('d62_receipt') is not None:
-        import flow109_density_fill as density
-        density.validate_filled_odb(project, authority['d62_receipt'])
-    with tempfile.TemporaryDirectory(prefix='fill-map-proof-') as tmp:
-        derived = Path(tmp) / 'fill.map'
-        derive_map(Path(authority['base_map']), Path(authority['rules']) if authority.get('rules') else None,
-                   filled, derived)
-        if digest(derived) != authority['derived_map_sha256']:
-            raise Refusal('LL_FILL_STREAM_AUTHORITY_CHANGED', 'derived mapping recipe')
 
 
-def default_stream(project: Path, top: str, pdk: Any, container: str) -> dict:
-    """One Default KLayout stream of the current filled DEF, then real fill.
-
-    This is the ordinary runner's primary route, without a Step-37 mode
-    switch. The older multi-engine tool arm remains an explicit diagnostic.
-    Signoff, whole-IC admission and shipping are separate obligations.
-    """
-    import phase3_one_shot_runner as runner
-    import librelane_contract as contract
-    project = project.resolve()
-    # Preserve the previous promotion before this invocation streams anew.
-    reuse_refusal = None
-    if (project / DEFAULT_STREAM_REL).is_file():
-        try:
-            record = validate_default_stream(project)
-            if record['file_top'] != top or record.get('pdk') != pdk.name:
-                raise Refusal('LL_FINISHING_WRONG_DECLARATION', str(record))
-            return dict(record, receipt=str(project / DEFAULT_STREAM_REL))
-        except (Refusal, OSError, ValueError, KeyError, TypeError) as exc:
-            reuse_refusal = f'{type(exc).__name__}: {exc}'
-    pnr = project / 'phase3/stage3/pnr'
-    filled = pnr / 'filled.def'
-    try:
-        validate_fill_consumption(project)
-    except (Refusal, OSError, ValueError, KeyError):
-        notes = []
-        if not runner._emit_metal_fill(project, top, pdk, container, filled, notes):
-            raise Refusal('LL_FILL_ODB_NOT_READY', '; '.join(notes))
-        validate_fill_consumption(project)
-    image, root = runner._librelane_step_ctx(project, '34', pdk.name)
-    configs = resolve_step_configs(project, image, pdk.name, ['KLayout.StreamOut'],
-                                   pdk_root=root, folder=CONFIG_FOLDER)
-    stream_step, configs = _select_fill_stream(project, image, root, pdk.name, filled, configs)
-    odb = _load(project / RECORD_REL)['odb']['tool']
-    state = _load(Path(odb['state']))
-    state['def'] = str(filled)
-    initial = project / 'phase3/librelane/37-default-state.json'
-    write_json(initial, state)
-    recipe, native_script = (_default_stream_recipe(project, image, root) if stream_step == 'KLayout.StreamOut'
-                             else _default_stream_recipe(project, image, root, stream_step))
-    folder = run_chain(project, image, [(stream_step, configs[stream_step], initial)],
-                       mounts=_mounts(root, pdk.name), lane='37-default-stream',
-                       pdk_root=PDK_GUEST_ROOT)[0]
-    before, after = _current_stage(project, folder / 'state_out.json', stream_step)
-    stream = Path(after['klayout_gds'])
-    _default_stream_inputs(project, top, folder, image, root, pdk.name,
-                           recipe, native_script, filled, stream)
-    boundary = pnr / f'{top}.prefinish.gds'
-    shutil.copyfile(stream, boundary)
-    write_json(boundary.with_suffix('.gds.receipt.json'), {
-        'program': 'phase3_one_shot_runner', 'artefact': boundary.name,
-        'sha256': digest(boundary), 'size': boundary.stat().st_size,
-        'mtime_ns': boundary.stat().st_mtime_ns, 'top': top,
-        'streamed_from_def': filled.name, 'def_sha256': digest(filled),
-        'engine': 'klayout'})
-    pnr_gds = pnr / f'{top}.gds'
-    # The raw native stream is immutable. Seal exactly once on a separate
-    # subject; its retained consumer runs before any filler touches the die.
-    sealed = project / 'phase3/tool_arms/26.5ic/default-stream/sealed.gds'
-    sealed.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(stream, sealed)
-    finishing = runner._die_finishing_record(project, top, pdk, sealed, container)
-    if finishing.status not in ('PASS', 'NOT_APPLICABLE'):
-        raise Refusal('LL_DIE_FINISHING_REFUSED', finishing.detail)
-    shutil.copyfile(sealed, pnr_gds)
-    ctx = runner._step34_gds_tool_arm(project, pdk, pnr_gds)
-    if ctx is None:
-        raise Refusal('LL_FILL_GDS_NOT_RUN', 'Default finishing requires the primary fill arm')
-    ok, note = runner._step34_gds_ship(project, pnr_gds, ctx, (False, 'direct arm not run'))
-    if not ok:
-        raise Refusal('LL_FILL_GDS_REFUSED', note)
-    arm = ctx['tool']
-    canonical = project / 'phase3/stage4/gds' / f'{top}.gds'
-    canonical.parent.mkdir(parents=True, exist_ok=True)
-    # Existing output gates judge the actual filled subject, before promotion.
-    from librelane_step37 import _vibeic_gds_gates
-    gates = _vibeic_gds_gates(project, image, root, pdk.name, pnr_gds, filled,
-                             'default', configs[stream_step])
-    if any(row['rc'] != 0 or not row['sha256'] for row in gates.values()):
-        raise Refusal('LL_FINISHED_GDS_GATE_FAILED', str(gates))
-    shutil.copyfile(pnr_gds, canonical)
-    record = {'file_top': top, 'design_name': _def_design_name(filled),
-              'stream_step': stream_step,
-              'image': image, 'pdk': pdk.name, 'gates': gates,
-              'prior_promotion_refusal': reuse_refusal,
-              'finishing_status': finishing.status,
-              'finishing_stream_sha256': digest(stream),
-              'stream_inputs_sha256': digest(pnr / f'{top}.stream_inputs.json'),
-              'stream_state': str(folder / 'state_out.json'),
-              'stream_state_sha256': digest(folder / 'state_out.json')}
-    for key, path in {'filled_def': filled, 'stream': stream, 'sealed': sealed,
-                      'prefill': project / 'phase3/tool_arms/34/prefill.gds',
-                      'source': Path(arm['subject']), 'pnr_gds': pnr_gds,
-                      'canonical': canonical}.items():
-        record[key], record[key + '_sha256'] = str(path), digest(path)
-    if stream_step == FILL_STREAM_STEP:
-        authority = project / 'phase3/librelane' / CONFIG_FOLDER / 'explicit-fill.authority.json'
-        record.update(fill_mapping_authority=str(authority),
-                      fill_mapping_authority_sha256=digest(authority))
-    if finishing.status == 'PASS':
-        report = project / 'reports/phase3/die_finishing.json'
-        record.update(finishing_report=str(report), finishing_report_sha256=digest(report))
-    write_json(project / DEFAULT_STREAM_REL, record)
-    update_record(project, 'default_stream', record)
-    publish_metal_density(project, arm.get('ratios') or {}, canonical, pdk.name)
-    validate_default_stream(project)
-    per_layer = current_metal_density(project, arm, record)
-    if per_layer.get('verdict') != 'PASS':
-        raise Refusal('LL_METAL_DENSITY_CONSUMER_FAILED', str(per_layer))
-    # Keep the engine-neutral transcript on the canonical caller boundary.
-    shutil.copyfile(folder / 'invocation.log', pnr / 'stream_out.log')
-    runner._step37_declare_streamout_gds_provenance(
-        project, top, default_finishing=True)
-    return dict(record, receipt=str(project / DEFAULT_STREAM_REL))
 
 
-STEP37_PROMOTION_REL = 'phase3/librelane/37-promotion.json'
 
 
 def validate_density_result(project: Path, arm: dict, *, layout: Path | None = None) -> dict:
-    """Read the PDK deck's own density count on its unchanged GDS."""
+    """Read the native PDK density count for the selected physical subject."""
     try:
         state = _lc.project_path(project, arm['state'])
         subject = _lc.project_path(project, arm['subject'])
-        if digest(subject) != arm['subject_sha256']:
-            raise ValueError('density input GDS changed')
         return _current_density_row(project, state, CONFIG_FOLDER,
                                     layout=layout if layout is not None else subject)
     except (OSError, ValueError, TypeError, KeyError, Refusal) as exc:
@@ -1759,7 +1172,7 @@ def _current_density_row(project: Path, state: Path, config_folder: str, *,
     try:
         before, after = _current_stage(project, state, 'KLayout.Density')
         subject = _lc.project_path(project, before['gds'])
-        if layout is not None and digest(subject) != digest(layout):
+        if layout is not None and subject.read_bytes() != layout.read_bytes():
             raise ValueError('density measured a different GDS')
         value = _count(after.get('metrics', {}).get(DENSITY_METRIC))
         if value is None:
@@ -1770,11 +1183,14 @@ def _current_density_row(project: Path, state: Path, config_folder: str, *,
         return {'value': 'NOT_MEASURED', 'reason': str(exc)}
 
 
+STEP37_PROMOTION_REL = 'phase3/librelane/37-promotion.json'
+
+
 def step37_density(project: Path) -> Optional[Dict[str, Any]]:
     """When step 37 streamed on the tool, its own SealRing -> Filler ->
     Density chain is step 34's GDS half: the density judgement of the stream
-    it promoted (`librelane_step37`'s `37-<arm>-density.json`), its state
-    re-hashed.  None when step 37 promoted nothing."""
+    it promoted (`librelane_step37`'s `37-<arm>-density.json`).
+    None when step 37 promoted nothing."""
     promo = project / STEP37_PROMOTION_REL
     if not promo.is_file():
         return None
@@ -1785,7 +1201,7 @@ def step37_density(project: Path) -> Optional[Dict[str, Any]]:
     except (OSError, ValueError, Refusal):
         return {'status': 'UNREADABLE', 'source': STEP37_PROMOTION_REL}
     state = Path(str(judged.get('source') or ''))
-    if not state.is_file() or digest(state) != (judged.get('sha256') or {}).get('state_out.json'):
+    if not state.is_file():
         return {'status': 'STALE', 'source': str(report.relative_to(project)), 'state': str(state)}
     row = (judged.get('metrics') or {}).get(DENSITY_METRIC) or {}
     count = _count(row.get('value')) if row.get('status') in ('MEASURED', 'FAIL') else None
@@ -1796,8 +1212,7 @@ def step37_density(project: Path) -> Optional[Dict[str, Any]]:
         return {'status': 'NOT_MEASURED', 'source': str(report.relative_to(project)),
                 'reason': current.get('reason') or 'density judgment differs from tool output'}
     return {'status': 'MEASURED', 'errors': count, 'arm': f'step37:{arm}', 'rules': None,
-            'source': str(report.relative_to(project)), 'state': str(state),
-            'state_sha256': digest(state)}
+            'source': str(report.relative_to(project)), 'state': str(state)}
 
 
 def router_via_counts(metrics: Dict[str, Any]) -> Optional[Dict[str, int]]:

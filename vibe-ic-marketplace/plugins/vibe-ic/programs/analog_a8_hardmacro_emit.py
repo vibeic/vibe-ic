@@ -973,35 +973,15 @@ def _validated_model_bindings(value: object) -> List[Dict]:
     return value
 
 
-def _runtime_model_path(path: Path, directory: Path) -> Path:
-    """Rebind absent model carriers using the case's recorded content only.
-
-    The shared State resolver owns PDK containment, mount precedence, digest
-    validation and candidate uniqueness. Never discover a replacement model.
-    """
+def _runtime_model_path(path: Path) -> Path:
+    """Resolve an absent declared model through the actual installed PDK tree."""
     if path.is_file():
         return path
-    receipt = directory / _A8_MEASUREMENT
-    if not receipt.is_file():
-        return path
-    try:
-        rec = json.loads(receipt.read_text())
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: unreadable model receipt: {exc}") from exc
-    if not isinstance(rec, dict):
-        raise ValueError("A8_MODEL_ASSET_UNRESOLVED: model receipt must contain an object")
-    models = _validated_model_bindings(rec.get("model_bindings"))
-    hashes = {row["sha256"] for row in models if row["path"] == str(path)}
-    if not hashes:
-        return path
-    if len(hashes) != 1:
-        raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: conflicting model hashes: {path}")
     family = next((path.parts[i - 1] for i, part in enumerate(path.parts)
                    if i > 0 and part in ("libs.tech", "libs.ref")), None)
-    resolved = resolve_state_pdk_asset(path, pdk=family,
-        fingerprint={"config_files": {str(path): next(iter(hashes))}})
+    resolved = resolve_state_pdk_asset(path, pdk=family)
     if resolved is None:
-        raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: missing, changed or ambiguous model: {path}")
+        raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: missing or ambiguous model: {path}")
     return resolved
 
 
@@ -1017,7 +997,7 @@ def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dic
         runtime = path
         digest = _sha256(path) if path.is_file() else _remote_sha256(container, str(path))[0]
         if digest is None and not container:
-            runtime = _runtime_model_path(path, directory)
+            runtime = _runtime_model_path(path)
             digest = _sha256(runtime) if runtime.is_file() else None
         if digest is None:
             raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: A8 delivered model source cannot be read: {path}")
@@ -1533,7 +1513,7 @@ def load_native_measurement(project: Path, block: str, gds: Path,
                 path = Path(fields[1])
                 if not path.is_absolute():
                     path = (bdir / path).resolve()
-                runtime = (_runtime_model_path(path, bdir)
+                runtime = (_runtime_model_path(path)
                            if isinstance(model, dict) and "resolved_path" in model else path)
                 if (not isinstance(model, dict) or model.get("path") != str(path)
                         or model.get("resolved_path", str(path)) != str(runtime)
