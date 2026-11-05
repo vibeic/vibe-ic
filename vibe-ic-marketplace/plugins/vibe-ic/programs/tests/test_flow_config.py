@@ -497,6 +497,7 @@ def test_implementation_pdn_widths_reach_native_configuration(project):
     ("PDN_VWIDTH", 2.4), ("RUN_POST_GRT_DESIGN_REPAIR", True),
     ("GRT_DESIGN_REPAIR_MAX_CAP_PCT", 30), ("GRT_DESIGN_REPAIR_MAX_SLEW_PCT", 30),
     ("EXTRA_EXCLUDED_CELLS", ["delay_weak*"]),
+    ("RSZ_CORNERS", ["slow_setup", "fast_hold"]),
 ])
 def test_cli_records_supported_implementation_choice(project, key, value):
     output = project / "config.json"
