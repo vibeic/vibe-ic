@@ -4045,6 +4045,17 @@
       ],
       "corners": "all",
       "parallel": true
+    },
+    "post_route_timing_repair": {
+      "kind": "librelane",
+      "imports": [
+        "librelane_plugins.librelane_plugin_vibeic.postroute_repair"
+      ],
+      "steps": [
+        "Vibeic.PostRouteRepair",
+        "OpenROAD.RCX",
+        "OpenROAD.STAPostPNR"
+      ]
     }
   },
   "report_check_readers": {
