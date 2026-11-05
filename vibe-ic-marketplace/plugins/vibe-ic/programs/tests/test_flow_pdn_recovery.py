@@ -101,6 +101,28 @@ def test_public_entry_performs_one_replay_even_when_second_em_fails(tmp_path, mo
     assert calls[1]["from_name"] == "die_floorplan_and_macros"
 
 
+def test_public_prepass_preserves_historical_native_clock_on_retained_run(tmp_path, monkeypatch):
+    import sys
+    import flow_engine
+    import flow_engine_frontend as frontend
+    import flow_pdn_current
+    reports = []
+    def run(project, **kwargs):
+        if kwargs.get("to_name"):
+            return {"native_common_started_at": 100, "common_wall_seconds": 5}
+        return {"fail": 0}
+    monkeypatch.setattr(flow_pdn_current, "needs_estimate", lambda *args: True)
+    monkeypatch.setattr(frontend, "time", SimpleNamespace(time=lambda: 200, perf_counter=lambda: 2000))
+    monkeypatch.setitem(sys.modules, "flow_engine", SimpleNamespace(run=run, TABLE=flow_engine.TABLE,
+        write_json=lambda path, report: reports.append(dict(report))))
+    args = SimpleNamespace(project=tmp_path, entry_step="requirements_and_delivery_route",
+        exit_step="candidate_electromigration", rtl_input="structured", delivery_target="ip_hardmacro",
+        route="ip", pdk="auto", from_name=None)
+    assert frontend.run_public(args) == 0
+    assert reports[-1]["common_wall_seconds"] == 100
+    assert reports[-1]["native_common_started_at"] == 100
+
+
 def test_replayed_metrics_replace_old_candidate_and_spent_times_remain(tmp_path):
     import flow_engine
     row = {"name": "die_floorplan_and_macros", "status": "PASS", "tool_seconds": 4,
