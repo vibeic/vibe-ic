@@ -123,10 +123,13 @@ YOSYS_PASSES = ("proc; flatten; opt_expr; opt_clean; opt_dff; opt_clean")
 
 
 def yosys_script(rtl_files: List[str], top: str, netlist: str,
-                 simdef: str = "", passes: str = "", *, slang: bool = False) -> str:
-    """The DUT read EXACTLY as the chip's synthesis reads it (R-0915-157):
-    `_chip_synth_read.chip_read_lines` — `read_verilog -sv [-DSIMULATION ]` per
-    file. No `-formal`, no proof define: the facts are about the chip."""
+                 simdef: str = "", passes: str = "", *, slang: bool = False,
+                 no_implicit_memories: bool = False) -> str:
+    """Read the chip source without formal defines.
+
+    The ordinary read uses synthesis's chip_read_lines. Reset-only Slang
+    views can disable implicit memory inference to expose native reset cells.
+    """
     import _chip_synth_read as _csr
     reads = "; ".join(_csr.chip_read_lines([Path(f) for f in rtl_files], simdef))
     if slang:
@@ -134,7 +137,8 @@ def yosys_script(rtl_files: List[str], top: str, netlist: str,
         from _rtl_include_hub import macro_headers_first
         files = macro_headers_first(topological_package_first([Path(f) for f in rtl_files]))
         includes = " ".join('-I ' + str(p) for p in sorted({p.parent for p in files}))
-        reads = f"read_slang --single-unit --top {top} {simdef}{includes} " + " ".join(map(str, files))
+        memory = "--no-implicit-memories " if no_implicit_memories else ""
+        reads = f"read_slang --single-unit {memory}--top {top} {simdef}{includes} " + " ".join(map(str, files))
     return (f"{reads}; hierarchy -top {top}; "
             f"{passes or YOSYS_PASSES}; write_json {netlist}")
 
@@ -2602,8 +2606,8 @@ def check_claim(netlist: dict, top: str, claim: dict,
 #   C2  every reset pin of every flop (SRST/ARST/SET/CLR/ALOAD) is driven by a
 #       declared reset port through a pure inverter/buffer chain — so no flop
 #       Q (a synchronizer) and no gate (a qualified clear) is in any reset path;
-#   C3  a declared reset reaches NOTHING but those reset pins (no D, no EN, no
-#       clock) — the only use of a reset is to reset;
+#   C3  a declared reset reaches reset pins, or D inputs of the same native
+#       synchronous-reset cells; no other D, EN or clock use;
 #   C4  no latch, memory, array, $anyinit or unclassified cell;
 #   C5  no register the structural read folds away that the proof keeps: the
 #       design-state census of a read WITHOUT opt_dff (as `prep -noff` keeps
@@ -2704,6 +2708,11 @@ def applicability(netlist: dict, top: str, clock: str, resets: List[str],
                     continue
                 if k == "ff" and p in _RESET_PINS:
                     continue
+                if k == "ff" and p == "D" and c.get("type") in _SYNC_RESET_FFS:
+                    srst = _bits(c, "SRST")
+                    if (len(srst) == 1
+                            and _chain_source(drivers, srst[0], allow_inv=True)[0] == b):
+                        continue
                 fails.append(f"C3 the reset {r!r} reaches {n}.{p} "
                              f"({c.get('type')}) — not a reset pin")
                 break
@@ -2756,7 +2765,8 @@ def file_sha256(path: Path) -> Optional[str]:
 
 def run_yosys(rtl_files: List[Path], top: str, work_dir: Path,
               container: Optional[str], simdef: str = "",
-              tag: str = "", passes: str = "") -> Tuple[int, str, Path]:
+              tag: str = "", passes: str = "", *,
+              no_implicit_memories: bool = False) -> Tuple[int, str, Path]:
     """Write the netlist with the flow's yosys. Returns (rc, log, netlist).
 
     `container=None` runs on this filesystem (the in-image route CI and the
@@ -2769,7 +2779,8 @@ def run_yosys(rtl_files: List[Path], top: str, work_dir: Path,
     if netlist.exists():
         netlist.unlink()
     script = yosys_script([str(Path(f).resolve()) for f in rtl_files], top,
-                          str(netlist.resolve()), simdef, passes)
+                          str(netlist.resolve()), simdef, passes,
+                          slang=no_implicit_memories, no_implicit_memories=no_implicit_memories)
     ys = work_dir / f"formal_structural_check{tag}.ys"
     _aa.write_text(ys, script.replace("; ", "\n") + "\n")
     inner = (f"export PATH=/foss/tools/bin:/foss/tools/yosys/bin:$PATH; "
@@ -2788,7 +2799,7 @@ def run_yosys(rtl_files: List[Path], top: str, work_dir: Path,
     retry, reason = frontend.decide_synth_frontend(
         rtl_files, rc, netlist.is_file(), log,
         rtl_text_blob=frontend.read_text_blob(rtl_files))
-    if retry and rc != 127:
+    if retry and rc != 127 and not no_implicit_memories:
         _aa.write_text(ys.with_suffix('.read_verilog.ys'), script.replace('; ', '\n') + '\n')
         _aa.write_text(work_dir / f"formal_structural_check{tag}.read_verilog.log", log)
         script = yosys_script([str(Path(f).resolve()) for f in rtl_files], top,
@@ -2828,12 +2839,13 @@ def elaborations(rtl_files: List[Path], top: str, work_dir: Path,
              "raw_path": rpath, "raw_rc": rrc}]
 
 
-def _reset_memory_binding(source: dict, lowered: dict, top: str, clock: str) -> dict:
-    """Complete source/word/Q binding for the bounded reset-only lowering.
+def _reset_memory_binding(source: dict, lowered: dict, top: str, clock: str,
+                          resets: List[str]) -> dict:
+    """Complete source storage/Q census for the bounded reset-only lowering.
 
-    This is admission to the existing native next-state role proof, not reset
-    evidence itself. Keep every source word and scalar Q in both twins. A
-    missing, merged, ambiguous or unsupported identity refuses the whole route.
+    A native aggregate memory bus needs no word-order identity for reset
+    polarity/synchrony. Its actual bits must cover the complete storage and
+    belong to reset-controlled Q bits; a matching count alone is insufficient.
     Clock observations and temporal HDL constructors do not use this route.
     """
     proof = {"inside": False, "failed_preconditions": [], "source_aliases": {},
@@ -2913,7 +2925,8 @@ def _reset_memory_binding(source: dict, lowered: dict, top: str, clock: str) -> 
             else:
                 clocks.add((clk[0], edge))
                 written.add(memid)
-        elif cell["type"] != "$memrd" or _param_bit(params.get("CLK_ENABLE")) != 0:
+        elif (cell["type"] not in {"$memrd", "$memrd_v2"}
+              or _param_bit(params.get("CLK_ENABLE")) != 0):
             fails.append(f"unsupported source reset memory port: {name}")
     sequential_memories = set(memories) - set(roms)
     if (not sequential_memories or written != sequential_memories
@@ -2947,13 +2960,31 @@ def _reset_memory_binding(source: dict, lowered: dict, top: str, clock: str) -> 
             observed_clock = (clk[0], _param_bit((cell.get("parameters") or {}).get("CLK_POLARITY"))) if len(clk) == 1 else None
             if observed_clock not in clocks:
                 fails.append(f"native {view} Q clock disagrees with source: {name}")
+        native_aliases, aggregates = dict(aliases), set()
+        for memory_name, memory in memories.items():
+            words = [n for n, alias in aliases.items() if alias.get("memory") == memory_name]
+            if words and memory_name in mod.get("netnames", {}) and not any(
+                    word in mod.get("netnames", {}) for word in words):
+                for word in words:
+                    del native_aliases[word]
+                native_aliases[memory_name] = {"width": memory["width"] * memory["size"]}
+                aggregates.add(memory_name)
+        reset_q = set()
+        if view == "optimized" and aggregates:
+            for reset in resets:
+                bit, _ = _port_bit(mod, reset)
+                if bit is not None:
+                    mapping = _reset_map(mod, bit)
+                    reset_q.update(b for cell in mapping["sync"] + mapping["async"] for b in cell["q"])
         word_bits = {}
-        for name, alias in aliases.items():
+        for name, alias in native_aliases.items():
             net = (mod.get("netnames") or {}).get(name, {})
             bits = net.get("bits") or []
             if (_param_bit(net.get("hide_name", 0)) or len(bits) != alias["width"] or
                     any(not isinstance(b, int) or b not in qbits for b in bits)):
                 fails.append(f"missing exact native {view} source alias: {name}")
+            if view == "optimized" and name in aggregates and not set(bits) <= reset_q:
+                fails.append(f"native reset memory {name} includes Q bits without a known reset control")
             word_bits[name] = bits
         population = [b for bits in word_bits.values() for b in bits]
         if (len(qbits) != len(set(qbits)) or len(population) != len(set(population)) or
@@ -3055,12 +3086,23 @@ def check(rtl_files: List[Path], top: str, claims: List[dict],
         reset_fails = []
         proofs = []
         for e in elabs:
+            original = _top_module(e["raw"], top)[1]
+            memories = original.get("memories") or {}
+            no_implicit_memories = False
+            for _, cell, _ in _cells(original):
+                memid = str((cell.get("parameters") or {}).get("MEMID", "")).lstrip("\\")
+                if (cell.get("type") == "$memrd_v2" and memid in memories
+                        and not _clock_combinational_rom(original, memid, memories[memid])):
+                    no_implicit_memories = True
+                    break
             passes = YOSYS_PASSES.replace("flatten;", "flatten; memory_map;")
             raw_passes = RAW_PASSES.replace("flatten;", "flatten; memory_map;")
             rc, _, path = run_yosys(rtl_files, top, work_dir, container, simdef,
-                                    tag="_reset_memory", passes=passes)
+                                    tag="_reset_memory", passes=passes,
+                                    no_implicit_memories=no_implicit_memories)
             rrc, _, rpath = run_yosys(rtl_files, top, work_dir, container, simdef,
-                                      tag="_reset_memory_raw", passes=raw_passes)
+                                      tag="_reset_memory_raw", passes=raw_passes,
+                                      no_implicit_memories=no_implicit_memories)
             def load(code, p):
                 try:
                     return json.loads(p.read_text()) if code == 0 else None
@@ -3068,7 +3110,8 @@ def check(rtl_files: List[Path], top: str, claims: List[dict],
                     return None
             lowered = dict(e, rc=rc, path=path, raw_rc=rrc, raw_path=rpath,
                            netlist=load(rc, path), raw=load(rrc, rpath))
-            proof = _reset_memory_binding(e, lowered, top, (klass or {}).get("clock", ""))
+            proof = _reset_memory_binding(e, lowered, top, (klass or {}).get("clock", ""),
+                sorted({str(c.get("signal") or "") for c in claims if c.get("rule") in reset_rules}))
             if record["rtl_sha256"] != {str(f): file_sha256(Path(f)) for f in rtl_files}:
                 proof["inside"] = False
                 proof["failed_preconditions"].append("source changed during reset memory elaboration")

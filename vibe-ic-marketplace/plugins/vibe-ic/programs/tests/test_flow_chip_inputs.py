@@ -634,6 +634,60 @@ def test_explicit_legal_geometry_is_retained(inputs):
     assert result["CORE_AREA"] == native["CORE_AREA"]
 
 
+@pytest.mark.parametrize("ingested", [False, True])
+def test_selected_operator_slot_controls_die_core_and_pad_order(inputs, ingested):
+    import submission_template_ingest as ingest
+
+    project, config, native, _, _ = inputs
+    generated = chip.prepare(project, config)
+    sides = {side: generated["PAD_" + side][:] for side in chip.SIDES.values()}
+    sides["NORTH"], sides["EAST"] = sides["EAST"], sides["NORTH"]
+    sides["SOUTH"].reverse()
+    die, core = [0.125, 0.25, 100.125, 100.25], [22.125, 22.25, 78.125, 78.25]
+    source = project / ("operator" if ingested else "input/submission_template/slots")
+    slot = {"SLOT": "neutral_slot", "DIE_AREA": die, "CORE_AREA": core,
+            **{"PAD_" + side: values for side, values in sides.items()}}
+    _write(source / "neutral_slot.yaml", json.dumps(slot))
+    _write(project / "input/step_0_5ic_answers.json",
+           json.dumps({"operator_template": {"slot": "neutral_slot"}}))
+    if ingested:
+        assert ingest.main([str(project), "--template", str(source), "--slot", "neutral_slot"]) == 0
+    native.update(DIE_AREA=[0, 0, 80, 80], CORE_AREA=[22, 22, 58, 58])
+
+    result = chip.prepare(project, config)
+
+    assert result["DIE_AREA"] == die
+    assert result["CORE_AREA"] == core
+    assert {side: result["PAD_" + side] for side in sides} == sides
+    report = json.loads((project / "work/flow/chip/preparation.json").read_text())
+    assert report["operator_slot"] == "neutral_slot"
+    wrapper = Path(result["VERILOG_FILES"][-1]).read_text()
+    assert all(f" {instance} (" in wrapper for names in sides.values() for instance in names)
+
+
+@pytest.mark.parametrize("selected", [None, "unavailable_slot"])
+def test_supplied_operator_slot_never_defaults_to_another_geometry(inputs, selected):
+    project, config, _, _, _ = inputs
+    _write(project / "input/submission_template/slots/neutral_slot.yaml", json.dumps({
+        "SLOT": "neutral_slot", "DIE_AREA": [0, 0, 100, 100]}))
+    if selected:
+        _write(project / "input/step_0_5ic_answers.json",
+               json.dumps({"operator_template": {"slot": selected}}))
+    with pytest.raises(ValueError, match="no slot is selected|0 matching records"):
+        chip.prepare(project, config)
+
+
+def test_operator_slot_pad_names_must_resolve_to_wrapper_pads(inputs):
+    project, config, _, _, _ = inputs
+    _write(project / "input/submission_template/slots/neutral_slot.yaml", json.dumps({
+        "SLOT": "neutral_slot", "DIE_AREA": [0, 0, 100, 100],
+        "PAD_NORTH": ["unknown_pad"]}))
+    _write(project / "input/step_0_5ic_answers.json",
+           json.dumps({"operator_template": {"slot": "neutral_slot"}}))
+    with pytest.raises(ValueError, match="does not resolve to one unused wrapper pad"):
+        chip.prepare(project, config)
+
+
 def test_missing_native_fact_is_named(inputs):
     project, config, native, _, _ = inputs
     del native["PAD_FILLERS"]

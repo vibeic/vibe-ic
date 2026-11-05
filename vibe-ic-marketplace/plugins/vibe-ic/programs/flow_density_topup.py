@@ -129,7 +129,7 @@ class DensityTopUp(Density):
         kwargs, environment = self.extract_env(kwargs)
         environment.update(PDK=str(self.config["PDK"]), PDK_ROOT=str(self.config["PDK_ROOT"]))
         self.run_subprocess(
-            ["python3", str((helpers / "generate_fill.py").resolve()), input_gds.name],
+            ["python3", str((helpers / "generate_fill.py").resolve()), input_gds.name, "-dist"],
             log_to=work / "fill.log", env=environment, **{**kwargs, "cwd": str(fill_dir)})
         pattern = fill_dir / f"{name}_fill_pattern.gds.gz"
         if not pattern.is_file() or not pattern.stat().st_size:
