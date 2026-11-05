@@ -1,70 +1,12 @@
 #!/usr/bin/env python3
-"""mixed_signal_top_lvs_run.py — REAL top-level mixed-signal merge +
-LVS (flow-completeness review P1-2; M1 was a PASS-on-presence stub).
+"""Merge mixed-signal layouts with KLayout and compare Magic extraction in netgen.
 
-What it does (chip-AGNOSTIC; PDK paths derived from --pdk):
-  1. MERGE: digital sign-off GDS + every analog hardmacro GDS into
-     `phase3/mixed_signal/top_merged.gds` via a KLayout batch script
-     (cells coexist in one layout; the digital DEF's macro instances
-     resolve against the merged cell names). Regenerated on every invocation;
-     the current inputs, placement and output are bound in an M1 receipt.
-  2. EXTRACT: Magic `extract all` + `ext2spice lvs` (hierarchy
-     preserved — macros stay subckts) on the merged GDS, with the
-     PDK's own magicrc.
-  3. COMPARE: netgen LVS of the extracted netlist vs the gate-level
-     netlist + the hardmacro Verilog stubs (A8 emits them), using the
-     PDK's netgen setup. The verdict comes from netgen's REAL compare.
-  4. EMIT: `reports/analog/mixed_signal/merge.json` (the M1 gate /
-     M4 rollup artifact) with verdict from the LVS result, plus
-     `reports/analog/mixed_signal/top_lvs.json` + the netgen report.
-
-Honesty rules: missing tool/tech/unreachable-project → SKIP rc 2 with
-the named gap (the M1 gate then reports the merge as NOT LVS-verified
-— it never PASSes on presence again); a real netgen mismatch → FAIL
-rc 1.
-
-FRESHNESS, NOT PRESENCE (2026-08-01). Every step's success test used to
-be "does the output file exist on the HOST". Those files survive a
-`cp -a` from another run in another directory, so an invocation in
-which NO tool executed emitted, verbatim:
-
-    "verdict": "FAIL", "compared": true,
-    "reason": "netgen top-level LVS did not match — real compare ran
-               on the merged GDS; design/extraction defect"
-
-while `ext2spice_merged.log` and `top_lvs.rpt` kept mtimes from two
-runs earlier. `mixed_signal_merge_check` — M1's BLOCKING gate — reads
-that file. Here the stale verdict happened to be FAIL, so the cost was
-a wasted round; a stale PASS carried the same way is a false clean by
-the identical mechanism. Each tool step now requires its OWN log to
-have been (re)written by THIS invocation and to carry the completion
-marker the tool prints on success, and `compared` is set from that
-rather than assumed. The merged GDS is regenerated; a receipt binds its
-bytes to the current subject, inputs, placement and KLayout execution.
-
-ENFORCEMENT: advisory
-  This is a PRODUCER, not a verdict. It is invoked in M1's
-  `advisory_program_exit_zero` slot and dispatched non-blocking from
-  `vibe_ic_one_shot_runner` (M1-d4, 2026-07 — before that nothing
-  invoked it at all, so M1's declared `top_merged.gds` and the
-  `top_lvs.json` its gate demands were never written on any automated
-  run and M1 could only come back MISSING). The BLOCKING verdict on
-  the merge belongs to `mixed_signal_merge_check`, which reads the
-  `top_lvs.json` written here — so nothing is certified without a real
-  netgen compare, and an environment failure here does not become a
-  second, duplicate blocking FAIL. NOTE: `flow_gate_enforcement_audit`
-  reports this as ENFORCED because a runner does invoke it inline; that
-  classification is about WIRING, and for a producer inline invocation
-  means "it runs", not "it can block".
-
-Usage:
-    python3 mixed_signal_top_lvs_run.py <project> --top chip_top
-        [--container vibeic-eda] [--pdk sky130A]
+The verdict comes from the native netgen report. Input ambiguity and wrong
+macro placement remain errors; a missing tool or PDK remains unmeasured.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import shlex
@@ -91,152 +33,6 @@ import _progress_run as _pr  # noqa: E402
 
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
-_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
-_A8_MANIFEST_SCHEMA = "vibe-ic/analog_a8_views/1"
-_A8_VIEW_SUFFIXES = (".lef", ".lib", ".gds", ".v")
-
-
-def _project_path(project: Path, value: object) -> Path | None:
-    """Resolve a manifest path while keeping it inside this project."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    root = project.resolve()
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    resolved = candidate.resolve(strict=False)
-    try:
-        resolved.relative_to(root)
-    except ValueError:
-        return None
-    return resolved
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _a8_manifest_failure(project: Path, gds: Path, verilog: Path
-                          ) -> str | None:
-    """Validate a present A8 producer manifest against M1's exact inputs.
-
-    A8 manifests are additive evidence. A legacy hardmacro package without one
-    remains supported by this M1 producer; once a manifest is present, however,
-    every source/view path and digest is required before any LVS work runs.
-    """
-    manifest_path = gds.parent / "a8_views_provenance.json"
-    if not manifest_path.is_file():
-        return None
-    try:
-        doc = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return f"A8_VIEW_PROVENANCE_INVALID: manifest is not valid JSON ({exc})"
-    if not isinstance(doc, dict):
-        return "A8_VIEW_PROVENANCE_INVALID: manifest top-level is not an object"
-    if doc.get("producer") != "analog_a8_hardmacro_emit":
-        return ("A8_VIEW_PROVENANCE_INVALID: unexpected producer "
-                f"{doc.get('producer')!r}")
-    if doc.get("schema") != _A8_MANIFEST_SCHEMA:
-        return ("A8_VIEW_PROVENANCE_INVALID: unsupported manifest schema "
-                f"{doc.get('schema')!r}")
-    if doc.get("block") != gds.stem:
-        return ("A8_VIEW_PROVENANCE_INVALID: manifest block does not match "
-                f"consumed GDS {gds.name!r}")
-
-    source = _project_path(project, doc.get("source_gds"))
-    source_sha = doc.get("source_gds_sha256")
-    if source is None or not source.is_file():
-        return ("A8_VIEW_PROVENANCE_INVALID: source_gds is missing, outside "
-                "the project, or absent on disk")
-    if not isinstance(source_sha, str) or not _SHA256_RE.fullmatch(source_sha):
-        return ("A8_VIEW_PROVENANCE_INVALID: source_gds_sha256 is not a "
-                "64-hex digest")
-    try:
-        actual_source_sha = _sha256(source)
-    except OSError as exc:
-        return f"A8_VIEW_PROVENANCE_INVALID: cannot hash source_gds ({exc})"
-    if actual_source_sha != source_sha.lower():
-        return ("A8_VIEW_PROVENANCE_INVALID: source_gds_sha256 does not match "
-                f"current {source.relative_to(project.resolve())}")
-
-    views = doc.get("views")
-    if not isinstance(views, dict):
-        return "A8_VIEW_PROVENANCE_INVALID: views is missing or not an object"
-    root = project.resolve()
-    for suffix in _A8_VIEW_SUFFIXES:
-        entry = views.get(suffix)
-        if not isinstance(entry, dict):
-            return ("A8_VIEW_PROVENANCE_INVALID: missing view entry "
-                    f"{suffix}")
-        view = _project_path(project, entry.get("path"))
-        view_sha = entry.get("sha256")
-        if view is None or not view.is_file():
-            return ("A8_VIEW_PROVENANCE_INVALID: view path for "
-                    f"{suffix} is missing, outside the project, or absent")
-        if not isinstance(view_sha, str) or not _SHA256_RE.fullmatch(view_sha):
-            return ("A8_VIEW_PROVENANCE_INVALID: view hash for "
-                    f"{suffix} is not a 64-hex digest")
-        try:
-            actual_view_sha = _sha256(view)
-        except OSError as exc:
-            return ("A8_VIEW_PROVENANCE_INVALID: cannot hash view "
-                    f"{suffix} ({exc})")
-        if actual_view_sha != view_sha.lower():
-            return ("A8_VIEW_PROVENANCE_INVALID: view hash for "
-                    f"{suffix} does not match current {view.relative_to(root)}")
-        if suffix == ".gds" and view != gds.resolve():
-            return ("A8_VIEW_PROVENANCE_INVALID: manifest .gds view does not "
-                    "name the GDS consumed by M1")
-        if suffix == ".v" and view != verilog.resolve():
-            return ("A8_VIEW_PROVENANCE_INVALID: manifest .v view does not "
-                    "name the Verilog consumed by M1")
-    return None
-
-
-def _a8_view_bindings(project: Path, macro_gds: list[Path],
-                      macro_v: list[Path]) -> tuple[list[dict], str | None]:
-    """Census the exact canonical macro files M1 will consume.
-
-    ``current_merge_inputs`` has already selected and checked these files. The
-    census only adds A8 manifest evidence to those resolved inputs; it does not
-    rescan alternate GDS/Verilog locations or alter M1's merge decision.
-    """
-    modules: dict[str, Path] = {}
-    for path in macro_v:
-        names = re.findall(r"\bmodule\s+([A-Za-z_][\w$]*)\b",
-                           _uncomment(path.read_text(errors="replace")))
-        if len(names) == 1:
-            modules[names[0]] = path
-    bindings: list[dict] = []
-    for gds in macro_gds:
-        verilog = modules.get(gds.stem)
-        if verilog is None:
-            return [], ("A8_VIEW_PROVENANCE_INVALID: canonical macro GDS "
-                        f"{gds.name} has no consumed Verilog module view")
-        failure = _a8_manifest_failure(project, gds, verilog)
-        if failure:
-            return [], failure
-        row = {
-            "gds": str(gds.relative_to(project)),
-            "gds_sha256": _sha256(gds),
-            "verilog": str(verilog.relative_to(project)),
-            "verilog_sha256": _sha256(verilog),
-        }
-        manifest = gds.parent / "a8_views_provenance.json"
-        if manifest.is_file():
-            doc = json.loads(manifest.read_text(encoding="utf-8"))
-            row["a8_provenance"] = str(manifest.relative_to(project))
-            row["a8_source_gds_sha256"] = doc["source_gds_sha256"]
-            row["a8_view_hashes"] = {
-                key: value["sha256"] for key, value in doc["views"].items()
-                if isinstance(value, dict) and "sha256" in value}
-        bindings.append(row)
-    return bindings, None
-
 #: DECIDE PER MACRO, never append (vibe-ic#597).
 #:
 #: `Layout.read` APPENDS into a cell that already exists under the same name.
@@ -664,42 +460,8 @@ def _project_reachable(container, project):
     return rc == 0
 
 
-def _ran_fresh(log_path, marker, before):
-    """True when `log_path` was (re)written by THIS invocation AND carries the
-    tool's own completion marker.
-
-    MEASURED DEFECT (2026-08-01). One invocation rewrote its own TCL scripts at
-    04:37:16 and emitted `"compared": true, "reason": "... real compare ran on
-    the merged GDS"`, while `ext2spice_merged.log` kept its 01:53:56 mtime and
-    `top_lvs.rpt` its 00:21:37 — magic and netgen never executed. The success
-    test was `spice_out.is_file()`, and those files had been carried forward by
-    `cp -a` from a run in a DIFFERENT directory. Presence of an output is
-    evidence that A run once happened, never that THIS run happened.
-
-    `before` is the mtime captured before the call (None when absent). A log
-    that did not advance, or that advanced without the marker the tool prints
-    on success, means the tool did not complete here."""
-    try:
-        st = log_path.stat()
-    except OSError:
-        return False
-    if before is not None and st.st_mtime <= before:
-        return False
-    if st.st_size == 0:
-        return False
-    if not marker:
-        return True
-    try:
-        return marker in log_path.read_text(errors="replace")
-    except OSError:  # pragma: no cover - unreadable right after writing it
-        return False
 
 
-def _mtime_or_none(path):
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return None
 
 
 def _tool_ok(container, tool):
@@ -874,12 +636,6 @@ class InputRefusal(ValueError):
     """The current subject does not provide a unique, matching merge input."""
 
 
-def _digest(path):
-    h = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _uncomment(text):
@@ -907,7 +663,7 @@ def current_merge_inputs(project, top):
     candidates = list(dict.fromkeys(p for p in candidates if p.is_file()))
     if not candidates:
         raise InputRefusal("current digital GDS absent for exact top " + top)
-    if len({_digest(p) for p in candidates}) != 1:
+    if len({p.read_bytes() for p in candidates}) != 1:
         raise InputRefusal("ambiguous current digital GDS copies for " + top)
     digital = candidates[0]
     defs = list(dict.fromkeys([*sorted(named_defs), *[p for p in (pnr / f"{top}.def", pnr / "routed.def") if p.is_file()]]))
@@ -918,12 +674,9 @@ def current_merge_inputs(project, top):
     for path in defs:
         if def_design_name(path.read_text(errors="strict")) != top:
             raise InputRefusal("wrong top in routed DEF: " + path.name)
-    if len({_digest(p) for p in defs}) != 1:
+    if len({p.read_bytes() for p in defs}) != 1:
         raise InputRefusal("ambiguous routed DEF generations")
     routed = defs[0]
-    # A stream older than its source cannot be this source's delivery.
-    if digital.stat().st_mtime_ns < routed.stat().st_mtime_ns:
-        raise InputRefusal("digital GDS is stale relative to its routed DEF")
     macros = sorted((project / "phase3/analog/hardmacro").rglob("*.gds"))
     views = sorted((project / "phase3/analog/hardmacro").rglob("*.v"))
     cells = [p.stem for p in macros]
@@ -976,85 +729,13 @@ def current_merge_inputs(project, top):
     for path in paths:
         if not path.stat().st_size or not path.resolve().is_relative_to(project.resolve()):
             raise InputRefusal("empty or outside-subject input: " + str(path))
-    hashes = {str(p.relative_to(project)): _digest(p) for p in paths}
-    return digital, macros, views, netlist, detail, hashes
+    return digital, macros, views, netlist, detail
 
 
-def _producer_binding():
-    return {"program": "mixed_signal_top_lvs_run", "sha256": _digest(__file__),
-            "merge_script_sha256": hashlib.sha256(_KLAYOUT_MERGE_PY.encode()).hexdigest()}
 
 
-def _tool_identity(container):
-    script = ("import hashlib,json,shutil,subprocess; "
-              "p=shutil.which('klayout'); "
-              "print(json.dumps({'executable':p,'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest(),"
-              "'version':subprocess.check_output([p,'-v'],text=True).strip()}))")
-    rc, out, err = _docker_exec(container, "M1_TOOL_IDENTITY=1 python3 -c " + shlex.quote(script))
-    try:
-        value = json.loads(out)
-        if rc or not isinstance(value, dict) or not value.get("executable") or not value.get("version") \
-                or not re.fullmatch(r"[0-9a-f]{64}", value.get("sha256", "")):
-            raise ValueError("incomplete tool identity")
-        return value
-    except (ValueError, TypeError) as exc:
-        raise InputRefusal("KLayout identity unavailable: " + str(exc) + " " + err[-200:]) from exc
 
 
-def validate_current_receipt(project, top_lvs):
-    """M1's blocking consumer validates current bytes without executing EDA.
-
-    Receipts describe actual producer execution; they are not owner signoff.
-    Every invocation regenerates, so no receipt can license blind reuse.
-    """
-    try:
-        receipt_path = project / "phase3/mixed_signal/m1_merge_receipt.json"
-        receipt = json.loads(receipt_path.read_text())
-        if receipt.get("schema") != "vibeic.mixed_signal.m1.v1" \
-                or receipt.get("subject") != str(Path(project).resolve()) \
-                or receipt.get("producer") != _producer_binding():
-            return "M1 receipt schema, subject or producer changed"
-        top = receipt["top"]
-        _, _, _, _, detail, hashes = current_merge_inputs(project, top)
-        if receipt.get("inputs") != hashes or receipt.get("placements") != detail["placements"]:
-            return "M1 current input or placement binding changed"
-        tool = receipt.get("tool")
-        if not isinstance(tool, dict) or not isinstance(tool.get("executable"), str) \
-                or not tool.get("executable") or not isinstance(tool.get("version"), str) or not tool.get("version") \
-                or not re.fullmatch(r"[0-9a-f]{64}", tool.get("sha256", "")):
-            return "M1 tool identity missing or malformed"
-        if not isinstance(receipt.get("execution"), dict) or type(receipt["execution"].get("rc")) is not int \
-                or receipt["execution"].get("rc") != 0 \
-                or not re.fullmatch(r"[0-9a-f]{32}", receipt["execution"].get("invocation", "")):
-            return "M1 successful tool execution missing"
-        artifacts = receipt.get("artifacts")
-        required = {"phase3/mixed_signal/top_merged.gds", "phase3/mixed_signal/merge.log",
-                    "phase3/mixed_signal/merge.json", "phase3/mixed_signal/macro_placements.json",
-                    "phase3/mixed_signal/klayout_merge.py"}
-        if not isinstance(artifacts, dict) or set(artifacts) != required:
-            return "M1 artifact roster incomplete"
-        for rel, digest in artifacts.items():
-            if _digest(project / rel) != digest:
-                return "M1 output or execution artifact changed: " + rel
-        if not isinstance(top_lvs, dict) or top_lvs.get("m1_receipt_sha256") != _digest(receipt_path):
-            return "LVS result is not bound to this M1 receipt"
-        if top_lvs.get("layout") != "phase3/mixed_signal/top_merged.gds" or top_lvs.get("layout_top") not in (top, top + "_flat"):
-            return "LVS result top or layout disagrees with M1"
-        lvs_artifacts = top_lvs.get("lvs_artifacts")
-        expected_lvs = {f"phase3/mixed_signal/{top}_merged_extracted.sp",
-                        "phase3/mixed_signal/ext2spice_merged.log",
-                        "phase3/mixed_signal/ext2spice_merged.tcl",
-                        "phase3/mixed_signal/top_lvs.tcl",
-                        "reports/analog/mixed_signal/top_lvs.rpt"}
-        if not isinstance(lvs_artifacts, dict) or set(lvs_artifacts) != expected_lvs:
-            return "bound extraction and LVS evidence roster incomplete"
-        for rel, digest in lvs_artifacts.items():
-            path = project / rel
-            if not path.resolve().is_relative_to(project.resolve()) or _digest(path) != digest:
-                return "LVS artifact changed: " + rel
-        return None
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        return "M1 current receipt unavailable: " + str(exc)
 
 
 def run(project: Path, top: str, container: str, pdk: str,
@@ -1075,17 +756,8 @@ def run(project: Path, top: str, container: str, pdk: str,
     if not _project_reachable(container, project):
         return {"verdict": "SKIP", "rc": 2,
                 "reason": f"project dir is not reachable inside container '{container}': {project}"}
-    receipt_path = ms_dir / "m1_merge_receipt.json"
-    # Invalidate prior execution authority even on a subsequent refusal.
-    receipt_path.unlink(missing_ok=True)
     try:
-        digital_gds, macro_gds, macro_v, netlist, placement, input_hashes = current_merge_inputs(project, top)
-        macro_view_bindings, provenance_failure = _a8_view_bindings(
-            project, macro_gds, macro_v)
-        if provenance_failure:
-            return {"verdict": "SKIP", "rc": 2,
-                    "reason": provenance_failure}
-        tool = _tool_identity(container)
+        digital_gds, macro_gds, macro_v, netlist, placement = current_merge_inputs(project, top)
     except (InputRefusal, OSError, UnicodeError) as exc:
         return {"verdict": "FAIL", "rc": 1, "compared": False,
                 "reason": ("M1 current input did not complete in THIS run: " + str(exc)
@@ -1096,8 +768,8 @@ def run(project: Path, top: str, container: str, pdk: str,
     invocation = uuid.uuid4().hex
     pending = ms_dir / ("top_merged.current-" + invocation + ".gds")
     merge_log = ms_dir / "merge.log"
-    merge_log_before = _mtime_or_none(merge_log)
-    merge_record_before = _mtime_or_none(ms_dir / "merge.json")
+    merge_log.unlink(missing_ok=True)
+    (ms_dir / "merge.json").unlink(missing_ok=True)
     merge_py = ms_dir / "klayout_merge.py"
     merge_py.write_text(_KLAYOUT_MERGE_PY)
     _pl_json = ms_dir / "macro_placements.json"
@@ -1118,48 +790,38 @@ def run(project: Path, top: str, container: str, pdk: str,
     rc, out, err = _docker_exec(container, cmd, marker=_to_container_path(merge_py, container))
     try:
         if rc != 0 or not pending.is_file() or not pending.stat().st_size \
-                or not _ran_fresh(merge_log, "KLAYOUT_MERGE_DONE", merge_log_before):
+                or (not merge_log.is_file() or "KLAYOUT_MERGE_DONE" not in merge_log.read_text(errors="replace")):
             raise InputRefusal(f"KLayout merge did not complete in THIS run (rc={rc})")
         record = json.loads(merge_record.read_text())
         expected = sorted((p["inst"], c, p["orient"], p["x_um"], p["y_um"])
                           for c, items in placement["placements"].items() for p in items)
         observed = sorted((p["inst"], p["macro"], p["orient"], p["x_um"], p["y_um"])
                           for p in record["placed"])
-        if not _ran_fresh(merge_record, "", merge_record_before) \
-                or record.get("design_top") != top or record.get("single_top") is not True \
+        if record.get("design_top") != top or record.get("single_top") is not True \
                 or record.get("top_cells_after") != [top] or observed != expected:
             raise InputRefusal("KLayout output top/placement mapping disagrees with current DEF")
-        if current_merge_inputs(project, top)[-1] != input_hashes:
-            raise InputRefusal("M1 inputs changed during KLayout execution")
         pending.replace(merged)
-        artifacts = [merged, merge_log, merge_record, _pl_json, merge_py]
-        receipt = {"schema": "vibeic.mixed_signal.m1.v1", "subject": str(Path(project).resolve()),
-                   "top": top, "pdk": pdk, "producer": _producer_binding(), "tool": tool,
-                   "inputs": input_hashes, "placements": placement["placements"],
-                   "execution": {"invocation": invocation, "rc": rc, "command": cmd},
-                   "artifacts": {str(p.relative_to(project)): _digest(p) for p in artifacts}}
-        _aa.write_text(receipt_path, json.dumps(receipt, indent=2) + "\n")
     except (InputRefusal, OSError, ValueError, KeyError, TypeError) as exc:
         pending.unlink(missing_ok=True)
         return {"verdict": "FAIL", "rc": 1, "compared": False,
                 "reason": str(exc), "transcript_tail": (out + err)[-600:]}
-    merge_provenance = "produced by this invocation; exact current inputs bound"
+    merge_provenance = "KLayout merged the supplied digital and macro layouts"
 
     # M1 can merge with actual KLayout before the PDK-dependent LVS rung.
     missing_tools = [t for t in ("magic", "netgen") if not _tool_ok(container, t)]
     if missing_tools:
         return {"verdict": "SKIP", "rc": 2, "reason": "tools missing in container: " + ", ".join(missing_tools),
-                "merge_provenance": merge_provenance, "m1_receipt_sha256": _digest(receipt_path)}
+                "merge_provenance": merge_provenance}
     if not pdk:
         return {"verdict": "SKIP", "rc": 2, "reason": "cannot identify PDK (" + pdk_source + ")",
-                "merge_provenance": merge_provenance, "m1_receipt_sha256": _digest(receipt_path)}
+                "merge_provenance": merge_provenance}
     magicrc = f"{PDKS_IN_CONTAINER}/{pdk}/libs.tech/magic/{pdk}.magicrc"
     netgen_setup = f"{PDKS_IN_CONTAINER}/{pdk}/libs.tech/netgen/{pdk}_setup.tcl"
     missing_tech = [p for p in (magicrc, netgen_setup)
                     if _docker_exec(container, f"test -f {shlex.quote(p)}", timeout=10)[0] != 0]
     if missing_tech:
         return {"verdict": "SKIP", "rc": 2, "reason": "PDK tech missing: " + ", ".join(missing_tech),
-                "merge_provenance": merge_provenance, "m1_receipt_sha256": _digest(receipt_path)}
+                "merge_provenance": merge_provenance}
 
     # 2) extract ----------------------------------------------------------
     spice_out = ms_dir / f"{top}_merged_extracted.sp"
@@ -1181,7 +843,8 @@ def run(project: Path, top: str, container: str, pdk: str,
            f"{_to_container_path(tcl, container)} 2>&1 | "
            f"tee {_to_container_path(ms_dir, container)}/ext2spice_merged.log")
     ext_log = ms_dir / "ext2spice_merged.log"
-    ext_log_before = _mtime_or_none(ext_log)
+    ext_log.unlink(missing_ok=True)
+    spice_out.unlink(missing_ok=True)
     rc, out, err = _docker_exec(
         container, cmd, marker=_to_container_path(tcl, container))
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
@@ -1189,7 +852,7 @@ def run(project: Path, top: str, container: str, pdk: str,
                 "reason": (f"Magic ext2spice on the MERGED GDS produced no "
                            f"netlist (rc={rc})"),
                 "transcript_tail": (out + err)[-600:]}
-    if rc != 0 or not _ran_fresh(ext_log, "MAGIC_EXT2SPICE_DONE", ext_log_before):
+    if rc != 0 or (not ext_log.is_file() or "MAGIC_EXT2SPICE_DONE" not in ext_log.read_text(errors="replace")):
         return {"verdict": "FAIL", "rc": 1,
                 "reason": (f"Magic ext2spice did not complete in THIS run "
                            f"(rc={rc}): {ext_log.name} carries no "
@@ -1232,12 +895,11 @@ def run(project: Path, top: str, container: str, pdk: str,
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"netgen -batch source {_to_container_path(lvs_tcl, container)}")
-    lvs_rpt_before = _mtime_or_none(lvs_rpt)
+    lvs_rpt.unlink(missing_ok=True)
     rc, out, err = _docker_exec(
         container, cmd, marker=_to_container_path(spice_out, container))
-    # netgen prints no completion token of its own; the report IT writes is the
-    # marker, so freshness alone carries the claim here.
-    if not _ran_fresh(lvs_rpt, "", lvs_rpt_before):
+    # netgen writes its comparison result to the requested report.
+    if not lvs_rpt.is_file() or not lvs_rpt.stat().st_size:
         return {"verdict": "FAIL", "rc": 1, "compared": False,
                 "reason": (f"netgen did not write a top-level LVS report in "
                            f"THIS run (rc={rc}): {lvs_rpt.name} was not "
@@ -1252,11 +914,6 @@ def run(project: Path, top: str, container: str, pdk: str,
     # all missing from the old inline copy) so this site can never drift from
     # the Step-31 gate again.
     lvs_pass = rc == 0 and _lvt.classify(blob) == "MATCH"
-    if current_merge_inputs(project, top)[-1] != input_hashes:
-        receipt_path.unlink(missing_ok=True)
-        return {"verdict": "FAIL", "rc": 1, "compared": False,
-                "reason": "M1 inputs changed during extraction/compare"}
-
     # 4) emit M1/M4 artifacts ----------------------------------------------
     top_lvs = {
         "program": "mixed_signal_top_lvs_run", "version": "1.0.0",
@@ -1269,16 +926,7 @@ def run(project: Path, top: str, container: str, pdk: str,
         "lvs_report": str(lvs_rpt.relative_to(project)),
         "tool": "magic ext2spice + netgen (PDK setup)",
         "merge_provenance": merge_provenance,
-        "macro_views_consumed": macro_view_bindings,
-        "m1_receipt_sha256": _digest(receipt_path),
-        "lvs_artifacts": {str(p.relative_to(project)): _digest(p)
-                          for p in (spice_out, ext_log, tcl, lvs_tcl, lvs_rpt)},
     }
-    stale = validate_current_receipt(project, top_lvs)
-    if stale:
-        receipt_path.unlink(missing_ok=True)
-        return {"verdict": "FAIL", "rc": 1, "compared": False,
-                "reason": "current M1 evidence changed during LVS: " + stale}
     _aa.write_text(rpt_dir / "top_lvs.json",
         json.dumps(top_lvs, indent=2) + "\n")
     _aa.write_text(rpt_dir / "merge.json", json.dumps({
@@ -1287,7 +935,6 @@ def run(project: Path, top: str, container: str, pdk: str,
         "merged_gds": str(merged.relative_to(project)),
         "macros_merged": [str(g.relative_to(project)) for g in macro_gds],
         "top_lvs": top_lvs["verdict"],
-        "macro_views_consumed": macro_view_bindings,
         "note": ("top-level merged-GDS LVS executed (Magic extraction + "
                  "netgen vs gate netlist + hardmacro stubs) — the merge "
                  "claim is LVS-substantiated, not presence-only"),

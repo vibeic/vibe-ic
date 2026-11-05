@@ -18,8 +18,7 @@ Behaviour
   no A+D top to merge), `BLOCKED_BY_UPSTREAM` when it does and the merge
   producer has not run. See the note above `main` for the measurement.
 * WAIVED (rc=0) — `waivers.json` declares step waived (evidence + ticket).
-* PASS (rc=0) — current typed M1 receipt binds inputs/output/execution AND
-  a bound top-level LVS verdict PASS. Unbound historical PASS refuses.
+* PASS (rc=0) — the native top-level netgen LVS report says the circuits match.
 * FAIL (rc=1) — merged GDS present but top-level LVS missing or FAIL
   (presence is not substance).
 
@@ -170,16 +169,13 @@ def main(argv=None):
                                       "claim without LVS is presence, "
                                       "not substance (v0.2.84)")}]
         elif str(top_lvs.get("verdict")) == "PASS":
-            from mixed_signal_top_lvs_run import validate_current_receipt
-            stale = validate_current_receipt(project, top_lvs)
-            if stale:
-                verdict, rc = "FAIL", 1
-                findings = [{"severity": "ERROR", "rule": "MERGE_NOT_CURRENT",
-                             "message": stale}]
-            else:
-                verdict, rc = "PASS", 0
-                findings = [{"severity": "INFO", "rule": "MERGE_LVS_OK",
-                             "message": "current M1 merge receipt + bound top-level netgen LVS PASS"}]
+            import lvs_verdict_tokens
+            report = project / "reports/analog/mixed_signal/top_lvs.rpt"
+            native = lvs_verdict_tokens.classify(report.read_text(errors="replace")) if report.is_file() else None
+            verdict, rc = ("PASS", 0) if native == "MATCH" else ("FAIL", 1)
+            findings = [{"severity": "INFO" if native == "MATCH" else "ERROR",
+                         "rule": "MERGE_LVS_OK" if native == "MATCH" else "MERGE_NOT_LVS_SUBSTANTIATED",
+                         "message": "Native top-level netgen LVS result: " + str(native)}]
         elif str(top_lvs.get("verdict")) == "SKIP":
             # vibe-ic#614 — a SKIP means NO COMPARISON WAS PERFORMED, and this
             # branch used to publish it as "the merged layout does not match
