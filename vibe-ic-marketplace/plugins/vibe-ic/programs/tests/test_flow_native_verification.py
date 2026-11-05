@@ -244,7 +244,8 @@ def test_eqy_reports_native_witness_interpreter_failure(tmp_path, monkeypatch):
     assert "yosys-witness cannot execute" in result["detail"] and "/usr/bin/env" in result["detail"]
 
 
-@pytest.mark.parametrize("change", ["none", "unused_models", "renamed_core_ports", "open_pad_pins", "unknown_core", "core", "core_pin", "terminal", "instance", "type"])
+@pytest.mark.parametrize("change", ["none", "unused_models", "renamed_core_ports", "open_pad_pins", "unknown_core",
+    "inline_unknown_core", "inline_z_core", "inline_undriven_core", "core", "core_pin", "terminal", "instance", "type"])
 def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
     if not shutil.which("eqy"):
         pytest.skip("Native EQY is required")
@@ -276,6 +277,10 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
     if change == "unknown_core":
         core.write_text("module core(input clk,rst_n,a,output q); assign q=1'bx; endmodule\n")
         gate.write_text(wrapper + "assign oq=1'bx;\nendmodule\n")
+    elif change in {"inline_unknown_core", "inline_z_core", "inline_undriven_core"}:
+        assignment = {"inline_unknown_core": "assign oq=1'bx;\n", "inline_z_core": "assign oq=1'bz;\n"}.get(change, "")
+        gold.write_text(wrapper + assignment + "endmodule\n")
+        gate.write_text(gold.read_text())
     cells.write_text("library(neutral) {}\n")
     pads.write_text("(* blackbox *)\nmodule INPAD(inout PAD,output Y); endmodule\n"
                     "(* blackbox *)\nmodule INPAD_ALT(inout PAD,output Y); endmodule\n"
@@ -296,7 +301,7 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change):
     assert rows.get("Yosys.Wrapper") == ("FAIL" if change in {"terminal", "instance", "type"} else "PASS"), result
     if change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins", "core", "core_pin"}:
         assert rows.get("Yosys.EQY.Core") == ("FAIL" if change in {"core", "core_pin"} else "PASS"), result
-    if change == "unknown_core":
+    if change in {"unknown_core", "inline_unknown_core", "inline_z_core", "inline_undriven_core"}:
         assert rows.get("Yosys.EQY.Core") == "NOT_MEASURED", result
         assert not result["metrics"], result
     elif change in {"none", "unused_models", "renamed_core_ports", "open_pad_pins"}:

@@ -110,11 +110,10 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
         connected = {bit for port in module["ports"].values() for bit in port["bits"]}
         connected.update(bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
                          for bits in cell["connections"].values() for bit in bits)
-        connected.update(bit for wire in module["netnames"].values() if wire["attributes"].get("hdlname")
-                         for bit in wire["bits"])
         connected_ports = {f"{instance}.{pin}" for instance, cell in module["cells"].items()
                            if cell["type"] in pads["types"] for pin, bits in cell["connections"].items()
-                           if connected.intersection(bits) or set(bits).intersection({"0", "1"})}
+                           if bits and (cell["port_directions"].get(pin) == "input"
+                                        or connected.intersection(bits) or set(bits).intersection({"0", "1"}))}
         exposed = json.loads((core / f"{side}.json").read_text())["modules"][top]
         disconnected = [f"{top}/{name}" for name, port in exposed["ports"].items()
                         if port["direction"] == "output" and name not in module["ports"]
