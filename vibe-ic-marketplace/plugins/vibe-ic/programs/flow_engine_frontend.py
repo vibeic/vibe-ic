@@ -411,7 +411,7 @@ def run_public(args):
         forwarded["pdk"] = args.pdk
     from flow_pdn_current import needs_estimate
     original_common = None
-    if (route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"}
+    if (route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff", "ip_hardmacro"}
             and needs_estimate(route, forwarded.get("from_name"), json.loads(flow_engine.TABLE.read_text()))):
         estimate = flow_engine.run(project, route=route, to_name="pre_layout_timing", **forwarded)
         if estimate.get("common_wall_seconds") is not None:
