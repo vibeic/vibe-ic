@@ -287,7 +287,7 @@ def test_d30_existing_consumer_closes_only_bound_independent_empty_population(tm
     assert result['status'] == 'PASS' and result['delivery_blocked'] is False
 
 
-@pytest.mark.parametrize('damage', ['none', 'missing_equivalence'])
+@pytest.mark.parametrize('damage', ['none', 'missing_equivalence', 'missing_timing_modes'])
 def test_d30_public_dispatch_preserves_complete_canonical_handoff(tmp_path, monkeypatch, damage):
     from types import SimpleNamespace
     import _specrtl_common as sources
@@ -308,6 +308,15 @@ def test_d30_public_dispatch_preserves_complete_canonical_handoff(tmp_path, monk
     if damage == 'missing_equivalence':
         (tmp_path / 'reports/flow109/default_rows/D25.json').unlink()
         with pytest.raises(flow109.Flow109Error, match='FLOW109_D25_RESULT_MISSING'):
+            flow109.prepare_front_door(args, tmp_path)
+        assert not (tmp_path / 'reports/flow109/default_rows/D30.json').exists()
+        return
+    if damage == 'missing_timing_modes':
+        path = tmp_path / 'reports/flow109/default_rows/D26.json'
+        row = json.loads(path.read_text())
+        row.pop('timing_modes_receipt')
+        _write(path, row)
+        with pytest.raises(flow109.Flow109Error, match='FLOW109_D26_TIMING_MODES_MISSING'):
             flow109.prepare_front_door(args, tmp_path)
         assert not (tmp_path / 'reports/flow109/default_rows/D30.json').exists()
         return
