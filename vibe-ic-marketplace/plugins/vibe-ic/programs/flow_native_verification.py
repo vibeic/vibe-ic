@@ -601,6 +601,31 @@ def gls(project, directory, tool, commands, *, state, config):
                 generated = (sample.get("topology") == "serial_parallel"
                              and project / sample.get("tb", "") == bench)
                 try:
+                    if module and not (plan or generated) and not native._tb_dut_instance(tb_text, top):
+                        from testbench_gen import (
+                            _DELIVERED_RE, _is_authored_tb, delivered_case_oracle, emit_unit_tbs,
+                        )
+                        if (not _is_authored_tb(bench) and not _DELIVERED_RE.search(bench.read_text())
+                                and delivered_case_oracle(project, bench.stem) is None):
+                            from _specrtl_common import parse_rtl_ports
+                            _, ports = parse_rtl_ports(text, top)
+                            if not ports or any(type(port.width) is not int or port.width < 1 for port in ports):
+                                raise ValueError("The native top port dimensions are unavailable for the case producer.")
+                            surface = [(port.direction, f"[{port.width - 1}:0]" if port.width > 1 else "", port.name)
+                                       for port in ports]
+                            producer = {}
+                            output = work / "generated_tb"
+                            count = emit_unit_tbs(project, top=top, report=producer, out_dir=output,
+                                scaffold=False, case_stated=True, case_ids=[bench.stem], dut_ports=surface)
+                            rebound = output / (bench.stem + ".v")
+                            if (count != 1 or not rebound.is_file()
+                                    or producer.get("known_answer_vector_unbound")):
+                                raise ValueError("The native chip-port case producer could not ground the declared case: "
+                                                 + json.dumps(producer))
+                            tb_text = native.strip_comments(rebound.read_text())
+                            module = native._TB_MODULE_RE.search(tb_text)
+                            row["generated_testbench"] = str(rebound)
+                            reports.append(rebound)
                     if module and (plan or generated):
                         from _specrtl_common import parse_rtl_ports
                         _, ports = parse_rtl_ports(text, top)
