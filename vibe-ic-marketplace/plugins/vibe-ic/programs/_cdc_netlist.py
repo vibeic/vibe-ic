@@ -283,7 +283,38 @@ def require_binding(project: Path, path: Path, nl: "Netlist") -> dict:
     except (OSError, ValueError, KeyError, TypeError, ll.Refusal) as exc:
         raise Refusal("CDC_NETLIST_UNBOUND",
                       f"no complete current native producer binding: {exc}") from None
+    _load_clock_gates(project, nl)
     return rec
+
+
+def _load_clock_gates(project: Path, nl: "Netlist") -> None:
+    """Use the native JsonHeader library configuration for clock-only ancestry."""
+    import fnmatch
+    from flow109_clock_plan import liberty_pin_roles
+    config = project / "phase3/librelane/step2/header_resolved.json"
+    nl.clock_parents.clear()
+    if not config.is_file():
+        return
+    cfg = json.loads(config.read_text())
+    libraries = cfg.get("LIB", {})
+    paths = [p for pattern, group in libraries.items()
+             if fnmatch.fnmatchcase(cfg.get("DEFAULT_CORNER", ""), pattern) for p in group]
+    for path in paths:
+        if not Path(path).is_file():
+            continue
+        for master, pins in liberty_pin_roles(Path(path).read_text()).items():
+            clock = [p for p, r in pins.items() if r["clock_gate_clock_pin"]]
+            outputs = [p for p, r in pins.items() if r["clock_gate_out_pin"]
+                       and len(clock) == 1 and set(r["timing_arcs"]) == {(clock[0], "positive_unate")}]
+            if len(clock) != 1:
+                continue
+            for cell in nl.cells.values():
+                if cell["type"] == master:
+                    conn = cell["connections"]
+                    if len(conn.get(clock[0], [])) == 1:
+                        for output in outputs:
+                            if len(conn.get(output, [])) == 1:
+                                nl.clock_parents[conn[output][0]] = conn[clock[0]][0]
 
 
 def build(project: Path, rtl_files: List[Path], top: Optional[str],
@@ -410,6 +441,7 @@ class Netlist:
     flops: List[Flop] = field(default_factory=list)
     memories: int = 0
     ambiguous_drivers: Set[int] = field(default_factory=set)
+    clock_parents: Dict[object, object] = field(default_factory=dict)
 
     @property
     def port_bits(self) -> Dict[object, str]:
@@ -422,9 +454,12 @@ class Netlist:
     def flop_of_q(self) -> Dict[object, Flop]:
         return {b: f for f in self.flops for b in f.q}
 
-    def root(self, bit, limit: int = 32) -> object:
+    def root(self, bit, limit: int = 32, *, clock: bool = False) -> object:
         """Follow a net back through single-input buffers/inverters."""
         for _ in range(limit):
+            if clock and bit in self.clock_parents:
+                bit = self.clock_parents[bit]
+                continue
             drv = self.drivers.get(bit)
             if not drv:
                 return bit
@@ -457,7 +492,7 @@ class Netlist:
 
     def domain(self, flop: Flop,
                port_labels: Optional[Dict[object, str]] = None) -> str:
-        return self.bit_label(self.root(flop.clk), self.clock_port_labels
+        return self.bit_label(self.root(flop.clk, clock=True), self.clock_port_labels
                               if port_labels is None else port_labels)
 
     def sample_edge(self, flop: Flop) -> int:
@@ -465,6 +500,9 @@ class Netlist:
         bit = flop.clk
         edge = flop.clk_pol
         for _ in range(32):
+            if bit in self.clock_parents:
+                bit = self.clock_parents[bit]
+                continue
             drv = self.drivers.get(bit)
             if not drv:
                 break

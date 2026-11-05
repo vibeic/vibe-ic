@@ -209,7 +209,8 @@ def test_clock_plan_sinks_closes_the_census_or_refuses():
 def test_liberty_declarations_decide_sequential_cells_and_pin_roles():
     assert clock.liberty_clock_pins(LIBERTY) == {"DFF": "CLK", "DFFN": "CLKN", "LAT": "E"}
     roles = clock.liberty_pin_roles(LIBERTY)
-    assert roles["PADIN"]["PAD"] == {"direction": "input", "clock": False, "is_pad": True}
+    assert {k: roles["PADIN"]["PAD"][k] for k in ("direction", "clock", "is_pad")} == {
+        "direction": "input", "clock": False, "is_pad": True}
     assert roles["BUF"]["A"]["direction"] == "input" and roles["BUF"]["Z"]["direction"] == "output"
     with pytest.raises(ValueError, match="D34_LIBERTY_CLOCK_EXPRESSION_UNSUPPORTED"):
         clock.liberty_clock_pins('cell (G) { ff (Q, QN) { clocked_on : "CLK & EN"; } }')
