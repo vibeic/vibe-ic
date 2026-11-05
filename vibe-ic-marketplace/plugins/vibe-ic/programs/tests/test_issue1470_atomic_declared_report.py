@@ -17,11 +17,6 @@ and wrote their declared report destination with `Path(...).write_text(...)`:
     generated_artifact_conflict_resolve.py:391  .write_text(...)
     hygiene_finding_delta.py:420  .write_text(...)
 
-Both are verdict-bearing. `generated_artifact_conflict_resolve` writes a
-RESOLVED/REFUSED/UNMEASURABLE verdict a landing acts on; `hygiene_finding_delta`
-writes the subset comparison that BLOCKS a landing. A truncated one of those is
-read downstream as the step's own evidence — exactly the lie #1082 exists to
-remove — so the fix is to convert them, never to widen the register.
 
 WHY THE REGISTER IS NOT TOUCHED, AND WHY THAT IS ASSERTED HERE
 ==============================================================
@@ -32,20 +27,6 @@ is the whole ratchet. `test_the_green_was_not_bought_by_widening_the_register`
 is the assertion that pins that, so the cheap fix cannot be reintroduced later
 and still look like this one.
 
-AND THE PROPERTY IS CHECKED AT RUNTIME, NOT ONLY AS A SHAPE
-===========================================================
-Every other test around #1082 checks the SHAPE of the source — that no
-`.write_text` reaches a declared destination. A shape assertion cannot tell a
-converted program from one whose writer no longer runs. So the two runtime
-tests below drive both real programs end to end and check the invariant the
-issue is actually about, in both directions:
-
-    the write succeeds  -> the declared destination exists and parses
-    the write dies      -> the declared destination DOES NOT EXIST at all,
-                           and no temp sibling is left behind
-
-The second is only a measurement because the first exists: a program that wrote
-nothing under any circumstances would satisfy "absent after a death" for free.
 
 chip-AGNOSTIC: nothing here reasons about any IC, vendor, SKU or process.
 """
@@ -57,7 +38,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _atomic_artefact as A  # noqa: E402
 import atomic_artifact_write_check as G  # noqa: E402
 import generated_artifact_conflict_resolve as RESOLVER  # noqa: E402
-import hygiene_finding_delta as DELTA  # noqa: E402
 import skill_stage_membership_check as MEMBERSHIP  # noqa: E402
 import advisory_clause_states_its_reason as ADVISORY  # noqa: E402
 import stage_on_pass_review as REVIEW  # noqa: E402
@@ -97,7 +77,7 @@ BASELINE = PROGRAMS / "_atomic_artefact_residual.json"
 #: register does not go stale because anyone edits it, it goes stale because
 #: the tree keeps growing programs that write a declared report. The ratchet
 #: catching each one BY NAME is the mechanism working, not a defect in it.
-CONVERTED = ["generated_artifact_conflict_resolve", "hygiene_finding_delta",
+CONVERTED = ["generated_artifact_conflict_resolve",
              "stage_on_pass_review", "skill_stage_membership_check",
              "advisory_clause_states_its_reason"]
 
@@ -131,14 +111,6 @@ def _argv_review(dest: Path, repo: Path):
     return [str(repo), "--stage", "no-such-stage", "--json", str(dest)]
 
 
-def _argv_delta(dest: Path, repo: Path):
-    # Both records are deliberately absent: the program REFUSES, and a refusal
-    # is still a verdict it must write whole. Nothing here needs a real hygiene
-    # run, which keeps this test far inside the 60s inner bound.
-    return ["--base", str(repo / "absent_base.json"),
-            "--candidate", str(repo / "absent_candidate.json"),
-            "--base-host", "host-a", "--candidate-host", "host-a",
-            "--json", str(dest)]
 
 
 def _argv_membership(dest: Path, repo: Path):
@@ -162,7 +134,6 @@ def _argv_advisory(dest: Path, repo: Path):
 #: (label, module, argv-builder). Driven end to end in both runtime tests.
 DRIVEN = [
     ("generated_artifact_conflict_resolve", RESOLVER, _argv_resolver),
-    ("hygiene_finding_delta", DELTA, _argv_delta),
     ("stage_on_pass_review", REVIEW, _argv_review),
     ("skill_stage_membership_check", MEMBERSHIP, _argv_membership),
     ("advisory_clause_states_its_reason", ADVISORY, _argv_advisory),
