@@ -157,12 +157,60 @@ def testbenches(project, tool):
     return list(dict.fromkeys(paths))
 
 
-def cocotb_run(directory, tb, files, top, commands, simulator):
+def simulation_sources(project, files, top, benches):
+    from catalog_glue_closure_resolver import (
+        _gather, _macro_body_module_refs, _strip_comments, build_index, resolve_closure,
+    )
+    from design_one_shot_runner import _V662_INCLUDE_RE, _v662_design_src_rtl_files
+    from testbench_gen import package_first_order
+    from verilator_coverage_measure import _tb_top_module
+
+    files = [path.resolve() for path in files]
+    hdl_benches = [path.resolve() for path in benches if path.suffix in (".v", ".sv")]
+    sources = _gather(project / "phase2/stage1/rtl")
+    for path in [*_v662_design_src_rtl_files(project), *files, *hdl_benches]:
+        sources[path] = _strip_comments(path.read_text(errors="replace"))
+    include_order = {parent: index for index, parent in enumerate(dict.fromkeys(
+        path.parent for path in [*benches, *files, *sources]))}
+    included_names = {Path(name).name for text in sources.values()
+                      for name in _V662_INCLUDE_RE.findall(text)}
+    relative_includes = {Path(name).name for text in sources.values()
+                         for name in _V662_INCLUDE_RE.findall(text) if Path(name).name != name}
+    headers = {}
+    for path in sources:
+        if ((path.suffix in {".vh", ".svh"} or path.name in included_names)
+                and path.name not in relative_includes):
+            headers.setdefault(path.name, []).append(path)
+    for providers in headers.values():
+        selected = min(providers, key=lambda path: include_order[path.parent])
+        for path in providers:
+            if path != selected:
+                del sources[path]
+    index = build_index(sources)
+    # Selected RTL wins, then staged sources, then supplied dependencies.
+    for kind in ("mod_def", "pkg_def", "macro_def"):
+        for name, providers in index[kind].items():
+            selected = [path for path in providers if path in files]
+            index[kind][name] = selected or providers[:1]
+    index["macro_refs"] = {name: set().union(*(
+        _macro_body_module_refs(sources[path]).get(name, set()) for path in providers))
+        for name, providers in index["macro_def"].items()}
+    reachable = set()
+    for root in [top, *(_tb_top_module(path) for path in hdl_benches)]:
+        closure, _ = resolve_closure(root, sources, index)
+        reachable.update(closure)
+    selected = list(dict.fromkeys([*files, *(path for path in sources
+        if path in reachable and path not in hdl_benches)]))
+    return (package_first_order([path for path in selected if path.suffix in (".v", ".sv")]),
+            list(dict.fromkeys(path.parent for path in [*benches, *selected])))
+
+
+def cocotb_run(directory, tb, files, top, commands, simulator, include_dirs):
     import verilator_coverage_measure as coverage
     directory.mkdir()
     makefile = directory / "simulation.mk"
     flags = " ".join(coverage.COVERAGE_INSTRUMENTATION_FLAGS)
-    includes = " ".join(dict.fromkeys(str(f.parent.resolve()) for f in files))
+    includes = " ".join(str(path.resolve()) for path in include_dirs)
     makefile.write_text(
         f"SIM = {simulator}\nTOPLEVEL_LANG = verilog\n"
         f"VERILOG_SOURCES = {' '.join(str(f.resolve()) for f in files)}\n"
@@ -217,9 +265,14 @@ def simulation(project, directory, tool, commands):
     if not files or not benches:
         return commands.result(reports=[producer_report] if producer_report.is_file() else [],
             detail="Produced RTL and a program-generated testbench are required.")
+    silicon_files = files
+    files, include_dirs = simulation_sources(project, files, top, benches)
     reports, dats, assertions, native_steps = [], [], [], []
 
     def invoke(argv, cwd):
+        if argv[0] == "verilator":
+            argv = [argv[0], *["-I" + str(path) for path in include_dirs
+                              if "-I" + str(path) not in argv], *argv[1:]]
         completed = commands.run(argv, cwd)
         return ((completed.returncode, completed.stdout, completed.stderr) if completed is not None
                 else (127, "", "Native executable is absent."))
@@ -231,12 +284,12 @@ def simulation(project, directory, tool, commands):
         if tb.suffix == ".py":
             if not top or not shutil.which("cocotb-config"):
                 return commands.result(reports=reports, detail="Cocotb and the declared top are required.")
-            functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus")
+            functional = cocotb_run(run / "functional", tb, files, top, commands, "icarus", include_dirs)
             report = run / "functional/results.xml"
             summary = parse_junit(report)
             if summary and summary["tests"] > 0 and not summary["skipped"]:
                 failures = summary["failures"] + summary["errors"]
-            completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator")
+            completed = cocotb_run(run / "coverage", tb, files, top, commands, "verilator", include_dirs)
             data = run / "coverage/coverage.dat"
             if report.is_file():
                 reports.append(report)
@@ -247,7 +300,7 @@ def simulation(project, directory, tool, commands):
         else:
             executable = run / "functional.vvp"
             compiled = commands.run(["iverilog", "-g2012", "-s", coverage._tb_top_module(tb),
-                "-o", executable, *["-I" + str(f.parent) for f in files], *files, tb])
+                "-o", executable, *["-I" + str(path) for path in include_dirs], *files, tb])
             functional = (commands.run(["vvp", executable], cwd=tb.parent)
                           if compiled is not None and compiled.returncode == 0 else compiled)
             if functional is not None and compiled is not None and compiled.returncode == 0:
@@ -290,7 +343,7 @@ def simulation(project, directory, tool, commands):
             if line_map is not None:
                 parsed["line_union"] = line_map
                 reports.append(Path(info))
-            scoped = coverage.scope_totals(parsed, list(map(str, files)))
+            scoped = coverage.scope_totals(parsed, list(map(str, silicon_files)))
             if scoped:
                 for category, counts in scoped["totals"].items():
                     if counts["total"] > 0 and (category != "line" or scoped["line_metric"] == "executable_line_union"):
