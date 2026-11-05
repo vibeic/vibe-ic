@@ -64,6 +64,29 @@ def invoke(project, plan):
         _ACTIVE = False
 
 
+def test_native_handoff_does_not_repeat_synthesis_area_acceptance(tmp_path, monkeypatch):
+    context = tmp_path / 'context.json'
+    context.write_text('{}')
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(context))
+    monkeypatch.setattr(flow109, 'validate_execution_context',
+                        lambda _: {'requested_step': 'D30'})
+    monkeypatch.setattr(flow109, 'dft_preroute_admission', lambda *_: {
+        'functional_equivalence': {'path': 'reports/lec_eqy.json'}})
+    monkeypatch.setattr(runner, '_current_phase2_consumer',
+        lambda _, sid, __: None if sid in ('9', '13') else {
+            'result': {'site': 'step_sdc_validation_post_prelayout'}})
+    reached = []
+
+    def producer_boundary(*args, **kwargs):
+        reached.append(args[1])
+        raise RuntimeError('stop before the handoff producer writes')
+
+    monkeypatch.setattr(runner._spf, 'retained_call', producer_boundary)
+    result = invoke(tmp_path, [])
+    assert reached == ['14'], result
+    assert result.status == 'NOT_MEASURED'
+
+
 def test_actual_handoff_entry_reuses_accepted_native_and_mapped_sdc(actual):
     project, reached = actual
     result = invoke(project, [])

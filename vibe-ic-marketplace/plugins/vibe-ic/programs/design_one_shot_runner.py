@@ -28075,10 +28075,7 @@ def step_synthesis_handoff(project: Path, *, plan=None, owner_capture=False) -> 
                               'Step14 awaits current complete D26 mapped SDC acceptance',
                               reason_class=_V.ReasonClass.UPSTREAM_REFUSED)
         for sid in ('8', '9', '10', '13'):
-            if sid == '13' and retained_native:
-                # Preroute admission just reopened the independently adopted
-                # native consumer. An unrelated legacy no-population attempt
-                # is retained but cannot replace that qualified proof source.
+            if sid in ('9', '13') and retained_native:
                 continue
             if _current_phase2_consumer(project, sid, 0.0) is None:
                 return StepResult('synthesis_handoff', 'NOT_MEASURED', 0.0,
