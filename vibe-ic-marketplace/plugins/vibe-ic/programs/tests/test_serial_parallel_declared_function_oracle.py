@@ -633,9 +633,9 @@ _SCENARIO_REQUEST_TEXTS = {
 }
 
 
-def _public_scenario_input(tmp_path, text, *, choices=True, population=None, width=8):
+def _public_scenario_input(tmp_path, text, *, choices=True, population=None, width=8, mode="good"):
     root = tmp_path / "neutral_public_scenario"
-    _declared_scenario_project(root, width=width)
+    _declared_scenario_project(root, width=width, mode=mode)
     case = {"name": "requested_case", "kind": "coverage_goal",
             "expected": "100% PASS", "stimulus": text, "coverage_scope": text}
     (root / "phase1/generated_docs/L10_TEST_CASES.json").write_text(
@@ -739,18 +739,34 @@ def test_public_unnumbered_consecutive_population_uses_recorded_default(tmp_path
 
 
 @pytest.mark.parametrize("text_key", ["zh_unnumbered", "en_unnumbered"])
-def test_public_explicit_author_population_is_consumed_without_rewriting_l10(tmp_path, text_key):
-    root, case = _public_scenario_input(tmp_path, _SCENARIO_REQUEST_TEXTS[text_key], population=7)
+@pytest.mark.parametrize("population", [7, 64, 10000])
+def test_public_explicit_author_population_is_consumed_without_rewriting_l10(tmp_path, text_key, population):
+    root, case = _public_scenario_input(tmp_path, _SCENARIO_REQUEST_TEXTS[text_key], population=population)
     inputs = [root / "phase1/generated_docs/L10_TEST_CASES.json",
               root / "plugin_output/declaration.json"]
     before = {path: path.read_bytes() for path in inputs}
     report = {}; count = tbg.emit_unit_tbs(root, "neutral_serial", report=report)
     plan = aotg.arithmetic_scenario_plan(root, "digital_arithmetic_primitive", case)
     _record_public_scenario(root, case, report, plan)
-    assert count == 1 and plan is not None and plan["transactions"] == 7, (report, plan)
+    assert count == 1 and plan is not None and plan["transactions"] == population, (report, plan)
     assert not plan.get("assumptions"), plan
     assert aotg.ARITHMETIC_SCENARIO_HEADER in (root / "phase2/stage1/sim/tb/requested_case.v").read_text()
+    measured = _scenario_icarus_execution(root, [case])[case["name"]]
+    assert measured["verdict"] == "PASS" and measured["achieved_pct"] == 100.0, measured
+    log = (root / "native/requested_case/run.log").read_text()
+    assert f"ARITH_SCENARIO_DONE transactions={population} comparisons={8 * population} errors=0" in log, log
     assert all(path.read_bytes() == original for path, original in before.items())
+
+
+def test_public_unnumbered_consecutive_population_keeps_native_mismatch(tmp_path):
+    root, case = _public_scenario_input(tmp_path, _SCENARIO_REQUEST_TEXTS["en_unnumbered"],
+                                       mode="wrong_product")
+    measured = _scenario_icarus_execution(root, [case])[case["name"]]
+    assert measured["verdict"] == "FAIL", measured
+    plan = aotg._scenario_header(root / "phase2/stage1/sim/tb/requested_case.v")
+    assert plan["transactions"] == 2 and plan["assumptions"][0]["value"] == 2, plan
+    log = (root / "native/requested_case/run.log").read_text()
+    assert "ARITH_SCENARIO_DONE transactions=2 comparisons=16 errors=16" in log, log
 
 
 @pytest.mark.parametrize("population", [True, "7", 1, 20001])
