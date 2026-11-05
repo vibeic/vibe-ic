@@ -639,14 +639,6 @@ def execute(
                 steps.append((sid, cfg))
             folders = _ll.run_chain(project, image, [(s, c, state0) for s, c in steps],
                                     mounts=mounts, lane=lane, pdk_root=_ll.PDK_GUEST_ROOT)
-            if POST_GRT_REPAIR not in arm_ids:
-                # DRV standard section 1: post-GRT repair is a required stage;
-                # a chain the flow gated it out of records that it did not run.
-                import drv_stage_receipts as _drv_stages
-                _drv_stages.record_not_run(
-                    project, "post_grt_repair",
-                    f"{POST_GRT_REPAIR} is not in step 21's chain ({lane}); "
-                    f"flow gates false: {gated_off.get(POST_GRT_REPAIR) or 'not requested'}")
             final = folders[-1] / "state_out.json"
             mfolders = _ll.run_chain(project, image, [(s, c, final) for s, c in measure],
                                      mounts=mounts, lane=f"{lane}-measure", pdk_root=_ll.PDK_GUEST_ROOT)
@@ -752,13 +744,6 @@ def execute(
                          "drc": arms[selected]["nvr"] / "named_viol_after.drc"}
         elif json.loads(gates["librelane"].read_text()).get("verdict") == "NOT_MEASURED":
             return _refuse("LL_ROUTE_NOT_MEASURED", str(gates["librelane"]), out)
-        # The shipped route's post-GRT repair receipt is the SELECTED arm's
-        # (seed arms and the step-32 pregrt arm rewrite it as they run).
-        import drv_stage_receipts as _drv_stages
-        _drv_stages.rebind_lane(
-            project, list(zip(arms[selected]["ids"], arms[selected]["folders"]))
-            if selected in arms else None,
-            ("post_grt_repair",), selected)
         # Step 32 on LibreLane (T102 r2) runs HERE, on the routed database the
         # selection just chose, before the tail: LL21 -> Vibeic.PostRouteRepair
         # -> tail. `variant_arm` is this step's own LibreLane route with extra
