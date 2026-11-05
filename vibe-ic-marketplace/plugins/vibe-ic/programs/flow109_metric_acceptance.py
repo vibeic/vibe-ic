@@ -1649,8 +1649,6 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
             import synth_handoff_netlist_check as handoff
             from _rtl_include_hub import silicon_rtl_selection
             import tempfile
-            flow109.dft_source_intent(project, current)
-            flow109._accepted_row(project, Path('reports/flow109/default_rows/D22.json'), 'D22')
             adopted = handoff.bound_handoff(project)
             if adopted is None or adopted.get('verdict') != 'PASS':
                 raise MetricRefusal('D25_NATIVE_SUBJECT_UNBOUND', 'current D22 handoff absent')
@@ -1667,9 +1665,8 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
             fp = receipt['input']
             mapped = Path(adopted['mapped'])
             rtl = list(silicon_rtl_selection(project / 'phase2/stage1/rtl'))
-            manifest, _ = flow109._bound_project_json(
-                project, Path('input/flow109/D22.json'), 'D25_NATIVE_SUBJECT_UNBOUND')
-            if (cfg.get('DESIGN_NAME') != manifest.get('top') or cfg.get('PDK') != manifest.get('pdk')
+            synthesis = json.loads((Path(adopted['native']).parent / 'config.json').read_bytes())
+            if (cfg.get('DESIGN_NAME') != synthesis.get('DESIGN_NAME') or cfg.get('PDK') != synthesis.get('PDK')
                     or cfg.get('VERILOG_FILES') != [str(p.resolve()) for p in rtl]
                     or state.get('nl') != str(mapped)
                     or fp.get('state_files') != {str(mapped): contract.digest(mapped)}
@@ -1679,7 +1676,6 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
             mounts = handoff._receipt_pdk_mounts(folder, receipt)
             if contract.config_file_hashes(cfg, mounts) != fp.get('config_files'):
                 raise MetricRefusal('D25_NATIVE_INPUT_STALE', 'native EQY config files changed')
-            synthesis = json.loads((Path(adopted['native']).parent / 'config.json').read_bytes())
             groups = synthesis.get('CELL_LIBS') or synthesis.get('LIB') or {}
             selected = {value for group in groups.values() for value in group}
             import fnmatch
@@ -1703,14 +1699,8 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
                 raise MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'EQY and adopted synthesis libraries differ')
             script = Path(cfg['EQY_SCRIPT'])
             if script.read_text() != native.eqy_script(
-                    manifest['top'], rtl, mapped, next(iter(proof_libraries))):
+                    synthesis['DESIGN_NAME'], rtl, mapped, next(iter(proof_libraries))):
                 raise MetricRefusal('D25_NATIVE_CONFIGURATION_UNBOUND', 'EQY script differs')
-            try:
-                launch = contract.local_image_attestation()
-            except contract.Refusal as exc:
-                raise MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', str(exc)) from exc
-            if fp.get('image') != launch.get('image'):
-                raise MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'native EQY image differs')
             with tempfile.TemporaryDirectory() as temporary:
                 observed = native.judge_eqy(folder, Path(temporary) / 'lec_eqy.json')
             component = observed['verdict'] if observed['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'

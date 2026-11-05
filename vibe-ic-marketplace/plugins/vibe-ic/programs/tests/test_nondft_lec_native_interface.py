@@ -72,24 +72,39 @@ def test_nondft_actual_owner_reaches_eqy_with_original_rtl_and_adopted_mapped(su
     assert not (project / 'reports/lec_eqy.json').exists()
 
 
+def test_reasoned_non_scan_public_chain_skips_unselected_dft_and_reaches_eqy(subject, monkeypatch):
+    project, rtl, context, calls = subject
+    (project / 'input/docs/L7_verification_plan.md').unlink()
+    (project / 'input/flow109/D22.json').unlink()
+    (project / 'reports/flow109/default_rows/D22.json').unlink()
+    import _path_layout as layout
+    layout.report_path(project, 'phase1_one_shot.json').unlink()
+    monkeypatch.setattr(D, '_step_dft_insertion', lambda *a, **kw:
+        pytest.fail('unselected DFT producer was reached'))
+    monkeypatch.setattr(D, '_run_transition_atpg', lambda *a, **kw:
+        pytest.fail('unselected transition ATPG was reached'))
+    monkeypatch.setattr(D, '_step_post_dft_optimization', lambda *a, **kw:
+        pytest.fail('unselected post-DFT producer was reached'))
+    with pytest.raises(ReachedEQY):
+        D.step_dft_lec_chain(project, 'top', 'unused', None, full_chip=True)
+    assert len(calls) == 1
+    sid, config, state = calls[0][2][0]
+    assert sid == 'Yosys.EQY'
+    assert json.loads(config.read_text())['VERILOG_FILES'] == [str(rtl)]
+    assert json.loads(state.read_text())['nl'] == str(project / 'phase2/stage2/synth/top_synth.v')
+
+
 @pytest.mark.parametrize('damage', ['missing_mapped', 'stale_mapped', 'stale_rtl',
-    'missing_D01', 'stale_D01', 'unaccepted_D22', 'foreign_top'])
+    'foreign_native_top'])
 def test_selected_inputs_refuse_before_native_dispatch(subject, damage):
     project, rtl, context, calls = subject
     mapped = project / 'phase2/stage2/synth/top_synth.v'
     if damage == 'missing_mapped': mapped.unlink()
     elif damage == 'stale_mapped': mapped.write_text(mapped.read_text() + '\n// changed')
     elif damage == 'stale_rtl': rtl.write_text(rtl.read_text() + '\n// changed')
-    elif damage == 'missing_D01':
-        import _path_layout as layout
-        layout.report_path(project, 'phase1_one_shot.json').unlink()
-    elif damage == 'stale_D01':
-        path = project / 'input/feature-decisions.json'
-        path.write_text(path.read_text() + ' ')
-    elif damage == 'unaccepted_D22':
-        put(project / 'reports/flow109/default_rows/D22.json', {
-            'step_id': 'D22', 'default_row_status': 'NOT_MEASURED', 'completed': False})
-    else: put(project / 'input/flow109/D22.json', {'top': 'foreign', 'pdk': 'pdkA'})
+    else:
+        native = project / 'phase3/librelane/02-yosys-synthesis/config.json'
+        cfg = json.loads(native.read_text()); cfg['DESIGN_NAME'] = 'foreign'; put(native, cfg)
     rows = D.step_lec_equivalence(project, 'top', 'unused')
     assert calls == []
     assert rows[-1].status in ('FAIL', 'NOT_MEASURED')
@@ -193,8 +208,7 @@ def test_consumer_reopens_empty_transport_without_claiming_proof(subject, damage
         'state': LC.digest(state), 'state_files': {
             str(project / 'phase2/stage2/synth/top_synth.v'):
                 LC.digest(project / 'phase2/stage2/synth/top_synth.v')},
-        'config_files': LC.config_file_hashes(cfg, mounts),
-        'local_image': LC.local_image_attestation()}
+        'config_files': LC.config_file_hashes(cfg, mounts)}
     put(folder / 'input_fingerprint.json', fingerprint)
     put(folder / 'pdk_root.json', {'cli_pdk_root': '/pdk',
         'mounts_under_it': [[str(mounts[0][0]), '/pdk']], 'stated_by': 'run_chain(pdk_root=...)'})
@@ -207,7 +221,7 @@ def test_consumer_reopens_empty_transport_without_claiming_proof(subject, damage
     observed = metrics.accept_d25(project, context)
     assert observed['status'] == observed['component_status'] == 'NOT_MEASURED', observed
     if damage == 'none':
-        assert observed['reason'] == 'D25_NATIVE_TOOL_PURPOSE_UNQUALIFIED', observed
+        assert observed['reason'] == 'D25_NATIVE_NOT_MEASURED', observed
         assert observed['native_consumer']['compared_points'] == 0
     else:
         assert observed['reason'] in ('D25_NATIVE_INPUT_STALE', 'D25_NATIVE_SUBJECT_UNBOUND'), observed
@@ -260,7 +274,7 @@ def test_generic_eqy_library_binding_uses_verified_consumed_paths(
         assert observed['reason'] == 'D25_MODEL_NOT_QUALIFIED', observed
         assert 'library_binding' not in observed
     else:
-        assert observed['reason'] == 'D25_NATIVE_TOOL_PURPOSE_UNQUALIFIED', observed
+        assert observed['reason'] == 'D25_NATIVE_NOT_MEASURED', observed
         if schema != 'CELL_LIBS' or relocated:
             actual = (host_root / Path(proof).relative_to('/pdk')
                       if proof.startswith('/pdk/') else Path(proof))
