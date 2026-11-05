@@ -156,6 +156,26 @@ def test_restoring_native_state_replaces_cached_metrics(tmp_path):
     assert chain.state.get_by_df(DesignFormat.ODB) == str(database)
 
 
+def test_resumed_pdn_uses_sized_native_configuration(tmp_path, monkeypatch):
+    pytest.importorskip("librelane")
+    import flow_engine as engine
+    import flow_pdn_current
+
+    report = native_run(tmp_path, Path(__file__).resolve().parents[1])
+    floorplan = tmp_path / "steps/die_floorplan_and_macros/result.json"
+    earlier = floorplan.read_bytes()
+    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda *args, **kwargs: {
+        "PDN_VWIDTH": 2.0, "PDN_HWIDTH": 2.0})
+
+    resumed = engine.run(tmp_path, route=report["route"],
+        from_name="io_pad_ring_and_power_distribution", to_name="io_pad_ring_and_power_distribution")
+
+    config = json.loads((tmp_path / "steps/io_pad_ring_and_power_distribution/openroad_generatepdn/config.json").read_text())
+    assert config["PDN_VWIDTH"] == config["PDN_HWIDTH"] == 2
+    assert resumed["steps"][0]["status"] == "PASS"
+    assert floorplan.read_bytes() == earlier
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=Path, required=True)

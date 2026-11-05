@@ -334,6 +334,9 @@ class NativeChain:
                 span = (max(float(extent[2]) - float(extent[0]), float(extent[3]) - float(extent[1]))
                         if extent else None)
                 settings = current_settings(self.project, self.config, parallel_length_um=span)
+                if self.route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"}:
+                    from flow_chip_inputs import sized_floorplan
+                    settings.update(sized_floorplan(self.project, self.config, settings))
                 self.owner.config = self.owner.config.copy(**_native_pdn_numbers(settings))
                 self.config = self.owner.config.to_raw_dict()
         except Exception as exc:
@@ -856,7 +859,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
         beginning = time.perf_counter()
         preparation = ToolResult()
         if restore_directory is not None:
-            if chain.prepare() is None:
+            if chain.prepare(**({"floorplan": True} if
+                    first > positions.get("die_floorplan_and_macros", first) else {})) is None:
                 chain.restore(restore_directory)
             preparation = chain.preparation_result()
             restore_directory = None

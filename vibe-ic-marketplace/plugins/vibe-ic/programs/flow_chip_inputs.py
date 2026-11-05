@@ -450,6 +450,25 @@ def _floorplan(native: dict, chosen: dict, ordered: dict, library: dict, area: f
                        "pad_side_widths_um": spans, "manufacturing_grid_um": grid}
 
 
+def sized_floorplan(project: Path, native: dict, settings: dict) -> dict:
+    from flow_config import _load
+
+    path = project / "work/flow/chip/preparation.json"
+    prepared = _load(path)
+    fields = _load(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").get("fields", {})
+    native = {**native, **settings, "DIE_AREA": fields.get("die_area_um"),
+              "CORE_AREA": fields.get("core_area_um")}
+    slot = _selected_slot(project)
+    if slot is not None:
+        native = _slot_geometry(native, slot)
+    _, placement, _ = _side_ports(project, prepared["ports"])
+    die, core, geometry = _floorplan(native, prepared["pads"], prepared["pad_sides"],
+        _library(native), prepared["geometry"]["mapped_cell_area_um2"], placement, settings)
+    prepared.update(geometry=geometry, die_area_um=die, core_area_um=core)
+    path.write_text(json.dumps(prepared, indent=2, default=str) + "\n")
+    return {"DIE_AREA": die, "CORE_AREA": core}
+
+
 def _identifier(name: str) -> str:
     return name if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9$]*", name) else "\\" + name.lstrip("\\") + " "
 

@@ -385,6 +385,45 @@ def test_current_geometry_reaches_floorplan_and_reserves_both_ring_rails(inputs,
     assert geometry["core_inset_um"] >= 8.4 + geometry["pad_depth_um"]
 
 
+def test_floorplan_row_reserves_the_ring_sized_after_initial_preparation(inputs, monkeypatch):
+    pytest.importorskip("librelane")
+    from types import SimpleNamespace
+    from librelane.config import Config
+    import flow_engine
+    import flow_pdn_current
+
+    project, config, native, _, _ = inputs
+    native.update(PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=False,
+                  PDN_CORE_RING_VOFFSET=1, PDN_CORE_RING_HOFFSET=1,
+                  PDN_CORE_RING_VWIDTH=1, PDN_CORE_RING_HWIDTH=1,
+                  PDN_CORE_RING_VSPACING=1, PDN_CORE_RING_HSPACING=1)
+    generated = chip.prepare(project, config)
+    initial_inset = generated["CORE_AREA"][0] - generated["DIE_AREA"][0]
+    power = project / "steps/pre_layout_timing/result.json"
+    _write(power, json.dumps({"native_metrics": {"power__total__corner:nominal": 0.02}}))
+    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda *args, **kwargs: {
+        "PDN_CORE_RING_VWIDTH": 12, "PDN_CORE_RING_HWIDTH": 12})
+    monkeypatch.setattr(chip, "_native_core", lambda *args: pytest.fail("second synthesis"))
+    chain = flow_engine.NativeChain(project, {"delivery_target": "gds"})
+    chain.owner = SimpleNamespace(config=Config({**native, **generated}))
+    chain.config = chain.owner.config.to_raw_dict()
+
+    assert chain.prepare(floorplan=True) is None
+
+    die, core = chain.config["DIE_AREA"], chain.config["CORE_AREA"]
+    inset = min(core[0] - die[0], core[1] - die[1], die[2] - core[2], die[3] - core[3])
+    assert inset > initial_inset
+    assert inset >= 2 + 20 + 1 + 2 * 12 + 1
+    assert (core[2] - core[0]) * (core[3] - core[1]) >= 40 / 0.4
+    declaration = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    docs = json.loads(declaration.read_text())
+    docs["fields"] = {"die_area_um": generated["DIE_AREA"], "core_area_um": generated["CORE_AREA"]}
+    declaration.write_text(json.dumps(docs))
+    error = chain.prepare(floorplan=True)
+    assert isinstance(error, ValueError)
+    assert "cannot fit" in str(error)
+
+
 def test_current_sizing_uses_initial_die_before_final_floorplan(inputs, monkeypatch):
     import flow_pdn_current
     project, config, native, _, _ = inputs
