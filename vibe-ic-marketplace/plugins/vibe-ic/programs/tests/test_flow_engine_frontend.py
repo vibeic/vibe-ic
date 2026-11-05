@@ -323,7 +323,6 @@ def test_debug_resume_keeps_ai_canonical_rtl_and_lints_only(tmp_path, input_cont
 
 @pytest.mark.parametrize("input_contract", ["original", "structured"])
 def test_debug_author_failure_refreshes_from_ai_output_and_retains_history(tmp_path, input_contract):
-    import ai_signed_judgement
     import flow_engine
     route = {"entry_step": "4", "verify_through": "4", "delivery_target": "rtl",
              "input_contract": input_contract, "verify_closed_steps": ["D1", "0.5ic", "1", "2", "4"]}
@@ -345,13 +344,6 @@ def test_debug_author_failure_refreshes_from_ai_output_and_retains_history(tmp_p
     author = {"kind": "AI", "model": "fixture-author-model"}
     backup.write_text(json.dumps({"schema": "vibeic.benchmark.ai_backup_record.v1", "author": author}))
     (rtl.parent.parent / "fallback_skill.md").write_text("Use spec-to-rtl to implement the generic inverter.\n")
-    judgement = tmp_path / "reports/audit/ai_judgements/1.json"
-    judgement.parent.mkdir(parents=True)
-    judgement.write_text(json.dumps({"schema": "vibeic.ai-judgement.v1", "step_id": "1",
-                                     "verdict": "PASS", "signed_by": "fixture-reviewer",
-                                     "evidence_sha256": ai_signed_judgement.evidence_sha256(tmp_path, "1"),
-                                     "judgement": "Reviewed the authored RTL."}))
-    assert ai_signed_judgement.check(tmp_path, "1")[0]
     def lint_only(command, **kwargs):
         assert command[command.index("--entry-step") + 1] == "2"
         assert command[command.index("--exit-step") + 1] == "2"

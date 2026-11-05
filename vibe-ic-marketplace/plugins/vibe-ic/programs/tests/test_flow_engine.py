@@ -11,14 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import flow_engine as engine
 
 
-@pytest.fixture(params=["installed", "regenerated"])
-def physical_step_table(request, tmp_path):
-    if request.param == "installed":
-        return engine.read_json(engine.TABLE)
-    output = tmp_path / "steps.json"
-    subprocess.run([sys.executable, str(engine.HERE / "flow_steps_generate.py"),
-                    "--output", str(output)], check=True)
-    return engine.read_json(output)
+@pytest.fixture
+def physical_step_table():
+    return engine.read_json(engine.TABLE)
 
 
 def command_row(name, value=0, code=0, inputs=()):

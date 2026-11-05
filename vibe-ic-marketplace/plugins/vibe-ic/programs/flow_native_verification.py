@@ -420,7 +420,7 @@ def gls_signal_netlist(directory, netlist, text, used, closure, config, commands
     from _pad_ring import parse_lef_pin_roles, parse_verilog_rail_bridges
     from _specrtl_common import parse_rtl_ports
     from flow_chip_inputs import _paths
-    from flow109_netlist_cdc import _word
+    from flow_native_adapters import _word
 
     roles, connections, removed = {}, {}, set()
     for key in ("PAD_LEFS", "CELL_LEFS", "EXTRA_LEFS"):
