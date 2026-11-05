@@ -6,9 +6,8 @@ import sys
 
 import pytest
 
-import flow109_final_gls as final_gls
 
-sys.path.insert(0, str(final_gls.HERE / 'librelane_plugins'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'librelane_plugins'))
 from librelane_plugin_vibeic import GateLevelSim
 
 
