@@ -181,6 +181,8 @@ class OwnerSession:
             command = [sys.executable, str(Path(__file__).with_name("phase1_one_shot_runner.py")),
                        str(self.project), "--route", delivery_route_for_target(self.route["delivery_target"]),
                        "--mode", "docs", "--execution-mode", "default", "--engine", "native"]
+            if self.route.get("pdk"):
+                command += ["--pdk", self.route["pdk"]]
             self.phase1_executed = True
         elif kind != "phase1" and not self.executed and (bounded or rerun or not path.is_file()):
             if bounded:
@@ -286,8 +288,8 @@ def run_public(args):
         text = flow_engine.design_text(project)
         proposal = router.route_task(text)
         target = args.delivery_target
-        if target is None and args.route == "ip":
-            target = "ip_hardmacro"
+        if target is None and args.route:
+            target = "ip_hardmacro" if args.route == "ip" else "shippable_gds"
         if target is None:
             requirements = router.prompt_delivery_requirements(text)
             resolved = router.resolve_prompt_delivery_target(requirements, None)
@@ -296,6 +298,8 @@ def run_public(args):
             target = resolved["target"]
         route = router.route_decision_receipt(
             text, nature=proposal["entry_nature"], delivery_target=target)
+    if getattr(args, "pdk", "auto") != "auto":
+        route = {**route, "pdk": args.pdk}
     summary = flow_engine.run(project, route=route)
     return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
 
