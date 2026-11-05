@@ -174,10 +174,10 @@
     },
     "requires_em": {
       "value": true,
-      "when": "ic",
+      "when": "physical",
       "source": {
         "file": "programs/flow_em_corners.py",
-        "note": "Ruling211: retain published IC power-grid EM against PDK Jmax."
+        "note": "Ruling220: retain the IC native engineering tool and original limit for physical hard IP as well."
       }
     },
     "requires_spares": {
@@ -190,10 +190,10 @@
     },
     "requires_si": {
       "value": true,
-      "when": "ic",
+      "when": "physical",
       "source": {
         "file": "programs/flow_ic_checks.py",
-        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+        "note": "Ruling220: retain the IC native engineering tool and original limit for physical hard IP as well."
       }
     },
     "requires_spice": {
@@ -3265,7 +3265,7 @@
             }
           },
           {
-            "when": "ic",
+            "when": "ic or hard_ip",
             "tool": {
               "kind": "librelane",
               "steps": [
@@ -3292,7 +3292,7 @@
           "metric": "si_setup_slack_ns",
           "operator": ">=",
           "limit": 0,
-          "when": "ic",
+          "when": "ic or hard_ip",
           "source": {
             "file": "programs/flow_ic_checks.py"
           }
@@ -3301,7 +3301,7 @@
           "metric": "si_hold_slack_ns",
           "operator": ">=",
           "limit": 0,
-          "when": "ic",
+          "when": "ic or hard_ip",
           "source": {
             "file": "programs/flow_ic_checks.py"
           }
@@ -3310,7 +3310,7 @@
           "metric": "coupling_noise_delay_bounds",
           "operator": "within_declared_bounds",
           "limit": null,
-          "when": "not ic or analog_physical",
+          "when": "not (ic or hard_ip) or analog_physical",
           "source": {
             "file": "flow/flow109.json",
             "line": 11894
@@ -3319,7 +3319,7 @@
             "kind": "design_or_pdk",
             "metric": "coupling_noise_delay_bounds"
           },
-          "tool_gap": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool."
+          "tool_gap": "Digital IC and hard IP retain the published native numerical scope; broader analog or assembly engineering measurements still need their native tool."
         }
       ],
       "legacy_id": {
@@ -3773,7 +3773,7 @@
             }
           },
           {
-            "when": "ic",
+            "when": "ic or hard_ip",
             "tool": {
               "kind": "librelane",
               "steps": [
@@ -3811,7 +3811,7 @@
           "operator": "<=",
           "limit": 100,
           "unit": "%",
-          "when": "ic",
+          "when": "ic or hard_ip",
           "source": {
             "file": "programs/flow109_final_electrical.py",
             "line": 166
