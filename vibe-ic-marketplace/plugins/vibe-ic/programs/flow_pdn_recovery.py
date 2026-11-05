@@ -34,7 +34,7 @@ def printed_bound(value: str, upper: bool) -> Decimal:
     return number + half_unit if upper else number - half_unit
 
 
-def measured_settings(config, hotspots, tech, limits, wires, rules):
+def measured_settings(config, hotspots, tech, limits, wires, rules, parallel_length_um=None):
     """Return actuator inputs; native remeasurement decides whether they work."""
     grid = Decimal(tech.getManufacturingGrid()) / Decimal(tech.getDbUnitsPerMicron())
     if grid <= 0:
@@ -57,9 +57,10 @@ def measured_settings(config, hotspots, tech, limits, wires, rules):
         if not current.is_finite() or not area.is_finite() or area <= 0 or current <= 0:
             return None
         points = [float(row[key]) for key in ("Node0 X", "Node0 Y", "Node1 X", "Node1 Y")]
-        owners = {wire.role for wire in wires if wire.layer.lower() == layer and all(
-            wire.bounds[axis] <= points[index] <= wire.bounds[axis + 2]
-            for index, axis in ((0, 0), (1, 1), (2, 0), (3, 1)))}
+        endpoint_roles = [{wire.role for wire in wires if wire.layer.lower() == layer
+            and wire.bounds[0] <= points[index] <= wire.bounds[2]
+            and wire.bounds[1] <= points[index + 1] <= wire.bounds[3]} for index in (0, 2)]
+        owners = endpoint_roles[0] & endpoint_roles[1]
         if len(owners) != 1:
             return None
         role = owners.pop()
@@ -85,7 +86,7 @@ def measured_settings(config, hotspots, tech, limits, wires, rules):
             key = f"PDN_{axis}PITCH"
             proposed[key] = float((Decimal(str(config[key])) / pitch_factor / quantum
                 ).to_integral_value(rounding=ROUND_FLOOR) * quantum)
-    settings = coherent_geometry(proposed, widths, tech)
+    settings = coherent_geometry(proposed, widths, tech, parallel_length_um)
     settings = {key: value for key, value in settings.items() if value != float(config[key])}
     return RecoveryPlan(settings, tuple(evidence)) if settings else None
 
@@ -168,7 +169,8 @@ def _plan_recovery(project: Path, route: dict, summary: dict) -> RecoveryPlan | 
     lefs = matching(config["TECH_LEFS"], config["DEFAULT_CORNER"])
     if len(lefs) != 1:
         return None
-    reports = list((project / "steps/candidate_electromigration/vibeic_emcorners").glob("max_*/em-*.csv"))
+    em_root = project / "steps/candidate_electromigration/vibeic_emcorners"
+    reports = list(em_root.glob("max_*/em-*.csv"))
     hotspots, limits = [], {}
     for report in reports:
         for line in (report.parent / "em_limits_pdk.txt").read_text().splitlines():
@@ -182,12 +184,15 @@ def _plan_recovery(project: Path, route: dict, summary: dict) -> RecoveryPlan | 
     if not hotspots:
         return None
     import odb
-    state = json.loads((configs[0].parent / "state_out.json").read_text())
+    state = json.loads((em_root / "state_in.json").read_text())
     database = odb.dbDatabase.create()
     try:
         odb.read_db(database, state["odb"])
+        block = database.getChip().getBlock()
+        die = block.getDieArea()
+        length = max(die.dx(), die.dy()) / block.getDbUnitsPerMicron()
         return measured_settings(config, hotspots, database.getTech(), limits,
-            _wires(database.getChip().getBlock(), config), parse_lef_jmax(lefs[0].read_text()))
+            _wires(block, config), parse_lef_jmax(lefs[0].read_text()), length)
     finally:
         odb.dbDatabase.destroy(database)
 

@@ -50,6 +50,13 @@ def test_measured_rail_overload_reduces_pitch_without_changing_cell_rail_width()
     assert plan.settings == {"PDN_VPITCH": 80, "PDN_HPITCH": 80}
 
 
+def test_native_resistor_between_separate_fixed_pin_regions_remains_a_rail_actuator():
+    plan = measured_settings(config(), [hotspot("rail")], Tech(), {"rail": Decimal(".001")},
+        [Wire("rail", "rail", (-1, -1, 1, 1)), Wire("rail", "rail", (-1, 4, 1, 6))],
+        {"rail": {"thickness_um": .54}})
+    assert plan.settings == {"PDN_VPITCH": 80, "PDN_HPITCH": 80}
+
+
 @pytest.mark.parametrize("wires,basis", [([], "AREAL"),
     ([Wire("vertical", "PDN_VWIDTH", (-1, -1, 1, 6)), Wire("vertical", "rail", (-1, -1, 1, 6))], "AREAL"),
     ([Wire("vertical", "PDN_VWIDTH", (-1, -1, 1, 6))], "PER_CUT")])
