@@ -516,3 +516,39 @@ def test_shared_input_resolver_recovers_declared_top_without_config_side_effects
     assert top == "unit"
     assert files == [project / "phase2/stage1/rtl/unit.v"]
     assert not (project / "work").exists()
+
+
+def test_explicit_pdn_actuator_overrides_documentary_starting_geometry(project):
+    docs = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    docs.write_text(json.dumps({"fields": {"pdk_target": "sky130A", "constraint_declarations": [
+        {"kind": "flow_setting", "token": "PDN_VPITCH", "value": "160"}]}}))
+    declaration = project / "plugin_output/declaration.json"
+    declaration.parent.mkdir()
+    declaration.write_text(json.dumps({"PDN_VPITCH": 80}))
+    assert build_config(project, route="ip")["PDN_VPITCH"] == 80
+
+
+@pytest.mark.parametrize("extent_key", [None, "DIE_AREA", "CORE_AREA"])
+def test_hardmacro_sizes_native_defaults_after_current_estimate(project, monkeypatch, extent_key):
+    from flow_config import build_native_config
+    import flow_pdn_current
+    import types
+    seen = []
+    native = {"PDN_CFG": None, "PDN_RAIL_WIDTH": .6}
+    if extent_key:
+        native[extent_key] = [10, 20, 90, 100]
+    class Classic:
+        def __init__(self, config, **kwargs):
+            self.config = types.SimpleNamespace(to_raw_dict=lambda: native)
+    flows = types.ModuleType("librelane.flows")
+    flows.Flow = types.SimpleNamespace(factory=types.SimpleNamespace(get=lambda kind: Classic))
+    monkeypatch.setitem(sys.modules, "librelane.flows", flows)
+    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda root, config, parallel_length_um:
+        seen.append((root, config, parallel_length_um)) or {"PDN_VWIDTH": 2.4})
+    power = project / "steps/pre_layout_timing/result.json"
+    power.parent.mkdir(parents=True)
+    power.write_text("{}")
+    result = build_native_config(project, route="ip")
+    assert result["PDN_VWIDTH"] == 2.4
+    assert "PDN_RAIL_WIDTH" not in result
+    assert seen == [(project.resolve(), native, 80 if extent_key else None)]
