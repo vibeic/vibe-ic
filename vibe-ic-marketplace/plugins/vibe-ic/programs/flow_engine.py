@@ -160,7 +160,7 @@ def select_steps(table: dict, route: dict, features: dict,
             raise ValueError(f"Router boundary has no unique table address: {value}")
         return matches[0]
     start, end = find(str(route["entry_step"])), find(str(route["verify_through"]))
-    closed = set(route.get("verify_closed_steps", [])) if route.get("input_contract") == "original" else set()
+    closed = set(route.get("verify_closed_steps", []))
     if closed:
         indices = [i for i, row in enumerate(rows) if closed.intersection(aliases(row))]
         if indices:
