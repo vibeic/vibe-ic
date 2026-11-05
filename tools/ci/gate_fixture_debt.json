@@ -54,21 +54,13 @@
       "slug": "practical_notes_specificity",
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/practical_notes_specificity.py."
     },
-    {
-      "gate": "P0 disposition backing",
-      "slug": "p0_disposition_backing",
-      "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/p0_disposition_backing.py."
-    },
+
     {
       "gate": "no upstream forked twice",
       "slug": "no_upstream_forked_twice",
       "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/no_upstream_forked_twice.py."
     },
-    {
-      "gate": "PR bases reach main",
-      "slug": "pr_bases_reach_main",
-      "why": "NOT_WRITTEN_YET — the two-fixture convention lands with this change and this gate's pair has not been authored. This is debt, not a dispensation: the entry is deleted by writing tools/ci/gate_fixtures/pr_bases_reach_main.py."
-    },
+
     {
       "gate": "flow-gate enforcement audit",
       "slug": "flow_gate_enforcement_audit",
