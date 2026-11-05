@@ -89,6 +89,52 @@ def test_expert_reference_survives_regeneration_and_closes_hook(tmp_path):
     assert plan["reference_model_tier"] == "expert_filled"
 
 
+@pytest.mark.skipif(shutil.which("yosys") is None, reason="native Yosys is required")
+def test_undeclared_ports_use_native_interface_and_keep_expert_hook(tmp_path):
+    project = _project(tmp_path)
+    document = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    contents = json.loads(document.read_text())
+    contents["top_ports"] = []
+    document.write_text(json.dumps(contents))
+    original = document.read_text()
+    (project / "phase2/stage1/rtl/converter.sv").write_text(
+        "module converter #(parameter WIDTH = 7) "
+        "(input [WIDTH-1:0] sample, input ck4, output reg [WIDTH-1:0] result); "
+        "always @(posedge ck4) result <= sample; endmodule\n")
+
+    shape, reason = SUBJECT.classify_dut(project, "unknown")
+    assert shape is not None, reason
+    assert shape["kind"] == "generic"
+    assert {port["name"]: (port["dir"], port["numeric_width"])
+            for port in shape["ports"]} == {
+                "sample": ("input", 7), "ck4": ("input", 1),
+                "result": ("output", 7)}
+    first = SUBJECT.generate(project)
+    assert first["reference_model_tier"] == "hook_unfilled"
+    out = Path(first["out_dir"])
+    (out / "expert_reference_tb.py").write_text(EXPERT)
+    second = SUBJECT.generate(project)
+    assert second["reference_model_tier"] == "expert_filled"
+    assert (out / "tb_converter.py").read_text() == EXPERT
+    assert document.read_text() == original
+
+
+@pytest.mark.skipif(shutil.which("yosys") is None, reason="native Yosys is required")
+def test_native_interface_failure_does_not_emit_testbench(tmp_path):
+    project = _project(tmp_path)
+    document = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    contents = json.loads(document.read_text())
+    contents["top_ports"] = []
+    document.write_text(json.dumps(contents))
+    (project / "phase2/stage1/rtl/converter.sv").write_text(
+        "module converter(input sample, output result); syntax error; endmodule\n")
+
+    result = SUBJECT.generate(project)
+    assert result["status"] == "SKIP"
+    assert "Native interface elaboration failed" in result["reason"]
+    assert not (project / "phase2/stage1/sim_professional").exists()
+
+
 def test_generator_names_only_the_expert_model_it_measured(tmp_path):
     project = _project(tmp_path)
     first = SUBJECT.generate(project)

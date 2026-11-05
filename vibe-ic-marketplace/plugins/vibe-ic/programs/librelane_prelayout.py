@@ -81,9 +81,10 @@ def black_boxes(sta_log: str) -> list[dict[str, str]]:
             for m in _BLACK_BOX_RE.finditer(sta_log)]
 
 
-def sdc_diagnostics(sta_log: str, sdc: Path) -> list[dict[str, Any]]:
+def sdc_diagnostics(sta_log: str, sdc: Path, *, calibrate: bool = True) -> list[dict[str, Any]]:
     """OpenSTA diagnostics raised while reading THIS constraints file."""
-    instrument_calibration.assert_calibrated("librelane_prelayout::sdc_diagnostics")
+    if calibrate:
+        instrument_calibration.assert_calibrated("librelane_prelayout::sdc_diagnostics")
     found = []
     for m in _FILE_DIAG_RE.finditer(sta_log):
         if Path(m.group(3)).name != sdc.name:
@@ -94,7 +95,8 @@ def sdc_diagnostics(sta_log: str, sdc: Path) -> list[dict[str, Any]]:
 
 
 def check_setup_counts(checks_rpt: str,
-                       exclude: frozenset = frozenset()) -> Optional[dict[str, int]]:
+                       exclude: frozenset = frozenset(), *,
+                       calibrate: bool = True) -> Optional[dict[str, int]]:
     """check_setup findings by kind; None when the section was never written.
 
     `exclude` names objects that are never timed (the design's supply ports,
@@ -102,7 +104,8 @@ def check_setup_counts(checks_rpt: str,
     `-verbose` listing under the summary line names them; an unlisted count
     stands as reported.
     """
-    instrument_calibration.assert_calibrated("librelane_prelayout::check_setup_counts")
+    if calibrate:
+        instrument_calibration.assert_calibrated("librelane_prelayout::check_setup_counts")
     header = _CHECK_SETUP_HEADER_RE.search(checks_rpt)
     if header is None:
         return None

@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -309,6 +310,35 @@ def _resolve_tb_width(project: Path, ports: List[dict]) -> int:
 # --------------------------------------------------------------------------
 # DUT shape classification
 # --------------------------------------------------------------------------
+def _native_top_ports(project: Path) -> Tuple[Optional[str], List[dict], Optional[str]]:
+    """Read the authored interface with Yosys when prose supplied no port names."""
+    from _cdc_netlist import yosys_script
+    from flow_config import resolve_rtl_inputs
+
+    try:
+        files, top = resolve_rtl_inputs(project)
+    except (FileNotFoundError, ValueError) as error:
+        return None, [], str(error)
+    directory = project / "reports/phase2/professional_interface"
+    directory.mkdir(parents=True, exist_ok=True)
+    output = directory / "interface.json"
+    output.unlink(missing_ok=True)
+    try:
+        result = subprocess.run(["yosys", "-Q", "-T", "-p",
+                                 yosys_script(files, top, output)], cwd=project,
+                                capture_output=True, text=True, check=False)
+    except OSError as error:
+        return None, [], str(error)
+    log = directory / "yosys.log"
+    log.write_text(result.stdout + result.stderr)
+    if result.returncode != 0 or not output.is_file():
+        return None, [], f"Native interface elaboration failed; see {log}"
+    ports = json.loads(output.read_text())["modules"][top]["ports"]
+    return top, [{"name": name, "dir": port["direction"], "raw": port,
+                  "numeric_width": len(port["bits"]), "is_parametric": False}
+                 for name, port in ports.items()], None
+
+
 def classify_dut(project: Path, ic_class: str
                  ) -> Tuple[Optional[dict], Optional[str]]:
     """Return (shape, reason_if_none). shape kinds:
@@ -318,8 +348,11 @@ def classify_dut(project: Path, ic_class: str
       * "generic"         — reference hook (dual-track)
     """
     top, ports = _aog._load_top_ports(project)
-    if not top or not ports:
-        return None, "no usable L9 top ports"
+    authored_interface = not top or not ports
+    if authored_interface:
+        top, ports, why = _native_top_ports(project)
+        if not top or not ports:
+            return None, why or "no usable native top ports"
     cr = _load_clock_reset(project, ports)
     data = [p for p in ports
             if p["name"] not in (cr["clk"], cr["rst"])]
@@ -328,6 +361,9 @@ def classify_dut(project: Path, ic_class: str
     if not ins or not outs:
         return None, "need >=1 data input and >=1 data output"
     width = _resolve_tb_width(project, ports)
+    if authored_interface:
+        return ({"kind": "generic", "top": top, "cr": cr, "ports": ports,
+                 "width": width}, None)
 
     # arithmetic-primitive family: try the closed-form operator first
     spec, _why = _aog.extract_arith_spec(project, ic_class)

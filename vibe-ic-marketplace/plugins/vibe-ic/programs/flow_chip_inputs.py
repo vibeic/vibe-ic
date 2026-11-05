@@ -402,10 +402,10 @@ def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
         text = text.replace("[all_inputs -no_clocks]", collection([name for name in inputs if name not in clocks]))
         return text.replace("[all_outputs]", collection(outputs))
     path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
-    document = json.loads(path.read_text())
+    document = json.loads(path.read_text()) if path.is_file() else {}
     delay = document.get("constraints", {}).get("io_delay", {}).get("default_fraction_percent")
     if delay is None:
-        raise FileNotFoundError("Missing L19.constraints.io_delay.default_fraction_percent")
+        delay = _required(config, "IO_DELAY_CONSTRAINT")
     clocks = _required(config, "CLOCK_PORT")
     if isinstance(clocks, str):
         clocks = [clocks]
@@ -440,7 +440,7 @@ def prepare(project: Path, core_config: dict[str, Any]) -> dict[str, Any]:
     wrapper.write_text(_wrapper(core_config["DESIGN_NAME"], top, ports, chosen, ordered,
                                 supplies, native, library))
     sdc = destination / "constraints.sdc"
-    sdc.write_text(_sdc(project, core_config, ports))
+    sdc.write_text(_sdc(project, {**native, **core_config}, ports))
     result = dict(core_config)
     for axis in ("VERTICAL", "HORIZONTAL"):
         key = f"PDN_CORE_{axis}_LAYER"

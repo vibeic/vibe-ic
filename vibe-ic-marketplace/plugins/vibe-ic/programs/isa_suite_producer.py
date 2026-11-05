@@ -478,6 +478,9 @@ def bind_sram_ports(ports: List[Tuple[str, str, str]], *,
 
     out: Dict[str, str] = {}
     explicit: Dict[str, str] = {}
+    required_roles = list(_SDP_ROLES)
+    if protocol is not None and "ren" not in protocol["stated_roles"]:
+        required_roles.remove("ren")
     for role in _SDP_ROLES:
         want_dir = "input" if role == "rdata" else "output"
         hits = [n for d, _w, n in ports
@@ -490,7 +493,7 @@ def bind_sram_ports(ports: List[Tuple[str, str, str]], *,
             out[role] = hits[0]
             explicit[role] = _prefix(hits[0], role)
     for anchor in ("waddr", "ren"):
-        if anchor not in explicit:
+        if anchor in required_roles and anchor not in explicit:
             return None, f"SRAM role {anchor!r}: no explicit top port establishes its interface"
     interfaces = set(explicit.values())
     if len(interfaces) != 1:
@@ -500,7 +503,7 @@ def bind_sram_ports(ports: List[Tuple[str, str, str]], *,
     interface = interfaces.pop()
     aliases = {"wdata": "data", "rdata": "data",
                "wen": "we", "raddr": "addr"}
-    for role in _SDP_ROLES:
+    for role in required_roles:
         if role in out:
             continue
         alias = aliases.get(role)
