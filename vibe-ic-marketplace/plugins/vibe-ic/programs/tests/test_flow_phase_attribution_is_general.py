@@ -182,10 +182,9 @@ def test_sim_attribution_uses_the_selected_engine_verdict(
             _step("functional_simulation_and_coverage", native_status)]
         (p / "reports/flow_engine.json").write_text(json.dumps({"steps": rows}))
     phase = fpa.attribute(p)["phase3_verifying"]
-    expected = (native_status if native_status in {"PASS", "FAIL"} else "NOT_MEASURED"
-                ) if engine == "native" else owner_status
-    if engine == "native" and owner_status is None and native_status.startswith("missing-"):
-        expected = None
+    expected = owner_status
+    if engine == "native" and owner_status != "FAIL" and not (owner_status is None and native_status.startswith("missing-")):
+        expected = native_status if native_status in {"PASS", "FAIL"} else "NOT_MEASURED"
     assert {**phase["not_attempted"], **phase["ran"]}.get("sim") == expected
     assert ("sim" in phase["ran"]) + ("sim" in phase["not_attempted"]) == (expected is not None)
     assert phase["failed"] == sorted(["rtl_validate"] + (["sim"] if expected == "FAIL" else []))
@@ -195,23 +194,24 @@ def test_sim_attribution_uses_the_selected_engine_verdict(
 @pytest.mark.parametrize("before,after,expected", [
     ("PASS", "FAIL", "ELIGIBLE"), ("PASS", None, "ELIGIBLE"),
     ("FAIL", "PASS", "INELIGIBLE"), (None, "PASS", "NOT_MEASURED")])
-@pytest.mark.parametrize("owner_status", [None, "PASS"])
+@pytest.mark.parametrize("owner_status", [None, "PASS", "FAIL"])
 def test_native_sim_consumers_share_the_live_verdict(
         tmp_path, monkeypatch, before, after, expected, owner_status):
-    import benchmark_dispatch as bd
+    import benchmark_dispatch as bd, step_preflight as spf
     monkeypatch.setenv("VIBEIC_FLOW_ENGINE", "native")
     steps = [_step("rtl_gen", "PASS"), _step("rtl_validate", "PASS")]
     if owner_status:
-        steps.append(_step("sim", owner_status))
+        steps.append(_step("sim", owner_status, required_site={"runner": "design_one_shot_runner", "site": "sim",
+            "flow_steps": dict(spf.RUNNER_PLANS["design_one_shot_runner"].sites)["sim"]}))
     p = _project(tmp_path, steps, prompt=_PROMPT)
     report = p / "reports/flow_engine.json"
     name = "functional_simulation_and_coverage"
     report.write_text(json.dumps({"steps": [_step(name, before)] if before else []}))
     snapshot = {"exit": "4", "phases": fpa.attribute(p)}
-    assert bd._required_gate_ledger(snapshot)["eligibility"] == expected
+    assert bd._required_gate_ledger(snapshot)["eligibility"] == ("INELIGIBLE" if owner_status == "FAIL" else expected)
     assert bd._gate_evidence_freshness_reasons(p, snapshot) == []
     report.write_text(json.dumps({"steps": [_step(name, after)] if after else []}))
-    assert bd._gate_evidence_freshness_reasons(p, snapshot)
+    assert bool(bd._gate_evidence_freshness_reasons(p, snapshot)) == (owner_status != "FAIL")
 
 
 # ── FLOW-BACK TEST ───────────────────────────────────────────────────────────
