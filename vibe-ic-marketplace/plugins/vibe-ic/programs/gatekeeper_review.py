@@ -1059,29 +1059,8 @@ def _git_text(cwd: Path, argv: List[str]) -> Optional[str]:
 #: Where the toolchain profile of a hygiene record lives. ONE spelling, used by
 #: the writer here and by `hygiene_finding_delta`'s reader, so the two cannot
 #: drift into writing and looking for different names.
-def toolchain_sidecar(record: Path) -> Path:
-    return Path(str(record) + ".toolchain.json")
 
 
-def _stamp_toolchain(record: Path) -> None:
-    """Record THIS host's toolchain beside a hygiene record. Never raises.
-
-    A failure to stamp leaves NO sidecar, which the consumer reads as "not
-    recorded" and discloses. It must never leave a WRONG one: a profile that
-    does not describe the run it sits beside is worse than none, because the
-    comparison it enables would be believed.
-    """
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import toolchain_profile as _tc
-        toolchain_sidecar(record).write_text(
-            json.dumps(_tc.profile(), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8")
-    except Exception:                      # pragma: no cover - best effort
-        try:
-            toolchain_sidecar(record).unlink()
-        except OSError:
-            pass
 
 
 def repo_hygiene_gate(repo: Path,
@@ -1277,25 +1256,6 @@ def repo_hygiene_gate(repo: Path,
                 return GateResult(name, 2,
                                   f"ERROR — could not hand on the coverage "
                                   f"record: {exc}")
-            # AND THE TOOLCHAIN THIS RECORD WAS MEASURED UNDER (vibe-ic#1327).
-            #
-            # `hygiene_finding_delta` differences two of these records and
-            # already refuses across HOSTS, because a finding is host-dependent.
-            # Same host is not the same toolchain: measured on 8HD-8 at one
-            # commit, the bare host and the full container disagreed by 25
-            # failures over the identical tree, and the `test_cvdp_gate*` family
-            # alone went 29 red -> 0 red with tools added. A subtraction across
-            # that difference attributes the delta to the branch.
-            #
-            # A SIDECAR, not a new key in the record: `repo_hygiene_parallel`
-            # rebuilds this document field by field and `test_routed_def_corpus
-            # _dispatch` pins its exact top-level key set, so a key added here
-            # would have to be added in two more places to stay consistent —
-            # and a record whose shape depends on which runner wrote it is worse
-            # than a file beside it. The consumer treats an ABSENT sidecar as
-            # "not recorded", never as "the toolchains matched".
-            _stamp_toolchain(summary_out)
-
     return _hygiene_verdict(doc, supervised.rc)
 
 
