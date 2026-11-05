@@ -468,3 +468,20 @@ def test_public_entry_runs_one_pass_from_requested_step(tmp_path, monkeypatch):
     assert observed[0]["from_name"] == "synthesis"
     assert len(observed) == 1
     assert "to_name" not in observed[0]
+
+
+def test_public_em_failure_returns_native_failure_without_replay(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import sys
+    observed = []
+    native = {"fail": 1, "not_measured": 0, "steps": [{
+        "name": "candidate_electromigration", "status": "FAIL",
+        "native_metrics": {"em_violations": 2}}]}
+    monkeypatch.setitem(sys.modules, "flow_engine", SimpleNamespace(
+        run=lambda project, **kwargs: observed.append(kwargs) or native))
+    args = SimpleNamespace(project=tmp_path, entry_step="requirements_and_delivery_route",
+        exit_step="candidate_electromigration", rtl_input="structured",
+        delivery_target="ip_hardmacro", route="ip", from_name=None, pdk="auto")
+    assert frontend.run_public(args) == 1
+    assert len(observed) == 1
+    assert native["steps"][0]["native_metrics"] == {"em_violations": 2}

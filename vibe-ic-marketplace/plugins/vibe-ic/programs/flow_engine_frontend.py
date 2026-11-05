@@ -409,24 +409,7 @@ def run_public(args):
         forwarded["from_name"] = args.from_name
     if getattr(args, "pdk", "auto") != "auto":
         forwarded["pdk"] = args.pdk
-    previous_report = project / "reports/flow_engine.json"
-    previous_report = json.loads(previous_report.read_text()) if previous_report.is_file() else {}
     summary = flow_engine.run(project, route=route, **forwarded)
-    from flow_pdn_recovery import plan_recovery, apply_plan, finish_replay
-    recovery_started = time.perf_counter()
-    recovery = plan_recovery(project, route, summary)
-    if recovery is not None:
-        first = summary
-        archive = apply_plan(project, route, first, recovery)
-        recovery_program_seconds = time.perf_counter() - recovery_started
-        summary = flow_engine.run(project, route=route,
-            **{**forwarded, "from_name": "die_floorplan_and_macros"})
-        summary = finish_replay(project, first, summary, archive,
-                                extra_program_seconds=recovery_program_seconds)
-    elif (getattr(args, "from_name", None) == "die_floorplan_and_macros"
-            and previous_report.get("pdn_recovery")):
-        archive = Path(previous_report["pdn_recovery"]["first_attempt"])
-        summary = finish_replay(project, previous_report, summary, archive)
     return 1 if summary.get("fail") else 2 if summary.get("not_measured") else 0
 
 
