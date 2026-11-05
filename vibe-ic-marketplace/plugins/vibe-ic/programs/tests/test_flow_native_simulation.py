@@ -150,3 +150,85 @@ def test_unresolved_declared_scenario_does_not_use_sample_success(tmp_path):
     assert result["metrics"] == {}
     assert not result["ran"]
     assert "transaction_rearm" in result["detail"]
+
+
+def debug_counter(project, *, different=False):
+    rtl = project / "phase2/stage1/rtl/counter_unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module counter_unit(input clk, reset_n, output reg [3:0] count);\n"
+                   "always @(posedge clk) if(!reset_n) count<=0; "
+                   f"else count<=count+{2 if different else 1}; endmodule\n")
+    return rtl
+
+
+@pytest.mark.parametrize("clocked", [False, True])
+def test_debug_interface_without_documents_issues_the_normal_model_handoff(tmp_path, clocked):
+    if not shutil.which("yosys"):
+        pytest.skip("Native Yosys is required")
+    if clocked:
+        rtl = debug_counter(tmp_path)
+    else:
+        rtl = tmp_path / "phase2/stage1/rtl/counter_unit.v"
+        rtl.parent.mkdir(parents=True)
+        rtl.write_text("module counter_unit(output [3:0] count); assign count=4'd7; endmodule\n")
+    result = execute(tmp_path, tmp_path / "output", {
+        "adapter": "simulation", "rtl": [str(rtl)], "top": "counter_unit"}, {})
+    assert "requires its reference model" in result["detail"], result
+    assert result["metrics"] == {} and not result["ran"]
+    report_path = tmp_path / "reports/phase2/gates/professional_tb.json"
+    report = json.loads(report_path.read_text())
+    assert report["status"] == "INCOMPLETE"
+    assert report["reference_model_tier"] == "hook_unfilled"
+    handoff = report["reference_model_handoff"]
+    assert handoff["status"] == "REQUIRED" and handoff["fallback_skill"] == "testbench-gen"
+    assert Path(handoff["artifact_path"]).parent.is_dir()
+    assert (Path(handoff["artifact_path"]).parent / "tb_counter_unit.py").is_file()
+    assert str(report_path) in result["reports"]
+
+
+def test_incomplete_arithmetic_producer_keeps_its_normal_handoff(tmp_path):
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "logic_unit", "ic_class": "digital_arithmetic_primitive", "top_ports": [
+            {"name": name, "direction": direction, "width": 4}
+            for name, direction in (("a", "input"), ("b", "input"), ("y", "output"))]}))
+    rtl = tmp_path / "phase2/stage1/rtl/logic_unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module logic_unit(input [3:0] a,b, output [3:0] y); assign y=a&b; endmodule\n")
+    result = execute(tmp_path, tmp_path / "output", {
+        "adapter": "simulation", "rtl": [str(rtl)], "top": "logic_unit"}, {})
+    assert "requires its reference model" in result["detail"], result
+    assert result["metrics"] == {} and not result["ran"]
+    report = json.loads((tmp_path / "reports/phase2/gates/professional_tb.json").read_text())
+    assert report["reference_model_tier"] == "hook_unfilled"
+    assert report["reference_model_handoff"]["status"] == "REQUIRED"
+    assert Path(report["reference_model_handoff"]["artifact_path"]).parent.is_dir()
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_debug_reference_model_is_consumed_without_changing_the_rtl(tmp_path, different):
+    if not all(shutil.which(name) for name in ("yosys", "iverilog", "vvp", "cocotb-config", "verilator")):
+        pytest.skip("Native Yosys, Icarus, cocotb and Verilator are required")
+    rtl = debug_counter(tmp_path, different=different)
+    tool = {"adapter": "simulation", "rtl": [str(rtl)], "top": "counter_unit"}
+    first = execute(tmp_path, tmp_path / "first", tool, {})
+    assert "requires its reference model" in first["detail"], first
+    report_path = tmp_path / "reports/phase2/gates/professional_tb.json"
+    handoff = json.loads(report_path.read_text())["reference_model_handoff"]
+    expert = Path(handoff["artifact_path"])
+    expert.write_text("import cocotb\nfrom cocotb.triggers import Timer\n"
+        "@cocotb.test()\nasync def counter_behavior(dut):\n"
+        "    dut.clk.value=0\n    dut.reset_n.value=0\n    await Timer(1,unit='ns')\n"
+        "    dut.clk.value=1\n    await Timer(1,unit='ns')\n    assert int(dut.count.value)==0\n"
+        "    dut.clk.value=0\n    dut.reset_n.value=1\n    await Timer(1,unit='ns')\n"
+        "    for expected in range(1,4):\n        dut.clk.value=1\n        await Timer(1,unit='ns')\n"
+        "        assert int(dut.count.value)==expected\n        dut.clk.value=0\n        await Timer(1,unit='ns')\n"
+        "    print('PROFESSIONAL_TB PASS')\n")
+    original = rtl.read_bytes()
+    result = execute(tmp_path, tmp_path / "second", tool, {})
+    assert rtl.read_bytes() == original
+    functional = [row for row in result["native_steps"] if row["name"] == "Icarus.Functional"]
+    assert [row["status"] for row in functional] == ["FAIL" if different else "PASS"], result
+    assert (result["metrics"]["assertion_failures"] > 0) is different
+    assert "reference_model_handoff" not in json.loads(report_path.read_text())

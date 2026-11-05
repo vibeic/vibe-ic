@@ -168,14 +168,28 @@ def simulation(project, directory, tool, commands):
             for path in sorted(unit_dir.glob(pattern)) if is_unit_tb(path))]))
     if files and not benches:
         from arith_oracle_tb_gen import generate as arithmetic
-        from professional_tb_gen import generate, _detect_ic_class
+        from professional_tb_gen import _detect_ic_class
         arithmetic(project, _detect_ic_class(project))
         benches = testbenches(project, tool)
-        if not benches:
-            generate(project)
-            benches = testbenches(project, tool)
+    producer_report = project / "reports/phase2/gates/professional_tb.json"
+    professional = project / "phase2/stage1/sim_professional" / str(top)
+    managed = (professional / "verification_plan.json").is_file() and any(
+        bench.parent == professional for bench in benches)
+    if files and (not benches or managed):
+        from professional_tb_gen import generate
+        generated = generate(project, rtl=files, top=top)
+        producer_report.parent.mkdir(parents=True, exist_ok=True)
+        producer_report.write_text(json.dumps({**generated, "status": "INCOMPLETE",
+            "reason": generated.get("reason") or "Native functional verification has not completed."}, indent=2) + "\n")
+        handoff = generated.get("reference_model_handoff")
+        if handoff:
+            return commands.result(reports=[producer_report], detail=
+                "The existing professional testbench producer requires its reference model: "
+                + json.dumps(handoff))
+        benches = testbenches(project, tool)
     if not files or not benches:
-        return commands.result(detail="Produced RTL and a program-generated testbench are required.")
+        return commands.result(reports=[producer_report] if producer_report.is_file() else [],
+            detail="Produced RTL and a program-generated testbench are required.")
     reports, dats, assertions, native_steps = [], [], [], []
 
     def invoke(argv, cwd):
