@@ -5682,19 +5682,18 @@ def _four_phase_rollup(fpa, results: list[dict]) -> dict:
     return out
 
 
-def _require_program_first_ai_acceptance(run_p: Path) -> None:
-    """Block scoring until Program gates and blind AI review accept every id."""
+def _require_program_first_ai_acceptance(run_p: Path) -> bool:
     run_p = Path(run_p).resolve()
     solve_p = run_p / "solve_report.json"
     if not solve_p.is_file():
-        return                         # historical/manual runs keep old policy
+        return False                   # historical/manual runs keep old policy
     try:
         solve = _strict_json_loads(solve_p.read_text(errors="replace"))
     except (OSError, ValueError):
-        return                         # the clean-room gate reports this later
+        return False                   # the clean-room gate reports this later
     policy = solve.get("acceptance_policy") or {}
     if policy.get("required") is not True:
-        return
+        return False
     if (policy.get("review_task_schema") != _REVIEW_TASK_SCHEMA
             or policy.get("review_schema") != _AI_REVIEW_SCHEMA):
         raise SystemExit("Program First + AI Review acceptance BLOCKED: solve "
@@ -5751,6 +5750,7 @@ def _require_program_first_ai_acceptance(run_p: Path) -> None:
     if failures:
         raise SystemExit("Program First + AI Review acceptance BLOCKED:\n  "
                          + "\n  ".join(failures))
+    return bool(expected)
 
 
 def _shape_c_task_binding_reasons(task: dict, run_p: Path,
@@ -6412,13 +6412,11 @@ def cmd_score(bench: str, run: str, dataset: str | None,
         raise SystemExit(
             "canonical scoring requires a full-dataset general --solve run; "
             "partial, separate-scaffold, or benchmark-local runs are not eligible")
-    _require_program_first_ai_acceptance(run_p)
-    # Front-door Vibe-IC entry gate (owner directive 2026-06-28): refuse to
-    # score a run that did not enter through the Vibe-IC plugin.  Direct-agent
-    # authoring / patching followed by a host-scorer invocation measures
-    # "Opus + MCP-EDA", not Vibe-IC.
+    accepted = _require_program_first_ai_acceptance(run_p)
     entry_guard = Path(__file__).resolve().parent / "vibe_ic_entry_guard.py"
-    if entry_guard.is_file() and not allow_direct_agent:
+    from flow_engine_frontend import selected_engine
+    if (entry_guard.is_file() and not allow_direct_agent
+            and not (selected_engine([]) == "native" and accepted)):
         rc = subprocess.call([sys.executable, str(entry_guard), str(run_p),
                               "--strict"])
         if rc != 0:

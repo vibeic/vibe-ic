@@ -195,7 +195,7 @@
     {
       "name": "submission_and_implementation_interface",
       "title": "Submission and implementation interface",
-      "when": "always",
+      "when": "False",
       "tool": {
         "kind": "adapter",
         "program": "phase1_one_shot_runner.py",
@@ -208,7 +208,8 @@
         "native": [
           "0.5ic"
         ]
-      }
+      },
+      "applicability_reason": "No native engineering tool or checks remain. _run_step_0_5ic performs old submission/template admission and is not an available native OwnerSession tool. Documents and unchanged Router own the implementation interface."
     },
     {
       "name": "pdk_library_deck_and_tool_use_qualification",
@@ -809,9 +810,14 @@
           "unit": "percent",
           "source": {
             "file": "programs/verilator_coverage_measure.py",
-            "line": 2766
+            "line": 2774
           },
-          "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+          "limit_note": "Original Step4 checker floor. A stricter applicable design-declared target must also be enforced. This is distinct from benchmark_verify_report line floor 90 and D13 document-bound comparison.",
+          "caller_source": {
+            "file": "flow/phase1_phase2_phase3.yaml",
+            "line": 2576,
+            "note": "Actual old Step4 check caller supplies no threshold overrides."
+          }
         },
         {
           "metric": "coverage_toggle_pct",
@@ -820,9 +826,14 @@
           "unit": "percent",
           "source": {
             "file": "programs/verilator_coverage_measure.py",
-            "line": 2767
+            "line": 2775
           },
-          "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+          "limit_note": "Original Step4 checker floor. A stricter applicable design-declared target must also be enforced. This is distinct from benchmark_verify_report line floor 90 and D13 document-bound comparison.",
+          "caller_source": {
+            "file": "flow/phase1_phase2_phase3.yaml",
+            "line": 2576,
+            "note": "Actual old Step4 check caller supplies no threshold overrides."
+          }
         },
         {
           "metric": "coverage_branch_pct",
@@ -831,9 +842,14 @@
           "unit": "percent",
           "source": {
             "file": "programs/verilator_coverage_measure.py",
-            "line": 2768
+            "line": 2776
           },
-          "limit_note": "Existing native coverage CLI default; a design-declared target must be passed unchanged to the native command."
+          "limit_note": "Original Step4 checker floor. A stricter applicable design-declared target must also be enforced. This is distinct from benchmark_verify_report line floor 90 and D13 document-bound comparison.",
+          "caller_source": {
+            "file": "flow/phase1_phase2_phase3.yaml",
+            "line": 2576,
+            "note": "Actual old Step4 check caller supplies no threshold overrides."
+          }
         },
         {
           "metric": "coverage_targets",
@@ -848,7 +864,7 @@
             "kind": "design_or_pdk",
             "metric": "coverage_targets"
           },
-          "tool_gap": "Ruling 208 has not accepted the duplicate classification. Verify actual old-step callers and published SPM coverage limits; enforce stricter declared targets. Existing numeric checks are unchanged pending that verification."
+          "tool_gap": "Actual Step4 callers enforce line 70, toggle 60, branch 70; benchmark reporting independently enforces line 90. Flow109 D13 compares exact native counts against per-category declared bounds and keeps informational target applicability. Direct L-document bound comparison remains unwired; use stricter applicable targets and require real measurements. Published SPM reports show 100/98.48/100 but contain no numeric declared bounds. See COVERAGE_LIMITS.md."
         }
       ],
       "legacy_id": {
@@ -1400,7 +1416,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "synthesis_constraints"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_netlist"
         }
       ]
     },
@@ -1471,10 +1490,10 @@
       "title": "Netlist equivalence",
       "when": "digital_netlist",
       "tool": {
-        "kind": "librelane",
-        "steps": [
-          "Yosys.EQY"
-        ]
+        "kind": "adapter",
+        "adapter": "eqy",
+        "program": "flow_native_verification.py",
+        "metric": "unproved_equivalence"
       },
       "checks": [
         {
@@ -1553,7 +1572,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "prelayout_timing_targets"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_netlist"
         }
       ]
     },
@@ -2105,7 +2127,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "floorplan_boundary_pin_feasibility"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "die_physical"
         }
       ]
     },
@@ -2149,21 +2174,6 @@
             "line": 9016
           },
           "unit": "count"
-        },
-        {
-          "metric": "pad_access_spacing",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "die_physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 9036
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "pad_access_spacing"
-          },
-          "tool_gap": "Native engineering tool report for io pad ring and power distribution; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -2291,7 +2301,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "skew_insertion_targets"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical"
         }
       ]
     },
@@ -2400,7 +2413,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "pre_cts_setup_drv_targets"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical"
         },
         {
           "metric": "congestion_targets",
@@ -2416,7 +2432,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "congestion_targets"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical"
         }
       ]
     },
@@ -2505,23 +2524,7 @@
           "OpenROAD.STAMidPNR"
         ]
       },
-      "checks": [
-        {
-          "metric": "clock_tree_sink_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "digital_physical and requires_cts",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 10005
-          },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "OpenROAD CTS native clock-net loads and connected sink counts"
-          },
-          "tool_gap": "OpenROAD CTS native clock-net loads and connected sink counts. Wire only this native report; both sides must come from the tool."
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D38",
         "native": [
@@ -2529,6 +2532,36 @@
         ]
       },
       "observations": [
+        {
+          "metric": "clock_tree_sink_coverage",
+          "native_metrics": [],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 10005
+          },
+          "reason": "OpenROAD CTS reports sink counts but no independent numeric coverage bound is declared. Report the native CTS counts. Actual missing/unconstrained clocks remain covered by native STA diagnostics.",
+          "declared_limit_from": {},
+          "operator": "covers_all",
+          "limit": null,
+          "when": "digital_physical and requires_cts",
+          "native_report_numbers": [
+            {
+              "metric": "Total number of sinks",
+              "report": "openroad_cts/openroad-cts.log",
+              "pattern": "Total number of sinks: (\\d+)\\."
+            },
+            {
+              "metric": "Total number of sinks after clustering",
+              "report": "openroad_cts/openroad-cts.log",
+              "pattern": "Total number of sinks after clustering: (\\d+)\\."
+            },
+            {
+              "metric": "Number of sinks covered",
+              "report": "openroad_cts/openroad-cts.log",
+              "pattern": "Number of sinks covered: (\\d+)\\."
+            }
+          ]
+        },
         {
           "metric": "clock_skew_insertion_drv",
           "native_metrics": [
@@ -2543,7 +2576,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "clock_skew_insertion_drv"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical and requires_cts"
         }
       ]
     },
@@ -2582,7 +2618,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "post_cts_setup_hold_drv"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical and requires_cts"
         },
         {
           "metric": "repair_stagnation_iterations",
@@ -2595,7 +2634,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "repair_stagnation_iterations"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical and requires_cts"
         }
       ]
     },
@@ -2719,7 +2761,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "post_repair_timing_drv"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical"
         },
         {
           "metric": "repair_iteration_budget",
@@ -2732,7 +2777,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "repair_iteration_budget"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "digital_physical"
         }
       ]
     },
@@ -2811,30 +2859,30 @@
           "enabled_by": "ERROR_ON_DISCONNECTED_PINS",
           "enabled_default": true,
           "when": "otherwise"
-        },
-        {
-          "metric": "route__wirelength__max",
-          "operator": "<=",
-          "limit": null,
-          "source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 286
-          },
-          "metric_source": {
-            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
-            "line": 286
-          },
-          "unit": "um",
-          "enabled_by": "ERROR_ON_LONG_WIRE",
-          "enabled_default": true,
-          "limit_config": "WIRE_LENGTH_THRESHOLD",
-          "when": "otherwise"
         }
       ],
       "legacy_id": {
         "registry": "D42",
         "native": []
-      }
+      },
+      "observations": [
+        {
+          "metric": "route__wirelength__max",
+          "native_metrics": [
+            "route__wirelength__max"
+          ],
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 286
+          },
+          "reason": "The native WIRE_LENGTH_THRESHOLD is null on the current run. Report route__wirelength__max without inventing a bound. If the tool configuration or a document declares a bound, compare the same native value against that original bound.",
+          "declared_limit_from": {},
+          "operator": "<=",
+          "limit": null,
+          "limit_config": "WIRE_LENGTH_THRESHOLD",
+          "when": "otherwise"
+        }
+      ]
     },
     {
       "name": "antenna_checks",
@@ -2926,10 +2974,10 @@
       "title": "Final adopted netlist equivalence",
       "when": "digital_physical",
       "tool": {
-        "kind": "librelane",
-        "steps": [
-          "Yosys.EQY"
-        ]
+        "kind": "adapter",
+        "adapter": "eqy",
+        "program": "flow_native_verification.py",
+        "metric": "final_lec_unproved"
       },
       "checks": [
         {
@@ -3068,29 +3116,31 @@
           }
         ]
       },
-      "checks": [
-        {
-          "metric": "candidate_parasitic_coverage",
-          "operator": "covers_all",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 11676
-          },
-          "required_from": {
-            "kind": "native_tool_population",
-            "tool": "OpenSTA report_parasitic_annotation annotated and unannotated native nets"
-          },
-          "tool_gap": "OpenSTA report_parasitic_annotation annotated and unannotated native nets. Wire only this native report; both sides must come from the tool."
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D47",
         "native": [
           "22"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "candidate_parasitic_coverage",
+          "native_metrics": [
+            "timing__unannotated_net__count",
+            "timing__unannotated_net_filtered__count"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 11676
+          },
+          "reason": "Report the native annotation count; no additional declaration supplies a numeric coverage bound here. Final extraction annotation and final STA remain engineering checks.",
+          "declared_limit_from": {},
+          "operator": "covers_all",
+          "limit": null,
+          "when": "physical"
+        }
+      ]
     },
     {
       "name": "candidate_signal_integrity",
@@ -3443,29 +3493,36 @@
           }
         ]
       },
-      "checks": [
-        {
-          "metric": "per_mode_rail_average_peak_power",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 13257
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "per_mode_rail_average_peak_power"
-          },
-          "tool_gap": "Native engineering tool report for candidate power analysis; wire the report/input adapter without population emitters or requirement traces."
-        }
-      ],
+      "checks": [],
       "legacy_id": {
         "registry": "D56",
         "native": [
           "33"
         ]
-      }
+      },
+      "observations": [
+        {
+          "metric": "per_mode_rail_average_peak_power",
+          "native_metrics": [
+            "power__total",
+            "power__internal__total",
+            "power__leakage__total",
+            "power__switching__total"
+          ],
+          "source": {
+            "file": "flow/flow109.json",
+            "line": 13257
+          },
+          "reason": "Report native power numbers. No undeclared power budget is invented; compare a document-declared power bound when present.",
+          "declared_limit_from": {
+            "kind": "design_or_pdk",
+            "metric": "per_mode_rail_average_peak_power"
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical"
+        }
+      ]
     },
     {
       "name": "candidate_ir_drop",
@@ -3526,21 +3583,6 @@
           },
           "unit": "%",
           "limit_note": "Native PSM worst drop divided by the Liberty supply voltage."
-        },
-        {
-          "metric": "static_dynamic_ir_limits",
-          "operator": "within_declared_bounds",
-          "limit": null,
-          "when": "physical and requires_ir",
-          "source": {
-            "file": "flow/flow109.json",
-            "line": 13460
-          },
-          "limit_from": {
-            "kind": "design_or_pdk",
-            "metric": "static_dynamic_ir_limits"
-          },
-          "tool_gap": "OpenROAD PDNSim static and dynamic IR native analysis; wire the report/input adapter without population emitters or requirement traces."
         }
       ],
       "legacy_id": {
@@ -3990,7 +4032,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "dfm_density_lithography_cmp_targets"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical"
         },
         {
           "metric": "advanced_dfm_provider_targets",
@@ -4003,7 +4048,10 @@
           "declared_limit_from": {
             "kind": "design_or_pdk",
             "metric": "advanced_dfm_provider_targets"
-          }
+          },
+          "operator": "within_declared_bounds",
+          "limit": null,
+          "when": "physical and requires_advanced_dfm"
         }
       ]
     },
@@ -4012,26 +4060,10 @@
       "title": "Finishing geometry fidelity",
       "when": "physical",
       "tool": {
-        "kind": "profiles",
-        "profiles": [
-          {
-            "when": "digital_physical",
-            "tool": {
-              "kind": "adapter",
-              "program": "flow109_final_geometry.py",
-              "function": "execute",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
-            }
-          },
-          {
-            "when": "otherwise",
-            "tool": {
-              "kind": "native_report",
-              "from": "stream_out",
-              "scope": "Native streamer agreement before finishing. Finishing-only geometry fidelity has no numeric native check in Classic or Chip."
-            }
-          }
-        ]
+        "kind": "adapter",
+        "adapter": "xor",
+        "program": "flow_native_verification.py",
+        "metric": "unexplained_stream_xor"
       },
       "checks": [
         {

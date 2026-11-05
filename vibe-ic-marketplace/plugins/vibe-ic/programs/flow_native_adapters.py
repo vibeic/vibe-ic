@@ -227,11 +227,15 @@ def declared_electrical_checks(project):
     return list(checks.values())
 
 
-def execute(project, directory, tool, route):
+def execute(project, directory, tool, route, *, state=None, config=None):
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
     commands = Commands(work)
+    if tool.get("adapter") in {"eqy", "xor"}:
+        import flow_native_verification
+        return getattr(flow_native_verification, tool["adapter"])(
+            project, work, tool, commands, state=state, config=config or {})
     adapter = ADAPTERS.get(tool.get("adapter"))
     if adapter is None:
         return commands.result(detail=f"No native adapter for {tool.get('adapter')!r}.")

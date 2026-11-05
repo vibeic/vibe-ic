@@ -13,6 +13,7 @@ import math
 import operator
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -100,6 +101,8 @@ def design_features(project: Path, route: dict, table: dict) -> dict:
     expressions = [row["when"] for row in table["steps"]]
     expressions += [check["when"] for row in table["steps"] for check in row.get("checks", [])
                     if check.get("when") not in (None, "otherwise")]
+    expressions += [item["when"] for row in table["steps"] for item in row.get("observations", [])
+                    if item.get("when") not in (None, "otherwise")]
     expressions += list(table.get("predicates", {}).values())
     expressions += [default["when"] for default in table.get("feature_defaults", {}).values()]
     for expression in expressions:
@@ -239,6 +242,7 @@ class NativeChain:
         for module in tool.get("imports", []):
             importlib.import_module(module)
         result = ToolResult()
+        producer_unavailable = False
         for name in tool.get("steps", []):
             step_class = Step.factory.get(name)
             if step_class is None:
@@ -261,12 +265,18 @@ class NativeChain:
 
             step = ObservedStep(self.owner.config, self.state)
             metric_name = getattr(step, "metric_name", None)
+            if (metric_name and producer_unavailable and not any(
+                    key == metric_name or key.startswith(metric_name + "__corner:") for key in result.metrics)):
+                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
+                                            "status": "NOT_MEASURED", "missing_inputs": [metric_name]})
+                continue
             if metric_name:
                 result.metrics.update({key: value for key, value in self.state.metrics.items()
                                        if key == metric_name or key.startswith(metric_name + "__corner:")})
             missing = [item.id for item in step.inputs
                        if not item.optional and self.state.get_by_df(item) is None]
             if missing:
+                producer_unavailable = True
                 result.detail += f" {name} missing input: {missing}."
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
                                             "missing_inputs": missing})
@@ -296,6 +306,7 @@ class NativeChain:
                 code, ran, detail = None, False, str(exc)
                 status = "NOT_MEASURED"
             if code or not ran:
+                producer_unavailable = True
                 self.state = type(self.state)(self.state, overrides={item: None for item in step.outputs},
                                               metrics=self.state.metrics)
             result.metrics.update(emitted)
@@ -376,6 +387,21 @@ def document_value(project: Path | None, reference: dict) -> Any:
             except (KeyError, IndexError, TypeError, ValueError):
                 continue
             return value
+    if reference.get("metric"):
+        found = []
+        def visit(value):
+            if isinstance(value, dict):
+                if reference["metric"] in value and value[reference["metric"]] is not None:
+                    found.append(value[reference["metric"]])
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+        for path in sorted((project / "phase1/generated_docs").glob("L*.json")):
+            visit(read_json(path))
+        if found:
+            return found[0] if all(value == found[0] for value in found) else {"conflicting_bounds": found}
     return None
 
 
@@ -430,6 +456,35 @@ def measure(checks: list, metrics: dict, config: dict, features: dict,
                              **({"missing": f"Native value or original limit for {check['metric']}"}
                                 if status == "NOT_MEASURED" else {})})
     return observed
+
+
+def report_observations(row, directory, native, config, features, project):
+    observations, checks = [], []
+    for item in row.get("observations", []):
+        if item.get("when", "always") != "otherwise" and not predicate(item.get("when", "always"), features):
+            continue
+        values = {key: value for key, value in native.metrics.items()
+                  if any(fnmatch.fnmatchcase(key, name) or key.startswith(name + "__corner:")
+                         for name in item.get("native_metrics", []))}
+        for number in item.get("native_report_numbers", []):
+            path = directory / number["report"]
+            matches = re.findall(number["pattern"], path.read_text()) if path.is_file() else []
+            if matches:
+                values[number["metric"]] = float(matches[-1])
+                native.metrics[number["metric"]] = values[number["metric"]]
+        limit = config.get(item["limit_config"]) if item.get("limit_config") else item.get("limit")
+        if limit is None:
+            limit = document_value(project, item.get("declared_limit_from", {}))
+        observations.append({**item, "values": values, "limit": limit,
+                             "status": "OBSERVED" if values else "NOT_MEASURED"})
+        if limit is not None:
+            if len(item.get("native_metrics", [])) == 1:
+                checks.append({**item, "metric": item["native_metrics"][0], "limit": limit})
+            elif isinstance(limit, dict) and not {"min", "max"}.intersection(limit):
+                checks.extend({**item, "metric": key, "limit": value} for key, value in limit.items())
+            else:
+                checks.append({**item, "limit": limit})
+    return observations, checks
 
 
 def evaluate(tool: ToolResult, measurements: list) -> str:
@@ -573,22 +628,27 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                                 detail=f"Native reports from {tool['from']}")
         elif kind == "adapter" and tool.get("adapter"):
             from flow_native_adapters import execute
-            native = ToolResult(**execute(project, directory, tool, route))
+            native = ToolResult(**execute(project, directory, tool, route, state=chain.state, config=chain.config))
         elif kind == "adapter" and tool.get("function") == "doc_extract":
             native = ToolResult(**owner_session.result(directory, "phase1"))
         else:
             native = ToolResult(detail=tool.get("gap", "Native adapter is not available"))
         checks = [check for check in row["checks"] if check.get("when") != "otherwise"
                   or tool.get("selected_profile", "otherwise") == "otherwise"]
+        observations, declared_checks = report_observations(row, directory, native, chain.config, features, project)
+        checks.extend(declared_checks)
         if "Checker.SetupViolations" in tool.get("steps", []):
             from flow_native_adapters import declared_electrical_checks
             checks = [*checks, *declared_electrical_checks(project)]
         observed = measure(checks, native.metrics, chain.config, features, project)
         elapsed = time.perf_counter() - beginning + prepared.get(row["name"], (None, 0))[1]
         result = {"name": row["name"], "title": row["title"],
-                  "status": evaluate(native, observed), "tool_ran": native.ran,
+                  "status": (previous.get("status", "NOT_MEASURED")
+                             if kind == "native_report" and not observed else evaluate(native, observed)),
+                  "tool_ran": native.ran,
                   "tool_exit_code": native.exit_code, "metrics": observed,
                   "native_metrics": native.metrics, "native_steps": native.native_steps,
+                  "observations": observations,
                   "reports": native.reports, "detail": native.detail,
                   "tool_seconds": native.tool_seconds,
                   "program_seconds": (saved["program_seconds"] if retained else 0) + max(0, elapsed - (extra_tool_seconds if retained else native.tool_seconds)),
