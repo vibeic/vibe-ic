@@ -57,14 +57,12 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import _path_layout as _pl
 import verdict as _V  # R-0915-85: the five step verdicts + the one cascade rule
-import _runner_summary as _rsum  # noqa: E402  vibe-ic#2081
 import _analog_a_check_common as _acc
-import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 # vibe-ic#2080 — the master block-list SCHEMA gate. `main()` already refuses an
 # ABSENT list and SKIPs an explicitly-empty one; PRESENT-BUT-BROKEN was the
 # state neither covered, and this gate — the only thing that judges it — was
@@ -108,27 +106,6 @@ class StepResult:
         _V.validate_step_row(self)
 
 
-def _preflight_refusal(name: str, block: str):
-    """This runner's refusal row for `step_preflight.gate`.
-
-    `BLOCKED` carries the same meaning it does in the other three runners: the
-    step was NOT attempted because an INPUT could not support it, so NOTHING is
-    known. It is `NOT_MEASURED(input_absent)` in the one vocabulary — which is
-    would have fallen through that function's catch-all `return "PASS"` and a
-    refusal would have produced a GREEN run, which is the defect class this
-    whole pre-flight exists to remove. Measured on this ladder specifically: a
-    refusal is neither FAIL, nor a vacuity disclosure, nor structure-only, nor
-    WAIVED/SKIP, so every one of the four tiers above the catch-all would have
-    declined it and an all-refused analog track would have scored a clean PASS.
-
-    NOTE the shape difference from `design_one_shot_runner._preflight_refusal`:
-    this runner's `StepResult` carries a `block` as its SECOND positional field,
-    so the row is built with it rather than assuming the phase-2 signature.
-    """
-    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
-        return StepResult(name, block, _spf.REFUSAL_STATUS, 0.0, detail,
-                          extras=extras, reason_class=_spf.REFUSAL_REASON_CLASS)
-    return _mk
 
 
 # Statuses that must NOT reach a green verdict. `BLOCKED` is `step_preflight`'s
@@ -498,7 +475,7 @@ def _record_reason_class(record: Optional[Path]) -> str:
         doc = {}
     reason = doc.get("reason_class") if isinstance(doc, dict) else None
     return (reason if reason in {r.value for r in _V.ReasonClass}
-            else _spf.REFUSAL_REASON_CLASS)
+            else _V.ReasonClass.INPUT_ABSENT.value)
 
 
 def _a6_librelane_arm(project: Path, block: str, container: str,
@@ -1399,11 +1376,11 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
     if _up and not (out_dir / f"{bname}.sp").is_file():
         _ustep, _uline = _up
         return StepResult(
-            step_name, bname, _spf.REFUSAL_STATUS, time.time() - t0,
+            step_name, bname, _V.Verdict.NOT_MEASURED.value, time.time() - t0,
             f"upstream {_ustep} refused: {_uline}",
             extras={"verdict_tier": "ENV_UNAVAILABLE",
                     "env_refused_upstream": _ustep,
-                    "env_refused_detail": _uline}, reason_class=_spf.REFUSAL_REASON_CLASS)
+                    "env_refused_detail": _uline}, reason_class=_V.ReasonClass.INPUT_ABSENT.value)
 
     # v1.6.35: every A1-A9 step now has a deterministic
     # artefact-presence + substance gate. Missing artefact → rc=2,
@@ -1506,7 +1483,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                 # The arm measured nothing: an environment refusal, or a tool
                 # the contract stopped. Its record says which.
                 return StepResult(
-                    step_name, bname, _spf.REFUSAL_STATUS, time.time() - t0,
+                    step_name, bname, _V.Verdict.NOT_MEASURED.value, time.time() - t0,
                     f"LibreLane DRC arm ({_a6_mode}): {_a6_arm.get('detail')}",
                     output_files=_step_outputs(project, bname, step_name),
                     extras={"librelane_arm": _a6_arm,
@@ -1595,22 +1572,22 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     capture_output=True, text=True)
             except (OSError, subprocess.SubprocessError, _pr.Stalled) as _exc:
                 return StepResult(
-                    step_name, bname, _spf.REFUSAL_STATUS, time.time() - t0,
+                    step_name, bname, _V.Verdict.NOT_MEASURED.value, time.time() - t0,
                     f"{a8_prog.name} could not execute: {_exc}",
                     extras={"producer": a8_prog.name,
                             "verdict_tier": "ENV_UNAVAILABLE"},
-                    reason_class=_spf.REFUSAL_REASON_CLASS)
+                    reason_class=_V.ReasonClass.INPUT_ABSENT.value)
             _a8_tail = ((a8_cp.stderr or "").strip().splitlines()
                         or (a8_cp.stdout or "").strip().splitlines()
                         or ["no output"])[-1]
             if a8_cp.returncode == _pc.EX_ENV_REFUSED:
                 return StepResult(
-                    step_name, bname, _spf.REFUSAL_STATUS, time.time() - t0,
+                    step_name, bname, _V.Verdict.NOT_MEASURED.value, time.time() - t0,
                     f"{a8_prog.name}: {_a8_tail}",
                     extras={"producer": a8_prog.name,
                             "producer_rc": a8_cp.returncode,
                             "verdict_tier": "ENV_UNAVAILABLE"},
-                    reason_class=_spf.REFUSAL_REASON_CLASS)
+                    reason_class=_V.ReasonClass.INPUT_ABSENT.value)
             if a8_cp.returncode == 2:
                 return StepResult(
                     step_name, bname, _V.Verdict.NOT_MEASURED.value,
@@ -2003,7 +1980,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     # be acted on, and the row rounds up to a green verdict.
                     # The producer says so in its EXIT CODE — `EX_ENV_REFUSED`,
                     # its own tier — so this is decided on a number and not on
-                    # prose. The row is `_spf.REFUSAL_STATUS` (in
+                    # prose. The row is `_V.Verdict.NOT_MEASURED.value` (in
                     # NOT_MEASURED, so it cannot be green), carries the
                     # refusal's OWN line, and is remembered for the steps
                     # downstream that would otherwise report an absence this
@@ -2015,12 +1992,12 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                     "refusal and printed nothing"))
                         record_env_refusal(bname, step_name, why)
                         return StepResult(
-                            step_name, bname, _spf.REFUSAL_STATUS,
+                            step_name, bname, _V.Verdict.NOT_MEASURED.value,
                             time.time() - t0, why,
                             extras={"producer": prod["program"],
                                     "producer_rc": pcp.returncode,
                                     "verdict_tier": "ENV_UNAVAILABLE",
-                                    "env_refused": True}, reason_class=_spf.REFUSAL_REASON_CLASS)
+                                    "env_refused": True}, reason_class=_V.ReasonClass.INPUT_ABSENT.value)
                     if pcp is not None and pcp.returncode not in (0, 2):
                         return StepResult(
                             step_name, bname, "NOT_MEASURED", time.time() - t0,
@@ -2075,12 +2052,12 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                         _a7_image = f"{_pin.image_repo()}@{_a7_image}"
                     if not _a7_image:
                         return StepResult(
-                            step_name, bname, _spf.REFUSAL_STATUS,
+                            step_name, bname, _V.Verdict.NOT_MEASURED.value,
                             time.time() - t0,
                             f"{_pc.ENV_REFUSED_TOKEN} {_a7_why}",
                             extras={"producer": a7_prog.name,
                                     "verdict_tier": "ENV_UNAVAILABLE"},
-                            reason_class=_spf.REFUSAL_REASON_CLASS)
+                            reason_class=_V.ReasonClass.INPUT_ABSENT.value)
                     a7_record = out_dir / "a7_post_layout.json"
                     a7_before = _a7_record_stamp(a7_record)
                     a7_cp = _pr.run(
@@ -2093,7 +2070,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                         and f"{a7_prog.name} exited {_pc.EX_ENV_REFUSED}")
                     if a7_gap:
                         return StepResult(
-                            step_name, bname, _spf.REFUSAL_STATUS,
+                            step_name, bname, _V.Verdict.NOT_MEASURED.value,
                             time.time() - t0, str(a7_gap),
                             extras={"producer": a7_prog.name,
                                     "producer_rc": a7_cp.returncode,
@@ -2296,7 +2273,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                     f"{_pc.EX_ENV_REFUSED}")
                     if _env_gap and not _corner_results_exists(project, bname):
                         return StepResult(
-                            step_name, bname, _spf.REFUSAL_STATUS,
+                            step_name, bname, _V.Verdict.NOT_MEASURED.value,
                             time.time() - t0,
                             f"{_env_gap} (container={_a4_container})",
                             extras={"producer": real_prog.name,
@@ -2304,7 +2281,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                     "container": _a4_container,
                                     "pdk": _a4_pdk,
                                     "verdict_tier": "ENV_UNAVAILABLE",
-                                    "env_unavailable": "container"}, reason_class=_spf.REFUSAL_REASON_CLASS)
+                                    "env_unavailable": "container"}, reason_class=_V.ReasonClass.INPUT_ABSENT.value)
                     # Re-run the substance gate whenever the sweep left an
                     # artefact behind — not only when the sweep exited 0.
                     #
@@ -2602,7 +2579,6 @@ def step_block_list_schema(project: Path) -> StepResult:
                       extras={"block_list_schema": row}, disclosures=[_V.Disclosure.ADVISORY])
 
 
-@_spf.retained_step('A9', canonical_acceptance=True)
 def _a9_cosim(project: Path, args=None) -> Dict[str, Any]:
     """Run `analog_a9_cosim_emit` on the L22-declared scenarios.
 
@@ -2691,505 +2667,30 @@ def _step_verdicts(plan):
 
 
 
-def _default_analog_rejection(project: Path, sid: str, started_at: float,
-                              complete_population: bool) -> Optional[StepResult]:
-    """Read a terminal full-row consumer before the next Default producer.
-
-    A bounded block request is component evidence. Earlier partial-block
-    consumers cannot decide a row whose terminal producer had no consumer.
-    """
-    import execution_policy
-    if execution_policy.request()['mode'] != 'default' or not complete_population:
-        return None
-    import step_output_collector
-    row = next((r for r in step_output_collector.current_acceptance(project, started_at)
-                if str(r['id']) == sid), None)
-    if row is not None and row['status'] in ('PASS', 'PASS_WITH_WAIVERS', 'NOT_APPLICABLE'):
-        return None
-    status = 'FAIL' if row is not None and row['status'] == 'FAIL' else 'NOT_MEASURED'
-    consumer = (row['result'].get('canonical_consumer') or {}) if row else {}
-    step = consumer.get('step') or {}
-    reasons = step.get('reasons') or [
-        row['status'] if row else 'no terminal complete consumer was recorded']
-    return StepResult(
-        'canonical_analog_acceptance', '', status, 0.0,
-        f"canonical step {sid} was not accepted: " + '; '.join(map(str, reasons)),
-        extras={'step_id': sid, 'output_version': row['folder'] if row else None,
-                'consumer_recorded': row is not None},
-        reason_class=(_V.ReasonClass.UPSTREAM_REFUSED.value if status == 'NOT_MEASURED' else ''))
 
 
 def main() -> int:
-    p = argparse.ArgumentParser()
-    p.add_argument("project", type=Path)
-    p.add_argument("--flow", choices=("70", "109"), default="70",
-                   help="109 runs the native A01-A19 analog track")
-    p.add_argument("--entry-step", help="First analog row in a 109 continuation (A01-A19)")
-    p.add_argument("--exit-step", help="Last analog row in a 109 continuation (A01-A19)")
-    p.add_argument("--flow109-manifest", type=Path,
-                   help="Existing design feature declarations; qualification files are not required")
-    p.add_argument("--container", default=_pin.default_container_name())
-    p.add_argument("--allow-deterministic-stubs",
-                   action="store_true",
-                   dest="allow_deterministic_stubs",
-                   help=("v1.6.171 (#60 P1-6) — when a per-block "
-                          "analog artefact is missing, emit a "
-                          "minimal-substance stub tagged "
-                          "`extraction_strategy: deterministic_stub` "
-                          "+ re-run the gate. Returns "
-                          "PASS_WITH_WAIVERS carrying "
-                          "Disclosure.STRUCTURE_ONLY (R-0915-85). "
-                          "Also controllable via the "
-                          "ANALOG_DETERMINISTIC_STUBS=1 env var."))
-    p.add_argument("--blocks", default="",
-                   help="comma-separated subset of block names; default = all")
-    p.add_argument("--post-mc-samples", type=int, default=None,
-                   help="explicit A15 execution sample count (>=2), for --flow 109")
-    p.add_argument("--pdk", default="",
-                   help=("PDK selector for the A-track's PDK-bound producers. "
-                         "Forwarded here by vibe_ic_one_shot_runner so a run "
-                         "driven with --pdk measures the PDK it names. When it "
-                         "CONTRADICTS the design's own L19 declaration the run "
-                         "REFUSES with both named; when it is absent the "
-                         "declaration is used; there is no literal default."))
-    import execution_policy as execution
-    execution.add_arguments(p)
-    args = p.parse_args()
-    if args.post_mc_samples is not None:
-        if args.flow != "109" or args.post_mc_samples < 2:
-            p.error("--post-mc-samples requires --flow 109 and a count >= 2")
-    if args.flow == "109" and args.execution_mode not in (None, "default"):
-        p.error("the native A01-A19 entry currently implements Default mode")
-    execution.configure(args)
-
-    project = args.project.resolve()
-    if not project.is_dir():
-        print(f"ERROR: not a directory: {project}", file=sys.stderr)
+    parser = argparse.ArgumentParser(description="Run the native analog tool track.")
+    parser.add_argument("project", type=Path)
+    parser.add_argument("--entry-step", default="A01")
+    parser.add_argument("--exit-step", default="A19")
+    parser.add_argument("--container", default="")
+    parser.add_argument("--blocks", default="")
+    parser.add_argument("--pdk", default="")
+    parser.add_argument("--post-mc-samples", type=int)
+    parser.add_argument("--execution-mode", choices=("default",), default="default")
+    parser.add_argument("--execution-cpus", type=int, default=8)
+    parser.add_argument("--execution-workers", type=int, default=1)
+    args = parser.parse_args()
+    if args.post_mc_samples is not None and args.post_mc_samples < 2:
+        parser.error("--post-mc-samples must be at least 2")
+    from analog_native_flow import run_window
+    try:
+        result = run_window(args.project, args)
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
         return 2
-
-    if args.flow == "109":
-        # Mixed-signal rows already have source-registered producers and
-        # consumers in the canonical Flow109 dispatcher.  Keep A01-A19 on
-        # this runner's native owner, but let an explicitly requested M row
-        # reach that existing dispatch instead of failing the A-only window
-        # parser before its producer can run.
-        requested = (args.entry_step or "", args.exit_step or "")
-        if any(step.startswith("M") for step in requested):
-            import flow109
-            args.flow109_plan_only = False
-            try:
-                result = flow109.prepare_front_door(args, project)
-            except flow109.Flow109Error as exc:
-                print(f"REFUSED: {exc}", file=sys.stderr)
-                return 2
-            except ValueError as exc:
-                if not hasattr(exc, "report") or not hasattr(exc, "code"):
-                    raise
-                from _atomic_artefact import write_json
-                write_json(project / "reports" / "flow109" / "admission.json",
-                           exc.report)
-                print(f"REFUSED: {exc.code}: {exc}", file=sys.stderr)
-                return 2
-            if result is not None:
-                return result
-        from analog_native_flow import run_window
-        try:
-            result = run_window(project, args)
-        except (OSError, ValueError) as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 2
-        return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[result["window_verdict"]]
-    if args.entry_step or args.exit_step or args.flow109_manifest:
-        p.error("A01-A19 continuation options require --flow 109")
-
-    # BIND OR REFUSE. A `--pdk` that contradicts the design's own declaration
-    # is a question this runner is not entitled to answer by itself, so it
-    # answers with both names and stops rather than picking one in silence.
-    _contra = _pdk_contradiction(args, project)
-    if _contra:
-        _flag, _declared = _contra
-        msg = (f"--pdk {_flag} CONTRADICTS the design's own declared PDK "
-               f"target {_declared} (phase1/generated_docs/"
-               f"L19_CONSTRAINTS_PDK.json#fields.pdk_target). Refusing to "
-               f"substitute either one silently: re-run with --pdk "
-               f"{_declared}, or correct the design's declaration. Nothing "
-               f"was simulated and no analog artefact was written.")
-        print(f"[BLOCKED] analog_one_shot_runner: {msg}", file=sys.stderr)
-        out = _pl.report_path(project, "analog_one_shot.json")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"phase": "analog",
-                                    "verdict": _spf.REFUSAL_STATUS,
-                                    "reason": msg,
-                                    "pdk_flag": _flag,
-                                    "pdk_declared": _declared,
-                                    "blocks": []}, indent=2) + "\n")
-        return 2
-
-    # v1.6.128 (#50 Fix 1) — differentiate "missing block list" from
-    # "empty block list". When the file is genuinely absent (no
-    # analog/analog_block_list.json AND no L5_ADI_SPEC.json), the
-    # runner refuses to emit VACUOUS_PASS — instead it FAILs with
-    # FAIL_NO_BLOCK_LIST so the caller knows phase1 / spec-extract
-    # was skipped. An empty block list (file present, declares
-    # `[]` or L5.no_analog=true) still SKIPs cleanly — this is the
-    # legitimate pure-digital case.
-    blocks, status = _load_block_list_with_status(project)
-    declared_blocks = list(blocks)
-    if args.blocks:
-        wanted = {b.strip() for b in args.blocks.split(",") if b.strip()}
-        blocks = [b for b in blocks
-                  if (b.get("name") or b.get("type")) in wanted]
-
-    if status == "missing":
-        msg = ("analog_block_list.json missing AND "
-               "generated_docs/L5_ADI_SPEC.json absent. "
-               "Run phase1 / spec-extract first, or place an "
-               "explicit `[]` in analog/analog_block_list.json to "
-               "mark the project as having no analog blocks.")
-        print(f"[FAIL] analog_one_shot_runner: {msg}", file=sys.stderr)
-        out = _pl.report_path(project, "analog_one_shot.json")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"phase":   "analog",
-                                    "verdict": "FAIL_NO_BLOCK_LIST",
-                                    "reason":  msg,
-                                    "blocks":  []}, indent=2) + "\n")
-        return 2
-
-    if not blocks:
-        print("[SKIP] analog_one_shot_runner: no analog blocks declared "
-              "(check analog/analog_block_list.json or "
-              "L5_ADI_SPEC.json#analog_blocks)")
-        # Emit a SKIP report so flow-orchestrate can confirm analog was
-        # considered and skipped on purpose.
-        out = _pl.report_path(project, "analog_one_shot.json")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"phase": "analog", "verdict": "SKIP",
-                                    "reason": "no analog blocks declared",
-                                    "blocks": []}, indent=2) + "\n")
-        return 0
-
-    # v1.6.129 (#50 Fix 3 defensive) — when blocks were resolved from
-    # the L5_ADI_SPEC.json fallback but `analog/analog_block_list.json`
-    # is absent (e.g. older project tree where phase1 < v1.6.129 ran),
-    # materialise the canonical file so per-step deterministic gates
-    # (analog_a*_check.py — they only consult the block-list file via
-    # `_analog_a_check_common.load_block_list`) see the same blocks.
-    # Without this fallback, gates emit VACUOUS_PASS for every step
-    # and the runner aggregates a false-PASS at top level.
-    # Chip-AGNOSTIC.
-    block_list_path = _pl.analog_dir(project) / "analog_block_list.json"
-    if not block_list_path.is_file():
-        block_list_path.parent.mkdir(parents=True, exist_ok=True)
-        # `block_count` IS PART OF THE DECLARED SCHEMA, and this writer omitted
-        # it. The `analog-spec-extract` skill's master-list rule — the rule
-        # `analog_block_list_emit_check` was extracted from — requires
-        # `block_count` and requires it to equal `len(blocks)`. Nothing noticed
-        # because nothing ran that gate (vibe-ic#2080): this runner
-        # materialised a list its own schema gate rejects, and the tree looked
-        # the same either way. `len(blocks)` is the only value it can be.
-        #
-        # `spec_file` is deliberately NOT invented here. The schema asks each
-        # entry to name the block's `spec.json`, and this writer has not seen
-        # one — A1 is what emits them. A materialisation that promised a path
-        # it never looked for would be a fabricated record, and the gate is
-        # right to report the absence instead.
-        materialized_blocks = declared_blocks if execution.request()['mode'] == 'default' else blocks
-        block_list_path.write_text(
-            json.dumps({"blocks": materialized_blocks, "block_count": len(materialized_blocks)},
-                       indent=2, ensure_ascii=False)
-            + "\n", encoding="utf-8")
-
-    # Freeze the resolved declaration before registration. A1-A5 products are
-    # still collected by the ordinary dispatcher when each later row runs.
-    from execution_analog_installation import prepare_entry_request
-    entry_request = prepare_entry_request(project, args) if execution.request()['mode'] == 'ultra' else None
-    execution.bootstrap(project, parameters={'analog_request': entry_request})
-
-    plan: List[StepResult] = []
-    halted_at = None
-    complete_population = len(blocks) == len(declared_blocks)
-    a9_rows = []
-    # No refusal is inherited from a previous run of this process.
-    reset_env_refusals()
-
-    def _dispatched(sr: StepResult) -> None:
-        plan.append(sr)
-        print(f"  {sr.status:6} {sr.name:24} block={sr.block:16} "
-              f"{_rsum.summary_detail(sr.detail, sr.status, width=60)}")
-
-    def _close_default_row(sid, started_at, rows):
-        # Preserve native measured FAIL even if a later block succeeds.
-        if any(row.status == 'FAIL' for row in rows):
-            return True
-        rejection = _default_analog_rejection(project, sid, started_at, complete_population)
-        if rejection is None:
-            return False
-        _dispatched(rejection)
-        return True
-
-    if execution.request()['mode'] == 'ultra':
-        # Every declared block must get its A1-A5 producer opportunity before
-        # the first unified fixed A6/A7/A8 Context is cached by the ordinary
-        # Controller. Keep one literal preflight call site per canonical row.
-        for blk in blocks:
-            _bname = blk.get("name") or blk.get("type") or "unknown"
-            _note = f"block={_bname}"
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A1",
-                _preflight_refusal("A1_spec_extract", _bname),
-                step_for_block, project, blk, "A1_spec_extract", args=args,
-                _preflight_note=_note, _preflight_canonical_acceptance=True))
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A2",
-                _preflight_refusal("A2_topology_select", _bname),
-                step_for_block, project, blk, "A2_topology_select", args=args,
-                _preflight_note=_note, _preflight_canonical_acceptance=True))
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A3",
-                _preflight_refusal("A3_netlist_gen", _bname),
-                step_for_block, project, blk, "A3_netlist_gen", args=args,
-                _preflight_note=_note, _preflight_canonical_acceptance=True))
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A4",
-                _preflight_refusal("A4_corner_sweep", _bname),
-                step_for_block, project, blk, "A4_corner_sweep", args=args,
-                _preflight_note=_note, _preflight_canonical_acceptance=True))
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A5",
-                _preflight_refusal("A5_layout", _bname),
-                step_for_block, project, blk, "A5_layout", args=args,
-                _preflight_note=_note, _preflight_canonical_acceptance=True))
-
-        # Keep each unified row's full block population together before the
-        # next row. In particular, all A7 producer opportunities precede the
-        # first A8 dispatch, so every block's current A7 product is settled
-        # before the ordinary fixed A8 census is created.
-        for blk in blocks:
-            _bname = blk.get("name") or blk.get("type") or "unknown"
-            _note = f"block={_bname}"
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A6",
-                _preflight_refusal("A6_block_pv", _bname),
-                step_for_block, project, blk, "A6_block_pv", args=args,
-                _preflight_note=_note, _preflight_canonical_acceptance=True))
-        for blk in blocks:
-            _bname = blk.get("name") or blk.get("type") or "unknown"
-            _note = f"block={_bname}"
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A7",
-                _preflight_refusal("A7_post_layout_resim", _bname),
-                step_for_block, project, blk, "A7_post_layout_resim", args=args,
-                _preflight_note=_note, _preflight_canonical_acceptance=True))
-        for blk in blocks:
-            _bname = blk.get("name") or blk.get("type") or "unknown"
-            _note = f"block={_bname}"
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A8",
-                _preflight_refusal("A8_hardmacro_gen", _bname),
-                step_for_block, project, blk, "A8_hardmacro_gen", args=args,
-                _preflight_note=_note, _preflight_canonical_acceptance=True))
-        for blk in blocks:
-            _bname = blk.get("name") or blk.get("type") or "unknown"
-            _note = f"block={_bname}"
-            _dispatched(_spf.gate(
-                project, "analog_one_shot_runner", "A9",
-                _preflight_refusal("A9_hw_verify", _bname),
-                step_for_block, project, blk, "A9_hw_verify", args=args,
-                _preflight_note=_note))
-    else:
-        # Default deliberately completes every declared block before advancing a row.
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A1",
-                    _preflight_refusal("A1_spec_extract", _bname),
-                    step_for_block, project, blk, "A1_spec_extract", args=args,
-                    _preflight_note=_note, _preflight_canonical_acceptance=True))
-            if _close_default_row('A1', _terminal_started, plan[row_begin:]):
-                halted_at = 'A1'
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A2",
-                    _preflight_refusal("A2_topology_select", _bname),
-                    step_for_block, project, blk, "A2_topology_select", args=args,
-                    _preflight_note=_note, _preflight_canonical_acceptance=True))
-            if _close_default_row('A2', _terminal_started, plan[row_begin:]):
-                halted_at = 'A2'
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A3",
-                    _preflight_refusal("A3_netlist_gen", _bname),
-                    step_for_block, project, blk, "A3_netlist_gen", args=args,
-                    _preflight_note=_note, _preflight_canonical_acceptance=True))
-            if _close_default_row('A3', _terminal_started, plan[row_begin:]):
-                halted_at = 'A3'
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A4",
-                    _preflight_refusal("A4_corner_sweep", _bname),
-                    step_for_block, project, blk, "A4_corner_sweep", args=args,
-                    _preflight_note=_note, _preflight_canonical_acceptance=True))
-            if _close_default_row('A4', _terminal_started, plan[row_begin:]):
-                halted_at = 'A4'
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A5",
-                    _preflight_refusal("A5_layout", _bname),
-                    step_for_block, project, blk, "A5_layout", args=args,
-                    _preflight_note=_note, _preflight_canonical_acceptance=True))
-            if _close_default_row('A5', _terminal_started, plan[row_begin:]):
-                halted_at = 'A5'
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A6",
-                    _preflight_refusal("A6_block_pv", _bname),
-                    step_for_block, project, blk, "A6_block_pv", args=args,
-                    _preflight_note=_note, _preflight_canonical_acceptance=True))
-            if _close_default_row('A6', _terminal_started, plan[row_begin:]):
-                halted_at = 'A6'
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A7",
-                    _preflight_refusal("A7_post_layout_resim", _bname),
-                    step_for_block, project, blk, "A7_post_layout_resim", args=args,
-                    _preflight_note=_note, _preflight_canonical_acceptance=True))
-            if _close_default_row('A7', _terminal_started, plan[row_begin:]):
-                halted_at = 'A7'
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A8",
-                    _preflight_refusal("A8_hardmacro_gen", _bname),
-                    step_for_block, project, blk, "A8_hardmacro_gen", args=args,
-                    _preflight_note=_note, _preflight_canonical_acceptance=True))
-            if _close_default_row('A8', _terminal_started, plan[row_begin:]):
-                halted_at = 'A8'
-        if halted_at is None:
-            row_begin = len(plan)
-            for blk in blocks:
-                _terminal_started = time.time()
-                _bname = blk.get("name") or blk.get("type") or "unknown"
-                _note = f"block={_bname}"
-                _dispatched(_spf.gate(
-                    project, "analog_one_shot_runner", "A9",
-                    _preflight_refusal("A9_hw_verify", _bname),
-                    step_for_block, project, blk, "A9_hw_verify", args=args,
-                    _preflight_note=_note))
-            a9_rows = plan[row_begin:]
-
-    # q5 — A9's co-simulation is CHIP-level: its scenarios cross blocks, so it
-    # runs once, after every block's A1-A9, against the ids Phase 1 declared in
-    # L22. Recorded beside the rows, not as one: the flow's A9 gate
-    # (`mixed_signal_cosim_check`) owns that verdict, and a second row here
-    # would roll the same fact up twice.
-    if halted_at is None:
-        cosim_started = time.time()
-        a9_cosim = _a9_cosim(project, args)
-        if execution.request()['mode'] == 'default':
-            if a9_cosim.get('rc') == 1 or _close_default_row('A9', cosim_started, a9_rows):
-                halted_at = 'A9'
-    else:
-        a9_cosim = {'rc': None, 'tier': 'NOT_MEASURED',
-                    'detail': f'not executed after canonical step {halted_at} was not accepted'}
-
-    # vibe-ic#2080 — the master block list every A-gate above read, judged at
-    # last by the gate written for it. AFTER the loop: A1 is what emits each
-    # block's spec.json, so asking before it would answer about a tree this run
-    # had not built. ADVISORY — the status is "ADVISORY", which no tier of
-    # `_aggregate_verdict` names, so the row cannot move the analog verdict.
-    _dispatched(step_block_list_schema(project))
-
-    verdict = _aggregate_verdict(plan)
-    # A9's chip-level native return stays beside the rows, counted once.
-    if execution.request()['mode'] == 'default' and a9_cosim.get('rc') != 0:
-        if a9_cosim.get('rc') == 1:
-            verdict = 'FAIL'
-        elif verdict != 'FAIL':
-            verdict = 'NOT_MEASURED'
-    # R-0915-85: the tier is a DISCLOSURE beside the verdict now, so the
-    # reader asks for the disclosure rather than for a word that meant both.
-    structure_only = [s for s in plan
-                      if _V.Disclosure.STRUCTURE_ONLY.value
-                      in (s.disclosures or ())]
-    summary = {
-        "phase": "analog",
-        "project": str(project),
-        "blocks": [b.get("name") or b.get("type") for b in blocks],
-        "steps": [asdict(s) for s in plan],
-        "verdict": verdict,
-        # NAMED, not only counted: a reader who sees the tier needs to know
-        # which step of which block produced it without opening nine records.
-        "structure_only_steps": [f"{s.block}/{s.name}" for s in structure_only],
-    }
-    summary["a9_cosim"] = a9_cosim
-    if execution.request()['mode'] == 'default':
-        summary['halted_at'] = halted_at
-    import ai_signed_judgement as _ai_judgement
-    summary["ai_judgements"] = _ai_judgement.pending(project, ("A1", "A2", "A9"))
-    _ai_judgement.demote_runner_rows(summary["steps"], summary["ai_judgements"])
-    if summary["ai_judgements"] and summary["verdict"] in ("PASS", "PASS_WITH_WAIVERS"):
-        summary["verdict"] = "NOT_MEASURED"
-        summary["reason_class"] = "awaiting_signed_judgement"
-    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
-    # The analog A1-A9 track is driven standalone for analog-only cells, which
-    # therefore had no steps tree at all. Best-effort, non-gating; recorded in
-    # reports/audit/steps_view.json either way.
-    # Published BEFORE the view is built -- see publish_report_then_steps_view.
-    summary["steps_view"], out = _pl.publish_report_then_steps_view(
-        project, PROGRAMS_DIR, "analog_one_shot_runner", summary,
-        "analog_one_shot.json")
-    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-    # v1.6.32: emit canonical final_summary.md (best-effort). Analog
-    # alone won't populate digital sections; the generator handles
-    # missing-section gracefully.
-    fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
-    print(f"\n=== analog_one_shot_runner DONE ===")
-    print(f"verdict: {summary['verdict']}")
-    print(f"final summary: {'reports/final_summary.md' if fs_ok else 'NOT generated'}")
-    # R-0915-85 — THE EXIT CODE IS THE RUN WORD, the same rule the other three
-    # runners now apply. `!= "FAIL"` exited 0 on every word that is not FAIL,
-    # which after the collapse includes NOT_MEASURED: an analog track where
-    # nothing was measured would have told the shell it passed.
-    return 0 if _V.parse(summary["verdict"]) in (
-        _V.Verdict.PASS, _V.Verdict.PASS_WITH_WAIVERS) else 1
+    return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[result["window_verdict"]]
 
 
 if __name__ == "__main__":

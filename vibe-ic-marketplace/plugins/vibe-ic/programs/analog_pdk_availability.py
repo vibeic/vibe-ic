@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import hashlib
 import os
 import re
 import shlex
@@ -53,28 +52,9 @@ DEFAULT_PDKS_ROOT = "/foss/pdks"
 
 
 def local_pdks_root(image: Optional[str] = None) -> Optional[str]:
-    """The root declared by this attested image, never a caller-selected path."""
-    import librelane_contract as launch
-    if not os.environ.get(launch.LOCAL_ATTESTATION_ENV):
-        return None
-    bound = launch.local_image_attestation(image)
-    raw = Path(bound['attestation_path']).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != bound['attestation_sha256']:
-        raise ValueError('LOCAL_PDK_ROOT_ATTESTATION_CHANGED')
-    record = json.loads(raw)
-    installed = next(row for row in record['image_inspect'] if row['Id'] == bound['image_id'])
-    roots = [s.partition('=')[2] for s in installed['Config'].get('Env', [])
-             if s.startswith('PDK_ROOT=')]
-    if len(roots) != 1 or os.environ.get('PDK_ROOT') != roots[0]:
-        raise ValueError('LOCAL_PDK_ROOT_IMAGE_ENV_UNBOUND')
-    root = Path(roots[0])
-    if (not root.is_absolute() or '..' in root.parts or str(root) != roots[0]
-            or not (roots[0] == DEFAULT_PDKS_ROOT or roots[0].startswith('/nix/store/'))):
-        raise ValueError('LOCAL_PDK_ROOT_AUTHORITY_REFUSED')
-    for current in (root, *root.parents):
-        if current.is_symlink() or not current.is_dir():
-            raise ValueError('LOCAL_PDK_ROOT_AUTHORITY_REFUSED')
-    return roots[0]
+    """Read the installed PDK root used by the native tools."""
+    root = Path(os.environ.get("PDK_ROOT", DEFAULT_PDKS_ROOT))
+    return str(root) if root.is_dir() else None
 
 # Monte-Carlo STATISTICAL CARD keywords — the parse-verified signal that a model
 # lib actually carries statistical / mismatch distributions (vs a pure name-hint

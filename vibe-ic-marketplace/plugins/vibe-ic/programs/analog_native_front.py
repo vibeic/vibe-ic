@@ -210,8 +210,6 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         if failure:
             return failure
         smokes = cfg.get('model_smokes', config.get('model_smokes'))
-        if smokes is None:
-            smokes = _read(project / 'input/flow109/A02.json').get('smokes')
         if not isinstance(smokes, list) or not smokes:
             return finish('NOT_MEASURED', 'A02_MODEL_SMOKE_DECKS_ABSENT: provide existing model_smokes decks and their measurements')
         from flow109_analog_model_check import consume
