@@ -453,7 +453,7 @@ def _run_opensta_paths(project: Path, sta_netlist: str, sdc: str, spef: str,
         f"> /work/{rpt_rel}\n"
         "exit\n"
     )
-    (project / tcl_rel).write_text(tcl)
+    (project / tcl_rel).write_text(_tdf._local_script(project, tcl, pdk_dir, extra))
     ec, out, err = _tdf._run_in_docker(
         project, f"sta -no_init -exit /work/{tcl_rel}", timeout=timeout,
         pdk_dir=pdk_dir, extra_mounts=extra)
@@ -598,7 +598,6 @@ def run_pdf_atpg(project: Path, netlist_rel: str, cut_rel: str, flat_rel: str,
     if (project / flat_rel).exists() and (project / flat_rel).stat().st_size > 0:
         base["gate_levelise"] = f"reused existing flat core: {flat_rel}"
     else:
-        flat_rel = "phase2/stage2/dft/pdf/flat_core.v"
         liberty_ctr, lib_mount = _tdf._resolve_liberty_mount(project, liberty)
         # The corner libraries STAPostPNR read also model the netlist's pad
         # cells; without them a padded top cannot be levelised.
@@ -729,14 +728,9 @@ def run_pdf_atpg(project: Path, netlist_rel: str, cut_rel: str, flat_rel: str,
         return 0, base
 
     (project / miters_rel).write_text("\n".join(miters))
-    # Select a modern external CDCL `sat` backend (kissat/cadical) if the fork
-    # image provides one — same fix as DT1; DT3/SDD reuses these verdicts. Self-
-    # validating + fail-safe to the built-in engine (see _tdf._detect_sat_solver).
-    select_solver = _tdf._detect_sat_solver(project, pdk_dir,
-                                            timeout=min(timeout, 120))
-    base["sat_solver"] = select_solver or "minisat (built-in ezSAT)"
-    batch = _build_pdf_batch(flat_rel, miters_rel, specs, prim_in_names,
-                             select_solver=select_solver)
+    base["sat_solver"] = "native default"
+    batch = _build_pdf_batch(flat_rel, miters_rel, specs, prim_in_names)
+    batch = _tdf._local_script(project, batch, pdk_dir)
     batch_rel = "phase2/stage2/dft/pdf/_pdf_batch.ys"
     (project / batch_rel).write_text(batch)
     ec, out, err = _tdf._run_in_docker(
@@ -745,11 +739,17 @@ def run_pdf_atpg(project: Path, netlist_rel: str, cut_rel: str, flat_rel: str,
     (pdf_dir / "sat_run.log").write_text(log[-300000:])
 
     verdicts, examples = _parse_pdf_batch_log(log, specs, prim_in_names)
-    if not verdicts:
+    if ec:
         base.update({"verdict": "ERROR", "status": "ERROR",
-                     "reasons": [f"PDF SAT produced no verdicts (yosys exit {ec})",
+                     "reasons": [f"PDF SAT failed (yosys exit {ec})",
                                  (log[-300:] or "").strip()]})
         return 1, base
+    missing = [(idx, variant) for idx, variant, _ in specs if (str(idx), variant) not in verdicts]
+    if missing:
+        base.update({"verdict": "NOT_MEASURED", "status": "NOT_MEASURED",
+                     "reasons": [f"PDF SAT left {len(missing)} requested variants ungraded"],
+                     "ungraded_variants": missing})
+        return 2, base
 
     # 5. GRADE — fold verdicts into each record, recompute coverage.
     for rec in path_records:
