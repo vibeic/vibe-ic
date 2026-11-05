@@ -8618,10 +8618,26 @@ def _try_serial_current_source(binding: _Phase1ProjectBinding, ic_class: str,
 
 
 def step_rtl_gen(project: Path, ic_class: str,
-                 force_regen: Optional[bool] = None) -> StepResult:
+                 force_regen: Optional[bool] = None, *, native_engine: bool = False) -> StepResult:
     """Run RTL dispatch in isolation, then CAS-publish its complete delta."""
     t0 = time.time()
     project = Path(project)
+    if native_engine and not _design_supplied_build_rtl(project):
+        solver = PROGRAMS_DIR / "serial_parallel_mul_synth.py"
+        action = "--refresh-contract" if list(_pl.rtl_dir(project).glob("*.v")) else "--emit"
+        result = _pr.run([sys.executable, str(solver), str(project), action, "--engine", "native"],
+                         capture_output=True, text=True)
+        if result.returncode == 0:
+            produced = json.loads(result.stdout.strip().splitlines()[-1])
+            outputs = [produced[key] for key in ("written", "validated_rtl", "declaration_written",
+                       "declaration_retained", "input_declaration_written") if produced.get(key)]
+            return StepResult("rtl_gen", "PASS", time.time() - t0,
+                "Native deterministic serial-parallel arithmetic producer.", outputs,
+                extras={"deterministic_generator": "serial_parallel_mul_synth", "program_first": True,
+                        "spec": produced["spec"], "exit_code": result.returncode})
+        if result.returncode != 2:
+            return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                (result.stdout + result.stderr)[-2000:], extras={"exit_code": result.returncode})
     # D10 — the per-dispatch supply records start empty for EVERY call, before
     # any early return can read the previous call's.
     _SUPPLY_DEFERRALS.clear()
@@ -29008,7 +29024,8 @@ def main() -> int:
         plan.append(_owner_dispatch(
             project, "design_one_shot_runner", "rtl_gen",
             _preflight_refusal("rtl_gen"),
-            step_rtl_gen, project, ic_class, _preflight_canonical_acceptance=True))
+            step_rtl_gen, project, ic_class, _preflight_canonical_acceptance=True,
+            **({"native_engine": True} if _native_engine else {})))
 
     # Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP CONSUME. When step_rtl_gen
     # WAIVED (reused-IP / catalog-glue) and left rtl/ EMPTY but the design's
