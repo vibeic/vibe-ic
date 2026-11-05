@@ -617,6 +617,53 @@ def test_chip_eqy_separates_pad_wrapper_from_resettable_core(tmp_path, change, p
 
 
 
+@pytest.mark.parametrize("change", ["none", "core", "signal", "rail", "missing_pad", "no_power_view", "rail_logic"])
+def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, change):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    models, gold, gate, power, liberty, lef = [tmp_path / name for name in
+        ("pads.v", "gold.v", "gate.v", "power.v", "cells.lib", "pads.lef")]
+    models.write_text("(* blackbox *) module INPAD(input PAD,output Y,inout VP,VN); endmodule\n"
+        "(* blackbox *) module OUTPAD(input A,output PAD,inout VP,VN); endmodule\n"
+        "(* blackbox *) module SUPPLY(inout VP,VN); endmodule\n")
+    liberty.write_text("library(neutral) {}\n")
+    lef.write_text("\n".join(f"MACRO {master}\n CLASS PAD INOUT ;\n"
+        " PIN VP\n  DIRECTION INOUT ;\n  USE POWER ;\n END VP\n"
+        " PIN VN\n  DIRECTION INOUT ;\n  USE GROUND ;\n END VN\n"
+        f"END {master}\n" for master in ("INPAD", "OUTPAD", "SUPPLY")))
+    gold.write_text("module unit(input a,b,output y,inout supply_high,supply_low); wire internal;\n"
+        "INPAD pi(.PAD(a),.Y(internal),.VP(supply_high),.VN(supply_low));\n"
+        + ("OUTPAD po(.A(internal & supply_high)," if change == "rail_logic" else "OUTPAD po(.A(internal),")
+        + ".PAD(y),.VP(supply_high),.VN(supply_low));\n"
+        "SUPPLY pv(.VP(supply_high),.VN(supply_low)); endmodule\n")
+    operation = "~internal" if change == "core" else "internal"
+    gate.write_text("module unit(input a,b,output y); wire internal;\n"
+        f"INPAD pi(.PAD(a),.Y(internal)); OUTPAD po(.A({operation}),.PAD(y));\n"
+        "SUPPLY pv(); endmodule\n")
+    high, low = ("supply_low", "supply_high") if change == "rail" else ("supply_high", "supply_low")
+    power.write_text("module unit(input a,b,output y,inout supply_high,supply_low); wire internal;\n"
+        f"INPAD pi(.PAD({'b' if change == 'signal' else 'a'}),.Y(internal),.VP({high}),.VN({low}));\n"
+        f"OUTPAD po(.A({operation}),.PAD(y),.VP(supply_high),.VN(supply_low));\n"
+        + ("" if change == "missing_pad" else "SUPPLY pv(.VP(supply_high),.VN(supply_low)); ")
+        + "endmodule\n")
+    state = {"nl": str(gate)}
+    if change != "no_power_view":
+        state["pnl"] = str(power)
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+              "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(liberty)]},
+              "PAD_VERILOG_MODELS": [str(models)], "PAD_LEFS": [str(lef)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state=state, config=config)
+    rows = {row["name"]: row["status"] for row in result.get("native_steps", [])}
+    assert rows.get("Yosys.Wrapper") == ("PASS" if change in {"none", "core", "rail_logic"} else "FAIL"), result
+    if change in {"none", "core", "no_power_view"}:
+        assert rows.get("Yosys.EQY.Core") == ("FAIL" if change == "core" else "PASS"), result
+    assert (result["metrics"].get("unproved_equivalence") == 0) is (change == "none"), result
+    if change == "none":
+        for side in ("gold", "gate"):
+            ports = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]["ports"]
+            assert not any(name in {"supply_high", "supply_low"} or name.endswith((".VP", ".VN")) for name in ports)
+
+
 @pytest.mark.parametrize("direct_output", [False, True])
 def test_pad_boundary_removes_logical_package_outputs_and_keeps_core_outputs(tmp_path, direct_output):
     if not shutil.which("yosys"):
