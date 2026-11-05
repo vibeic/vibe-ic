@@ -2008,7 +2008,7 @@ def test_non_sim_gate_failure_keeps_its_repair_instruction(tmp_path, monkeypatch
     assert "reference_model_handoff" not in repair
 
 
-def _native_gate_parent_task(tmp_path, monkeypatch, *, wrapper_reject=False, runner_selection=None):
+def _native_gate_parent_task(tmp_path, monkeypatch, *, wrapper_reject=False, runner_selection=None, unmeasured=False):
     """Native lint and a fixture wrapper with a functional PASS, no dataset."""
     run, _, runner = _dispatched_parent_task(tmp_path)
     project = run / "projects/p1"
@@ -2024,6 +2024,13 @@ p = pathlib.Path(sys.argv[1]).resolve()
 assert sys.argv[sys.argv.index('--entry-step') + 1] == '2'
 source = (p/'phase2/stage1/rtl/dut.v').read_text()
 wrapper_reject = %r
+upstream_blocked = %r
+if upstream_blocked:
+    _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
+        'verdict':'FAIL', 'steps':[{'name':'rtl_gen','status':'PASS'},
+        {'name':'upstream_consumer','status':'FAIL'},
+        {'name':'rtl_validate','status':'BLOCKED'}]}, p)
+    sys.exit(0)
 container = os.environ.get('VIBEIC_REPAIR_TEST_CONTAINER')
 argv = (['docker','exec','-i',container,'yosys'] if container else ['yosys'])
 lint = subprocess.run(argv + ['-Q','-T','-p',
@@ -2038,7 +2045,7 @@ row = _required_site_row(p, 'rtl_validate', StepResult(
 _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     'verdict':row.status,
     'steps':[{'name':'rtl_gen','status':'PASS','detail':'fixture'},asdict(row)]}, p)
-''' % (str(PROGRAMS), wrapper_reject))
+''' % (str(PROGRAMS), wrapper_reject, unmeasured))
     argv = bd._resume_solver_argv(runner, project, True, "2", "2", resolve_manifest=False)
     process = bd._RunnerBudget(1, None, 0).run(argv)
     assert process.error is None, process.error
@@ -3038,7 +3045,8 @@ def test_emitted_phase1_provenance_is_bound_when_the_task_does_not_carry_it(
     emitted = task["phase1_provenance"]
     assert emitted["ran"] is True
     stale = {k: v for k, v in task.items() if k != "phase1_provenance"}
-    _solve_report(run, stale)
+    # This provenance-only fixture measures the RTL producer, not downstream gates.
+    _solve_report(run, stale, exit_step="1")
     _write_review(stale, _valid_review(stale))
 
     def never(_self, argv):
@@ -3790,3 +3798,81 @@ def test_source_upgrade_regates_native_fail_without_changing_candidate(tmp_path,
     assert bd.cmd_resume('rtllm', '/unused', str(run)) == (0 if fixed else 2)
     assert Path(current['response_path']).exists() == fixed
     assert len(list((run / 'runner_regates').rglob('prior_task.json'))) == 1
+
+
+@_NEEDS_SIMULATOR
+def test_unmeasured_native_gate_is_not_accepted_after_real_semantic_pass(tmp_path, monkeypatch):
+    run, task, _ = _native_gate_parent_task(tmp_path, monkeypatch, wrapper_reject=True, unmeasured=True)
+    _write_review(task, _valid_review(task))
+    assert bd._validate_ai_review(task)['challenge_result']['status'] == 'PASS'
+    assert not (Path(task['project']) / 'native_lint.json').exists()
+    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 2
+    acceptance = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
+    assert acceptance['accepted_ids'] == []
+    assert not Path(task['response_path']).exists()
+    repair = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
+    assert repair['status'] == 'PROGRAM_GATE_NOT_MEASURED'
+    assert 'repair_record_requirements' not in repair
+
+
+@_NEEDS_SIMULATOR
+@pytest.mark.parametrize('prior', ['unmeasured', 'scored', 'eligible', 'failed', 'foreign-response'])
+def test_source_upgrade_recovers_only_unscored_false_acceptance(tmp_path, monkeypatch, prior):
+    selection = {}
+    run, task, rtl = _native_gate_parent_task(
+        tmp_path, monkeypatch, wrapper_reject=prior != 'eligible',
+        unmeasured=prior in {'unmeasured', 'scored', 'foreign-response'}, runner_selection=selection)
+    _write_review(task, _valid_review(task))
+    assert bd._validate_ai_review(task)['challenge_result']['status'] == 'PASS'
+    # Retained producer output from the defective coordinator, never a live run.
+    solve_path = run / 'solve_report.json'
+    solve = json.loads(solve_path.read_text())
+    solve['results'][0]['accepted'] = True
+    solve_path.write_text(json.dumps(solve))
+    bd._atomic_write_json(run / bd._ACCEPTANCE_REPORT, {'accepted_ids': [task['id']]})
+    payload = Path(task['candidate_snapshot']['response_payload_path']).read_bytes()
+    if prior == 'foreign-response':
+        payload = b'{}'
+    Path(task['response_path']).write_bytes(payload)
+    if prior == 'scored':
+        (run / 'pass_at_1.json').write_text('{"total":1,"passed":1}')
+    old_rtl = rtl.read_bytes()
+    old_review = Path(task['review_path']).read_bytes()
+    old_receipt = Path(task['program_verification']['runner_invocation']['record_path']).read_bytes()
+    runner = Path(task['program_verification']['runner_invocation']['source_before']['runner']['path'])
+    upgraded = runner.parent.with_name('upgraded-runner') / runner.name
+    upgraded.parent.mkdir()
+    upgraded.write_text(runner.read_text().replace('upstream_blocked = True', 'upstream_blocked = False')
+                        .replace('wrapper_reject = True', 'wrapper_reject = False'))
+    selection['path'] = upgraded
+    rc = bd.cmd_resume('rtllm', '/unused', str(run))
+    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    archives = list((run / 'runner_regates').rglob('prior_task.json'))
+    assert len(archives) == (1 if prior == 'unmeasured' else 0)
+    if prior != 'unmeasured':
+        if prior in {'scored', 'foreign-response'}:
+            assert rc == 2
+            assert not (Path(task['project']) / 'native_lint.json').exists()
+        assert current['review_path'] == task['review_path']
+        assert Path(task['response_path']).read_bytes() == payload
+        return
+    assert rc == 2
+    archive = archives[0].parent
+    assert json.loads(archives[0].read_text()) == task
+    assert (archive / 'prior_response.json').read_bytes() == payload
+    assert (archive / 'prior_review.json').read_bytes() == old_review
+    assert (archive / 'prior_invocation.json').read_bytes() == old_receipt
+    assert json.loads((archive / 'prior_result.json').read_text())['accepted'] is True
+    assert current['candidate_origin'] == 'PROGRAM'
+    assert current['rtl_sha256'] == task['rtl_sha256'] and rtl.read_bytes() == old_rtl
+    assert current['review_path'] != task['review_path']
+    assert not Path(current['review_path']).exists()
+    assert not Path(current['response_path']).exists()
+    assert json.loads((Path(task['project']) / 'native_lint.json').read_text())['rc'] == 0
+    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 2
+    assert len(list((run / 'runner_regates').rglob('prior_task.json'))) == 1
+    _write_review(current, _valid_review(current))
+    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 0
+    result = json.loads(solve_path.read_text())['results'][0]
+    assert bd._required_gate_ledger(result)['eligibility'] == 'ELIGIBLE'
+    assert json.loads(Path(current['response_path']).read_text())['completion'] == json.loads(payload)['completion']

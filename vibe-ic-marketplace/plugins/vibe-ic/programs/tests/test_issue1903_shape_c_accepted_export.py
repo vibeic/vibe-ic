@@ -413,7 +413,9 @@ def test_shape_b_route_is_preserved(tmp_path, monkeypatch):
     assert len(called) == 1
 
     (run / "solve_report.json").write_text(json.dumps({
-        "results": [{"id": "neutral_core"}],
+        "results": [{"id": "neutral_core", "exit": "1",
+                     "phases": {"phase3_verifying": {
+                         "ran": {"rtl_gen": "PASS"}}}}],
     }) + "\n")
     dispatch._export_accepted_shape_b_samples("rtllm", dataset, run)
     assert len(called) == 2

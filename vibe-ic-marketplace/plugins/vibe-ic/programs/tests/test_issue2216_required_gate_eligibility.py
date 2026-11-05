@@ -476,7 +476,8 @@ def test_unreadable_live_gate_evidence_blocks_export(tmp_path, damage):
 def test_unchanged_live_gate_evidence_preserves_export_policy(tmp_path, status):
     run, _, task, _, result = _freshness_fixture(tmp_path, status)
     result["phases"]["phase3_verifying"]["ai_semantic_review"] = {"status": "PASS"}
-    assert BD._shape_c_task_binding_reasons(task, run, result) == []
+    reasons = BD._shape_c_task_binding_reasons(task, run, result)
+    assert reasons == ([] if status == "PASS" else [BD._gate_status_note(BD._required_gate_ledger(result))])
     assert BD._required_gate_ledger(result)["eligibility"] == (
         "ELIGIBLE" if status == "PASS" else BD._NOT_MEASURED)
 
@@ -484,7 +485,9 @@ def test_unchanged_live_gate_evidence_preserves_export_policy(tmp_path, status):
 @pytest.mark.parametrize("status,changed", [
     ("PASS", False), ("BLOCKED", False), ("PASS", True),
 ])
-def test_resume_checks_live_gate_evidence_before_publication(tmp_path, status, changed):
+def test_resume_checks_live_gate_evidence_before_publication(tmp_path, monkeypatch, status, changed):
+    from test_benchmark_program_first_ai_review import _stub_dispatched_reentry
+    _stub_dispatched_reentry(monkeypatch)
     run, dataset, task, report, _ = _freshness_fixture(tmp_path, status)
     if changed:
         doc = json.loads(report.read_text())
@@ -492,10 +495,66 @@ def test_resume_checks_live_gate_evidence_before_publication(tmp_path, status, c
         report.write_text(json.dumps(doc))
     BD.cmd_resume("verilogeval-v2", str(dataset), str(run))
     acceptance = json.loads((run / BD._ACCEPTANCE_REPORT).read_text())
-    assert acceptance["accepted_ids"] == ([] if changed else [task["id"]])
+    assert acceptance["accepted_ids"] == ([task["id"]] if status == "PASS" and not changed else [])
     if changed:
         repairs = BD._read_jsonl(run / BD._REPAIR_WORKLIST)
         assert any(r.get("status") == "PROGRAM_GATE_EVIDENCE_STALE"
                    for r in repairs), repairs
         assert not Path(task["response_path"]).exists()
         assert (Path(task["project"]) / "phase2/stage1/rtl/TopModule.sv").is_file()
+
+
+@pytest.mark.parametrize("status", ["PASS", "FAIL", "BLOCKED", "INCOMPLETE"])
+@pytest.mark.parametrize("door", ["resume", "export"])
+def test_only_eligible_required_gates_publish(tmp_path, monkeypatch, status, door):
+    run, dataset, task, _, result = _freshness_fixture(tmp_path, status)
+    assert BD._required_gate_ledger(result)["eligibility"] == {
+        "PASS": "ELIGIBLE", "FAIL": "INELIGIBLE",
+        "BLOCKED": "NOT_MEASURED", "INCOMPLETE": "NOT_MEASURED",
+    }[status]
+    if door == "resume":
+        from test_benchmark_program_first_ai_review import _stub_dispatched_reentry
+        _stub_dispatched_reentry(monkeypatch)
+        BD.cmd_resume("verilogeval-v2", str(dataset), str(run))
+        accepted = json.loads((run / BD._ACCEPTANCE_REPORT).read_text())["accepted_ids"]
+        assert accepted == ([task["id"]] if status == "PASS" else [])
+        assert Path(task["response_path"]).is_file() == (status == "PASS")
+        if status in {"BLOCKED", "INCOMPLETE"}:
+            repair = BD._read_jsonl(run / BD._REPAIR_WORKLIST)[0]
+            assert repair["status"] == "PROGRAM_GATE_NOT_MEASURED"
+            assert "repair_record_requirements" not in repair
+    else:
+        try:
+            BD._export_accepted_shape_c_samples("verilogeval-v2", run)
+        except SystemExit as exc:
+            assert status != "PASS", str(exc)
+        samples = sorted(p.name for p in (run / "samples").glob("*.sv"))
+        assert samples == ([f"{task['id']}_sample01.sv"] if status == "PASS" else [])
+
+
+@pytest.mark.parametrize("status", ["PASS", "FAIL", "BLOCKED"])
+@pytest.mark.parametrize("door", ["score", "shape-b"])
+def test_retained_acceptance_cannot_export_unmeasured_gates(tmp_path, monkeypatch, status, door):
+    run, _, task, _, _ = _freshness_fixture(tmp_path, status)
+    BD._atomic_write_json(run / BD._ACCEPTANCE_REPORT, {
+        "schema": BD._ACCEPTANCE_SCHEMA, "status": "COMPLETE", "total": 1,
+        "accepted": 1, "accepted_ids": [task["id"]]})
+    Path(task["response_path"]).write_bytes(Path(task["candidate_snapshot"]["response_payload_path"]).read_bytes())
+    if door == "shape-b":
+        import benchmark_io_adapter as bio
+        monkeypatch.setattr(bio, "problems", lambda *args: [])
+        # No input records: an eligible run reaches dataset lookup, but a held
+        # ledger must stop earlier, before the existing sample exporter runs.
+        with pytest.raises(SystemExit) as caught:
+            BD._export_accepted_shape_b_samples("rtllm", tmp_path, run)
+        observed = str(caught.value)
+        assert ("no dataset input record" in observed) == (status == "PASS"), observed
+        if status != "PASS":
+            assert "PROGRAM gate" in observed
+        return
+    try:
+        BD._require_program_first_ai_acceptance(run)
+        accepted = True
+    except SystemExit:
+        accepted = False
+    assert accepted == (status == "PASS")
