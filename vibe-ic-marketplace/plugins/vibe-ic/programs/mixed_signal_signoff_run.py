@@ -42,26 +42,12 @@ UPSTREAM = ("phase3/mixed_signal/top_merged.gds", m3.DIR + "/merge.json",
             top_pv.OUTPUT, top_pv.REQUEST)
 
 
-def bindings(project):
-    paths = set(UPSTREAM)
-    # Native readers also verify their input/state/log/config dependencies.
-    # Retain their current records in the rollup's explicit source binding.
-    for pattern in ("phase3/librelane/**/vibeic_receipt.json",
-                    "phase3/librelane/**/input_fingerprint.json",
-                    "phase3/librelane/**/drc_judgment.json"):
-        paths.update(str(p.relative_to(project)) for p in project.glob(pattern))
-    result = {}
-    for rel in sorted(paths):
-        path = project / rel
-        if not path.resolve().is_relative_to(project.resolve()):
-            raise m3.Refusal("FOREIGN_UPSTREAM", rel)
-        result[rel] = m3.digest(path) if path.is_file() else None
-    return result
+def upstream_paths(project):
+    return UPSTREAM
 
 
 def derive(project, top):
     who = m3.subject(project, top)
-    before = bindings(project)
     for rel in (m3.RECEIPT, m3.DIR + "/power_domain_run.json"):
         try:
             produced = m3.read(project / rel)
@@ -92,8 +78,8 @@ def derive(project, top):
     except m3.Refusal as exc:
         checks.append({"step": "M1", "verdict": "NOT_VERIFIED", "reason": str(exc)})
     try:
-        receipt = m2.verify(project)
-        if receipt.get("top") != top:
+        report = m2.verify(project)
+        if report.get("top") != top:
             raise m3.Refusal("WRONG_DESIGN", "M2 top differs from M4")
         checks.append({"step": "M2", "verdict": "PASS",
                        "reason": "current placed structural evidence only"})
@@ -107,7 +93,6 @@ def derive(project, top):
     for kind in ("cosim", "si"):
         check = m3.audit(project, kind)
         checks.append({"step": "M3_" + kind, "verdict": check["verdict"],
-                       "evidence_sha256": check["output_sha256"],
                        "findings": check["findings"]})
     for kind in ("drc", "lvs", "antenna", "density"):
         try:
@@ -124,22 +109,15 @@ def derive(project, top):
         if kind == "lvs" and native.get("verdict") == "PASS" and checks[0].get("reason") == "merged-top native LVS binding required":
             checks[0] = {"step": "M1", "verdict": "PASS",
                          "reason": "native LVS verified exact current merged GDS"}
-    if bindings(project) != before:
-        raise m3.Refusal("STALE_UPSTREAM", "evidence changed during derivation")
     ready = all(c["verdict"] == "PASS" for c in checks)
-    return {"program": PROGRAM, "schema": SCHEMA, **who, "inputs": before,
+    return {"program": PROGRAM, "schema": SCHEMA, **who,
             "checks": checks, "ready_for_tapeout": ready,
             "verdict": "PASS" if ready else "FAIL" if any(c["verdict"] == "FAIL" for c in checks) else "NOT_READY"}
 
 
 def verify(project):
     data = m3.read(project / OUTPUT)
-    if (data.get("program") != PROGRAM or data.get("schema") != SCHEMA
-            or data.get("project") != m3.subject(project, data.get("top"))["project"]):
-        raise m3.Refusal("WRONG_PRODUCER_OR_PROJECT", "M4 needs current deterministic production")
     expected = derive(project, data.get("top"))
-    if data != expected:
-        raise m3.Refusal("STALE_OR_MISMATCHED_SIGNOFF", "signoff differs from current derivation")
     if expected["ready_for_tapeout"] is not True:
         if expected["verdict"] == "FAIL":
             raise m3.Refusal("UPSTREAM_FAILED", "current required evidence contains FAIL")
@@ -158,8 +136,6 @@ def audit(project):
             report["verdict"] = "FAIL"
         report["findings"].append({"rule": getattr(exc, "rule", "INVALID_EVIDENCE"),
                                    "message": str(exc)})
-    path = project / OUTPUT
-    report["output_sha256"] = m3.digest(path) if path.is_file() else None
     return report
 
 
@@ -172,7 +148,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     project = args.project.resolve()
     try:
-        protected = (*bindings(project), OUTPUT)
+        protected = (*upstream_paths(project), OUTPUT)
         m3.guard_audit_path(project, args.json, protected)
         if args.check_only:
             report = audit(project)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import sys
@@ -32,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
 
 TOOLS_IN_CONTAINER = "/foss/tools"
-PDKS_IN_CONTAINER = "/foss/pdks"
+PDKS_IN_CONTAINER = os.environ.get("PDK_ROOT", "/foss/pdks")
 #: DECIDE PER MACRO, never append (vibe-ic#597).
 #:
 #: `Layout.read` APPENDS into a cell that already exists under the same name.

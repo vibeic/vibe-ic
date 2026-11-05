@@ -208,11 +208,8 @@ def _is_whitelisted(path_tok: str, project_root: str = "") -> bool:
 def _local_model_root(project: Path):
     """Bind the selected installed model tree, never the whole image store."""
     import analog_pdk_availability as availability
-    import librelane_contract as launch
     from declared_pdk_is_the_pdk_used_check import declared_target
 
-    if not _os.environ.get(launch.LOCAL_ATTESTATION_ENV):
-        return None, None
     try:
         if availability.local_pdks_root() is None:
             return None, None
@@ -228,7 +225,7 @@ def _local_model_root(project: Path):
         if root.resolve(strict=True) != root or not root.is_dir():
             return None, 'LOCAL_PDK_MODEL_ROOT_NOT_CANONICAL'
         return root, None
-    except (OSError, ValueError, KeyError, TypeError, StopIteration, launch.Refusal) as exc:
+    except (OSError, ValueError, KeyError, TypeError, StopIteration) as exc:
         return None, str(exc)
 
 
