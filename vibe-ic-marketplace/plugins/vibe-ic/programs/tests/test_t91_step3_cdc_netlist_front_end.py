@@ -41,7 +41,11 @@ def _captured_tool(netlist):
     not a claim that Yosys ran in this pytest session.
     """
     def run(argv, **kwargs):
-        assert argv[0] == "yosys", "only the native Yosys seam is substituted"
+        assert argv[0] in ("yosys", "/captured/yosys"), \
+            "only the native Yosys seam is substituted"
+        if argv[-2:] == ["-p", "read_slang -help"]:
+            return subprocess.CompletedProcess(argv, 0,
+                "1. Executing SLANG frontend.\n", "")
         target = Path(argv[-1].rsplit("json -o ", 1)[1])
         target.write_bytes(Path(netlist).read_bytes())
         return subprocess.CompletedProcess(argv, 0, "", "")

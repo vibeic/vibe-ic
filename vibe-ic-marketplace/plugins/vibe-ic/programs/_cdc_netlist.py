@@ -339,9 +339,16 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
     raw_tmp.unlink(missing_ok=True)
     files = _read_order([Path(f).resolve() for f in rtl_files])
     script = yosys_script(files, top, raw_tmp)
-    if shutil.which("yosys"):
-        argv = ["yosys", "-q", "-p", script]
-    else:
+    local_yosys = shutil.which("yosys")
+    if local_yosys:
+        import synth_frontend as _sf
+        probe = subprocess.run([local_yosys, "-p", "read_slang -help"],
+                               capture_output=True, text=True)
+        if _sf.read_slang_is_builtin(probe.stdout + probe.stderr):
+            argv = ["yosys", "-q", "-p", script]
+        else:
+            local_yosys = None
+    if not local_yosys:
         # Only the docker path needs an image: the caller's, else the one the
         # contract resolves (switch `image` > VIBEIC_LIBRELANE_IMAGE > this
         # host's released image). A refusal names the resolver's cause.
