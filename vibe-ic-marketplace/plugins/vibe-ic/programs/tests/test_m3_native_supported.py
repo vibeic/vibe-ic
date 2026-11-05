@@ -370,3 +370,34 @@ def test_current_interface_consumes_native_rc_with_controlled_ancestors(current_
     expected = 0 if outcome == "pass" else 1
     assert cosim_gate.main([str(project), "--require-current-production"]) == expected
     assert si_gate.main([str(project), "--require-current-production"]) == expected
+
+
+def test_si_audit_rechecks_declared_bounds_and_measured_values(current_interface_project):
+    import copy
+    project = current_interface_project
+    native_path = project / "input/mixed_signal/native.json"
+    spec = read(native_path)
+    assert m3.main([str(project), "--top", spec["top"], "--container", "host"]) == 0
+    assert m3.audit(project, "si")["verdict"] == "PASS"
+    report_path = project / m3.SI
+    report = read(report_path)
+    for kind in ("timing", "noise", "crosstalk"):
+        modified = copy.deepcopy(spec)
+        if kind == "timing":
+            criterion = modified["si"]["interfaces"][0]["criteria"][0]
+            measured = report["interfaces"][0]["metrics"][criterion["metric"]]["measured"]
+        else:
+            criterion = modified["canonical"][kind]["criteria"][0]
+            measured = report["current_interfaces"][0][kind]["criteria"][0]["measured"]
+        criterion["max"] = measured / 2
+        write(native_path, modified)
+        assert m3.audit(project, "si")["verdict"] == "FAIL", kind
+        write(native_path, spec)
+        incomplete = copy.deepcopy(report)
+        if kind == "timing":
+            del incomplete["interfaces"][0]["metrics"][criterion["metric"]]["measured"]
+        else:
+            del incomplete["current_interfaces"][0][kind]["criteria"][0]["measured"]
+        write(report_path, incomplete)
+        assert m3.audit(project, "si")["verdict"] == "NOT_MEASURED", kind
+        write(report_path, report)

@@ -154,6 +154,60 @@ def produce(project, top, container="host"):
     return record
 
 
+def _check_si_bounds(criterion, value, label):
+    import math
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise Refusal("MISSING_MEASUREMENT", label)
+    bounds = {key: criterion[key] for key in ("min", "max") if key in criterion}
+    if not bounds or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                         for v in bounds.values()):
+        raise Refusal("MISSING_LIMIT", label)
+    if ("min" in bounds and value < bounds["min"]) or ("max" in bounds and value > bounds["max"]):
+        raise Refusal("FAILED_MEASUREMENT", f"{label}={value} outside {bounds}")
+
+
+def _verify_si(project, report):
+    native = read(project / "input/mixed_signal/native.json")
+    timing = (native.get("si") or {}).get("interfaces") or []
+    measured_pins = {row.get("name"): row.get("metrics", {}) for row in report.get("interfaces", [])
+                     if isinstance(row, dict)}
+    if not timing:
+        raise Refusal("SI_COVERAGE_NOT_MEASURED", "no declared timing criteria")
+    for pin in timing:
+        criteria = pin.get("criteria") or []
+        if not criteria:
+            raise Refusal("MISSING_LIMIT", f"timing {pin.get('pin')}")
+        for criterion in criteria:
+            metric = criterion.get("metric")
+            measured = measured_pins.get(pin.get("pin"), {}).get(metric, {})
+            _check_si_bounds(criterion, measured.get("measured") if isinstance(measured, dict) else None,
+                             f"timing {pin.get('pin')}/{metric}")
+    canonical = native.get("canonical") or {}
+    scenarios = plan(project)
+    observed = {row.get("id"): row for row in report.get("current_interfaces", []) if isinstance(row, dict)}
+    if not scenarios or not observed:
+        raise Refusal("SI_COVERAGE_NOT_MEASURED", "no measured current-interface scenarios")
+    entries = canonical.get("interfaces")
+    for scenario in scenarios:
+        spec = canonical
+        if entries is not None:
+            if not isinstance(entries, list):
+                raise Refusal("SI_COVERAGE_NOT_MEASURED", "unsupported interface declarations")
+            spec = next((entry for entry in entries if isinstance(entry, dict)
+                         and entry.get("id") == scenario.get("interface")), {})
+        result = observed.get(scenario.get("id"), {})
+        for kind in ("noise", "crosstalk"):
+            criteria = (spec.get(kind) or {}).get("criteria") or []
+            if not criteria:
+                raise Refusal("SI_COVERAGE_NOT_MEASURED", f"{kind} criteria absent for {scenario.get('id')}")
+            values = (result.get(kind) or {}).get("criteria") or []
+            for criterion in criteria:
+                metric = criterion.get("metric")
+                found = next((row for row in values if isinstance(row, dict)
+                              and row.get("metric") == metric and row.get("units") == criterion.get("units")), {})
+                _check_si_bounds(criterion, found.get("measured"), f"{scenario.get('id')} {kind}/{metric}")
+
+
 def verify(project, kind):
     """Read the native report and compare measured values to declared bounds."""
     import math
@@ -197,6 +251,7 @@ def verify(project, kind):
         coverage = data.get("coverage") or {}
         if data.get("verdict") != "PASS" or any(coverage.get(key) != "MEASURED" for key in ("timing", "noise", "crosstalk")):
             raise Refusal("SI_COVERAGE_NOT_MEASURED", "; ".join(data.get("blockers", [])) or "timing/noise/crosstalk coverage incomplete")
+        _verify_si(project, data)
     return data
 
 
