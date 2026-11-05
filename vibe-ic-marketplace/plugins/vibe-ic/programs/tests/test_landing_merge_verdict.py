@@ -126,7 +126,7 @@ SHA = "c" * 40
 
 _GOOD_LOG = """=== gatekeeper landing gates — base=origin/main ===
 --- cheap tier (also enforced by the pre-push hook) ---
-  PASS  NDA — added content/paths
+  PASS  NDA — commit messages
   PASS  version monotonic (assigned at merge — deferred)
   REPORT  untracked scratch paths in this checkout
 --- full tier (minutes; stamps the tree on success) ---
@@ -136,7 +136,7 @@ _GOOD_LOG = """=== gatekeeper landing gates — base=origin/main ===
 """ % SHA[:9]
 
 _RED_TEST_TIER_LOG = """=== gatekeeper landing gates — base=origin/main ===
-  PASS  NDA — added content/paths
+  PASS  NDA — commit messages
   PASS  version monotonic (assigned at merge — deferred)
   FAIL  targeted tests (21 file(s))
   PASS  repo hygiene gates
@@ -1027,6 +1027,7 @@ def sandbox(tmp_path_factory):
         "_crash_safe_scratch.py",
         "_owned_process_supervisor.py",
         "_semantic_child_progress.py",
+        "commit_msg_nda_check.py",
         "gate_process_attestation.py",
         "git_prohibition_guard.py",
         "hygiene_finding_delta.py",

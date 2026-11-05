@@ -2,12 +2,23 @@ import json
 from copy import deepcopy
 from pathlib import Path
 import sys
+import subprocess
 from decimal import Decimal
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import flow_engine as engine
+
+
+@pytest.fixture(params=["installed", "regenerated"])
+def physical_step_table(request, tmp_path):
+    if request.param == "installed":
+        return engine.read_json(engine.TABLE)
+    output = tmp_path / "steps.json"
+    subprocess.run([sys.executable, str(engine.HERE / "flow_steps_generate.py"),
+                    "--output", str(output)], check=True)
+    return engine.read_json(output)
 
 
 def command_row(name, value=0, code=0, inputs=()):
@@ -45,9 +56,10 @@ def test_failed_step_does_not_block_independent_tool(tmp_path):
 
 
 @pytest.mark.parametrize("errors,status", [(0, "PASS"), (1, "FAIL")])
-def test_manufacturability_reads_final_native_result_before_aggregation(tmp_path, errors, status):
+def test_manufacturability_reads_final_native_result_before_aggregation(
+        tmp_path, errors, status, physical_step_table):
     names = {"design_for_manufacturability", "final_electrical_analysis", "signoff_aggregation"}
-    rows = [deepcopy(row) for row in engine.read_json(engine.TABLE)["steps"] if row["name"] in names]
+    rows = [deepcopy(row) for row in physical_step_table["steps"] if row["name"] in names]
     measurement = command_row("final_electrical_analysis", errors)
     measurement["tool"]["command"][2] = (
         "import pathlib; p=pathlib.Path('calls'); "
@@ -463,11 +475,11 @@ def test_native_seal_skip_is_missing_measurement_and_verifier_failure_still_fail
 
 @pytest.mark.parametrize("target,nature,entry,exit_step,count", [
     ("rtl", "debug", "4", "4", 4),
-    ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 39),
+    ("ip_hardmacro", "spec_generation", "D1", "37.5ip", 41),
     ("shippable_gds", "spec_generation", "D1", "37.5ic", 45),
 ])
 def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
-        tmp_path, target, nature, entry, exit_step, count):
+        tmp_path, target, nature, entry, exit_step, count, physical_step_table):
     import task_nature_route as router
     docs = tmp_path / "phase1/generated_docs"
     docs.mkdir(parents=True)
@@ -479,7 +491,7 @@ def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         nature=nature, delivery_target=target)
     route = {**route, "input_contract": "structured"}
     assert (route["entry_step"], route["verify_through"]) == (entry, exit_step)
-    table = engine.read_json(engine.TABLE)
+    table = physical_step_table
     features = engine.design_features(tmp_path, route, table)
     selected = engine.select_steps(table, route, features, None, None)
     assert len(selected) == count
@@ -497,6 +509,21 @@ def test_real_structured_routes_keep_bounded_closure_and_full_physical_windows(
         assert selected[0]["name"] == "requirements_and_delivery_route"
         assert selected[-1]["name"] == ("ip_release_views_and_documentation"
                                           if target == "ip_hardmacro" else "compliance_and_final_adoption")
+        for name, native_step, values in (
+            ("candidate_signal_integrity", "VibeIC.SignalIntegrity",
+             {"si_setup_slack_ns": 0, "si_hold_slack_ns": 0}),
+            ("candidate_electromigration", "VibeIC.EMCorners",
+             {"em_violations": 0, "em_worst_utilization_pct": 100}),
+        ):
+            row = next(row for row in selected if row["name"] == name)
+            assert engine.choose_tool(row["tool"], features)["steps"] == [native_step]
+            measured = engine.measure(row["checks"], values, {}, features)
+            assert {item["metric"] for item in measured} == set(values)
+            assert engine.evaluate(engine.ToolResult(True, 0), measured) == "PASS"
+            for metric in values:
+                bad = {**values, metric: -0.01 if metric.startswith("si_") else values[metric] + 1}
+                assert engine.evaluate(engine.ToolResult(True, 0),
+                                       engine.measure(row["checks"], bad, {}, features)) == "FAIL"
 
 
 @pytest.mark.parametrize("watts,status", [(0.004, "PASS"), (0.005, "FAIL"),

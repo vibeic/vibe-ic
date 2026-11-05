@@ -1019,7 +1019,7 @@ def test_the_cli_offers_no_way_to_skip_the_hygiene_set():
 _LANDING_ONLY = (
     "version_bump_monotonic_check",
     "nda_diff_scan_check",
-    "blindness_audit",
+    "commit_msg_nda_check", "blindness_audit",
     "full_suite_run_check", "run_output_completeness_check",
     # Grades the control a base..head CHANGE was measured against. In the
     # repo-hygiene lane there is no change and no control run, so it would have

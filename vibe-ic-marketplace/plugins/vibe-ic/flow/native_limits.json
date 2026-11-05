@@ -977,7 +977,7 @@
         "operator": "<=",
         "limit": 100,
         "unit": "%",
-        "when": "ic",
+        "when": "ic or hard_ip",
         "source": {
           "file": "programs/flow109_final_electrical.py",
           "line": 166
@@ -1168,7 +1168,7 @@
         "metric": "si_setup_slack_ns",
         "operator": ">=",
         "limit": 0,
-        "when": "ic",
+        "when": "ic or hard_ip",
         "source": {
           "file": "programs/flow_ic_checks.py"
         }
@@ -1177,7 +1177,7 @@
         "metric": "si_hold_slack_ns",
         "operator": ">=",
         "limit": 0,
-        "when": "ic",
+        "when": "ic or hard_ip",
         "source": {
           "file": "programs/flow_ic_checks.py"
         }
@@ -1360,7 +1360,7 @@
       }
     },
     "candidate_electromigration": {
-      "ic": {
+      "ic or hard_ip": {
         "kind": "librelane",
         "steps": [
           "VibeIC.EMCorners"
@@ -1382,7 +1382,7 @@
       }
     },
     "candidate_signal_integrity": {
-      "ic": {
+      "ic or hard_ip": {
         "kind": "librelane",
         "steps": [
           "VibeIC.SignalIntegrity"
@@ -1904,10 +1904,10 @@
     },
     "requires_em": {
       "value": true,
-      "when": "ic",
+      "when": "physical",
       "source": {
         "file": "programs/flow_em_corners.py",
-        "note": "Ruling211: retain published IC power-grid EM against PDK Jmax."
+        "note": "Ruling220: retain the IC native engineering tool and original limit for physical hard IP as well."
       }
     },
     "requires_spares": {
@@ -1920,10 +1920,10 @@
     },
     "requires_si": {
       "value": true,
-      "when": "ic",
+      "when": "physical",
       "source": {
         "file": "programs/flow_ic_checks.py",
-        "note": "Retain the published IC native engineering measurement and its original numerical comparator."
+        "note": "Ruling220: retain the IC native engineering tool and original limit for physical hard IP as well."
       }
     },
     "requires_spice": {
@@ -3144,8 +3144,8 @@
       {
         "old_name": "coupling_noise_delay_bounds",
         "class": "T",
-        "reason": "The IC digital profile retains its actual published native numerical scope; broader or non-IC engineering measurements still need their native tool.",
-        "when": "not ic or analog_physical"
+        "reason": "Digital IC and hard IP retain the published native numerical scope; broader analog or assembly engineering measurements still need their native tool.",
+        "when": "not (ic or hard_ip) or analog_physical"
       }
     ],
     "candidate_timing_closure": [

@@ -150,7 +150,7 @@ def _argv(gate, planted):
 # alone took `Overall: PASS_WITH_WAIVERS` to `Overall: FAIL`, Phase 2 to FAIL
 # and Phase 3 to SKIPPED. The design never reached place-and-route because the
 # host lacked OPTIONAL private config.
-_GATES = ("nda_diff_scan_check.py",
+_GATES = ("commit_msg_nda_check.py", "nda_diff_scan_check.py",
           "source_chip_agnostic_check.py", "nda_tracked_tree_scan.py",
           "practical_notes_specificity_check.py", "backlog_sanitize_check.py")
 
@@ -164,7 +164,7 @@ _GATES = ("nda_diff_scan_check.py",
 # two files and it is deliberately NOT fixed here: this change is the import
 # crash alone, and widening it would mean the crash fix could not be reverted
 # on its own. Adding these two to `_ECHO_GATES` is the follow-up's job.
-_ECHO_GATES = ("nda_diff_scan_check.py",
+_ECHO_GATES = ("commit_msg_nda_check.py", "nda_diff_scan_check.py",
                "source_chip_agnostic_check.py", "nda_tracked_tree_scan.py")
 
 

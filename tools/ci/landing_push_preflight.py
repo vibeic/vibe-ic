@@ -49,10 +49,11 @@ SCHEMA = 1
 KIND = "vibeic.landing-push-preflight-receipt"
 PROGRAMS_REL = "vibe-ic-marketplace/plugins/vibe-ic/programs"
 GATES = (
+    "commit_msg_nda_check.py",
     "nda_diff_scan_check.py",
     "git_prohibition_guard.py",
 )
-NDA_GUARDS = frozenset({"nda_diff_scan_check.py"})
+NDA_GUARDS = frozenset({"commit_msg_nda_check.py", "nda_diff_scan_check.py"})
 BASE_FILES = GATES + ("_commercial_pdk.py",)
 
 
@@ -120,6 +121,8 @@ def build_receipt(*, object_repo: Path, base: str, candidate: str,
         env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(authority)})
 
         commands: list[tuple[str, list[str]]] = [
+            ("commit_msg_nda_check.py",
+             ["--repo", str(repo), "--rev-range", push_range]),
             ("nda_diff_scan_check.py",
              ["--repo", str(repo), "--rev-range", push_range]),
         ]
