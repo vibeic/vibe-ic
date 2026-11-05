@@ -72,10 +72,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Optional
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _progress_run as _pr  # noqa: E402
 
 
 # ─── phase1 ──────────────────────────────────────────────────────────────
@@ -1253,12 +1253,6 @@ def gate_timeout_s() -> int:
     return GATE_TIMEOUT_DEFAULT_S
 
 
-# Single shared helper that every one-shot runner calls right before
-# its DONE banner. Generates the canonical `reports/final_summary.md`
-# (chip-AGNOSTIC) by invoking `final_report_generate.py` as a
-# subprocess. Best-effort: failure is logged but does NOT change the
-# runner's verdict (the runner's own step audit is the source of truth;
-# the summary is a derived view).
 # --------------------------------------------------------------------------- #
 # "DID THIS INVOCATION PUBLISH THIS FILE?" — ONE implementation, for every
 # reader that needs the answer.
@@ -1303,35 +1297,6 @@ def published_here(path, started_at, tolerance_s=None) -> bool:
         return False
 
 
-def emit_final_summary(project, programs_dir=None) -> bool:
-    """Run `final_report_generate.py` against `project` and return True
-    on success, False on any failure (exception, missing tool, non-zero
-    exit, stall). Caller logs the True/False; do NOT use the return
-    to gate the verdict — final report is a downstream artefact.
-
-    #525 sized an OUTER bound from the child's OWN size-adaptive audit
-    budget, because a fixed 240s cap was killing the child before #469's
-    900-3600s inner budget could even apply. Sizing a bound better is still
-    guessing at one: the child is now supervised by forward progress, so it
-    runs as long as it is working and no `timeout` parameter is left to get
-    the arithmetic wrong. No caller ever passed one."""
-    import sys
-    from pathlib import Path
-    if programs_dir is None:
-        programs_dir = Path(__file__).resolve().parent
-    final_gen = Path(programs_dir) / "final_report_generate.py"
-    if not final_gen.is_file():
-        return False
-    try:
-        from flow_artifact_paths import top_arguments
-        r = _pr.run(
-            [sys.executable, str(final_gen), str(project)] + top_arguments(project),
-            check=False,
-            capture_output=True, text=True,
-        )
-        return r.returncode == 0
-    except Exception:
-        return False
 
 
 # ---------------------------------------------------------------------------
