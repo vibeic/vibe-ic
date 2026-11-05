@@ -505,9 +505,22 @@ def binding_dispositions(project: Path, formal_dir: Path, results: dict) -> List
     proof_status = ", ".join(f"{t.get('task')}:{t.get('status')}"
                              f"({t.get('bound')})" for t in tasks) or "no proof task"
     covering = _reset_guarded_properties(harness, _dut_output_ports(project, harness))
+    import formal_property_run as _fpr
+    _, _, structural_open = _fpr._verified_program_closures(formal_dir)
+    try:
+        native_claims = (json.loads((formal_dir / _fpr.STRUCTURAL_EVIDENCE).read_text()).get("claims") or []
+                         if structural_open else [])
+    except (OSError, ValueError):
+        native_claims = []
     current_inputs = _dut_ports(project, harness, "input")
     out: List[dict] = []
     for row, b in rows:
+        cited = (structural_open.get(str(row.get("id"))) or {}).get("claims") or []
+        native_reset = any(c.get("rule") == "reset_port" and c.get("signal") == b["port"]
+                           and c.get("verdict") == "PASS"
+                           and c.get("sync_reset_flops", 0) + c.get("async_reset_flops", 0) > 0
+                           and any(d.get("claim") == {k: c.get(k, "") for k in ("rule", "signal", "value")}
+                                   for d in cited) for c in native_claims)
         rec = {"id": str(row.get("id")), "kind": "binding", "role": b["role"],
                "port": b["port"], "property": None, "proof_status": proof_status,
                "proved_harness_sha256": {
@@ -523,7 +536,7 @@ def binding_dispositions(project: Path, formal_dir: Path, results: dict) -> List
                        f"(no `rst_active = [!]{b['port']}`)")
         if covering:
             rec["property"] = covering[0]
-        else:
+        elif not native_reset:
             why.append("no substantive reset assertion on a connected DUT output is guarded by that reset")
         why.extend(stale)
         if not proven:
@@ -533,7 +546,8 @@ def binding_dispositions(project: Path, formal_dir: Path, results: dict) -> List
         else:
             rec.update(status=DISCHARGED_BY_BINDING, reason=(
                 f"harness binds DUT port {b['port']!r} as the reset and "
-                f"{covering[0]}, guarded by it, is PROVEN ({proof_status})"))
+                + (f"{covering[0]}, guarded by it, is PROVEN ({proof_status})" if covering else
+                   f"a native Yosys reset pin witnesses that role ({proof_status})")))
         out.append(rec)
     return out
 
