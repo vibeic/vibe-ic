@@ -4444,6 +4444,10 @@
     "small_delay_defect_atpg": {
       "kind": "adapter",
       "adapter": "small_delay_atpg"
+    },
+    "final_test_pattern_replay": {
+      "kind": "adapter",
+      "adapter": "final_patterns"
     }
   },
   "report_check_readers": {

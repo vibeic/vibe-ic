@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from librelane.state import DesignFormat
-from librelane.steps.step import StepError
-from librelane_plugin_vibeic import TestPatternReplay as PatternReplayStep
+from librelane.steps.step import StepError, StepException
+from librelane_plugins.librelane_plugin_vibeic import TestPatternReplay as PatternReplayStep
 
 
 def _subject(tmp_path: Path, outcome="pass", stale=False, wrong_netlist=False):
@@ -48,8 +48,7 @@ endmodule
                    "vector_count": 2}]}))
     step_dir = tmp_path / "step"
     instance = SimpleNamespace(id=PatternReplayStep.id,
-        config={"VIBEIC_PATTERN_MANIFEST": str(manifest),
-                "VIBEIC_PATTERN_TIMEOUT_S": 30},
+        config={"VIBEIC_PATTERN_MANIFEST": str(manifest), "VIBEIC_PATTERN_TIMEOUT_S": 30},
         step_dir=str(step_dir), _run=PatternReplayStep._run)
     return instance, {DesignFormat.NETLIST: str(netlist)}, step_dir
 
@@ -59,17 +58,23 @@ def test_native_pattern_replay_passes_exact_population(tmp_path):
     _, metrics = PatternReplayStep.run(instance, state)
     assert metrics == {"vibeic__pattern_replay__case__count": 1,
                        "vibeic__pattern_replay__vector__count": 2,
-                       "vibeic__pattern_replay__passed": 1}
+                       "vibeic__pattern_replay__passed": 1,
+                       "final_pattern_good_machine_errors": 0}
     assert json.loads((folder / "pattern_replay_results.json").read_text())["verdict"] == "PASS"
 
 
-@pytest.mark.parametrize("outcome,stale", [("fail", False), ("pass", True)])
-def test_native_pattern_replay_blocks_bad_result_or_changed_pattern(
-        tmp_path, outcome, stale):
-    instance, state, folder = _subject(tmp_path, outcome, stale)
+def test_native_pattern_replay_blocks_a_native_failure(tmp_path):
+    instance, state, folder = _subject(tmp_path, "fail")
     with pytest.raises(StepError, match="BLOCKING pattern replay"):
         PatternReplayStep.run(instance, state)
     assert json.loads((folder / "pattern_replay_results.json").read_text())["verdict"] == "FAIL"
+
+
+def test_native_pattern_replay_trusts_the_tool_without_input_hashes(tmp_path):
+    instance, state, folder = _subject(tmp_path, stale=True)
+    _, metrics = PatternReplayStep.run(instance, state)
+    assert metrics["final_pattern_good_machine_errors"] == 0
+    assert "export_roundtrip_errors" not in json.loads((folder / "pattern_replay_results.json").read_text())
 
 
 def test_native_pattern_replay_rejects_wrong_implementation(tmp_path):
@@ -128,18 +133,18 @@ def test_timed_pattern_replay_applies_native_delays_and_keeps_exact_population(t
 
 
 @pytest.mark.parametrize('field', ['sdf_sha256', 'netlist_sha256', 'model_sha256'])
-def test_timed_pattern_replay_refuses_changed_consumed_identity(tmp_path, field):
+def test_timed_pattern_replay_uses_native_delays_without_identity_hashes(tmp_path, field):
     instance, state, folder = _timed_subject(tmp_path)
     path = Path(instance.config['VIBEIC_PATTERN_MANIFEST'])
     manifest = json.loads(path.read_text())
     manifest['timing'][field] = {} if field == 'model_sha256' else '0' * 64
     path.write_text(json.dumps(manifest))
-    with pytest.raises(StepError):
-        PatternReplayStep.run(instance, state)
+    _, metrics = PatternReplayStep.run(instance, state)
+    assert metrics["final_pattern_good_machine_errors"] == 0
     result = json.loads((folder / 'pattern_replay_results.json').read_text())
-    assert result['verdict'] == 'FAIL'
-    assert result['runs'] == []
-    assert len(result['export_roundtrip_errors']) > 0
+    assert result['verdict'] == 'PASS'
+    assert len(result['runs']) == 1
+    assert 'export_roundtrip_errors' not in result
 
 
 def test_functional_pass_with_zero_applied_sdf_delays_is_not_timed_pass(tmp_path):
@@ -173,8 +178,8 @@ def test_timed_pattern_replay_blocks_an_unexplained_sdf_record(tmp_path):
 def test_fragmented_native_sdf_error_cannot_disappear_from_classification(tmp_path):
     instance, state, folder = _timed_subject(tmp_path)
     native = instance._run
-    def corrupt_transcript(argv, log, limit, cwd=None):
-        rc = native(argv, log, limit, cwd=cwd)
+    def corrupt_transcript(argv, log, *args, **kwargs):
+        rc = native(argv, log, *args, **kwargs)
         if 'vvp' in argv:
             with open(log, 'a') as stream:
                 stream.write('\nSDF ERROR: fragmented native source record\n')
@@ -186,3 +191,44 @@ def test_fragmented_native_sdf_error_cannot_disappear_from_classification(tmp_pa
     assert run['sdf_annotation']['unclassified_sdf_errors'] == 1
     assert run['sdf_annotation']['sdf_errors_unexplained'] == 1
     assert run['verdict'] == 'FAIL'
+
+
+def test_missing_native_result_counts_are_unmeasured(tmp_path):
+    instance, state, folder = _subject(tmp_path)
+    manifest = json.loads(Path(instance.config["VIBEIC_PATTERN_MANIFEST"]).read_text())
+    bench = Path(manifest["cases"][0]["testbench"])
+    bench.write_text(bench.read_text().replace("VIBEIC_PATTERN_REPLAY PASS case_1 2", "Simulation finished"))
+    manifest["cases"][0]["testbench_sha256"] = hashlib.sha256(bench.read_bytes()).hexdigest()
+    Path(instance.config["VIBEIC_PATTERN_MANIFEST"]).write_text(json.dumps(manifest))
+    with pytest.raises(StepException, match="no check counts"):
+        PatternReplayStep.run(instance, state)
+    assert json.loads((folder / "pattern_replay_results.json").read_text())["verdict"] == "NOT_MEASURED"
+
+
+def test_native_replay_has_no_clock_cutoff(tmp_path, monkeypatch):
+    instance, state, folder = _subject(tmp_path)
+    import librelane_plugins.librelane_plugin_vibeic as native
+
+    original = native.subprocess.run
+    def run(*args, **kwargs):
+        assert "timeout" not in kwargs
+        return original(*args, **kwargs)
+    monkeypatch.setattr(native.subprocess, "run", run)
+    assert PatternReplayStep.run(instance, state)[1]["final_pattern_good_machine_errors"] == 0
+
+
+@pytest.mark.parametrize("wrong_netlist,expected", [(False, "NOT_MEASURED"), (True, "FAIL")])
+def test_selected_pattern_row_uses_native_results_and_keeps_roundtrip_unmeasured(tmp_path, wrong_netlist, expected):
+    import flow_engine as engine
+    import flow_native_adapters as adapters
+
+    instance, state, folder = _subject(tmp_path, wrong_netlist=wrong_netlist)
+    row = next(row for row in engine.read_json(engine.TABLE)["steps"] if row["name"] == "final_test_pattern_replay")
+    result = adapters.execute(tmp_path, tmp_path / "row", row["tool"], {},
+        state={"nl": state[DesignFormat.NETLIST]}, config=instance.config)
+    native = engine.ToolResult(**result)
+    assert native.ran
+    assert "final_pattern_good_machine_errors" in native.metrics
+    assert "export_roundtrip_errors" not in native.metrics
+    checks = engine.measure(row["checks"], native.metrics, {}, {"requires_dft": True})
+    assert engine.evaluate(native, checks) == expected

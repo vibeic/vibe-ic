@@ -4791,9 +4791,7 @@
       "when": "requires_dft",
       "tool": {
         "kind": "adapter",
-        "program": "flow109_final_gls.py",
-        "function": "execute",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "adapter": "final_patterns"
       },
       "checks": [
         {
