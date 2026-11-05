@@ -167,7 +167,7 @@ def _control_rtl(body, width=2, edge="posedge clk"):
 
 
 @pytest.mark.parametrize("case", _CONTROL_CASES)
-def test_complete_reset_mapping_normal_cli_preserves_force_priority_and_unknowns(tmp_path, case):
+def test_explicit_reset_mapping_api_preserves_force_priority_and_unknowns(tmp_path, case):
     _yosys()
     body, expected, role, total = _CONTROL_CASES[case]
     rtl = tmp_path/"m.v"
@@ -246,7 +246,7 @@ def test_post_reset_native_independence_requires_total_same_edge_premises(tmp_pa
     assert progress["completed"] == progress["planned"] and not progress["unknown"], mapping
     if positive:
         row = next(r for r in mapping["rows"] if r["classification"] == "UNRESOLVED_DATA_DEPENDENCE")
-        # The normal CLI must distinguish a proved post-reset relation from
+        # The explicit API must distinguish a proved post-reset relation from
         # the pre-fix one-step-only diagnostic. Its blocking verdict stays.
         assert row["reason"] == ("POST_RESET_COFACTOR_INDEPENDENCE: reset-independent in the immediate poststate of an asserted reset edge; "
                                  "unrestricted first-edge force sense remains unresolved"), row
@@ -362,7 +362,7 @@ _GUARDED_ROLE_CASES = {
 
 
 @pytest.mark.parametrize("case", _GUARDED_ROLE_CASES)
-def test_guarded_boolean_roles_normal_cli_has_actual_feasible_domains(tmp_path, case):
+def test_guarded_boolean_roles_explicit_api_has_actual_feasible_domains(tmp_path, case):
     _yosys()
     body, expected, classification = _GUARDED_ROLE_CASES[case]
     rtl, output = tmp_path / "m.v", tmp_path / "mapping.json"
@@ -1051,7 +1051,7 @@ _PRIORITY_LOAD_CASES = {
 
 
 @pytest.mark.parametrize('case', _PRIORITY_LOAD_CASES)
-def test_priority_load_retention_normal_cli_keeps_unrestricted_q_and_data(tmp_path, case):
+def test_priority_load_retention_explicit_api_keeps_unrestricted_q_and_data(tmp_path, case):
     _yosys()
     body, polarity, expected = _PRIORITY_LOAD_CASES[case]
     active = '!rst' if polarity == 'active_low' else 'rst'

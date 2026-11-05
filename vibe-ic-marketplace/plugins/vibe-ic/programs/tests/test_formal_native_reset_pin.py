@@ -89,6 +89,13 @@ def test_supported_inverter_root_preserves_effective_polarity():
     assert [fsc.check_claim(model, "neutral", c)["verdict"] for c in CLAIMS] == [fsc.PASS] * 3
 
 
+@pytest.mark.parametrize("polarity", [2, "10", 3, -1])
+def test_non_boolean_native_polarity_is_unknown(polarity):
+    model = native_model()
+    model["modules"]["neutral"]["cells"]["state"]["parameters"]["SRST_POLARITY"] = polarity
+    assert [fsc.check_claim(model, "neutral", c)["verdict"] for c in CLAIMS] == [fsc.NOT_DISCHARGED] * 3
+
+
 def binding_fixture(tmp_path, monkeypatch, rtl=RTL):
     no_transition_sat(monkeypatch)
     docs = tmp_path / "phase1/generated_docs"
