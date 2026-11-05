@@ -231,6 +231,25 @@ def _arm_edges(clean: str, members: List[str],
     return out
 
 
+def _enum_binding_scope(text: str, position: int) -> Tuple[str, str]:
+    stack = []
+    closes = {'endmodule': 'module', 'endpackage': 'package',
+              'endinterface': 'interface', 'endprogram': 'program', 'end': 'begin'}
+    tokens = re.finditer(r'"(?:\\.|[^"\\])*"|\b(module|endmodule|package|endpackage|'
+                         r'interface|endinterface|program|endprogram|begin|end)\b', text)
+    for token in tokens:
+        kind = token.group(1)
+        if kind is None:
+            continue
+        if kind not in closes:
+            stack.append((kind, token.start()))
+        elif stack and stack[-1][0] == closes[kind]:
+            opened, start = stack.pop()
+            if start <= position < token.start():
+                return opened, text[start:token.end()]
+    return 'file', text
+
+
 def declared_state_machines(
         sources: Dict[str, str]) -> List[Dict[str, Any]]:
     """Every state machine the `{relpath: text}` map DECLARES.
@@ -255,25 +274,25 @@ def declared_state_machines(
             clean[rel] = strip_verilog_comments(text)
 
     # 1. every enum, keyed by type name, remembering where it is declared.
-    declared: List[Tuple[str, str, str]] = []   # (rel, tname, body)
-    seen_types = set()
+    declared = []
     for rel in sorted(clean):
         for enum in TYPEDEF_ENUM_RE.finditer(clean[rel]):
             tname = enum.group("tname")
-            if tname in seen_types:
-                continue
             if len(_member_names(enum.group("body"))) < 2:
                 continue
-            seen_types.add(tname)
-            declared.append((rel, tname, enum.group("body")))
+            scope, scoped_text = _enum_binding_scope(clean[rel], enum.start())
+            declared.append((rel, tname, enum.group("body"), scope, scoped_text))
 
     # 2. keep the ones bound to a state register ANYWHERE in the map.
     out: List[Dict[str, Any]] = []
-    for rel, tname, body in declared:
+    for rel, tname, body, scope, scoped_text in declared:
+        binding_sources = (clean if scope == 'package' and
+                           sum(row[1] == tname for row in declared) == 1
+                           else {rel: scoped_text})
         signals: List[str] = []
         binding_files: List[str] = []
-        for brel in sorted(clean):
-            found = _fsm_bound_signals(clean[brel], tname)
+        for brel in sorted(binding_sources):
+            found = _fsm_bound_signals(binding_sources[brel], tname)
             if not found:
                 continue
             binding_files.append(brel)
@@ -292,8 +311,8 @@ def declared_state_machines(
         transitions: List[Dict[str, str]] = []
         seen_edge = set()
         for brel in binding_files:
-            targets = _typed_signals(clean[brel], tname) or signals
-            for src, dst in _arm_edges(clean[brel], members, targets):
+            targets = _typed_signals(binding_sources[brel], tname) or signals
+            for src, dst in _arm_edges(binding_sources[brel], members, targets):
                 if (src, dst) in seen_edge:
                     continue
                 seen_edge.add((src, dst))
