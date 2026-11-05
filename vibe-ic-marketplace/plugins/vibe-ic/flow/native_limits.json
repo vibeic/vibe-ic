@@ -4124,6 +4124,18 @@
       "adapter": "dfm",
       "program": "dfm_screen_check.py",
       "parallel": true
+    },
+    "ip_release_views_and_documentation": {
+      "kind": "adapter",
+      "adapter": "ip_release_docs",
+      "parallel": true,
+      "destination": "phase3/stage4/hardmacro",
+      "formats": {
+        "lef": ".lef",
+        "lib": ".lib",
+        "gds": ".gds",
+        "nl": ".v"
+      }
     }
   },
   "report_check_readers": {
