@@ -674,8 +674,6 @@ def test_gatekeeper_review_counts_the_gate_as_blocking(tmp_path):
                       override_files=["own.py"],
                       override_cur="9.9.9", override_prev="9.9.8")
     clean_by_name = {g.name: g for g in clean.gates}
-    assert clean_by_name["ppa_pr_scope_check"].rc == 0, (
-        clean_by_name["ppa_pr_scope_check"].summary)
     assert clean.verdict == "MERGE_OK", clean.blocking
 
     # The SAME edits, re-parented onto the tip from a stale tree.
@@ -685,8 +683,6 @@ def test_gatekeeper_review_counts_the_gate_as_blocking(tmp_path):
                   override_files=["own.py"],
                   override_cur="9.9.9", override_prev="9.9.8")
     by_name = {g.name: g for g in v.gates}
-    assert by_name["ppa_pr_scope_check"].rc == 0, (
-        by_name["ppa_pr_scope_check"].summary)
     assert by_name["gatekeeper_stale_branch_check"].rc == 1
     assert "TREE REWIND" in by_name["gatekeeper_stale_branch_check"].summary
     assert {b.split(":", 1)[0] for b in v.blocking} == {

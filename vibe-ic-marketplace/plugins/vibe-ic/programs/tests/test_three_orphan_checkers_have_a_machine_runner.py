@@ -38,8 +38,7 @@ _AUDIT = _PROGRAMS / "checker_execution_wiring_audit.py"
 _HYGIENE = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 
 _ORPHANED = ("blocker_classification_check.py",
-             "container_login_banner_parse_check.py",
-             "control_substance_check.py")
+             "container_login_banner_parse_check.py",)
 
 
 @pytest.fixture(scope="module")

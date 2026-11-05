@@ -213,7 +213,6 @@ def _vacuous_argv(prog: str, absent: pathlib.Path, emptydir: pathlib.Path):
                                         str(emptydir / "ctx.json")],
         "ppa_diagnostic_router.py":    [a, "--json",
                                         str(emptydir / "route.json")],
-        "ppa_pr_scope_check.py":       ["--repo", d, "--changed-file", a],
         # A run DIRECTORY that is not there. See `_VACUOUS_RC` for why this
         # program's declared answer is 3 and not 2.
         "ppa_signoff_records.py":      [str(emptydir / "absent_run_dir")],

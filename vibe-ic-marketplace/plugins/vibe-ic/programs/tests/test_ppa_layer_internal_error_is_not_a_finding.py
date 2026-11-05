@@ -274,7 +274,6 @@ def test_no_ppa_program_lets_a_traceback_reach_the_exit_code(prog, tmp_path):
                                      str(tmp_path / "route.json")],
         # A REPO with no diff rather than a document: this program takes a
         # commit RANGE, so the junk file goes where a changed file goes.
-        "ppa_pr_scope_check.py": ["--repo", str(tmp_path), "--changed-file", j],
         "ppa_signoff_records.py": [j],
     }.get(prog)
     if argv is None:
