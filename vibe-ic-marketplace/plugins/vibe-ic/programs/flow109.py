@@ -3010,7 +3010,12 @@ def prepare_front_door(args, project: Path) -> int | None:
     touches_dft_contract = (isinstance(entry_position, int) and isinstance(exit_position, int)
                             and any(entry_position <= positions[row] <= exit_position
                                     for row in dft_contract_rows))
-    if plan["features"]["has_digital"] and touches_dft_contract:
+    import spec_declaration_emit as declaration
+    contract, _, _ = declaration.select_contract(project)
+    ordinary_non_scan = (plan["features"]["requires_scan"] is False
+        and declaration.explicit_non_scan_decision(project) is not None
+        and (not contract or not any(field['name'] == 'dft' for field in contract['fields'])))
+    if plan["features"]["has_digital"] and touches_dft_contract and not ordinary_non_scan:
         source_intent = dft_source_intent(project, {"features": plan["features"]})
         plan["dft_source_admission"] = source_intent
         if source_intent["requires_scan"] is False:
