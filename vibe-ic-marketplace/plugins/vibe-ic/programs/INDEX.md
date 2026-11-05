@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1531
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1531)
+- **Total programs (excluding helpers / shims):** 1526
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1526)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1522 |
+| `any` | 1517 |
 
 ## Alphabetical listing
 
@@ -820,7 +820,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_consumer_contract` | any | — | shared derivation helpers for the SEMANTIC L-doc completeness gates (batch layergate-7: L20 / L22 / L23). |
 | `l_doc_cross_consistency_check` | any | — | D3 program-first capture of the ``phase1-output-verify`` skill's "Cross-doc consistency" checklist (item 3). |
 | `l_doc_evidence_util` | any | — | the "evidence path + read-back value" primitive. |
-| `l_doc_field_ownership_map` | any | — | WHICH LAYER DECLARES A FIELD OF THIS NAME. |
 | `l_doc_field_producer_check` | any | — | a field a checker READS must have a PRODUCER. |
 | `l_doc_generator_stamp` | any | v0.1.51 | every emitted L document records WHICH RELEASE produced it, and a consumer can act on that. |
 | `l_doc_parity_diff` | any | v0.1.51 | L-doc parity diff (program-extracted vs fresh-agent-extracted). |
@@ -981,7 +980,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `openroad_hold_repair_tcl_gen` | any | — | emit the OpenROAD `repair_timing -hold` block with the SKILL's hard guardrails baked in. |
 | `openroad_tcl_deprecation_check` | any | v0.69 | Recursively scan a plugin tree for OpenROAD TCL usages that have been removed or renamed in recent OpenROAD releases, so a skill / progra... |
 | `oracle_dump_required_check` | any | — | Category-B workflow gate. |
-| `oracle_self_consistency_sweep` | any | — | HARNESS-SIDE audit of a benchmark dataset. |
 | `oracle_table_synth` | any | — | deterministic SOLVER from a prompt-disclosed oracle. |
 | `oracle_tb_gen` | any | — | deterministic per-IC oracle testbench generator (ORGANIC-20260606 #439). |
 | `oracle_vector_gen` | any | v0.114 | v0.114 (BACKLOG-v6 C1 closure). |
@@ -1201,7 +1199,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `real_ic_gate` | any | — | run ONE real IC end-to-end through the plugin's own front door on a candidate tree, and say which step verdicts moved. |
 | `record_prompt_context_bridge` | any | — | visible prompt/context record adapter. |
 | `reference_control_resolved_through_a_mutable_ref` | any | — | A control whose reference point is a name that moves. |
-| `refusal_names_its_remedy_census` | any | — | Refusals that do not name the channel a reader would fix them through. |
 | `register_bus_driver_gen` | any | — | drive a known-answer vector over the bus the design SAYS it is driven over. |
 | `registry_is_the_iteration_domain` | any | — | A registry that IS the population instead of a FILTER over one. |
 | `regmap_bit_layout_check` | any | — | gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields. |
@@ -1254,7 +1251,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
 | `rtl_transitive_cone` | any | — | Deterministic transitive-cone reduction for a staged RTL source tree. |
 | `rtl_unit_test_coverage_check` | any | v0.50.2 | v0.50.2 plugin gate |
-| `rtllm_oracle_adapter` | any | — | record-format mapping for the oracle sweep. |
 | `run_entry_manifest` | any | — | record WHICH STEP a run entered the flow at. |
 | `run_output_completeness_check` | any | — | the EMPTY / MISSING / STUB deliverable gate. |
 | `run_status` | any | — | ORGANIC #599. Universal runner watchdog. |
@@ -1521,7 +1517,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `verilator_timing_fallback_check` | any | — | golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile. |
 | `verilog_selfcheck_lint` | any | — | PROGRAM-FIRST verilator -Wall self-lint gate. |
 | `verilog_width_resolve` | any | — | SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de... |
-| `verilogeval_oracle_adapter` | any | — | record-format mapping for the oracle sweep. |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3). |
 | `vibe_ic_entry_guard` | any | — | enforce single entry point for benchmark + IC runs. |
 | `vibe_ic_one_shot_runner` | any | — | full Vibe-IC flow orchestrator. |
@@ -1603,7 +1598,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1522 programs)
+### `any` (1517 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2394,7 +2389,6 @@ _(no programs in this group)_
 - `l_doc_consumer_contract` — shared derivation helpers for the SEMANTIC L-doc completeness gates (batch layergate-7: L20 / L22 / L23).
 - `l_doc_cross_consistency_check` — D3 program-first capture of the ``phase1-output-verify`` skill's "Cross-doc consistency" checklist (item 3).
 - `l_doc_evidence_util` — the "evidence path + read-back value" primitive.
-- `l_doc_field_ownership_map` — WHICH LAYER DECLARES A FIELD OF THIS NAME.
 - `l_doc_field_producer_check` — a field a checker READS must have a PRODUCER.
 - `l_doc_generator_stamp` — every emitted L document records WHICH RELEASE produced it, and a consumer can act on that.  _[v0.1.51]_
 - `l_doc_parity_diff` — L-doc parity diff (program-extracted vs fresh-agent-extracted).  _[v0.1.51]_
@@ -2555,7 +2549,6 @@ _(no programs in this group)_
 - `openroad_hold_repair_tcl_gen` — emit the OpenROAD `repair_timing -hold` block with the SKILL's hard guardrails baked in.
 - `openroad_tcl_deprecation_check` — Recursively scan a plugin tree for OpenROAD TCL usages that have been removed or renamed in recent OpenROAD releases, so a skill / progra...  _[v0.69]_
 - `oracle_dump_required_check` — Category-B workflow gate.
-- `oracle_self_consistency_sweep` — HARNESS-SIDE audit of a benchmark dataset.
 - `oracle_table_synth` — deterministic SOLVER from a prompt-disclosed oracle.
 - `oracle_tb_gen` — deterministic per-IC oracle testbench generator (ORGANIC-20260606 #439).
 - `oracle_vector_gen` — v0.114 (BACKLOG-v6 C1 closure).  _[v0.114]_
@@ -2775,7 +2768,6 @@ _(no programs in this group)_
 - `real_ic_gate` — run ONE real IC end-to-end through the plugin's own front door on a candidate tree, and say which step verdicts moved.
 - `record_prompt_context_bridge` — visible prompt/context record adapter.
 - `reference_control_resolved_through_a_mutable_ref` — A control whose reference point is a name that moves.
-- `refusal_names_its_remedy_census` — Refusals that do not name the channel a reader would fix them through.
 - `register_bus_driver_gen` — drive a known-answer vector over the bus the design SAYS it is driven over.
 - `registry_is_the_iteration_domain` — A registry that IS the population instead of a FILTER over one.
 - `regmap_bit_layout_check` — gate that catches L4_REGMAP.json registers that don't specify explicit bit positions for their fields.
@@ -2827,7 +2819,6 @@ _(no programs in this group)_
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).
 - `rtl_transitive_cone` — Deterministic transitive-cone reduction for a staged RTL source tree.
 - `rtl_unit_test_coverage_check` — v0.50.2 plugin gate  _[v0.50.2]_
-- `rtllm_oracle_adapter` — record-format mapping for the oracle sweep.
 - `run_entry_manifest` — record WHICH STEP a run entered the flow at.
 - `run_output_completeness_check` — the EMPTY / MISSING / STUB deliverable gate.
 - `run_status` — ORGANIC #599. Universal runner watchdog.
@@ -3093,7 +3084,6 @@ _(no programs in this group)_
 - `verilator_timing_fallback_check` — golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile.
 - `verilog_selfcheck_lint` — PROGRAM-FIRST verilator -Wall self-lint gate.
 - `verilog_width_resolve` — SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de...
-- `verilogeval_oracle_adapter` — record-format mapping for the oracle sweep.
 - `version_bump_monotonic_check` — strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3).
 - `vibe_ic_entry_guard` — enforce single entry point for benchmark + IC runs.
 - `vibe_ic_one_shot_runner` — full Vibe-IC flow orchestrator.

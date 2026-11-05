@@ -99,6 +99,14 @@ def _chip_pdn(project: Path, pdk: str) -> dict:
     return result
 
 
+def _input_docs(project: Path) -> dict[str, str]:
+    paths = [project / "input/phase1_prompt.md"]
+    paths += sorted((project / "input/docs").rglob("*"))
+    return {str(path.relative_to(project)): path.read_text(errors="replace")
+            for path in paths if path.is_file()
+            and path.suffix.lower() in {".md", ".rst", ".txt", ".markdown"}}
+
+
 def build_config(project: Path | str, *, route: str | None = None) -> dict[str, Any]:
     """Read L documents and produced RTL; route is supplied by the Router caller."""
     project = Path(project).resolve()
@@ -110,15 +118,48 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
     fields = l19.get("fields", {})
     top = l9.get("top_module") or l1.get("tapeout_metadata", {}).get("top_cell")
     pdk = fields.get("pdk_target") or l19.get("pdk_target")
-    if not top or not pdk:
-        raise FileNotFoundError("L9 top_module and L19 pdk_target are required")
     from _chip_synth_read import chip_rtl_files
+    from _design_module_set import module_names_in_text
 
-    rtl = chip_rtl_files(project / "phase2/stage1/rtl")
+    rtl_root = project / "phase2/stage1/rtl"
+    rtl = [path for directory in [rtl_root, *sorted(rtl_root.rglob("*"))]
+           if directory.is_dir() for path in chip_rtl_files(directory)]
     if not rtl:
         raise FileNotFoundError("No produced RTL in phase2/stage1/rtl")
+    inputs = _input_docs(project)
+    sources: dict[str, Any] = {}
+    assumptions = []
+    if not pdk:
+        from parametric_spec_extractor import extract_pdk_target
+
+        for source, text in inputs.items():
+            target = extract_pdk_target(text)
+            if target:
+                pdk = target["pdk"]
+                sources["PDK"] = source
+                break
+    modules = set().union(*(module_names_in_text(path.read_text(errors="replace"))
+                            for path in rtl))
+    if top not in modules:
+        from phase1_doc_one_shot_runner import _extract_top_module_from_docs
+
+        for source, text in inputs.items():
+            declared = _extract_top_module_from_docs({source: text})
+            if declared in modules:
+                top = declared
+                sources["DESIGN_NAME"] = source
+                break
+    if not top or not pdk:
+        raise FileNotFoundError("Top module and PDK must be declared in design documents")
+    if top not in modules:
+        raise FileNotFoundError(f"Declared top module {top} is absent from produced RTL")
     config: dict[str, Any] = {"DESIGN_NAME": top, "PDK": pdk,
                               "VERILOG_FILES": [str(path) for path in rtl]}
+    config["VERILOG_INCLUDE_DIRS"] = sorted({str(path.parent) for path in
+                                           rtl_root.rglob("*") if path.is_file()})
+    if any(re.search(r"\bpackage\s+\w+|\bimport\s+\w+::", path.read_text())
+           for path in rtl if path.suffix == ".sv"):
+        config["USE_SLANG"] = True
     for field, key in {"die_area_um": "DIE_AREA", "core_area_um": "CORE_AREA"}.items():
         if fields.get(field) is not None:
             config[key] = fields[field]
@@ -130,6 +171,15 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
               and clock.get("pdk_scoped_target") in {None, pdk}]
     if not clocks:
         clocks = _load(docs / "L8_RTL_CONSTANTS.json").get("clock_domains", [])
+    if not clocks:
+        from phase1_doc_one_shot_runner import _v638_comportable_interface_harvest
+
+        for source, text in inputs.items():
+            for row in _v638_comportable_interface_harvest(text):
+                if (row.get("extraction_strategy") == "comportable_clock_bullet_v638"
+                        and re.search(r"Primary\s+Clock", row["source_row"], re.I)):
+                    clocks.append({"source_pin": row["name"]})
+                    sources["CLOCK_PORT"] = source
     if clocks:
         ports = [clock.get("source_pin") or clock.get("name") for clock in clocks]
         config["CLOCK_PORT"] = ports[0] if len(ports) == 1 else ports
@@ -138,12 +188,20 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
             period = 1000 / clocks[0]["freq_mhz"]
         if period is not None:
             config["CLOCK_PERIOD"] = period
+    if "CLOCK_PERIOD" not in config:
+        assumptions.append("CLOCK_PERIOD is undeclared; use LibreLane's native default. "
+                           "It is an implementation assumption, not a design timing target.")
+    if "CLOCK_PORT" not in config:
+        assumptions.append("CLOCK_PORT is undeclared; timing is NOT_MEASURED.")
     if route in {"ic", "DIE"}:
         config.update(_chip_pdn(project, pdk))
     config.update(_settings(fields, pdk))
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
         config.update(PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+    notes = project / "work/flow/config_sources.json"
+    notes.parent.mkdir(parents=True, exist_ok=True)
+    notes.write_text(json.dumps({"sources": sources, "assumptions": assumptions}, indent=2) + "\n")
     return config
 
 

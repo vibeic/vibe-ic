@@ -9504,7 +9504,7 @@ def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0,
 
 def _cmd_resume_locked(bench: str, dataset: str, run: str,
                        jobs: int = 1, heavy_jobs: int | None = None,
-                       worker_threads: int = 0) -> int:
+                       worker_threads: int = 0, program_reentry=None) -> int:
     """Advance Program First / AI Review work and publish only acceptances.
 
     PROGRAM emits first. A runner WAIVE or a valid route-level declaration may
@@ -9931,8 +9931,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     retry_plans = []
     retry_blocked = []
     for result in results:
-        if (result.get("worker_status") == "ERROR"
-                and result.get("worker_retryable") is True):
+        if (result.get("id") == program_reentry[0] if program_reentry else
+                result.get("worker_status") == "ERROR" and result.get("worker_retryable") is True):
             pid = str(result.get("id"))
             reentry_state = _route_reentry_state(pid, result, allow_d1_only=True)
             if reentry_state.get("status") == "REFUSED":
@@ -9989,18 +9989,23 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,
                 run_p, "PROGRAM", program_phases=result.get("phases"),
+                verification_challenges=program_reentry[1] if program_reentry and pid == program_reentry[0] else None,
                 runner_invocation=outcome.invocation,
-                expected_public_input=result.get("public_original_input"))
+                expected_public_input=(task_by_id.get(pid) or result).get("public_original_input"))
             task_by_id[pid] = task
+            if program_reentry and pid == program_reentry[0]:
+                task["program_regate"] = program_reentry[2]
             result.update({
                 "review_task": task["review_path"],
-                "candidate_origin": "PROGRAM",
+                "candidate_origin": "PROGRAM", "ai_repair_required": False,
                 "awaiting_ai_review": True, "awaiting_ai": True,
             })
             refreshed.add(pid)
             print(f"  {pid:44s} Program worker retry completed; "
                   "fresh AI review required")
             continue
+        if program_reentry is not None:
+            break  # An explicit PROGRAM retry grants no AI backup permission.
         waive = _rtl_gen_waive(proj)
         route_backup = _declared_route_ai_backup(
             result.get("routing_verdict") or {})
@@ -11574,8 +11579,9 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
     task = tasks[ids.index(pid)]
     if task.get("schema") != _REVIEW_TASK_SCHEMA:
         refuse("wrong task schema")
-    if task.get("candidate_origin") != "AI_REPAIR":
-        refuse("only an AI_REPAIR candidate can be re-gated")
+    native = task.get("candidate_origin") == "PROGRAM"
+    if task.get("candidate_origin") not in {"PROGRAM", "AI_REPAIR"}:
+        refuse("only an AI_REPAIR or PROGRAM candidate can be re-gated")
 
     stale_output = _regate_request_field(request, "stale_output_sha256",
                                          "rtl_sha256")
@@ -11587,9 +11593,9 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
             ("stale_output_sha256", stale_output, task.get("rtl_sha256"))):
         if value != expected or not re.fullmatch(r"[0-9a-f]{64}", str(expected)):
             refuse("stale " + field)
-    if not re.fullmatch(r"[0-9a-f]{64}", str(signed or "")):
+    if not native and not re.fullmatch(r"[0-9a-f]{64}", str(signed or "")):
         refuse("malformed signed_input_sha256")
-    if signed == str(task.get("rtl_sha256") or ""):
+    if not native and signed == str(task.get("rtl_sha256") or ""):
         refuse("the gates did not change the signed input; nothing to re-gate")
 
     # --- identity half 2: the declared Program version pair ---------------
@@ -11645,14 +11651,15 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
     admission = _validated_route_reentry_state(
         bench=bench, dataset=dataset, fmt=fmt, run_p=run_p, pid=pid,
         result=result, route_worklist=route_worklist,
-        allow_d1_only=False, supplied_rtl=True)
+        allow_d1_only=False, supplied_rtl=not native)
     if admission.get("status") != "ACTIVE":
         refuse(str(admission.get("reason") or "ROUTE_REENTRY_REFUSED"))
     tree = _regate_project_tree(project)
     prompt = bound(task.get("prompt_path"))
     if prompt != project / "input" / "phase1_prompt.md" or _sha256_text(prompt.read_text()) != task["prompt_sha256"]:
         refuse("prompt drift")
-    if task.get("phase1_provenance") != ea.phase1_provenance(project):
+    if task.get("phase1_provenance") != ea.input_provenance(
+            project, admission["route_receipt"].get("input_contract", "structured") if native else "structured"):
         refuse("Phase-1 provenance drift")
 
     def snapshot(candidate):
@@ -11666,7 +11673,8 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
         if reasons:
             refuse("; ".join(reasons))
 
-    for field in ("candidate_snapshot", "program_candidate_snapshot", "repair_parent_candidate_snapshot"):
+    for field in (("candidate_snapshot", "program_candidate_snapshot") if native else
+                  ("candidate_snapshot", "program_candidate_snapshot", "repair_parent_candidate_snapshot")):
         snapshot(task.get(field))
     working = [bound(p) for p in _rtl_files(project)]
     if ([str(p) for p in working] != task.get("working_rtl_paths")
@@ -11674,6 +11682,31 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
             or task["candidate_snapshot"].get("rtl_sha256") != task["rtl_sha256"]
             or task.get("rtl_paths") != task["candidate_snapshot"]["rtl_paths"]):
         refuse("working or frozen RTL drift")
+    if native:
+        verdict = _validate_ai_review(task)
+        challenge = verdict.get("verified_challenge")
+        if verdict.get("status") != "ACCEPTED" or not challenge:
+            refuse("invalid current review/source: " + "; ".join(verdict.get("reasons") or []))
+        inherited = list(task.get("verification_challenges") or [])
+        if not any(c.get("path") == challenge["path"] for c in inherited):
+            inherited.append(challenge)
+        archive = _regate_path(run_p / "runner_regates" / _safe_problem_id(pid) / ("program-regate-" + request_sha), run_p, exists=False)
+        for name, value in (("request", request), ("prior_task", task), ("prior_result", result)):
+            _write_immutable_json(archive / (name + ".json"), value)
+        shutil.copytree(project, archive / "prior_project", symlinks=True)
+        new_task = None
+        try:
+            working[0].parent.rename(archive / "prior_rtl")
+            rc = _cmd_resume_locked(bench, str(dataset), str(run_p), worker_threads=worker_threads,
+                                    program_reentry=(pid, inherited, dict(request, actor="PROGRAM", archive_path=str(archive))))
+            new_task = next((t for t in _read_jsonl(task_path) if t["id"] == pid and t["review_path"] != task["review_path"]), None)
+        finally:
+            _write_immutable_json(archive / "terminal.json", {"status": "FRESH_REVIEW_REQUIRED" if new_task else "FAILED",
+                                                            "result": next(r for r in _read_json_regular(solve_path)["results"] if r["id"] == pid),
+                                                            "reason": str(sys.exc_info()[1] or "")})
+        if new_task is None:
+            refuse("Program runner failed; frozen task retained; see " + str(archive))
+        return rc
     provenance = task.get("repair_provenance")
     if not isinstance(provenance, dict):
         refuse("task lacks its AI repair provenance")

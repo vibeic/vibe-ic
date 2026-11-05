@@ -144,6 +144,13 @@ def test_unselected_profile_does_not_require_its_reports(tmp_path):
     assert execute(tmp_path, [row])["steps"][0]["status"] == "PASS"
 
 
+def test_list_valued_document_features_do_not_abort_the_chain(tmp_path):
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L1_DATASHEET.json").write_text(json.dumps({"features": ["register interface"], "fields": []}))
+    assert execute(tmp_path, [command_row("measure")])["pass"] == 1
+
+
 def test_from_does_not_restore_an_invalidated_later_state(tmp_path, monkeypatch):
     restored = []
     monkeypatch.setattr(engine.NativeChain, "initialize", lambda self: None)
