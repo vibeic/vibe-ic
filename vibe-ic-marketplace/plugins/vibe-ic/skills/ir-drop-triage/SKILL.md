@@ -53,11 +53,12 @@ original limit from the native EM report. Distinguish a metal-width violation
 from a per-cut via violation before choosing a repair. A width-scaled utilization
 is only a prediction; rebuilding the grid can redistribute current.
 
-For the native flow, record the selected `PDN_*` setting in the existing
-`plugin_output/declaration.json`, preserving other choices. This is an
-AI-authored implementation choice under this skill, consumed by `flow_config`.
-It is not a new specification limit or a required declaration contract. Do not
-change the user's prompt or generated L documents to express the move.
+For the native flow, use `programs/flow_config.py --project <project> --route ic
+--set KEY=JSON` to record the selected `PDN_*` setting. The program preserves
+other choices in the existing `plugin_output/declaration.json` and emits the
+configuration that consumes the move. This is an implementation choice, not a
+new specification limit or a required declaration contract. Do not change the
+user's prompt or generated L documents to express it.
 
 Keep the original report and the rollback value. Resume through the public
 entry from PDN generation, then remeasure EM, IR, timing and physical verification
