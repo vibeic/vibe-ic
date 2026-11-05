@@ -222,13 +222,17 @@ def test_radix_request_existing_protocol_native(tmp_path, scenario):
     ("Requests are only accepted when not busy.", True),
     ("Ignore requests while busy.", True),
     ("Requests are accepted\nonly when idle.", True),
+    ("The diagnostic monitor is not busy, but requests are ignored while busy.", True),
+    ("The diagnostic monitor is not busy, but requests are accepted only when idle.", True),
+    ("The diagnostic monitor is not busy, but ignore requests while busy.", True),
     ("Requests are not ignored while busy.", False),
     ("No requests are ignored while busy.", False),
     ("Do not ignore requests while busy.", False),
     ("Do not ever ignore requests while busy.", False),
     ("The status monitor is busy while requests are accepted.", False),
 ], ids=["only_idle", "ignore_busy", "not_accept_busy", "must_not_be_accepted", "only_not_busy",
-        "ignore_requests_busy", "wrapped_idle", "not_ignore_busy",
+        "ignore_requests_busy", "wrapped_idle", "other_denial_ignored",
+        "other_denial_idle", "other_denial_imperative", "not_ignore_busy",
         "no_ignored_requests", "do_not_ignore", "do_not_ever_ignore", "other_busy_signal"])
 def test_radix_request_busy_restriction_is_source_bound_native(tmp_path, protocol, serialized):
     desc = _request_admission_desc(protocol=protocol)
@@ -261,6 +265,12 @@ def test_radix_request_admission_lesson_reaches_digest(tmp_path):
     digest = (tmp_path / "lessons.md").read_text()
     assert "Request admission follows the declared condition" in digest
     assert "loading" in digest and "restart" in digest
+
+
+def test_radix_request_partial_description_preserves_legacy_identity():
+    desc = "Module name:\n incomplete_unit\n"
+    shape = "radix2_signed_divider"
+    assert rcs.module_of_shape(shape, desc) == _module_decl(rcs.emit_rtl(shape, desc))
 
 
 @pytest.mark.parametrize("change", ["missing_ready", "other_algorithm", "wrong_width",
