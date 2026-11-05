@@ -3944,10 +3944,10 @@ confirm the assertion fails again. Also rerun the original public interface
 sequence. A tool difference alone does not establish a fork bug, and switching
 the canonical simulator or suppressing its failure does not repair the RTL.
 
-### Step3 reset-role authoring
+### Native reset-role authoring
 
 Follow `skills/rtl-review/SKILL.md` when ordinary RDC emits
-`RESET_ROLE_UNRESOLVED`. Use the canonical Step3 request/answer CLI in
+`RESET_ROLE_UNRESOLVED`. Use the native reset-role request/answer CLI in
 `programs/ai_signed_judgement.py`, cite the actual design input and exact current
 source context for every state/Q/selector candidate, and leave unsupported or
 conflicting roles unresolved. Read all current input, not only the selected
@@ -3955,10 +3955,10 @@ quote, and explain how each state/branch/selector follows from that input.
 Supported inference may use any input language; the program does not classify
 meaning with English keywords or detect a dishonest review. Do not manufacture
 facts in Phase1 documents.
-The signature attributes reviewed bytes; it does not prove intent, erase native
-reset cycles or replace the deterministic ordinary consumer. A valid current
-graph is reused: role adoption and consumer-only continuation must not rebuild
-its producer, mutate its manifest/log or invalidate unrelated signed subjects.
+Role data records the expert's interpretation of the cited input. It does not
+prove intent, erase native reset cycles or replace the ordinary native consumer.
+Read the produced graph and its actual source context. Publishing role facts
+must not rebuild that graph or alter the native tool results.
 
 ### Skill: Preserve the kind of correctness the input requests
 

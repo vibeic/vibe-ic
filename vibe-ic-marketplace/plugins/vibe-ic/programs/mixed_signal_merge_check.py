@@ -225,9 +225,6 @@ def main(argv=None):
     if args.json:
         out_path = Path(args.json)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        # R-0915-152 -- the document states WHO INVOKED this writer, beside the verdict it
-        # already composes. Unstated role == producer, so the run's own path is unchanged.
-        _ga.stamp(out)
         atomic_write_text(out_path, json.dumps(out, indent=2, ensure_ascii=False) + "\n")
     print(f"=== {_GATE_NAME} ({project.name}) ===")
     print(f"  verdict: {verdict}")

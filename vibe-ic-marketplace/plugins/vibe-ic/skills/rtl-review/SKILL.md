@@ -182,12 +182,11 @@ prose + the gate's structural flag.
 A constant-arm D-mux is a role candidate, not proof of an architectural reset.
 When ordinary `reset_dependency_check` reports `RESET_ROLE_UNRESOLVED`, read
 its `summary.reset_dependency_analysis.reset_role_request` and the current
-source plus actual design INPUT. Do not change L-docs, native graph/manifest,
+source plus actual design INPUT. Do not change L-docs, the native graph,
 RTL, native reset pins or rule severity to satisfy this request.
 
-The Step3 request/answer writer below is newly added; existing D1/1/4/5
-receipt contracts are unchanged. Use
-`programs/ai_signed_judgement.py PROJECT --step 3` to obtain the current request. Author an answer with that exact `evidence_sha256`, `netlist_sha256`
+Use `programs/ai_signed_judgement.py PROJECT --step 3` to obtain the native
+reset-role request. Author an answer containing the requested candidate references
 and `reset_roles[]`. Each role row includes the unchanged `candidate` object,
 `role` (`synchronous_reset`, `functional_update`, or `unresolved`), `rationale`,
 and exact `source_context` citations; resolved roles additionally require
@@ -199,12 +198,11 @@ in any language. In the rationale, describe the exact state, branch and selector
 and explain how the cited intent supports that role. A constant arm, a signal
 name, existing ARST or missing L8 facts alone is not intent. Insufficient or
 conflicting intent stays `unresolved`; do not fabricate input to fit a role.
-The program validates identity and citation bytes, not natural-language truth or
+The program checks native candidate references and source citations, not natural-language truth or
 a dishonest review. Semantic support and contradiction review belong to ICExpert.
 
-Publish through the same program with `--step 3 --answer ANSWER.json
---signed-by REVIEWER --judgement REASON`, then rerun the same ordinary RDC
-consumer. Only the canonical `reports/audit/ai_judgements/3.json` is authority;
-the temporary authored answer is not. The unchanged intrinsic candidate census
-keeps the handoff required after adoption or request deletion. Existing native
-cycles and other gates remain authoritative; a role signature is no IC PASS.
+Publish through the same program with `--step 3 --answer ANSWER.json`, then
+rerun the ordinary RDC consumer using the resulting role data. Keep the native
+candidate population and current source/intent citations complete. Unsupported
+roles remain unresolved. The native graph and RDC findings decide the measured
+result; a role annotation does not establish IC signoff.
