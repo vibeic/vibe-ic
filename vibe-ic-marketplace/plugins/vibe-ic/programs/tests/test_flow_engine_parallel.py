@@ -63,6 +63,18 @@ def run(project, rows):
     return engine.run(project, table={'steps': rows}, route=route)
 
 
+@pytest.mark.parametrize('name', ['netlist_equivalence', 'final_adopted_netlist_equivalence'])
+def test_actual_equivalence_tools_leave_physical_export_free(tmp_path, worker, name):
+    source = next(item for item in engine.read_json(engine.TABLE)['steps'] if item['name'] == name)
+    tool = {**source['tool'], 'hold': True}
+    report = run(tmp_path, [row(name, tool), command('physical', 'physical.done', wait=True),
+                            command('export', 'export.done')])
+    assert report['pass'] == 3
+    proof = report['steps'][0]
+    assert proof['timing_group'] == 'other'
+    assert (tmp_path / 'export.done').exists()
+
+
 @pytest.mark.parametrize('code,check_status,aggregate_status', [(0, 'PASS', 'PASS'), (3, 'FAIL', 'FAIL')])
 def test_blocked_check_does_not_delay_physical_export_and_aggregate_waits(
         tmp_path, worker, code, check_status, aggregate_status):
