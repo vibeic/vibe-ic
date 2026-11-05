@@ -4367,29 +4367,13 @@
       "title": "Final PERC ESD and latch-up",
       "when": "physical and requires_perc",
       "tool": {
-        "kind": "profiles",
-        "profiles": [
-          {
-            "when": "ic",
-            "tool": {
-              "kind": "librelane",
-              "steps": [
-                "VibeIC.ElectricalRules"
-              ],
-              "imports": [
-                "flow_ic_checks"
-              ]
-            }
-          },
-          {
-            "when": "otherwise",
-            "tool": {
-              "kind": "adapter",
-              "program": "execution_backend_producers.py",
-              "function": "produce",
-              "gap": "Native invocation must be adapted without the old acceptance wrappers."
-            }
-          }
+        "kind": "librelane",
+        "imports": [
+          "flow_ic_checks"
+        ],
+        "steps": [
+          "VibeIC.ElectricalRules",
+          "VibeIC.PercGeometry"
         ]
       },
       "checks": [

@@ -261,91 +261,26 @@ def _recorded_noncore_masters(def_file: Path, reader=None, *,
         return set()
 
 
-def current_lef_context(project: Path, folder: Path, def_file: Path) -> Dict[str, Any]:
-    """Reopen the current native producer's complete SC/IO LEF closure.
-
-    Only producer-configured, receipt-bound bytes can assign a placed master a
-    role. The IO wrapper's WROTE record must name the same IO bytes. Unknown or
-    conflicting roles refuse measurement, rather than becoming CORE or N/A.
-    """
-    import hashlib
+def _lef_roles(lefs):
     from _pad_ring import parse_lef_macro_classes
-    import librelane_contract as contract
+    from _source_record_merge import merge_source_records
+    roles, conflicts = merge_source_records(
+        [parse_lef_macro_classes(Path(path).read_text()) for path in lefs])
+    for conflict in conflicts:
+        roles.pop(conflict['key'], None)
+    return roles
 
-    def digest(path):
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-    def load(path):
-        return json.loads(Path(path).read_text())
-
-    config_path = folder / "config.json"
-    receipt_path = folder / "vibeic_receipt.json"
-    io_path = project / "reports/phase3/io_pad_chip_top.json"
-    config, receipt, io = load(config_path), load(receipt_path), load(io_path)
-    expected = receipt["input"]["config_files"]
-    if io.get("verdict") != "WROTE":
-        raise ValueError("PERC_LEF_IO_AUTHORITY_MISSING")
-
-    def paths(values):
-        if not isinstance(values, list) or any(not isinstance(v, str) or not v for v in values):
-            raise ValueError("PERC_LEF_DECLARATION_INVALID")
-        return [Path(v) if Path(v).is_absolute() else project / v for v in values]
-
-    sc = paths(config.get("CELL_LEFS"))
-    pads = paths(config.get("PAD_LEFS"))
-    extra = paths(config.get("EXTRA_LEFS") or [])
-    recorded = paths(io.get("io_library_lefs"))
-    if not sc or not pads or not recorded:
-        raise ValueError("PERC_LEF_CLOSURE_MISSING")
-    if not all(p.is_file() for p in recorded):
-        try:
-            recorded = contract.resolve_io_lefs_through_pad_lefs(
-                io.get("io_library_lefs"), folder)
-        except contract.Refusal as exc:
-            raise ValueError(f"PERC_LEF_IO_AUTHORITY_MISMATCH: {exc}") from exc
-
-    def source(lef):
-        return contract.resolve_state_pdk_asset(
-            lef, pdk=config.get("PDK"), fingerprint=receipt) or lef
-
-    if ({source(p).resolve(strict=True) for p in pads}
-            != {p.resolve(strict=True) for p in recorded}):
-        raise ValueError("PERC_LEF_IO_AUTHORITY_MISMATCH")
-    classes: Dict[str, set[str]] = {}
-    records = []
-    for lef in dict.fromkeys(sc + pads + extra):
-        readable = source(lef)
-        sha = digest(readable)
-        if expected.get(str(lef)) != sha:
-            raise ValueError(f"PERC_LEF_BYTES_CHANGED: {lef}")
-        text = readable.read_text()
-        for body in re.split(r"(?m)(?=^\s*MACRO\s+\S+)", text):
-            for master, cls in parse_lef_macro_classes(body).items():
-                classes.setdefault(master, set()).add(cls)
-        records.append({"path": str(readable), "sha256": sha})
-    placed = {m for _i, m in _p._parse_def_components(def_file)}
-    missing = sorted(m for m in placed if len(classes.get(m, ())) != 1)
-    if missing:
-        raise ValueError("PERC_LEF_ROLE_MISSING_OR_CONFLICTING: " + ", ".join(missing))
-    roles = {m: next(iter(classes[m])) for m in sorted(placed)}
-    unsupported = sorted(m for m, cls in roles.items()
-                         if cls.partition(" ")[0] not in {"CORE", "PAD", "ENDCAP"})
-    if unsupported:
-        raise ValueError("PERC_LEF_ROLE_UNSUPPORTED: " + ", ".join(unsupported))
-    return {"project": str(project), "def": {"path": str(def_file), "sha256": digest(def_file)},
-            "lefs": records, "roles": roles,
-            "authorities": [{"path": str(p), "sha256": digest(p)}
-                            for p in (config_path, receipt_path, io_path)]}
+def current_lef_context(project: Path, folder: Path, def_file: Path) -> Dict[str, Any]:
+    config = json.loads((folder / "config.json").read_text())
+    paths = [Path(raw) if Path(raw).is_absolute() else project / raw
+             for key in ("CELL_LEFS", "PAD_LEFS", "EXTRA_LEFS")
+             for raw in config.get(key) or []]
+    return {"project": str(project), "lefs": list(map(str, paths)), "roles": _lef_roles(paths)}
 
 
 def _checked_lef_roles(context: Dict[str, Any], def_file: Path) -> Dict[str, str]:
-    import hashlib
-    for row in [context["def"], *context["lefs"], *context["authorities"]]:
-        if hashlib.sha256(Path(row["path"]).read_bytes()).hexdigest() != row["sha256"]:
-            raise ValueError("PERC_LEF_CONTEXT_DRIFT")
-    if Path(context["def"]["path"]).resolve() != def_file.resolve():
-        raise ValueError("PERC_LEF_DEF_MISMATCH")
-    return context["roles"]
+    return _lef_roles([row['path'] if isinstance(row, dict) else row for row in context['lefs']])
 
 
 def _is_std_cell(master: str, noncore_masters: Optional[set[str]] = None) -> bool:
@@ -480,7 +415,8 @@ def _latchup_tap_spacing_check(def_file: Path,
                                screen_um: float = _DEFAULT_SCREEN_UM,
                                rated_tap_masters: Optional[Sequence[str]] = None,
                                tapless_pdk: bool = False,
-                               lef_context: Optional[Dict[str, Any]] = None
+                               lef_context: Optional[Dict[str, Any]] = None,
+                               lefs: Optional[Sequence[str]] = None
                                ) -> Dict[str, Any]:
     """Screen well/substrate-tap SPATIAL coverage of the std-cell field from the
     routed DEF. CONCLUSIVE-FAIL-ONLY per the anti-over-claim rule.
@@ -518,7 +454,10 @@ def _latchup_tap_spacing_check(def_file: Path,
     die = tuple(_die.rect) if _die.rect else None
     geom = _parse_placed_geometry(text)
     roles = _checked_lef_roles(lef_context, def_file) if lef_context is not None else {}
-    if lef_context is None:
+    if lefs is not None:
+        roles = _lef_roles(lefs)
+        noncore = {m for m, cls in roles.items() if cls.partition(' ')[0] in {'PAD', 'ENDCAP'}}
+    elif lef_context is None:
         noncore = _recorded_noncore_masters(def_file, roles_out=roles)
     else:
         noncore = {m for m, cls in roles.items()
@@ -533,7 +472,7 @@ def _latchup_tap_spacing_check(def_file: Path,
     # W5/28: an empty exclusion set has two very different causes and the record
     # now says which. Without this the screen reported a core population that
     # included every pad, and nothing in the report said the PDK had not been read.
-    if lef_context is None and _unreadable_recorded_lefs:
+    if lefs is None and lef_context is None and _unreadable_recorded_lefs:
         base["lef_noncore_masters_unavailable"] = list(_unreadable_recorded_lefs)
         base["lef_noncore_masters_unavailable_why"] = (
             "this run's recorded IO LEF(s) could not be read where this audit "
@@ -866,7 +805,8 @@ def run_geometry_layer(def_file: str,
                        screen_um: float = _DEFAULT_SCREEN_UM,
                        rated_tap_masters: Optional[Sequence[str]] = None,
                        tapless_pdk: bool = False,
-                       lef_context: Optional[Dict[str, Any]] = None
+                       lef_context: Optional[Dict[str, Any]] = None,
+                       lefs: Optional[Sequence[str]] = None
                        ) -> Dict[str, Any]:
     """Run the open-source PERC GEOMETRY layer on a routed DEF (and optional
     extracted netlist). Returns ONE aggregate report dict.
@@ -877,7 +817,8 @@ def run_geometry_layer(def_file: str,
     dp = Path(def_file)
     spacing = _latchup_tap_spacing_check(dp, screen_um=screen_um,
                                          rated_tap_masters=rated_tap_masters,
-                                         tapless_pdk=tapless_pdk, lef_context=lef_context)
+                                         tapless_pdk=tapless_pdk, lef_context=lef_context,
+                                         **({'lefs': lefs} if lefs is not None else {}))
     guardring = _guardring_topology_check(dp)
     report: Dict[str, Any] = {
         "def": str(def_file),

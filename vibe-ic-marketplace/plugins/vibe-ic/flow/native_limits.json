@@ -4401,6 +4401,16 @@
       "steps": [
         "VibeIC.PackageInterface"
       ]
+    },
+    "final_perc_esd_and_latch_up": {
+      "kind": "librelane",
+      "imports": [
+        "flow_ic_checks"
+      ],
+      "steps": [
+        "VibeIC.ElectricalRules",
+        "VibeIC.PercGeometry"
+      ]
     }
   },
   "report_check_readers": {
