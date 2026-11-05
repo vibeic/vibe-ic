@@ -208,7 +208,7 @@ class NativeChain:
     def initialize(self):
         if self.owner is not None:
             return
-        from flow_config import build_config
+        from flow_config import build_native_config as build_config
         from librelane.flows import Flow
         from librelane.state import State
         from librelane.common import Toolbox

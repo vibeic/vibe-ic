@@ -122,7 +122,7 @@ def _side_ports(project: Path, ports: list[dict]):
 def _paths(value) -> list[Path]:
     if isinstance(value, dict):
         return list(dict.fromkeys(path for group in value.values() for path in _paths(group)))
-    if isinstance(value, (str, Path)):
+    if isinstance(value, (str, os.PathLike)):
         return [Path(str(value))]
     return [Path(str(path)) for path in value or []]
 
@@ -374,6 +374,18 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
 
 
 def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
+    directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
+    collection = lambda names: "[get_ports -regexp {^(" + "|".join(re.escape(name) for name in names) + ")$}]"
+    original = config.get("PNR_SDC_FILE")
+    if original:
+        text = Path(str(original)).read_text()
+        inputs = [bit for bit, value in directions.items() if value == "input"]
+        outputs = [bit for bit, value in directions.items() if value == "output"]
+        clocks = config.get("CLOCK_PORT") or []
+        clocks = [clocks] if isinstance(clocks, str) else clocks
+        text = text.replace("[all_inputs]", collection(inputs))
+        text = text.replace("[all_inputs -no_clocks]", collection([name for name in inputs if name not in clocks]))
+        return text.replace("[all_outputs]", collection(outputs))
     path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
     document = json.loads(path.read_text())
     delay = document.get("constraints", {}).get("io_delay", {}).get("default_fraction_percent")
@@ -384,29 +396,17 @@ def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
         clocks = [clocks]
     period = float(_required(config, "CLOCK_PERIOD"))
     budget = period * float(delay) / 100
-    directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
     if any(clock not in directions or directions[clock] != "input" for clock in clocks):
         raise ValueError("CLOCK_PORT must name an elaborated core input")
     # -regexp with anchored escaped names keeps bus brackets literal in OpenSTA.
-    collection = lambda names: "[get_ports -regexp {^(" + "|".join(re.escape(name) for name in names) + ")$}]"
     lines = ["set_units -time ns"]
     for index, clock in enumerate(clocks):
         lines.append(f"create_clock -name core_clock_{index} -period {period:g} {collection([clock])}")
         for direction, command in (("input", "set_input_delay"), ("output", "set_output_delay")):
             names = [bit for bit, value in directions.items() if value == direction and bit not in clocks]
             if names:
-                lines.append(f"{command} {budget:g} -clock core_clock_{index} {collection(names)}")
-    original = config.get("PNR_SDC_FILE")
-    if original:
-        extra = Path(str(original)).read_text().replace("\\\n", " ")
-        inputs = [bit for bit, value in directions.items() if value == "input" and bit not in clocks]
-        outputs = [bit for bit, value in directions.items() if value == "output"]
-        for line in extra.splitlines():
-            if re.match(r"\s*(set_units|create_clock|set_input_delay|set_output_delay)\b", line):
-                continue
-            line = re.sub(r"\[all_inputs(?:\s+-no_clocks)?\]", lambda _: collection(inputs), line)
-            line = line.replace("[all_outputs]", collection(outputs))
-            lines.append(line)
+                additive = " -add_delay" if index else ""
+                lines.append(f"{command} {budget:g} -clock core_clock_{index}{additive} {collection(names)}")
     return "\n".join(lines) + "\n"
 
 
@@ -427,8 +427,13 @@ def prepare(project: Path, core_config: dict[str, Any]) -> dict[str, Any]:
     sdc = destination / "constraints.sdc"
     sdc.write_text(_sdc(project, core_config, ports))
     result = dict(core_config)
+    for axis in ("VERTICAL", "HORIZONTAL"):
+        key = f"PDN_CORE_{axis}_LAYER"
+        if result.get(key) == native.get(f"PDN_{axis}_LAYER"):
+            result.pop(key, None)
     result.update(DESIGN_NAME=top, VERILOG_FILES=[*core_config["VERILOG_FILES"], str(wrapper)],
                   FP_SIZING="absolute", DIE_AREA=die, CORE_AREA=core,
+                  PDN_ENABLE_PINS=False,
                   VDD_NETS=[power], GND_NETS=[ground], PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
     result.update({"PAD_" + full: ordered[side] for side, full in SIDES.items()})
     tool_seconds = sum(run["tool_seconds"] for run in runs)

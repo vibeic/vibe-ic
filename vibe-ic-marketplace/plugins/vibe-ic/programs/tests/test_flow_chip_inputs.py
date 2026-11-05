@@ -1,10 +1,22 @@
 """Chip preparation uses elaborated interfaces and native library geometry."""
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 import flow_chip_inputs as chip
+
+
+def test_native_pathlike_config_values_are_single_paths():
+    class NativePath(os.PathLike):
+        def __fspath__(self):
+            return "/native/technology.lef"
+
+        def __str__(self):
+            return self.__fspath__()
+
+    assert chip._paths({"nominal": NativePath()}) == [Path("/native/technology.lef")]
 
 
 def _write(path, text):
@@ -113,6 +125,7 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     project, config, native, ports, _ = inputs
     result = chip.prepare(project, config)
     assert result["DESIGN_NAME"] == "logic_chip"
+    assert result["PDN_ENABLE_PINS"] is False
     assert len(result["PAD_NORTH"]) == 4
     assert len(result["PAD_EAST"]) == 3
     assert len(result["PAD_SOUTH"]) == 1
@@ -151,6 +164,16 @@ def test_bus_order_offset_and_single_index_are_preserved():
     assert chip._bits(ports[1]) == ["single[7]"]
 
 
+def test_ring_layers_equal_to_mesh_layers_use_native_connection_once(inputs):
+    project, config, native, _, _ = inputs
+    for axis, layer in (("VERTICAL", "upper_vertical"), ("HORIZONTAL", "upper_horizontal")):
+        native[f"PDN_{axis}_LAYER"] = layer
+        config[f"PDN_CORE_{axis}_LAYER"] = layer
+    result = chip.prepare(project, config)
+    assert "PDN_CORE_VERTICAL_LAYER" not in result
+    assert "PDN_CORE_HORIZONTAL_LAYER" not in result
+
+
 def test_dynamic_inout_is_refused():
     with pytest.raises(ValueError, match="inout.*output-enable"):
         chip._ports({"modules": {"core": {"ports": {
@@ -186,6 +209,34 @@ def test_missing_document_io_delay_is_named(inputs):
         chip._sdc(project, config, ports)
 
 
+def test_existing_sdc_keeps_clock_names_exceptions_and_budgets(inputs):
+    project, config, _, ports, _ = inputs
+    original = project / "input/timing.sdc"
+    original.write_text("create_clock -name declared_clock -period 24 [get_ports clk]\n"
+        "set_clock_uncertainty 0.2 [get_clocks declared_clock]\n"
+        "set_input_delay 3 -clock declared_clock [all_inputs -no_clocks]\n"
+        "set_output_delay 5 -clock declared_clock [all_outputs]\n")
+    config["PNR_SDC_FILE"] = str(original)
+    text = chip._sdc(project, config, ports)
+    assert "create_clock -name declared_clock -period 24" in text
+    assert "[get_clocks declared_clock]" in text
+    assert "set_input_delay 3 -clock declared_clock" in text
+    assert "set_output_delay 5 -clock declared_clock" in text
+    assert "core_clock_0" not in text
+    assert "all_inputs" not in text and "all_outputs" not in text
+
+
+def test_multiple_clock_delays_are_additive(inputs):
+    project, config, _, ports, _ = inputs
+    config["CLOCK_PORT"] = ["clk", "other_clock"]
+    ports = [*ports, {"name": "other_clock", "direction": "input", "width": 1,
+                     "indexed": False, "msb": 0, "lsb": 0}]
+    text = chip._sdc(project, config, ports)
+    assert "-clock core_clock_0 -add_delay" not in text
+    assert "set_input_delay 4.8 -clock core_clock_1 -add_delay" in text
+    assert "set_output_delay 4.8 -clock core_clock_1 -add_delay" in text
+
+
 def test_impossible_declared_geometry_is_refused(inputs):
     project, config, native, _, _ = inputs
     native["DIE_AREA"] = [0, 0, 50, 50]
@@ -218,7 +269,8 @@ set_false_path -from [all_inputs -no_clocks] -to [all_outputs]
 """)
     config["PNR_SDC_FILE"] = str(source)
     sdc = chip._sdc(project, config, ports)
-    assert "99" not in sdc
+    assert "create_clock -period 99 [get_ports clk]" in sdc
+    assert "set_input_delay 99 -clock clk" in sdc
     assert "set_clock_uncertainty 0.25" in sdc
     assert "set_false_path -from [get_ports -regexp" in sdc
     assert "all_inputs" not in sdc and "all_outputs" not in sdc

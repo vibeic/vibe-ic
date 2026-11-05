@@ -74,9 +74,7 @@ def _chip_pdn(project: Path, pdk: str) -> dict:
     registry = _load(PROGRAMS / "pdk_registry.json")
     ring = next((row.get("pdn_ring", {}) for row in registry.get("pdks", [])
                  if row.get("name") == pdk), {})
-    result: dict[str, Any] = {
-        "PDN_VOFFSET": 7, "PDN_HOFFSET": 7, "PDN_SKIPTRIM": True,
-    }
+    result: dict[str, Any] = {"PDN_SKIPTRIM": True}
     if ring:
         result.update(PDN_CORE_RING=True,
                       PDN_CORE_RING_CONNECT_TO_PADS=bool(ring.get("connect_to_pad_layers")))
@@ -89,6 +87,8 @@ def _chip_pdn(project: Path, pdk: str) -> dict:
     if ring.get("core_offset_um") is not None:
         result.update(PDN_CORE_RING_VOFFSET=ring["core_offset_um"],
                       PDN_CORE_RING_HOFFSET=ring["core_offset_um"])
+        for axis, width in zip(("V", "H"), ring.get("widths", [])):
+            result[f"PDN_{axis}OFFSET"] = ring["core_offset_um"] + width / 2
     script = project / "work/flow/pdn_cfg.tcl"
     script.parent.mkdir(parents=True, exist_ok=True)
     lines = ["source $::env(SCRIPTS_DIR)/openroad/common/pdn_cfg.tcl"]
@@ -144,6 +144,14 @@ def build_config(project: Path | str, *, route: str | None = None) -> dict[str, 
     sdc = project / "phase3/stage3/pnr/constraint.sdc"
     if sdc.is_file():
         config.update(PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+    return config
+
+
+def build_native_config(project: Path | str, *, route: str | None = None) -> dict[str, Any]:
+    config = build_config(project, route=route)
+    if route in {"ic", "DIE"}:
+        from flow_chip_inputs import prepare
+        config = prepare(Path(project).resolve(), config)
     return config
 
 
