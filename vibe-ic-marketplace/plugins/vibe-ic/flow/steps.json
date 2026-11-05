@@ -1440,10 +1440,13 @@
       "title": "DFT architecture and insertion",
       "when": "requires_dft",
       "tool": {
-        "kind": "adapter",
-        "program": "design_one_shot_runner.py",
-        "function": "_step_dft_insertion",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "librelane",
+        "imports": [
+          "flow_dft_steps"
+        ],
+        "steps": [
+          "VibeIC.ScanInsertion"
+        ]
       },
       "checks": [
         {
@@ -1473,8 +1476,12 @@
       "when": "requires_dft",
       "tool": {
         "kind": "librelane",
+        "imports": [
+          "flow_dft_steps"
+        ],
         "steps": [
-          "Yosys.Resynthesis"
+          "Yosys.Resynthesis",
+          "VibeIC.ScanPreservation"
         ]
       },
       "checks": [
@@ -2462,10 +2469,13 @@
       "title": "Physical scan stitching",
       "when": "requires_scan and physical",
       "tool": {
-        "kind": "adapter",
-        "program": "phase3_one_shot_runner.py",
-        "function": "step_scan_physical",
-        "gap": "Native invocation must be adapted without the old acceptance wrappers."
+        "kind": "librelane",
+        "imports": [
+          "flow_dft_steps"
+        ],
+        "steps": [
+          "VibeIC.PhysicalScan"
+        ]
       },
       "checks": [
         {

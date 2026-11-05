@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1474
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1474)
+- **Total programs (excluding helpers / shims):** 1475
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1475)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1465 |
+| `any` | 1466 |
 
 ## Alphabetical listing
 
@@ -540,6 +540,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_declared_producer_run` | any | — | run the producers the FLOW already declares, so the RUN writes the documents it is supposed to write. |
 | `flow_density_topup` | any | — | flow_density_topup |
 | `flow_dependency_graph_check` | any | — | recompute the flow-gate's dependency dimension. |
+| `flow_dft_steps` | any | — | Native scan replacement, stitching and serial replay on LibreLane State. |
 | `flow_em_corners` | any | — | flow_em_corners |
 | `flow_engine` | any | — | Run the Router-selected window of the native step table. |
 | `flow_engine_frontend` | any | — | flow_engine_frontend |
@@ -1546,7 +1547,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1465 programs)
+### `any` (1466 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -2058,6 +2059,7 @@ _(no programs in this group)_
 - `flow_declared_producer_run` — run the producers the FLOW already declares, so the RUN writes the documents it is supposed to write.
 - `flow_density_topup` — flow_density_topup
 - `flow_dependency_graph_check` — recompute the flow-gate's dependency dimension.
+- `flow_dft_steps` — Native scan replacement, stitching and serial replay on LibreLane State.
 - `flow_em_corners` — flow_em_corners
 - `flow_engine` — Run the Router-selected window of the native step table.
 - `flow_engine_frontend` — flow_engine_frontend
