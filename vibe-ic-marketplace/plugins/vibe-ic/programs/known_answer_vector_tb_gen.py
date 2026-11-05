@@ -166,7 +166,8 @@ def bind_vector(case: dict,
 
 def emit_case_oracle_from_ports(case: dict, dut_module: str,
                                 ports: Sequence[Tuple[str, str, str]],
-                                settle_cycles: int = 64
+                                settle_cycles: int = 64,
+                                timescale: Optional[str] = None
                                 ) -> Tuple[Optional[str], str]:
     """`(verilog, reason)` for ONE vector, or `(None, why)` — fail-closed."""
     binding, why = bind_vector(case, ports)
@@ -187,6 +188,8 @@ def emit_case_oracle_from_ports(case: dict, dut_module: str,
     L.append("// the DUT's own output. A mismatch increments `errors` and the")
     L.append("// run ends $fatal(1) — this file cannot print a PASS it did not")
     L.append("// verify.")
+    if timescale is not None:
+        L.append(f"`timescale {timescale}")
     L.append(f"module {name};")
     L.append("  integer errors = 0;")
     if clk:

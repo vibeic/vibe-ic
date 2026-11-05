@@ -798,14 +798,9 @@ def test_gls_names_missing_native_inputs(tmp_path):
     assert not result["ran"] and "State netlist" in result["detail"]
 
 
-@pytest.mark.parametrize("different", [False, True])
-def test_gls_regenerates_declared_vectors_on_native_chip_ports(tmp_path, different):
-    if not shutil.which("iverilog") or not shutil.which("vvp"):
-        pytest.skip("Native Icarus is required")
+def declared_vector_chip_fixture(project, *, different=False):
     from testbench_gen import emit_unit_tbs
 
-    project, directory = tmp_path / "project", tmp_path / "run"
-    directory.mkdir()
     state, config = gls_fixture(project, different=different)
     rtl = project / "phase2/stage1/rtl"
     rtl.mkdir(parents=True)
@@ -822,19 +817,38 @@ def test_gls_regenerates_declared_vectors_on_native_chip_ports(tmp_path, differe
     (docs / "L10_TEST_CASES.json").write_text(json.dumps({"test_cases": cases}))
     assert emit_unit_tbs(project, top="core_unit", scaffold=False, case_stated=True) == 4
     benches = sorted((project / "phase2/stage1/sim/tb").glob("*.v"))
-    original = {path: path.read_bytes() for path in benches}
+    model = Path(config["CELL_VERILOG_MODELS"][0])
+    model.write_text(model.read_text() + "module clock_cell(input a,output y); "
+        "assign y=a; specify (a=>y)=(1,1); endspecify endmodule\n")
     Path(state["nl"]).write_text(
         "module chip_unit(input clk,rst_n,input [7:0] message,output [7:0] digest);\n"
-        + "\n".join(f"delay_cell gate{bit}(.a(message[{bit}]),.y(digest[{bit}]));" for bit in range(8))
+        "wire delayed_clk; reg [7:0] stored; clock_cell clock_input(.a(clk),.y(delayed_clk));\n"
+        "always @(posedge delayed_clk) stored<=message;\n"
+        + "\n".join(f"delay_cell gate{bit}(.a(stored[{bit}]),.y(digest[{bit}]));" for bit in range(8))
         + "\nendmodule\n")
     Path(state["sdf"]["typical"]).write_text(
         '(DELAYFILE (SDFVERSION "3.0") (DESIGN "chip_unit") (DIVIDER /) (TIMESCALE 1ns)\n'
+        '(CELL (CELLTYPE "chip_unit") (INSTANCE) (DELAY (ABSOLUTE '
+        '(INTERCONNECT clk clock_input/a (0.5:0.5:0.5)))))\n'
+        '(CELL (CELLTYPE "clock_cell") (INSTANCE clock_input) '
+        '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))\n'
         + "\n".join(f'(CELL (CELLTYPE "delay_cell") (INSTANCE gate{bit}) '
                        '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))' for bit in range(8)) + ")\n")
     sdc = project / "timing.sdc"
     sdc.write_text("set_units -time ns\ncreate_clock -period 24 [get_ports clk]\n")
     state["sdc"] = str(sdc)
     config["DESIGN_NAME"] = "chip_unit"
+    return state, config, benches
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_regenerates_declared_vectors_on_native_chip_ports(tmp_path, different):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config, benches = declared_vector_chip_fixture(project, different=different)
+    original = {path: path.read_bytes() for path in benches}
     result = gls(project, directory, {"testbenches": [str(path) for path in benches]},
                  Commands(directory), state=state, config=config)
     assert len(result["native_steps"]) == 4, result
@@ -844,6 +858,112 @@ def test_gls_regenerates_declared_vectors_on_native_chip_ports(tmp_path, differe
     assert {path: path.read_bytes() for path in benches} == original
     assert all("chip_unit dut" in Path(row["generated_testbench"]).read_text()
                for row in result["native_steps"]), result
+    assert all("always #12 clk = ~clk;" in path.read_text()
+               for path in directory.glob("corner_*/annotated_tb.v"))
+
+
+@pytest.mark.parametrize("source", ["authored", "delivered", "input_delivered", "unbound", "unknown_case"])
+def test_gls_does_not_replace_unavailable_core_checks(tmp_path, source):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config, benches = declared_vector_chip_fixture(project)
+    bench = benches[0]
+    if source == "authored":
+        bench.write_text("".join(bench.read_text().splitlines(keepends=True)[1:]))
+    elif source == "delivered":
+        bench.write_text("// DELIVERED: input/sim/tb/vector_0.v\n" + bench.read_text())
+    elif source == "input_delivered":
+        delivered = project / "input/sim/tb/vector_0.v"
+        delivered.parent.mkdir(parents=True)
+        delivered.write_bytes(bench.read_bytes())
+    else:
+        path = project / "phase1/generated_docs/L10_TEST_CASES.json"
+        document = json.loads(path.read_text())
+        if source == "unbound":
+            document["test_cases"][0]["expected_outputs"] = {"unavailable_result": "00"}
+        else:
+            document["test_cases"] = document["test_cases"][1:]
+        path.write_text(json.dumps(document))
+    original = bench.read_bytes()
+    result = gls(project, directory, {"testbenches": [str(bench)]},
+                 Commands(directory), state=state, config=config)
+    assert result["native_steps"][0]["status"] == "NOT_MEASURED", result
+    assert not result["native_steps"][0]["ran"]
+    assert "gls_failures" not in result["metrics"]
+    assert bench.read_bytes() == original
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_gls_regenerates_declared_register_bus_vectors(tmp_path, different):
+    if not shutil.which("iverilog") or not shutil.which("vvp"):
+        pytest.skip("Native Icarus is required")
+    from testbench_gen import emit_unit_tbs
+
+    project, directory = tmp_path / "project", tmp_path / "run"
+    directory.mkdir()
+    state, config = gls_fixture(project, different=different)
+    rtl = project / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    header = ("(input clk,reset_n,cs,we,input [7:0] address,input [31:0] write_data,"
+              "output [31:0] read_data,output error)")
+    (rtl / "core_unit.v").write_text("module core_unit" + header + "; endmodule\n")
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    registers = [{"name": "CTRL", "address": "0x08", "access": "R/W", "fields": [
+        {"field_name": "INIT", "lsb": 0, "bits": "0"},
+        {"field_name": "NEXT", "lsb": 1, "bits": "1"}]},
+        {"name": "STATUS", "address": "0x09", "access": "R", "fields": [
+        {"field_name": "READY", "lsb": 0, "bits": "0"},
+        {"field_name": "VALID", "lsb": 1, "bits": "1"}]}]
+    registers.extend({"name": f"BLOCK{index}", "address": hex(16 + index), "access": "W"}
+                     for index in range(16))
+    registers.extend({"name": f"DIGEST{index}", "address": hex(32 + index), "access": "R"}
+                     for index in range(8))
+    (docs / "L4_REGMAP.json").write_text(json.dumps({"registers": registers}))
+    case = {"name": "bus_vector", "kind": "known_answer_vector",
+            "inputs": {"message": "01"}, "expected_outputs": {"digest": "a5" * 32},
+            "citation": "Input vector table", "source": "input_document",
+            "evidence": "input/docs/spec.md"}
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps({"test_cases": [case]}))
+    assert emit_unit_tbs(project, top="core_unit", scaffold=False, case_stated=True) == 1
+    bench = project / "phase2/stage1/sim/tb/bus_vector.v"
+    original = bench.read_bytes()
+    model = Path(config["CELL_VERILOG_MODELS"][0])
+    model.write_text(model.read_text() + "module clock_cell(input a,output y); "
+        "assign y=a; specify (a=>y)=(1,1); endspecify endmodule\n")
+    Path(state["nl"]).write_text("module chip_unit" + header + ";\n"
+        "wire delayed_clk; reg [31:0] first_word,raw; reg valid;\n"
+        "clock_cell clock_input(.a(clk),.y(delayed_clk)); assign error=0;\n"
+        "always @(posedge delayed_clk or negedge reset_n)\n"
+        "if(!reset_n) begin first_word<=0;valid<=0;end else if(cs&&we) begin\n"
+        "if(address==16) first_word<=write_data;\n"
+        "if(address==8&&write_data[0]) valid<=first_word==32'h01800000; end\n"
+        "always @* begin raw=0; if(address==9) raw={30'b0,valid,1'b1};\n"
+        "else if(address>=32&&address<40) raw=32'ha5a5a5a5;end\n"
+        + "\n".join(f"delay_cell gate{bit}(.a(raw[{bit}]),.y(read_data[{bit}]));" for bit in range(32))
+        + "\nendmodule\n")
+    Path(state["sdf"]["typical"]).write_text(
+        '(DELAYFILE (SDFVERSION "3.0") (DESIGN "chip_unit") (DIVIDER /) (TIMESCALE 1ns)\n'
+        '(CELL (CELLTYPE "chip_unit") (INSTANCE) (DELAY (ABSOLUTE '
+        '(INTERCONNECT clk clock_input/a (0.5:0.5:0.5)))))\n'
+        '(CELL (CELLTYPE "clock_cell") (INSTANCE clock_input) '
+        '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))\n'
+        + "\n".join(f'(CELL (CELLTYPE "delay_cell") (INSTANCE gate{bit}) '
+                       '(DELAY (ABSOLUTE (IOPATH a y (1:1:1) (1:1:1)))))' for bit in range(32)) + ")\n")
+    sdc = project / "timing.sdc"
+    sdc.write_text("set_units -time ns\ncreate_clock -period 24 [get_ports clk]\n")
+    state["sdc"] = str(sdc)
+    config["DESIGN_NAME"] = "chip_unit"
+    result = gls(project, directory, {"testbenches": [str(bench)]},
+                 Commands(directory), state=state, config=config)
+    native = result["native_steps"][0]
+    assert native["status"] == ("FAIL" if different else "PASS"), result
+    assert native["sdf_delays_applied"] > 0 and native["sdf_errors"] == 0, result
+    assert (result["metrics"]["gls_failures"] > 0) is different
+    assert bench.read_bytes() == original
+    assert "always #12 clk = ~clk;" in (directory / "corner_1/annotated_tb.v").read_text()
 
 
 def test_gls_replays_every_state_corner(tmp_path):
