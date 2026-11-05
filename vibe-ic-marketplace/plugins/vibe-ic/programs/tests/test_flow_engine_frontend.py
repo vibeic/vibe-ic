@@ -184,11 +184,13 @@ def test_public_entry_retains_the_existing_router_closure(tmp_path, monkeypatch)
 
 @pytest.mark.parametrize("selected,target", [("ic", "shippable_gds"), ("ip", "ip_hardmacro")])
 def test_public_native_delivery_flag_overrides_document_wording(tmp_path, monkeypatch, selected, target):
+    import flow_engine
     docs = tmp_path / "input/docs"
     docs.mkdir(parents=True)
     (docs / "requirements.md").write_text("Generate a digital IP block with a clock and data ports.")
     observed = []
     engine = SimpleNamespace(
+        TABLE=flow_engine.TABLE, aliases=flow_engine.aliases,
         design_text=lambda project: (docs / "requirements.md").read_text(),
         run=lambda project, **kwargs: observed.append(kwargs["route"]) or {})
     monkeypatch.setitem(sys.modules, "flow_engine", engine)
