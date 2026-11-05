@@ -18,6 +18,23 @@ sys.path.insert(0, str(SCRIPT.parent))
 import verilator_coverage_measure as gate  # noqa: E402
 
 
+def test_failed_native_simulation_keeps_its_diagnostic(tmp_path):
+    rtl = tmp_path / "unit.v"
+    tb = tmp_path / "tb_unit.sv"
+    rtl.write_text("module unit; endmodule\n")
+    tb.write_text("module tb_unit; endmodule\n")
+    responses = iter([(0, "native build stdout\n", "native build stderr\n"),
+                      (1, "assertion failed at cycle 7\n", "native simulation stderr\n")])
+    with pytest.raises(SystemExit, match="no coverage.dat"):
+        gate.verilate_tb_and_run([str(rtl)], str(tb), str(tmp_path / "build"),
+                                str(tmp_path / "run"),
+                                exec_fn=lambda argv, cwd: next(responses))
+    assert (tmp_path / "build/build.log").read_text() == (
+        "native build stdout\nnative build stderr\n")
+    assert (tmp_path / "run/simulation.log").read_text() == (
+        "assertion failed at cycle 7\nnative simulation stderr\n")
+
+
 # ---------------------------------------------------------------------------
 # parse_coverage_dat — use a synthetic fixture that matches the regex
 # ---------------------------------------------------------------------------
