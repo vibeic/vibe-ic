@@ -16,18 +16,17 @@ description: Infinite-loop single gatekeeper agent that owns main and services t
 
 # Gatekeeper Loop — Single-Owner PR-Merge Loop for `main`
 
-## User-facing Flow109 identity
+## User-facing flow identity
 
-All progress reports to the user MUST use the current stable Flow109 ID and its
-1-based `position` from `flow/flow109.json`. The ID is execution authority; the
-position is display/audit metadata and must never be passed as an entry or exit
-step. Read both from the exact source used by the run; never infer either from
-an output folder or historical report. Do not renumber after filtering out
-inapplicable rows.
+All progress reports to the user MUST use the 1-based position in the run's
+complete `flow/steps.json` `steps` list, plus the row's `title`. Position is
+display metadata. Select execution by semantic name. Read the table used by
+the run, never infer order from an output folder or historical report.
+Do not renumber after filtering out inapplicable rows.
 
-Report `<stable ID> (position <position>) — <row name>: <measured status>`.
-Historical IDs belong only in immutable receipts and historical
-cross-references; they are not current progress identity. Preserve executable
+Report `第 N 步 <row name>: <measured status>`.
+Names must describe the step without embedding a step count or legacy step ID.
+Historical IDs belong only in historical cross-references. Preserve executable
 IDs, historical outputs and checkpoint identity. A display change does not
 trigger a rerun.
 If the mapping is unavailable, report the step name and say numbering is not

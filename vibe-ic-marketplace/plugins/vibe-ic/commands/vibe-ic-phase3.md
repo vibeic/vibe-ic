@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-phase3
-description: Run a bounded backend Flow109 row through the sole public entry in Default mode. AI-monitored + close-loop.
+description: Run a bounded backend flow row through the sole public entry in Default mode. AI-monitored + close-loop.
 argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id> [--top-name <top>] [--pdk <pdk>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
@@ -8,9 +8,9 @@ argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
-# /vibe-ic-phase3 — bounded Flow109 backend entry
+# /vibe-ic-phase3 — bounded flow backend entry
 
-**Prerequisite**: every input declared by the selected current Flow109 row must
+**Prerequisite**: every input declared by the selected current flow row must
 exist and bind the current project. The manifest must select that row for the
 owner-declared IC/IP route.
 
@@ -22,7 +22,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS \
 ```
 
 Do not call a backend owner directly. The public entry admits only the exact
-current row/window and retains its Flow109 request and attempt. D50 is the
+current row/window and retains its flow request and attempt. D50 is the
 current path-delay ATPG responsibility at position 72, but it has no registered
 dispatch today; requesting D50 must refuse before native work. Never replace
 that refusal with a former path-ATPG entry. Use another backend ID only after
@@ -38,12 +38,12 @@ After the run completes, the AI must:
    - **`pnr`** FAIL → check `phase3/pnr/openroad.log`; common: site name detected wrong, metal_prefix detected wrong, CTS buffer not in liberty, die size too small (util > 80% requires enlarging die), missing TRACKS (runner already adds `make_tracks`), SDC ref FPGA-only port → close-loop fix `_detect_pdk` heuristic
    - **`gds`** FAIL → check KLayout stream-out log; usually LEF conflict (multiple LEF variants for the same macro) → fix `lef_by_macro` selection logic
    - **`drc` / `lvs`** WAIVED is legal (commercial deck must be run offline); but if .lydrc should exist yet was not found, hint to fix the path
-3. A selected-row PASS permits only the next dependency-valid Flow109 request;
+3. A selected-row PASS permits only the next dependency-valid flow request;
    it is not tapeout or whole-flow acceptance.
 
 **Helper skills:** `synthesis-driver` / `pnr-orchestrate` / `drc-orchestrate` / `lvs-orchestrate` / `gds-export` / `tapeout-checklist`
 
-**Rule:** the selected Flow109 attempt and every selected component must be
+**Rule:** the selected flow attempt and every selected component must be
 current and terminal. Missing signoff remains NOT_MEASURED; a row-local PASS is
 never promoted to backend or whole-flow PASS by this command.
 

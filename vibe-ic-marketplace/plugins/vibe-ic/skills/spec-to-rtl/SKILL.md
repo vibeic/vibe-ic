@@ -241,7 +241,7 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    completes its author-self-validation component only from the same invocation's
    authored RTL, D11 position 19 validation/lint, D12 position 20 CDC/RDC, and
    D13 position 21 reference-testbench receipts, with the exact child invocation
-   and report publication bound to the public Flow109 entry.
+   and report publication bound to the public flow entry.
 
    Until that public path produces a current completed component `PASS`, preserve
    the authored RTL and handoff as **unconsumed**. Missing, stale, foreign, or
@@ -257,7 +257,7 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    position 17 stable-ID window, and `--execution-mode default`. The public
    resolver must accept that window before work begins. Never call
    `design_one_shot_runner.py` directly as a public substitute, never invoke a
-   native helper directly, and never pass a Flow109 D-id to a native helper.
+   native helper directly, and never pass a flow D-id to a native helper.
 
 ## What this skill IS NOT
 
@@ -660,7 +660,7 @@ without a stated range needs no invented limit. The deterministic
 
 ### How this finding REACHES you (#2081, second half)
 
-Until v1.19.x nothing routed a Phase-3 timing verdict here. The current Flow109
+Until v1.19.x nothing routed a Phase-3 timing verdict here. The current flow
 responsibility map is: candidate timing closure at D49 position 71; post-route
 timing repair at D41 position 63; pre-layout timing at D26 position 38; and
 mode/constraint planning at D19 position 31. A user/operator selects the stable

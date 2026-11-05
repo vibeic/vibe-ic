@@ -59,6 +59,17 @@ def test_added_table_entry_runs_without_runner_change(tmp_path):
     assert (tmp_path / "steps/new_step/tool.log").is_file()
 
 
+def test_progress_uses_full_table_order_after_filtering_and_insertion(tmp_path, capsys):
+    rows = [command_row(name) for name in ("first", "inapplicable", "selected")]
+    rows[1]["when"] = "False"
+    execute(tmp_path, rows, from_name="selected", to_name="selected")
+    assert capsys.readouterr().out == "第 3 步 selected: PASS\n"
+
+    rows.insert(0, command_row("inserted"))
+    execute(tmp_path, rows, from_name="selected", to_name="selected")
+    assert capsys.readouterr().out == "第 4 步 selected: PASS\n"
+
+
 def test_router_window_remains_bounded(tmp_path):
     import task_nature_route as router
     decision = router.route_decision_receipt(
