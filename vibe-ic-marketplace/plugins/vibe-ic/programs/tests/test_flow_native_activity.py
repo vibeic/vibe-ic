@@ -56,6 +56,58 @@ def test_native_activity_dump_and_vector_power_read_the_state_netlist(activity_c
     assert "report_power" in (project / "result/power.tcl").read_text()
 
 
+@pytest.mark.parametrize("instance", ["compute_stage", "signal_core"])
+@pytest.mark.parametrize("flattened", [False, True])
+def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypatch, instance, flattened):
+    native_tools()
+    from flow_native_adapters import Commands
+    import re
+
+    project, state, config, tool = activity_case
+    core_netlist = Path(state["nl"])
+    core_netlist.write_text("module unit(input [1:0] a, output [1:0] y);\n"
+        "plain buffer0(.A(a[0]), .Y(y[0])); plain buffer1(.A(a[1]), .Y(y[1])); endmodule\n")
+    bench = Path(tool["testbenches"][0])
+    bench.write_text(bench.read_text().replace("reg a=0", "reg [1:0] a=0").replace("wire y;", "wire [1:0] y;"))
+    chip = project / "work/flow/chip"
+    chip.mkdir(parents=True)
+    core_state = chip / "core_state.json"
+    core_state.write_text(json.dumps({"nl": str(core_netlist)}))
+    (chip / "sizing.json").write_text(json.dumps({"top": "unit", "state_out": str(core_state)}))
+    wrapper = f"module package_unit(input [1:0] pad_a, output [1:0] pad_y); unit {instance}(.a(pad_a), .y(pad_y)); endmodule\n"
+    (chip / "wrapper.v").write_text(wrapper)
+    mapped = project / "chip.v"
+    mapped.write_text((f"module package_unit(input [1:0] pad_a, output [1:0] pad_y);\n"
+        f"wire [1:0] \\{instance}/a ; wire [1:0] \\{instance}/y ;\n"
+        f"assign \\{instance}/a = pad_a; assign pad_y = \\{instance}/y ;\n"
+        f"plain \\{instance}/buffer0 (.A(\\{instance}/a [0]), .Y(\\{instance}/y [0]));\n"
+        f"plain \\{instance}/buffer1 (.A(\\{instance}/a [1]), .Y(\\{instance}/y [1])); endmodule\n")
+        if flattened else core_netlist.read_text() + wrapper)
+    state["nl"], config["DESIGN_NAME"] = str(mapped), "package_unit"
+    original = bench.read_bytes()
+    run = Commands.run
+    def probe(self, argv, cwd=None):
+        if argv[0] == "sta":
+            script = Path(argv[-1])
+            script.write_text(script.read_text() + '\nputs "CORE_ACTIVITY: [get_property [get_pins {'
+                + instance + '/buffer0/A}] activity]"\n')
+        return run(self, argv, cwd=cwd)
+    monkeypatch.setattr(Commands, "run", probe)
+
+    result = run_case(activity_case)
+
+    assert evaluate(ToolResult(**result), []) == "PASS", result
+    assert result["metrics"]["activity__annotated_pin_count"] > 0
+    measured = re.search(r"CORE_ACTIVITY:\s+(\S+)\s+(\S+)\s+user", (project / "result/power.rpt").read_text())
+    assert measured and float(measured[1]) > 0
+    assert bench.read_bytes() == original
+    assert json.loads((project / "result/activity/activity.json").read_text())["dut_module"] == "unit"
+    (chip / "wrapper.v").write_text(wrapper.replace(instance, "absent_core"))
+    missing = flow_activity.execute(project, project / "missing_result", tool, {}, state=state, config=config)
+    assert evaluate(ToolResult(**missing), []) == "NOT_MEASURED", missing
+    assert missing["metrics"] == {}
+
+
 @pytest.mark.parametrize("missing", ["netlist", "library", "scenario", "models", "sdc"])
 def test_missing_activity_inputs_are_not_measured(activity_case, missing):
     project, state, config, tool = activity_case

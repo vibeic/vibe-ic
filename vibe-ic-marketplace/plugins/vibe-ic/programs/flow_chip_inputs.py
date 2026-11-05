@@ -97,6 +97,7 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
                                  "detail": detail, "reports": str(directory)})
     finally:
         (destination / "sizing.json").write_text(json.dumps({"runs": runs,
+            "top": core_config["DESIGN_NAME"], "state_out": str(run_root / "yosys_synthesis/state_out.json"),
             "tool_seconds": sum(run["tool_seconds"] for run in runs)}, indent=2) + "\n")
     header = json.loads(Path(str(state[DesignFormat.JSON_HEADER])).read_text())
     area = state.metrics.get("design__instance__area")
