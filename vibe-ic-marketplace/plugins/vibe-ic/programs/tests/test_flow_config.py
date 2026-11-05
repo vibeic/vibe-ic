@@ -540,12 +540,12 @@ def test_hardmacro_sizes_native_defaults_after_current_estimate(project, monkeyp
     flows = types.ModuleType("librelane.flows")
     flows.Flow = types.SimpleNamespace(factory=types.SimpleNamespace(get=lambda kind: Classic))
     monkeypatch.setitem(sys.modules, "librelane.flows", flows)
-    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda root, config:
-        seen.append((root, config)) or {"PDN_VWIDTH": 2.4})
+    monkeypatch.setattr(flow_pdn_current, "current_settings", lambda root, config, parallel_length_um:
+        seen.append((root, config, parallel_length_um)) or {"PDN_VWIDTH": 2.4})
     power = project / "steps/pre_layout_timing/result.json"
     power.parent.mkdir(parents=True)
     power.write_text("{}")
     result = build_native_config(project, route="ip")
     assert result["PDN_VWIDTH"] == 2.4
     assert "PDN_RAIL_WIDTH" not in result
-    assert seen == [(project.resolve(), native)]
+    assert seen == [(project.resolve(), native, None)]

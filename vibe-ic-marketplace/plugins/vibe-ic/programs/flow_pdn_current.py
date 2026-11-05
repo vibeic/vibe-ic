@@ -93,7 +93,8 @@ def coherent_geometry(config, widths, tech, parallel_length_um=0, explicit=()):
         if layer is None:
             raise ValueError(f"PDN routing layer is absent from technology: {layer_name}")
         size = round(width * units)
-        length = math.ceil(parallel_length_um * units)
+        # Before a Classic floorplan exists, bound PRL by OpenDB's signed coordinate range.
+        length = math.ceil(parallel_length_um * units) if parallel_length_um is not None else 2**31 - 1
         return max(layer.getSpacing(size, length), layer.findTwSpacing(size, size, length)) / units
 
     def at_least(key, value):

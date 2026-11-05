@@ -331,7 +331,7 @@ def build_native_config(project: Path | str, *, route: str | None = None, pdk: s
         owner = Flow.factory.get("Classic")(config, design_dir=str(Path(project).resolve()),
                                             pdk_root=os.environ.get("PDK_ROOT"))
         resolved = owner.config.to_raw_dict()
-        config.update(current_settings(Path(project).resolve(), resolved))
+        config.update(current_settings(Path(project).resolve(), resolved, parallel_length_um=None))
     return config
 
 
