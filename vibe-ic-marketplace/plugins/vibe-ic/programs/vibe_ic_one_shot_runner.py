@@ -1276,6 +1276,21 @@ def _current_step9_checkpoint(project: Path, *,
     return {'step9_record': prior, 'native_handoff': bound}, None
 
 
+def _functional_timing_without_scan(project: Path) -> bool:
+    import flow109
+    import spec_declaration_emit as declaration
+
+    if not _flow109_selected_row('D26'):
+        return False
+    context = flow109.validate_execution_context(json.loads(
+        Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+    contract, _, _ = declaration.select_contract(project)
+    return (all(context['features'].get(k) is False
+                for k in ('requires_dft', 'requires_scan'))
+            and declaration.explicit_non_scan_decision(project) is not None
+            and (not contract or not any(f['name'] == 'dft' for f in contract['fields'])))
+
+
 def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
                               container: str) -> dict:
     """Resume D26 using functional timing on the current adopted netlist.
@@ -1292,7 +1307,8 @@ def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
     import synth_handoff_netlist_check as handoff
 
     project = Path(project).resolve()
-    selected_d26 = _flow109_selected_row('D26')
+    selected_d26 = (_flow109_selected_row('D26')
+                    and not _functional_timing_without_scan(project))
     receipt_path = project / 'reports/flow109/d26_scan_mode.json'
     receipt = {
         'schema': 'vibeic.flow109.d26-timing-modes.v1',
@@ -2209,6 +2225,9 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
     import librelane_contract as contract
 
     project = Path(project).resolve()
+    if _functional_timing_without_scan(project):
+        _finish_selected_native_owner(project, '10', acceptance)
+        return acceptance
     status = acceptance.get('verdict')
     timing_ref = acceptance.get('timing_modes_receipt')
     semantic_ref = None
