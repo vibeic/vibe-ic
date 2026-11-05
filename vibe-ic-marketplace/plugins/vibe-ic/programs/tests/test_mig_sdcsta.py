@@ -7,6 +7,7 @@ script on synthesized neutral examples when EQY is installed.
 """
 import importlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -523,6 +524,81 @@ def test_eqy_native_memory_against_flattened_gate(tmp_path, memory, corrupt, exp
         assert list((folder / "scratch/strategies").glob("*/sat/trace.vcd"))
     else:
         assert report["unproven_points"] == report["xbits_partitions"] == []
+
+
+@pytest.mark.skipif(shutil.which("eqy") is None, reason="native EQY is required")
+@pytest.mark.parametrize("states", [3, 4])
+@pytest.mark.parametrize("corrupt,expected", [(False, "PASS"), (True, "FAIL")])
+def test_eqy_native_fsm_encoding_preserves_init_and_reset_cex(tmp_path, states, corrupt, expected):
+    """Native FSM preparation keeps all state/port bits and a real reset CEX."""
+    from lec_run import FSM_ENCFILE_NAME
+    transitions = ("SECOND: state <= IDLE; " if states == 3 else
+                   "SECOND: state <= LAST; LAST: state <= IDLE; ")
+    common = ("module neutral(input clk, reset_n, d, output y,z); "
+              "localparam [1:0] IDLE=0, FIRST=1, SECOND=2, LAST=3; "
+              "reg [1:0] state; reg defined_source=1'b1; "
+              "always @(posedge clk) if (!reset_n) defined_source<=1; "
+              "else defined_source<=d; "
+              "always @(posedge clk) if (!reset_n) state<=IDLE; "
+              "else case(state) IDLE: if(d) state<=FIRST; FIRST: state<=SECOND; "
+              + transitions + "default: state<=IDLE; endcase assign z=defined_source; ")
+    rtl = put(tmp_path / "rtl.v", common + "assign y=(state==IDLE); endmodule\n")
+    damage = ("reg after_reset=1'b0; "
+              "always @(posedge clk) if (!reset_n) after_reset<=1; " if corrupt else "")
+    revised = put(tmp_path / "revised.v", common + damage + "assign y=(state==IDLE)"
+                  + (" ^ after_reset" if corrupt else "") + "; endmodule\n")
+    netlist = tmp_path / "netlist.v"
+    encoding = tmp_path / FSM_ENCFILE_NAME
+    mapped = subprocess.run(["yosys", "-Q", "-T", "-p",
+        f"read_verilog {revised}; synth -top neutral -encfile {encoding}; "
+        f"write_verilog -noattr {netlist}"], capture_output=True, text=True, timeout=60)
+    put(tmp_path / "synthesis.log", mapped.stdout + mapped.stderr)
+    assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+    assert encoding.read_text().startswith(".fsm neutral state\n")
+    liberty = put(tmp_path / "neutral.lib", "library(neutral) {}\n")
+    script = put(tmp_path / "proof.eqy",
+                 eqy.eqy_script("neutral", [rtl], netlist, str(liberty)))
+    folder = tmp_path / "step"
+    result = subprocess.run(["eqy", "-j", "1", "-d", str(folder / "scratch"),
+                             str(script)], capture_output=True, text=True, timeout=60)
+    put(tmp_path / "native.log", result.stdout + result.stderr)
+    report = eqy.judge_eqy(folder, tmp_path / "report.json")
+    assert report["verdict"] == expected, result.stdout + result.stderr
+    assert result.returncode == (0 if expected == "PASS" else 2)
+    assert all(set(strategies.values()) == {expected} for strategies in report["partitions"].values())
+    assert report["xbits_partitions"] == report["unproven_points"] == []
+    if corrupt:
+        trace = next((folder / "scratch/strategies").glob("*/sat/trace.vcd"))
+        names, values, frames, changed = {}, {}, [], False
+        for line in trace.read_text().splitlines():
+            if line.startswith("$var"):
+                words = line.split()
+                names[words[3]] = words[4]
+            elif line.startswith("#"):
+                if changed:
+                    frames.append({names[code]: value for code, value in values.items()})
+                changed = False
+            elif line.startswith("b"):
+                value, code = line.split()
+                values[code], changed = value[1:], True
+            elif line and line[0] in "01xz":
+                values[line[1:]], changed = line[0], True
+        if changed:
+            frames.append({names[code]: value for code, value in values.items()})
+        assert len(frames) >= 2
+        assert frames[0]["\\__pi_reset_n"] == "0"
+        assert frames[0]["\\gate.after_reset"] == "0"
+        assert frames[-1]["\\gate.after_reset"] == "1"
+        assert (frames[-1]["\\__po_y__gold"], frames[-1]["\\__po_y__gate"]) == ("1", "0")
+    compared = {}
+    for partition in (folder / "scratch/partitions").glob("*.json"):
+        for name, bits in json.loads(partition.read_text())["partition"]["outbits"].items():
+            compared.setdefault(name, set()).update(bits)
+    assert compared["y"] == compared["z"] == {0}
+    assert compared["state"] == set(range(states))
+    for side in ("gold", "gate"):
+        model = (folder / "scratch" / (side + ".il")).read_text()
+        assert re.search(r"attribute \\init 1'1\n\s+wire[^\n]*# \\defined_source\n", model)
 
 
 @pytest.mark.parametrize("a,b,expect", [

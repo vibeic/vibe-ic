@@ -18,6 +18,10 @@ The generated script differs from LibreLane's generic one in these measured ways
   (`$_DFF_P_`) reads.
 * Map RAM and inferred ROM to registers and logic in both views before
   partitioning, so the SAT and ABC engines receive supported proof cells.
+* When synthesis emitted an FSM encoding table, run ordinary FSM preparation
+  on gold before `prep` optimizes its registers, and keep native FSM words
+  intact through wire splitting. Both views then use the native state encoding
+  while preserving every state bit, primary output and source initial value.
 * Amend each partition with the gold definitions of its matched inputs. A
   synthesis-merged alias must retain the state relation of the original
   registers: treating the other alias as an arbitrary partition input can
@@ -66,13 +70,20 @@ _EQY_STATUSES = ("PASS", "FAIL", "UNKNOWN", "ERROR", "TIMEOUT")
 
 
 def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str) -> str:
+    from lec_run import (fsm_encfile_beside_netlist, fsm_signal_names,
+                         _equiv_splitnets)
+    encoding = fsm_encfile_beside_netlist(str(netlist))
+    states = fsm_signal_names(encoding)
+    gold_prep = ([f"hierarchy -top {top}", "proc", "opt -nosdff -nodffe", "fsm"]
+                 if states else [])
+    split = _equiv_splitnets(encoding, states).replace("splitnets -ports", "splitnets", 1)
     gold = " ".join(str(p) for p in rtl)
     return "\n".join([
-        "[gold]", f"read_verilog -formal -sv {gold}", "",
+        "[gold]", f"read_verilog -formal -sv {gold}", *gold_prep, "",
         "[gate]", f"read_liberty -ignore_miss_func {liberty}",
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
-        "memory", "async2sync", "setundef -init -zero", "splitnets",
+        "memory", "async2sync", "setundef -init -zero", split.rstrip(),
         observable_matchpoint_names(top).rstrip(), "",
         "[match *]", "gold-nomatch /^_[0-9]+_$/",
         "gate-nomatch /^_[0-9]+_$/", "",
