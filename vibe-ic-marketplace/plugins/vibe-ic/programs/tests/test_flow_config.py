@@ -55,6 +55,40 @@ def test_native_delay_defaults_need_no_library_scan(existing):
     assert config["EXTRA_EXCLUDED_CELLS"] == existing
 
 
+@pytest.mark.parametrize("cap,slew,expected_cap,expected_slew", [
+    (None, None, ".2", "3"),
+    (".1", "1", ".1", "1"),
+    (".5", "5", ".2", "3"),
+    (".1", None, ".1", "3"),
+])
+def test_native_cts_characterization_respects_core_limits(cap, slew, expected_cap, expected_slew):
+    pytest.importorskip("librelane")
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    config = Config({"MAX_CAPACITANCE_CONSTRAINT": Decimal(".2"),
+                     "MAX_TRANSITION_CONSTRAINT": Decimal("3"),
+                     "CTS_MAX_CAP": Decimal(cap) if cap else None,
+                     "CTS_MAX_SLEW": Decimal(slew) if slew else None})
+    result = native_defaults(config)
+    assert result["CTS_MAX_CAP"] == Decimal(expected_cap)
+    assert result["CTS_MAX_SLEW"] == Decimal(expected_slew)
+    assert native_defaults(result)["CTS_MAX_CAP"] == result["CTS_MAX_CAP"]
+    assert config["CTS_MAX_CAP"] == (Decimal(cap) if cap else None)
+
+
+def test_native_cts_characterization_does_not_invent_a_missing_slew_limit():
+    pytest.importorskip("librelane")
+    from librelane.config import Config
+    from flow_config import native_defaults
+
+    config = Config({"MAX_CAPACITANCE_CONSTRAINT": Decimal(".2"),
+                     "CTS_MAX_CAP": None, "CTS_MAX_SLEW": None})
+    result = native_defaults(config)
+    assert result["CTS_MAX_CAP"] is None
+    assert result["CTS_MAX_SLEW"] is None
+
+
 @pytest.mark.parametrize("pdk,gf180", [("gf180mcuD", True), ("GF180MCUA", True),
                                       ("sky130A", False), (None, False)])
 def test_native_platform_defaults_exclude_weak_cells_only_for_gf180(tmp_path, pdk, gf180):
