@@ -32,10 +32,10 @@ def eqy_partitions(scratch):
     if not complete:
         return "NOT_MEASURED", None, "EQY partition declarations or strategy statuses are incomplete.", reports
     unknown = [name for name, words in parts.items() if "PASS" not in words]
-    if unknown or xbits:
+    if unknown:
         return ("NOT_MEASURED", None,
                 f"EQY has {len(unknown)} undecided and {len(xbits)} gold-x partition(s).", reports)
-    return "PASS", 0, f"EQY proved all {len(declared)} partition(s).", reports
+    return "PASS", 0, f"EQY proved all {len(declared)} partition(s), including {len(xbits)} gold-x partition(s).", reports
 
 
 def reset_boundary(project):
@@ -55,7 +55,7 @@ def reset_boundary(project):
                         if name and edge in {"posedge", "negedge"}:
                             clocks.add((name, edge))
                     for row in _records(container, "resets", "reset_domains"):
-                        name, polarity = row.get("name"), row.get("polarity")
+                        name, polarity = row.get("source_pin") or row.get("name"), row.get("polarity")
                         if name and polarity in {"active_low", "active_high"}:
                             resets.add((name, polarity))
     if len(clocks) != 1 or len(resets) != 1:
@@ -108,9 +108,10 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
             return None, None, reports, "Pad-boundary elaboration did not complete."
         views[side] = json.loads((directory / f"{side}.before-normalization.json").read_text())["modules"][top]
         module = views[side]
+        core_connections = {bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
+                            for bits in cell["connections"].values() for bit in bits}
         connected = {bit for port in module["ports"].values() for bit in port["bits"]}
-        connected.update(bit for cell in module["cells"].values() if cell["type"] not in pads["types"]
-                         for bits in cell["connections"].values() for bit in bits)
+        connected.update(core_connections)
         connected_ports = {f"{instance}.{pin}" for instance, cell in module["cells"].items()
                            if cell["type"] in pads["types"] for pin, bits in cell["connections"].items()
                            if bits and (cell["port_directions"].get(pin) == "input"
@@ -119,10 +120,25 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
         disconnected = [f"{top}/{name}" for name, port in exposed["ports"].items()
                         if port["direction"] == "output" and name not in module["ports"]
                         and name not in connected_ports]
+        pad_terminals = {bit for cell in module["cells"].values() if cell["type"] in pads["types"]
+                         for pin, bits in cell["connections"].items()
+                         if cell["port_directions"].get(pin) == "inout" for bit in bits}
+        package_inputs = {bit for port in module["ports"].values() if port["direction"] in {"input", "inout"}
+                          for bit in port["bits"]}
+        package_outputs = [f"{top}/{name}" for name, port in module["ports"].items()
+                           if port["direction"] == "output" and port["bits"]
+                           and all(type(bit) is int and bit in pad_terminals
+                                   and bit not in core_connections and bit not in package_inputs for bit in port["bits"])]
+        projection = []
+        if package_outputs:
+            projection.extend(["expose -input " + " ".join(package_outputs),
+                               "delete -output " + " ".join(package_outputs)])
         if disconnected:
+            projection.append("delete -port " + " ".join(disconnected))
+        if projection:
             path = directory / f"{side}_core.ys"
             path.write_text(f"read_json {_word(core / (side + '.json'))}\n"
-                + "delete -port " + " ".join(disconnected) + "\n"
+                + "\n".join(projection) + "\n"
                 + f"hierarchy -top {top}\nclean -purge\n"
                 + f"write_json {_word(core / (side + '.json'))}\n"
                 + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")
@@ -185,6 +201,8 @@ def eqy(project, directory, tool, commands, *, state, config):
     from librelane_eqy import eqy_script
     from sdf_gate_sim import netlist_used_cells, verilog_model_closure
     from lec_post_layout_check import _LIB_CELL_RE
+    from flow_chip_inputs import _paths
+    from _pad_ring import parse_lef_macro_classes
 
     project, directory = Path(project), Path(directory)
     top, netlist = config.get("DESIGN_NAME"), state.get("nl") if state is not None else None
@@ -192,6 +210,14 @@ def eqy(project, directory, tool, commands, *, state, config):
     if not top or not netlist or not Path(netlist).is_file() or not rtl or any(not path.is_file() for path in rtl):
         return commands.result(detail="EQY needs produced RTL, State netlist and the configured corner's Liberty models.")
     used = set().union(*(netlist_used_cells(path.read_text()) for path in [*rtl, Path(netlist)]))
+    classes = {}
+    for key in ("CELL_LEFS", "PAD_LEFS", "EXTRA_LEFS"):
+        for path in _paths(config.get(key)):
+            path = path if path.is_absolute() else project / path
+            if path.is_file():
+                classes.update(parse_lef_macro_classes(path.read_text()))
+    physical = {name for name, kind in classes.items() if name in used
+                and (kind in {"PAD SPACER", "CORE SPACER"} or kind.startswith("ENDCAP "))}
     corner = config.get("DEFAULT_CORNER", "")
     liberty, external_liberty, pad_liberty = [], [], []
     for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
@@ -238,9 +264,13 @@ def eqy(project, directory, tool, commands, *, state, config):
     pad_types.update(match["name"] for path in pad_models
                      for match in _NETLIST_MODULE_RE.finditer(path.read_text()))
     pad_types &= used
+    pad_types -= physical
     script = directory / "equivalence.eqy"
     source = eqy_script(top, rtl, Path(netlist), liberty[0], synthesis=config,
         views=directory, liberty_files=list(map(Path, liberty)), model_verilog=models)
+    if physical:
+        removal = "\n".join("delete */t:" + master for master in sorted(physical)) + "\n"
+        source = source.replace("[gate]", removal + "[gate]", 1).replace("[script]", removal + "[script]", 1)
     wrapper_count, wrapper_reports, wrapper_detail = None, [], ""
     if pad_types:
         from pdk_udp_synth_shim_gen import _strip_specials

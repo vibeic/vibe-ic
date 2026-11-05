@@ -1736,7 +1736,7 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
         families = ['random_transactions']
     if not families:
         return None
-    required_choices = {}; required_population = None
+    required_choices = {}; required_population = None; assumptions = []
 
     def defer(reason: str) -> None:
         if request is not None:
@@ -1762,7 +1762,7 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
         required_choices['rearm_reset_cycles'] = {'type': 'integer', 'minimum': 1, 'maximum': 16}
     if choices.get('parallel_hold') != 'through_final_product_bit':
         required_choices['parallel_hold'] = {'type': 'string', 'allowed': ['through_final_product_bit']}
-    # Read a designer's explicit count, never turn a generic sample into it.
+    # A stated population always outranks the fallback for a silent document.
     count = declared_vector_population(intent['case']) if (intent['consecutive_transactions'] or random_vectors) else None
     if random_vectors and count is not None and count > MAX_CASE_VECTORS:
         defer('declared random population exceeds supported per-case vector capacity')
@@ -1778,6 +1778,11 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
         malformed = type(chosen) is not int or not minimum <= chosen <= MAX_CASE_VECTORS
         if not malformed:
             count = chosen
+    elif intent['consecutive_transactions'] and count is None and not malformed:
+        count = minimum
+        assumptions.append({'field': population_path, 'value': count,
+                            'minimum': minimum, 'maximum': MAX_CASE_VECTORS,
+                            'basis': 'Document omits the transaction population; use the supported minimum.'})
     if intent['consecutive_transactions'] and (malformed or count is None or not minimum <= count <= MAX_CASE_VECTORS):
         required_population = {'type': 'integer', 'minimum': minimum, 'maximum': MAX_CASE_VECTORS,
                                'declaration_path': population_path}
@@ -1871,6 +1876,8 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
             'comparisons': sum(p['comparisons'] for p in phases)}
     if len(phases) > 1:
         plan['populations'] = phases
+    if assumptions:
+        plan['assumptions'] = assumptions
     if reset_observation is not None:
         plan['reset_observation'] = reset_observation
     return plan
