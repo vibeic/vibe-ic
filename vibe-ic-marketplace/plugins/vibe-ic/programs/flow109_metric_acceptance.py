@@ -1639,9 +1639,7 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
         if (all(current['features'].get(key) is False
                 for key in ('requires_dft', 'requires_scan'))
                 and (project / 'reports/lec_eqy.json').exists()):
-            # Reopen the existing generic producer's actual inputs and output.
-            # Named-purpose qualification still belongs to _d25_accept_eqy;
-            # a generic EQY observation never supplies that approval itself.
+            # Reopen the generic producer's actual inputs, mode and output.
             import librelane_contract as contract
             import librelane_eqy as native
             import synth_handoff_netlist_check as handoff
@@ -1712,12 +1710,15 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
             with tempfile.TemporaryDirectory() as temporary:
                 observed = native.judge_eqy(folder, Path(temporary) / 'lec_eqy.json')
             component = observed['verdict'] if observed['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
-            result.update(component_status=component, native_tool='Yosys.EQY',
+            result.update(status=component, component_status=component,
+                delivery_blocked=component != 'PASS', native_tool='Yosys.EQY',
                 native_consumer=observed,
+                native_assumptions={'script': script.read_text(),
+                    'config': {key: cfg.get(key) for key in
+                        ('DESIGN_NAME', 'DEFAULT_CORNER', 'EQY_FORCE_ACCEPT_PDK')}},
                 library_binding={'synthesis_recorded': selected_name, 'proof_recorded': proof_name,
                     'consumed_path': str(proof_path.resolve()), 'sha256': selected_binding['sha256']},
-                reason='D25_NATIVE_TOOL_PURPOSE_UNQUALIFIED',
-                qualification_detail='generic EQY inputs are bound; named mode/model authority is still required')
+                reason='D25_NATIVE_' + component)
             return result
         consumed = {}
 
