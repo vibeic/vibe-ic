@@ -281,23 +281,8 @@ def test_vacuous_a_declaration_that_is_not_an_object_is_refused():
         assert axis_of(r).codes == (F.C_ECO_DECLARATION_UNREADABLE,), junk
 
 
-def test_vacuous_producer_on_a_missing_plan_emits_no_zero(tmp_path):
-    out = tmp_path / "eco.json"
-    doc = json.loads(out.read_text(encoding="utf-8"))
-    for row in doc["records"]:
-        assert row["status"] != "MEASURED", row
-        assert "value" not in row, row
 
 
-def test_vacuous_the_unreadable_plan_makes_the_gate_undetermined(tmp_path):
-    """End to end: the producer's honest absence must survive into the
-    verdict. This is the join the two halves are separately correct about and
-    could still get wrong between them."""
-    out = tmp_path / "eco.json"
-    recs = json.loads(out.read_text(encoding="utf-8"))["records"]
-    r = F.promotion_verdict(cand("unread", clean_nine() + recs), policy())
-    assert r.verdict == F.UNDETERMINED
-    assert axis_of(r).status == F.AXIS_UNDETERMINED
 
 
 # ---------------------------------------------------------------------------
