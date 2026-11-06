@@ -190,5 +190,3 @@ def test_ordinary_actionability_debt_carries_no_token(tmp_path):
 # ---------------------------------------------------------------------------
 # The detector itself: a token, not prose.
 # ---------------------------------------------------------------------------
-
-
