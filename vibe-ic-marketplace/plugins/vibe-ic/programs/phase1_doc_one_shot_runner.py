@@ -64486,7 +64486,8 @@ def _post_emit_floorplan_contract(project: Path) -> None:
     oracle/golden/testbench/reference-flow. Chip-AGNOSTIC; runs regardless of
     ic_class."""
     try:
-        contract = _fpc.extract_floorplan_contract(project)
+        integration = _try_load_l_doc(project, "L9_INTEGRATION_SPEC") or {}
+        contract = _fpc.extract_floorplan_contract(project, integration.get("top_module"))
     except Exception as e:
         print(f"      floorplan-contract extract FAILED (fail-open): {e}",
               file=sys.stderr)
@@ -64545,6 +64546,11 @@ def _post_emit_floorplan_contract(project: Path) -> None:
     # declaration and every L19 copy and reports a named disagreement.
     if die and not fields.get("die_area_budget_um"):
         fields["die_area_budget_um"] = die
+        changed = True
+
+    rectangle = contract.get("die_area_um")
+    if rectangle is not None and fields.get("die_area_um") is None:
+        fields["die_area_um"] = rectangle
         changed = True
 
     new_hints = contract.get("floorplan_hints") or []
