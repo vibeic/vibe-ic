@@ -28,8 +28,6 @@ for _p in (_PROGRAMS, _TESTS):
         sys.path.insert(0, str(_p))
 
 import foundry_handoff_package_check as C                      # noqa: E402
-from test_foundry_handoff_layout_member_is_the_signed_off_gds import (  # noqa: E402
-    _admit)
 
 TOOL = b"GDS-bytes-librelane-klayout-density-finished" * 64
 REFINISHED = b"GDS-bytes-rewritten-in-place-after-promotion" * 64
@@ -54,7 +52,6 @@ def _project(tmp: Path, *, shipped: bytes, tool: bytes | None,
             "source_sha256": hashlib.sha256(tool).hexdigest(),
             "canonical": str(tmp / "phase3/stage3/pnr/spm.gds"),
             "canonical_sha256": hashlib.sha256(tool).hexdigest()}))
-    _admit(tmp)
     return tmp
 
 
