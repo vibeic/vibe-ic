@@ -5,33 +5,33 @@
   "populations": {
     "programs_top_level": {
       "definition": "Every *.py directly in plugins/vibe-ic/programs/ (top level, NOT recursive). Helpers (_*.py), DEPRECATED_* and *_shim.py ARE included. This is the population the shell glob `programs/*.py` expands to. NOTE: the git pathspec `programs/*.py` is NOT the same thing \u2014 git's `*` crosses `/`, so `git ls-files 'programs/*.py'` returns the RECURSIVE population instead.",
-      "count": 1653,
-      "sha256_of_sorted_paths": "85cc7373142834178e856cb180e0c9731c6522e57390b6f28d9f3c6ec8a7c7f5"
+      "count": 779,
+      "sha256_of_sorted_paths": "ed412fdb6999875930766940142ec1fb272ac22e46f6e70b0fd9aec869d3d294"
     },
     "programs_catalogued": {
       "definition": "programs_top_level minus helpers and deprecation shims (_*.py, DEPRECATED_*, *_shim.py, and any file whose first 2000 chars contain 'DEPRECATION SHIM'). This is the population catalogued in programs/INDEX.md by tools/gen_programs_index.py.",
-      "count": 1480,
-      "sha256_of_sorted_paths": "7d2aa7d055d563166a985b4698cfce3a9f317da0e0a18a969a07c986bc575c55"
+      "count": 670,
+      "sha256_of_sorted_paths": "ddc7999f070467c81a06605ddd4872862913fa5ace73f5301d491ea967ffdd5a"
     },
     "programs_tree_all_py": {
       "definition": "Every *.py at ANY depth under plugins/vibe-ic/programs/, including programs/tests/ and the sub-packages. Roughly programs_top_level + test_files + sub-package modules.",
-      "count": 6703,
-      "sha256_of_sorted_paths": "587adc01ce963698e9d7bf1e05b1c3740766c99bd7606235dcd9680b2e07830d"
+      "count": 4180,
+      "sha256_of_sorted_paths": "4283d09cd37e219de11e758cef0e212114479361bb992d3891eeca0d54202aab"
     },
     "test_files": {
       "definition": "Every test_*.py at any depth under plugins/vibe-ic/programs/tests/.",
-      "count": 4894,
-      "sha256_of_sorted_paths": "eaf2368e4c8c4d041264a93cbadaec095848912cf63ef78c8940d2086f30bbef"
+      "count": 3268,
+      "sha256_of_sorted_paths": "12f989a733c1869fb19bf4668d555c9dc519252cc637a2845afa52c36eead8d5"
     },
     "mcp_eda_test_files": {
       "definition": "Every test_*.py directly under plugins/vibe-ic/mcp-eda/test/.",
-      "count": 57,
-      "sha256_of_sorted_paths": "adffc6f36f99599c3eb0c559836ce0e1c29f199debd1657d91b51ef3a275b9c8"
+      "count": 54,
+      "sha256_of_sorted_paths": "a9bf206602f63d145661162f16cb986b57b37505452d40569a14668faa4ab731"
     },
     "programs_helpers_and_shims": {
       "definition": "programs_top_level minus programs_catalogued: the helper modules and deprecation shims that INDEX.md deliberately omits. Stated in the plugin README so the gap between the two program counts is accounted for rather than left as an unexplained discrepancy.",
-      "count": 173,
-      "sha256_of_sorted_paths": "322274f2ad6d5e0da7a58afbec3ad29c6e22adf1457835d68ca8d21e85079f2b"
+      "count": 109,
+      "sha256_of_sorted_paths": "837c4a30167a12c6943c4de62eafc71014cb7c368ea9a70bca60d14e5e649dbb"
     },
     "skill_compliance_test_files": {
       "definition": "Every test_*.py under plugins/vibe-ic/skills/*/tests/ \u2014 the per-skill compliance regressions. A DIFFERENT corpus from test_files, which is programs/tests/ only.",
@@ -40,13 +40,13 @@
     },
     "gate_programs_check_suffix": {
       "definition": "Top-level programs whose filename ends in _check.py. A SUBSET of gate_programs_check_audit_lint \u2014 quoting one where the other is meant is a different measurement, not a correction.",
-      "count": 583,
-      "sha256_of_sorted_paths": "cb2cb1f92210ffc355e8d93f3c8e7cb0aca13b0507a7e8e8b4252bd7bce44719"
+      "count": 139,
+      "sha256_of_sorted_paths": "ae1f345ca73bed691d5a3bf4f827c322ff5f762d87a7b749ac1fb47c3a5fa937"
     },
     "gate_programs_check_audit_lint": {
       "definition": "Top-level programs whose filename ends in _check.py, _audit.py or _lint.py.",
-      "count": 614,
-      "sha256_of_sorted_paths": "b463caa2b3ff80ddbfd66e3a0e53e414a54f0559020055aa06e602901be055e8"
+      "count": 148,
+      "sha256_of_sorted_paths": "15f94ad42923b9a585b118187802b43ef540478e8c49169e24ead3407c536cc4"
     }
   }
 }
