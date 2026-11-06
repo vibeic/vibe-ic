@@ -115,9 +115,6 @@ def env(tmp_path, monkeypatch):
     _switch(project)
     yield SimpleNamespace(project=project, image=image, fake=fake, tmp=tmp_path,
                           resolved_root=tmp_path / 'cache' / IMAGE_ID.split(':')[1])
-    runner = sys.modules.get('phase3_one_shot_runner')
-    if runner is not None:
-        runner.set_invocation_provenance_sink(None)
 
 
 def _switch(project, **values):
