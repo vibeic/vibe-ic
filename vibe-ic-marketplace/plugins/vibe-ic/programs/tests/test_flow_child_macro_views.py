@@ -31,16 +31,28 @@ def project(root, child_config=True, hardening=True):
     return source
 
 
-@pytest.mark.parametrize("failure", [False, True, "crash", "metric"])
-def test_child_native_production_and_failure_reach_macro_step(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize("failure,preexisting", [
+    (False, "none"), (False, "report"), (False, "overrides"),
+    (True, "overrides"), ("crash", "none"), ("metric", "none"),
+])
+def test_child_native_production_and_failure_reach_macro_step(tmp_path, monkeypatch, failure, preexisting):
     source = project(tmp_path)
     calls = []
     original_input = {p.relative_to(tmp_path / "input"): p.read_bytes()
                       for p in (tmp_path / "input").rglob("*") if p.is_file()}
-    if not failure:
+    if preexisting == "report":
         stale = tmp_path / "work/flow/children/compute_tile/reports/flow_engine.json"
         stale.parent.mkdir(parents=True)
         stale.write_text(json.dumps({"fail": 0, "steps": []}))
+    if preexisting == "overrides":
+        old = tmp_path / "work/flow/children/compute_tile/old"
+        old.mkdir(parents=True)
+        views = {}
+        for kind, extension in [("gds", "gds"), ("lef", "lef"), ("nl", "v"), ("lib", "lib"), ("spef", "spef")]:
+            path = old / ("tile." + extension)
+            path.write_text("old native output\n")
+            views[kind] = {"*": [str(path)]} if kind in {"lib", "spef"} else [str(path)]
+        (tmp_path / "work/flow/native_overrides.json").write_text(json.dumps({"MACROS": {"compute_tile": views}}))
 
     def public_run(commands, argv, **kwargs):
         calls.append(list(map(str, argv)))
@@ -88,6 +100,7 @@ def test_child_native_production_and_failure_reach_macro_step(tmp_path, monkeypa
     if failure:
         assert ("public entry exited 9" if failure == "crash" else "native synthesis failure") in row["detail"]
         assert not (source / "views/tile.gds").exists()
+        assert "MACROS" not in engine.read_json(tmp_path / "work/flow/native_overrides.json")
     else:
         config = engine.read_json(tmp_path / "work/flow/native_overrides.json")
         macro = config["MACROS"]["compute_tile"]
