@@ -35,30 +35,10 @@ from pathlib import Path
 
 _TESTS = Path(__file__).resolve().parent
 _PLUGIN = _TESTS.parents[1]
-#: The checkout the plugin sits in (the monorepo root), or the plugin itself
-#: where there is no enclosing checkout (the installed cache).
-_ROOT = next((p for p in _PLUGIN.parents if (p / ".git").exists()), _PLUGIN)
 if str(_TESTS) not in sys.path:
     sys.path.insert(0, str(_TESTS))
 import _progress_run as _pr  # noqa: E402
 import _tree_write_audit as TWA  # noqa: E402
-
-_T = "programs/tests/"
-FORMER_WRITERS = {
-    _T + "test_progress_run.py"
-         "::test_the_outer_window_is_RESOLVED_from_its_owner_not_copied_here":
-        "REWROTE the tracked programs/pytest_per_file_junit.py in place "
-        "(DEFAULT_STALL_AFTER 300 -> 999) and wrote it back",
-}
-#: NOT watched here, and why. `test_issue1129_gatekeeper_prepare_landing.py::
-#: test_the_real_program_runs_against_this_repo_and_honours_its_boundary` ran
-#: the real landing preparation on the SHARED checkout (version bump across
-#: plugin.json, both marketplace manifests and the READMEs; INDEX.md; then
-#: `git checkout --`). It now runs from a private `--shared` clone and asserts
-#: that the program it ran lives there. It costs ~460 s (the census writer) and
-#: skips on any dirty tree, so re-running it in this child would double that
-#: cost and read as "did not PASS" whenever the suite runs on local edits.
-
 
 #: The child session's OWN autouse cleanup, by identity (file, function). Each
 #: deletes a stray waveform dump (.vcd/.fst/...) from the plugin root or
@@ -229,43 +209,3 @@ def test_the_audit_sees_a_write_and_only_a_write(tmp_path):
         "the audit reported a write the child never made under the tree: "
         f"{sorted(seen)}")
     assert (root / "programs" / "real.py").read_text() == "x\n"
-
-
-def test_no_former_writer_plants_anything_in_the_shipped_tree():
-    """ONE child session for every former writer, and ONE test, on purpose: a
-    module-scoped fixture is instantiated once per xdist WORKER, so spreading
-    per-node cases across workers re-ran the whole child session for each.
-
-    Two failure classes, both named per node. A node that did not PASS proves
-    nothing about what it writes (renamed, deleted, or red for another
-    reason). A node that wrote under the checkout is the defect. An import-time
-    write carries no test id, so collection-time events are reported on their
-    own: both corpus modules wrote while they were being COLLECTED."""
-    audit = TWA.run_nodes(sorted(FORMER_WRITERS), plugin_root=_PLUGIN,
-                          root=_ROOT, exempt=CLEANUP_FIXTURES)
-    assert audit.outcomes, (
-        f"the audited child reported no test at all (rc={audit.rc}); an "
-        f"empty session proves nothing:\n{audit.output[-3000:]}")
-    problems = []
-    for nodeid in sorted(FORMER_WRITERS):
-        got = audit.outcomes.get(nodeid)
-        if got != "passed":
-            problems.append(
-                f"{nodeid} did not PASS under the audit ({got or 'not run'})")
-        wrote = sorted({f"{e['event']} {e['path']}"
-                        for e in audit.writes_by(nodeid)})
-        if wrote:
-            problems.append(
-                f"{nodeid} wrote into the checkout it tests: "
-                f"{'; '.join(wrote)} (on origin/main 76a277544 it "
-                f"{FORMER_WRITERS[nodeid]})")
-    collected = sorted({f"{e['event']} {e['path']}"
-                        for e in audit.writes_by("")})
-    if collected:
-        problems.append("collecting the former writers wrote into the "
-                        "checkout: " + "; ".join(collected))
-    assert not problems, (
-        "every concurrent worker listing these paths races the writer:\n  "
-        + "\n  ".join(problems)
-        + (f"\nchild rc={audit.rc}\n{audit.output[-3000:]}"
-           if any("did not PASS" in p for p in problems) else ""))

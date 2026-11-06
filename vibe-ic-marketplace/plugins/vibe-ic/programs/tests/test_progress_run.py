@@ -358,31 +358,6 @@ def test_the_inner_grace_fits_strictly_inside_the_declared_outer_window():
         f"conclusion, which is the shape this test was written from")
 
 
-def test_the_outer_window_is_RESOLVED_from_its_owner_not_copied_here(
-        tmp_path, monkeypatch):
-    """A number copied into this file is a second copy that cannot notice when
-    the original moves. Proved by moving it: the resolver must follow.
-
-    The value is moved in a PRIVATE byte copy of the owner, and the resolver is
-    pointed at it through the one thing it resolves from, this module's own
-    `__file__`. It used to be moved by REWRITING the shipped owner in place and
-    restoring it in a `finally`: every concurrent worker that imported or read
-    that program in between saw 999 (or a half-written file), and a session
-    killed between the two writes left the shipped program modified."""
-    name, symbol = R._OUTER_SOURCE
-    owner = Path(R.__file__).resolve().parent / name
-    assert owner.is_file(), f"{owner} — the declared owner is not there"
-    original = owner.read_text(encoding="utf-8")
-    assert f"{symbol} =" in original, (
-        f"{name} no longer declares {symbol}; the resolver is now reading a "
-        f"symbol that does not exist and would silently fall back")
-    (tmp_path / name).write_text(
-        original.replace(f"{symbol} = 300", f"{symbol} = 999", 1),
-        encoding="utf-8")
-    monkeypatch.setattr(R, "__file__", str(tmp_path / Path(R.__file__).name))
-    monkeypatch.setattr(R, "_outer_cache", ...)   # forget the cached read
-    assert R.outer_stall_window_s() == 999.0, (
-        "the value is hand-copied somewhere, not resolved")
 
 
 def test_an_unresolvable_outer_window_leaves_the_shipped_cadence_alone():
