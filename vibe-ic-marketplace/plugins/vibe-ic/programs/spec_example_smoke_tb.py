@@ -110,7 +110,7 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple

@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
-import tempfile
+import vibeic_temp as tempfile
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:

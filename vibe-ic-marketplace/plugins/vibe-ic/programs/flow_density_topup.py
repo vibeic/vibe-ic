@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 
 from librelane.common import Path as NativePath, get_script_dir
 from librelane.state import DesignFormat, State

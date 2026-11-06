@@ -17,7 +17,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))

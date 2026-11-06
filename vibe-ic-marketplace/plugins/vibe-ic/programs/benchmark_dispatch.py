@@ -32,7 +32,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 # ---------------------------------------------------------------------------
 
-import argparse, atexit, hashlib, hmac, json, os, secrets, shutil, subprocess, sys, tempfile
+import argparse, atexit, hashlib, hmac, json, os, secrets, shutil, subprocess, sys, vibeic_temp as tempfile
 import concurrent.futures
 import contextlib
 import fcntl

@@ -27,7 +27,7 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 
 GRAY2 = ["00", "01", "11", "10"]  # standard 2-var Gray column/row order

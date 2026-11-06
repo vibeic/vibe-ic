@@ -69,6 +69,8 @@ vendor, PDK or case-name literal decides any branch.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 # --- sibling-import path (vibe-ic#2104) ------------------------------------
 import os as _os                                                    # noqa: E402
 import sys as _sys                                                  # noqa: E402
@@ -84,7 +86,7 @@ import json
 import re
 import shutil
 import tarfile
-import tempfile
+import vibeic_temp as tempfile
 import time
 import uuid
 from pathlib import Path
@@ -1179,7 +1181,7 @@ def docker_executor(job_path: Path, work: Path) -> Tuple[int, str]:
     name = f"vibeic_isa_{_os.getpid()}_{uuid.uuid4().hex[:8]}"
     inner = (f"export PATH=/foss/tools/bin:$PATH; python3 "
              f"/vibeic/programs/{Path(__file__).name} --inside {job_path}")
-    argv = ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+    argv = ["docker", "run", *_vtmp.docker_mounts(), "--rm", *_dmem.docker_memory_flags(),
             "--name", name, "--user", f"{_os.getuid()}:{_os.getgid()}",
             "-e", "HOME=/tmp", "-v", f"{work}:{work}",
             "-v", f"{HERE}:/vibeic/programs:ro",
@@ -1380,7 +1382,9 @@ def _produce(project: Path, *, executor: Optional[Callable[[Path, Path],
             progs.append(item)
     if not progs:
         return _refuse(f"the lock holds no program for units {wanted_units}")
-    work = Path(work_root) if work_root else Path(tempfile.mkdtemp(prefix="vibeic_isa_"))
+    work = (Path(work_root) if work_root else
+            tempfile.new_run("isa", "verification", keep=True) if keep_work else
+            Path(tempfile.mkdtemp(prefix="vibeic_isa_")))
     work.mkdir(parents=True, exist_ok=True)
     try:
         roots: Dict[str, Path] = {}

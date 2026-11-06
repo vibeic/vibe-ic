@@ -627,7 +627,7 @@ def _libreoffice_convert_to_text(p: Path, target_filter: str) -> str:
     decoded text or "" when LibreOffice is unavailable / produced nothing.
     Chip-AGNOSTIC.
     """
-    import tempfile
+    import vibeic_temp as tempfile
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
         return ""

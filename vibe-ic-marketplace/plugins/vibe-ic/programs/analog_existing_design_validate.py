@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import shlex
 import sys
-import tempfile
+import vibeic_temp as tempfile
 
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))

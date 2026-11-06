@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import shutil
 import sys
-import tempfile
+import vibeic_temp as tempfile
 
 from _atomic_artefact import write_json
 from analog_macro_top_gen import DEST, RECORD, generate

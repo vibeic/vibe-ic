@@ -63,7 +63,7 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 from typing import Optional
 

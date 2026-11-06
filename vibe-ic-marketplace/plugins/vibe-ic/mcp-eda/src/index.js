@@ -47,6 +47,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { execSync } from "child_process";
+import { configureTemp, scratchPath, beginTemp } from "./temp_paths.mjs";
 import { registerDevices } from "./devices/_registry.js";
 import { containerToolCommand } from "./lib/tool_path.mjs";
 import { parseYosysSynthStats } from "./lib/yosys_synth_stats.mjs";
@@ -76,6 +77,8 @@ import { gateManifestEntry } from "./lib/manifest_metrics.mjs";
 import { parseWns, parseTns } from "./lib/sta_slack.mjs";
 import { parseIrReport, parseReportPower } from "./lib/psm_report.mjs";
 import { evaluateStaEvidence, staEvidenceTcl, STA_EVIDENCE_TERMS } from "./lib/sta_evidence.mjs";
+
+configureTemp();
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -360,7 +363,7 @@ exit
     // long-running mcp server doesn't accumulate one `vivado_program_*.tcl`
     // per Vivado-tool call (the legacy `<(echo ...)` form left nothing on
     // disk; this preserves that property).
-    const _tclPath = join(process.env.TMPDIR || "/tmp", `vivado_program_${randomUUID()}.tcl`);
+    const _tclPath = scratchPath(`vivado_program_${randomUUID()}.tcl`);
     let result;
     try {
       require_fs_writeFileSync(_tclPath, tclScript, "utf-8");
@@ -934,7 +937,7 @@ server.tool(
         return wrapResult({ success: false, t0, error: "either `script` or `script_file` required", output: "" });
       }
       const suffix = engine === "klayout_python" ? ".py" : engine === "klayout_drc" ? ".drc" : "";
-      tmpFile = `/tmp/run_tcl_${Date.now()}_${Math.floor(Math.random() * 100000)}${suffix}`;
+      tmpFile = scratchPath(`run_tcl_${Date.now()}_${Math.floor(Math.random() * 100000)}${suffix}`);
       const b64 = Buffer.from(script, "utf-8").toString("base64");
       const writeRes = dockerExec(`echo '${b64}' | base64 -d > ${tmpFile}`, 30000);
       if (!writeRes.success) {
@@ -1137,7 +1140,7 @@ names = sorted([c.name for c in ly.each_cell()])
 print('GDS_CELL_COUNT=' + str(len(names)))
 print('GDS_CELL_SAMPLE=' + ','.join(names[:10]))
 `;
-      const gdsTmp = `/tmp/pdk_lint_${Date.now()}_${Math.floor(Math.random() * 100000)}.py`;
+      const gdsTmp = scratchPath(`pdk_lint_${Date.now()}_${Math.floor(Math.random() * 100000)}.py`);
       const gdsB64 = Buffer.from(gdsScript, "utf-8").toString("base64");
       const gdsWrite = dockerExec(`echo '${gdsB64}' | base64 -d > ${gdsTmp}`, 30000);
       const gdsRes = gdsWrite.success
@@ -2139,7 +2142,9 @@ puts "ADC_RESULT: channel=${channel} raw_avg=[format {%.1f} $avg] voltage=[forma
 
 close_service master $adc_path
 `;
-    const tmpDir = "/tmp/adc_read";
+    const temporary = beginTemp("mcp", "adc-read");
+    const tmpDir = temporary.run;
+    try {
     fs.mkdirSync(tmpDir, { recursive: true });
     const tclPath = path.join(tmpDir, `adc_ch${channel}.tcl`);
     fs.writeFileSync(tclPath, tclScript);
@@ -2172,6 +2177,7 @@ close_service master $adc_path
 
     writeManifest(tmpDir, { step: "eda_fpga_adc_read", status: result.success ? "PASS" : "FAIL", channel, voltage: result.voltage });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } finally { temporary.close(); }
   }
 );
 

@@ -5,6 +5,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import time
+import vibeic_temp
 
 
 NATIVE_STEPS = dict(zip((
@@ -182,7 +183,9 @@ def _signoff(project, state):
             row = {}
             reason = f"{kind}: native result absent or unreadable ({path}: {exc})"
             if kind in ("lvs", "scenarios"):
-                raw = sorted((project / "steps" / name).glob("**/mixed_results.json"),
+                raw = sorted([*(path for parent in (project / "steps", vibeic_temp.current_run())
+                                for path in (parent / name).glob("**/mixed_results.json")),
+                              *(project / "reports/native").glob(f"*/{name}/**/mixed_results.json")],
                              key=lambda item: item.stat().st_mtime_ns, reverse=True)
                 expected = "M07" if kind == "lvs" else "M08"
                 for candidate in raw:

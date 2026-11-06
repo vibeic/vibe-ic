@@ -207,7 +207,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                 return finish('FAIL', 'A02_MODEL_SMOKE_INPUT_INVALID: ' + str(exc))
             # A unique log prevents an earlier successful run from supplying
             # evidence when a new invocation fails before it opens its log.
-            import tempfile
+            import vibeic_temp as tempfile
             with tempfile.NamedTemporaryFile(prefix=ident + '-', suffix='.log',
                                              dir=outdir, delete=False) as handle:
                 log = Path(handle.name)
@@ -219,7 +219,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                 return finish('NOT_MEASURED', 'A02_NATIVE_MODEL_LOG_ABSENT: ' + ident)
             needs.append(need)
             rows.append({**need, 'returncode': result['returncode'],
-                         'log': {'path': str(log.relative_to(project))}})
+                         'log': {'path': str(log)}})
         checked = consume(project, {'required_smokes': needs}, {'smokes': rows})
         if checked['verdict'] != 'PASS':
             unavailable = checked['reason'] in {'A02_NATIVE_MEASUREMENT_ABSENT', 'A02_NATIVE_MEASUREMENT_NONFINITE'}
@@ -303,7 +303,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             else:
                 if not testbench.is_file():
                     return finish('NOT_MEASURED', 'A05_OP_STIMULUS_ABSENT: provide op_deck or existing testbench')
-                import tempfile
+                import vibeic_temp as tempfile
                 with tempfile.NamedTemporaryFile(mode='w', prefix='native-op-', suffix='.sp',
                                                  dir=bdir, delete=False) as handle:
                     handle.write(_op_deck(testbench.read_text()))
@@ -342,7 +342,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                 break
         if not instantiated:
             return finish('FAIL', 'A05_OP_DUT_NOT_INSTANTIATED: ' + subckt)
-        import tempfile
+        import vibeic_temp as tempfile
         with tempfile.NamedTemporaryFile(prefix='native-op-', suffix='.log',
                                          dir=outdir, delete=False) as handle:
             log = Path(handle.name)

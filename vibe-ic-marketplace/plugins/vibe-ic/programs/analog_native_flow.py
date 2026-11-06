@@ -6,6 +6,8 @@ not required to execute. Native errors and missing measurements remain visible.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +18,7 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 import threading
 import time
 
@@ -102,7 +104,7 @@ class NativeCommands:
                 command[0] = "python3"
             socket = Path("/var/run/docker.sock")
             group = socket.stat().st_gid if socket.exists() else os.getgid()
-            command = ["docker", "exec", "--user", f"{os.getuid()}:{group}",
+            command = ["docker", "exec", *_vtmp.container_env(), "--user", f"{os.getuid()}:{group}",
                        "-e", "PYTHONDONTWRITEBYTECODE=1",
                        *(["-e", "VIBEIC_EDA_IMAGE=" + self.image] if self.image else []),
                        "-w", str(cwd), self.container, "bash", "-lc",

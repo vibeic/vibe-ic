@@ -108,7 +108,13 @@ fi
 #       for an unreadable tree or a bad pattern; that was recorded as
 #       "rc 0, no matches", i.e. byte-identical to a clean tree. It now
 #       refuses with exit 2 instead of attesting safety it never measured.
-GREP_ERR="$(mktemp)"
+TEMP_HELPER="${ROOT}/../programs/vibeic_temp.py"
+TEMP_CONTEXT="$(python3 "$TEMP_HELPER" begin shell burn-sentinel --owner-pid "$$")"
+TMPDIR="$(printf '%s' "$TEMP_CONTEXT" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tmp"])')"
+TEST_ROOT="$(printf '%s' "$TEMP_CONTEXT" | python3 -c 'import json,sys;print(json.load(sys.stdin)["run"])')"
+export TMPDIR
+trap 'python3 "$TEMP_HELPER" finish --context "$TEMP_CONTEXT"' EXIT
+GREP_ERR="$(mktemp "$TMPDIR/burn-grep.XXXXXX")"
 RAW="$(grep -arEn "${PATTERN_BURN}" \
        "${SRC}" \
        --include="*.js" --include="*.ts" --include="*.py" \

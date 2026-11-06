@@ -70,6 +70,8 @@ registry's declared ladder.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import math
 
 import argparse
@@ -180,7 +182,7 @@ def fork_capability(image: str, docker: str = "docker") -> Dict[str, Any]:
     network, command = _ll.native_tool_command(image, [
         "bash", "-c", "set -o pipefail; printf '%s' \"$1\" | openroad -no_init "
         "-no_splash -exit /dev/stdin 2>&1", "vibeic-probe", tcl])
-    cmd = [docker, "run", "--rm", "--network", network, *_dmem.docker_memory_flags(),
+    cmd = [docker, "run", *_vtmp.docker_mounts(), "--rm", "--network", network, *_dmem.docker_memory_flags(),
            image, "--skip", *command]
     try:
         from librelane_contract import PROBE_DEADLINE_S

@@ -106,6 +106,8 @@ Generality: applies to ANY Verilog/SystemVerilog design. Finds bugs #1, #2,
 #7, #10 from the <half-duplex-tester> debug session using only syntax patterns.
 """
 from __future__ import annotations
+
+import vibeic_temp as _vtmp
 import argparse
 import fcntl
 import hashlib
@@ -113,7 +115,7 @@ import json
 import os
 import re
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
@@ -7015,7 +7017,7 @@ sys.exit(record['native_returncode'] if record['native_returncode'] is not None 
             volumes += ['-v', f'{directory}:{directory}:ro']
         volumes += ['-v', f'{work}:{work}']
         import _docker_memory as memory
-        argv = ['docker', 'run', '--rm', '--network', 'none',
+        argv = ['docker', 'run', *_vtmp.docker_mounts(), '--rm', '--network', 'none',
                 *memory.docker_memory_flags(), *volumes,
                 target, '--skip', 'python3', '-c', launcher, str(receipt), *command]
         context['command'] = argv

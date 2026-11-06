@@ -15,13 +15,15 @@ an executable candidate that the native compiler rejects is a measured FAIL.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import hashlib
 import json
 import math
 import re
 import shutil
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 import os
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -1101,7 +1103,7 @@ def run_structural_contract(
             header_mount = ["-v", f"{frozen_header}:/work/prompt_header.sv:ro"]
         memory = "2g" if port_scope else "4g"
         command = [
-            docker, "run", "--rm", "--pull=never", "--user", f"{os.getuid()}:{os.getgid()}",
+            docker, "run", *_vtmp.docker_mounts(), "--rm", "--pull=never", "--user", f"{os.getuid()}:{os.getgid()}",
             "--cpus=2", f"--memory={memory}",
             "--pids-limit=128", "--network=none", "--read-only",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",

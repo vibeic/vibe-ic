@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 
 import pya
 
