@@ -29,6 +29,7 @@ append_if_exists_argument rd_args VIBEIC_PRR_MAX_WIRE_LENGTH -max_wire_length
 append_if_exists_argument rd_args VIBEIC_PRR_SLEW_MARGIN_PCT -slew_margin
 append_if_exists_argument rd_args VIBEIC_PRR_CAP_MARGIN_PCT -cap_margin
 append_if_exists_argument rd_args VIBEIC_PRR_MAX_UTIL_PCT -max_utilization
+odb::dbDatabase_beginEco $::block
 log_cmd repair_design {*}$rd_args
 
 if {[info exists ::env(VIBEIC_PRR_RECOVER_POWER_PCT)]} {
@@ -54,11 +55,18 @@ append_if_exists_argument hold_args VIBEIC_PRR_MAX_UTIL_PCT -max_utilization
 log_cmd repair_timing {*}$hold_args
 log_cmd repair_design {*}$rd_args
 
+set changed [expr {![odb::dbDatabase_ecoEmpty $::block]}]
+odb::dbDatabase_endEco $::block
+odb::dbDatabase_commitEco $::block
+utl::metric_integer vibeic__postroute__changed $changed
+
 # A full reroute lets the router move neighbors that a scoped ECO route freezes.
-foreach net [$::block getNets] {
-    if {![$net isSpecial] && [$net getSigType] ni {POWER GROUND}} {
-        set wire [$net getWire]
-        if {$wire ne "NULL"} {odb::dbWire_destroy $wire}
+if {$changed} {
+    foreach net [$::block getNets] {
+        if {![$net isSpecial] && [$net getSigType] ni {POWER GROUND}} {
+            set wire [$net getWire]
+            if {$wire ne "NULL"} {odb::dbWire_destroy $wire}
+        }
     }
 }
 unset_dont_touch_objects

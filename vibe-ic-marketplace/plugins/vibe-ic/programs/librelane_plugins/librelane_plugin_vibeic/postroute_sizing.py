@@ -40,4 +40,8 @@ class PostRouteSizing(ResizerStep):
     def run(self, state_in, **kwargs):
         kwargs, env = self.extract_env(kwargs)
         env["VIBEIC_ROUTED_SPEFS"] = self.value_to_tcl(state_in[DesignFormat.SPEF])
-        return super().run(state_in, env=env, **kwargs)
+        views, metrics = super().run(state_in, env=env, **kwargs)
+        if metrics.get("vibeic__postroute__changed") == 0:
+            # Keep the input's fillers, wires and extracted parasitics together.
+            return {}, metrics
+        return views, metrics

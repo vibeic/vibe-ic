@@ -7,7 +7,8 @@ import pytest
 import flow_engine as engine
 
 
-def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_path, monkeypatch):
+@pytest.mark.parametrize("changed", [None, 0, 1])
+def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_path, monkeypatch, changed):
     events = []
 
     class State(dict):
@@ -31,7 +32,8 @@ def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_pat
     class Repair(NativeStep):
         def run(self, state):
             events.append('repair')
-            return {'odb': 'repaired-unrouted'}, {}
+            return ({'odb': 'repaired-unrouted'} if changed != 0 else {},
+                    {'vibeic__postroute__changed': changed} if changed is not None else {})
 
     class ExtractBefore(NativeStep):
         def run(self, state):
@@ -55,7 +57,11 @@ def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_pat
 
     class Timing(NativeStep):
         def run(self, state):
-            assert state['spef'] == f"extracted:{state['odb']}"
+            if changed == 0:
+                assert state['odb'] == 'routed-with-fillers'
+                assert state['spef'] == 'input-routed-spef'
+            else:
+                assert state['spef'] == f"extracted:{state['odb']}"
             events.append('timing')
             return {}, {'timing__setup__ws': 0}
 
@@ -86,6 +92,8 @@ def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_pat
                if row['name'] == 'post_route_timing_repair')
     result = chain.execute(tmp_path / 'step', row['tool'])
     assert result.exit_code == 0
-    assert events == ['extract_before', 'repair', 'place', 'global_route',
-                      'detail_route', 'fill', 'extract', 'timing']
+    assert engine.evaluate(result, []) == 'PASS'
+    assert events == (['extract_before', 'repair', 'timing'] if changed == 0 else
+                     ['extract_before', 'repair', 'place', 'global_route',
+                      'detail_route', 'fill', 'extract', 'timing'])
     assert [step['name'] for step in result.native_steps] == row['tool']['steps']

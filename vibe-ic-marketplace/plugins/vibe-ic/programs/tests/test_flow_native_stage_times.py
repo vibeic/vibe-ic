@@ -51,7 +51,8 @@ def test_ordinary_synthesis_keeps_native_strategy_without_search(tmp_path, monke
 
 
 @pytest.mark.parametrize("missing_corner", [False, True])
-def test_routed_sizing_reads_corners_then_releases_only_signal_wires(tmp_path, missing_corner):
+@pytest.mark.parametrize("changed", [False, True])
+def test_routed_sizing_reads_corners_then_releases_only_signal_wires(tmp_path, missing_corner, changed):
     tclsh = shutil.which("tclsh")
     if tclsh is None:
         pytest.skip("Tcl interpreter is required")
@@ -85,6 +86,13 @@ foreach {net type special} {signal SIGNAL 0 power POWER 0 ground GROUND 0 specia
     }]
 }
 namespace eval odb {proc dbWire_destroy {wire} {puts "DESTROY $wire"}}
+namespace eval odb {
+    proc dbDatabase_beginEco {block} {puts BEGIN_ECO}
+    proc dbDatabase_ecoEmpty {block} {return [expr {!$::changed}]}
+    proc dbDatabase_endEco {block} {puts END_ECO}
+    proc dbDatabase_commitEco {block} {puts COMMIT_ECO}
+}
+namespace eval utl {proc metric_integer {key value} {puts "METRIC $key $value"}}
 proc write_views {} {puts WRITE_VIEWS}
 set ::block block
 set ::env(SCRIPTS_DIR) unused
@@ -95,6 +103,7 @@ set ::env(VIBEIC_PRR_HOLD_MAX_BUFFER_PCT) 5
 set ::env(VIBEIC_PRR_SETUP_SEQUENCE) default
 set ::env(VIBEIC_ROUTED_SPEFS) {min_* min.spef nom_* nom.spef max_* max.spef}
 '''
+    prefix += f"set ::changed {int(changed)}\n"
     if missing_corner:
         prefix += "set ::env(VIBEIC_ROUTED_SPEFS) {nom_* nom.spef}\n"
     runner = tmp_path / "run.tcl"
@@ -116,5 +125,9 @@ set ::env(VIBEIC_ROUTED_SPEFS) {min_* min.spef nom_* nom.spef max_* max.spef}
         assert calls[0] == calls[3] == "CALL repair_design -verbose"
         assert calls[1].startswith("CALL repair_timing -setup ")
         assert calls[2].startswith("CALL repair_timing -hold ")
-        assert [line for line in lines if line.startswith("DESTROY ")] == ["DESTROY signal-wire"]
+        assert [line for line in lines if line.startswith("DESTROY ")] == (
+            ["DESTROY signal-wire"] if changed else [])
+        assert f"METRIC vibeic__postroute__changed {int(changed)}" in lines
+        assert lines.index("BEGIN_ECO") < lines.index(calls[0])
+        assert lines.index(calls[-1]) < lines.index("END_ECO") < lines.index("COMMIT_ECO")
         assert lines[-1] == "WRITE_VIEWS"
