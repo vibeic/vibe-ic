@@ -762,6 +762,20 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
                   PDN_ENABLE_PINS=False, MAGIC_EXT_USE_GDS=True,
                   VDD_NETS=[power], GND_NETS=[ground], FALLBACK_SDC=str(sdc),
                   PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+    if native.get("MAGICRC"):
+        magicrc = destination / "pad-extraction.magicrc"
+        if Path(native["MAGICRC"]) != magicrc:
+            # Magic reads its rc before LibreLane's wrapper loads the step environment.
+            # Preload pad LEFs only for extraction; other Magic steps keep full views.
+            magicrc.write_text("if {[info exists ::env(_TCL_ENV_IN)]} {source $::env(_TCL_ENV_IN)}\n"
+                + "source " + _tcl_word(native["MAGICRC"]) + "\n" + r'''
+if {[info exists ::env(STEP_ID)] && $::env(STEP_ID) eq "Magic.SpiceExtraction"
+    && [info exists ::env(PAD_LEFS)]} {
+    foreach lef $::env(PAD_LEFS) {lef read $lef}
+    gds noduplicates true
+}
+''')
+        result["MAGICRC"] = str(magicrc)
     if native.get("PDN_CORE_RING") and native.get("PDN_CORE_RING_CONNECT_TO_PADS"):
         ring_layers = {native.get(f"PDN_CORE_{axis}_LAYER") or native[f"PDN_{axis}_LAYER"]
                        for axis in ("VERTICAL", "HORIZONTAL")}

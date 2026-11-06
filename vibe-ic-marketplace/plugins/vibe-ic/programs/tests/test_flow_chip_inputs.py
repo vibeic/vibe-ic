@@ -1233,3 +1233,101 @@ def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, over
     clock = f"core_clock_{clock_count - 1}" + (" -add_delay" if clock_count == 2 else "")
     assert f"set_input_delay {budget:g} -clock {clock}" in text
     assert f"set_output_delay {budget:g} -clock {clock}" in text
+
+
+@pytest.mark.parametrize("core_overlap", [False, True])
+def test_native_pad_extraction_keeps_full_core_geometry(inputs, tmp_path, core_overlap):
+    import shutil
+    import subprocess
+    from librelane.common import Path as NativePath, Toolbox
+    from librelane.flows import Flow
+    from librelane.state import DesignFormat, State
+    from librelane.steps import Step, StepError
+
+    root = os.environ.get("PDK_ROOT")
+    rc = Path(root or "/missing") / "sky130A/libs.tech/magic/sky130A.magicrc"
+    if not shutil.which("magic") or not rc.is_file():
+        pytest.skip("native Magic and installed PDK required")
+    project, config, native, _, _ = inputs
+    native["MAGICRC"] = str(rc)
+    prepared = chip.prepare(project, config)
+    layout = tmp_path / "layout"
+    layout.mkdir()
+    script = layout / "generate.tcl"
+    core = "box 0 0 0 0\ngetcell bad_poly\ngetcell bad_res\n" if core_overlap else ""
+    script.write_text('''drc off
+crashbackups disable
+locking disable
+load bad_poly -silent
+box 0 0 2um 2um
+paint poly
+load bad_res -silent
+box 0 0 2um 2um
+paint npolyres
+load neutral_pad -silent
+box 0 0 0 0
+getcell bad_poly
+getcell bad_res
+load neutral_core -silent
+box 0 0 2um 2um
+paint metal1
+''' + core + '''load neutral_chip -silent
+box 0 0 0 0
+getcell neutral_pad
+box 10um 0 10um 0
+getcell neutral_core
+gds write fixture.gds
+quit -noprompt
+''')
+    generated = subprocess.run(["magic", "-dnull", "-noconsole", "-rcfile", str(rc), str(script)],
+                               cwd=layout, capture_output=True, text=True)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    lef = _write(tmp_path / "pads.lef", '''VERSION 5.8 ;
+MACRO neutral_pad
+ CLASS PAD INOUT ;
+ ORIGIN 0 0 ;
+ SIZE 2 BY 2 ;
+ PIN PAD
+  DIRECTION INOUT ;
+  USE SIGNAL ;
+  PORT
+   LAYER met1 ;
+   RECT 0 0 1 1 ;
+  END
+ END PAD
+END neutral_pad
+END LIBRARY
+''')
+    definition = _write(tmp_path / "fixture.def", '''VERSION 5.8 ;
+DESIGN neutral_chip ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 20000 20000 ) ;
+END DESIGN
+''')
+    rtl = _write(tmp_path / "neutral_chip.v", "module neutral_chip(); endmodule\n")
+    owner = Flow.factory.get("Classic")({"DESIGN_NAME": "neutral_chip", "PDK": "sky130A",
+        "VERILOG_FILES": [str(rtl)], "CLOCK_PORT": None, "CLOCK_PERIOD": 10,
+        "MAGIC_EXT_USE_GDS": prepared["MAGIC_EXT_USE_GDS"],
+        "MAGICRC": prepared.get("MAGICRC", str(rc))}, design_dir=str(tmp_path), pdk_root=root)
+    native_config = owner.config.copy(PAD_LEFS=[NativePath(str(lef))])
+    state = State({DesignFormat.GDS: NativePath(str(layout / "fixture.gds")),
+                   DesignFormat.DEF: NativePath(str(definition))})
+    toolbox = Toolbox(str(tmp_path / "tools"))
+    extracted = Step.factory.get("Magic.SpiceExtraction")(native_config, state_in=state).start(
+        toolbox=toolbox, step_dir=str(tmp_path / "extract"))
+    assert extracted.metrics["magic__illegal_overlap__count"] == int(core_overlap)
+    spice = Path(extracted[DesignFormat.SPICE]).read_text()
+    assert ".subckt neutral_pad PAD" in spice and "Xneutral_pad" in spice
+    checker = Step.factory.get("Checker.IllegalOverlap")(native_config, state_in=extracted)
+    if core_overlap:
+        with pytest.raises(StepError):
+            checker.start(toolbox=toolbox, step_dir=str(tmp_path / "check"))
+    else:
+        checker.start(toolbox=toolbox, step_dir=str(tmp_path / "check"))
+        original = native_config.copy(MAGICRC=NativePath(str(rc)))
+        full = Step.factory.get("Magic.DRC")(original, state_in=state).start(
+            toolbox=toolbox, step_dir=str(tmp_path / "drc-original"))
+        unchanged = Step.factory.get("Magic.DRC")(native_config, state_in=state).start(
+            toolbox=toolbox, step_dir=str(tmp_path / "drc-prepared"))
+        assert full.metrics["magic__drc_error__count"] > 0
+        assert unchanged.metrics["magic__drc_error__count"] == full.metrics["magic__drc_error__count"]

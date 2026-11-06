@@ -96,6 +96,15 @@ def _child(project, name, config, raw, pdk, commands, library=None):
     if docs.is_dir():
         shutil.copytree(docs, child / "input/docs")
     resolved = resolve_config(config, raw, pdk, library)
+    supplied_sdc = set()
+    for key in ("FALLBACK_SDC", "PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+        for index, source in enumerate(paths(resolved.get(key))):
+            if source in supplied_sdc or not source.is_file():
+                continue
+            target = child / "input/docs/supplied_constraints" / f"{key.lower()}_{index}.sdc"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            supplied_sdc.add(source)
     # Stage only supplied design sources; physical views stay in native outputs.
     for source in paths(resolved.get("VERILOG_FILES")):
         rtl = child / "input/rtl" / source.name
