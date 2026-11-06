@@ -435,9 +435,9 @@ def test_prepare_writes_usable_chip_inputs_and_preserves_pdn(inputs):
     assert ".A(_core_port_3)" in wrapper
     assert result["FALLBACK_SDC"] == result["PNR_SDC_FILE"] == result["SIGNOFF_SDC_FILE"]
     sdc = Path(result["PNR_SDC_FILE"]).read_text()
-    assert "-period 24" in sdc
-    assert "set_input_delay 4.8" in sdc
-    assert "set_output_delay 4.8" in sdc
+    assert "-period [sta::time_sta_ui [expr {24 * 1e-9}]]" in sdc
+    assert "set_input_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]]" in sdc
+    assert "set_output_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]]" in sdc
     assert "all_inputs" not in sdc and "all_outputs" not in sdc
     assert r"data\[5\]" in sdc
     report = json.loads((project / "work/flow/chip/preparation.json").read_text())
@@ -506,8 +506,8 @@ def test_bidirectional_pad_terminal_does_not_change_the_logical_input_budget(inp
     report = json.loads((project / "work/flow/chip/preparation.json").read_text())
     assert next(port for port in report["ports"] if port["name"] == "data")["direction"] == "input"
     sdc = Path(result["PNR_SDC_FILE"]).read_text()
-    assert "set_input_delay 4.8" in sdc and r"data\[5\]" in sdc
-    assert "set_output_delay 4.8" in sdc
+    assert "set_input_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]]" in sdc and r"data\[5\]" in sdc
+    assert "set_output_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]]" in sdc
 
 
 def test_native_bidirectional_receivers_pass_the_normal_verilator_step(tmp_path, native_inputs):
@@ -792,12 +792,12 @@ def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
     text = Path(result["PNR_SDC_FILE"]).read_text()
     assert "set_timing_derate -late 1.05" in text
     assert "set_timing_derate -early 0.949999" in text
-    assert "set_clock_uncertainty 0.25" in text
-    assert "set_clock_transition 0.15" in text
+    assert "set_clock_uncertainty [sta::time_sta_ui [expr {0.25 * 1e-9}]]" in text
+    assert "set_clock_transition [sta::time_sta_ui [expr {0.15 * 1e-9}]]" in text
     assert "set_max_transition [sta::time_sta_ui [expr {3 * 1e-9}]] [current_design]" in text
     assert "set_max_capacitance [sta::capacitance_sta_ui [expr {0.2 * 1e-12}]] $_chip_core_pins" in text
     assert "set_max_capacitance [sta::capacitance_sta_ui [expr {0.2 * 1e-12}]] [current_design]" not in text
-    assert "set_load 0.01" in text
+    assert "set_load [sta::capacitance_sta_ui [expr {10 * 1e-15}]]" in text
     assert "set _chip_pad_max 1" in text
     assert "set _chip_pad_min 0.08" in text
 
@@ -899,6 +899,7 @@ def test_pad_edges_follow_the_native_linked_corner(inputs, tmp_path, linked, max
     result = chip.prepare(project, config)
     script = tmp_path / "read.sdc.tcl"
     script.write_text('''namespace eval sta {
+proc time_sta_ui seconds {expr {$seconds * 1e9}}
 proc top_instance {} {return INSTANCE}
 proc find_pin {name} {return PIN}
 proc pin_sim_logic_value {pin} {return X}
@@ -919,8 +920,11 @@ proc get_libs args {
 }
 ''' + f"set ::linked {linked}\nsource {{{result['PNR_SDC_FILE']}}}\n")
     completed = subprocess.run([*command, str(script)], capture_output=True, text=True, check=True)
-    assert f"EDGE -max {maximum} PORTS" in completed.stdout
-    assert f"EDGE -min {minimum} PORTS" in completed.stdout
+    edges = [line.split() for line in completed.stdout.splitlines() if line.startswith("EDGE ")]
+    assert len(edges) == 2
+    assert all(parts[3] == "PORTS" for parts in edges)
+    assert {parts[1]: float(parts[2]) for parts in edges} == pytest.approx(
+        {"-max": float(maximum), "-min": float(minimum)})
 
 
 def test_input_pad_edge_coverage_cannot_omit_a_selected_master(inputs):
@@ -1032,8 +1036,8 @@ def test_undeclared_io_delay_uses_resolved_native_default(inputs, missing_docume
     native["IO_DELAY_CONSTRAINT"] = 30
     result = chip.prepare(project, config)
     text = Path(result["PNR_SDC_FILE"]).read_text()
-    assert "set_input_delay 7.2" in text
-    assert "set_output_delay 7.2" in text
+    assert "set_input_delay [sta::time_sta_ui [expr {7.2 * 1e-9}]]" in text
+    assert "set_output_delay [sta::time_sta_ui [expr {7.2 * 1e-9}]]" in text
 
 
 def test_existing_sdc_keeps_clock_names_exceptions_and_budgets(inputs):
@@ -1060,8 +1064,8 @@ def test_multiple_clock_delays_are_additive(inputs):
                      "indexed": False, "msb": 0, "lsb": 0}]
     text = chip._sdc(project, config, ports)
     assert "-clock core_clock_0 -add_delay" not in text
-    assert "set_input_delay 4.8 -clock core_clock_1 -add_delay" in text
-    assert "set_output_delay 4.8 -clock core_clock_1 -add_delay" in text
+    assert "set_input_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]] -clock core_clock_1 -add_delay" in text
+    assert "set_output_delay [sta::time_sta_ui [expr {4.8 * 1e-9}]] -clock core_clock_1 -add_delay" in text
 
 
 @pytest.mark.parametrize("existing_sdc", [False, True])
@@ -1209,7 +1213,7 @@ def test_escaped_core_identifiers_have_legal_verilog_names(inputs):
 @pytest.mark.parametrize("period_field", ["period_ns", "freq_mhz"])
 @pytest.mark.parametrize("clock_count", [1, 2])
 def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, override, period_field, clock_count):
-    from sdc_constraints import create_clocks_in_text
+    import re
 
     project, config, _, ports, _ = inputs
     config["CLOCK_PORT"] = ["clk", "other_clock"][:clock_count]
@@ -1227,9 +1231,10 @@ def test_each_primary_clock_keeps_its_declared_period_and_io_budget(inputs, over
         document.setdefault("fields", {})["clock_target"] = {"period_ns": override}
         path.write_text(json.dumps(document))
     text = chip._sdc(project, config, ports)
-    periods = [clock["period_ns"] for clock in create_clocks_in_text(text)]
+    periods = [float(value) for value in re.findall(
+        r"create_clock -name \S+ -period \[sta::time_sta_ui \[expr \{([\d.eE+-]+) \* 1e-9\}\]\]", text)]
     assert periods == ([override or 20] if clock_count == 1 else [20, 50])
     budget = ((override or 20) if clock_count == 1 else 50) * 0.2
     clock = f"core_clock_{clock_count - 1}" + (" -add_delay" if clock_count == 2 else "")
-    assert f"set_input_delay {budget:g} -clock {clock}" in text
-    assert f"set_output_delay {budget:g} -clock {clock}" in text
+    assert f"set_input_delay [sta::time_sta_ui [expr {{{budget:g} * 1e-9}}]] -clock {clock}" in text
+    assert f"set_output_delay [sta::time_sta_ui [expr {{{budget:g} * 1e-9}}]] -clock {clock}" in text
