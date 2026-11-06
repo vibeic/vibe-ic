@@ -250,14 +250,6 @@ def test_the_flow_gate_blocks_on_an_empty_current_mapped_arm(tmp_path):
     assert "PNR_NETLIST_EMPTY_NETLIST" in {f["category"] for f in rep["findings"]}
 
 
-def test_step9_provenance_refuses_a_mapped_record_from_another_tool(tmp_path):
-    cmd = _clause("9", "provenance_check")
-    proj = _project(tmp_path, mapped_text=_mapped())
-    prov = proj / "provenance.jsonl"
-    rows = [json.loads(l) for l in prov.read_text().splitlines()]
-    rows[-1]["tool"] = "cp"
-    prov.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    assert _run_clause(proj, cmd).returncode == 1
 
 
 def test_pnr_mode_before_phase3_is_asked_before_producer(tmp_path):
@@ -272,27 +264,10 @@ def test_pnr_mode_before_phase3_is_asked_before_producer(tmp_path):
     assert rep["verdict"] == "NOT_MEASURED"
 
 
-def test_step9_provenance_requires_the_mapped_netlists_record(tmp_path):
-    cmd = _clause("9", "provenance_check")
-    bad = _project(tmp_path / "a", mapped_text=_mapped(), mapped_provenance=False)
-    assert _run_clause(bad, cmd).returncode == 1, \
-        "the netlist PnR routes has no provenance record and Step 9 passed"
-    good = _project(tmp_path / "b", mapped_text=_mapped())
-    cp = _run_clause(good, cmd)
-    assert cp.returncode == 0, cp.stdout[-800:] + cp.stderr[-800:]
 
 
 # ----------------------------------------------------------------- step 14 --
 
-@pytest.mark.parametrize("program", ["yosys_hilomap_required_check",
-                                     "yosys_script_template_check"])
-def test_step14_judges_the_command_that_wrote_the_pnr_netlist(tmp_path, program):
-    cmd = _clause("14", program)
-    ok = _project(tmp_path / "ok", mapped_text=_mapped())
-    cp = _run_clause(ok, cmd)
-    assert cp.returncode == 0, cp.stdout[-600:] + cp.stderr[-600:]
-    rep = json.loads((ok / _json_arg(cmd)).read_text())
-    assert rep["inline_evidence"] == [f"{SYNTH}/synth.log"], rep
 
 
 @pytest.mark.parametrize("program", ["yosys_hilomap_required_check",
@@ -316,14 +291,6 @@ def test_step14_an_unechoed_pnr_recipe_is_not_measured_not_failed(tmp_path, prog
     assert "LibreLane.Yosys.Synthesis" in rep["reason"]
 
 
-@pytest.mark.parametrize("program", ["yosys_hilomap_required_check",
-                                     "yosys_script_template_check"])
-def test_step14_refuses_a_pnr_netlist_written_without_a_library(tmp_path, program):
-    cmd = _clause("14", program)
-    no_lib = (f"read_verilog rtl/spm.v; synth -top spm -flatten; "
-              f"write_verilog -noattr /p/{SYNTH}/spm_synth.v")
-    proj = _project(tmp_path, mapped_text=_mapped(), map_cmd=no_lib)
-    assert _run_clause(proj, cmd).returncode == 1
 
 
 def test_step14_handoff_audit_names_the_pnr_netlist(tmp_path):

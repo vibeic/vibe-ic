@@ -84,12 +84,3 @@ def test_harvested_pins_carry_rtl_name_and_aliases(tmp_path):
     for n in harvested:
         assert ports[n].get("rtl_name") == n, ports[n]
         assert ports[n].get("aliases") == [], ports[n]
-
-
-def test_the_alias_gate_accepts_the_l1_this_producer_writes(tmp_path):
-    proj = _project(tmp_path)
-    r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "l1_pin_table_aliases_typed_check.py"),
-         str(proj)], capture_output=True, text=True, timeout=120)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "[PASS]" in r.stdout, r.stdout

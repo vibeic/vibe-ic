@@ -67,10 +67,7 @@ def producer(project: Path, monkeypatch, half='drc', counts=None, inherited=None
         put(folder / 'state_in.json', before)
         put(folder / 'config.json', json.loads(cfg.read_text()))
         after = dict(before, metrics=dict(before.get('metrics', {})))
-        import librelane_ir_antenna as antenna
-        owned = {'OpenROAD.CheckAntennas': antenna.ROUTER_METRICS,
-                 'KLayout.Antenna': (antenna.GDS_METRIC,)}
-        for key in pv.PRODUCED.get(step, owned.get(step, ())):
+        for key in pv.PRODUCED.get(step, ()):
             after['metrics'][key] = counts.get(key, 0)
         put(folder / 'state_out.json', after)
         return subprocess.CompletedProcess(command, 0, 'neutral protocol process edge', '')

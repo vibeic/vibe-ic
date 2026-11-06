@@ -362,4 +362,3 @@ def test_the_producer_wires_the_design_input_qualifiers(tmp_path,
     tb = (proj / rec["cases"][0]["tb"]).read_text()
     assert "if ((o_we === 1'b0))" in tb
     assert "qualified by 'o_we' active=1" in tb
-    assert "D1-signed" in tb

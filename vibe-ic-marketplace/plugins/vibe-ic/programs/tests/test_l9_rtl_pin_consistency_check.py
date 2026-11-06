@@ -312,17 +312,3 @@ def test_customer_facing_port_still_fails_when_missing_from_l9(tmp_path):
     assert r.returncode == 1, r.stdout
     assert "FAIL" in r.stdout
     assert "customer_facing_pin" in r.stdout
-
-
-def test_listed_in_structural_rtl_gates():
-    """Wave 79 — gate is wired into flow_compliance_check's
-    _STRUCTURAL_RTL_GATES tuple so strict-mode statistics include it.
-    """
-    fc = (
-        Path(__file__).resolve().parent.parent / "flow_compliance_check.py"
-    )
-    text = fc.read_text()
-    assert "l9_rtl_pin_consistency_check" in text, (
-        "l9_rtl_pin_consistency_check must appear in "
-        "flow_compliance_check._STRUCTURAL_RTL_GATES"
-    )

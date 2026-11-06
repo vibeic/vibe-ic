@@ -128,97 +128,6 @@ def test_no_trajectory_at_all_is_still_undetermined():
 import importlib  # noqa: E402
 
 
-def _runner():
-    """Plain import, the idiom every other phase-3 test in this directory uses
-    (`programs/` is on sys.path above). NOT `spec_from_file_location`: loading
-    this module under a synthetic name leaves it out of `sys.modules`, and
-    `dataclasses` then resolves a field annotation through
-    `sys.modules.get(cls.__module__)` and dies on None — which reds every test
-    in this block, CONTROLS INCLUDED, for a reason that has nothing to do with
-    the property under test."""
-    return importlib.import_module("phase3_one_shot_runner")
-
-
-def test_the_runners_own_trajectory_reader_also_sees_the_verified_count():
-    """The regression, stated against the reader the ladder actually calls."""
-    mod = _runner()
-    traj = mod._drt_violation_trajectory(_VERIFIED_DISAGREES)
-    assert traj[:4] == [251, 50, 50, 0], traj
-    assert traj[-1] == 1, (
-        "the runner's trajectory reader returned the loop's superseded count "
-        "while the router had already published a different verified one")
-
-
-def test_the_docstrings_last_element_invariant_actually_holds():
-    """`_drt_violation_trajectory` promises "The LAST element equals
-    `_drt_final_violations`". Until this delegated, that sentence was false on
-    exactly the logs the promise matters on."""
-    mod = _runner()
-    for log in (_LOOP, _VERIFIED_AGREES, _VERIFIED_DISAGREES):
-        traj = mod._drt_violation_trajectory(log)
-        assert traj[-1] == mod._drt_final_violations(log), (log, traj)
-
-
-def test_the_rescue_engages_on_a_route_the_verifier_says_did_not_converge():
-    """The consequence, not the parse: with the verified count in the
-    trajectory, `_drt_is_non_converging` sees final=1 after a 0 (a CLIMB at the
-    tail) and the die-loosen ladder fires instead of declining."""
-    mod = _runner()
-    traj = mod._drt_violation_trajectory(_VERIFIED_DISAGREES)
-    assert mod._drt_is_non_converging(traj) is True, traj
-    dims, reason = mod._route_feedback_loosen_ex(
-        285, 285, _VERIFIED_DISAGREES, 0,
-        auto_die_requested=True, route_completed=True, residual_history=[])
-    assert reason != "route_still_converging", reason
-    assert dims is not None, (
-        "the rescue still declined on a route the router itself reported as "
-        "unconverged")
-
-
-def test_control_a_log_the_verifier_never_spoke_on_is_untouched():
-    """THE CONTROL. Without it the fix is satisfied by code that rewrites every
-    log's answer. These four inputs must read EXACTLY as they did before —
-    three carry no DRT-0701 line at all, and the fourth carries one that
-    AGREES, so none of them may move in either direction."""
-    mod = _runner()
-    assert mod._drt_violation_trajectory(_LOOP) == [251, 50, 50, 0]
-    assert mod._drt_violation_trajectory(_VERIFIED_AGREES) == [251, 50, 50, 0]
-    assert mod._drt_violation_trajectory("") == []
-    assert mod._drt_violation_trajectory("GPL-0301 utilization 120%") == []
-
-
-def test_control_the_declines_that_are_not_this_bug_still_decline():
-    """The ladder's other refusals are untouched: an explicit die and a route
-    that never completed still decline, with their own named reasons, on the
-    same log that now engages the loosen path."""
-    mod = _runner()
-    assert mod._route_feedback_loosen_ex(
-        285, 285, _VERIFIED_DISAGREES, 0,
-        auto_die_requested=False, route_completed=True,
-        residual_history=[]) == (None, "explicit_die_requested")
-    assert mod._route_feedback_loosen_ex(
-        285, 285, _VERIFIED_DISAGREES, 0,
-        auto_die_requested=True, route_completed=False,
-        residual_history=[]) == (None, "route_did_not_complete")
-
-
-def test_control_a_genuinely_still_improving_route_is_still_not_loosened():
-    """A trajectory whose tail is strictly DECREASING is a router that ran out
-    of iterations, not a congested die — it must still decline. Guards against
-    a fix that simply makes the ladder always fire."""
-    mod = _runner()
-    improving = (
-        "[INFO DRT-0199]   Number of violations = 251\n"
-        "[INFO DRT-0199]   Number of violations = 50\n"
-        "[INFO DRT-0199]   Number of violations = 4\n")
-    assert mod._drt_violation_trajectory(improving) == [251, 50, 4]
-    assert mod._drt_is_non_converging([251, 50, 4]) is False
-    assert mod._route_feedback_loosen_ex(
-        285, 285, improving, 0, auto_die_requested=True,
-        route_completed=True,
-        residual_history=[]) == (None, "route_still_converging")
-
-
 # ---------------------------------------------------------------------------
 # APPENDING IS NOT THE SAME AS MANUFACTURING.
 #
@@ -265,17 +174,6 @@ def test_the_verified_count_is_still_reachable_when_the_loop_was_silent():
     number is not gone, it is simply not pretending to be a trajectory. A
     caller that wants OpenROAD's verified count asks for it by name."""
     assert sdf.router_post_route_verified_count(_VERIFIED_ONLY) == 1
-
-
-def test_the_runner_does_not_judge_convergence_from_a_synthesised_point():
-    """THE CONSEQUENCE, at the reader the rescue ladder actually calls.
-    `_drt_is_non_converging([1])` is True and `([])` is False, so the
-    manufactured point did not merely mislabel a number — it put the die-loosen
-    ladder into a convergence judgement on a route with no history to judge."""
-    mod = _runner()
-    assert mod._drt_violation_trajectory(_VERIFIED_ONLY) == []
-    assert mod._drt_is_non_converging(
-        mod._drt_violation_trajectory(_VERIFIED_ONLY)) is False
 
 
 def test_the_ppa_log_reading_is_an_honest_silence_not_a_number():

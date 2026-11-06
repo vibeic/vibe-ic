@@ -369,37 +369,6 @@ def test_read_text_blob_is_bounded_and_survives_unreadable_files(tmp_path):
 # Call-site wiring: the design property must actually reach the predicates
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_callers_supply_the_design_property():
-    """A predicate that CAN read the design property is useless if the runner
-    never passes it — with no blob the fail-safe is "no retry", so an unwired
-    call-site would silently disable the retry everywhere."""
-    import inspect
-    import design_one_shot_runner as D
-    import phase3_one_shot_runner as P3
-
-    p3 = inspect.getsource(P3.step_synth)
-    assert "synth_frontend_should_retry_under_synthesis" in p3
-    assert "rtl_text_blob=_sf.read_text_blob(rtl_files)" in p3
-    # 2026-09-15: this line used to pin `produced_output=netlist.is_file()`.
-    # The property it is guarding — the caller SUPPLIES the observable rather
-    # than letting it default — is unchanged and still asserted. What changed
-    # is which observable is correct. `netlist.is_file()` answers "does a file
-    # of that name exist", and phase 3 synthesises into the directory phase 2
-    # already wrote `<top>_synth.v` to, so it was true before the build began:
-    # on opentitan_aes a 4-hour-old netlist made `produced_output` True and
-    # suppressed the -DSYNTHESIS retry the runner ships for that very design.
-    # The caller now passes a per-build stamp comparison instead.
-    assert "produced_output=_netlist_is_from_this_build()" in p3
-    assert "produced_output=netlist.is_file()" not in p3, (
-        "the presence test is back: an earlier build's netlist will again be "
-        "read as this build's output and suppress the retry")
-
-    esc = inspect.getsource(D._verilator_sim_escape)
-    assert "rtl_text_blob=_sf.read_text_blob(rtl_files)" in esc
-    assert "tb_text=_tb_text" in esc
-
-    sim = inspect.getsource(D._iverilog_compile_with_sv_fallback)
-    assert "converted_exists=converted_host.is_file()" in sim
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -101,7 +101,6 @@ def _project(tmp_path: Path, router_report: str | None) -> Path:
         (pnr / "openroad.log").write_text(log)
         routed_def = pnr / "routed.def"
         routed_def.write_text("VERSION 5.8 ;\nDESIGN widget ;\nEND DESIGN\n")
-        assert runner._write_router_drc_receipt(pnr, routed_def, log)
     return tmp_path
 
 

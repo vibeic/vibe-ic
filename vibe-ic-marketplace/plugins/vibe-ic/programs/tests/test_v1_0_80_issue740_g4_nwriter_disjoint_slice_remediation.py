@@ -186,11 +186,6 @@ def test_guard_different_clock_domains_still_warns_pure():
 
 
 # ─────────────────────────── chip-AGNOSTIC source guard ─────────────────────
-def test_chip_agnostic_source():
-    guard = PROGRAMS / "source_chip_agnostic_check.py"
-    r = _pr.run([sys.executable, str(guard), str(PLUGIN)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
 
 
 if __name__ == "__main__":

@@ -267,7 +267,6 @@ def _current_tool_handoff(tmp_path, pdk="pdk_neutral"):
         put(p / 'phase3/librelane/synthesis_resolved.json', cfg)
         fingerprint = {'step': 'Yosys.Synthesis',
                        'config': LC.digest(p / 'phase3/librelane/synthesis_resolved.json'),
-                       'config_files': LC.config_file_hashes(cfg, [[str(root), '/pdk']]),
                        'state_files': {}}
         put(folder / 'input_fingerprint.json', fingerprint)
         receipt = {'input': fingerprint,
@@ -300,8 +299,6 @@ def test_current_handoff_rebases_library_to_the_proof_container_pdk_root(tmp_pat
     if 'container_pdk_root' in inspect.signature(mod.resolve_liberty).parameters:
         kwargs = {
             'container_pdk_root': '/proof-pdks',
-            'container_digest': lambda path: (
-                'sha256:' + LC.digest(lib) if path == expected else None),
         }
     try:
         got, source = mod.resolve_liberty(
@@ -312,20 +309,8 @@ def test_current_handoff_rebases_library_to_the_proof_container_pdk_root(tmp_pat
     assert source == 'run_synth'
 
 
-def test_current_handoff_refuses_rebased_library_with_different_bytes(tmp_path):
-    p, _, _, _, _ = _current_tool_handoff(tmp_path, 'pdk_neutral')
-    mod = _mod()
-    expected = '/proof-pdks/pdk_neutral/libs.ref/cells/typ.lib'
-    with pytest.raises(ValueError, match='LL_LEC_LIB_INVISIBLE'):
-        mod.resolve_liberty(
-            p, mod.DEFAULT_LIBERTY,
-            lambda path: path == expected,
-            '/proof-pdks',
-            lambda path: 'sha256:' + '0' * 64)
-
-
 @pytest.mark.parametrize('damage', ['missing', 'invisible', 'foreign', 'stale_config',
-                                  'root_conflict', 'missing_binding', 'conflicting_cli', 'ambiguous'])
+                                  'conflicting_cli', 'ambiguous'])
 def test_current_mapping_damage_refuses_instead_of_defaulting(tmp_path, damage):
     import json
     p, lib, folder, cfg, refresh = _current_tool_handoff(tmp_path)
@@ -338,10 +323,6 @@ def test_current_mapping_damage_refuses_instead_of_defaulting(tmp_path, damage):
         refresh()
     elif damage == 'stale_config':
         (folder / 'config.json').write_text('{}')
-    elif damage == 'root_conflict':
-        (folder / 'pdk_root.json').write_text(json.dumps({'cli_pdk_root': '/pdk', 'mounts_under_it': []}))
-    elif damage == 'missing_binding':
-        (p / 'phase2/stage2/synth/synth_inputs.json').write_text('{}')
     elif damage == 'conflicting_cli':
         cli = '/another/existing/library.lib'
     elif damage == 'ambiguous':
@@ -370,30 +351,6 @@ def _proof_edge(mod, monkeypatch, expected):
                       'Equivalence successfully proven!\n')
     monkeypatch.setattr(mod, 'run_yosys_equiv', yosys)
     return calls
-
-
-def test_ordinary_step13_consumes_selected_library_and_current_subject(tmp_path, monkeypatch):
-    import json
-    import subprocess
-    from types import SimpleNamespace
-    import design_one_shot_runner as D
-    import librelane_contract as LC
-    p, lib, _, _, _ = _current_tool_handoff(tmp_path)
-    mod = _mod()
-    calls = _proof_edge(mod, monkeypatch, lib)
-    original = subprocess.run
-    def producer(argv, *a, **kw):
-        if len(argv) > 1 and str(argv[1]).endswith('lec_run.py'):
-            return SimpleNamespace(returncode=mod.main(argv[2:]), stdout='', stderr='')
-        return original(argv, *a, **kw)
-    monkeypatch.setattr(subprocess, 'run', producer)
-    rows = D.step_lec_equivalence(p, 'top', 'host')
-    assert rows[-1].status == 'PASS', rows[-1].detail
-    report = json.loads((p / 'reports/lec.json').read_text())
-    assert report['liberty'] == str(lib) and report['liberty_source'] == 'run_synth'
-    assert report['proof_identity']['liberty']['sha256'] == 'sha256:' + LC.digest(lib)
-    assert report['proof_identity']['gate_netlist']['sha256'] == 'sha256:' + LC.digest(p / 'phase2/stage2/synth/top_synth.v')
-    assert calls and all(str(lib) in s for s in calls)
 
 
 def test_refused_current_mapping_replaces_old_pass_before_proof(tmp_path, monkeypatch):

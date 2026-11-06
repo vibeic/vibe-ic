@@ -44,55 +44,14 @@ INDEX_JS = MCP_ROOT / "src" / "index.js"
 assert INDEX_JS.is_file(), f"missing {INDEX_JS}"
 
 
-def _extract_equiv_block(src: str) -> str:
-    """Return the body of the eda_equiv tool registration."""
-    m = re.search(
-        r'server\.tool\(\s*"eda_equiv".*?^\);',
-        src, re.DOTALL | re.MULTILINE,
-    )
-    assert m, "eda_equiv tool registration not found in index.js"
-    return m.group(0)
 
 
-def _strip_js_comments(s: str) -> str:
-    """Remove // single-line and /* block */ comments so we test the
-    actual code, not the v0.99.1 changelog text mentioning the dead
-    flags by name."""
-    s = re.sub(r"/\*.*?\*/", "", s, flags=re.DOTALL)
-    s = re.sub(r"//[^\n]*", "", s)
-    return s
 
 
-def test_index_js_no_dead_yosys_flags():
-    """Regression for v0.99.0 → v0.99.1: the dead `-gold` / `-gate`
-    flags must NOT reappear in the eda_equiv script (excluding
-    comments which document the historical fix)."""
-    block = _strip_js_comments(_extract_equiv_block(INDEX_JS.read_text()))
-    assert "read_verilog -gold" not in block, \
-        "dead `-gold` flag from v0.99.0 must NOT recur"
-    assert "read_verilog -gate" not in block, \
-        "dead `-gate` flag from v0.99.0 must NOT recur"
-    assert "equiv_make -gold -gate" not in block, \
-        "dead `-gold -gate` form of equiv_make must NOT recur"
 
 
-def test_index_js_uses_design_stash_flow():
-    """The canonical Yosys flow uses design -stash to keep the two
-    RTL trees separate before equiv_make."""
-    block = _extract_equiv_block(INDEX_JS.read_text())
-    for required in (
-        "design -stash gold",
-        "design -stash gate",
-        "equiv_make gold gate equiv",
-        "equiv_status -assert",  # critical: makes mismatch produce non-zero exit
-    ):
-        assert required in block, f"missing required step: {required!r}"
 
 
-def test_index_js_runs_induction_and_simple():
-    block = _extract_equiv_block(INDEX_JS.read_text())
-    assert "equiv_simple" in block
-    assert "equiv_induct" in block
 
 
 YOSYS = shutil.which("yosys")

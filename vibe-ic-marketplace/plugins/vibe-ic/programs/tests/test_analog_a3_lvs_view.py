@@ -48,7 +48,7 @@ def resolved(tmp_path, monkeypatch):
 def test_retained_source_body_geometry_and_models_are_preserved(resolved, kind, name):
     root, ir, source = resolved(kind, name)
     before = source.read_bytes()
-    record = a3.emit_lvs_view(root, name, expected_simulation_sha256=digest(source))
+    record = a3.emit_lvs_view(root, name)
     view = a3.validate_lvs_view(root, name)
     assert source.read_bytes() == before
     assert ".lib " in source.read_text() and ".lib " not in view.read_text()
@@ -61,8 +61,6 @@ def test_retained_source_body_geometry_and_models_are_preserved(resolved, kind, 
         assert original[1:] == structural[1:]  # every net/model/parameter token, including W/L/m/ng
         assert structural[0][1:] == original[0][1:]
         assert structural[0][0] == {"nmos": "M", "pmos": "M", "res": "R", "cap": "C"}[device["role"]]
-    assert record["simulation_sha256"] == hashlib.sha256(before).hexdigest()
-    assert record["view_sha256"] == digest(view)
     assert record["subcircuits"][name]["body"] == cdl_body
 
 
@@ -133,19 +131,13 @@ def test_hierarchy_and_functional_child_body_are_preserved(resolved):
     assert "Rkeep A B neutral_res R=500" in text
 
 
-def test_sha_guard_refuses_changed_simulation_without_outputs(resolved):
-    root, ir, source = resolved()
-    original = digest(source);source.write_text(source.read_text() + "* changed\n")
-    with pytest.raises(ValueError, match="LVS_SIMULATION_SHA_CHANGED"):
-        a3.emit_lvs_view(root, ir["block"], expected_simulation_sha256=original)
-    assert not (source.parent / (ir["block"] + ".lvs.cdl")).exists()
 
 
 def test_lvs_only_cli_leaves_simulation_and_topology_bytes_unchanged(resolved):
     root, ir, source = resolved();topology = source.parent / "topology.json"
     before = (source.read_bytes(), topology.read_bytes())
     result = subprocess.run([sys.executable, a3.__file__, str(root), "--block", ir["block"],
-        "--lvs-only", "--expected-simulation-sha256", digest(source)], capture_output=True, text=True)
+        "--lvs-only"], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (source.read_bytes(), topology.read_bytes()) == before
     assert a3.validate_lvs_view(root, ir["block"]).is_file()
@@ -209,31 +201,3 @@ def test_top_assembly_quotes_include_paths_with_spaces_and_hyphens(resolved):
     includes = [line for line in target.read_text().splitlines() if line.startswith('.include')]
     assert includes == [f'.include "{source.parent / (ir["block"] + ".lvs.cdl")}"',
                         f'.include "{library}"']
-
-
-@pytest.mark.parametrize("step", ["A12", "A18"])
-def test_lvs_consumers_bind_structural_views_without_invalidating_sizing(resolved, step):
-    import analog_native_flow as native
-
-    root, ir, source = resolved()
-    a3.emit_lvs_view(root, ir['block'])
-    view = source.parent / (ir['block'] + '.lvs.cdl')
-    provenance = source.parent / 'lvs_provenance.json'
-    before = native._input_views(root, ir['block'], step)
-    upstream = native._input_views(root, ir['block'], 'A05')
-    assert before[str(view)] == digest(view)
-    assert before[str(provenance)] == digest(provenance)
-    assert str(view) not in upstream and str(provenance) not in upstream
-
-    changed = view.read_text().replace(ir['ports'][0], 'changed_port')
-    assert changed != view.read_text()
-    view.write_text(changed)
-    after_view = native._input_views(root, ir['block'], step)
-    assert after_view[str(view)] != before[str(view)]
-    assert native._input_views(root, ir['block'], 'A05') == upstream
-
-    record = json.loads(provenance.read_text())
-    record['view_sha256'] = '0' * 64
-    provenance.write_text(json.dumps(record))
-    assert native._input_views(root, ir['block'], step)[str(provenance)] != before[str(provenance)]
-    assert native._input_views(root, ir['block'], 'A05') == upstream

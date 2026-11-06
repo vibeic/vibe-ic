@@ -232,47 +232,17 @@ def test_an_unreadable_oracle_is_still_denied_by_its_name(project):
     assert rfb.design_input_denial(project, golden)
 
 
-def _audit(project):
-    import phase3_one_shot_runner as runner
-    return runner._reference_flow_pnr_audit(project)
 
 
-def test_gap_e_an_unreadable_recipe_keeps_the_ingest_incomplete(tmp_path):
-    """The landed GAP-E contract (an incomplete read never renders clean),
-    asserted without the root-only early return the landed tests carry."""
-    rf = tmp_path / "input" / "reference_flow"
-    rf.mkdir(parents=True)
-    recipe = rf / "flow.mk"
-    recipe.write_text("export CORE_UTILIZATION = 40\n")
-    _unreadable(recipe)
-    (rf / "linked.mk").symlink_to(rf / "gone.mk")
-    a = _audit(tmp_path)
-    assert a["status"] == "config-unreadable" and a["ingest_complete"] is False
-    assert {u.split(" ")[0] for u in a["unreadable"]} == {
-        "input/reference_flow/flow.mk", "input/reference_flow/linked.mk"}
-    assert a["excluded_oracle"] == []
 
 
-def test_gap_e_an_unreadable_non_recipe_stays_not_examined(tmp_path):
-    rf = tmp_path / "input" / "reference_flow"
-    rf.mkdir(parents=True)
-    (rf / "flow.mk").write_text("export CORE_UTILIZATION = 40\n")
-    settings = rf / "settings.json"
-    settings.write_text('{"A": 1}\n')
-    _unreadable(settings)
-    a = _audit(tmp_path)
-    assert a["unscanned"] == ["input/reference_flow/settings.json"]
-    assert a["excluded_oracle"] == [] and a["ingest_complete"] is False
 
 
 def test_an_unreadable_design_sdc_is_still_the_design_sdc(tmp_path):
     import sdc_constraints as sdc
-    import phase3_one_shot_runner as runner
     rf = tmp_path / "input" / "reference_flow"
     rf.mkdir(parents=True)
     design = rf / "design.sdc"
     design.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
     _unreadable(design)
     assert sdc.collect_sdc_files(tmp_path) == [design]
-    [row] = runner._staged_sdc_survey(tmp_path)
-    assert not row["reason_not_consumed"].startswith("§4.05"), row

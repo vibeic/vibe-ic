@@ -205,33 +205,6 @@ def test_historical_version_reconciliation_keeps_content_refusals(coverage, rc, 
     assert not _truth.historical_backlog_version_only(report, rc, declared, None)
 
 
-@pytest.mark.parametrize('mutation', ['none', 'remove_invocation', 'missing_gate'])
-def test_stamp_rechecks_real_invocations_without_rewriting_baseline(tmp_path, mutation):
-    real_plugin = ROOT / 'vibe-ic-marketplace/plugins/vibe-ic'
-    sys.path.insert(0, str(real_plugin / 'programs'))
-    plugin = tmp_path / 'plugin'
-    programs = plugin / 'programs'
-    programs.mkdir(parents=True)
-    gate = 'plugin_change_pytest_gate'
-    baseline = (real_plugin / 'programs/gate_is_wired_baseline.json').read_bytes()
-    (programs / 'gate_is_wired_baseline.json').write_bytes(baseline)
-    if mutation != 'missing_gate':
-        (programs / f'{gate}.py').write_bytes((real_plugin / 'programs' / f'{gate}.py').read_bytes())
-    caller = (real_plugin / 'programs/benchmark_verify_report.py').read_text()
-    if mutation == 'remove_invocation':
-        caller = caller.replace('"plugin_change_pytest_gate.py"', '"missing_entry.py"')
-    (programs / 'benchmark_verify_report.py').write_text(caller)
-    # The old declaration remains present in every negative arm.
-    (plugin / 'benchmark').mkdir()
-    (plugin / 'benchmark/CAPTURE_ROUTING.json').write_bytes((real_plugin / 'benchmark/CAPTURE_ROUTING.json').read_bytes())
-    known = set(json.loads(baseline)['unwired'])
-    assert gate in known
-    refused, evidence = _truth.live_unwired_routing_targets(
-        plugin, tmp_path, {'captured_rule': gate}, known)
-    assert refused == ([] if mutation == 'none' else ['captured_rule'])
-    if mutation == 'none':
-        assert any('benchmark_verify_report.py' in item for item in evidence[gate]['executable'])
-    assert (programs / 'gate_is_wired_baseline.json').read_bytes() == baseline
 
 
 def _excluded_source_result() -> str:

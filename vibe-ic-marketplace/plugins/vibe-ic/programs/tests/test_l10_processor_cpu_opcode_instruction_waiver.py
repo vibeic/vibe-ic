@@ -282,44 +282,6 @@ def test_the_import_failure_fallback_is_the_same_key_set(monkeypatch):
         "l3_opcode_response_template_check._TEMPLATE_KEYS")
 
 
-def test_the_gate_and_the_flow_agree_about_a_concrete_golden():
-    """`concrete_reference_output` must answer EXACTLY what the flow's own
-    `design_one_shot_runner._golden_bytes_from_l3_opcode` answers — that
-    function is what decides whether a full-stack vector can be scored, so a
-    disagreement would mean the gate waives a case the flow could grade (or
-    fails one it could not). Both are RUN, on the same inputs."""
-    dr = pytest.importorskip("design_one_shot_runner")
-    templates = [
-        [{"byte_offset": 0, "value": "0x41"}],
-        [{"byte_offset": 0, "value": 0x41}],
-        # `isinstance(True, int)` — the flow reads this as 0x01, so this gate
-        # must too. Diverging would be the FAIL-OPEN direction: an entry the
-        # flow calls BOUND would become waivable here.
-        [{"byte_offset": 0, "value": True}],
-        [{"byte_offset": 0, "value": False}],
-        [{"byte_offset": 0, "value": 0}],
-        [{"byte_offset": 0, "value": "0x0"}],
-        [{"byte_offset": 0, "value": 300}],
-        [{"byte_offset": 0, "value": -1}],
-        [{"byte_offset": 0, "value": None}],
-        [{"byte_offset": 0, "value": ["0x41"]}],
-        [{"byte_offset": 0, "value": "0x41"}, {"byte_offset": 1, "value": "0x02"}],
-        [{"byte_offset": 0, "value": "0x41"}, {"byte_offset": 1, "source": "payload"}],
-        [{"byte_offset": 0, "source": "crc8"}],
-        [{"byte_offset": 0, "value": "notahex"}],
-        [{"byte_offset": 0, "value": "0xZZ"}],
-        [{"byte_offset": 0}],
-        ["not a dict"],
-        [],
-        None,
-        "response_payload_template",
-    ]
-    for tmpl in templates:
-        assert (gate.concrete_reference_output(tmpl)
-                == dr._golden_bytes_from_l3_opcode(
-                    {"response_payload_template": tmpl})), tmpl
-
-
 # ---------------------------------------------------------------------------
 # THE HEADLINE: two BYTE-IDENTICAL expectations, split by the L-DOC
 # ---------------------------------------------------------------------------

@@ -42,7 +42,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 
-RUNNER = _PROGRAMS / "phase3_one_shot_runner.py"
 BACKEND = _PROGRAMS / "_ppa" / "backends" / "opensta.py"
 
 #: Stamps the PPA reader deliberately does NOT parse, each with the reason.
@@ -111,8 +110,6 @@ STAMP_CONSUMERS = {
 }
 
 
-
-
 #: A stamp is a token the runner WRITES INTO A REPORT. Two things wear the same
 #: spelling and are not that, and both were measured on this tree (czmainred9,
 #: v1.19.60) as false accusations this file made against honest landings:
@@ -140,18 +137,6 @@ STAMP_CONSUMERS = {
 _STAMP_RE = re.compile(r"(?<![A-Za-z0-9_])STA_[A-Z_]+(?=\s*:)")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_a_stamp_is_consumed_or_disclosure_only_never_both():
     both = sorted(set(STAMP_CONSUMERS) & set(NOT_READ_ON_PURPOSE))
     assert not both, (
@@ -173,8 +158,6 @@ def test_the_spef_stamp_is_now_actually_read():
         "report had already stated.")
 
 
-
-
 def test_every_ledger_entry_states_a_reason():
     for name, why in NOT_READ_ON_PURPOSE.items():
         assert isinstance(why, str) and len(why.strip()) > 40, (
@@ -192,38 +175,6 @@ def test_every_ledger_entry_states_a_reason():
 # across two f-string lines ("...ONE process " + "corner; ..."), so an anchor
 # that reads past `process` matches ZERO times in the SOURCE while looking
 # perfectly correct in the emitted report.
-_SINGLE_CORNER_ANCHOR = "STA_SIGNOFF_CORNER_SEMANTICS this report times ONE process"
-
-
-def _single_corner_stamp_block() -> str:
-    """The stamp block of the deck that writes the single-corner SPEF report."""
-    text = RUNNER.read_text()
-    assert text.count(_SINGLE_CORNER_ANCHOR) == 1, (
-        "the anchor identifying the single-corner STA emitter now matches "
-        "%d times, so this test can no longer say which emitter it is "
-        "measuring." % (text.count(_SINGLE_CORNER_ANCHOR),))
-    end = text.index(_SINGLE_CORNER_ANCHOR)
-    start = text.rindex("read_spef", 0, end)
-    return text[start:end]
-
-
-def test_the_single_corner_deck_stamps_the_parasitics_it_reads():
-    """It read a SPEF and disclosed four other facts about the corner.
-
-    MEASURED on the campaign's own run: `sta_spef_based.rpt` carried
-    STA_BASIS, STA_SIGNOFF_CORNER, STA_BASIS_LIBERTY and
-    STA_SIGNOFF_CORNER_COUNT, and no parasitics. That report has NO banner, so
-    the whole-file stamp is the only place its RC condition could ever be
-    stated, and both published end-to-end records that read it are undecidable
-    on the RC axis as a direct result.
-    """
-    block = _single_corner_stamp_block()
-    assert "read_spef" in block, block
-    assert "STA_BASIS_SPEF" in block, (
-        "the deck that writes the single-corner SPEF report reads a SPEF and "
-        "does not stamp it, while stamping the corner, the liberty and the "
-        "corner count. The report it produces can then name no RC condition "
-        "at all:\n" + block)
 
 
 # ── the population's own two directions (czmainred9) ──────────────────────

@@ -379,18 +379,3 @@ def test_the_scanned_population_is_not_empty_for_this_tree(tmp_path):
 # would be undone by the next `waiver_template_gen.py` run, which stamped
 # `str(audit_json)` — always absolute, because `main` resolves the project dir.
 # --------------------------------------------------------------------------
-def test_waiver_template_gen_emits_a_portable_source_audit(tmp_path):
-    gen = _PROGRAMS / "waiver_template_gen.py"
-    project = tmp_path / "home" / _FAKE_USER / "proj"
-    (project / "reports").mkdir(parents=True)
-    (project / "reports" / "flow_compliance.json").write_text(json.dumps(
-        {"results": [{"id": 7, "status": "MISSING", "message": "no tool"}]}))
-    r = _pr.run([sys.executable, str(gen), str(project), "--quiet"],
-                capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    out = json.loads((project / "waivers.json.template").read_text())
-    assert out["_source_audit"] == "reports/flow_compliance.json", (
-        "the generator must record the audit RELATIVE to the project; an "
-        "absolute path ships the generating operator's home directory")
-    assert str(project) not in json.dumps(out), (
-        "the generated template still carries an absolute host path")

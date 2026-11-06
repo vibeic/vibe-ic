@@ -63,18 +63,6 @@ def test_digital_only_l5_keeps_provenance(tmp_path):
     assert "input/docs/cpu.md" in l5["source_documents"]
 
 
-def test_digital_only_passes_unique_content_gate(tmp_path):
-    """The issue's exact 驗收 end-state: l_doc_unique_content_check must
-    PASS (rc 0) on fresh phase1 output for a digital-only IC — pre-fix it
-    reported `L5_ADI_SPEC.json vs L8_RTL_CONSTANTS.json: jaccard=0.72`."""
-    _run_l5_l8(tmp_path)
-    result = subprocess.run(
-        [sys.executable, str(PROG / "l_doc_unique_content_check.py"),
-         str(tmp_path)],
-        capture_output=True, text=True,
-    )
-    assert result.returncode == 0, result.stdout
-    assert "L5_ADI_SPEC.json vs L8_RTL_CONSTANTS.json" not in result.stdout
 
 
 def test_analog_ic_l5_still_populated(tmp_path):

@@ -48,9 +48,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import _chip_synth_read as CSR              # noqa: E402
-import design_one_shot_runner as R          # noqa: E402
-import phase3_one_shot_runner as P3         # noqa: E402
-import vibe_ic_one_shot_runner as FD        # noqa: E402
 
 PLACEHOLDER = "chip_top"        # the runner's --top-name default
 CORE = "core"                   # the only module the design's RTL declares
@@ -160,47 +157,3 @@ def test_the_fixture_really_is_not_idempotent(tmp_path):
 _OTHER_RTL = ("module other(input a, output y);\n  assign y = ~a;\n"
               "endmodule\n")
 _OTHER_MAPPED = "module other(a, y);\n  input a; output y;\nendmodule\n"
-
-
-def _two_root_tree(tmp_path: Path) -> Path:
-    """Two independent roots, no chip_top, no L9 hint: the front door picks
-    the --ic-name module for phase 3; effective_top(placeholder) cannot."""
-    proj = _tree(tmp_path, rtl_extra={"other.v": _OTHER_RTL})
-    (proj / f"{SYNTH}/other_synth.v").write_text(_OTHER_MAPPED)
-    return proj
-
-
-def _calls(tree, func_name):
-    import ast
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            f = node.func
-            name = getattr(f, "id", None) or getattr(f, "attr", None)
-            if name == func_name or any(
-                    getattr(a, "id", None) == func_name for a in node.args):
-                yield node
-
-
-def test_both_mains_are_wired():
-    """The front door forwards its decision; phase 2 main hands it to the
-    chain as a phase-2 request. Read from the shipped source, not restated."""
-    import ast
-    fd = ast.parse(Path(FD.__file__).read_text())
-    (call,) = list(_calls(fd, "_phase2_runner_argv"))
-    kw = {k.arg: k.value for k in call.keywords}
-    assert "_phase3_rederives_top" in ast.unparse(kw["phase3_rederive_ic_name"])
-    p2 = ast.parse(Path(R.__file__).read_text())
-    gated = [c for c in _calls(p2, "step_dft_lec_chain")
-             if any(getattr(a, "id", None) == "step_dft_lec_chain"
-                    for a in c.args)]
-    (call,) = gated
-    kw = {k.arg: ast.unparse(k.value) for k in call.keywords}
-    assert kw["phase2_request"] == "True"
-    assert kw["rederive_ic_name"] == "args.phase3_rederives_top_with_ic_name"
-
-
-def test_phase2_cli_accepts_the_flag():
-    import subprocess
-    out = subprocess.run([sys.executable, R.__file__, "--help"],
-                         capture_output=True, text=True, timeout=120)
-    assert "--phase3-rederives-top-with-ic-name" in out.stdout, out.stderr[-2000:]

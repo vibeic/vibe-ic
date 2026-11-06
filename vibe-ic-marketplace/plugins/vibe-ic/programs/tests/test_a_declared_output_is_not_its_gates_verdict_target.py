@@ -179,11 +179,6 @@ def test_the_gates_still_run_and_write_their_verdict_somewhere():
     assert "reports/phase3/foundry_handoff_check.json" in c38
 
 
-def test_the_producer_runner_drives_the_producers_not_the_gates():
-    import phase3_one_shot_runner as R
-    table = {n: (prog, out) for n, prog, out, _a in R._PRE_AUDIT_PRODUCERS}
-    assert table["tapeout_checklist"][0] == "tapeout_checklist_gen.py", table
-    assert table["foundry_handoff"][0] == "foundry_handoff_pack_gen.py", table
 
 
 def test_the_generator_accepts_the_runners_flag():

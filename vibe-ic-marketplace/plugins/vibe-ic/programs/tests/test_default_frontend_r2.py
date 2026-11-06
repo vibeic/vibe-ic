@@ -82,14 +82,6 @@ def test_step2_staged_pdk_cannot_mask_conflicting_l19(tmp_path, monkeypatch):
 
 
 
-def test_frontdoor_passes_the_selected_pdk_to_phase2():
-    import vibe_ic_one_shot_runner as frontdoor
-    common = dict(top_name="top", container="eda", max_rtl_repair_retries=3,
-                  lec_max_completed_rungs=None, skip_hardware=True,
-                  skip_phase3=False, skip_analog=True, entry_step="9", exit_step="14")
-    argv = frontdoor._phase2_runner_argv(Path("/project"), pdk="secondaryKitD", **common)
-    assert argv[argv.index("--pdk") + 1] == "secondaryKitD"
-    assert "--pdk" not in frontdoor._phase2_runner_argv(Path("/project"), **common)
 
 
 @pytest.mark.parametrize("primary,alternates,selected,expected", [

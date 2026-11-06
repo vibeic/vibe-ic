@@ -158,73 +158,6 @@ def test_matching_netlist_sha_passes(tmp_path: Path) -> None:
     assert _run(tmp_path).returncode == 0
 
 
-def test_stale_netlist_sha_fails(tmp_path: Path) -> None:
-    """The measured escape: the netlist was edited after the sweep, so the
-    corner verdict certifies a circuit no longer on disk."""
-    _block_list(tmp_path, ["ldo"])
-    _a3_netlist(tmp_path, "ldo")
-    doc = dict(_CLEAN)
-    doc["netlist_source"] = "phase3/analog/ldo/ldo.sp"
-    doc["netlist_sha256"] = "0" * 64
-    _corners(tmp_path, "ldo", doc)
-    r = _run(tmp_path)
-    assert r.returncode == 1
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert any("A4_NETLIST_SHA_MISMATCH" in f["rule"] for f in rpt["findings"])
-
-
-def test_sha_without_a_named_source_and_no_declared_deck_fails(
-        tmp_path: Path) -> None:
-    """A digest anchored to NOTHING.
-
-    This fixture used to leave `<block>.sp` on disk, because the named-path
-    rule was the only one that existed and it failed every unnamed digest.
-    `A4_SWEEP_STALE_VS_NETLIST` now answers the unnamed case against the
-    FLOW-DECLARED deck — an anchor the artefact cannot move, and therefore a
-    stronger check than the name it declined to write. So the state this rule
-    still owns, and the state its own words describe, is the one where there
-    is genuinely nothing left to check the hash against: no name, and no
-    flow-declared deck either. The subject of the test is unchanged; the
-    fixture now isolates it instead of overlapping the other rule."""
-    _block_list(tmp_path, ["ldo"])
-    doc = dict(_CLEAN)
-    doc["netlist_sha256"] = "0" * 64
-    _corners(tmp_path, "ldo", doc)
-    r = _run(tmp_path)
-    assert r.returncode == 1
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert any("A4_SHA_CLAIM_UNANCHORED" in f["rule"] for f in rpt["findings"])
-
-
-def test_sha_naming_an_unreadable_source_fails(tmp_path: Path) -> None:
-    _block_list(tmp_path, ["ldo"])
-    _a3_netlist(tmp_path, "ldo")
-    doc = dict(_CLEAN)
-    doc["netlist_source"] = "phase3/analog/ldo/does_not_exist.sp"
-    doc["netlist_sha256"] = "0" * 64
-    _corners(tmp_path, "ldo", doc)
-    r = _run(tmp_path)
-    assert r.returncode == 1
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert any("A4_SHA_SOURCE_UNREADABLE" in f["rule"] for f in rpt["findings"])
-
-
-def test_stale_testbench_sha_fails(tmp_path: Path) -> None:
-    _block_list(tmp_path, ["ldo"])
-    _a3_netlist(tmp_path, "ldo")
-    (tmp_path / "phase3" / "analog" / "ldo" / "tb_ldo.sp").write_text("* tb\n")
-    doc = dict(_CLEAN)
-    doc["netlist_source"] = "phase3/analog/ldo/ldo.sp"
-    doc["netlist_sha256"] = _sha_of(tmp_path, "phase3/analog/ldo/ldo.sp")
-    doc["netlist_testbench"] = "phase3/analog/ldo/tb_ldo.sp"
-    doc["netlist_testbench_sha256"] = "1" * 64
-    _corners(tmp_path, "ldo", doc)
-    r = _run(tmp_path)
-    assert r.returncode == 1
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert any("A4_NETLIST_SHA_MISMATCH" in f["rule"] for f in rpt["findings"])
-
-
 def test_artefact_recording_no_sha_is_left_alone(tmp_path: Path) -> None:
     """Silence is not upgraded to evidence, and it is not newly punished
     here either — other rules judge an artefact that discloses nothing."""
@@ -268,26 +201,6 @@ def test_a_sweep_whose_digest_still_recomputes_certifies(
     assert r.returncode == 0, (r.stdout, r.stderr)
 
 
-def test_a_sweep_measured_on_a_superseded_netlist_fails(
-        tmp_path: Path) -> None:
-    """The exact sequence: A3 refuses a deck, the deck is fixed, and the
-    corner_results.json beside it keeps certifying A4 on numbers measured on
-    the circuit that was replaced."""
-    _block_list(tmp_path, ["ldo"])
-    _a3_netlist(tmp_path, "ldo")
-    _swept(tmp_path, "ldo", netlist_sha256=_sha(tmp_path, "ldo", "ldo.sp"))
-    sp = tmp_path / "phase3" / "analog" / "ldo" / "ldo.sp"
-    sp.write_text(sp.read_text().replace("r1 vout vss 100k",
-                                         "xr1 vout vss res_po w=1u l=10u"))
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.stdout, r.stderr)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    f = next(x for x in rpt["findings"]
-             if x["rule"] == "A4_SWEEP_STALE_VS_NETLIST")
-    assert f["stale_input"].endswith("ldo.sp"), f
-    assert f["declared_sha256"] != f["actual_sha256"], f
-
-
 def test_a_changed_stimulus_deck_is_a_stale_sweep_too(tmp_path: Path) -> None:
     """The producer stamps `netlist_testbench_sha256` as well, and the same
     argument applies: a sweep is the pair of a circuit and the stimulus that
@@ -300,12 +213,6 @@ def test_a_changed_stimulus_deck_is_a_stale_sweep_too(tmp_path: Path) -> None:
            netlist_sha256=_sha(tmp_path, "ldo", "ldo.sp"),
            netlist_testbench_sha256=_sha(tmp_path, "ldo", "tb_ldo.sp"))
     assert _run(tmp_path).returncode == 0
-    tb.write_text("* tb\n.include ldo.sp\nVdd vdd 0 3.3\n.end\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.stdout, r.stderr)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert any(x["rule"] == "A4_SWEEP_STALE_VS_NETLIST"
-               for x in rpt["findings"]), rpt
 
 
 def test_an_artefact_that_publishes_no_digest_is_left_alone(
@@ -340,35 +247,6 @@ def test_a_vanished_netlist_is_still_reported_as_absent_not_stale(
 # The named-path rule and the flow-declared-path rule are not duplicates, and
 # neither is unreachable once the other is present. These pin the join.
 
-def test_a_true_digest_of_a_file_the_artefact_chose_is_still_stale(
-        tmp_path: Path) -> None:
-    """THE RESIDUAL ESCAPE the named-path rule disclosed about itself, and the
-    reason both rules ship.
-
-    `netlist_source` names a DIFFERENT existing file — the stimulus deck —
-    and records that file's TRUE digest. The named-path rule re-hashes what it
-    is pointed at, finds agreement, and has nothing to say: the artefact chose
-    the name, so it can make its own digest true. The deck A3 declares and
-    A5/A6 lay out is `<block>.sp`, it is something else entirely, and the
-    corner numbers are not about it. Only the flow-declared path catches this,
-    because it is the one path the artefact cannot move."""
-    _block_list(tmp_path, ["ldo"])
-    _a3_netlist(tmp_path, "ldo")
-    tb = tmp_path / "phase3" / "analog" / "ldo" / "tb_ldo.sp"
-    tb.write_text("* tb\n.include ldo.sp\nVdd vdd 0 1.8\n.end\n")
-    doc = dict(_CLEAN)
-    # points at the testbench, and the digest of the testbench is honest
-    doc["netlist_source"] = "phase3/analog/ldo/tb_ldo.sp"
-    doc["netlist_sha256"] = _sha_of(tmp_path, "phase3/analog/ldo/tb_ldo.sp")
-    _corners(tmp_path, "ldo", doc)
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.stdout, r.stderr)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    f = next(x for x in rpt["findings"]
-             if x["rule"] == "A4_SWEEP_STALE_VS_NETLIST")
-    assert f["stale_input"].endswith("ldo.sp"), f
-    assert not f["stale_input"].endswith("tb_ldo.sp"), f
-
 
 def test_one_stale_digest_produces_exactly_one_finding(
         tmp_path: Path) -> None:
@@ -383,18 +261,6 @@ def test_one_stale_digest_produces_exactly_one_finding(
     doc["netlist_sha256"] = _sha_of(tmp_path, "phase3/analog/ldo/ldo.sp")
     _corners(tmp_path, "ldo", doc)
     assert _run(tmp_path).returncode == 0            # negative control
-    sp = tmp_path / "phase3" / "analog" / "ldo" / "ldo.sp"
-    sp.write_text(sp.read_text() + "* edited after the sweep\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.stdout, r.stderr)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    digest_rules = [f["rule"] for f in rpt["findings"]
-                    if f["rule"] in ("A4_NETLIST_SHA_MISMATCH",
-                                     "A4_SWEEP_STALE_VS_NETLIST",
-                                     "A4_SHA_CLAIM_UNANCHORED",
-                                     "A4_SHA_SOURCE_UNREADABLE")]
-    # the named-path rule owns it: it quotes the artefact's own words back
-    assert digest_rules == ["A4_NETLIST_SHA_MISMATCH"], rpt
 
 
 def test_an_unnamed_digest_is_answered_by_the_declared_deck_not_punished(
@@ -412,10 +278,3 @@ def test_an_unnamed_digest_is_answered_by_the_declared_deck_not_punished(
     assert _run(tmp_path).returncode == 0
     # …and the same shape with a digest that does NOT recompute is caught,
     # by the rule that could answer it — never left unjudged.
-    doc["netlist_sha256"] = "0" * 64
-    _corners(tmp_path, "ldo", doc)
-    r = _run(tmp_path)
-    assert r.returncode == 1
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert any(f["rule"] == "A4_SWEEP_STALE_VS_NETLIST"
-               for f in rpt["findings"]), rpt

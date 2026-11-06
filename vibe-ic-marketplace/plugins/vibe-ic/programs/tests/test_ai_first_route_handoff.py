@@ -91,31 +91,15 @@ def _typed_d1_runner(calls):
         calls.append(argv)
         if argv[argv.index("--exit-step") + 1] != "D1":
             return SimpleNamespace(returncode=1, stdout="", stderr="")
-        context = json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV])
-        project = Path(context["project"])
+        project = Path(argv[2])
         generated_docs = project / "phase1" / "generated_docs"
         generated_docs.mkdir(parents=True, exist_ok=True)
         (generated_docs / "L1.json").write_text(json.dumps({
             "schema": "fixture.phase1.ldoc.v1",
-            "invocation_id": context["invocation_id"],
         }, sort_keys=True))
-        producer = Path(context["source"]["runner"]["path"])
         report = {
             "schema": "fixture.phase1.report.v1",
             "verdict": "PASS",
-            "runner_binding": {
-                "schema": "vibeic.runner_report_binding.v1",
-                "invocation_id": context["invocation_id"],
-                "project": context["project"],
-                "argv": context["argv"],
-                "source": context["source"],
-                "report_name": "phase1_one_shot.json",
-                "producer": {
-                    "path": str(producer),
-                    "sha256": hashlib.sha256(producer.read_bytes()).hexdigest(),
-                },
-                "material": bd._runner_material_snapshot(project),
-            },
         }
         report_path = path_layout.report_path(project, "phase1_one_shot.json")
         report_path.parent.mkdir(parents=True, exist_ok=True)

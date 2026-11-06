@@ -84,19 +84,8 @@ RESTRICTIONS = (
 )
 
 
-def _reset_session():
-    if runner._RTL_SESSION_BINDING is not None:
-        runner._RTL_SESSION_BINDING.close()
-    runner._RTL_SESSION_BINDING = None
-    runner._RTL_SESSION_OWNED = False
-    runner._RTL_SESSION_PROJECT = None
 
 
-@pytest.fixture(autouse=True)
-def _isolated_session():
-    _reset_session()
-    yield
-    _reset_session()
 
 
 def _write(project, rel, text):

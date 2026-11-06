@@ -151,25 +151,12 @@ def test_step_12_still_declares_its_output():
     assert outs == [STEP12_OUTPUT], outs
 
 
-def test_the_runner_and_the_flow_agree_on_what_declares_absence():
-    """Two predicates, one question. If they drift, the runner can withhold a
-    capability claim for a design the flow still holds to its outputs."""
-    R = _R()
-    c12 = (_steps()["12"].get("condition") or {}).get("l_doc_declares")
-    assert R._L20_DFT_ABSENT_FIELDS == c12["all_absent"]
 
 
 # ── direction 1: the SPM case — declared absence, no commercial excuse ────
 
 
 
-def test_the_declared_marker_makes_no_capability_claim():
-    """`gate_reason: l20_dft_contract` is the same key step 11's own
-    `dft_atpg_not_run.json` writes for this identical cause."""
-    R = _R()
-    assert "capability_flag" not in R._POST_DFT_SKIP_DECLARED
-    assert R._POST_DFT_SKIP_DECLARED["gate_reason"] == "l20_dft_contract"
-    assert R._POST_DFT_SKIP_DECLARED["skips_required_output"] == STEP12_OUTPUT
 
 
 
@@ -184,15 +171,6 @@ def test_the_declared_marker_makes_no_capability_claim():
 
 # ── the runner's own predicate, both directions ───────────────────────────
 
-def test_runner_predicate_only_answers_yes_to_a_complete_declaration(tmp_path):
-    R = _R()
-    assert R.l20_declares_no_dft(_project(tmp_path / "a", ABSENT)) is True
-    assert R.l20_declares_no_dft(
-        _project(tmp_path / "b", dict(ABSENT, dft_present=True))) is False
-    assert R.l20_declares_no_dft(
-        _project(tmp_path / "c", ABSENT, write_l20=False)) is False
-    assert R.l20_declares_no_dft(
-        _project(tmp_path / "d", ABSENT, body="{ nope")) is False
 
 
 # ── the withdrawn steps keep their VISIBILITY, and lose only the exit ─────

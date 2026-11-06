@@ -44,8 +44,6 @@ PLUGIN = Path(__file__).resolve().parents[2]
 REPO = PLUGIN.parents[2]
 
 
-
-
 _GOOD = {"spec_period_ns": 10.0, "achievable_period_ns": 4.76,
          "worst_setup_slack_ns": 5.24, "relaxation_applied": False}
 
@@ -55,37 +53,14 @@ _GOOD = {"spec_period_ns": 10.0, "achievable_period_ns": 4.76,
 # ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
-
-
 # ---------------------------------------------------------------------------
 # the domain trap
 # ---------------------------------------------------------------------------
 
 
-
-
-
-
 # ---------------------------------------------------------------------------
 # the runner is actually wired — a program without a caller is the #725 shape
 # ---------------------------------------------------------------------------
-def test_the_runner_emits_on_a_pass_and_not_only_on_a_failure():
-    """THE two-arm subject. `phase3_one_shot_runner` guarded the emit with
-    `setup_wns < 0`, so the measurement existed only for failing runs."""
-    src = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
-    assert "if mc_ocv_ok and setup_wns is not None:" in src, (
-        "the achievable-Fmax emit is no longer unconditional on a measured "
-        "setup number — if the `setup_wns < 0` guard came back, the achieved "
-        "period is again recorded only for runs that failed (vibe-ic#1097 S8)")
-    assert "if mc_ocv_ok and setup_wns is not None and setup_wns < 0:" not in src
 
 
 def test_the_gate_is_wired_into_the_flow():

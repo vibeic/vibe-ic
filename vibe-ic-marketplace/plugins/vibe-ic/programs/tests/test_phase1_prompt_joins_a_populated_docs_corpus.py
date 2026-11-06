@@ -45,9 +45,6 @@ def _project(tmp_path: Path) -> Path:
 def test_prompt_is_bridged_when_docs_dir_already_holds_real_documents(
         tmp_path, monkeypatch):
     project = _project(tmp_path)
-    # The delegated docs runner is not under test; stub it so the bridge is
-    # the only thing this exercises.
-    monkeypatch.setattr(P._phase1_doc, "main", lambda: 0, raising=False)
 
     P._run_docs_mode(project, "UNIT_IC")
 
@@ -61,7 +58,6 @@ def test_prompt_is_bridged_when_docs_dir_already_holds_real_documents(
 def test_the_real_vendor_document_is_never_overwritten(tmp_path, monkeypatch):
     project = _project(tmp_path)
     before = (project / "input" / "docs" / "vendor_theory.md").read_text()
-    monkeypatch.setattr(P._phase1_doc, "main", lambda: 0, raising=False)
 
     P._run_docs_mode(project, "UNIT_IC")
 
@@ -73,7 +69,6 @@ def test_an_existing_docs_entry_of_the_same_name_wins(tmp_path, monkeypatch):
     project = _project(tmp_path)
     existing = project / "input" / "docs" / "phase1_prompt.md"
     existing.write_text("# Already here\n")
-    monkeypatch.setattr(P._phase1_doc, "main", lambda: 0, raising=False)
 
     P._run_docs_mode(project, "UNIT_IC")
 

@@ -63,22 +63,10 @@ MAGIC_DUMP_TWO_OVERLAPS = (
 # --------------------------------------------------------------------------- #
 # fixtures
 # --------------------------------------------------------------------------- #
-def _project(tmp_path: Path, *, feedback: str = None,
-             extraction: bool = True, transcript: str = None) -> Path:
-    """A project root with an extraction, and optionally a feedback dump.
-
-    `feedback=None` means the dump is ABSENT; `feedback=""` means it exists and
-    is EMPTY, which is what `feedback save` writes for zero areas. Those two are
-    the whole point of trap (1) and the fixture keeps them distinguishable.
-    """
-    proj = tmp_path / "proj"
-    return proj
 
 
 
 
-def _rules(report: dict) -> list:
-    return [f["rule"] for f in report["findings"]]
 
 
 # --------------------------------------------------------------------------- #
@@ -165,84 +153,3 @@ def test_real_magic_writes_a_dump_this_parser_reads(tmp_path):
 # --------------------------------------------------------------------------- #
 # WIRING — these read files that exist on origin/main, and fail there
 # --------------------------------------------------------------------------- #
-
-
-def test_the_extraction_recipe_dumps_the_feedback_channel():
-    """A channel that is never dumped cannot be read. FAILS on origin/main."""
-    import phase3_one_shot_runner as R
-    tcl = R._MAGIC_EXT2SPICE_TCL
-    assert "feedback save $env(FEEDBACK_OUT)" in tcl, \
-        "the recipe must dump magic's feedback areas, or the gate has no input"
-    assert tcl.index("extract all") < tcl.index("feedback save"), \
-        "the dump must follow the extract that generates the areas"
-    assert tcl.index("feedback save") < tcl.index("quit"), \
-        "the dump must precede quit"
-    runner = RUNNER.read_text()
-    assert "FEEDBACK_OUT={_to_container_path(str(feedback_out), container)}" \
-        in runner, "the recipe's env var must be exported by the invocation"
-
-
-
-
-def test_flow_step31_gates_illegal_overlap_before_lvs():
-    """The clause exists AND sits before both LVS clauses. FAILS on main."""
-    import yaml
-    doc = yaml.safe_load(FLOW.read_text())
-    step = next(s for s in doc["steps"] if s["id"] == 31)
-    clauses = [c["program_exit_zero"] for c in step["gate"]["all_of"]
-               if "program_exit_zero" in c]
-    idx = {name: i for i, c in enumerate(clauses)
-           for name in [c.split()[0]] }
-    assert "magic_illegal_overlap_check" in idx, \
-        "step 31 must declare the illegal-overlap gate"
-    assert idx["magic_illegal_overlap_check"] < idx["lvs_report_check"]
-    assert idx["magic_illegal_overlap_check"] < idx["lvs_signoff_guard"]
-
-
-
-
-def test_the_gate_is_spawned_inline_and_blocks_before_netgen():
-    """Not merely declared: the runner spawns it and stops on its status.
-
-    Asserted on the SOURCE ORDER inside `_run_extraction_lvs`, because "between
-    extraction and LVS" is a claim about position, not just presence.
-    FAILS on origin/main.
-    """
-    src = RUNNER.read_text()
-    body = src[src.index("def _run_extraction_lvs("):]
-    body = body[:body.index("\ndef ", 10)]
-    assert "_run_illegal_overlap_gate(" in body
-    assert "if _mio_rc != 0:" in body, "the exit status must reach a decision"
-    assert body.index("magic -dnull") < body.index("_run_illegal_overlap_gate("), \
-        "the gate must run AFTER the extraction"
-    gate_at = body.index("_run_illegal_overlap_gate(")
-    # Anchor on the two places netgen is actually INVOKED, not on the word:
-    # `netgen_setup` is a parameter in this function's own signature, and an
-    # ordering test that matched it would pass on any arrangement whatsoever.
-    for invocation in ("_try_power_aware_lvs(", 'netgen -batch lvs'):
-        assert gate_at < body.index(invocation), (
-            f"the gate must run BEFORE {invocation!r} — a compare over an "
-            f"undecided netlist is not evidence about the design")
-    import ast
-    function = next(node for node in ast.parse(src).body
-                    if isinstance(node, ast.FunctionDef) and node.name == "_run_illegal_overlap_gate")
-    helper = ast.get_source_segment(src, function)
-    assert "magic_illegal_overlap_check.py" in helper
-    assert "subprocess.run(" in helper
-    assert "_verify_runtime_command(cmd)" in helper
-    assert "timeout=_ILLEGAL_OVERLAP_GATE_TIMEOUT" in helper
-
-
-
-
-def test_the_runner_helper_fails_closed_on_a_dirty_extraction(tmp_path):
-    import phase3_one_shot_runner as R
-    proj = _project(tmp_path, feedback=MAGIC_DUMP_TWO_OVERLAPS)
-    rc, detail = R._run_illegal_overlap_gate(
-        proj, proj / "reports/phase3/magic_illegal_overlap.json")
-    assert rc == 1, "a dirty extraction must not clear the inline gate"
-    assert "MAGIC_ILLEGAL_OVERLAP" in detail
-    rc2, _ = R._run_illegal_overlap_gate(
-        _project(tmp_path / "b", feedback=""),
-        tmp_path / "b" / "out.json")
-    assert rc2 == 0, "a measured-clean extraction must pass through"

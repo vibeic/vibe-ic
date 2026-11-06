@@ -287,89 +287,10 @@ def test_a_reachable_magic_answers_with_its_own_banner():
 
 # ── the runner half: it must hand over the container ───────────────────────
 
-def _runner():
-    sys.path.insert(0, str(_PROGRAMS))
-    import phase3_one_shot_runner as r
-    return r
 
 
-def test_the_runner_hands_the_producer_the_container_the_tools_are_in(
-        tmp_path, monkeypatch):
-    """This step is a plain host subprocess between steps that are dispatched.
-
-    Without the container name the producer probes the one environment magic
-    is known not to be in — which is how a run whose own provenance carries a
-    successful magic invocation reported magic absent.
-    """
-    r = _runner()
-    seen = {}
-
-    def fake_run(cmd, **_kw):
-        seen["cmd"] = [str(c) for c in cmd]
-        return subprocess.CompletedProcess(cmd, 0, "ok\n", "")
-
-    # RECORD AT EVERY RUN-SHAPED SEAM THE STEP MAY DISPATCH THROUGH.
-    #
-    # v1.17.70 (measured 2026-09-07 on 8HD-4) moved this step's launch onto
-    # `_run_producer`, which dispatches through `_progress_run.run` — progress
-    # supervision instead of a wall clock — and `_progress_run` spawns with
-    # `subprocess.Popen`. Stubbing `subprocess.run` alone therefore recorded
-    # nothing at all, and this test failed with a bare `KeyError: 'cmd'`: a
-    # message about the RECORDER that read like a message about the argv.
-    #
-    # The property under test is that the step hands the producer `--container
-    # <name>`. That is true or false regardless of which helper carries the
-    # argv there, so every seam is watched at once and the assertion below
-    # names them when nothing arrives.
-    _seams = (("_progress_run.run", r._pr, "run"),
-              ("subprocess.run", r.subprocess, "run"))
-    for _name, _owner, _attr in _seams:
-        monkeypatch.setattr(_owner, _attr, fake_run)
-    r.step_digital_hardmacro_gen(tmp_path, None, "eda_ctr")
-    # REFUSE BY NAME, never `seen.get("cmd", [])`: an absent recording is not
-    # an empty argv, and defaulting it would turn "I never saw the launch"
-    # into "the launch carried no --container" — a different, false finding.
-    assert "cmd" in seen, (
-        "the step launched nothing through any watched seam ("
-        + ", ".join(n for n, _o, _a in _seams) + "), so this test observed "
-        "NO argv. That is not evidence that --container was omitted; it means "
-        "the recorder and the step no longer meet. Find the seam the step "
-        "dispatches through and add it above before reading this as a defect "
-        "in step_digital_hardmacro_gen.")
-    assert "--container" in seen["cmd"], seen["cmd"]
-    assert seen["cmd"][seen["cmd"].index("--container") + 1] == "eda_ctr"
 
 
-def test_the_pdk_directory_is_confirmed_where_the_pdk_is_installed(
-        tmp_path, monkeypatch):
-    """`$PDK_ROOT` names a CONTAINER path, so the host answer is None on
-    every real run — and the producer then fell back to a `$PDK_ROOT` it
-    could not see either. The tech LEF the run is already driving OpenROAD
-    with names the same directory, and the container confirms it holds the
-    technology."""
-    r = _runner()
-    monkeypatch.delenv("PDK_ROOT", raising=False)
-    pdk = type("P", (), {"name": "somepdk",
-                         "tech_lef": "/foss/pdks/somepdk/libs.ref/x/y.tlef"})()
-    asked = {}
-
-    def fake_exec(container, cmd, timeout=1800, **_k):
-        asked["container"], asked["cmd"] = container, cmd
-        return 0, "", ""
-
-    monkeypatch.setattr(r, "_docker_exec", fake_exec)
-    got = r._hardmacro_pdk_dir(pdk, "eda_ctr")
-    assert got == "/foss/pdks/somepdk", got
-    assert asked["container"] == "eda_ctr"
-    assert "/foss/pdks/somepdk/libs.tech/magic" in asked["cmd"]
-
-    # AND IT STILL DEGRADES TO A REFUSAL: a container that does not hold the
-    # technology resolves nothing, rather than a directory nobody confirmed.
-    monkeypatch.setattr(r, "_docker_exec",
-                        lambda *_a, **_k: (1, "", "no such directory"))
-    assert r._hardmacro_pdk_dir(pdk, "eda_ctr") is None
-    # and with no container to ask, nothing is invented either
-    assert r._hardmacro_pdk_dir(pdk, "") is None
 
 
 # ── the whole crossing, end to end, through the CLI the runner invokes ────

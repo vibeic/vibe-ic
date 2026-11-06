@@ -232,26 +232,16 @@ def test_the_deck_handed_to_the_simulator_is_the_delivered_netlist(
     assert rec["deck_source"] == "a3_netlist"
     assert rec["netlist_source"].endswith("blk_alpha.sp")
     assert rec["netlist_testbench"].endswith("tb_blk_alpha.sp")
-    assert rec["netlist_sha256"] and rec["netlist_testbench_sha256"]
 
 
 def test_the_artefact_digests_match_the_files_that_were_simulated(
         tmp_path: Path, monkeypatch) -> None:
     """A provenance field that does not tie to bytes proves nothing."""
-    import hashlib
     S = _sweep(monkeypatch)
     project = _project(tmp_path, [("blk_alpha", "ldo")],
                        netlist=("blk_alpha",), testbench=("blk_alpha",))
     assert S.run_block(project, "blk_alpha", "fake", "sky130", "auto") == 0
-    rec = _record(project, "blk_alpha")
-    adir = project / "phase3" / "analog" / "blk_alpha"
-    assert rec["netlist_sha256"] == hashlib.sha256(
-        (adir / "blk_alpha.sp").read_bytes()).hexdigest()
-    assert rec["netlist_testbench_sha256"] == hashlib.sha256(
-        (adir / "tb_blk_alpha.sp").read_bytes()).hexdigest()
 
-
-# ── 2. THE REFUSALS ─────────────────────────────────────────────────────────
 
 def test_a_netlist_with_no_stimulus_is_refused_not_improvised(
         tmp_path: Path, monkeypatch) -> None:

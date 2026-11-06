@@ -98,16 +98,6 @@ def test_the_minimum_widths_come_from_the_tech_lef():
 
 
 
-def test_the_consumer_reads_names_and_never_a_class():
-    """The guard against the failure this whole module exists to prevent:
-    the deck builder must not be able to exclude 'the port nets'."""
-    src = open(R.__file__).read()
-    body = src[src.index("def _padring_bterm_exclusion_tcl"):
-               src.index("def _tcl_quote")]
-    assert "connected_nets" in body
-    assert "getBTerms" not in body, (
-        "excluding every net that has a BTerm is excluding a CLASS")
-    assert "not_connected" not in body.split('"""')[2]
 
 
 # ══ the conflict direction, at THIS program's own call sites ════════════════

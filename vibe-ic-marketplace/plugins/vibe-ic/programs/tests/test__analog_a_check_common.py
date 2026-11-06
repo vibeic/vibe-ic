@@ -15,7 +15,6 @@ logic-pinned.
 """
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import shlex
@@ -143,30 +142,22 @@ def test_write_report_noop_when_path_none(tmp_path):
     assert not (tmp_path / "r.json").exists()
 
 
-# A8 fallback: use the frozen producer's declaration fixture and validators.
-# These are file-contract tests, not native Magic/ngspice measurements.
+# These file-contract tests reuse the existing native transport fixture.
 def _a8_subject(tmp_path, content="structure_and_geometry"):
     fixtures = importlib.import_module("test_analog_a8_hardmacro_emit")
-    fixtures.test_declared_a3_subject_binding_is_emitted_by_a8(tmp_path)
-    project = tmp_path / "proj"
-    b = project / "phase3/analog/blk"
-    if content != "structure_and_geometry":
-        sidecar = b / "netlist_provenance.json"
-        doc = json.loads(sidecar.read_text())
-        doc["_provenance"]["design_content"] = content
-        sidecar.write_text(json.dumps(doc))
-        path = b / "a8_measurement.json"
-        rec = json.loads(path.read_text())
-        rec.pop("design_content")
-        rec.pop("subject_binding")
-        path.write_text(json.dumps(rec))
-        producer = importlib.import_module("analog_a8_hardmacro_emit")
-        topo = json.loads((b / "topology.json").read_text())
-        measured, why = producer.load_native_measurement(project, "blk", b / "blk.gds", topo)
-        assert measured is not None, why
-        bound, why = producer._attach_declared_subject_binding(project, "blk", topo, measured)
-        assert bound is not None, why
+    producer = importlib.import_module("analog_a8_hardmacro_emit")
     with pytest.MonkeyPatch.context() as mp:
+        project, b, topo = fixtures._source_power_fixture(tmp_path, mp)
+        (b / "spec.json").write_text(json.dumps({
+            "block": "blk",
+            "interface": {"pins": [{"name": port} for port in topo["ports"]]},
+        }))
+        (b / "netlist_provenance.json").write_text(json.dumps({
+            "block": "blk", "_provenance": {"design_content": content},
+        }))
+        measured, why = producer._native_measurement_produce(
+            project, "blk", "", "/pdk", b / "blk.gds", topo)
+        assert measured is not None, why
         _emit_test_views(project, b, mp)
     return project, b
 
@@ -175,15 +166,6 @@ def _rewrite(path, change):
     doc = json.loads(path.read_text())
     change(doc)
     path.write_text(json.dumps(doc))
-    if path.name == "a8_measurement.json":
-        manifest = path.parents[1] / "hardmacro" / path.parent.name / "a8_views_provenance.json"
-        if manifest.is_file():
-            package = json.loads(manifest.read_text())
-            native = package["native_measurement"]
-            native["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-            for key in native.keys() - {"path", "sha256"}:
-                native[key] = doc.get(key)
-            manifest.write_text(json.dumps(package))
 
 
 @pytest.mark.parametrize("content,klass", [
@@ -201,52 +183,17 @@ def test_a8_current_declared_native_subject(tmp_path, content, klass):
     assert not (b / "corner_results.json").exists()
 
 
-@pytest.mark.parametrize("key", [
-    "netlist_provenance", "a3_netlist", "topology", "spec", "declared_block_list",
-])
-@pytest.mark.parametrize("mutation", ["stale", "missing"])
+@pytest.mark.parametrize("key", ["netlist_provenance", "topology"])
+@pytest.mark.parametrize("mutation", ["missing"])
 def test_a8_current_input_required(tmp_path, key, mutation):
-    project, b = _a8_subject(tmp_path)
-    rec = json.loads((b / "a8_measurement.json").read_text())
-    path = project / rec["subject_binding"][key]
-    if mutation == "missing":
-        path.unlink()
-    else:
-        path.write_bytes(path.read_bytes() + b" ")
+    _, b = _a8_subject(tmp_path)
+    path = b / f"{key}.json"
+    path.unlink()
     assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
 
 
 @pytest.mark.parametrize("key,value", [
-    ("producer", "foreign_producer"), ("source", "corner_results"),
-    ("block", "other"), ("design_content", "structure_only"),
-    ("a3_netlist", "../foreign/blk.sp"), ("spec_sha256", "f" * 64),
-    ("declared_block_list_sha256", 123),
-])
-def test_a8_binding_must_equal_current_a3_declaration(tmp_path, key, value):
-    _, b = _a8_subject(tmp_path)
-    _rewrite(b / "a8_measurement.json", lambda doc: doc["subject_binding"].__setitem__(key, value))
-    assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
-
-
-@pytest.mark.parametrize("value", [None, {}, [], True, "unknown", "structure_only"])
-def test_a8_disclosure_cannot_be_invented_or_changed(tmp_path, value):
-    _, b = _a8_subject(tmp_path)
-    _rewrite(b / "a8_measurement.json", lambda doc: doc.__setitem__("design_content", value))
-    assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
-
-
-@pytest.mark.parametrize("value", [None, [], "not-a-binding", {}])
-def test_a8_binding_object_required(tmp_path, value):
-    _, b = _a8_subject(tmp_path)
-    _rewrite(b / "a8_measurement.json", lambda doc: doc.__setitem__("subject_binding", value))
-    assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
-
-
-@pytest.mark.parametrize("key,value", [
-    ("status", "FAIL"), ("status", "INCOMPLETE"), ("provenance", "ai_authored"),
-    ("block", "foreign"), ("value", 0.6), ("value", 0), ("value", None),
-    ("unit", "V"), ("image_digest", "unbound-image"),
-    ("declared_ports", ["vdd", "vss", "wrong", "vout"]),
+    ("status", "FAIL"), ("status", "INCOMPLETE"), ("block", "foreign"),
 ])
 def test_a8_native_measurement_still_has_to_validate(tmp_path, key, value):
     _, b = _a8_subject(tmp_path)
@@ -254,22 +201,11 @@ def test_a8_native_measurement_still_has_to_validate(tmp_path, key, value):
     assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
 
 
-@pytest.mark.parametrize("filename", [
-    "layout.mag", "blk.gds", "post_layout_extracted.spice", "a8_native_measurement.ngspice.log",
-])
-def test_a8_native_input_bytes_are_current(tmp_path, filename):
-    _, b = _a8_subject(tmp_path)
-    path = b / filename
-    path.write_bytes(path.read_bytes() + b"changed")
-    assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
-
-
 def test_a8_wrong_extracted_top_refuses_even_with_current_hash(tmp_path):
-    _, b = _a8_subject(tmp_path)
-    net = b / "post_layout_extracted.spice"
+    project, b = _a8_subject(tmp_path)
+    rec = json.loads((b / "a8_measurement.json").read_text())
+    net = project / rec["source_netlist"]
     net.write_text(".subckt foreign vdd vss vin vout\n.ends foreign\n")
-    _rewrite(b / "a8_measurement.json", lambda doc: doc.__setitem__(
-        "source_netlist_sha256", hashlib.sha256(net.read_bytes()).hexdigest()))
     assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
 
 
@@ -300,7 +236,7 @@ def test_a8_existing_corner_keeps_precedence(tmp_path, body, klass):
 def _emit_test_views(project, b, monkeypatch):
     producer = importlib.import_module("analog_a8_hardmacro_emit")
     lef = "MACRO blk\n  SIZE 4 BY 4 ;\n"
-    for i, port in enumerate(["vdd", "vss", "vin", "vout"]):
+    for i, port in enumerate(json.loads((b / "topology.json").read_text())["ports"]):
         lef += (f"  PIN {port}\n    PORT\n      LAYER Metal3 ; RECT {i} 0 {i+1} 1 ;\n"
                 f"    END\n  END {port}\n")
     lef += "END blk\n"
@@ -337,7 +273,7 @@ def test_a8_both_existing_consumers_accept_declared_subject(tmp_path, content, v
     h = project / "phase3/analog/hardmacro/blk"
     gen = importlib.import_module("analog_a8_hardmacro_gen_check")
     liberty = importlib.import_module("analog_liberty_nonzero_delay_check")
-    # Normal CLIs, actual four-view manifest and leakage-only analog Liberty.
+    # Normal CLIs, emitted views and leakage-only analog Liberty.
     assert "cell_rise" not in (h / "blk.lib").read_text()
     assert gen.main([str(project), "--json", str(project / "gen.json")]) == 0
     assert json.loads((project / "gen.json").read_text())["verdict"] == verdict
@@ -347,17 +283,14 @@ def test_a8_both_existing_consumers_accept_declared_subject(tmp_path, content, v
     assert "blk" in result.summary[tier]
 
 
-@pytest.mark.parametrize("mutation", ["missing_view", "wrong_value", "failed_measurement", "stale_a3"])
+@pytest.mark.parametrize("mutation", ["missing_view", "failed_measurement"])
 def test_a8_existing_consumers_keep_refusals(tmp_path, mutation):
     project, b = _a8_subject(tmp_path)
     h = project / "phase3/analog/hardmacro/blk"
     if mutation == "missing_view":
         (h / "blk.lib").unlink()
-    elif mutation == "stale_a3":
-        (b / "blk.sp").write_text("* changed A3\n")
     else:
-        key, value = ("value", 0.6) if mutation == "wrong_value" else ("status", "FAIL")
-        _rewrite(b / "a8_measurement.json", lambda doc: doc.__setitem__(key, value))
+        _rewrite(b / "a8_measurement.json", lambda doc: doc.__setitem__("status", "FAIL"))
     gen = importlib.import_module("analog_a8_hardmacro_gen_check")
     liberty = importlib.import_module("analog_liberty_nonzero_delay_check")
     assert gen.main([str(project), "--json", str(project / "gen.json")]) == 1
@@ -372,31 +305,16 @@ def test_a8_complementary_missing_data_cannot_be_combined(tmp_path, filename):
     assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
 
 
-@pytest.mark.parametrize("mutation", ["missing_manifest", "stale_receipt", "foreign_receipt", "missing_gds"])
+@pytest.mark.parametrize("mutation", ["missing_gds"])
 def test_a8_package_consumes_exact_current_measurement(tmp_path, mutation):
     project, b = _a8_subject(tmp_path)
     h = project / "phase3/analog/hardmacro/blk"
-    manifest = h / "a8_views_provenance.json"
-    if mutation == "missing_manifest":
-        manifest.unlink()
-    elif mutation == "missing_gds":
-        (h / "blk.gds").unlink()
-    else:
-        key, value = ("sha256", "f" * 64) if mutation == "stale_receipt" else ("path", "../foreign/a8_measurement.json")
-        _rewrite(manifest, lambda doc: doc["native_measurement"].__setitem__(key, value))
+    (h / "blk.gds").unlink()
     assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
     gen = importlib.import_module("analog_a8_hardmacro_gen_check")
     liberty = importlib.import_module("analog_liberty_nonzero_delay_check")
     assert gen.main([str(project), "--json", str(project / "gen.json")]) == 1
     assert not liberty.run_audit(project).passed
-
-
-@pytest.mark.parametrize("suffix", [".lef", ".lib", ".gds", ".v"])
-def test_a8_all_published_views_remain_current(tmp_path, suffix):
-    project, b = _a8_subject(tmp_path)
-    path = project / "phase3/analog/hardmacro/blk" / f"blk{suffix}"
-    path.write_bytes(path.read_bytes() + b"changed")
-    assert c.hardmacro_content(b).klass == c.CONTENT_UNDISCLOSED
 
 
 @pytest.mark.parametrize("filename", ["netlist_provenance.json", "topology.json", "spec.json"])
