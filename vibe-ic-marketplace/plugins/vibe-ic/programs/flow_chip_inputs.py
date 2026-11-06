@@ -83,15 +83,14 @@ def netlist_area(config, state, toolbox, directory, on_tool_run=None):
 
 
 def _native_core(project: Path, core_config: dict, destination: Path, on_tool_run=None):
-    from flow_config import native_defaults
+    from flow_config import create_native_flow, native_defaults
     from librelane.common import Toolbox
-    from librelane.flows import Flow
     from librelane.state import DesignFormat, State
     from librelane.steps import Step, StepError, StepException
 
     os.environ["_OPENLANE_MAX_CORES"] = "8"
-    owner = Flow.factory.get("Chip")(core_config, design_dir=str(project),
-                                     pdk_root=os.environ.get("PDK_ROOT"))
+    owner = create_native_flow("Chip", core_config, design_dir=str(project),
+                               pdk_root=os.environ.get("PDK_ROOT"))
     owner.config = native_defaults(owner.config)
     native = owner.config.to_raw_dict()
     run_root = Path(tempfile.mkdtemp(prefix="core_", dir=tempfile.current_run() / "core_inputs"))

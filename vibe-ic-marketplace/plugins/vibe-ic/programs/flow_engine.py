@@ -309,8 +309,7 @@ class NativeChain:
             raise self.initialization_error
         if self.owner is not None:
             return
-        from flow_config import build_native_config as build_config, native_defaults
-        from librelane.flows import Flow
+        from flow_config import build_native_config as build_config, create_native_flow, native_defaults
         from librelane.state import State
         from librelane.common import Toolbox
         kind = "Chip" if self.route["delivery_target"] in {"gds", "shippable_gds", "foundry_handoff"} else "Classic"
@@ -318,8 +317,8 @@ class NativeChain:
                               **({"pdk": self.pdk} if self.pdk else {}),
                               **({"on_tool_run": self.observe_preparation} if kind == "Chip" else {}))
         os.environ["_OPENLANE_MAX_CORES"] = "8"
-        self.owner = Flow.factory.get(kind)(config, design_dir=str(self.project),
-                                            pdk_root=os.environ.get("PDK_ROOT"))
+        self.owner = create_native_flow(kind, config, design_dir=str(self.project),
+                                        pdk_root=os.environ.get("PDK_ROOT"))
         self.toolbox = Toolbox(str(vibeic_temp.current_run() / "tool_tmp"))
         self.owner.config = native_defaults(self.owner.config)
         self.config = self.owner.config.to_raw_dict()
