@@ -75,6 +75,20 @@ def _p3():
     return m
 
 
+def _fake_pdk(tmp_path: Path) -> Path:
+    """A minimal PDK tree with the directory shape a registry entry declares."""
+    root = tmp_path / "pdks" / "testpdkA"
+    lib = root / "libs.ref" / "scl" / "lib"
+    lef = root / "libs.ref" / "scl" / "lef"
+    tlef = root / "libs.ref" / "scl" / "techlef"
+    for d in (lib, lef, tlef):
+        d.mkdir(parents=True, exist_ok=True)
+    (lib / "scl__tt_025C_1v80.lib").write_text("library (scl) { }\n")
+    (lef / "scl.lef").write_text("SITE unit_site\n")
+    (tlef / "scl__nom.tlef").write_text("LAYER li1 ;\n  TYPE ROUTING ;\n")
+    return root
+
+
 def test_split_liberty_reaches_native_lib_config_and_sta_reader(tmp_path):
     import inspect
     import librelane_contract as contract
