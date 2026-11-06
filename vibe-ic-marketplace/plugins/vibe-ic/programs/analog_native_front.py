@@ -155,7 +155,10 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             validate_attribution_output(project, _read(path), name)
         except AttributionRefusal:
             attribution_stale = True
-        if not path.is_file() or attribution_stale:
+        existing = _read(path)
+        provenance = existing.get('_provenance')
+        owned = isinstance(provenance, dict) and provenance.get('producer') == 'analog_a1_spec_emit'
+        if not path.is_file() or owned or attribution_stale:
             result = call('analog_a1_spec_emit.py', [project, '--block', name])
             failure = failed(result, 'A01_SPEC_PRODUCER')
             if failure:
