@@ -113,6 +113,13 @@ foreach {net type special} {signal SIGNAL 0 power POWER 0 ground GROUND 0 specia
     }]
 }
 namespace eval odb {proc dbWire_destroy {wire} {puts "DESTROY $wire"}}
+namespace eval odb {
+    # Native initialization journals repeated CLOCK assignments without resizing.
+    proc dbDatabase_beginEco {block} {}
+    proc dbDatabase_ecoEmpty {block} {return 0}
+    proc dbDatabase_endEco {block} {}
+    proc dbDatabase_commitEco {block} {}
+}
 namespace eval utl {proc metric_integer {key value} {puts "METRIC $key $value"}}
 proc write_views {} {puts WRITE_VIEWS}
 set ::block block
