@@ -51,11 +51,12 @@ def test_native_candidate_population_and_fixed_document_settings(tmp_path):
 
 
 def test_level_two_preserves_a_density_declared_through_its_native_alias(tmp_path):
-    from flow_ppa_variants import native_candidates
+    from flow_ppa_variants import native_candidates, pinned_settings
 
     docs = tmp_path / "input/docs"
     docs.mkdir(parents=True)
     (docs / "constraints.md").write_text("PL_TARGET_DENSITY = 0.5\n")
+    assert pinned_settings(tmp_path) == {"PL_TARGET_DENSITY_PCT"}
     candidates = native_candidates(tmp_path, {"PL_TARGET_DENSITY_PCT": 90},
         {"PL_TARGET_DENSITY_PCT": "50"}, level=2,
         activity={"steps": ["OpenROAD.GlobalPlacement"]})
@@ -104,6 +105,26 @@ def test_cts_axes_require_an_executed_solution_and_keep_the_fanout_cap(tmp_path)
     assert {value["CTS_SINK_CLUSTERING_SIZE"] for value in axes["cts"] if value} == {2, 4}
     log.unlink()
     assert explorer.native_activity(rows)["cts_preclustering"] is None
+
+
+def test_document_custom_step_setting_survives_native_flow_config_filtering(tmp_path, monkeypatch):
+    from flow_config import native_defaults
+    import flow_clock_geometry
+
+    class Config(dict):
+        def copy(self, **changes):
+            return Config({**self, **changes})
+
+    monkeypatch.setattr(flow_clock_geometry, "cts_settings", lambda config: {})
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L19_CONSTRAINTS_PDK.json").write_text(json.dumps({"fields": {
+        "constraint_declarations": [{"kind": "flow_setting", "token": "VIBEIC_PRR_RECOVER_POWER_PCT", "value": 25}]}}))
+    overrides = tmp_path / "work/flow/native_overrides.json"
+    overrides.parent.mkdir(parents=True)
+    overrides.write_text(json.dumps({"VIBEIC_PRR_RECOVER_POWER_PCT": 50}))
+    configured = native_defaults(Config(DESIGN_DIR=str(tmp_path), PDK="process"))
+    assert configured["VIBEIC_PRR_RECOVER_POWER_PCT"] == 25
 
 
 def test_zero_level_runs_once_without_a_ppa_measurement(tmp_path, monkeypatch):

@@ -36,7 +36,7 @@ def test_public_variants_select_by_all_pass_and_declared_objective(
     entry.write_text('''import json, os, sys, time
 from pathlib import Path
 p=Path(sys.argv[1])
-assert sys.argv[2:]==['--route','ip']
+assert sys.argv[2:]==['--route','ip','--ppa-level','0']
 assert not (p/'reports/original.txt').exists()
 c=json.loads((p/'input/case.json').read_text())
 overrides=json.loads((p/'work/flow/native_overrides.json').read_text())

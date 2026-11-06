@@ -73,7 +73,7 @@ def run_variant(project, output, variant, cores, flow_args, ppa_level=0):
         launcher = ("import os,sys; os.sched_setaffinity(0,map(int,sys.argv[1].split(','))); "
                     "os.execv(sys.executable,[sys.executable,*sys.argv[2:]])")
         command = [sys.executable, "-c", launcher, ",".join(map(str, cores)), str(ENTRY),
-                   str(destination), *flow_args]
+                   str(destination), *flow_args, "--ppa-level", "0"]
         with (output / (name + ".log")).open("w") as log:
             with subprocess.Popen(command, cwd=destination, stdout=log, stderr=subprocess.STDOUT) as completed:
                 _, status, usage = os.wait4(completed.pid, 0)
@@ -112,8 +112,8 @@ def run_variant(project, output, variant, cores, flow_args, ppa_level=0):
 
 def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, spool=None):
     project, output = Path(project).resolve(), Path(output).resolve()
-    if output.is_relative_to(project):
-        raise ValueError("The exploration output must be outside the source project.")
+    if output.is_relative_to(project) and not output.is_relative_to(project / "reports"):
+        raise ValueError("Exploration output must be outside the project or under its excluded reports directory.")
     level, level_source = selected_level(project, ppa_level)
     if level > 2:
         raise ValueError("Levels3/4 use the native-tool handoff, not the Levels1/2 knob driver")
@@ -251,6 +251,63 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None, sp
               "documents pin settings; they are not padded with duplicate runs."]
     (output / "RESULT.md").write_text("\n".join(lines) + "\n")
     return report
+
+
+def explore_public(project, *, level, level_source, flow_args=(), spool=None):
+    """Publish the adopted trial into the public project's canonical outputs."""
+    import vibeic_temp
+
+    started = time.monotonic()
+    project = Path(project).resolve()
+    output = project / "reports/ppa" / ("run-" + str(time.time_ns()))
+    if level > 2:
+        output.mkdir(parents=True, exist_ok=True)
+        pending = {"ppa_level": level, "ppa_level_source": level_source,
+                   "state": "NOT_MEASURED", "reason": "Final native-tool Stage A handoff is required before Stage B execution"}
+        (output / "results.json").write_text(json.dumps(pending, indent=2) + "\n")
+        summary = {**pending, "steps": [], "fail": 0, "not_measured": 1,
+                   "ppa": {"results": str(output / "results.json"), "selected": None}}
+        (project / "reports/flow_engine.json").write_text(json.dumps(summary, indent=2) + "\n")
+        return 2
+    options = {"spool": spool} if spool else {}
+    result = explore(project, output, ppa_level=level, flow_args=flow_args, **options)
+    chosen = result.get("selected_project")
+    diagnostic = chosen or result["variants"][0]["project"]
+    source = Path(diagnostic)
+    if chosen:
+        for folder in ("phase1", "phase2", "phase3", "steps", "work", "reports"):
+            if (source / folder).is_dir():
+                shutil.copytree(source / folder, project / folder, dirs_exist_ok=True)
+        # Keep the complete trial population under reports/ppa. Only canonical
+        # published outputs point at the adopted project's new location.
+        for folder in ("phase1", "phase2", "phase3", "steps", "work", "reports"):
+            for path in (project / folder).rglob("*.json"):
+                if path.is_relative_to(project / "reports/ppa"):
+                    continue
+                try:
+                    before = json.loads(path.read_text())
+                except (ValueError, OSError):
+                    continue
+                after = vibeic_temp.relocate(before, {str(source): str(project)})
+                if before != after:
+                    mode = path.stat().st_mode
+                    path.chmod(mode | 0o200)
+                    try:
+                        path.write_text(json.dumps(after, indent=2) + "\n")
+                    finally:
+                        path.chmod(mode)
+    summary = _load(source / "reports/flow_engine.json")
+    if chosen:
+        summary = vibeic_temp.relocate(summary, {str(source): str(project)})
+    summary.update(ppa_level=level, ppa_level_source=level_source,
+                   public_wall_seconds=time.monotonic() - started,
+                   ppa={"results": str(output / "results.json"), "selected": result["selected"],
+                        "selected_project": chosen, "native_trial_wall_seconds": summary.get("wall_seconds"),
+                        "native_child_cpu_hours": (sum(row["cpu_hours"] for row in result["variants"])
+                                                   if all("cpu_hours" in row for row in result["variants"]) else None)})
+    (project / "reports/flow_engine.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return 0 if chosen else 1 if any(row["status"] == "FAIL"
+                                   for row in summary.get("steps", [])) else 2
 
 
 def main():

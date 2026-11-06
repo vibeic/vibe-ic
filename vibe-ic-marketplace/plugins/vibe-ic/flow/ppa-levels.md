@@ -11,6 +11,13 @@ python3 programs/flow_explore.py /path/project --output /path/exploration \
 ```
 
 CLI `--ppa-level` overrides document `PPA_LEVEL`; the explorer defaults to 2.
+The full public physical entry also uses this policy. Each candidate calls that
+same entry with Level 0, so one trial executes one native flow. The adopted
+trial's generated outputs are published to the original project's canonical
+directories; the full population remains under `reports/ppa/`. The native flow
+report records the selected level, native trial wall time and separate total
+public wall time. `--ppa` requests the native-tool/Stage B path, which stays
+unmeasured until its final Stage A handoff is available.
 Level 0 executes the reference once. Level 1 proposes seven high-value native
 configurations, including the reference: minimum-drive exclusion, power recovery,
 resizer maximum utilization, and candidate cell area/leakage sizing limits.
@@ -38,6 +45,10 @@ mounted scratch root. The adapter contains no host inventory or dispatcher.
 Levels 3 and 4 require the native-tool result handoff and are not implemented by
 this knob enumerator. Level 3 belongs to the unchanged native tools; Level 4
 enhances their best all-PASS result. This change adds no independent search engine.
+`flow_ppa_handoff.prepare_import` reads native ORFS or LibreLane result folders
+and uses the surviving State-copy kernel to prepare views. It carries no old
+PASS verdicts. Original single-corner SPEF stays separate until declared-corner
+RCX runs. This input preparation executes no Level 4 trial.
 
 Reference execution precedes the other proposals. Subsequent runs occupy
 disjoint CPU affinity groups; each group runs only one child at a time. The

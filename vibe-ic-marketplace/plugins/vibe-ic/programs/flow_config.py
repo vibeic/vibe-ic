@@ -111,7 +111,13 @@ def native_defaults(config):
         changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
     changes.update(cts_settings(config))
     if config.get("DESIGN_DIR"):
-        changes.update(_load(Path(config["DESIGN_DIR"]) / "work/flow/native_overrides.json"))
+        project = Path(config["DESIGN_DIR"])
+        changes.update(_load(project / "work/flow/native_overrides.json"))
+        # Chip/Classic do not declare custom downstream-step variables. Keep
+        # document settings available when that step compiles its own config.
+        fields = _load(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").get("fields", {})
+        changes.update({key: value for key, value in _settings(fields, config.get("PDK")).items()
+                        if key in PPA_SETTINGS})
     return config.copy(**changes)
 
 
