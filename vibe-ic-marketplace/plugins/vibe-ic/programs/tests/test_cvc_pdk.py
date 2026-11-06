@@ -73,6 +73,44 @@ def test_power_uses_active_liberty_voltages_for_all_declared_rails(tmp_path):
     assert "VDDIO input std_input" not in result
 
 
+@pytest.mark.parametrize("corner,core,io", [("typ", 1.8, 3.3), ("fast", 1.95, 5.5), ("slow", 1.6, 3.0)])
+def test_corner_operating_views_own_supply_voltages_not_uncharacterized_labels(tmp_path, corner, core, io):
+    libraries = {}
+    for name, voltage, io_voltage in (("typ", 1.8, 3.3), ("fast", 1.95, 5.5), ("slow", 1.6, 3.0)):
+        path = tmp_path / (name + ".lib")
+        path.write_text(f'library({name}) {{\nnom_voltage : {voltage};\n'
+                        f'voltage_map(VCORE, {voltage});\nvoltage_map(VIO, {io_voltage});\nvoltage_map(GND, 0);\n}}\n')
+        libraries[name + "*"] = [str(path)]
+    labels = tmp_path / "supply_links.lib"
+    labels.write_text('library(links) {\nvoltage_map(VCORE, 1.95);\nvoltage_map(VIO, 5.5);\n}\n')
+    config = {"DEFAULT_CORNER": corner, "LIB": libraries, "PAD_LIBS": {"*": [str(labels)]},
+              "VDD_NETS": ["VCORE", "VIO"], "GND_NETS": ["GND"]}
+    result = power_setup("A input std_input\n", config)
+    assert f"VCORE power {core}\n" in result
+    assert f"VIO power {io}\n" in result
+    assert "GND power 0.0\n" in result
+
+
+def test_conflicting_characterized_views_still_refuse(tmp_path):
+    paths = []
+    for name, voltage in (("one", 1.8), ("two", 1.95)):
+        path = tmp_path / (name + ".lib")
+        path.write_text(f'library({name}) {{\nnom_voltage : {voltage};\nvoltage_map(VCORE, {voltage});\n}}\n')
+        paths.append(str(path))
+    with pytest.raises(ValueError, match="Conflicting active PDK Liberty voltages for VCORE"):
+        power_setup("", {"LIB": paths, "VDD_NETS": ["VCORE"], "GND_NETS": ["GND"]})
+
+
+def test_uncharacterized_label_does_not_invent_an_unresolved_supply(tmp_path):
+    core = tmp_path / "core.lib"
+    core.write_text('library(core) {\nnom_voltage : 1.8;\nvoltage_map(VCORE, 1.8);\nvoltage_map(GND, 0);\n}\n')
+    labels = tmp_path / "supply_links.lib"
+    labels.write_text('library(links) {\nvoltage_map(VIO, 5.5);\n}\n')
+    with pytest.raises(ValueError, match="No PDK Liberty voltage or CVC power declaration for VIO"):
+        power_setup("", {"LIB": [str(core)], "PAD_LIBS": [str(labels)],
+                         "VDD_NETS": ["VCORE", "VIO"], "GND_NETS": ["GND"]})
+
+
 @pytest.mark.parametrize("conducting", [False, True])
 def test_native_pdk_io_cell_and_default_resistor_complete_cvc_without_losing_a_leak(tmp_path, conducting):
     pytest.importorskip("librelane")
@@ -102,6 +140,9 @@ def test_native_pdk_io_cell_and_default_resistor_complete_cvc_without_losing_a_l
     libraries = list((pdk / "libs.ref/sky130_fd_sc_hd/lib").glob("*tt_025C_1v80.lib*"))
     assert len(libraries) == 1
     step.config.update(LIB={"*": list(map(str, libraries))}, DEFAULT_CORNER="tt")
+    io_libs = pdk / "libs.ref/sky130_fd_io/lib"
+    step.config["PAD_LIBS"] = {"*": [str(next(io_libs.glob("sky130_ef_io__vccd_lvc_clamped_pad_tt_025C_1v80*.lib"))),
+                                   str(io_libs / "slices_stubs.lib")]}
     _, metrics = ElectricalRules.run(step, {DesignFormat.SPICE: str(source), DesignFormat.NETLIST: str(netlist)})
     result = json.loads((tmp_path / "cvc.json").read_text())
     assert result["completed"] and result["devices"] == 4
