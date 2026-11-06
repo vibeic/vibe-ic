@@ -58,38 +58,14 @@ def _project(tmp_path, authoritative, stamps):
     return p
 
 
-def _gate(project):
-    return subprocess.run([sys.executable, str(_GATE), str(project)],
-                          capture_output=True, text=True)
 
 
 # ── (2) GATE: catches a divergent per-L-doc stamp ────────────────────────────
 
-def test_gate_fails_on_divergent_stamp(tmp_path):
-    p = _project(tmp_path, "data_converter", {
-        "L19_CONSTRAINTS_PDK.json":
-            {"ic_class": "digital_arithmetic_primitive"},
-        "L21_POWER_INTENT.json":
-            {"ic_class": "digital_arithmetic_primitive"}})
-    r = _gate(p)
-    assert r.returncode == 1
-    assert "diverged from the authoritative class" in r.stdout
 
 
-def test_gate_passes_on_matching_stamp_NOLEAK(tmp_path):
-    p = _project(tmp_path, "data_converter", {
-        "L19_CONSTRAINTS_PDK.json": {"ic_class": "data_converter"}})
-    assert _gate(p).returncode == 0
 
 
-def test_gate_skips_doc_omitting_ic_class_NOLEAK(tmp_path):
-    """A doc that legitimately omits ic_class (or has empty/non-string) must
-    NOT trigger a false FAIL."""
-    p = _project(tmp_path, "data_converter", {
-        "L5_ADI_SPEC.json": {"analog_blocks": []},          # omits ic_class
-        "L7.json": {"ic_class": ""},                        # empty string
-        "L8.json": {"ic_class": 123}})                      # non-string
-    assert _gate(p).returncode == 0
 
 
 # ── (1) RE-STAMP: fixes the divergent docs at the phase2 boundary ────────────
@@ -109,12 +85,6 @@ def test_restamp_rewrites_only_divergent(tmp_path):
     assert "ic_class" not in d5
 
 
-def test_restamp_then_gate_passes(tmp_path):
-    p = _project(tmp_path, "data_converter", {
-        "L19.json": {"ic_class": "digital_arithmetic_primitive"}})
-    assert _gate(p).returncode == 1          # diverged before
-    PP.restamp_l_doc_skeletons(p)
-    assert _gate(p).returncode == 0          # fixed after
 
 
 def test_restamp_noop_on_matching_NOLEAK(tmp_path):

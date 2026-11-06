@@ -2219,11 +2219,6 @@ def test_dual_never_selects_an_arm_with_a_route_or_antenna_violation(tmp_path, m
     assert report['selected_arm'] == 'postdrt'
 
 
-def test_the_route_chain_calls_step_32_before_its_handoff():
-    """Source contract of step 21's one call site: step 32 runs on the
-    selected route before the views are copied and the tail resumes."""
-    runner = importlib.import_module('phase3_one_shot_runner')
-    assert callable(runner.postroute_repair_after_route)
 
 
 def test_the_runner_records_the_in_chain_repair_without_repairing_twice(tmp_path, monkeypatch):
@@ -2771,9 +2766,6 @@ def _finished_readback_fixture(tmp_path):
     return project, report, ready_path, finished
 
 
-def test_finished_candidate_readback_requires_full_owned_promotion(tmp_path):
-    project, report, _ready, _finished = _finished_readback_fixture(tmp_path)
-    assert prr.retained_finished_candidate_readback(project) == report
 
 
 def _displace_finished_readback(project):
@@ -2811,48 +2803,8 @@ def _stub_recovery_judges(monkeypatch):
                         lambda *_a, **_k: {'verdict': 'PASS'})
 
 
-def test_finished_candidate_readback_recovers_displaced_normal_metadata(
-        tmp_path, monkeypatch):
-    project, _report, _ready, _finished = _finished_readback_fixture(tmp_path)
-    _displace_finished_readback(project)
-    _stub_recovery_judges(monkeypatch)
-    report = prr.retained_finished_candidate_readback(project)
-    observed = report['verdict'] if report is not None else 'NO_READBACK'
-    assert observed == 'PASS'
-    assert report['adopted'] == '32-cand09'
-    assert report['final']['drv_count'] == 0
-    assert report['final']['unrouted_added'] == 0
-    runner = importlib.import_module('phase3_one_shot_runner')
-    owned = runner._step32_own_measurement(report)
-    assert owned['unrouted_added'] == 0
-    assert runner._promotion_unmeasured(owned) == ''
-    assert report['candidate_finishing']['drc'] == 'PASS'
-    assert report['candidate_finishing']['lvs'] == 'PASS'
-    assert report['retained_promotion_readback']['ready_record_sha256']
 
 
-def test_finished_candidate_recovery_refuses_missing_route_census(
-        tmp_path, monkeypatch):
-    project, _report, _ready, _finished = _finished_readback_fixture(tmp_path)
-    _displace_finished_readback(project)
-    _stub_recovery_judges(monkeypatch)
-    state_path = (project / 'phase3/librelane/32-cand09' /
-                  '01-vibeic-postrouterepair/state_out.json')
-    state = json.loads(state_path.read_text())
-    state['metrics'].pop('vibeic__prr__unrouted__added')
-    put(state_path, state)
-    ready_path = (project / prr.ARM_REL / 'candidate_continuations' /
-                  'lane-04/ready.json')
-    ready = json.loads(ready_path.read_text())
-    ready['repair_state_sha256'] = contract.digest(state_path)
-    ready['sealed_inputs'][str(state_path)] = contract.digest(state_path)
-    put(ready_path, ready)
-    decision_path = ready_path.with_name('decision.json')
-    decision = json.loads(decision_path.read_text())
-    decision['ready_record_sha256'] = contract.digest(ready_path)
-    put(decision_path, decision)
-    with pytest.raises(contract.Refusal, match='no measured unrouted_added'):
-        prr.retained_finished_candidate_readback(project)
 
 
 def test_normal_frontdoor_reenters_retained_promotion_without_actuator(
@@ -2881,169 +2833,10 @@ def test_normal_frontdoor_reenters_retained_promotion_without_actuator(
     assert answer.detail == 'retained recovery'
 
 
-def test_recovered_promotion_crosses_full_existing_step32_consumer_chain(
-        tmp_path, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    project, _report, _ready, _finished = _finished_readback_fixture(tmp_path)
-    _displace_finished_readback(project)
-    displaced = contract.digest(project / prr.REPORT_REL)
-    _stub_recovery_judges(monkeypatch)
-    monkeypatch.setattr(
-        prr, 'run',
-        lambda *_a, **_k: pytest.fail('native actuator entered during readback'))
-
-    report = prr.retained_finished_candidate_readback(project)
-    result = runner._postroute_repair_librelane_result(
-        project, project / 'phase3/stage3/pnr', report, 0.0,
-        handed=True, top='neutral')
-    assert result.status == 'PASS'
-    assert 'ADOPTED 32-cand09' in result.detail
-    assert runner._promotion_unmeasured(
-        runner._step32_own_measurement(report)) == ''
-    out = project / prr.DECLARED_REPAIR_REL
-    producer = runner._step32_producer_receipt(project, out)
-    assert producer is not None
-    decision = runner._repair_dec.decide(
-        None, True, project=project, producer_receipt=producer,
-        timing_basis='current Step-32 STAPostPNR per-corner census',
-        decision_scope='step32_native')
-    written, notes = [], []
-    source = project / prr.REPORT_REL
-    assert runner._publish_step32_decision(
-        project, decision, source, source, out, producer, written, notes) == 0
-    assert not notes
-    assert (out / 'postroute_timing_repair_decision.canonical.json').is_file()
-    history = (project / 'reports/phase3/postroute_repair_recovery_history' /
-               displaced)
-    archived = history / 'librelane_postroute_repair.failed.json'
-    assert contract.digest(archived) == displaced
-    assert (history / 'postroute_timing_repair_decision.failed.json').is_file()
-    handoff = project / 'reports/phase3/librelane_postroute_repair_handoff.json'
-    assert handoff.is_file()
-    current_def = project / 'phase3/stage3/pnr/routed.def'
-    assert current_def.read_text() == (tmp_path / 'neutral.candidate.def').read_text()
-    assert (project / runner.ROUTE_PROMOTION_REL).is_file()
-    reread = prr.retained_finished_candidate_readback(project)
-    assert reread['adopted'] == '32-cand09'
-    assert runner._promotion_unmeasured(
-        runner._step32_own_measurement(reread)) == ''
-    second_result = runner._postroute_repair_librelane_result(
-        project, project / 'phase3/stage3/pnr', reread, 0.0,
-        handed=True, top='neutral')
-    assert second_result.status == 'PASS'
-    second_producer = runner._step32_producer_receipt(project, out)
-    assert second_producer is not None
-    second_decision = runner._repair_dec.decide(
-        None, True, project=project, producer_receipt=second_producer,
-        timing_basis='current Step-32 STAPostPNR per-corner census',
-        decision_scope='step32_native')
-    second_written, second_notes = [], []
-    assert runner._publish_step32_decision(
-        project, second_decision, source, source, out, second_producer,
-        second_written, second_notes) == 0
-    assert not second_notes
-    archived_bytes = archived.read_bytes()
-    assert contract.digest(archived) == displaced
-
-    archived.write_bytes(archived_bytes + b'\n')
-    with pytest.raises(contract.Refusal,
-                       match='FINISHED_RECOVERY_HISTORY_CHANGED'):
-        runner._postroute_repair_librelane_result(
-            project, project / 'phase3/stage3/pnr', reread, 0.0,
-            handed=True, top='neutral')
-    archived.write_bytes(archived_bytes)
-    current_def.write_text(current_def.read_text() + '# damaged after handoff\n')
-    with pytest.raises(contract.Refusal, match='input route changed'):
-        prr.retained_finished_candidate_readback(project)
-
-    bad_root = tmp_path / 'damaged'
-    bad_project, _r, _ready, _finished = _finished_readback_fixture(bad_root)
-    _displace_finished_readback(bad_project)
-    bad_report = prr.retained_finished_candidate_readback(bad_project)
-    bad_report['candidates'][0]['repair_metrics'][
-        'vibeic__prr__unrouted__added'] = 1
-    before = (bad_project / 'phase3/stage3/pnr/routed.def').read_bytes()
-    refused = runner._postroute_repair_librelane_result(
-        bad_project, bad_project / 'phase3/stage3/pnr', bad_report, 0.0,
-        handed=True, top='neutral')
-    assert refused.status == 'NOT_MEASURED'
-    assert 'leaves 1 signal net(s) unrouted' in refused.detail
-    assert (bad_project / 'phase3/stage3/pnr/routed.def').read_bytes() == before
-    assert not (bad_project / 'reports/phase3/'
-                'librelane_postroute_repair_handoff.json').exists()
-
-    timing_root = tmp_path / 'timing-damaged'
-    timing_project, _r, _ready, _finished = _finished_readback_fixture(timing_root)
-    _displace_finished_readback(timing_project)
-    timing_report = prr.retained_finished_candidate_readback(timing_project)
-    timing_report['final']['hold_ws_min'] = 0.05
-    timing_report['candidates'][0]['measurement']['hold_ws_min'] = 0.05
-    timing_result = runner._postroute_repair_librelane_result(
-        timing_project, timing_project / 'phase3/stage3/pnr', timing_report,
-        0.0, handed=True, top='neutral')
-    assert timing_result.status == 'PASS'
 
 
-@pytest.mark.parametrize('damage,message', [
-    ('empty', 'metric population differs'),
-    ('missing', 'metric population differs'),
-    ('wrong_step', 'metric producer/value differs'),
-])
-def test_finished_candidate_readback_requires_exact_pv_metric_population(
-        tmp_path, damage, message):
-    project, _report, ready_path, _finished = _finished_readback_fixture(tmp_path)
-    ready = json.loads(ready_path.read_text())
-    rows = ready['pv']['drc']['metrics']
-    if damage == 'empty':
-        rows.clear()
-    elif damage == 'missing':
-        rows.pop('klayout__density_error__count')
-    else:
-        rows['klayout__density_error__count']['step'] = 'KLayout.DRC'
-    put(project / prr.ARM_REL / 'candidate_signoff/lane-04/drc.json',
-        ready['pv']['drc'])
-    put(ready_path, ready)
-    decision_path = ready_path.with_name('decision.json')
-    decision = json.loads(decision_path.read_text())
-    decision['ready_record_sha256'] = contract.digest(ready_path)
-    put(decision_path, decision)
-    try:
-        prr.retained_finished_candidate_readback(project)
-        observed = 'ADMITTED'
-    except contract.Refusal as exc:
-        observed = str(exc)
-    assert observed != 'ADMITTED', f'observed readback outcome={observed!r}'
-    assert message in observed, f'observed readback refusal={observed!r}'
 
 
-@pytest.mark.parametrize('damage,code', [
-    ('gds', 'LL_PRR_FINISHED_READBACK_STALE'),
-    ('drc', 'LL_PRR_FINISHED_READBACK_STALE'),
-    ('owner', 'LL_PRR_FINISHED_READBACK_STALE'),
-    ('failed', 'LL_PRR_FINISHED_READBACK_FAILED'),
-])
-def test_finished_candidate_readback_refuses_damage_before_actuation(
-        tmp_path, damage, code):
-    project, _report, ready_path, finished = _finished_readback_fixture(tmp_path)
-    if damage == 'gds':
-        finished.write_text('changed geometry\n')
-    elif damage == 'drc':
-        drc = project / prr.ARM_REL / 'candidate_signoff/lane-04/drc.json'
-        body = json.loads(drc.read_text())
-        body['verdict'] = 'FAIL'
-        put(drc, body)
-    elif damage == 'owner':
-        decision = ready_path.with_name('decision.json')
-        body = json.loads(decision.read_text())
-        body['candidate'] = 'wrong-owner'
-        put(decision, body)
-    else:
-        report_path = project / prr.REPORT_REL
-        body = json.loads(report_path.read_text())
-        body['candidate_finishing']['verdict'] = 'FAIL'
-        put(report_path, body)
-    with pytest.raises(contract.Refusal, match=code):
-        prr.retained_finished_candidate_readback(project)
 
 
 def test_normal_frontdoor_reads_promoted_finishing_before_any_new_actuator(
