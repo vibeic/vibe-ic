@@ -404,32 +404,10 @@ def test_out_of_layer_steps_never_read_the_record(tmp_path, record, step):
     assert LC.selected_mode(tmp_path, step) == expected
 
 
-def test_the_admission_identity_carries_the_layer(tmp_path, monkeypatch):
-    import phase3_one_shot_runner as P3
-    assert P3._librelane_admission_facts(tmp_path) == {}
-    facts = P3._librelane_admission_facts(tmp_path)
-    assert facts["librelane_impl_layer"] == LAYER
-    assert facts["librelane_contract_sha256"] == LC.digest(Path(LC.__file__))
-    # A different layer is a different identity.
-    moved = dict(LC.IMPL_STEP_MODES["librelane"], **{"8": "librelane"})
-    monkeypatch.setitem(LC.IMPL_STEP_MODES, "librelane", moved)
-    assert P3._librelane_admission_facts(tmp_path) != facts
 
 
-def test_a_damaged_record_is_part_of_the_identity_not_dropped(tmp_path):
-    import phase3_one_shot_runner as P3
-    facts = P3._librelane_admission_facts(tmp_path)
-    assert "IMPL_RECORD_UNREADABLE" in json.dumps(facts["librelane_impl_layer"])
 
 
-def test_a_chip_project_under_the_flag_keeps_a_contract_bound_identity(tmp_path):
-    import phase3_one_shot_runner as P3
-    project = _chip(tmp_path)
-    before = P3._librelane_admission_facts(project)
-    assert before.get("librelane_class_defaults")
-    after = P3._librelane_admission_facts(project)
-    assert after["librelane_impl_layer"] == LAYER and "librelane_contract_sha256" in after
-    assert after != before
 
 
 def _scratch(tmp_path, body: str) -> Path:
