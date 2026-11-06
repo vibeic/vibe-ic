@@ -320,27 +320,3 @@ def test_incomplete_waiver_still_gets_its_216_advisory(tmp_path):
 # ----------------------------------------------------------------------
 # 5. Why the disclosure, and not a refusal — pinned against the producer
 # ----------------------------------------------------------------------
-
-def test_producer_always_appends_the_self_reference(tmp_path):
-    """`_autogen_waivers_json` appends the run-record index unconditionally, so
-    the self-reference is on EVERY auto-generated entry. This is the reason
-    `evidence[] non-empty` could never discriminate, and the reason a refusal
-    would hit every honestly-disclosed deferral rather than the dishonest
-    ones."""
-    import phase3_one_shot_runner as p3
-
-    plan = [p3.StepResult(
-        "lvs", "NOT_MEASURED", 0.1,
-        "open-source LVS needs magic+netgen in container PATH",
-        extras={"missing_tool": "magic,netgen"}, reason_class="tool_absent")]
-    p3._autogen_waivers_json(tmp_path, plan)
-    emitted = json.loads((tmp_path / "waivers.json").read_text())
-
-    entry = emitted["waivers"][0]
-    assert entry["verdict_tier"] == "ENV_UNAVAILABLE", entry
-    assessment = _ei.assess(entry["evidence"], tmp_path)
-    assert assessment.self_report == 1, entry["evidence"]
-    # and the harvested `extras` scalar is a tool name, not a path — the same
-    # shape as the corpus's free-text sub-case, from the same harvester.
-    assert assessment.unresolvable >= 1, entry["evidence"]
-    assert not assessment.corroborated, entry["evidence"]

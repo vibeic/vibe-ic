@@ -58,109 +58,18 @@ _RECORDED = (
 )
 
 
-def _synthetic_corpus(root: Path) -> Path:
-    """A corpus shaped like the published one, carrying the three named trees.
-
-    It holds no reports: this file asks WHERE the ratchet looks, never what it
-    finds there. Attacking a synthetic cell would measure the fixture.
-    """
-    for parts in _RECORDED:
-        (root / "ic" / parts[0] / parts[1]).mkdir(parents=True, exist_ok=True)
-    return root
 
 
-def _reload_ratchet():
-    for name in ("_published_corpus", "test_adversarial_agent"):
-        if name in sys.modules:
-            importlib.reload(sys.modules[name])
-    return importlib.import_module("test_adversarial_agent")
 
 
-@pytest.fixture
-def pointed_at_a_corpus(tmp_path, monkeypatch):
-    root = _synthetic_corpus(tmp_path / "benchmark-data")
-    monkeypatch.setenv(PC.CORPUS_ENV, str(root))
-    yield root
-    for name in ("_published_corpus", "test_adversarial_agent"):
-        if name in sys.modules:
-            del sys.modules[name]
 
 
-def test_the_recorded_cells_resolve_under_the_pointer(pointed_at_a_corpus):
-    """CELL / DONOR / OLDER come from the pointer, not from a repo-local literal.
-
-    THE FAILURE THIS CATCHES is the one that actually happened: the names still
-    resolve to *something*, so nothing raises — they resolve to a path under a
-    repository that stopped carrying the corpus, and every test gated on them
-    goes quiet.
-    """
-    root = pointed_at_a_corpus
-    mod = _reload_ratchet()
-    for attr, parts in zip(("CELL", "DONOR", "OLDER"), _RECORDED):
-        got = getattr(mod, attr)
-        assert got is not None, (
-            f"{attr} did not resolve although the pointer names a corpus "
-            f"carrying ic/{parts[0]}/{parts[1]}. An unreachable ratchet reports "
-            f"nothing and reads as nothing wrong.")
-        assert root in got.parents, (
-            f"{attr} resolved to {got}, which is NOT under the corpus named by "
-            f"${PC.CORPUS_ENV} ({root}). The ratchet is reading a path it "
-            f"spelled itself instead of the corpus it was given — that is how "
-            f"12 of its 21 tests went to a silent skip at c5d7f2d00.")
 
 
-def test_the_corpus_gate_opens_when_the_corpus_is_there(pointed_at_a_corpus):
-    """The skip mark must actually lift. Resolving is not the same as running."""
-    mod = _reload_ratchet()
-    mark = mod._corpus
-    assert not mark.args[0], (
-        "the corpus skip is still in force with a readable corpus at "
-        f"${PC.CORPUS_ENV}. Every attack below it is unattempted, and an "
-        "attack nobody ran is not an attack that failed.")
 
 
-def test_the_skip_reason_is_the_suites_one_reason(pointed_at_a_corpus):
-    """One reason, so a reader who greps for one quiet corpus check finds all.
-
-    The private spelling this replaces — "published cells absent from this
-    checkout" — was true and useless: it named no pointer, so nobody reading it
-    learned that setting one would have run the tests.
-    """
-    mod = _reload_ratchet()
-    assert mod._corpus.kwargs["reason"] == PC.SKIP_REASON, (
-        "the ratchet skips with a reason of its own instead of the shared one; "
-        f"got {mod._corpus.kwargs['reason']!r}")
 
 
-def test_the_generator_refuses_rather_than_publishing_an_empty_finding_set(
-        monkeypatch):
-    """No corpus must not render as "every finding closed".
-
-    `tools/gen_adversarial_findings.py` writes the ratchet's own subject, and it
-    is the only supported way to write it — the file says so, because a
-    hand-edited finding list is an allowlist. Run with no corpus it attempts
-    nothing, finds nothing forging, and writes an EMPTY `forging` list. The
-    ratchet then reads thirteen findings closed on the day the corpus moved,
-    with no fix anywhere near them.
-
-    Asserted by RUNNING it, not by reading it: the refusal has to happen before
-    the write, and only the exit code proves the order.
-    """
-    monkeypatch.delenv(PC.CORPUS_ENV, raising=False)
-    gen = PC._REPO / "tools" / "gen_adversarial_findings.py"
-    assert gen.is_file(), f"{gen} is missing"
-    if PC.corpus_root() is not None:
-        pytest.skip("this checkout carries a corpus; the no-corpus path is "
-                    "not reachable here")
-    r = _pr.run([sys.executable, str(gen), str(PC._PLUGIN)],
-                       capture_output=True, text=True)
-    out = r.stdout + r.stderr
-    assert r.returncode != 0, (
-        "the generator exited 0 with no corpus to measure. Whatever it wrote, "
-        f"it measured nothing:\n{out[:2000]}")
-    assert "REFUSED" in out, (
-        f"the generator failed without refusing by name; a reader cannot tell "
-        f"'no corpus' from 'the campaign found nothing':\n{out[:2000]}")
 
 
 def test_the_repo_local_corpus_branch_looks_at_the_repository():

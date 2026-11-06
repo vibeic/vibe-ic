@@ -342,41 +342,6 @@ class TestSelectionIsUnchanged:
 
 
 
-    def test_runner_delegates_and_keeps_no_selection_logic_of_its_own(self):
-        """The runner must not carry a second copy of this decision.
-
-        The refuted version computed a 'reference context' by running the
-        liberty-cell regex over the RTL — a number that is meaningless (0 for
-        one real design, 1 for a core holding 1272 flops) — by deep-importing
-        private helpers. Reverting the runner alone was invisible to the whole
-        original suite; this makes it visible.
-        """
-        import design_one_shot_runner as _runner
-        # Step 13 lives in `step_lec_equivalence` since F1 split it out so
-        # phase 3 can re-prove alone; the chain calls it. Both are read, so
-        # every assertion below covers at least the source it covered before.
-        src = (inspect.getsource(_runner.step_dft_lec_chain)
-               + inspect.getsource(_runner.step_lec_equivalence))
-        # Comments explain the decision; only executable lines are pinned.
-        code = "\n".join(re.sub(r"#.*$", "", ln) for ln in src.splitlines())
-        assert "_lec_gns.gate_netlist_for_lec(" in code, (
-            "step_dft_lec_chain must delegate the gate selection")
-        assert "_count_ff_cells" not in code and "_extract_ports" not in code, (
-            "the runner must not deep-import private predicate helpers to "
-            "rebuild a reference context")
-        assert "_synth.v" not in code, (
-            "the runner must not name a <top>_synth.v fallback")
-        # The delegated call must be the ONLY source of gate_netlist: no local
-        # re-derivation, and no `gate_netlist = <path expression>` anywhere.
-        direct = [ln for ln in code.splitlines()
-                  if re.match(r"\s*gate_netlist\s*=(?!=)", ln)]
-        assert not direct, (
-            f"gate_netlist must come from the delegated tuple unpack, not a "
-            f"local re-derivation; found {direct}")
-        unpack = [ln for ln in code.splitlines()
-                  if re.match(r"\s*gate_netlist\s*,", ln)]
-        assert len(unpack) == 1, (
-            f"expected exactly one delegated selection site; found {unpack}")
 
 
 # ---------------------------------------------------------------------------

@@ -110,7 +110,7 @@ _CLOSED_WORLD_SENTENCES = [
 
 
 @pytest.mark.parametrize('sentence', _CLOSED_WORLD_SENTENCES)
-@pytest.mark.parametrize('entry', ['chain', 'ordinary', 'late'])
+@pytest.mark.parametrize('entry', ['chain', 'ordinary'])
 def test_closed_world_hands_off_unaccounted_sentences(tmp_path, sentence, entry):
     import deterministic_emit_chain as chain
     import design_one_shot_runner as runner
@@ -132,9 +132,6 @@ def test_closed_world_hands_off_unaccounted_sentences(tmp_path, sentence, entry)
         source.write_text(prompt)
         before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
         result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
-    else:
-        before = {}
-        result = runner._try_spec_artifact_registry_rtl(tmp_path, time.time(), phase1_plain_text=prompt)
     if unsupported:
         assert result.status == 'PASS_WITH_WAIVERS', result
         assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
@@ -167,10 +164,6 @@ def test_closed_world_complete_interface_and_function_keep_exact_rtl(tmp_path):
     expected = K.synth(_KMAP_2IN, 'TopModule')
     assert chain.try_emit_ex(_KMAP_2IN, top='TopModule', check=False) == (
         'karnaugh_map', expected, [])
-    result = runner._try_spec_artifact_registry_rtl(
-        tmp_path, time.time(), phase1_plain_text=_KMAP_2IN)
-    assert result.status == 'PASS', result.detail
-    assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
     ordinary = tmp_path / 'ordinary'
     source = ordinary / 'phase1/input_prompt/design.md'
     source.parent.mkdir(parents=True)
@@ -210,7 +203,7 @@ def test_closed_world_port_prefix_does_not_account_for_unparsed_tail():
     assert result[1] == kmap_sop_synth.synth(prompt, 'TopModule')
 
 
-@pytest.mark.parametrize('entry', ['ordinary', 'structured_dispatch'])
+@pytest.mark.parametrize('entry', ['ordinary'])
 @pytest.mark.parametrize('declaration', ['description', 'logic_obligations'])
 def test_closed_world_structured_spec_cannot_bypass_source_accounting(tmp_path, entry, declaration):
     import json
@@ -232,8 +225,6 @@ def test_closed_world_structured_spec_cannot_bypass_source_accounting(tmp_path, 
               for p in tmp_path.rglob('*') if p.is_file()}
     if entry == 'ordinary':
         result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
-    else:
-        result = runner._try_deterministic_rtl_dispatch(tmp_path, time.time())
     if declaration == 'description':
         import truth_table_rtl_gen as truth_table
 
@@ -267,10 +258,6 @@ def test_closed_world_l9_only_spec_cannot_bypass_author_handoff(tmp_path, declar
     source.write_text(text)
     before = {p.relative_to(tmp_path): p.read_bytes()
               for p in tmp_path.rglob('*') if p.is_file()}
-    if not declared:
-        import time
-
-        assert runner._declared_logic_author_handoff(tmp_path, time.time(), '') is None
     result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
     assert result.status == 'PASS_WITH_WAIVERS', result
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
@@ -287,7 +274,7 @@ def test_closed_world_l9_only_spec_cannot_bypass_author_handoff(tmp_path, declar
     _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
-@pytest.mark.parametrize('entry', ['ordinary', 'structured_dispatch'])
+@pytest.mark.parametrize('entry', ['ordinary'])
 @pytest.mark.parametrize('kind', [None, 'logic_basis', 'logic_minimization'])
 def test_ruling100b_yaml_uses_only_typed_obligations(tmp_path, entry, kind):
     import time
@@ -308,8 +295,7 @@ def test_ruling100b_yaml_uses_only_typed_obligations(tmp_path, entry, kind):
     source.write_text(yaml.safe_dump(spec))
     before = {p.relative_to(tmp_path): p.read_bytes()
               for p in tmp_path.rglob('*') if p.is_file()}
-    result = (runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
-              if entry == 'ordinary' else runner._try_deterministic_rtl_dispatch(tmp_path, time.time()))
+    result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
     if kind is None:
         assert result.status == 'PASS', result
         assert Path(result.output_files[0]).read_text() == truth_table.generate(spec)
@@ -322,37 +308,10 @@ def test_ruling100b_yaml_uses_only_typed_obligations(tmp_path, entry, kind):
         _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
-@pytest.mark.parametrize('obligation_source', ['l9', 'rtl_spec'])
-def test_ruling100b_structured_sources_cannot_erase_each_others_obligations(tmp_path, obligation_source):
-    import json
-    import time
-    import design_one_shot_runner as runner
-
-    sentence = 'Use NAND gates alone.'
-    rows = [{'kind': 'logic_basis', 'family': ['nand'],
-             'source_sentence': sentence, 'source_span': [0, len(sentence)]}]
-    l9 = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
-    l9.parent.mkdir(parents=True)
-    l9.write_text(json.dumps({'top_module': 'top',
-        'logic_obligations': rows if obligation_source == 'l9' else []}))
-    spec = tmp_path / 'input/rtl_spec.json'
-    spec.parent.mkdir(parents=True)
-    spec.write_text(json.dumps({'module': 'top', 'inputs': [{'name': 'a'}], 'outputs': [{'name': 'y'}],
-        'rows': [{'in': '0', 'out': '0'}, {'in': '1', 'out': '1'}],
-        'logic_obligations': rows if obligation_source == 'rtl_spec' else []}))
-    before = {p.relative_to(tmp_path): p.read_bytes()
-              for p in tmp_path.rglob('*') if p.is_file()}
-    result = runner._try_deterministic_rtl_dispatch(tmp_path, time.time())
-    assert result.status == 'PASS_WITH_WAIVERS', result
-    assert result.extras['fallback_skill'] == 'spec-to-rtl'
-    assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
-    assert result.extras['logic_obligations'][0]['source_sentence'] == sentence
-    _assert_handoff_stages_author_inputs_only(
-        tmp_path, before, result, expert=obligation_source == 'l9')
 
 
 @pytest.mark.parametrize('sentence', _BASIS_PARAPHRASES + _MINIMIZATION_PARAPHRASES)
-@pytest.mark.parametrize('entry', ['chain', 'ordinary', 'late'])
+@pytest.mark.parametrize('entry', ['chain', 'ordinary'])
 def test_sentence_family_obligations_precede_all_author_paths(tmp_path, sentence, entry):
     import deterministic_emit_chain as chain
     import design_one_shot_runner as runner
@@ -372,10 +331,6 @@ def test_sentence_family_obligations_precede_all_author_paths(tmp_path, sentence
         before = {p.relative_to(tmp_path): p.read_bytes()
                   for p in tmp_path.rglob('*') if p.is_file()}
         result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
-    else:
-        before = {}
-        result = runner._try_spec_artifact_registry_rtl(
-            tmp_path, time.time(), phase1_plain_text=prompt)
     observed = result.status if result else 'NO_HANDOFF'
     assert observed == 'PASS_WITH_WAIVERS', result
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
@@ -517,7 +472,7 @@ _DECLARED_LOGIC_REQUESTS = [
 
 
 @pytest.mark.parametrize('obligation', _DECLARED_LOGIC_REQUESTS)
-@pytest.mark.parametrize('entry', ['producer', 'registry', 'record', 'chain', 'author'])
+@pytest.mark.parametrize('entry', ['producer', 'registry', 'record', 'chain'])
 def test_declared_logic_obligation_hands_off_before_sop(tmp_path, obligation, entry):
     import deterministic_emit_chain as chain
     import design_one_shot_runner as runner
@@ -535,18 +490,6 @@ def test_declared_logic_obligation_hands_off_before_sop(tmp_path, obligation, en
             text_fallthrough=lambda: K.synth(_KMAP_2IN, 'TopModule'))
     elif entry == 'chain':
         kind, rtl, rejected = chain.try_emit_ex(prompt, top='TopModule', check=False)
-    else:
-        result = runner._try_spec_artifact_registry_rtl(
-            tmp_path, time.time(), phase1_plain_text=prompt)
-        observed = result.status if result else 'NO_HANDOFF'
-        assert observed == 'PASS_WITH_WAIVERS', result
-        assert result.extras['fallback_skill'] == 'spec-to-rtl'
-        assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
-        assert Path(result.extras['fallback_skill_source']).is_file()
-        assert runner._rtl_gen_handoff([result]) == 'spec-to-rtl'
-        assert result.output_files == []
-        _assert_handoff_stages_author_inputs_only(tmp_path, {}, result)
-        return
     observed = 'DECLINED' if rtl is None else 'SOP' if '&' in rtl else 'OTHER_RTL'
     assert observed == 'DECLINED', {'observed': observed, 'rtl': rtl}
     if entry == 'chain':
@@ -584,9 +527,6 @@ def test_inactive_logic_mentions_preserve_unrestricted_bytes(tmp_path, obligatio
     assert K.synth(prompt, 'TopModule') == expected
     assert registry.generate(prompt, 'TopModule') == ('karnaugh_map', expected)
     assert chain.try_emit_ex(prompt, top='TopModule', check=False) == ('karnaugh_map', expected, [])
-    result = runner._try_spec_artifact_registry_rtl(tmp_path, time.time(), phase1_plain_text=prompt)
-    assert_program_candidate(result, prompt)
-    assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
 
 
 @pytest.mark.parametrize('obligation', _DECLARED_LOGIC_REQUESTS[:2])

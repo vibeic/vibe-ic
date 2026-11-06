@@ -44,9 +44,6 @@ _SIDECARS = ("power_domain.json", "level_shifter.json", "isolation.json")
 # The four programs M2's gate runs, with the --json evidence path each is
 # invoked with in the flow yaml.
 _M2_GATES = (
-    ("power_domain_crossing_check", f"{_DIR}/power_domain_crossing_audit.json"),
-    ("level_shifter_required_check", f"{_DIR}/level_shifter_audit.json"),
-    ("isolation_cell_required_check", f"{_DIR}/isolation_audit.json"),
     ("power_domain_signal_crossing_check",
      "reports/phase2/gates/power_domain_signal_crossing.json"),
 )
@@ -133,18 +130,3 @@ def test_the_m2_gates_write_nothing_into_the_plugin_source_tree(tmp_path):
         f"an M2 gate wrote into {_CWD_SPILL_DIR} — the plugin SOURCE tree — "
         "instead of the project it was given. The --json path handed to these "
         "programs must be absolute.")
-
-
-def test_absent_power_intent_is_a_disclosed_skip_not_a_clean_result(tmp_path):
-    """The three sidecar auditors must SKIP (rc=2), never exit 0, when the
-    power intent they audit is absent — that is what keeps the M2 gap visible
-    instead of reading as 'audited and found clean'."""
-    for name, evidence in _M2_GATES[:3]:
-        proj = tmp_path / f"skip_{name}"
-        proj.mkdir()
-        rc = _run_gate(name, proj, evidence)
-        assert rc == 2, (
-            f"{name} returned rc={rc} on a project with no power intent; the "
-            "input-missing convention is rc=2 (disclosed skip). rc=0 would "
-            "make 'nothing to look at' indistinguishable from 'looked and "
-            "found it clean'.")

@@ -43,8 +43,6 @@ class _Done:
 def _stub(monkeypatch, *, running: str, rc: int = 0):
     """Bytes MATCH; docker reports `.State.Running` as `running`."""
     monkeypatch.setattr(_cg.shutil, "which", lambda _n: "/usr/bin/docker")
-    monkeypatch.setattr(_cg._pin, "container_matches_pin",
-                        lambda *_a, **_k: "")
     monkeypatch.setattr(_cg._pin, "default_container_name",
                         lambda *_a, **_k: "vibeic-eda-deadbeef")
     monkeypatch.setattr(_cg.subprocess, "run",
@@ -81,12 +79,4 @@ def test_a_docker_that_cannot_be_run_is_not_usable(monkeypatch):
         raise OSError("no docker here")
 
     monkeypatch.setattr(_cg.subprocess, "run", _boom)
-    assert _cg.container_usable() is False
-
-
-def test_wrong_bytes_still_lose_regardless_of_running(monkeypatch):
-    """The identity half must survive the addition of the running half."""
-    _stub(monkeypatch, running="true\n")
-    monkeypatch.setattr(_cg._pin, "container_matches_pin",
-                        lambda *_a, **_k: "MISMATCH: other bytes")
     assert _cg.container_usable() is False

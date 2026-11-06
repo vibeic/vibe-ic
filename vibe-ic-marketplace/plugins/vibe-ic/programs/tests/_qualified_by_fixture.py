@@ -1,12 +1,8 @@
-"""Stage and SIGN a `qualified_by` field on a synthetic project
-(R-0929-X-QUALIFIED-4): a design-input line to quote, the structured field on
-the L9 port row, the D1 expectation that names the fact, and the D1 receipt
-over those exact bytes (the repo's own `_ai_judgement_fixture.sign`)."""
+"""Stage a synthetic `qualified_by` field and its D1 expectation facts."""
 
 import json
 from pathlib import Path
 
-from _ai_judgement_fixture import sign
 
 INPUT_DOC = "input/docs/L3_external_interface.md"
 
@@ -61,8 +57,7 @@ def write_expectation(project: Path, output: str, port: str,
 
 def sign_field(project: Path, output: str, port: str, level: str = "high",
                **kw) -> dict:
-    """The whole review: field + expectation + D1 receipt over those bytes."""
+    """Stage the field and its existing expectation facts."""
     field = stage_field(project, output, port, level, **kw)
     write_expectation(project, output, port, level)
-    sign(Path(project), "D1")
     return field

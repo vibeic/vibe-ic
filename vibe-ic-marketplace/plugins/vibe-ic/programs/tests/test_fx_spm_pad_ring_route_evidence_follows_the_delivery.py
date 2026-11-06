@@ -15,6 +15,7 @@ route condition is false: an owner-declared hardmacro with no operator slot,
 or no live slot/SELF_TAPEOUT route marker. A DIE on a live route still owes it.
 """
 import sys
+import yaml
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -33,7 +34,8 @@ GDS = "phase3/stage4/gds/top.gds"
 
 
 def _step37():
-    return H._steps()["37"]
+    return next(row for row in yaml.safe_load(H._FLOW.read_text(encoding="utf-8"))["steps"]
+                if str(row["id"]) == "37")
 
 
 def _mini_step():
@@ -52,9 +54,11 @@ def _mini_step():
 
 def test_step_37_still_declares_it_with_the_die_steps_own_clause():
     step = _step37()
+    die_step = next(row for row in yaml.safe_load(H._FLOW.read_text(encoding="utf-8"))["steps"]
+                    if str(row["id"]) == "15.5ic")
     assert EVIDENCE in step["required_outputs"]
     cond = (step.get("output_conditions") or {}).get(EVIDENCE)
     assert cond, "step 37 declares no condition for the attestation"
     assert cond["delivery_declares"] == \
-        H._steps()["15.5ic"]["condition"]["delivery_declares"]
-    assert cond == H._steps()["15.5ic"]["condition"]
+        die_step["condition"]["delivery_declares"]
+    assert cond == die_step["condition"]

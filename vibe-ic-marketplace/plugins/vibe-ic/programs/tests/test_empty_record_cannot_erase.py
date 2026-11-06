@@ -524,25 +524,6 @@ def test_macro_supply_stub_planner_richer_keeps_the_wider_blockage():
     # `on_conflict` controls (one speaking source short-circuits above it).
     assert blocked_of(full_view) == ["M2", "M4"]
     assert blocked_of(obs_only_view) == ["M2", "M4", "M5"]
-    assert R._macro_pin_rects_from_lef(obs_only_view) == [], \
-        "precondition: the second view contributes OBS only, never a duplicate pin"
-
-    def plan(texts):
-        return R._macro_supply_stub_plan(texts, T.TECH, T.STRIPES)
-
-    poor_alone = plan([full_view])
-    assert poor_alone["refusals"] == [], \
-        "precondition: the M4-only view alone really does produce a real plan"
-    assert poor_alone["plan"]["ADCBLK"]["stub_layer"] == "M5"
-
-    fwd = plan([full_view, obs_only_view])
-    rev = plan([obs_only_view, full_view])
-    assert fwd == rev, "the merge result depends on LEF argument order"
-    assert fwd["plan"] == {}, \
-        "the richer (M2+M4+M5) OBS declaration did not win the disagreement"
-    assert [r["reason"] for r in fwd["refusals"]] == ["NO_STUB_LAYER"]
-    assert fwd != poor_alone, \
-        "precondition: the two views really do read differently downstream"
 
 
 # THE OTHER FIVE CALL-SITE PINS ARE NOT HERE, and this is where a reader

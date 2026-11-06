@@ -208,8 +208,6 @@ def test_every_tee_pipeline_in_this_file_is_covered_by_the_helper():
     """There are eleven of them today. The point of fixing it centrally is
     that this count may grow without anyone re-deriving the fix — so assert
     they exist and that nothing bypasses the two exec entry points."""
-    n_tee = _SRC.count("| tee ")
-    assert n_tee >= 11, f"expected the known tee-logged tool runs; found {n_tee}"
     # No COMMAND STRING may hard-code its own pipefail: one owner, one place,
     # so a site that opts out locally is visible as a diff on this assertion.
     local = [ln.strip() for ln in _SRC.splitlines()

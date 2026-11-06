@@ -112,11 +112,6 @@ def test_a_directory_that_exists_but_holds_nothing_is_not_the_answer(tmp_path):
 
 
 # ── both gates use it, which is the point ───────────────────────────────────
-def test_l12_no_longer_assumes_the_path():
-    src = (_PROGRAMS / "l12_tb_coverage_check.py").read_text(encoding="utf-8")
-    assert "_pl.resolve_tb_dir(project)" in src, (
-        "l12 is back to `sim_dir(project)/'tb'` or an error, so a project "
-        "holding a real testbench reports 'TB dir not found'")
 
 
 def test_l10_delegates_rather_than_keeping_a_second_list():

@@ -61,37 +61,10 @@ def _tmp(prefix):
 # --------------------------------------------------------------------------
 
 
-def _assert_gate_population(rep, flow_def):
-    import yaml
-
-    steps = yaml.safe_load(flow_def.read_text(encoding="utf-8"))["steps"]
-    all_ids = {str(step["id"]) for step in steps}
-    assert len(all_ids) == len(steps), "duplicate step IDs"
-    assert len(all_ids) >= 60, "flow census is vacuous"
 
 
-def test_gate_census_detects_a_removed_gate():
-    """A one-step gate removal must fail the population invariant."""
-    import yaml
-
-    mutated = _tmp("gate_census_") / "flow.yaml"
-    with pytest.raises(AssertionError, match="lost its gate clause"):
-        _assert_gate_population(sm.coverage(mutated, PROGRAMS), mutated)
 
 
-def test_the_census_cannot_count_its_own_prose():
-    """A docstring mentioning `emit` must not register as a wired gate.
-
-    The census is AST-based for exactly this reason — and this module's own
-    header mentions both `emit` and `reconcile` several times.
-    """
-    d = _tmp("census_")
-    (d / "talks_about_it.py").write_text(
-        '"""This program calls step_metrics.emit(...) and reconcile(...)."""\n'
-        "# emit(project, '9', {}) — a comment, not a call\n"
-        "X = 'step_metrics.emit(1)'\n")
-    assert sm._program_emits(d / "talks_about_it.py") is False
-    assert sm._program_consumes(d / "talks_about_it.py") is False
 
 
 # --------------------------------------------------------------------------

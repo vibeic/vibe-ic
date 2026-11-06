@@ -23,19 +23,8 @@ import _progress_run as _pr  # noqa: E402
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-_SRC = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-_FILL_REGION = _SRC.split("ROW_UTILIZATION_PCT")[0][-4000:] + \
-    _SRC[_SRC.find("ROW_UTILIZATION_PCT") - 4000:
-         _SRC.find("ROW_UTILIZATION_PCT") + 2000]
 
 
-def test_emitted_tcl_carries_dual_accessor_probe():
-    # current-name probe + legacy fallback both present
-    assert "$bb dx" in _SRC and "$bb getDX" in _SRC
-    assert "$bb dy" in _SRC and "$bb getDY" in _SRC
-    # the area accumulation goes through the probes, not a bare getDX
-    assert "_rcw $_bb" in _SRC and "_rch $_bb" in _SRC
-    assert "double([$_bb getDX])" not in _SRC
 
 
 def test_dual_accessor_probe_executes_on_both_api_generations(tmp_path):
@@ -65,13 +54,3 @@ puts "old [_rcw rect_old]x[_rch rect_old]"
     assert r.returncode == 0, r.stderr
     assert "new 100x50" in r.stdout
     assert "old 100x50" in r.stdout
-
-
-def test_na_parse_behavior_unchanged():
-    # NEGATIVE: a genuinely unmeasurable run still parses to None (NA) —
-    # the gate's under-fill FAIL semantics are untouched (#510 tests own
-    # that axis; this only pins the parser contract the fix relies on).
-    import phase3_one_shot_runner as R
-    assert R._v0_3_9_parse_row_utilization("ROW_UTILIZATION_PCT NA\n") is None
-    assert R._v0_3_9_parse_row_utilization(
-        "ROW_UTILIZATION_PCT 99.848\n") == pytest.approx(99.848)

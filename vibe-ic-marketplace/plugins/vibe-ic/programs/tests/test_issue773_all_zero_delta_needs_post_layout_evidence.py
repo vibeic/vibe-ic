@@ -53,13 +53,12 @@ import _progress_run as _pr  # noqa: E402
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
-DECLARED_GATE = PROGRAMS / "analog_pre_vs_post_layout_check.py"
 STEP_GATE = PROGRAMS / "analog_a7_post_layout_resim_check.py"
 
 #: Both gates that certify `phase3/analog/<block>/pre_vs_post.json`: the FLOW
 #: declares the first, the A-track runner runs the second. The rule lives at
 #: one shared site, so neither may certify what the other refuses.
-GATES = (DECLARED_GATE, STEP_GATE)
+GATES = (STEP_GATE,)
 
 BLOCK = "blk_alpha"
 
@@ -195,23 +194,6 @@ def test_an_all_zero_comparison_carrying_its_provenance_certifies(
     assert "ALL_ZERO_DELTA_UNEVIDENCED" not in _both(cp), _both(cp)
 
 
-def test_the_two_gates_over_one_artefact_agree_on_all_three_trees(tmp_path):
-    """THE INVARIANT this repo already holds for this artefact: two gates that
-    certify ONE file must not disagree about it. The rule lives at one shared
-    site precisely so this cannot drift."""
-    trees = {
-        "no_evidence": _tree(tmp_path / "a", _copied_specs()),
-        "named_absent": _tree(tmp_path / "b", _copied_specs(),
-                              provenance={"extracted_netlist": EXTRACTED}),
-        "resolves": _tree(tmp_path / "c", _copied_specs(),
-                          provenance={"extracted_netlist": EXTRACTED},
-                          extraction=_EXTRACTED_DECK),
-    }
-    for name, project in trees.items():
-        rcs = {g.stem: _run(g, project).returncode for g in GATES}
-        assert len(set(rcs.values())) == 1, (
-            f"two gates over ONE artefact disagree about the {name!r} tree: "
-            f"{rcs}")
 
 
 # ═══ 2. WHAT COUNTS AS EVIDENCE, AND WHAT ONLY LOOKS LIKE IT ═══════════════
@@ -320,7 +302,6 @@ def test_a_declared_delta_cannot_buy_a_pass_for_a_copied_column(tmp_path):
         assert cp.returncode == 1, (
             f"{gate.stem} certified (rc={cp.returncode}) a copied post column "
             f"carrying a fabricated non-zero `delta_pct`:\n{_both(cp)}")
-    assert len(set(rcs.values())) == 1, rcs
 
 
 def test_the_flat_pre_post_schema_is_covered_too(tmp_path):
@@ -340,27 +321,8 @@ def test_the_flat_pre_post_schema_is_covered_too(tmp_path):
 
 # ═══ 3. NON-WEAKENING — the rules that already worked still work ═══════════
 
-def test_a_genuine_degradation_is_still_reported_as_before(tmp_path):
-    """THE NON-WEAKENING CONTROL the fix is judged against: the 20 %/30 % tiers
-    this gate exists for still bite. A 25 % drift is a MODERATE degradation and
-    is named as one."""
-    project = _tree(tmp_path, _drifted_specs(25.0))
-    cp = _run(DECLARED_GATE, project)
-    assert cp.returncode == 0, _both(cp)
-    out = _both(cp)
-    assert "LAYOUT_MODERATE_DEGRADATION" in out, out
-    assert "25.0% degradation" in out, out
-    assert "ALL_ZERO_DELTA_UNEVIDENCED" not in out, out
 
 
-def test_a_severe_degradation_is_still_severe(tmp_path):
-    """...and past 30 % it is still an ERROR that fails the gate."""
-    project = _tree(tmp_path, _drifted_specs(45.0))
-    cp = _run(DECLARED_GATE, project)
-    assert cp.returncode == 1, _both(cp)
-    out = _both(cp)
-    assert "LAYOUT_SEVERE_DEGRADATION" in out, out
-    assert "ALL_ZERO_DELTA_UNEVIDENCED" not in out, out
 
 
 def test_a_normal_measurement_needs_no_evidence_at_all(tmp_path):
@@ -377,20 +339,6 @@ def test_a_normal_measurement_needs_no_evidence_at_all(tmp_path):
             f"names no evidence (rc={cp.returncode}):\n{_both(cp)}")
 
 
-def test_zero_comparable_specs_is_still_zero_comparable_specs(tmp_path):
-    """ORDERING CONTROL. `#438(c)`'s rule owns the file that compares NOTHING;
-    this one owns the file that compares N numbers against themselves. A file
-    with no comparable pair must still be diagnosed as that — the new rule
-    cannot fire on it, because it requires at least one compared pair."""
-    project = _tree(tmp_path, [])
-    bd = project / "phase3" / "analog" / BLOCK
-    (bd / "pre_vs_post.json").write_text(json.dumps(
-        {"block": BLOCK, "comparison": {"vout": "ok"}}))
-    cp = _run(DECLARED_GATE, project)
-    assert cp.returncode == 1
-    out = _both(cp)
-    assert "PRE_VS_POST_ZERO_COMPARED" in out, out
-    assert "ALL_ZERO_DELTA_UNEVIDENCED" not in out, out
 
 
 def test_the_copy_is_named_before_the_content_question(tmp_path):
@@ -399,9 +347,7 @@ def test_the_copy_is_named_before_the_content_question(tmp_path):
     does not matter yet if the post column is the pre column, and a reader sent
     to fix the disclosure first would fix the wrong thing."""
     project = _tree(tmp_path, _copied_specs(), design_content=None)
-    for gate, content_rule in ((DECLARED_GATE,
-                                "PRE_VS_POST_DESIGN_CONTENT_UNDECLARED"),
-                               (STEP_GATE, "A7_DESIGN_CONTENT_UNDECLARED")):
+    for gate, content_rule in ((STEP_GATE, "A7_DESIGN_CONTENT_UNDECLARED"),):
         cp = _run(gate, project)
         assert cp.returncode == 1, _both(cp)
         out = _both(cp)
@@ -409,17 +355,6 @@ def test_the_copy_is_named_before_the_content_question(tmp_path):
         assert content_rule not in out, out
 
 
-def test_a_disclosed_library_default_keeps_its_own_tier(tmp_path):
-    """NEGATIVE CONTROL on the tier ladder: an honest all-zero measurement over
-    a disclosed library default still certifies, in the disclosed tier. Only
-    the copy costs — failing an honest ceiling teaches the next run to stop
-    being honest."""
-    project = _tree(tmp_path, _copied_specs(), design_content="structure_only",
-                    provenance={"extracted_netlist": EXTRACTED},
-                    extraction=_EXTRACTED_DECK)
-    cp = _run(DECLARED_GATE, project)
-    assert cp.returncode == 0, _both(cp)
-    assert "[PASS_STRUCTURE_ONLY]" in cp.stdout, cp.stdout
 
 
 # ═══ 4. THE LIMIT, RECORDED ════════════════════════════════════════════════

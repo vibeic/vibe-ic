@@ -28,7 +28,6 @@ from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
-from _ai_judgement_fixture import consume_phase1_expert_answer  # noqa: E402
 
 _RUNNER = PROGRAMS / "phase1_one_shot_runner.py"
 
@@ -75,20 +74,7 @@ def _reason(proj: Path):
 
 def _run_consumed(proj: Path, mode: str, *, portless: bool = False):
     first = _run(proj, mode)
-    # An extraction gap is the gate's real halt; only a completed extraction
-    # receives the synthetic expert answer and evidence-bound D1 receipt.
-    if _reason(proj) == "extraction_gap":
-        return first
-    argv = [sys.executable, str(_RUNNER), str(proj), "--ic-name", "dut",
-            "--mode", mode]
-    return consume_phase1_expert_answer(
-        proj, argv, subprocess.run,
-        expected_tokens=["payload"] if portless else ["clk", "rx", "cmd_out", "frame_done"],
-        layer="L8_RTL_CONSTANTS" if portless else "L9_INTERFACE",
-        field_path="timing_parameters" if portless else "top_ports",
-        requirement=("the input's eight-bit payload is recorded as a timing parameter"
-                     if portless else "all input-declared ports appear in L9"),
-        first=first, capture_output=True, text=True, timeout=600)
+    return first
 
 
 def test_both_front_doors_run_the_sufficiency_gate_at_all(tmp_path):

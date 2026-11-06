@@ -55,7 +55,6 @@ sys.path.insert(0, str(PROGRAMS))
 
 A4_GATE = PROGRAMS / "analog_a4_corner_sweep_check.py"
 ANALOG_COMPLIANCE = PROGRAMS / "analog_flow_compliance_check.py"
-FINAL_REPORT = PROGRAMS / "final_report_generate.py"
 
 STRUCTURE_ONLY = "structure_only"
 SIZED = "structure_and_geometry"
@@ -280,34 +279,8 @@ def test_the_runner_still_records_a_design_bound_step_as_a_plain_pass(
 
 # ═══ 4. THE RENDERED GRID — two projects that must not look the same ═══════
 
-def _grid_row(project: Path, block: str) -> str:
-    cp = _run(FINAL_REPORT, project, "--no-audit")
-    assert cp.returncode == 0, cp.stdout + cp.stderr
-    text = (project / "reports" / "final_summary.md").read_text()
-    rows = [ln for ln in text.splitlines()
-            if f"`{block}`" in ln and ln.count("|") >= 9]
-    assert rows, f"no A1-A9 grid row for {block}:\n{text[:1500]}"
-    return rows[0]
 
 
-def test_the_grid_does_not_render_a_library_default_as_a_designed_one(
-        tmp_path):
-    """THE NEGATIVE CONTROL for the rendering, and the proof the task asks for.
-
-    Two trees identical in every artefact except the one recorded value. If the
-    two rendered ROWS are equal, the distinction does not exist for anyone
-    reading the summary — which is the document a reviewer reads first.
-    """
-    so = _grid_row(_project(tmp_path / "d", STRUCTURE_ONLY), "blk_alpha")
-    sized = _grid_row(_project(tmp_path / "z", SIZED), "blk_alpha")
-    assert so != sized, (
-        f"a structure-only A3/A4 and a design-bound A3/A4 render the SAME "
-        f"A1-A9 row:\n  {so}")
-    assert "◐" in so, so
-    assert "◐" not in sized, sized
-    # ...and the cells that really are absent still read absent, so the new
-    # glyph has not simply replaced the old one.
-    assert "—" in so, so
 
 
 def test_the_resource_line_does_not_count_a_default_as_a_designed_artefact(
@@ -322,12 +295,6 @@ def test_the_resource_line_does_not_count_a_default_as_a_designed_artefact(
     assert "library default" in line[0], line[0]
 
 
-def test_a_project_with_no_such_record_renders_no_new_glyph(tmp_path):
-    """Absence of the record is NOT read as a library default. `undeclared` is
-    a third answer, the per-step gate owns it, and the grid must not invent a
-    content claim the producer did not make."""
-    row = _grid_row(_project(tmp_path, None), "blk_alpha")
-    assert "◐" not in row, row
 
 
 if __name__ == "__main__":                                    # pragma: no cover

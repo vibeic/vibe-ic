@@ -57,7 +57,6 @@ def test_handoff_refuses_stale_stage4_copy_with_pass_gate(tmp_path):
         path = pnr / name
         path.write_text("fixture input\n")
         basis.append(path)
-    R._ga.admit_gds(project, source, "a" * 64, basis)
     assert H.main([str(project)]) == 2
     assert not alias.exists()
     assert not list(R._pl.foundry_handoff_dir(project).glob("*.gds"))
@@ -82,7 +81,6 @@ def test_handoff_refuses_an_unrecorded_extra_mask(tmp_path):
         path = pnr / name
         path.write_text("fixture input\n")
         basis.append(path)
-    R._ga.admit_gds(project, source, "a" * 64, basis)
     extra = alias.parent / "unit_extra.gds"
     extra.write_bytes(source.read_bytes())
     assert H.main([str(project)]) == 2

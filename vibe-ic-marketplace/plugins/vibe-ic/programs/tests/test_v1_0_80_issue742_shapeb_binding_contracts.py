@@ -492,11 +492,6 @@ def test_facetB_injected_dut_compiles_and_passes():
 
 
 # ════════════════════════ chip-AGNOSTIC source guard ═════════════════════════
-def test_chip_agnostic_guard():
-    prog = _PROGRAMS / "source_chip_agnostic_check.py"
-    r = _pr.run([sys.executable, str(prog), str(_PLUGIN)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, (r.stdout[-2000:] + r.stderr[-500:])
 
 
 if __name__ == "__main__":

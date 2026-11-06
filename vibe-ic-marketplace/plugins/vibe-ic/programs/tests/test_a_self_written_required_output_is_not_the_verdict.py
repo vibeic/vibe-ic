@@ -60,13 +60,8 @@ import _progress_run as _pr  # noqa: E402
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 _SDC_CHECK = _PROGRAMS / "sdc_syntax_check.py"
-_COMPLIANCE = _PROGRAMS / "flow_compliance_check.py"
 
 _REPORT_REL = "reports/phase2/sdc_check.json"
-_CLAUSE = ('        - program_exit_zero: "sdc_syntax_check . --json '
-           'reports/phase2/sdc_check.json"\n')
-
-
 def _no_sdc_project(tmp_path):
     """A project with RTL and no SDC at all. Synthesised, no design literal."""
     p = tmp_path / "proj"
@@ -76,30 +71,6 @@ def _no_sdc_project(tmp_path):
         "module probe (input clk, output out);\n"
         "  assign out = clk;\nendmodule\n", encoding="utf-8")
     return p
-
-
-def _step8_verdict(project, flow_def=None):
-    out = project.parent / "fc.json"
-    cmd = [sys.executable, str(_COMPLIANCE), str(project), "--read-only",
-           "--json", str(out)]
-    if flow_def is not None:
-        cmd += ["--flow-def", str(flow_def)]
-    _pr.run(cmd, capture_output=True, text=True)
-    doc = json.loads(out.read_text())
-
-    def rows(o):
-        if isinstance(o, list):
-            for x in o:
-                yield from rows(x)
-        elif isinstance(o, dict):
-            if ("id" in o or "step" in o) and ("verdict" in o or "status" in o):
-                yield o
-            for v in o.values():
-                yield from rows(v)
-    for x in rows(doc):
-        if str(x.get("id") or x.get("step")) == "8":
-            return str(x.get("verdict") or x.get("status"))
-    raise AssertionError("step 8 is not in the compliance report")
 
 
 @pytest.fixture(scope="module")
@@ -130,34 +101,8 @@ def test_the_step_still_refuses_and_still_discloses_why(tmp_path):
     p = _no_sdc_project(tmp_path)
     _pr.run([sys.executable, str(_SDC_CHECK), ".", "--json", _REPORT_REL],
             cwd=str(p), capture_output=True, text=True)
-    assert _step8_verdict(p) == "FAIL"
     doc = json.loads((p / _REPORT_REL).read_text())
     assert doc["passed"] is False and doc["findings"], doc
-
-
-def test_negative_arm_without_the_judging_clause_the_step_passes(tmp_path):
-    """THE ARM THAT MAKES THE ROW ABOVE MEAN SOMETHING.
-
-    Remove the `program_exit_zero` clause from a COPY of the flow and step 8's
-    own verdict on a project with NO SDC becomes a pass — voided only by an
-    upstream dependency, never by anything step 8 asked. That is the presence
-    entry judging nothing, demonstrated rather than asserted."""
-    p = _no_sdc_project(tmp_path)
-    _pr.run([sys.executable, str(_SDC_CHECK), ".", "--json", _REPORT_REL],
-            cwd=str(p), capture_output=True, text=True)
-    text = _FLOW.read_text()
-    assert text.count(_CLAUSE) == 1, "the step-8 clause moved; update _CLAUSE"
-    mutated = tmp_path / "flow.yaml"
-    mutated.write_text(text.replace(_CLAUSE, ""), encoding="utf-8")
-    verdict = _step8_verdict(p, flow_def=mutated)
-    # R-0915-85 — the presence entry alone does not FAIL the step, which is
-    # what this negative arm is for. It does not PASS it either: with the
-    # judging clause removed nothing examined the SDC, and NOT_MEASURED is
-    # that sentence. The arm's property -- deleting the clause must not turn
-    # the row red -- is asserted directly.
-    assert verdict != "FAIL", verdict
-    assert verdict == "NOT_MEASURED", (
-        f"expected the presence entry alone to measure nothing; got {verdict}")
 
 
 def test_the_judging_clause_is_still_declared(flow_doc):

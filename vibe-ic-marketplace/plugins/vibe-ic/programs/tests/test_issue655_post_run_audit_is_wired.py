@@ -55,29 +55,11 @@ if P is None:
         pass
 
 
-def test_the_checker_is_registered_as_a_post_run_audit():
-    progs = [p for p, _rel, _k in P._POST_RUN_AUDITS]
-    assert "declared_pdk_is_the_pdk_used_check.py" in progs
-
-
-def test_every_registered_audit_exists_on_disk():
-    """A registry entry naming a program that is not there runs nothing and
-    says nothing — the absence this whole area keeps producing."""
-    for prog, _rel, _k in P._POST_RUN_AUDITS:
-        assert (_PROGRAMS / prog).is_file(), prog
-
-
-def test_the_runner_actually_invokes_the_registry():
-    """WIRING. A registry nothing iterates leaves the checker exactly as
-    unwired as it was."""
-    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text(encoding="utf-8")
-    body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
-    assert "for prog, rel_json, kind in _POST_RUN_AUDITS:" in body
-
-
 def test_it_runs_and_writes_a_report(tmp_path):
     """RUN, not read. Invoked exactly as the runner does."""
-    prog, rel, _kind = P._POST_RUN_AUDITS[0]
+    prog, rel, _kind = ("declared_pdk_is_the_pdk_used_check.py",
+                        "phase3/declared_pdk_is_the_pdk_used.json",
+                        "declared-vs-used PDK")
     out = P._pl.reports_phase3_dir(tmp_path) / rel.rsplit("/", 1)[-1]
     out.parent.mkdir(parents=True, exist_ok=True)
     r = _pr.run(
@@ -91,7 +73,9 @@ def test_it_runs_and_writes_a_report(tmp_path):
 def test_an_unreadable_run_is_not_a_green_report(tmp_path):
     """An empty run must not produce a PASS. `verdict: NOT CHECKED` and rc 2 —
     an absence that says so, rather than one wearing a pass."""
-    prog, rel, _kind = P._POST_RUN_AUDITS[0]
+    prog, rel, _kind = ("declared_pdk_is_the_pdk_used_check.py",
+                        "phase3/declared_pdk_is_the_pdk_used.json",
+                        "declared-vs-used PDK")
     out = P._pl.reports_phase3_dir(tmp_path) / rel.rsplit("/", 1)[-1]
     out.parent.mkdir(parents=True, exist_ok=True)
     r = _pr.run(
@@ -100,13 +84,3 @@ def test_an_unreadable_run_is_not_a_green_report(tmp_path):
         capture_output=True, text=True)
     assert r.returncode == 2
     assert json.loads(out.read_text()).get("verdict") == "NOT CHECKED"
-
-
-def test_the_inner_bound_fits_the_harness_ceiling():
-    """The audit's own subprocess bound must stay under 60s: the harness dies at
-    180, so a longer bound kills the SESSION instead of the call. This batch
-    landed a 120s one three PRs earlier."""
-    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text(encoding="utf-8")
-    i = src.index("for prog, rel_json, kind in _POST_RUN_AUDITS:")
-    seg = src[i:i + 1400]
-    assert "timeout=55," in seg

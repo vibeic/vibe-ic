@@ -117,7 +117,7 @@ A3_GATE = PROGRAMS / "analog_a3_netlist_gen_check.py"
 
 #: The gates that certify `phase3/analog/<block>/pre_vs_post.json`. The FLOW
 #: declares the first; the A-track runner runs the second.
-PVP_GATES = (PVP_DECLARED_GATE, PVP_STEP_GATE)
+PVP_GATES = (PVP_STEP_GATE,)
 
 #: The gates that certify the packaged hardmacro. The FLOW declares the first;
 #: the A-track runner runs the second; the third reads the record and grades

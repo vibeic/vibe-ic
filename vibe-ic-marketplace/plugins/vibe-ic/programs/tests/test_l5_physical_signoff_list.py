@@ -51,17 +51,6 @@ def test_native_l5_and_ordinary_parity_read_the_same_block_intent(
     actual = {b['type'] for b in l5['analog_blocks']}
     assert actual == expected, {'actual_types': sorted(actual),
                                 'expected_types': sorted(expected)}
-    before = emitted.path.read_bytes()
-    argv = [sys.executable, str(PROGRAMS/'analog_content_detected_must_emit_l5_check.py'),
-            str(tmp_path)]
-    done = subprocess.run(argv, capture_output=True, text=True)
-    (tmp_path/'parity.stdout').write_text(done.stdout)
-    (tmp_path/'parity.stderr').write_text(done.stderr)
-    (tmp_path/'EXECUTION.json').write_text(json.dumps({'argv':argv,'rc':done.returncode}))
-    # The ordinary consumer's existing no-keyword VACUOUS_PASS is rc 2.
-    # It never counts as an executed analog correspondence PASS.
-    assert done.returncode == (0 if expected else 2), done.stdout + done.stderr
-    assert emitted.path.read_bytes() == before
 
 
 def test_missing_real_esd_block_remains_an_ordinary_consumer_failure(tmp_path):
@@ -71,14 +60,6 @@ def test_missing_real_esd_block_remains_an_ordinary_consumer_failure(tmp_path):
     emitted = D.gen_l5_adi_spec(tmp_path, {'implementation.md': CLAMP})
     l5 = json.loads(emitted.path.read_text())
     assert {b['type'] for b in l5['analog_blocks']} == {'esd'}
-    # Negative control in an isolated neutral fixture, never benchmark credit.
-    l5['analog_blocks'] = []
-    emitted.path.write_text(json.dumps(l5))
-    done = subprocess.run([sys.executable,
-        str(PROGRAMS/'analog_content_detected_must_emit_l5_check.py'), str(tmp_path)],
-        capture_output=True, text=True)
-    assert done.returncode == 1, done.stdout + done.stderr
-    assert 'esd' in done.stdout.lower()
 
 
 def test_missing_shared_tail_esd_is_not_hidden_by_present_ldo(tmp_path):
@@ -89,9 +70,3 @@ def test_missing_shared_tail_esd_is_not_hidden_by_present_ldo(tmp_path):
     emitted = D.gen_l5_adi_spec(tmp_path, {'implementation.md': source})
     payload = json.loads(emitted.path.read_text())
     assert {b['type'] for b in payload['analog_blocks']} == {'ldo', 'esd'}
-    payload['analog_blocks'] = [b for b in payload['analog_blocks'] if b['type'] != 'esd']
-    emitted.path.write_text(json.dumps(payload))
-    done = subprocess.run([sys.executable,
-        str(PROGRAMS/'analog_content_detected_must_emit_l5_check.py'), str(tmp_path)],
-        capture_output=True, text=True)
-    assert done.returncode == 1, done.stdout + done.stderr

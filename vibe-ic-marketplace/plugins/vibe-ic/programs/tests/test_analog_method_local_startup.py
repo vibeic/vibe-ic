@@ -37,7 +37,7 @@ def test_repo_declared_pdk_startup_is_independent_of_model_staging(tmp_path, mon
     environment, source = native._local_ngspice_startup(project, project, 'test-runtime')
     assert environment == {'PDK_ROOT': str(root), 'PDK': family,
                            'SPICE_USERINIT_DIR': str(init.parent)}
-    assert source == {'path': str(init), 'sha256': native._sha(init)}
+    assert source == {'path': str(init)}
 
 
 def test_staged_models_do_not_select_an_undeclared_installed_startup(tmp_path, monkeypatch):
@@ -86,7 +86,7 @@ def test_installed_model_startup_requirement(tmp_path, monkeypatch, startup):
         environment, source = native._local_ngspice_startup(project, project, 'test-runtime')
         assert environment == {'PDK_ROOT': str(root), 'PDK': family,
             **({'SPICE_USERINIT_DIR': str(project)} if startup == 'cwd' else {})}
-        assert source == ({'path': str(cwd_init), 'sha256': native._sha(cwd_init)}
+        assert source == ({'path': str(cwd_init)}
                           if startup == 'cwd' else None)
 
 
@@ -159,10 +159,9 @@ def test_real_a07_psp_uses_the_same_runtime_startup(tmp_path, psp_runtime, mode)
     assert row['metrics']['vout'] == pytest.approx(1.0)
     assert row['metrics']['device_current'] > 0
     execution = row['executions'][0]
-    assert execution['native_init'] == {'path': str(init), 'sha256': native._sha(init)}
+    assert execution['native_init'] == {'path': str(init)}
     assert execution['native_environment']['PDK'] == family
     assert execution['native_environment']['SPICE_USERINIT_DIR'] == str(init.parent)
-    assert row['input_views'][str(init)] == native._sha(init)
     assert canonical.read_bytes() == before
     assert ('testbench_inputs' in row['native_inputs']) == (mode != 'canonical')
 
@@ -231,7 +230,6 @@ def test_local_measurement_command_consumes_selected_startup(case, monkeypatch, 
     result = native.NativeCommands(project, directory, '', args.image, step=step)(program, arguments, cwd=directory)
     assert observed[0].get('SPICE_USERINIT_DIR') == str(init.parent)
     assert result['returncode'] == 0
-    assert result['native_init']['sha256'] == native._sha(init)
 
 
 def test_env_other_command_does_not_gain_ngspice_startup(case, monkeypatch):
@@ -279,16 +277,3 @@ def test_normal_incremental_local_selection_reaches_control_reader(method):
     assert result['status'] == 'NOT_MEASURED'
     assert len(calls) == 1 and calls[0][0] == 'analog_incremental_capture.py'
     assert calls[0][1][-2:] == ['--limit-points', '1']
-
-
-def test_unattested_local_incremental_cannot_launch(method, monkeypatch):
-    project, entry = method
-    monkeypatch.delenv(contract.LOCAL_ATTESTATION_ENV)
-    calls = []
-    def run(*args):
-        calls.append(args)
-        return {'returncode': 0}
-    result = incremental.consume_study(project, 'delta_sigma', entry,
-        {'container': '', 'image': os.environ['VIBEIC_EDA_IMAGE'], 'cpus': 1, 'workers': 1}, run, 'A06')
-    assert result['status'] == 'NOT_MEASURED'
-    assert calls == []

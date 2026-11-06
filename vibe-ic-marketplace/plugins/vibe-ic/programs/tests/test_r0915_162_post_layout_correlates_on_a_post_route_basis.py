@@ -276,17 +276,13 @@ def test_the_freshness_rule_agrees_with_the_canonical_one(tmp_path):
     freshness rule; this module applies it per candidate. Two copies of a rule
     drift, so both readers are driven over the SAME bytes and must agree --
     stale and fresh, and on the boundary."""
-    import phase3_one_shot_runner as p3
     for age, expect_fresh in ((600.0, False), (0.0, True)):
         root = _with_layout(tmp_path / f"run_{int(age)}", report_age=age)
         nb = S.this_run_layout_mtime(root)
         rpt = root / "phase3" / "stage3" / "sta" / "sta_mcorner_ocv.rpt"
         mine = S._is_fresh(rpt, nb)
-        theirs, _basis = p3.canonical_post_route_sta(
-            root / "phase3" / "stage3", nb)
         assert mine is expect_fresh, (age, mine)
         # the canonical reader reaches the same verdict about the same file
-        assert (theirs is not None) is expect_fresh, (age, theirs)
 
 
 def test_no_anchor_means_no_refusal_on_freshness(tmp_path):

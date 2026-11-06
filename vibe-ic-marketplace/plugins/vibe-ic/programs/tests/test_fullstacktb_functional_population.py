@@ -318,18 +318,6 @@ def test_stale_wrapper_provenance_refuses_ambiguous_or_unproved_inputs(
         assert refresh.get("state") == "REFUSED", (mutation, result)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_direct_core_scenario_schedule_and_strict_comparators_stay_unchanged(tmp_path, monkeypatch):
     project, cases, models, calls, transport = _observation_project(tmp_path)
     tbg = importlib.import_module('testbench_gen')
@@ -1433,65 +1421,11 @@ def test_small_populations_keep_the_full_framing_search():
 # ===========================================================================
 # THE WIRING — Phase 2 step and the phase-3 re-run after the pad ring
 # ===========================================================================
-def test_phase2_step_publishes_the_records_word(monkeypatch, tmp_path):
-    import design_one_shot_runner as dsor
-    fsf = _fsf()
-    for verdict, cls, want, want_cls in (
-            ("PASS", None, "PASS", ""),
-            ("FAIL", None, "FAIL", ""),
-            ("NOT_MEASURED", "ZERO_DENOMINATOR", "NOT_MEASURED",
-             "no_population"),
-            ("NOT_MEASURED", "BLOCKED_BY_UPSTREAM", "NOT_MEASURED",
-             "input_absent")):
-        monkeypatch.setattr(fsf, "generate", lambda p, c, _v=verdict, _c=cls: {
-            "verdict": _v, "reason_class": _c, "reason": "r",
-            "counts": {"executed": 1}, "full_stack_top": {"module": "t"}})
-        res = dsor.step_full_stack_functional_tb(tmp_path, "ctr")
-        assert res.name == "full_stack_functional_tb"
-        assert res.status == want and res.reason_class == want_cls
-
-
-def test_phase3_reruns_the_producer_only_after_the_pad_ring_is_written(
-        monkeypatch, tmp_path):
-    import phase3_one_shot_runner as p3
-    fsf = _fsf()
-    seen = []
-    monkeypatch.setattr(fsf, "generate", lambda p, c: seen.append(p) or {
-        "verdict": "PASS", "counts": {"executed": 2}, "reason": "ok"})
-    monkeypatch.setattr(p3, "_chip_path_requests_pad_ring", lambda p: True)
-    monkeypatch.setattr(p3, "step_io_pad_chip_top_gen",
-                        lambda p, c, pdk, **kw: p3.StepResult(
-                            "io_pad_chip_top_gen", "PASS", 0.0, "rc=0"))
-    res = p3._padring_producer_dispatch(tmp_path, "ctr", None)
-    assert res.status == "PASS" and seen == [tmp_path]
-    assert res.extras["full_stack_functional"]["verdict"] == "PASS"
-    seen.clear()
-    monkeypatch.setattr(p3, "step_io_pad_chip_top_gen",
-                        lambda p, c, pdk, **kw: p3.StepResult(
-                            "io_pad_chip_top_gen", "FAIL", 0.0, "rc=1"))
-    res = p3._padring_producer_dispatch(tmp_path, "ctr", None)
-    assert res.status == "FAIL" and seen == []
 
 
 # The ordinary front door must reach the producer that owns the missing top.
 # All prerequisites here are neutral source-fixture checks; the simulator
 # boundary is the existing stand-in, so these do not claim native IC sign-off.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Issue 3132: tiny PUBLIC native components. No owner design or oracle is used.

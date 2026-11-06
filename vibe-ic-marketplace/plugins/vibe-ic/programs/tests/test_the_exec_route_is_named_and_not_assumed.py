@@ -82,7 +82,7 @@ def route(monkeypatch):
         monkeypatch.setattr(P3, "_LOCAL_EXEC_MODE", None, raising=False)
         real_which = shutil.which
         monkeypatch.setattr(
-            P3.shutil, "which",
+            shutil, "which",
             lambda n, *a, **k: (docker_path if n == "docker"
                                 else real_which(n, *a, **k)))
         if eda_container is None:

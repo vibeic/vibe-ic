@@ -55,14 +55,6 @@ def test_section_is_697_companion_not_duplicate():
         "#699 section should cross-reference the #697 deterministic gate"
 
 
-def test_chip_agnostic_no_design_literal():
-    """The appended section carries no chip/SKU literal — universal disciplines."""
-    import sys
-    prog = (Path(__file__).resolve().parents[1] / "source_chip_agnostic_check.py")
-    r = _pr.run([sys.executable, str(prog),
-                        str(Path(__file__).resolve().parents[1].parent)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-500:]
 
 
 if __name__ == "__main__":

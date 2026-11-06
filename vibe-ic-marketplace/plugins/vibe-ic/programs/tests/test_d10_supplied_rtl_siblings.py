@@ -82,16 +82,12 @@ SPM = "module spm(input clk, output p);\n  assign p = clk;\nendmodule\n"
 TB = "module tb_spm;\n  spm u ();\nendmodule\n"
 
 
-
-
 def test_the_waive_counts_what_consume_stages(tmp_path):
     p = _vendor(tmp_path, {"spm.v": SPM, "tb_spm.v": TB})
     res = R.step_rtl_gen(p, "digital_cmd_driven")
     assert res.extras.get("fallback_skill") == "catalog-glue-author"
     assert "1 file(s)" in res.detail and "tb_spm" not in res.detail, \
         res.detail[:400]
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -135,8 +131,6 @@ def test_the_generator_runs_without_supplied_rtl(tmp_path, cls, mk, top,
 PARTIAL = [c for c in CLASSES if c[0] != "data_converter"]
 
 
-
-
 def test_a_supplied_generator_top_is_full_coverage_and_yields(tmp_path):
     """FULL coverage: data_converter's own top is the one module it emits
     (`cic_decimator`, not the L9 top `adc_top`); supplying it supplies the
@@ -154,8 +148,6 @@ def test_a_supplied_generator_top_is_full_coverage_and_yields(tmp_path):
     out = C.consume_reused_ip_rtl(p)
     assert out["staged"] == ["cic_decimator.v"]
     assert _defs(p, "cic_decimator") == 1
-
-
 
 
 @pytest.mark.parametrize("cls,mk,top,emitted", CLASSES,
@@ -206,8 +198,6 @@ def test_a_testbench_that_defines_the_top_is_not_the_design(tmp_path, files):
     assert R.step_rtl_gen(p, "mixed_signal_otp").status == "PASS"
 
 
-
-
 # =========================================================================== #
 # review of D6, follow-ups (a)-(d)
 # =========================================================================== #
@@ -216,21 +206,11 @@ D6 = _load("test_d6_supplied_rtl_outranks_every_generator")
 ARITH = D6.ARITH
 
 
-@pytest.fixture
-def _session(monkeypatch):
-    monkeypatch.setattr(R, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(R, "_RTL_SESSION_PROJECT", None)
-
-
-
-
 # (a) supplied VHDL never disappears silently -------------------------------
 VHDL = "entity top is end entity;\narchitecture rtl of top is begin end;\n"
 
 
-
-
-def test_a_supplied_vhdl_is_named_in_the_rtl_gen_result(tmp_path, _session):
+def test_a_supplied_vhdl_is_named_in_the_rtl_gen_result(tmp_path):
     p = D6._spm_project(tmp_path)
     D6._supply(p, "input/rtl", "spm.vhd", VHDL)
     res = R.step_rtl_gen(p, ARITH)
@@ -242,7 +222,7 @@ def test_a_supplied_vhdl_is_named_in_the_rtl_gen_result(tmp_path, _session):
 @pytest.mark.parametrize("route", ["input/rtl", "input/design_src/impl/rtl",
                                    "input/vendor_rtl"])
 def test_b_a_deferral_is_recorded_and_hands_off_as_reused_ip(
-        tmp_path, _session, route):
+        tmp_path, route):
     p = D6._spm_project(tmp_path)
     D6._supply(p, route, "spm.v", D6.SUPPLIED_SPM)
     res = R.step_rtl_gen(p, ARITH)
@@ -257,7 +237,7 @@ def test_b_a_deferral_is_recorded_and_hands_off_as_reused_ip(
         route == "input/vendor_rtl")
 
 
-def test_b_force_regen_overridden_by_supplied_rtl_is_said(tmp_path, _session):
+def test_b_force_regen_overridden_by_supplied_rtl_is_said(tmp_path):
     p = D6._prose_project(tmp_path, "bf", D6.BEHAVIORAL_PROSE)
     D6._supply(p, "input/rtl", "own_top.v", D6._supplied("own_top"))
     res = R.step_rtl_gen(p, ARITH, force_regen=True)
@@ -271,7 +251,7 @@ def test_b_force_regen_overridden_by_supplied_rtl_is_said(tmp_path, _session):
 DEFINES = "// spm widths\n`define SPM_BITS 8\n`define SPM_SIGNED 0\n"
 
 
-def test_c_a_define_only_v_file_does_not_stop_the_generator(tmp_path, _session):
+def test_c_a_define_only_v_file_does_not_stop_the_generator(tmp_path):
     p = D6._spm_project(tmp_path)
     D6._supply(p, "input/rtl", "spm_defines.v", DEFINES)
     res = R.step_rtl_gen(p, ARITH)
@@ -282,12 +262,7 @@ def test_c_a_define_only_v_file_does_not_stop_the_generator(tmp_path, _session):
     assert C.discover_supplied_design_sources(p) == []
 
 
-
-
 # (d) a previous run's generated rtl/ does not block the supplied design ----
-
-
-
 
 
 # =========================================================================== #
@@ -306,7 +281,7 @@ def test_consume_twice_does_not_claim_the_supplied_rtl_is_missing(tmp_path):
 
 
 def test_rtl_gen_after_consume_does_not_claim_the_supplied_rtl_is_blocked(
-        tmp_path, _session):
+        tmp_path):
     p = D6._spm_project(tmp_path)
     D6._supply(p, "input/vendor_rtl", "spm.v", D6.SUPPLIED_SPM)
     R.step_rtl_gen(p, ARITH)
@@ -336,7 +311,7 @@ def test_a_changed_supplied_file_is_still_reported(tmp_path):
 # WAIVE, told to start from the supplied RTL; reused IP gets catalog-glue.
 @pytest.mark.parametrize("route", ["input/rtl", "input/design_src/impl/rtl"])
 def test_context_rtl_keeps_spec_to_rtl_and_is_the_starting_point(
-        tmp_path, _session, route):
+        tmp_path, route):
     p = D6._spm_project(tmp_path)
     D6._supply(p, route, "spm.v", "module spm(input clk);\n  // TODO\n"
                                   "endmodule\n")
@@ -351,7 +326,7 @@ def test_context_rtl_keeps_spec_to_rtl_and_is_the_starting_point(
     assert again.extras["fallback_skill"] == "spec-to-rtl", again.extras
 
 
-def test_reused_ip_under_vendor_rtl_gets_catalog_glue(tmp_path, _session):
+def test_reused_ip_under_vendor_rtl_gets_catalog_glue(tmp_path):
     p = D6._spm_project(tmp_path)
     D6._supply(p, "input/vendor_rtl", "spm.v", D6.SUPPLIED_SPM)
     res = R.step_rtl_gen(p, ARITH)
@@ -359,7 +334,7 @@ def test_reused_ip_under_vendor_rtl_gets_catalog_glue(tmp_path, _session):
     assert "Do NOT author the design itself" in res.detail
 
 
-def test_a_declared_reused_ip_manifest_gets_catalog_glue(tmp_path, _session):
+def test_a_declared_reused_ip_manifest_gets_catalog_glue(tmp_path):
     """Reused IP through the runner's own loader: a manifest that DECLARES
     reused_ip (not consume's own staging record) under input/rtl."""
     p = D6._spm_project(tmp_path)
@@ -377,7 +352,7 @@ def test_a_declared_reused_ip_manifest_gets_catalog_glue(tmp_path, _session):
 @pytest.mark.parametrize("route,skill", [
     ("input/vendor_rtl", "catalog-glue-author"), ("input/rtl", "spec-to-rtl")])
 def test_an_unregistered_class_uses_the_same_supplied_rtl_hand_off(
-        tmp_path, _session, route, skill):
+        tmp_path, route, skill):
     p = D6._spm_project(tmp_path)
     D6._supply(p, route, "spm.v", D6.SUPPLIED_SPM)
     res = R.step_rtl_gen(p, "no_such_class_d10")
@@ -390,7 +365,7 @@ def test_an_unregistered_class_uses_the_same_supplied_rtl_hand_off(
 
 # MINOR — a guard that stepped aside says it was NOT evaluated, not that the
 # generator "deferred" as if it applied.
-def test_a_skipped_generator_is_recorded_as_not_evaluated(tmp_path, _session):
+def test_a_skipped_generator_is_recorded_as_not_evaluated(tmp_path):
     p = D6._spm_project(tmp_path)
     D6._supply(p, "input/vendor_rtl", "spm.v", D6.SUPPLIED_SPM)
     res = R.step_rtl_gen(p, ARITH, force_regen=True)
@@ -398,7 +373,6 @@ def test_a_skipped_generator_is_recorded_as_not_evaluated(tmp_path, _session):
     assert recs and all(r["applicability"] == "not_evaluated" for r in recs)
     assert "not run" in res.detail and "deferred to the supplied RTL" \
         not in res.detail
-
 
 
 # =========================================================================== #
@@ -438,7 +412,7 @@ def test_an_in_place_edit_of_the_staged_copy_is_not_reported(tmp_path):
     assert list(mf["staged_from_input_sha256"]) == ["input/rtl/spm.v"]
 
 
-def test_mixed_context_stub_and_vendor_ip_hand_off_per_file(tmp_path, _session):
+def test_mixed_context_stub_and_vendor_ip_hand_off_per_file(tmp_path):
     """A completion stub in input/rtl beside a vendor IP: the stub is the
     starting point (spec-to-rtl), the vendor file is kept as IP; nothing says
     "Do NOT author". RED on 77f5ba13e (one vendor file made it all IP)."""
@@ -456,7 +430,7 @@ def test_mixed_context_stub_and_vendor_ip_hand_off_per_file(tmp_path, _session):
     assert "input/vendor_rtl/ip_core.v" in res.detail
 
 
-def test_input_source_manifest_declares_reused_ip(tmp_path, _session):
+def test_input_source_manifest_declares_reused_ip(tmp_path):
     """`input/SOURCE_MANIFEST.json` reused_ip:true is a supported declaration
     path: RTL under input/rtl it covers is reused IP (catalog-glue). RED on
     77f5ba13e (only the phase2 manifest was read)."""
@@ -473,13 +447,6 @@ def test_input_source_manifest_declares_reused_ip(tmp_path, _session):
 # =========================================================================== #
 _SUPPLIED_OTP = ("// supplied\nmodule otp_mem(input clk, output q);\n"
                  "  assign q = clk;\nendmodule\n")
-
-
-
-
-
-
-
 
 
 # =========================================================================== #

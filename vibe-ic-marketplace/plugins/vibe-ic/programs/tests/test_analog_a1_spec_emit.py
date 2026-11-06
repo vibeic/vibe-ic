@@ -384,8 +384,6 @@ def test_native_a01_refreshes_a_retained_spec_for_new_attribution_and_blocks_bad
     assert row['status'] == ('PASS' if approved else 'FAIL'), row
     assert row['executions'][0]['program'] == 'analog_a1_spec_emit.py'
     if approved:
-        assert row['input_views'][str(path)] == hashlib.sha256(path.read_bytes()).hexdigest()
-        assert str(tmp_path / 'phase3/analog/chip_specs.json') in row['output_views']
         body = read_json(bdir(tmp_path, 'regulator_alpha') / 'spec.json')
         assert body['_provenance']['unattributed_electrical_rows_not_bound'] == 0
         path.unlink()

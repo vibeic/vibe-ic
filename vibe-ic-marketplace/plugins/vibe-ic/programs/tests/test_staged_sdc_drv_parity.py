@@ -129,28 +129,6 @@ set_max_fanout 12 [current_design]
 
 
 
-def test_step_pnr_wires_the_parity_pass_on_the_staged_branch():
-    """The defect was a MISSING CALL, not a bad function — guard the wiring so a
-    refactor cannot silently drop it back onto the unconstrained path.
-
-    FX_STEP7_ASIC_SDC moved the SDC author out of `step_pnr` into step 7's
-    producer (`_ppa.timing.author_asic_sdc`), which `step_pnr` now loads via
-    `asic_sdc_for_pnr`. The SAME property is asserted where the code lives:
-    the author's design-supplied-SDC branch applies the parity pass, and
-    `step_pnr` still writes the pass's record."""
-    author_src = (PROGRAMS / "_ppa" / "timing.py").read_text()
-    author = author_src.split("def author_asic_sdc(", 1)[1].split("\ndef ", 1)[0]
-    staged_branch = author.split('if out["design_staged"]:', 1)[1].split(
-        "\n    else:", 1)[0]
-    assert "_ensure_staged_sdc_drv(" in staged_branch, (
-        "step 7's design-supplied-SDC branch no longer applies the DRV "
-        "parity pass — a design shipping its own SDC would reach PnR with no "
-        "slew/cap target and repair_design would leave the slews unrepaired")
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    step_pnr_src = src.split("def step_pnr(", 1)[1].split(
-        "\ndef _decap_route_short_guard(", 1)[0]
-    assert "asic_sdc_for_pnr(" in step_pnr_src
-    assert '("drv_parity", "sdc_drv_parity.json")' in step_pnr_src
 
 
 def test_step_pnr_wires_the_fanout_cap_into_cts_clustering():

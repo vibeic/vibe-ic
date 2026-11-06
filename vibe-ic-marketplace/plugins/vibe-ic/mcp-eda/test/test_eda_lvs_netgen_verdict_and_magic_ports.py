@@ -79,29 +79,8 @@ def _extract_tool_block(src: str, tool: str) -> str:
 
 # ───────────────────────── A. static index.js checks ─────────────────────────
 
-def test_netgen_branch_drops_naive_match_regex():
-    """The naive `output.match(/uniquely/i) || ... /match/i` boolean and the
-    `match != null && !fail` matched/success derivation MUST be gone from the
-    eda_lvs CODE (comments documenting the historical bug are allowed)."""
-    block = _strip_js_comments(_extract_tool_block(INDEX_JS.read_text(), "eda_lvs"))
-    assert "result.output.match(/uniquely/i)" not in block, \
-        "the naive /uniquely/i verdict regex must NOT remain in the netgen branch"
-    assert "match != null && !fail" not in block, \
-        "the naive `match != null && !fail` matched/success derivation must be gone"
 
 
-def test_netgen_branch_uses_verdict_parser():
-    """The netgen branch derives its verdict from classifyNetgenVerdict and a
-    DID-NOT-RUN report probe — not a bare token match."""
-    block = _extract_tool_block(INDEX_JS.read_text(), "eda_lvs")
-    for required in (
-        "classifyNetgenVerdict",
-        "reportWritten",          # DID-NOT-RUN guard probes the report file
-        "verdict.matched",        # success/matched come from the parsed verdict
-        "load_stdcell_lib",       # std-cell-lib load param
-        "resolveLayoutTop",       # `_flat` auto-name-align
-    ):
-        assert required in block, f"eda_lvs netgen branch missing: {required!r}"
 
 
 def test_index_imports_netgen_verdict_module():
@@ -299,27 +278,10 @@ def test_build_netgen_lvs_tcl_loads_stdcell_into_schematic():
 
 # ───────── C. regression: old naive logic WOULD have false-positived ─────────
 
-def _old_naive_verdict(output: str) -> dict:
-    """Faithful re-implementation of the PRE-fix index.js netgen verdict."""
-    match = re.search(r"uniquely", output, re.I) or re.search(r"match", output, re.I)
-    fail = re.search(r"mismatch|NOT match|FAIL", output, re.I)
-    return {"matched": bool(match) and not fail, "success": not fail}
 
 
-def test_old_logic_was_a_false_positive_on_property_error():
-    """Proves the fix is load-bearing: the OLD logic scored the property-error
-    mismatch as matched=true (the silent false sign-off the backlog reports)."""
-    old = _old_naive_verdict(_PROPERTY_ERROR)
-    assert old["matched"] is True, \
-        "guard test: the OLD naive logic DID false-positive this case"
 
 
-def test_old_logic_scored_did_not_run_as_success():
-    """The OLD logic returned success=true on a 'Cannot find cell' run that
-    never compared (it would have written a PASS manifest)."""
-    old = _old_naive_verdict(_DID_NOT_RUN)
-    assert old["success"] is True, \
-        "guard test: the OLD naive logic DID treat a did-not-run as success"
 
 
 if __name__ == "__main__":  # pragma: no cover

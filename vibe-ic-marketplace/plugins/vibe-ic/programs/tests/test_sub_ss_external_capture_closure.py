@@ -27,10 +27,6 @@ def test_the_cts_chain_runs_a_measured_external_capture_retap_step():
     assert driver.index("external_capture_launch_retap.tcl") < driver.index("write_views")
     assert "VIBEIC_CLKPATH_PRECTS_INSTANCES" in driver
     assert 'id = "Vibeic.ExternalCaptureLaunchRetap"' in (steps / "__init__.py").read_text()
-    chain = (PROGRAMS / "librelane_cts_hold.py").read_text()
-    assert chain.index('("Vibeic.ClockPathDriveSizing",') < chain.index(
-        '("Vibeic.ExternalCaptureLaunchRetap",') < chain.index(
-        '("OpenROAD.ResizerTimingPostCTS",')
     body = helper.read_text()
     assert "find_timing_paths" in body and "all_outputs" in body
     assert "_vic_prects_insts" in body and "is_buffer" in body

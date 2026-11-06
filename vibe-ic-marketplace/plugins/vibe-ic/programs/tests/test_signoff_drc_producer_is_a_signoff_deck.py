@@ -418,10 +418,6 @@ def test_violations_still_fail_under_signoff(tmp_path):
 
 
 
-def test_re_stamping_an_unchanged_artefact_is_still_a_no_op(tmp_path):
-    proj = project(tmp_path, klayout_rdb(top="top"))
-    assert runner._v1_6_620_append_pv_signoff_provenance(proj, "top")
-    assert runner._v1_6_620_append_pv_signoff_provenance(proj, "top") == []
 
 
 

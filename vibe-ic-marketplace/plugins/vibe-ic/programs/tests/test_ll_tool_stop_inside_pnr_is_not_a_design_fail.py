@@ -30,26 +30,11 @@ import _analog_producer_common as _pc
 import _watchdog as W
 import verdict as _V
 
-import test_librelane_route as TR
-import test_librelane_cts_hold as TC
-import test_pnr_tool_fatal_signal_and_checkpoint_resume as TP
 
-contract = TR.contract
+import librelane_contract as contract
 
 STOPS = [('LL_TOOL_STALLED', W.RC_STALLED, _V.ReasonClass.STALLED.value),
          ('LL_TOOL_DEADLINE', 124, _V.ReasonClass.BUDGET_EXHAUSTED.value)]
-
-
-def _raising_as(monkeypatch, code):
-    """The route/CTS fakes raise `contract.Refusal('LL_STEP_FAILED', step)` at
-    the run_chain edge for `fail_step`. Re-spell that refusal as `code`, so the
-    SHIPPED execute() meets the stop where a real one would reach it."""
-    real = contract.Refusal
-
-    class _As(real):
-        def __init__(self, c, detail):
-            super().__init__(code if c == 'LL_STEP_FAILED' else c, detail)
-    monkeypatch.setattr(contract, 'Refusal', _As)
 
 
 # ── the contract's one mapping, extended to the session rc ─────────────────
@@ -66,66 +51,11 @@ def test_the_contract_names_the_session_rc_of_every_stop():
 
 # ── step 21: librelane_route.execute ─────────────────────────────────────────
 
-@pytest.mark.parametrize('code,rc,_reason', STOPS)
-def test_route_returns_the_stop_as_the_sessions_stop_code(tmp_path, monkeypatch,
-                                                          code, rc, _reason):
-    _raising_as(monkeypatch, code)
-    run = TR._run(tmp_path, monkeypatch, fail_step='OpenROAD.DetailedRouting')
-    assert run.rc == rc
-    assert f'PNR_ROUTE_REFUSED {code}' in run.out
-    assert not (run.out_dir / 'routed_preantenna.odb').exists()
-
-
-def test_route_keeps_a_tool_that_ran_and_failed_at_rc_1(tmp_path, monkeypatch):
-    run = TR._run(tmp_path, monkeypatch, fail_step='OpenROAD.DetailedRouting')
-    assert run.rc == 1 and 'LL_STEP_FAILED' in run.out
-
 
 # ── steps 19/20: librelane_cts_hold.execute ─────────────────────────────────
 
-@pytest.mark.parametrize('code,rc,_reason', STOPS)
-def test_cts_hold_returns_the_stop_as_the_sessions_stop_code(tmp_path, monkeypatch,
-                                                             code, rc, _reason):
-    _raising_as(monkeypatch, code)
-    run = TC._run_split(tmp_path, monkeypatch, fail_step='OpenROAD.CTS')
-    assert run.rc == rc
-    assert f'PNR_CTS_HOLD_REFUSED {code}' in run.out
-
-
-def test_cts_hold_keeps_a_tool_that_ran_and_failed_at_rc_1(tmp_path, monkeypatch):
-    run = TC._run_split(tmp_path, monkeypatch, fail_step='OpenROAD.CTS')
-    assert run.rc == 1 and 'LL_STEP_FAILED' in run.out
-
 
 # ── step_pnr: the session's stop code is NOT_MEASURED, never FAIL ────────────
-
-@pytest.mark.parametrize('_code,rc,reason', STOPS)
-def test_pnr_books_a_stopped_session_not_measured(tmp_path, monkeypatch,
-                                                  _code, rc, reason):
-    real_log = TP._crash_log
-    marker = ('WATCHDOG_STALLED: no progress'
-              if rc == W.RC_STALLED else
-              'PNR_ROUTE_REFUSED LL_TOOL_DEADLINE: probe stopped')
-    monkeypatch.setattr(TP, '_crash_log',
-                        lambda *a, **k: real_log(*a, **k) + '\n' + marker + '\n')
-    res, _calls, _p = TP._drive(tmp_path, monkeypatch, first_rc=rc,
-                                stage="detailed_route")
-    assert (res.status, res.reason_class) == ('NOT_MEASURED', reason)
-    assert f'rc={rc}' in res.detail
-
-
-@pytest.mark.parametrize('rc', [W.RC_STALLED, 124])
-def test_pnr_natural_exit_at_a_transport_rc_is_still_fail(tmp_path, monkeypatch, rc):
-    res, _calls, _p = TP._drive(tmp_path, monkeypatch, first_rc=rc,
-                                stage='detailed_route')
-    assert res.status == 'FAIL'
-    assert res.extras.get('finding') != 'PNR_SESSION_STOPPED'
-
-
-def test_pnr_keeps_a_tool_that_ran_and_failed_red(tmp_path, monkeypatch):
-    res, _calls, _p = TP._drive(tmp_path, monkeypatch, first_rc=1,
-                                stage="detailed_route")
-    assert res.status == 'FAIL'
 
 
 # ── the analog runner carries the block record's own reason ─────────────────

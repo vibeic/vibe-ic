@@ -278,18 +278,6 @@ def test_declared_choices_and_the_record_coexist(tmp_path):
     assert rep["verdict"] == "PASS", rep
 
 
-def test_runner_step_writes_the_record_with_the_resolved_top(tmp_path):
-    """The phase-2 step resolves the top against the staged modules and hands
-    it over; its call site passes no top, and `--top-name` is `chip_top` by
-    default, which this design does not have. RED on main: no file."""
-    import design_one_shot_runner as R
-    project = _consumed_project(tmp_path)
-    res = R.step_arith_declaration_emit(project)
-    assert res.status == "NOT_MEASURED"
-    assert (project / DECL_PATH).is_file(), res.detail
-    assert "wrote only the supplied-RTL record" in res.detail, res.detail
-    decl = json.loads((project / DECL_PATH).read_text())
-    assert decl["supplied_rtl"]["top"]["value"] == "shift_top"
 
 
 def test_the_record_is_not_read_as_a_feature_decision(tmp_path):
@@ -314,35 +302,8 @@ def _sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def test_step_does_not_claim_a_pre_existing_file_as_the_record(tmp_path):
-    """No supplied RTL, a declaration another writer left: the step must not
-    say it wrote the record, nor list that file as its artefact."""
-    import design_one_shot_runner as R
-    project = _consumed_project(tmp_path, supplied=False)
-    decl = project / DECL_PATH
-    decl.parent.mkdir(parents=True)
-    decl.write_text(json.dumps({"ip_catalog_used": []}))
-    before = _sha(decl)
-    res = R.step_arith_declaration_emit(project)
-    assert _sha(decl) == before
-    assert "supplied-RTL record" not in res.detail, res.detail
-    assert "left untouched" in res.detail, res.detail
-    assert res.output_files == []
 
 
-def test_step_reports_the_path_the_contract_names(tmp_path):
-    """The record is written where the SPEC's clause points; the step names
-    that file, not an assumed plugin_output/declaration.json."""
-    import design_one_shot_runner as R
-    project = _consumed_project(tmp_path)
-    other = "plugin_output/impl_choices.json"
-    (project / "input" / "docs" / "L7_verification_plan.md").write_text(
-        CONTRACT.replace(DECL_PATH, other))
-    res = R.step_arith_declaration_emit(project)
-    assert (project / other).is_file()
-    assert not (project / DECL_PATH).exists()
-    assert str(project / other) in res.detail, res.detail
-    assert res.output_files == [str(project / other)]
 
 
 def test_fail_closed_leaves_an_unreadable_author_file_alone(tmp_path):

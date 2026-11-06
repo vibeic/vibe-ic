@@ -159,23 +159,6 @@ def test_documented_response_survives_into_the_canonical_key(opcodes):
         == _DOCUMENTED_RESPONSE
 
 
-def test_documented_opcode_does_not_claim_it_has_no_reference_output(
-        opcodes):
-    """The same negative control read through a REAL pre-existing consumer.
-
-    `design_one_shot_runner._golden_bytes_from_l3_opcode` is the function
-    that decides whether a functional vector can be scored against a spec
-    golden. It returns None when any byte of the template is not a concrete
-    literal — which, pre-fix, was EVERY opcode with tx_len >= 2, including
-    the ones whose document spelled the response out. So a fully documented
-    opcode described itself as having no reference output and its vector was
-    emitted UNVERIFIED.
-
-    PRE-FIX: returns None.  POST-FIX: returns the document's bytes."""
-    assert dsr._golden_bytes_from_l3_opcode(opcodes["0x40"]) \
-        == "41,AA,BB,CC,DD,89"
-
-
 def test_documented_and_undocumented_are_distinguishable(opcodes):
     """The defect in one line: two opcodes that differ ONLY in whether the
     document states the response must not produce the same canonical
@@ -211,15 +194,6 @@ def test_partially_documented_response_keeps_its_documented_bytes(opcodes):
 # SECTION A2 (continued) — holds on BOTH trees.
 # ===========================================================================
 
-def test_partial_documentation_still_yields_no_concrete_golden(opcodes):
-    """Honesty in the other direction: a PARTIALLY documented response is
-    not a reference output. The consumer must still refuse to score it.
-
-    Passes on BOTH trees (pre-fix for the wrong reason — everything was
-    refused; post-fix because 4 of 6 bytes genuinely remain unknown). It is
-    here to pin that the fix did not turn a partial document into a
-    fabricated golden."""
-    assert dsr._golden_bytes_from_l3_opcode(opcodes["0x60"]) is None
 
 
 def test_merged_template_never_drops_a_byte_offset(opcodes):

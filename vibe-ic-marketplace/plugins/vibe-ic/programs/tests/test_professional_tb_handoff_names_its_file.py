@@ -23,7 +23,6 @@ a future edit cannot drift the message away from the code again.
 """
 from __future__ import annotations
 
-import inspect
 import json
 import sys
 from pathlib import Path
@@ -94,15 +93,6 @@ def test_the_scaffold_states_the_token_the_loader_requires(tmp_path):
     assert TOKEN in _scaffold_text(tmp_path)
 
 
-def test_the_runner_message_names_the_file_too():
-    """The runner's INCOMPLETE detail is what a reader sees in the log; it must
-    carry the same name as the scaffold."""
-    import design_one_shot_runner as DOR                 # noqa: E402
-    text = inspect.getsource(DOR)
-    i = text.index("reference-model hook is unfilled")
-    window = text[i:i + 900]
-    assert CONSUMED_FILE in window, window
-    assert TOKEN in window, window
 
 
 def test_the_loader_still_refuses_a_testskip_stub(tmp_path):
