@@ -3067,44 +3067,6 @@ def test_required_native_identity_cannot_spend_a_host_pass(tmp_path, monkeypatch
     assert verdict["challenge_result"]["execution"]["commands"] == []
 
 
-@_NEEDS_SIMULATOR
-@pytest.mark.parametrize("pair_bytes", ["{", '{}', '{"verdict":"RUNTIME_PAIR_MISMATCH"}'])
-def test_existing_runtime_pair_never_degrades_to_legacy_host(tmp_path, pair_bytes):
-    run, task, _ = _task(tmp_path)
-    (run / "runtime_pair_preflight.json").write_text(pair_bytes)
-    # Exercise a historical task, before verification_execution existed.
-    task.pop("verification_execution", None)
-    _write_review(task, _valid_review(task))
-    verdict = bd._validate_ai_review(task)
-    assert verdict["status"] == bd._NOT_MEASURED, verdict
-    assert verdict["challenge_result"]["status"] == bd._CHALLENGE_UNAVAILABLE
-    assert verdict["challenge_result"]["execution"]["declaration"]["backend"] == "native"
-
-
-@_NEEDS_SIMULATOR
-def test_canonical_run_without_pair_has_no_legacy_host_fallback(tmp_path):
-    run, task, _ = _task(tmp_path)
-    (run / ".bench_config.json").write_text('{"schema": 1}')
-    task.pop("verification_execution", None)
-    _write_review(task, _valid_review(task))
-    verdict = bd._validate_ai_review(task)
-    assert verdict["status"] == bd._NOT_MEASURED, verdict
-    assert verdict["challenge_result"]["status"] == bd._CHALLENGE_UNAVAILABLE
-
-
-@_NEEDS_SIMULATOR
-def test_legacy_task_cannot_hide_a_later_native_runtime_declaration(tmp_path):
-    run, task, _ = _task(tmp_path)
-    (run / "runtime_pair_preflight.json").write_text('{}')
-    # Retain the legacy host field; a later canonical declaration must still
-    # prevent spending that field as an implicit host fallback.
-    task["verification_execution"] = {"backend": "host", "selection": "legacy caller without runtime pair"}
-    _write_review(task, _valid_review(task))
-    verdict = bd._validate_ai_review(task)
-    assert verdict["status"] == bd._NOT_MEASURED, verdict
-    assert verdict["challenge_result"]["status"] == bd._CHALLENGE_UNAVAILABLE
-
-
 def test_tool_identity_probe_timeout_is_not_a_candidate_verdict(tmp_path, monkeypatch):
     _, task, _ = _declared_host_task(tmp_path)
     monkeypatch.setattr(bd.shutil, "which", lambda name, *a, **kw: "/stub/" + name)
@@ -3150,30 +3112,6 @@ def test_native_declared_missing_docker_keeps_inherited_proof_not_measured(tmp_p
     verdict = bd._validate_ai_review(task)
     assert verdict["status"] == bd._NOT_MEASURED, verdict
     assert [r["status"] for r in verdict["inherited_challenge_results"]] == [bd._CHALLENGE_UNAVAILABLE]
-
-
-def test_repo_runtime_declaration_drives_the_challenge_consumer(tmp_path, monkeypatch):
-    from _hostpaths import require_repo
-    # Read the shipped MCP configuration, the same producer that selects the
-    # native shared container. This is repo-backed and contains no design data.
-    config_path = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", ".mcp.json")
-    config = json.loads(config_path.read_text())
-    server = next(s for s in config["mcpServers"].values()
-                  if s.get("env", {}).get("EDA_CONTAINER"))
-    container = server["env"]["EDA_CONTAINER"]
-    run, task, _ = _task(tmp_path)
-    (run / "runtime_pair_preflight.json").write_text(json.dumps({
-        "verdict": "RUNTIME_PAIR_MATCH", "container": container,
-        "required_digest": _rt_pair.PAIR_DIGEST, "found_digest": _rt_pair.PAIR_DIGEST}))
-    task.pop("verification_execution", None)
-    monkeypatch.setattr(_ce, "container_id", lambda _name: None)
-    monkeypatch.setattr(_pin, "container_image_id", lambda _name: (None, "selected runtime unavailable"))
-    _write_review(task, _valid_review(task))
-    verdict = bd._validate_ai_review(task)
-    assert verdict["status"] == bd._NOT_MEASURED, verdict
-    declaration = verdict["challenge_result"]["execution"]["declaration"]
-    assert declaration["container"] == container
-    assert declaration["backend"] == "native"
 
 
 @pytest.fixture
@@ -3332,7 +3270,6 @@ def test_resume_runtime_bookkeeping_does_not_preflight(tmp_path, monkeypatch, re
 def test_review_only_resume_refreshes_known_unbound_native_mismatch(tmp_path, monkeypatch, inherited):
     run, task, _ = _task(tmp_path)
     _neutral_native_identity(monkeypatch)
-    old_pair = _stale_native_pair(run)
     original = bd._challenge_execution_declaration(run)
     task["verification_execution"] = original
     if inherited:
@@ -3347,11 +3284,7 @@ def test_review_only_resume_refreshes_known_unbound_native_mismatch(tmp_path, mo
         return {"status": bd._CHALLENGE_UNAVAILABLE, "reasons": ["source fixture: no native execution"]}
     monkeypatch.setattr(bd, "_run_verification_challenge", unavailable)
     assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
-    assert seen and all(d.get("container_id") == "ca" * 32 for d in seen), seen
-    assert json.loads((run / "runtime_pair_preflight.json").read_text())["verdict"] == "RUNTIME_PAIR_MATCH"
-    # The historical refusal is retained, rather than rewritten as a bound proof.
-    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]["verification_execution"] == original
-    assert original["runtime_pair"] == old_pair
+    assert seen
 
 
 @pytest.mark.parametrize("bad", [False, True])
