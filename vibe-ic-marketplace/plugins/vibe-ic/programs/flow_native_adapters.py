@@ -418,7 +418,9 @@ def simulation(project, directory, tool, commands):
 
 
 def formal(project, directory, tool, commands):
-    from formal_property_run import _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read
+    from formal_property_run import (
+        _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read, resolve_include_headers,
+    )
     from formal_harness_gen import _resolve_top
 
     authored = {}
@@ -446,6 +448,7 @@ def formal(project, directory, tool, commands):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
     statuses, covers, reports, required, observed, native_steps, scope, proof_scopes = [], [], [], [], [], [], [], []
     frontend_failures = set()
+    frontend_notes = []
 
     def cover_model(output, key, options):
         model, cells = output / "model/design.il", output / "model/cover_inputs.json"
@@ -535,9 +538,29 @@ def formal(project, directory, tool, commands):
             if frontend_aborted_the_read(completed.stdout + completed.stderr) and config.is_file():
                 body = config.read_text()
                 reads = list(re.finditer(r"(?m)^read_verilog[ \t]+-formal[ \t]+-sv[ \t]+([^\n]+)", body))
-                converted = (commands.run(["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
-                    "-DFORMAL", "-DYOSYS", "-I.", *shlex.split(reads[0][1])], cwd=output / "src")
-                    if len(reads) == 1 else None)
+                conversion_start = len(commands.records)
+                converted = None
+                if len(reads) == 1:
+                    arguments = shlex.split(reads[0][1])
+                    sources = [output / "src" / path for path in arguments
+                               if (output / "src" / path).is_file()]
+                    supplied = staged_rtl_sources(project)
+                    for header in resolve_include_headers(sources, [output / "src", source.parent,
+                            *(path.parent for path in sources), *(path.parent for path in supplied)]):
+                        destination = output / "src" / header.name
+                        if not destination.exists():
+                            shutil.copyfile(header, destination)
+                            reports.append(destination)
+                    argv = ["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
+                            "-DFORMAL", "-DYOSYS", "-I.", *arguments]
+                    converted = commands.run(argv, cwd=output / "src")
+                    if (converted is not None and converted.returncode
+                            and "Could not find file" in converted.stderr and "included from" in converted.stderr):
+                        converted = commands.run([*argv[:5], "-DSYNTHESIS", *argv[5:]], cwd=output / "src")
+                        frontend_notes.append(f"{key}: tried FORMAL+YOSYS+SYNTHESIS because the supplied "
+                            "FORMAL+YOSYS include was absent; this selects the supplied synthesis branch. "
+                            "Explicit harness assertions remain; implementation macro assertions omitted by "
+                            "that branch are outside the proof scope.")
                 if converted is not None and converted.returncode == 0:
                     lowered = output / "sv_frontend.v"
                     lowered.write_text(converted.stdout)
@@ -549,6 +572,7 @@ def formal(project, directory, tool, commands):
                     alternate = commands.run(["sby", "-f", "-d", destination, retry], cwd=source.parent)
                     if alternate is not None:
                         frontend_failures.add(first_read)
+                        frontend_failures.update(range(conversion_start, len(commands.records) - 1))
                         reports.extend([lowered, retry, output / "status"])
                         output, completed = destination, alternate
             native = sorted(output.rglob("status"))
@@ -592,10 +616,10 @@ def formal(project, directory, tool, commands):
     proves_top = bool(proof_scopes) and all(row["proves_declared_top"] for row in proof_scopes)
     scope_report = directory / "formal_scope.json"
     scope_report.write_text(json.dumps({"declared_top": declared_top, "proves_declared_top": proves_top,
-        "tasks": proof_scopes, "authoring": {key: authored[key] for key in (
+        "tasks": proof_scopes, "frontend": frontend_notes, "authoring": {key: authored[key] for key in (
             "top", "declared_top", "descended_to_leaf", "proves_declared_top", "selection") if key in authored},
         "scope": "Properties of the actual harness subjects only; top-level function uses simulation, ISA suites and GLS."}, indent=2) + "\n")
-    result = commands.result(metrics, [*reports, scope_report], " ".join([*scope, cover_detail,
+    result = commands.result(metrics, [*reports, scope_report], " ".join([*scope, *frontend_notes, cover_detail,
         f"proves_declared_top={str(proves_top).lower()}; scope is the actual harness subjects in {scope_report}."]))
     result["exit_code"] = next((r["exit_code"] for i, r in enumerate(commands.records)
                                 if i not in frontend_failures and r["exit_code"]),

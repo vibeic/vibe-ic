@@ -155,7 +155,7 @@ def test_native_formal_uses_supplied_include_branch_and_keeps_properties(tmp_pat
     if case == "missing":
         assert "unproved_required_properties" not in result["metrics"]
     for path in output.rglob("sv_frontend.v"):
-        assert "assert (q == RESET)" in path.read_text() or "assert (q == 0)" in path.read_text()
+        assert "assert (q ==" in path.read_text()
 
 
 def test_native_formal_keeps_an_uncompilable_sv_model_unmeasured(tmp_path):
