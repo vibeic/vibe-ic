@@ -2811,6 +2811,8 @@
           "Vibeic.PostRouteSizing",
           "OpenROAD.DetailedPlacement",
           "OpenROAD.GlobalRouting",
+          "OpenROAD.RepairDesignPostGRT",
+          "OpenROAD.ResizerTimingPostGRT",
           "OpenROAD.DetailedRouting",
           "OpenROAD.FillInsertion",
           "OpenROAD.RCX",

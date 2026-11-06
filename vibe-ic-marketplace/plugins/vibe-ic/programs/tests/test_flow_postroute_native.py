@@ -7,7 +7,8 @@ import pytest
 import flow_engine as engine
 
 
-def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_path, monkeypatch):
+@pytest.mark.parametrize("grt_repair", [False, True])
+def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_path, monkeypatch, grt_repair):
     events = []
 
     class State(dict):
@@ -65,7 +66,10 @@ def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_pat
         'Vibeic.PostRouteSizing': Repair, 'Vibeic.PostRouteRepair': Repair,
         'OpenROAD.DetailedPlacement': transform('place', 'repaired-unrouted', 'legalized'),
         'OpenROAD.GlobalRouting': transform('global_route', 'legalized', 'global-routed'),
-        'OpenROAD.DetailedRouting': transform('detail_route', 'global-routed', 'detail-routed'),
+        'OpenROAD.RepairDesignPostGRT': transform('repair_grt_design', 'global-routed', 'grt-design-repaired'),
+        'OpenROAD.ResizerTimingPostGRT': transform('repair_grt_timing', 'grt-design-repaired', 'grt-timing-repaired'),
+        'OpenROAD.DetailedRouting': transform('detail_route',
+            'grt-timing-repaired' if grt_repair else 'global-routed', 'detail-routed'),
         'OpenROAD.FillInsertion': transform('fill', 'detail-routed', 'repaired-rerouted-and-refilled'),
     }
     steps = ModuleType('librelane.steps')
@@ -79,7 +83,12 @@ def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_pat
 
     monkeypatch.setattr(engine.importlib, 'import_module', load)
     chain = engine.NativeChain(tmp_path, {'delivery_target': 'ip_hardmacro'})
-    chain.owner = SimpleNamespace(config={}, gating_config_vars={})
+    chain.config = {'RUN_POST_GRT_DESIGN_REPAIR': grt_repair,
+                    'RUN_POST_GRT_RESIZER_TIMING': grt_repair}
+    chain.owner = SimpleNamespace(config=chain.config, gating_config_vars={
+        'OpenROAD.RepairDesignPostGRT': ['RUN_POST_GRT_DESIGN_REPAIR'],
+        'OpenROAD.ResizerTimingPostGRT': ['RUN_POST_GRT_RESIZER_TIMING'],
+    })
     chain.state = State({'odb': 'routed-with-fillers'})
     monkeypatch.setattr(chain, 'prepare', lambda **kwargs: None)
     row = next(row for row in engine.read_json(engine.TABLE)['steps']
@@ -87,5 +96,9 @@ def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_pat
     result = chain.execute(tmp_path / 'step', row['tool'])
     assert result.exit_code == 0
     assert events == ['extract_before', 'repair', 'place', 'global_route',
+                      *(['repair_grt_design', 'repair_grt_timing'] if grt_repair else []),
                       'detail_route', 'fill', 'extract', 'timing']
     assert [step['name'] for step in result.native_steps] == row['tool']['steps']
+    repaired = [step for step in result.native_steps if step['name'] in {
+        'OpenROAD.RepairDesignPostGRT', 'OpenROAD.ResizerTimingPostGRT'}]
+    assert all(step['ran'] == grt_repair for step in repaired)
