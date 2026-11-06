@@ -370,8 +370,8 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
     So the run's OWN VERDICT decides. Normally the step that owns this
     artefact must report PASS.  The sole exception is an explicitly supplied
     AI-backup/repair candidate: its re-entry run begins at step 2 so rtl_gen
-    must report SKIPPED-BY-ENTRY, while all downstream PROGRAM gates run over
-    the hash-bound supplied bytes.  Callers must opt into that exception with
+    must report SKIPPED-BY-ENTRY, while the downstream native tools run over
+    the supplied RTL.  Callers must opt into that exception with
     ``supplied_rtl=True``; an ordinary solve can therefore never promote a
     scaffold merely because its generation step was skipped.
 
@@ -419,7 +419,7 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
     verdict = _rtl_gen_verdict(project)
     if verdict is None:
         return {"id": problem_id, "ok": False, "rtl_gen": None,
-                "reason": "the run wrote no phase2 report — cannot tell whether "
+                "reason": "the run wrote no native RTL result — cannot tell whether "
                           "this RTL was produced or merely scaffolded"}
     accepted_statuses = {_V.Verdict.PASS.value}
     if supplied_rtl:
@@ -759,6 +759,24 @@ def _declared_module_names(text: str) -> List[str]:
 
 def _rtl_gen_verdict(project: Path) -> Optional[Dict[str, str]]:
     """What the run itself said about the step that owns the RTL."""
+    engine_path = Path(project) / "reports/flow_engine.json"
+    if engine_path.is_file():
+        try:
+            engine = json.loads(engine_path.read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(engine, dict) or not isinstance(engine.get("steps"), list):
+            return None
+        rows = [row for row in engine["steps"] if isinstance(row, dict)]
+        author = next((row for row in reversed(rows) if row.get("name") == "rtl_authoring"), None)
+        if author is not None:
+            return {"status": str(author.get("status")), "detail": str(author.get("detail") or "")}
+        entry = str((engine.get("route") or {}).get("entry_step", ""))
+        if entry in {"2", "D11", "rtl_validation_and_lint"} and any(
+                row.get("name") == "rtl_validation_and_lint" for row in rows):
+            return {"status": _V.Verdict.NOT_APPLICABLE.value,
+                    "detail": "RTL authoring is outside the selected native validation window."}
+        return None
     rep = Path(project) / "reports" / "orchestrator" / "phase2_one_shot.json"
     if not rep.is_file():
         return None
