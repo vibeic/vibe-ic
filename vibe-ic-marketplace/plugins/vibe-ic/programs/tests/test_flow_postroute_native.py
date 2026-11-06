@@ -7,6 +7,64 @@ import pytest
 import flow_engine as engine
 
 
+@pytest.mark.parametrize("failure", ["Vibeic.PostRouteSizing", "OpenROAD.DetailedPlacement",
+                                    "OpenROAD.DetailedRouting"])
+def test_refused_postroute_candidate_retains_every_incoming_view(tmp_path, monkeypatch, failure):
+    class State(dict):
+        def __init__(self, values, overrides=None, metrics=None):
+            super().__init__({**values, **(overrides or {})})
+            self.metrics = metrics or {}
+
+        def dumps(self):
+            return json.dumps({**self, 'metrics': self.metrics})
+
+    class Refused(Exception):
+        pass
+
+    incoming = State({'odb': 'routed.odb', 'def': 'routed.def', 'spef': 'routed.spef',
+                      'nl': 'routed.v', 'pnl': 'routed.pnl.v', 'sdf': 'routed.sdf'},
+                     metrics={'routing_drc': 0})
+
+    def native_step(name):
+        class NativeStep:
+            inputs = ['odb']
+            outputs = list(incoming)
+
+            def __init__(self, config, state):
+                self.state = state
+
+            def run(self, state):
+                if name == failure:
+                    raise Refused('DPL-0033: candidate refused')
+                return {'odb': 'candidate.odb'}, {}
+
+            def start(self, **kwargs):
+                views, metrics = self.run(self.state)
+                return State({**self.state, **views}, metrics={**self.state.metrics, **metrics})
+
+        return NativeStep
+
+    steps = ModuleType('librelane.steps')
+    steps.Step = SimpleNamespace(factory=SimpleNamespace(get=native_step))
+    steps.StepError = Refused
+    steps.StepException = type('StepException', (Exception,), {})
+    monkeypatch.setitem(sys.modules, 'librelane.steps', steps)
+    monkeypatch.setattr(engine.importlib, 'import_module', lambda name: None)
+    chain = engine.NativeChain(tmp_path, {'delivery_target': 'ip_hardmacro'})
+    chain.owner = SimpleNamespace(config={}, gating_config_vars={})
+    chain.state = incoming
+    monkeypatch.setattr(chain, 'prepare', lambda **kwargs: None)
+    row = next(row for row in engine.read_json(engine.TABLE)['steps']
+               if row['name'] == 'post_route_timing_repair')
+    result = chain.execute(tmp_path / 'repair', row['tool'])
+    assert engine.evaluate(result, []) == 'FAIL'
+    assert result.exit_code == 1
+    assert dict(chain.state) == dict(incoming)
+    assert chain.state.metrics == incoming.metrics
+    saved = json.loads((tmp_path / 'repair/state_out.json').read_text())
+    assert saved == {**incoming, 'metrics': incoming.metrics}
+
+
 @pytest.mark.parametrize("changed", [None, 0, 1])
 def test_post_route_extraction_uses_repaired_rerouted_state_with_fillers(tmp_path, monkeypatch, changed):
     events = []
