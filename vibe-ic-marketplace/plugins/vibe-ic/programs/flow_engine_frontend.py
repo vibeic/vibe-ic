@@ -397,7 +397,8 @@ def native_diagnostics(process, argv, project, require_phase2=True):
             return {"status": "NOT_MEASURED", "reason": "The native engine reported no tool results.",
                     "argv": argv, "rc": process.rc}
         statuses = [row.get("status") for row in rows if isinstance(row, dict)]
-        verdict = "FAIL" if "FAIL" in statuses else "NOT_MEASURED" if "NOT_MEASURED" in statuses else "PASS"
+        verdict = ("FAIL" if "FAIL" in statuses else "PASS"
+                   if statuses and all(status == "PASS" for status in statuses) else "NOT_MEASURED")
         return {"status": "REPORTS_AVAILABLE", "fresh_reports": ["flow_engine.json"],
                 "argv": argv, "rc": process.rc, "native_verdict": verdict}
     name = "phase2_one_shot.json" if require_phase2 else "phase1_one_shot.json"
