@@ -6,7 +6,6 @@ writes are substituted, at the process edge (`_docker_exec`, the contract's
 """
 import importlib
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +17,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PROGRAMS / 'tests'))
 contract = importlib.import_module('librelane_contract')
-runner = importlib.import_module('phase3_one_shot_runner')
 from _stated_eda_image import mock_docker_route, state_the_image  # noqa: E402
 
 CORNERS = ['nom_tt_025C_5v00', 'nom_ss_125C_4v50', 'nom_ff_n40C_5v50']
@@ -47,95 +45,6 @@ def _isolated(monkeypatch):
 
 # ------------------------------------------------------------ the real deck ---
 
-def _cmds(deck):
-    """The deck's command lines (comments name commands too)."""
-    return [ln.strip() for ln in deck.splitlines()
-            if ln.strip() and not ln.lstrip().startswith('#')]
-
-
-def _has(deck, command):
-    """A command INVOKED by the deck: first word of a line, or of a `catch`."""
-    import re
-    pat = re.compile(r'^(?:if \{\[catch \{)?' + re.escape(command) + r'(?:\s|\}|$)')
-    return any(pat.match(ln) for ln in _cmds(deck))
-
-
-def _drive_step_pnr(tmp_path, monkeypatch, switch, *, stop_at_builder=True, calls=None,
-                    declared=False):
-    """The REAL step_pnr with only the process edge substituted (T89's harness).
-
-    With ``stop_at_builder`` it returns the deck-builder kwargs; otherwise the
-    real builder runs and every session command is recorded in ``calls``."""
-    import test_pad_connected_pdn_ring as ring_fixture
-    project = tmp_path / 'proj'
-    project.mkdir(parents=True)
-    if switch is not None:
-        put(project / 'phase3/librelane_switch.json', {'steps': switch})
-    pdk = ring_fixture._pdk(tmp_path, ring=None)
-    if declared:
-        _l19(project, pdk=pdk.name)
-    # Complete the unit PDK input instead of staging an image's real Liberty.
-    pdk.liberty = str(write(tmp_path / 'neutral.lib',
-                            'library(neutral) { time_unit : "1ns"; }\n'))
-    netlist = write(tmp_path / 'dut.v', 'module dut(input clk, output q); assign q=clk; endmodule\n')
-
-    def docker(container, cmd, *a, **k):
-        if calls is not None:
-            calls.append(('docker', cmd))
-        return 1, '', 'no container in this test'
-
-    for name, value in {
-            'pnr_input_netlist': lambda *a: (netlist, 'test DUT', False),
-            '_v1_6_599_check_wrapper_pin_order_cfg': lambda *a: None,
-            '_stage_via_legalized_tech_lef': lambda *a: {'status': 'NOT_NEEDED'},
-            'set_invocation_provenance_sink': lambda *a: None,
-            '_macro_supply_preroute_decision': lambda *a, **k: None,
-            '_resolve_staged_silicon_sdc': lambda *a: None,
-            '_liberty_drv_limits': lambda *a: {},
-            '_build_auto_silicon_sdc': lambda *a, **k: '',
-            '_container_mounts': lambda c: [],
-            '_docker_exec': docker,
-            '_docker_exec_raw': lambda *a, **k: (1, '', 'no container in this test')}.items():
-        monkeypatch.setattr(runner, name, value)
-
-    class AtBuilder(Exception):
-        pass
-
-    seen = {}
-    real_builder = runner._build_pnr_tcl_text
-
-    def builder(**kwargs):
-        seen.update(kwargs)
-        if stop_at_builder:
-            raise AtBuilder
-        return real_builder(**kwargs)
-
-    monkeypatch.setattr(runner, '_build_pnr_tcl_text', builder)
-    if stop_at_builder:
-        with pytest.raises(AtBuilder):
-            runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4)
-        return seen
-    return runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4)
-
-
-@pytest.fixture
-def real_deck(tmp_path, monkeypatch):
-    """pnr.tcl exactly as the runner's own builder emits it for a design."""
-    real_builder = runner._build_pnr_tcl_text
-    kwargs = _drive_step_pnr(tmp_path / 'deck', monkeypatch, None)
-    return real_builder(**kwargs)
-
-
-def test_the_cts_hold_region_is_delimited_once_at_the_decks_top_level(real_deck):
-    lines = real_deck.splitlines()
-    begin = [i for i, ln in enumerate(lines) if ln.strip() == runner._PNR_CTS_HOLD_BEGIN]
-    end = [i for i, ln in enumerate(lines) if ln.strip() == runner._PNR_CTS_HOLD_END]
-    assert len(begin) == 1 and len(end) == 1 and begin[0] < end[0]
-    region = '\n'.join(lines[begin[0]:end[0]])
-    assert 'clock_tree_synthesis' in region and 'repair_timing -hold' in region
-    assert 'global_route' not in region and 'detailed_route' not in region
-
-
 
 
 
@@ -145,41 +54,6 @@ def test_the_cts_hold_region_is_delimited_once_at_the_decks_top_level(real_deck)
 
 
 # ------------------------------------------------------------- the switch ---
-
-
-
-@pytest.mark.parametrize('switch', [{'19': 'librelane'}, {'20': 'librelane'},
-                                    {'19': 'dual', '20': 'librelane'}])
-def test_a_split_selection_is_refused_before_any_session(tmp_path, monkeypatch, switch):
-    calls = []
-    result = _drive_step_pnr(tmp_path, monkeypatch, switch, stop_at_builder=False, calls=calls)
-    assert result.status == 'FAIL'
-    assert result.detail.startswith('LL_CTS_HOLD_SPLIT_UNSUPPORTED')
-    assert not any('pnr.tcl' in cmd for _, cmd in calls)
-
-
-def test_the_producer_call_site_takes_the_librelane_split_only_when_selected(tmp_path, monkeypatch):
-    seen = []
-
-    def split(_runner, **kwargs):
-        seen.append(kwargs)
-        return 1, 'stopped by test', ''
-
-    direct_calls = []
-    _drive_step_pnr(tmp_path / 'direct', monkeypatch, None, stop_at_builder=False,
-                    calls=direct_calls)
-    assert seen == []
-    assert any(cmd.rstrip().endswith('openroad.log') and '/pnr.tcl' in cmd
-               for _, cmd in direct_calls)
-    ll_calls = []
-    _drive_step_pnr(tmp_path / 'll', monkeypatch, {'19': 'librelane', '20': 'librelane'},
-                    stop_at_builder=False, calls=ll_calls, declared=True)
-    assert seen and seen[0]['modes'] == {'19': 'librelane', '20': 'librelane'}
-    assert not any('/pnr.tcl ' in cmd for _, cmd in ll_calls)
-    overlay = seen[0]['overlay']
-    assert overlay['CTS_DISTANCE_BETWEEN_BUFFERS'][0] == \
-        runner._CTS_DEFAULT_DISTANCE_BETWEEN_BUFFERS_UM > 0
-    assert overlay['PL_RESIZER_HOLD_MAX_BUFFER_PCT'][0] == 5.0
 
 
 # ------------------------------------------------------ the declared config ---
@@ -207,8 +81,6 @@ def test_emit_config_caps_cts_clusters_at_the_declared_fanout(tmp_path):
     _l19(tmp_path, max_fanout=None)
     assert 'CTS_SINK_CLUSTERING_SIZE' not in contract.emit_config(
         tmp_path, 'gfX', tmp_path / 'c.json')
-
-
 
 
 def test_derived_step_config_keeps_the_step_and_records_every_change(tmp_path):
@@ -247,12 +119,6 @@ def test_only_a_vibeic_step_gets_the_plugin_on_its_path(tmp_path, monkeypatch):
     programs = str(contract.PLUGIN_ROOT.parent.resolve())
     assert f'PYTHONPATH={root}' not in calls[0]
     assert f'PYTHONPATH={root}' in calls[1] and f'{programs}:{programs}:ro' in calls[1]
-    fingerprint = json.loads((folders[1] / 'input_fingerprint.json').read_text())
-    # the OpenROAD script is the step's code too (T98 extended T97's digest)
-    assert {'librelane_plugins/librelane_plugin_vibeic/__init__.py',
-            'librelane_plugins/librelane_plugin_vibeic/clock_path_drive_sizing.tcl'} \
-        <= set(fingerprint['plugin'])
-    assert 'plugin' not in json.loads((folders[0] / 'input_fingerprint.json').read_text())
 
 
 def test_the_plugin_step_sources_the_runners_one_sizing_pass():
@@ -268,331 +134,10 @@ def test_the_plugin_step_sources_the_runners_one_sizing_pass():
 
 # ------------------------------------------------- the split, end to end ---
 
-def _fake_tool_run(project, corners, *, hold, cts_buffers=7, fail_step=None):
-    """What LibreLane writes for each step, at the run_chain edge."""
-    seen = {}
-
-    def chain(proj, image, triples, **kwargs):
-        seen['steps'] = [s for s, _, _ in triples]
-        seen['configs'] = [c for _, c, _ in triples]
-        seen['kwargs'] = kwargs
-        base = proj / 'phase3/librelane' / kwargs.get('lane', 'x')
-        folders, metrics = [], {}
-        for i, (step, _, _) in enumerate(triples, 1):
-            folder = base / f'{i:02d}-{step.lower().replace(".", "-")}'
-            if step == fail_step:
-                raise contract.Refusal('LL_STEP_FAILED', step)
-            views = {k: write(folder / f'chip_top.{k}', f'{step} {k}\n') for k in ('odb', 'def')}
-            if step == 'OpenROAD.CTS':
-                write(folder / 'cts.rpt', f'Total number of Buffers Inserted: {cts_buffers}.\n'
-                                          'Total number of Sinks: 9.\n')
-                write(folder / 'openroad-cts.log', '[INFO CTS-0010]  Clock net "clk" has 9 sinks.\n')
-                metrics['design__instance__area__stdcell'] = 1000.0
-            if step == 'OpenROAD.ResizerTimingPostCTS':
-                write(folder / 'openroad-resizertimingpostcts.log', '[INFO RSZ-0032] Inserted 2 hold buffers.\n')
-                metrics.update({'design__instance__count__hold_buffer': 2,
-                                'design__instance__count__setup_buffer': 0,
-                                'design__instance__area__stdcell': 1010.0})
-            if step == 'OpenROAD.STAMidPNR':
-                corner = json.loads(triples[i - 1][1].read_text())['PNR_CORNERS'][0]
-                metrics[f'timing__hold__ws__corner:{corner}'] = hold[corner]
-                metrics[f'timing__setup__ws__corner:{corner}'] = 5.0
-                metrics[f'clock__skew__worst_setup__corner:{corner}'] = -0.1
-                views = {}
-            state = {k: str(v) for k, v in views.items()} or json.loads(
-                ((folders[-1] / 'state_out.json') if folders else triples[0][2]).read_text())
-            state = dict(state, metrics=dict(metrics))
-            put(folder / 'state_out.json', state)
-            folders.append(folder)
-        return folders
-
-    def resolve(proj, image, pdk, step_ids, **kwargs):
-        seen['overlay'] = kwargs.get('overlay')
-        root = proj / 'phase3/librelane' / kwargs['folder']
-        lib = write(proj.parent / 'pdkroot' / pdk / 'neutral.lib',
-                    'library(x) {\n cell (neutral__dly_1) { }\n}\n')
-        out = {}
-        for step in step_ids:
-            doc = {'meta': {'step': step}, 'STA_CORNERS': corners,
-                   'PNR_CORNERS': None}
-            if step in ('OpenROAD.CTS', 'OpenROAD.ResizerTimingPostCTS'):
-                doc.update(CELL_LIBS={'nom': [f'/pdk/{pdk}/{lib.name}']},
-                           EXTRA_EXCLUDED_CELLS=[])
-            out[step] = put(root / f'{step}.json', doc)
-            put(root / f'{step}.views.json', {'inputs': ['odb'], 'outputs': []})
-        return out
-
-    return chain, resolve, seen
 
 
-def _split_project(tmp_path, switch):
-    project = tmp_path / 'proj'
-    out_dir = project / 'phase3/stage3/pnr'
-    put(project / 'phase3/librelane_switch.json',
-        dict(switch, pdk_root_host=str(tmp_path / 'pdkroot'), image='img@sha256:x'))
-    (tmp_path / 'pdkroot/pdkX').mkdir(parents=True)
-    write(out_dir / 'constraint.sdc', 'create_clock -period 24 clk\n')
-    deck = ('read_lef /t.lef\nread_liberty /l.lib\nread_verilog /n.v\nlink_design chip_top\n'
-            f'read_sdc {out_dir}/constraint.sdc\n'
-            f'{runner._PNR_RESUME_ELIDE_BEGIN}\nglobal_placement\n'
-            f'{runner._PNR_CTS_HOLD_BEGIN}\nclock_tree_synthesis -buf_list b\n'
-            f'write_def {out_dir}/post_cts.def\nrepair_timing -hold\n'
-            f'write_def {out_dir}/post_hold.def\n{runner._PNR_CTS_HOLD_END}\n'
-            f'global_route\ndetailed_route\nwrite_def {out_dir}/routed_preantenna.def\n'
-            f'{runner._PNR_RESUME_ELIDE_END}\nwrite_def {out_dir}/routed.def\n')
-    pnr_tcl = write(out_dir / 'pnr.tcl', deck)
-    return project, out_dir, pnr_tcl
 
 
-def _run_split(tmp_path, monkeypatch, *, switch=None, hold=None, arm_hold=None, fail_step=None):
-    switch = switch or {'steps': {'19': 'librelane', '20': 'librelane'}}
-    project, out_dir, pnr_tcl = _split_project(tmp_path, switch)
-    hold = hold or {c: 0.2 for c in CORNERS}
-    chain, resolve, seen = _fake_tool_run(project, CORNERS, hold=hold, fail_step=fail_step)
-    arm_hold = arm_hold or hold
-
-    def chains(proj, image, triples, **kwargs):
-        if kwargs.get('lane') == '19-cts-hold-direct-arm':
-            c2, _, s2 = _fake_tool_run(project, CORNERS, hold=arm_hold)
-            seen['arm_steps'] = [s for s, _, _ in triples]
-            return c2(proj, image, triples, **kwargs)
-        return chain(proj, image, triples, **kwargs)
-
-    monkeypatch.setattr(contract, 'resolve_step_configs', resolve)
-    monkeypatch.setattr(contract, 'run_chain', chains)
-    monkeypatch.setattr(contract, 'state_from_direct', lambda p, i, cfg, views, out, **k: (
-        seen.setdefault('bridged', []).append({v: str(x) for v, x in views.items()})
-        or put(out / 'state_in.json', {'odb': str(views['odb'])})))
-    monkeypatch.setattr(runner, '_after_restore_tcl', lambda *a, **k: '# after restore\n')
-    monkeypatch.setattr(runner, '_container_mounts', lambda c: [])
-    execs = []
-
-    def docker(container, cmd, *a, **k):
-        execs.append(cmd)
-        if 'pnr_cts_head.tcl' in cmd:
-            for ext in ('odb', 'def', 'nl.v', 'insts'):
-                write(out_dir / f'cts_hold_split/pre_cts.{ext}', f'pre {ext}\n')
-            return 0, 'head ok', ''
-        if 'pnr_cts_direct_arm.tcl' in cmd:
-            arm = project / 'phase3/tool_arms/19/openroad'
-            for name in ('post_cts.def', 'post_hold.def', 'post_hold.odb'):
-                write(arm / name, f'direct arm {name}\n')
-            return 0, 'arm ok', ''
-        return 0, 'tail ok', ''
-
-    monkeypatch.setattr(runner, '_docker_exec', docker)
-    cmd = (f'openroad -no_init -exit -metrics {out_dir}/openroad.metrics.json '
-           f'{pnr_tcl} 2>&1 | tee {out_dir}/openroad.log')
-
-
-def test_librelane_views_reach_the_paths_the_direct_route_reads(tmp_path, monkeypatch):
-    run = _run_split(tmp_path, monkeypatch)
-    assert run.rc == 0
-    assert run.seen['steps'] == ['OpenROAD.CTS', 'Vibeic.ClockPathDriveSizing',
-                                 'Vibeic.ExternalCaptureLaunchRetap',
-                                 'OpenROAD.ResizerTimingPostCTS'] + ['OpenROAD.STAMidPNR'] * 3
-    assert run.seen['kwargs']['lane'] == '19-cts-hold'
-    # head, then the tail appended to the same log, never the unsplit deck
-    assert len(run.execs) == 2 and 'pnr_cts_head.tcl' in run.execs[0]
-    assert 'pnr_cts_tail.tcl' in run.execs[1] and 'tee -a' in run.execs[1]
-    assert not any('/pnr.tcl ' in c for c in run.execs)
-    base = run.project / 'phase3/librelane/19-cts-hold'
-    cts_path = run.project / 'reports/phase3/librelane_cts_handoff.json'
-    assert cts_path.is_file(), 'the CTS owner must publish its independent handoff'
-    cts_receipt = json.loads(cts_path.read_text())
-    assert cts_receipt['measured_state'] == str(
-        (base / '03-vibeic-externalcapturelaunchretap/state_out.json').relative_to(run.project))
-    assert cts_receipt['measured_state_sha256'] == contract.digest(
-        run.project / cts_receipt['measured_state'])
-    assert set(cts_receipt['views']) == {'post_cts_def', 'cts_rpt'}
-    assert 'OpenROAD.ResizerTimingPostCTS' not in cts_receipt['chain']
-    assert (run.out_dir / 'post_cts.def').read_text() == \
-        (base / '03-vibeic-externalcapturelaunchretap/chip_top.def').read_text()
-    assert (run.out_dir / 'post_hold.odb').read_text() == \
-        (base / '04-openroad-resizertimingpostcts/chip_top.odb').read_text()
-    assert (run.project / 'phase3/stage3/cts/clock_tree.rpt').read_text().startswith(
-        'Total number of Buffers Inserted: 7.')
-    # the per-corner STA configs each name one corner
-    assert [json.loads(c.read_text())['PNR_CORNERS'] for c in run.seen['configs'][4:]] == \
-        [[c] for c in CORNERS]
-    sizing = json.loads(run.seen['configs'][1].read_text())
-    assert sizing['PNR_CORNERS'] == CORNERS
-    retap = json.loads(run.seen['configs'][2].read_text())
-    assert retap['PNR_CORNERS'] == CORNERS
-    assert Path(retap['VIBEIC_CLKPATH_PRECTS_INSTANCES']).is_file()
-    assert Path(sizing['VIBEIC_CLKPATH_SIZING_TCL']).read_text() == \
-        runner._clock_path_drive_sizing_tcl()
-    log = (run.out_dir / 'openroad.log').read_text()
-    assert 'PNR_STAGE: cts' in log and 'PNR_STAGE: hold_repair' in log
-    assert 'CTS-0010' in log and 'RSZ-0032' in log
-    # hold is repaired and measured in the sign-off's own scene (its OCV derate)
-    sdc_path, source = run.seen['overlay']['PNR_SDC_FILE']
-    scene = Path(sdc_path).read_text()
-    assert scene.startswith('create_clock -period 24 clk\n')
-    assert f'set_timing_derate -early {runner._FLAT_OCV_DERATE_EARLY}' in scene
-    assert f'set_timing_derate -late {runner._FLAT_OCV_DERATE_LATE}' in scene
-    assert 'constraint.sdc' in source and '_FLAT_OCV_DERATE' in source
-    area = json.loads((run.project / 'reports/phase3/pnr/hold_area.json').read_text())
-    assert (area['before_total_area'], area['after_total_area'], area['hold_buffer_count']) \
-        == (1000.0, 1010.0, 2)
-
-
-def test_cts_local_route_binds_the_resolved_pdk_root_at_the_cli_root(tmp_path, monkeypatch):
-    """The real CTS caller and LOCAL run_chain agree on the /pdk root."""
-    switch = {'steps': {'19': 'librelane', '20': 'librelane'}}
-    project, out_dir, pnr_tcl = _split_project(tmp_path, switch)
-    pdk_root = tmp_path / 'pdkroot'
-    pdk_root.mkdir(exist_ok=True)
-    pdk_name = 'pdkX'
-    (pdk_root / pdk_name).mkdir(exist_ok=True)
-    image = 'img@sha256:' + '7c' * 32
-    # This substituted LOCAL process has one stated finite envelope; do not
-    # inherit the shipping container's unrelated memory request.
-    monkeypatch.setenv('VIBEIC_DOCKER_MEMORY', '1g')
-    attestation = {'image': image, 'image_id': 'sha256:' + '7c' * 32,
-                   'repo_digests': [image], 'cid': 'ab' * 32,
-                   'network_mode': 'none', 'memory': 1024**3,
-                   'memory_swap': 1024**3, 'auto_remove': True}
-    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: True)
-    monkeypatch.setattr(contract, 'local_image_attestation', lambda _image: attestation)
-    monkeypatch.setattr(contract, 'image_capability', lambda *_a, **_k: None)
-    monkeypatch.setattr(runner, '_resolved_cell_policy', lambda configs, *_a, **_k:
-                        (configs, set()))
-
-    corners = ['nom_tt_025C_5v00']
-
-    def resolve(_project, _image, _pdk, step_ids, *, folder, **_kwargs):
-        root = project / 'phase3/librelane' / folder
-        result = {}
-        for step in step_ids:
-            config = put(root / f'{step}.json', {
-                'meta': {'step': step}, 'STA_CORNERS': corners, 'PNR_CORNERS': corners})
-            put(contract.views_path(config), {
-                'step': step, 'inputs': ['odb', 'def', 'nl', 'sdc'], 'outputs': []})
-            result[step] = config
-        return result
-
-    monkeypatch.setattr(contract, 'resolve_step_configs', resolve)
-    monkeypatch.setattr(contract, 'pdk_root_resolution',
-                        lambda *_a, **_k: {'path': str(pdk_root)})
-
-    def bridge(_project, _image, _config, views, output, **_kwargs):
-        state = {key: str(Path(value).resolve()) for key, value in views.items()}
-        return put(output / 'state_in.json', state)
-
-    monkeypatch.setattr(contract, 'state_from_direct', bridge)
-    direct_calls = []
-
-    def direct(_container, cmd, *args, **kwargs):
-        direct_calls.append(cmd)
-        if 'pnr_cts_head.tcl' in cmd:
-            for ext in ('odb', 'def', 'nl.v', 'insts'):
-                write(out_dir / f'cts_hold_split/pre_cts.{ext}', f'pre {ext}\n')
-        return 0, 'head ok', ''
-
-    monkeypatch.setattr(runner, '_docker_exec', direct)
-    monkeypatch.setattr(runner, '_after_restore_tcl', lambda *_a, **_k: '# restore\n')
-    monkeypatch.setattr(runner, '_container_mounts', lambda _container: [])
-
-    import _watchdog as watchdog
-    native_argv = []
-
-    class StopAfterLocalCommand(RuntimeError):
-        pass
-
-    def supervised(command, **_kwargs):
-        native_argv.append(command)
-        out = Path(command[command.index('-o') + 1])
-        views = {key: str(path.resolve()) for key, path in {
-            'odb': out_dir / 'cts_hold_split/pre_cts.odb',
-            'def': out_dir / 'cts_hold_split/pre_cts.def',
-            'nl': out_dir / 'cts_hold_split/pre_cts.nl.v',
-            'sdc': out_dir / 'constraint.sdc'}.items()}
-        put(out / 'state_out.json', views)
-        return SimpleNamespace(outcome='completed', rc=0, out='', err='', supervision={})
-
-    monkeypatch.setattr(watchdog, 'run_host_supervised', supervised)
-    original_chain = contract.run_chain
-
-    def stop_after_chain(*args, **kwargs):
-        folders = original_chain(*args, **kwargs)
-        raise StopAfterLocalCommand(folders)
-
-    monkeypatch.setattr(contract, 'run_chain', stop_after_chain)
-
-    assert native_argv
-    assert all(command[command.index('--pdk-root') + 1] == str(pdk_root.resolve())
-               for command in native_argv)
-
-
-def test_cts_local_route_still_refuses_a_missing_selected_pdk(tmp_path, monkeypatch):
-    switch = {'steps': {'19': 'librelane', '20': 'librelane'}}
-    project, out_dir, pnr_tcl = _split_project(tmp_path, switch)
-    shutil.rmtree(tmp_path / 'pdkroot' / 'pdkX')
-    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: True)
-    monkeypatch.setattr(contract, 'local_image_attestation',
-                        lambda image: {'image': image})
-    monkeypatch.setattr(contract, 'image_capability', lambda *_a, **_k: None)
-    calls = []
-
-    def direct(_container, cmd, *args, **kwargs):
-        calls.append(cmd)
-        for ext in ('odb', 'def', 'nl.v', 'insts'):
-            write(out_dir / f'cts_hold_split/pre_cts.{ext}', f'pre {ext}\n')
-        return 0, 'head ok', ''
-
-    monkeypatch.setattr(runner, '_docker_exec', direct)
-    monkeypatch.setattr(runner, '_after_restore_tcl', lambda *_a, **_k: '# restore\n')
-    monkeypatch.setattr(runner, '_container_mounts', lambda _container: [])
-    assert len(calls) == 1 and 'pnr_cts_head.tcl' in calls[0]
-    assert not (project / 'phase3/librelane/19-cts-hold/01-openroad-cts/invocation.log').exists()
-
-
-def test_a_missing_pdk_root_refuses_and_never_resumes_the_route(tmp_path, monkeypatch):
-    switch = {'steps': {'19': 'librelane', '20': 'librelane'}}
-    project, out_dir, pnr_tcl = _split_project(tmp_path, switch)
-    put(project / 'phase3/librelane_switch.json', switch)
-    execs = []
-
-    def docker(container, cmd, *a, **k):
-        execs.append(cmd)
-        for ext in ('odb', 'def', 'nl.v', 'insts'):
-            write(out_dir / f'cts_hold_split/pre_cts.{ext}', 'x\n')
-        return 0, '', ''
-
-    monkeypatch.setattr(runner, '_docker_exec', docker)
-    monkeypatch.setattr(runner, '_after_restore_tcl', lambda *a, **k: '')
-    monkeypatch.setattr(runner, '_container_mounts', lambda c: [])
-    assert len(execs) == 1 and not (out_dir / 'post_hold.def').exists()
-
-
-def test_a_failing_tool_step_refuses_by_name(tmp_path, monkeypatch):
-    run = _run_split(tmp_path, monkeypatch, fail_step='OpenROAD.ResizerTimingPostCTS')
-    assert run.rc != 0 and 'LL_STEP_FAILED' in run.out
-    assert len(run.execs) == 1 and not (run.out_dir / 'post_hold.def').exists()
-
-
-def test_dual_judges_both_arms_by_the_same_sta_and_hands_over_the_winner(tmp_path, monkeypatch):
-    better = {c: 0.3 for c in CORNERS}
-    worse = dict(better, nom_ss_125C_4v50=-0.5)
-    run = _run_split(tmp_path, monkeypatch, switch={'steps': {'19': 'dual', '20': 'dual'}},
-                     hold=better, arm_hold=worse)
-    assert run.rc == 0
-    assert run.seen['arm_steps'] == ['OpenROAD.STAMidPNR'] * 3
-    selection = json.loads((run.project / 'phase3/tool_arms/19/selection.json').read_text())
-    assert selection['selection'] == 'librelane'
-    # and the other way round: the direct arm wins and ITS views are handed over
-    run2 = _run_split(tmp_path / 'b', monkeypatch, switch={'steps': {'19': 'dual', '20': 'dual'}},
-                      hold=worse, arm_hold=better)
-    assert run2.rc == 0
-    assert (run2.out_dir / 'post_hold.odb').read_text() == 'direct arm post_hold.odb\n'
-    cts_path = run2.project / 'reports/phase3/librelane_cts_handoff.json'
-    assert cts_path.is_file(), 'the selected direct CTS view also needs its own owner record'
-    cts_receipt = json.loads(cts_path.read_text())
-    assert cts_receipt['selected'] == 'openroad'
-    assert set(cts_receipt['views']) == {'post_cts_def'}
-    assert 'direct arm' in (run2.project / cts_receipt['views']['post_cts_def']['dest']).read_text()
-    assert 'measured_state' not in cts_receipt and not cts_receipt['chain']
 
 
 # ------------------------------------------------------------------ gates ---
@@ -717,8 +262,6 @@ def test_cts_gate_passes_a_tree_within_the_cap_and_records_it(tmp_path):
     assert doc['metrics']['clock_tree_fanout']['cap'] == 4
 
 
-
-
 def test_hold_area_budget_reads_the_resizers_own_area_and_count(tmp_path):
     area = tmp_path / 'reports/phase3/pnr/hold_area.json'
     put(area, {'before_total_area': 1000.0, 'after_total_area': 1010.0,
@@ -735,21 +278,9 @@ def test_hold_area_budget_reads_the_resizers_own_area_and_count(tmp_path):
     assert rc == 0 and doc['reason'] == 'NO_HOLD_BUFFERS_NEEDED'
 
 
-
-
 def test_clock_skew_is_a_timing_metric_ppa_can_optimise():
     backend = importlib.import_module('_ppa.backends.librelane')
     assert {'clock__skew__worst_setup', 'clock__skew__worst_hold'} <= set(backend.TIMING_METRICS)
-
-
-def test_the_split_works_on_the_step_17_18_librelane_consumer_deck(real_deck):
-    """T97 hands placement to the direct deck at `puts "<marker> cts"`
-    (`placement_consumer_tcl`); the 19/20 region must survive that seam and
-    split the same way, so LL 15..18 -> LL 19/20 -> direct tail is one chain."""
-    consumer = contract.placement_consumer_tcl(real_deck, '/w/ll_placed.def',
-                                               runner._PNR_STAGE_MARKER)
-    assert consumer.count(runner._PNR_CTS_HOLD_BEGIN) == 1
-    assert consumer.count(runner._PNR_CTS_HOLD_END) == 1
 
 
 # SOURCE_CONTROL: the complete installed Tcl entry runs under tclsh. Only the

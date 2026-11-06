@@ -306,9 +306,7 @@ def run_nodes(nodeids: Sequence[str], *, plugin_root: Path,
     Bounded by PROGRESS (`_progress_run.run`), not by a wall clock: a child
     that stops making forward progress is killed and reported as not run, so
     every node reads "not run" and the caller's assertions go red by name.
-    `--write-guard=off`: the child's own snapshot guard would compare `git
-    status` while the parent session's other workers are writing, and its
-    verdict is not what this measures."""
+    """
     with tempfile.TemporaryDirectory(prefix="tree_write_audit_") as tmp:
         work = Path(tmp)
         junit = work / "junit.xml"
@@ -316,7 +314,7 @@ def run_nodes(nodeids: Sequence[str], *, plugin_root: Path,
         try:
             r = _pr.run(
                 [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                 "--write-guard=off", f"--junitxml={junit}", *nodeids],
+                 f"--junitxml={junit}", *nodeids],
                 cwd=str(plugin_root), env=env, capture_output=True, text=True)
             rc, output = r.returncode, (r.stdout or "") + (r.stderr or "")
         except _pr.Stalled as exc:

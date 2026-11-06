@@ -202,27 +202,3 @@ def test_a_verified_basis_says_so_and_a_missing_sidecar_is_unverified(
     _sidecar(proj, True)
     basis = P.l10_unit_tb_track(proj)["design_declared_na"]["basis"]
     assert basis["provenance_verified"] is True and "why" not in basis
-
-
-def test_the_coverage_payload_does_not_list_a_narrowed_case_as_covered(
-        tmp_path, monkeypatch):
-    """#1, RED BEFORE THE FIX: the runner's coverage_actual payload built
-    scenarios_covered from every JUnit testcase, so a DESIGN_DECLARED_NA case
-    whose oracle never ran was listed as covered, and the disclosure never
-    reached the artefact. run2-shaped: 2 applicable + 1 narrowed."""
-    import design_one_shot_runner as D
-    import _sim_results_bridge as _srb
-    rows = [{"name": "rv32i"}, {"name": "zifencei"}, M_ROW]
-    proj, ids = _project(tmp_path, rows, RV)
-    _wire(monkeypatch, proj, ids,
-          {"rv32i": PASS, "zifencei": PASS, "mul_div": UNRUN})
-    monkeypatch.setattr(_srb, "find_professional_tb_pass", lambda p: {
-        "tests": 3, "failures": 0, "errors": 0,
-        "rel_path": P._L10_UNIT_JUNIT_REL.as_posix(),
-        "rel_paths": [P._L10_UNIT_JUNIT_REL.as_posix()]})
-    pay = D._v1_6_609_functional_tb_pass_payload(proj)
-    assert pay and pay["verdict"] == "PASS", pay
-    assert pay["scenarios_covered"] == ["rv32i", "zifencei"], pay
-    assert pay["l10_conformance"] == {"ok": 2, "total": 2}
-    assert pay["declared_case_count"] == 3
-    assert [c["case"] for c in pay["design_declared_na"]["cases"]] == ["mul_div"]

@@ -27,7 +27,7 @@ CLI:
     exit 0 = no semantic floor found ; exit 3 = SEMANTIC FLOOR (with evidence)
 """
 from __future__ import annotations
-import argparse, itertools, json, re, subprocess, sys, tempfile, os
+import argparse, itertools, json, re, subprocess, sys, vibeic_temp as tempfile, os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 

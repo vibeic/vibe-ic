@@ -21,7 +21,7 @@ import re
 import shlex
 import shutil
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple

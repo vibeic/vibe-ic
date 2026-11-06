@@ -2398,7 +2398,7 @@ def _liberty_model_path(value, container: str = '', project: Optional[Path] = No
     if len(paths) < 2:
         return paths[0] if paths else ''
     import hashlib
-    import tempfile
+    import vibeic_temp as tempfile
 
     text = _read_pdk_text(paths, container)
     if text is None:
@@ -2410,7 +2410,7 @@ def _liberty_model_path(value, container: str = '', project: Optional[Path] = No
     prefix = f'corner_{corner}-' if corner else ''
     target = directory / f'{prefix}library-{identity}.lib'
     if not target.is_file():
-        with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as staged:
+        with tempfile.atomic_file(mode='w', dir=directory, delete=False) as staged:
             staged.write(text)
         os.replace(staged.name, target)
     return str(target)

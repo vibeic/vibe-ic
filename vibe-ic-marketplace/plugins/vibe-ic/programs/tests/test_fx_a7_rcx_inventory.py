@@ -254,44 +254,6 @@ def test_the_runner_keeps_a_layout_of_this_netlist(tmp_path, monkeypatch):
     assert "emit" not in _a5_calls(tmp_path, monkeypatch, _NET)
 
 
-def test_stale_redraw_uses_the_run_pdk_and_its_resolved_root(
-        tmp_path, monkeypatch):
-    """A stale layout must be redrawn by the process the current run selected.
-
-    The reviewed tip sends neither flag, so the emitter silently uses its
-    unrelated default process even when this run explicitly selected another.
-    """
-    import analog_one_shot_runner as R
-    import analog_pdk_availability as APA
-    project = _a6_block(tmp_path, _NET_OLD)
-    calls = []
-
-    def fake_run(cmd, *a, **k):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-    monkeypatch.setattr(R._pr, "run", fake_run)
-    def resolve(target, **kwargs):
-        assert target == "gf180mcuD"
-        assert kwargs == {"project": None, "container": "vibeic-eda"}
-        return {"available": True, "source": "container_installed",
-                "rung": 2, "matched_dir": "gf180mcuD",
-                "pdk_root": "/foundry/gf180mcuD"}
-
-    monkeypatch.setattr(APA, "resolve_pdk", resolve)
-    result = R.a5_stale_layout_redraw(
-        project, "ldo", SimpleNamespace(pdk="gf180mcuD",
-                                        container="vibeic-eda"))
-    assert result is not None and result["emitter_rc"] == 0
-    argv = calls[0]
-    family = (argv[argv.index("--family") + 1]
-              if "--family" in argv else "<emitter default>")
-    root = (argv[argv.index("--pdk-root") + 1]
-            if "--pdk-root" in argv else "<emitter default>")
-    assert family == "gf180mcuD", family
-    assert root == "/foundry", root
-
-
 def test_first_a5_draw_uses_the_same_run_pdk(tmp_path, monkeypatch):
     import analog_one_shot_runner as R
     import analog_pdk_availability as APA

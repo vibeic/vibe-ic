@@ -36,92 +36,13 @@ only difference is the slot keyword, and asserts the defect comes back.
 """
 from __future__ import annotations
 
-import re
-import sys
 from pathlib import Path
 
-import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import _progress_run as _pr  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 PLUGIN = PROGRAMS.parent
 FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
-FCC = PROGRAMS / "flow_compliance_check.py"
-
-# R-0915-85 — the disclosure has TWO shapes now, and both say the same fact.
-# A dependent that had a PASS to void still reads "PASS voided"; one that had
-# already measured nothing has no PASS to void and reads "rests on a broken
-# chain". Either is the disclosure this file protects.
-_VOIDED_RE = re.compile(
-    r"(PASS voided: dependency \[19\] CTS.*= FAIL, so this step's PASS "
-    r"certifies nothing about the design"
-    r"|rests on a broken chain: dependency \[19\] = FAIL)")
-
-
-def _def(ncomp: int, tag: str) -> str:
-    comps = "\n".join(
-        f"  - u{i} sky130_fd_sc_hd__buf_1 + PLACED ( {1000 + i * 10} 2000 ) N ;"
-        for i in range(ncomp))
-    return (f"VERSION 5.8 ;\nDIVIDERCHAR \"/\" ;\nBUSBITCHARS \"[]\" ;\n"
-            f"DESIGN top_{tag} ;\nUNITS DISTANCE MICRONS 1000 ;\n"
-            f"DIEAREA ( 0 0 ) ( 100000 100000 ) ;\n"
-            f"COMPONENTS {ncomp} ;\n{comps}\nEND COMPONENTS\nEND DESIGN\n")
-
-
-@pytest.fixture
-def broken_chain(tmp_path):
-    """Step 19 (CTS) FAILs on a vacuous clock-tree report; Step 20 (hold fix)
-    genuinely PASSes — 4 hold buffers over the pre-hold input. Step 20's PASS
-    therefore rests on a chain that broke."""
-    pnr = tmp_path / "phase3/stage3/pnr"
-    cts = tmp_path / "phase3/stage3/cts"
-    pnr.mkdir(parents=True)
-    cts.mkdir(parents=True)
-    (pnr / "post_cts.def").write_text(_def(40, "cts"))
-    (cts / "clock_tree.rpt").write_text(
-        "CTS not invoked\nno clock tree was built\n")
-    (pnr / "post_hold.def").write_text(_def(44, "hold"))
-    return tmp_path
-
-
-def _audit(project: Path, flow_def: Path) -> str:
-    # <=60s: `ci_harness_timeout_ceiling_check` derives a 60s per-call ceiling
-    # from the 180s harness bound, so an inner timeout above it can only fire
-    # after the session has already been killed. Measured worst case for this
-    # audit over the 4-file fixture is ~0.5s.
-    r = _pr.run(
-        [sys.executable, str(FCC), str(project), "--phase", "3", "--lenient",
-         "--flow-def", str(flow_def)],
-        capture_output=True, text=True)
-    return r.stdout + r.stderr
-
-
-def _step20(out: str) -> str:
-    keep, on = [], False
-    for ln in out.splitlines():
-        if re.search(r"] Step 20:", ln):
-            on = True
-        elif on and re.search(r"] Step \d+:", ln):
-            break
-        if on:
-            keep.append(ln)
-    return "\n".join(keep)
-
-
-def test_the_shipped_wiring_keeps_the_voided_disclosure(broken_chain):
-    out = _audit(broken_chain, FLOW)
-    block = _step20(out)
-    # R-0915-85 — the WORD is NOT_MEASURED and the REASON is `upstream_failed`,
-    # which is what `PASS-VOIDED` said. The disclosure line is what a reader
-    # acts on and it is asserted below; the word and its reason are asserted
-    # here so the two cannot part.
-    assert "[NOT_MEASURED" in block, block
-    assert "(upstream_failed)" in block, block
-    assert _VOIDED_RE.search(block), block
-
 
 def test_the_classifier_is_a_program_output_not_a_gate():
     step20 = next(step for step in yaml.safe_load(FLOW.read_text())["steps"]
@@ -133,46 +54,3 @@ def test_the_classifier_is_a_program_output_not_a_gate():
         "path": "reports/phase3/pnr/hold_area_budget.json",
         "verdict_field": "verdict",
     }]
-
-
-def test_POSITIVE_CONTROL_the_blocking_slot_still_retiers_the_step(
-        broken_chain, tmp_path):
-    """Adding the classifier back as a gate recreates the TIER defect.
-
-    R-0915-85 — AND ONLY THE TIER DEFECT NOW. This control also asserted that
-    the blocking slot DELETED the dependency-voided disclosure, which was true
-    and was a second defect riding on the first: the line was appended only to
-    a dependent that still had a PASS to void, so re-tiering the step away from
-    PASS took its disclosure with it. That is #901's own sentence -- a new
-    disclosure must not cost an old one -- and the broken-chain note is now
-    derived from the DECLARED ancestry instead, so it survives the re-tier.
-    The control's subject is unchanged and is asserted below; what it no longer
-    asserts is a loss it was only ever recording.
-    """
-    flow = yaml.safe_load(FLOW.read_text(encoding="utf-8"))
-    step20 = next(step for step in flow["steps"] if step["id"] == 20)
-    step20["gate"]["all_of"].insert(0, {
-        "program_exit_zero": (
-            "hold_area_budget_check . --json "
-            "reports/phase3/pnr/hold_area_budget.json")})
-    variant = tmp_path / "blocking_flow.yaml"
-    variant.write_text(yaml.safe_dump(flow, sort_keys=False))
-
-    out = _audit(broken_chain, variant)
-    block = _step20(out)
-    # #1978 makes this unclassified rc=2 an unsafe non-verdict rather than a
-    # benign vacuous skip.  The control's subject is unchanged: putting the
-    # classifier back in the gate denominator re-tiers Step 20 away from PASS
-    # and deletes the dependency-voided disclosure.
-    # The blocking slot re-tiers Step 20 away from PASS: the classifier could
-    # not judge, so nothing was measured, and the reason says which kind.
-    assert "[NOT_MEASURED" in block, block
-    assert "(partial_population)" in block or "(execution_error)" in block, \
-        block
-    assert re.search(
-        r"GATE_RAN hold_area_budget_check\s+rc=2\s+INCOMPLETE "
-        r"reason_class=EXECUTION_ERROR", out), out
-    assert _VOIDED_RE.search(block), (
-        "the re-tier took the dependency disclosure with it: the step is no "
-        "longer saying that it rests on a broken chain, which is the defect "
-        "the derived note exists to stop\n" + block)

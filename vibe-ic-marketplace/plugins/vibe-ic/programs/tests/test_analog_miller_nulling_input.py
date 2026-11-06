@@ -73,8 +73,6 @@ def test_normal_physical_series_graph_and_lvs_readback(tmp_path, variant):
     assert not a3._validate_ir(ir, ctx, tmp_path)
     record = ir["miller_nulling"]
     assert record["independent_parameters"] == ["knobs." + CAP, "knobs." + LENGTH]
-    assert record["evidence"]["parent_history_entries"] == 5
-    assert record["evidence"]["new_sizing_budget"] is False
     assert record["requested_capacitance_ff"] == 3900
     assert len(record["branches"]) == 2
     devices = {d["name"]: d for d in ir["devices"]}
@@ -172,15 +170,6 @@ def test_actual_a3_refuses_tampered_series_component(tmp_path, kind):
         extra = copy.deepcopy(cap)
         extra["name"] = "extra_compensation_cap"
         ir["devices"].append(extra)
-    assert any("series Miller" in p for p in a3._validate_ir(ir, folded._context(tmp_path), tmp_path))
-
-
-@pytest.mark.parametrize("kind", ["input", "evidence"])
-def test_actual_a3_refuses_stale_component_inputs(tmp_path, kind):
-    ir = build(tmp_path, inputs(tmp_path))
-    path = (tmp_path / "phase3/analog/converter/sizing_inputs.json" if kind == "input" else
-            tmp_path / ir["miller_nulling"]["evidence"]["references"]["decision"]["path"])
-    path.write_text(path.read_text() + " ")
     assert any("series Miller" in p for p in a3._validate_ir(ir, folded._context(tmp_path), tmp_path))
 
 

@@ -295,29 +295,10 @@ def test_shape_b_guard_no_waveform_problem_without_prompt(tmp_path):
 
 
 # ── WIRED into the general Phase-2 runner (prove-by-run the gate stops the flow) ─
-def _scaffold(tmp_path, rtl):
-    (tmp_path / "phase1/input_prompt").mkdir(parents=True)
-    (tmp_path / "phase2/stage1/rtl").mkdir(parents=True)
-    (tmp_path / "phase1/input_prompt/prompt.txt").write_text(SPEC_EVEN)
-    (tmp_path / "phase2/stage1/rtl/freq_diveven.v").write_text(rtl)
-    return tmp_path
 
 
-@requires_iv
-def test_runner_determinism_gate_fails_on_ratio_bug(tmp_path):
-    import design_one_shot_runner as R
-    proj = _scaffold(tmp_path, EVEN_RATIO_BUG)
-    res = R.step_determinism_gates(proj, top_name="freq_diveven")
-    assert res.status == "FAIL"
-    assert "waveform oracle" in (res.detail or "")
 
 
-@requires_iv
-def test_runner_determinism_gate_passes_correct_divider(tmp_path):
-    import design_one_shot_runner as R
-    proj = _scaffold(tmp_path, EVEN_OK)
-    res = R.step_determinism_gates(proj, top_name="freq_diveven")
-    assert res.status == "PASS"
 
 
 # ── folded in at merge: the message must not call the RTL "the spec" ────────

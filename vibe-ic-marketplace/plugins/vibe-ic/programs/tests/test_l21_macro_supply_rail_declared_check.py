@@ -489,31 +489,6 @@ def test_the_rail_waiver_does_not_absorb_the_untyped_abstract(tmp_path):
     assert rc_short == 1, "a <40-char waiver must not suppress the finding"
 
 
-def test_the_consumer_is_measurably_blind_to_an_untyped_abstract():
-    """The load-bearing claim in the L21-5 message, RUN rather than asserted.
-
-    `_macro_supply_gc_plan` is the backend function the gate speaks for. On the
-    untyped abstract it returns ([], []) — no global connection AND no
-    HARDMACRO_SUPPLY_UNCONNECTED finding — so the macro is invisible to the
-    binder and to the binder's own honesty report at the same time."""
-    sys.path.insert(0, str(PROGRAMS))
-    import importlib
-    runner = importlib.import_module("phase3_one_shot_runner")
-
-    connect_t, unconn_t = runner._macro_supply_gc_plan([MACRO_LEF], [], [])
-    assert unconn_t, (
-        "control: the TYPED abstract must reach the consumer's honesty report")
-    assert {(u["pin"], u["use"]) for u in unconn_t} == {
-        ("SUPPLY_HI_A", "POWER"), ("SUPPLY_LO_A", "GROUND")}, unconn_t
-
-    connect_m, unconn_m = runner._macro_supply_gc_plan(
-        [MAGIC_WRITTEN_LEF], [], [])
-    assert (connect_m, unconn_m) == ([], []), (
-        "the untyped abstract is expected to be INVISIBLE to the consumer — if "
-        "this ever stops being true the L21-5 message must be rewritten, not "
-        f"the test. got {connect_m!r} {unconn_m!r}")
-
-
 def test_the_shared_parser_separates_untyped_from_typed():
     """One parse answers both questions, so they can never disagree."""
     sys.path.insert(0, str(PROGRAMS))

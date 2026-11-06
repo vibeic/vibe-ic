@@ -9,7 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 import time
 
 
@@ -448,8 +448,9 @@ def formal(project, directory, tool, commands):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
     statuses, covers, reports, required, observed, native_steps, scope, proof_scopes = [], [], [], [], [], [], [], []
     frontend_failures = set()
+    unmodeled_inputs = set()
 
-    def cover_model(output, key, options):
+    def cover_model(output, key, options, *, inspect_only=False):
         model, cells = output / "model/design.il", output / "model/cover_inputs.json"
         if not model.is_file():
             native_steps.append({"name": key + ".Cover.Input", "ran": False,
@@ -464,6 +465,28 @@ def formal(project, directory, tool, commands):
             return None
         conditional, assertions, explicit, subjects = [], 0, 0, set()
         modules = json.loads(cells.read_text())["modules"]
+        missing = []
+        for module, body in modules.items():
+            for kind in ("anyseq", "anyconst"):
+                free = {bit for cell in body.get("cells", {}).values() if cell["type"] == "$" + kind
+                        for bit in cell["connections"].get("Y", []) if isinstance(bit, int)}
+                if kind == "anyseq":
+                    free.update(bit for port in body.get("ports", {}).values() if port["direction"] == "input"
+                                for bit in port["bits"])
+                for name, wire in body.get("netnames", {}).items():
+                    if str(wire.get("attributes", {}).get(kind, 0)).strip("0"):
+                        lost = sum(bit not in free for bit in wire["bits"])
+                        if lost:
+                            missing.append(f"{module}.{name}: {lost}/{len(wire['bits'])} {kind} bits lack native free-input drivers")
+        if missing:
+            detail = "Native formal model lost declared free inputs: " + "; ".join(missing)
+            unmodeled_inputs.add(key)
+            scope.append(detail)
+            native_steps.append({"name": key + ".Cover.Input", "ran": True,
+                "exit_code": compiled.returncode, "status": "NOT_MEASURED", "detail": detail})
+            return None
+        if inspect_only:
+            return 0
         for module, body in modules.items():
             for name, cell in body.get("cells", {}).items():
                 if cell["type"] == "$scopeinfo" and "." not in name:
@@ -576,6 +599,8 @@ def formal(project, directory, tool, commands):
                     if top_match:
                         native_read += "--top " + top_match[1] + " "
                     native_read += "-I " + _word(config.parent / "src") + " " + reads[0][1]
+                    native_read += ("\nsetundef -undriven -anyseq a:anyseq>0"
+                                    "\nsetundef -undriven -anyconst a:anyconst>0")
                     retry = config.parent / "slang_frontend.sby"
                     retry.write_text(original_body[:reads[0].start()] + native_read + original_body[reads[0].end():])
                     destination = config.parent / "slang_frontend"
@@ -598,8 +623,6 @@ def formal(project, directory, tool, commands):
                 body = config.read_text()
                 mode_match = re.search(r"^mode\s+(\S+)\s*$", body, re.M)
                 mode = mode_match[1] if mode_match else ""
-                if mode == "cover":
-                    covers.append(status)
             row = {"name": f"SymbiYosys.{task}", "ran": True,
                    "exit_code": completed.returncode,
                    "status": status if status in {"PASS", "FAIL"} else "NOT_MEASURED"}
@@ -607,12 +630,20 @@ def formal(project, directory, tool, commands):
             if mode in {"prove", "bmc"}:
                 options = re.search(r"(?ms)^\[options\]\s*\n(.*?)(?=^\[|\Z)", body)
                 assertions = cover_model(output, key, options[1] if options else "mode cover\n")
-                if status == "PASS" and assertions is None:
+                if assertions is None and (status == "PASS" or key in unmodeled_inputs):
                     status = "NOT_MEASURED"
                     row["status"] = status
-                    row["detail"] = "The native formal model's cover targets could not be read."
+                    row["detail"] = ("The native model lacks declared free inputs." if key in unmodeled_inputs
+                                     else "The native formal model's cover targets could not be read.")
                 if mode == "prove":
                     statuses.append(status)
+            elif mode == "cover":
+                cover_model(output, key, "", inspect_only=True)
+                if key in unmodeled_inputs:
+                    status = "NOT_MEASURED"
+                    row["status"] = status
+                    row["detail"] = "The native model lacks declared free inputs."
+                covers.append(status)
             if status in {"PASS", "FAIL"}:
                 observed.append(key)
             reports.extend(native)
@@ -793,8 +824,8 @@ Path(sys.argv[5]).write_text(json.dumps(result))
     argv = ["python3", "-c", code, str(Path(__file__).resolve().parent),
             str(project), str(work), json.dumps(mapped(tool, mounts)), str(result_path)]
     options = ["-w", mapped(str(work), mounts)]
-    if os.environ.get("TMPDIR"):
-        options.extend(["-e", "TMPDIR=" + mapped(os.environ["TMPDIR"], mounts)])
+    for key, value in tempfile.configure().items():
+        options.extend(["-e", key + "=" + mapped(value, mounts)])
     completed = commands.run(["docker", "exec", *options, container, "bash", "-lc",
                               "exec " + shlex.join(mapped(argv, mounts))])
     if completed is None or completed.returncode or not result_path.is_file():
@@ -808,7 +839,8 @@ Path(sys.argv[5]).write_text(json.dumps(result))
 def execute(project, directory, tool, route, *, state=None, config=None):
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
+    parent = tempfile.current_run("adapter", directory.name) / directory.name
+    work = Path(tempfile.mkdtemp(prefix="native_", dir=parent))
     commands = Commands(work)
     if tool.get("adapter") == "path_delay_atpg":
         from flow_atpg import path_delay

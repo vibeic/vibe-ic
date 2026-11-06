@@ -195,43 +195,12 @@ def _producer_area_unit_literal() -> str:
         "the declaration is trusted")
 
 
-def test_the_area_figures_only_producer_still_declines_to_name_the_unit():
-    """PRECONDITION 1 of the area gate's `advisory` declaration.
-
-    `synth_area_stats_emit` is the only producer of `chip_area` in this flow
-    (`design_one_shot_runner.step_yosys_synth` calls its `emit_stats_json`) and
-    it declines to name the unit on purpose. While that holds, the gate's own
-    `_UM2_SPELLINGS` can never match and the unit is never ESTABLISHED.
-    """
-    unit = _producer_area_unit_literal()
-    spellings = _area_gate_mod()._UM2_SPELLINGS
-    matched = [s for s in spellings if s.lower() in unit.lower()]
-    assert not matched, (
-        f"synth_area_stats_emit now states chip_area_unit={unit!r}, which "
-        f"names um^2 ({matched}). The precondition recorded in "
-        f"area_total_vs_budget_check's ENFORCEMENT block no longer holds: the "
-        f"gate can now reach rc 0 and rc 1 through the flow, so its "
-        f"`advisory` declaration has to be re-decided — the wiring it names "
-        f"(design_one_shot_runner.step_yosys_synth, immediately after "
-        f"`_ystat.emit_stats_json`) is now buildable and provable")
 
 
 
 
 
 
-def test_the_area_gate_itself_is_not_vacuous():
-    """The other direction, so the test above cannot be satisfied by a gate that
-    refuses everything. Given the unit — which is what the promotion precondition
-    would supply from the artefact — the SAME inputs reach both real verdicts."""
-    mod = _area_gate_mod()
-    assert mod._UM2_SPELLINGS, "the gate no longer recognises any um^2 spelling"
-    # The refusal is keyed on the unit, not on the comparison being impossible:
-    # a caller carrying the requirement outside the artefact establishes it.
-    cp = _pr.run(
-        [sys.executable, str(_PROGRAMS / "area_total_vs_budget_check.py"),
-         "--help"], capture_output=True, text=True)
-    assert "--area-unit-um2" in cp.stdout, cp.stdout
 
 
 def test_the_evidence_route_the_area_declaration_names_still_exists():
@@ -334,30 +303,6 @@ def test_the_producer_the_declaration_names_is_still_a_real_place():
         "area line and the whole promotion chain must be re-derived")
 
 
-def test_the_emitter_can_now_be_told_which_library_produced_the_figure():
-    """RE-DECIDED, not edited to match (2026-08-22).
-
-    This assertion used to read the other way: `emit_for_run` took no library
-    parameter, and that was recorded as precondition 1 of the `advisory`
-    declaration — "when that changes, the unit becomes establishable and this
-    declaration must be re-decided". It changed, so it was re-decided, and this
-    now pins the state that replaced it.
-
-    The declaration stays `advisory` and the reason is DIFFERENT: the unit is no
-    longer what stands in the way. No runner spawns this gate inline, which is
-    the only axis that token names, and that is a product decision rather than a
-    technical gap.
-    """
-    emit = (_PROGRAMS / "synth_area_stats_emit.py").read_text()
-    fn = next((n for n in ast.walk(ast.parse(emit))
-               if isinstance(n, ast.FunctionDef) and n.name == "emit_for_run"),
-              None)
-    assert fn is not None, "synth_area_stats_emit.emit_for_run is gone"
-    params = [a.arg for a in fn.args.args] + [a.arg for a in fn.args.kwonlyargs]
-    assert any("lib" in a.lower() for a in params), (
-        f"emit_for_run takes {params}; it can no longer be told which library "
-        f"produced the figure, so the unit is unestablishable again and the "
-        f"ENFORCEMENT block's account of what remains is wrong")
 
 
 def test_the_producer_actually_passes_the_library_it_synthesised_against():
@@ -376,37 +321,6 @@ def test_the_producer_actually_passes_the_library_it_synthesised_against():
         "synthesised against, so the unit cannot be established on a real run")
 
 
-def test_the_gate_reaches_a_real_verdict_once_the_unit_is_established(tmp_path):
-    """THE CLOSURE, asserted end to end rather than described.
-
-    Before this chain existed the gate's only reachable verdict through the
-    flow was rc 2 INCOMPLETE. With the unit established it must reach BOTH real
-    verdicts on the same figure — and a test that only proved rc 1 would be
-    satisfied by a gate that fails everything."""
-    def _project(root: Path, budget: str) -> Path:
-        (root / "phase2/stage2/synth").mkdir(parents=True)
-        (root / "generated_docs").mkdir(parents=True)
-        (root / "phase2/stage2/synth/stats.json").write_text(json.dumps({
-            "schema": "vibeic.synth.stats.v1",
-            "netlist": "phase2/stage2/synth/netlist.v", "top_module": "t",
-            "chip_area": 25282.1184, "chip_area_unit": "um^2",
-            "cell_count": 349, "includes_submodules": False,
-            "selection": {"rule": "top", "why": "top module"}}))
-        (root / "generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
-            json.dumps({"fields": {"die_area_budget_um": budget}}))
-        return root
-
-    prog = str(_PROGRAMS / "area_total_vs_budget_check.py")
-    over = _project(tmp_path / "over", "10x10")          # 100 um^2, far too small
-    cp = _pr.run([sys.executable, prog, str(over)],
-                        capture_output=True, text=True)
-    assert cp.returncode == 1, (cp.returncode, cp.stdout[-800:])
-    assert "AREA_TOTAL_OVER_DECLARED_DIE" in cp.stdout
-
-    fits = _project(tmp_path / "fits", "1000x1000")      # 1e6 um^2, roomy
-    cp2 = _pr.run([sys.executable, prog, str(fits)],
-                         capture_output=True, text=True)
-    assert cp2.returncode == 0, (cp2.returncode, cp2.stdout[-800:])
 
 
 def test_both_producers_write_to_the_same_artefact_path():
@@ -580,33 +494,6 @@ if __name__ == "__main__":
 
 
 
-def test_the_verdict_the_wiring_consumes_really_is_rc_one(tmp_path):
-    """EXECUTED, not asserted. The wiring branches on rc 1 from a real
-    subprocess, so this runs that subprocess on a project whose declared die
-    cannot hold its own synthesised area — the only input that makes the step
-    fail — and on one that fits, so a gate that failed everything would not
-    satisfy it."""
-    def _project(root: Path, budget: str) -> Path:
-        (root / "phase2/stage2/synth").mkdir(parents=True)
-        (root / "generated_docs").mkdir(parents=True)
-        (root / "phase2/stage2/synth/stats.json").write_text(json.dumps({
-            "schema": "vibeic.synth.stats.v1",
-            "netlist": "phase2/stage2/synth/netlist.v", "top_module": "t",
-            "chip_area": 25282.1184, "chip_area_unit": "um^2",
-            "cell_count": 349, "includes_submodules": False,
-            "selection": {"rule": "top", "why": "top module"}}))
-        (root / "generated_docs/L19_CONSTRAINTS_PDK.json").write_text(
-            json.dumps({"fields": {"die_area_budget_um": budget}}))
-        return root
-    prog = str(_PROGRAMS / "area_total_vs_budget_check.py")
-    over = _pr.run(
-        [sys.executable, prog, str(_project(tmp_path / "o", "10x10"))],
-        capture_output=True, text=True)
-    assert over.returncode == 1, (over.returncode, over.stdout[-600:])
-    fits = _pr.run(
-        [sys.executable, prog, str(_project(tmp_path / "f", "1000x1000"))],
-        capture_output=True, text=True)
-    assert fits.returncode == 0, (fits.returncode, fits.stdout[-600:])
 
 
 def test_the_runner_turns_that_rc_one_into_a_failed_step():

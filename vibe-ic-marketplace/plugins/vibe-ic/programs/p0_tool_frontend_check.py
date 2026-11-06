@@ -7,6 +7,8 @@ new P0 failure. Both tools must actually run; an absent tool is never PASS.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import json
 import math
@@ -215,7 +217,7 @@ def _invoke(tool: str, args: list[str], project: Path,
         # The one writable mount: the elaboration scratch directory this
         # program created for its own `write_json` (never the project).
         scratch = [m.group(1) for a in args for m in _ELAB_TARGET_RE.finditer(a)]
-        command = ["docker", "run", "--rm", "--name", container,
+        command = ["docker", "run", *_vtmp.docker_mounts(), "--rm", "--name", container,
                    "--cpus", cpus,
                    *_dmem.docker_memory_flags(),
                    "--network", "none",
@@ -400,7 +402,7 @@ def check(project: Path, image: str | None = None, *,
     """`image` is the declared one (`--image`); None resolves it only if a
     tool actually has to run in docker. The elaboration scratch directory
     lives exactly as long as this call, on every return path."""
-    import tempfile
+    import vibeic_temp as tempfile
     scratch = Path(tempfile.mkdtemp(prefix=_ELAB_SCRATCH_PREFIX))
     try:
         return _check(project, image, scratch, output_project=output_project)

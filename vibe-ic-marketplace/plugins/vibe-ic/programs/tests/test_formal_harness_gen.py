@@ -64,10 +64,69 @@ def _gen(tmp_path, text, name="dut.v", **kw):
 
 
 # ── comment hygiene ─────────────────────────────────────────────────────────
+_INTERNAL_BUS_STATE = """module bus_state #(parameter WIDTH=9)(
+    input clk,rst,select_read,input [WIDTH-1:0] data,
+    output wire [WIDTH-1:0] read_data,output wire error);
+    reg [WIDTH-1:0] stored;
+    always @(posedge clk) if(rst) stored<=9'd0; else stored<=data;
+    assign read_data=select_read ? stored : {WIDTH{1'b0}};
+    assign error=select_read && data[0];
+endmodule
+"""
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("mutate", [False, True])
+@pytest.mark.parametrize("reset_value", ["9'd0", "'1", "16'h200"])
+def test_internal_reset_state_uses_full_width_native_observer(tmp_path, asynchronous, mutate, reset_value):
+    if not all(shutil.which(name) for name in ("yosys", "sby", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+    from flow_native_adapters import Commands, formal
+
+    text = _INTERNAL_BUS_STATE.replace("@(posedge clk)", "@(posedge clk or posedge rst)") if asynchronous else _INTERNAL_BUS_STATE
+    text = text.replace("9'd0", reset_value)
+    rtl = tmp_path / "unit.v"
+    rtl.write_text(text)
+    harness = tmp_path / "formal_bus_state.sv"
+    result = G.generate(rtl=[rtl], top="bus_state", out=harness, assertion_form="immediate")
+    assert result["verdict"] == "EMITTED", result
+    assert result["properties"][0]["target"] == "stored", result
+    content = harness.read_text()
+    assert "// @observe vibeic_obs_stored = dut.stored" in content
+    assert "wire [WIDTH-1:0] vibeic_obs_stored;" in content
+    assert "(vibeic_obs_stored == vibeic_reset_stored)" in content
+    assert "localparam [WIDTH-1:0] vibeic_reset_stored =" in content
+    deck = harness.with_suffix(".sby")
+    deck.write_text(emit_invariant_sby([str(rtl)], str(harness), "formal_bus_state", [], [], prove_depth=8, bmc_depth=8))
+    if mutate:
+        wrong_value = "9'h001" if reset_value=="'1" else "9'h100"
+        rtl.write_text(text.replace("stored<="+reset_value, "stored<="+wrong_value))
+    output = tmp_path / "run"
+    output.mkdir()
+    native = formal(tmp_path, output, {"top":"bus_state", "properties":[str(deck)]}, Commands(output))
+    rows = [r for r in native["native_steps"] if r["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
+    assert len(rows)==2 and {r["status"] for r in rows}=={"FAIL" if mutate else "PASS"},native
+    assert harness.read_text()==content
+
+
 def test_strip_comments():
     assert "secret" not in G.strip_comments("a // secret\n/* b\n c */d")
     # newlines preserved so line structure survives
     assert G.strip_comments("a // x\nb").count("\n") == 1
+
+
+@pytest.mark.parametrize("change", ["nonliteral", "other_clock", "multiple_drivers"])
+def test_internal_reset_floor_keeps_unsupported_state_unselected(tmp_path, change):
+    text = _INTERNAL_BUS_STATE
+    if change == "nonliteral":
+        text = text.replace("stored<=9'd0", 'begin stored<=data; $display("stored<=9\'d0;"); end')
+    elif change == "other_clock":
+        text = text.replace("input clk,rst", "input clk,aux_clock,rst").replace("@(posedge clk)", "@(posedge aux_clock)")
+    else:
+        text = text.replace("endmodule", "always @(posedge clk) stored<=data; endmodule")
+    result, _out = _gen(tmp_path, text, top="bus_state")
+    assert result["verdict"] == "NOT_APPLICABLE", result
 
 
 # ── module header parse ─────────────────────────────────────────────────────
@@ -237,8 +296,14 @@ def test_diagnostic_strings_do_not_hide_real_invalid_gated_drivers(tmp_path, exp
         'always @(posedge clk) begin if(rst) stored<=0; else stored<=data; '
         '$display("assign held = !rst && stored; always_ff stored <= data;"); end '
         f'assign held={expression}; {extra} endmodule\n')
-    result, _ = _gen(tmp_path, text)
-    assert result["rc"] == 2 and result["verdict"] == "NOT_APPLICABLE", result
+    result, out = _gen(tmp_path, text)
+    if extra == "always @(posedge clk) stored <= data;":
+        assert result["verdict"] == "NOT_APPLICABLE", result
+        return
+    assert result["verdict"] == "EMITTED", result
+    assert all(p["output"] != "held" for p in result["properties"]), result
+    assert all(p.get("internal_state") for p in result["properties"]), result
+    assert "@observe vibeic_obs_stored = dut.stored" in out.read_text()
 
 
 @pytest.mark.parametrize("mutation", [None, "missing_gate", "wrong_polarity", "input_driver"])
@@ -303,29 +368,35 @@ def test_generate_reset_gated_active_low(tmp_path, expression):
     assert "if (rst_active || (f_past_valid && rst_active_q))" in immediate
 
 
-@pytest.mark.parametrize("expression,kwargs", [
-    ("rst && launch", {}),                         # wrong polarity
-    ("!rst && d", {}),                             # input, not register
-    ("!rst && missing", {}),                       # undriven register atom
-    ("!rst && launch", {"reset_value": "1'b1"}),    # released gate is nonzero
-    ("!(rst && launch)", {}),                      # whole-expression NOT
-    ("(!rst && launch) || d", {}),                  # unsupported expression
-    ("!rst && launch && d", {}),                   # additional qualifier
-    ("!rst && launch", {"output_width": "[3:0]"}),  # outside scalar grammar
-    ("!rst && launch", {"extra": "assign admitted = d;"}),
-    ("!rst && launch", {"extra": "always @(posedge clk) launch <= d;"}),
-    ("!rst && launch", {"extra": "always_ff @(posedge clk) launch <= d;"}),
-    ("!rst && launch", {"extra": "always_comb launch = d;"}),
-    ("!rst && launch", {"extra": "always @(posedge clk) if (rst) admitted <= 0; else admitted <= d;"}),
-    ("!rst && launch", {"extra": "always_ff @(posedge clk) if (rst) admitted <= 0; else admitted <= d;"}),
-    ("!rst && launch", {"extra": "always_comb admitted = d;"}),
-    ("!rst && launch", {"extra": "assign launch = d;"}),
+@pytest.mark.parametrize("expression,kwargs,internal", [
+    ("rst && launch", {}, True),
+    ("!rst && d", {}, True),
+    ("!rst && missing", {}, True),
+    ("!rst && launch", {"reset_value": "1'b1"}, True),
+    ("!(rst && launch)", {}, True),
+    ("(!rst && launch) || d", {}, True),
+    ("!rst && launch && d", {}, True),
+    ("!rst && launch", {"output_width": "[3:0]"}, True),
+    ("!rst && launch", {"extra": "assign admitted = d;"}, True),
+    ("!rst && launch", {"extra": "always @(posedge clk) launch <= d;"}, False),
+    ("!rst && launch", {"extra": "always_ff @(posedge clk) launch <= d;"}, False),
+    ("!rst && launch", {"extra": "always_comb launch = d;"}, False),
+    ("!rst && launch", {"extra": "always @(posedge clk) if (rst) admitted <= 0; else admitted <= d;"}, True),
+    ("!rst && launch", {"extra": "always_ff @(posedge clk) if (rst) admitted <= 0; else admitted <= d;"}, True),
+    ("!rst && launch", {"extra": "always_comb admitted = d;"}, True),
+    ("!rst && launch", {"extra": "assign launch = d;"}, False),
 ])
-def test_generate_reset_gated_unsupported_refused(tmp_path, expression, kwargs):
-    result, _ = _gen(tmp_path, _gated_output(expression, **kwargs))
-    assert result["verdict"] == "NOT_APPLICABLE"
-    assert result["rc"] == 2
-    assert "construction-safe" in result["reason"]
+def test_generate_reset_gated_unsupported_refused(tmp_path, expression, kwargs, internal):
+    text = _gated_output(expression, **kwargs)
+    result, out = _gen(tmp_path, text)
+    iface = G.parse_module(text, "gated_output")
+    assert all(p.output != "admitted" for p in G.derive_reset_props(iface, "rst", False))
+    if internal:
+        assert result["verdict"] == "EMITTED", result
+        assert all(p.get("internal_state") and p["target"] == "launch" for p in result["properties"])
+        assert "@observe vibeic_obs_launch = dut.launch" in out.read_text()
+    else:
+        assert result["verdict"] == "NOT_APPLICABLE" and result["rc"] == 2
 
 
 def test_derive_reset_props_omits_nonliteral_output():

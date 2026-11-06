@@ -41,7 +41,7 @@ import hashlib
 import json
 import re
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 

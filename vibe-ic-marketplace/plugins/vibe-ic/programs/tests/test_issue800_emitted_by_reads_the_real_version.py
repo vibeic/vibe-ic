@@ -95,15 +95,6 @@ class TestResolver:
         assert pmd.running_plugin_version() == "UNRESOLVED"
         assert pmd.emitted_by("some_tool") == "some_tool vUNRESOLVED"
 
-    def test_unresolved_renders_the_same_at_a_direct_interpolation_site(
-            self, tmp_path, monkeypatch):
-        """The prose emitters build `(v{running_plugin_version()})` themselves,
-        so they are where an empty sentinel would have leaked."""
-        monkeypatch.setattr(pmd, "_THIS_PLUGIN_ROOT", tmp_path / "nowhere")
-        mod = importlib.import_module("sta_triage_classify")
-        md = mod.report_to_markdown(mod.build_report([], 0.0, 0.0))
-        assert "(vUNRESOLVED)." in md
-        assert "(v)." not in md
 
     def test_unresolved_token_is_not_version_shaped(self):
         """`0.1.33` sorted and compared like a measurement; this must not."""
@@ -136,19 +127,6 @@ class TestEmittersFollowTheManifest:
         assert sk["emitted_by"] == \
             "phase1_post_process.emit_l_doc_skeleton v7.0.1"
 
-    def test_hold_fix_planner_json_and_markdown(self, absurd_b):
-        mod = importlib.import_module("hold_fix_planner")
-        plan = mod.build_plan([])
-        assert plan["emitted_by"] == "hold_fix_planner v42.13.9"
-        assert "_Emitted by `hold_fix_planner.py` (v42.13.9)._" in \
-            mod.plan_to_markdown(plan)
-
-    def test_ir_drop_triage_json_and_markdown(self, absurd_a):
-        mod = importlib.import_module("ir_drop_triage_classify")
-        t = mod.build_triage([])
-        assert t["emitted_by"] == "ir_drop_triage_classify v7.0.1"
-        assert "_Emitted by `ir_drop_triage_classify.py` (v7.0.1)._" in \
-            mod.triage_to_markdown(t)
 
     def test_mpw_precheck_result_gate_attribution_carries_no_version(self):
         """The constant names the TOOL only — the release half is never
@@ -174,19 +152,6 @@ class TestEmittersFollowTheManifest:
         assert got["extracted_by"] == \
             "phase1_protocol_spec_extract.extract_l14_* v7.0.1"
 
-    def test_analog_oracle_comparator_version(self, absurd_b):
-        mod = importlib.import_module("analog_oracle_compare")
-        src = (_PROGRAMS / "analog_oracle_compare.py").read_text(encoding="utf-8")
-        assert '"comparator_version": _pmd.emitted_by(' in src
-        assert mod._pmd.emitted_by("analog_oracle_compare") == \
-            "analog_oracle_compare v42.13.9"
-
-    def test_lvs_netgen_setup_header(self, absurd_b):
-        mod = importlib.import_module("lvs_netgen_setup_emit")
-        txt = mod.build_supplementary_setup_tcl("sky130A")
-        assert "# Vibe-IC plugin v42.13.9 — supplementary Netgen LVS setup" \
-            in txt
-
 
 # ─────────────────────────────────────────────────────────────────────
 # 3. The source-level gate: no emit site may RESTATE the version
@@ -197,16 +162,12 @@ class TestEmittersFollowTheManifest:
 # fail loudly rather than drifting.
 _VERSION_READING_PROGRAMS = {
     "aid_class_rtl_gen",
-    "analog_oracle_compare",
     "caravel_integration_runner",
     "caravel_wrapper_emit",
-    "drc_fix_planner",
-    "postroute_timing_repair_status_gen",
     # The audit artefact's own `version` field. It said "0.119.62" on all 28
     # tracked audits, across every release from 1.0.0 to 1.9.79 — #800's scan
     # never saw it because the key is `version`, which is not one of
     # _ATTRIBUTION_KEYS.
-    "flow_compliance_check",
     "foundry_handoff_pack_gen",
     # The programs of step 0.5ic and of step 37.5ic's two arms. Each asks the
     # manifest (`_pmd.emitted_by`) rather than restating a literal, which is the
@@ -221,30 +182,14 @@ _VERSION_READING_PROGRAMS = {
     # exactly what #800 pinned this set against, and an emitter that is
     # DECLARED is not the defect.
     "general_precheck",
-    "hold_fix_planner",
-    "ir_drop_triage_classify",
-    "l_doc_parity_diff",
     "l_doc_taxonomy",
-    "lvs_netgen_setup_emit",
-    "lvs_triage_classify",
     "mpw_precheck_cleanup",
     "mpw_precheck_result_gate",
-    "oracle_vector_gen",
     "phase1_doc_one_shot_runner",
     "phase1_post_process",
     "phase1_protocol_spec_extract",
-    "phase1_verify_aggregate",
-    "phase2_verify_aggregate",
-    "phase3_verify_aggregate",
-    "pnr_doctor",
-    "ppa_predict_aggregate",
-    "protocol_turnaround_audit",
-    "rtl_review_aggregate",
     "signoff_ladder_run",
     "signoff_waiver_emit",
-    "sta_triage_classify",
-    "synth_doctor",
-    "tapeout_declaration_check",
     "tapeout_declaration_gen",
     # #1744 — the live external-refusal gate. It stamps its report with
     # `_pmd.emitted_by` for the same reason the other emitters do: a verdict

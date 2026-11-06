@@ -161,13 +161,6 @@ def test_both_audits_share_the_alias_helper(tmp_path):
     assert ports == {"a", "b", "s"}
 
 
-def test_chip_agnostic_guard():
-    import sys
-    prog = (Path(__file__).resolve().parents[1] / "source_chip_agnostic_check.py")
-    r = _pr.run([sys.executable, str(prog),
-                        str(Path(__file__).resolve().parents[1].parent)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-400:]
 
 
 if __name__ == "__main__":

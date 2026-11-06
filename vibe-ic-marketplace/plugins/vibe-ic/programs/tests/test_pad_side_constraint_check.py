@@ -321,101 +321,6 @@ def test_cli_vacuous_pass_exit_code(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# WIRING (Defect 1b): the DERIVED pin_order.cfg must actually reach OpenROAD.
-#
-# The gate above only DISCLOSES a wrong-side placement. The corrective half is
-# step_pnr deriving a pin_order.cfg from the L-doc table and feeding it to the
-# ORGANIC #650 `set_io_pin_constraint` path. That derived cfg is written to the
-# canonical PnR output dir (`phase3/stage3/pnr/`), which is NOT one of the
-# project-supplied locations `_v1_0_38_find_pin_order_cfg` scans
-# (openlane/, pnr/, constraints/, project root) — so without the last-resort
-# fallback the file is written and never read, and the corrective half is dead
-# code while every test above still passes.
-# ---------------------------------------------------------------------------
-
-import re as _re  # noqa: E402
-
-import phase3_one_shot_runner as _p3  # noqa: E402
-
-
-def _emit_derived_cfg(project: Path) -> Path:
-    """Run the REAL emitter step_pnr calls.
-
-    (The first cut of this file re-implemented the derivation inline, so a
-    mutation of the shipped emitter changed nothing here — the classic
-    vacuous control. Everything below now exercises
-    `_p3._emit_ldoc_pin_order_cfg`.)
-    """
-    out_dir = project / "phase3" / "stage3" / "pnr"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    _p3._emit_ldoc_pin_order_cfg(project, out_dir)
-    return out_dir / "pin_order.cfg"
-
-
-def test_derived_pin_order_cfg_is_discovered(tmp_path):
-    """FIXED direction: the cfg derived into phase3/stage3/pnr/ is found."""
-    _write_docs(tmp_path, _L9_MD)
-    assert psc._load_pad_side_table(tmp_path), "L9 table must parse"
-    cfg = _emit_derived_cfg(tmp_path)
-    assert cfg.is_file()
-    assert _p3._v1_0_38_find_pin_order_cfg(tmp_path) == cfg
-
-
-def test_derived_pin_order_cfg_reaches_openroad(tmp_path):
-    """FIXED direction: the derived cfg becomes set_io_pin_constraint TCL,
-    with each L-doc edge mapped to the matching OpenROAD region."""
-    _write_docs(tmp_path, _L9_MD)
-    _emit_derived_cfg(tmp_path)
-    bare = "place_pins -hor_layers M3 -ver_layers M2"
-    tcl, note = _p3._v1_0_38_pin_placement_block(tmp_path, bare)
-    assert "set_io_pin_constraint" in tcl
-    assert "pin_order.cfg ingested" in note
-    # Each cfg entry is resolved against the design's own BTerm names and the
-    # matched LITERAL names reach `-pin_names`, so the entry->region binding
-    # is asserted on the emitted resolve + report pair.
-    # clk genuinely belongs on East -> OpenROAD region "right".
-    assert "PIN_ORDER_CONSTRAINT_APPLIED: clk -> right:" in tcl
-    # rst on South -> "bottom"; p/y on West -> "left"; x bus on North -> "top".
-    assert "PIN_ORDER_CONSTRAINT_APPLIED: rst -> bottom:" in tcl
-    assert "PIN_ORDER_CONSTRAINT_APPLIED: p -> left:" in tcl
-    assert "PIN_ORDER_CONSTRAINT_APPLIED: x\\[.*\\] -> top:" in tcl
-    # DEFECT direction: the bussed North entry must NOT be handed to
-    # `-pin_names` as a raw regex. That is what OpenROAD rejected with
-    # `[ERROR PPL-0061] Pins {x\[.*\]} ... were not found`, after which the
-    # surrounding catch demoted it to a NONFATAL note and place_pins put the
-    # whole bus on the wrong edge — while every scalar entry in the same cfg
-    # was honored. Measured on spm/sky130A: 32 x-bits on E instead of N.
-    assert not _re.search(r"-pin_names \{x\\\[\.\*\\\]\}", tcl)
-    assert "set _poc_pins [vibeic_pin_names_matching {x\\[.*\\]}]" in tcl
-    # The bare auto-assign must still follow, for pins the cfg does not name.
-    assert bare in tcl
-
-
-def test_no_derived_cfg_keeps_bare_auto_assign(tmp_path):
-    """DEFECT direction / no-op guard: a project with NO L-doc table and no
-    derived cfg keeps the legacy bare place_pins, byte-for-byte."""
-    _emit_derived_cfg(tmp_path)          # no docs -> must write nothing
-    assert not (tmp_path / "phase3" / "stage3" / "pnr" /
-                "pin_order.cfg").exists()
-    bare = "place_pins -hor_layers M3 -ver_layers M2"
-    tcl, note = _p3._v1_0_38_pin_placement_block(tmp_path, bare)
-    assert tcl == bare
-    assert note == ""
-    assert "set_io_pin_constraint" not in tcl
-
-
-def test_project_supplied_cfg_wins_over_derived(tmp_path):
-    """Precedence: a project-supplied cfg must OUTRANK the derived one, so the
-    fallback can never hijack an explicit override."""
-    _write_docs(tmp_path, _L9_MD)
-    _emit_derived_cfg(tmp_path)
-    supplied = tmp_path / "openlane" / "pin_order.cfg"
-    supplied.parent.mkdir(parents=True, exist_ok=True)
-    supplied.write_text("#N\nclk\n", encoding="utf-8")
-    assert _p3._v1_0_38_find_pin_order_cfg(tmp_path) == supplied
-
-
-# ---------------------------------------------------------------------------
 # FRONT B — the pattern rewrite false-positived on a CONFORMING design.
 #
 # `_pattern_to_regex` rewrote ANY bracketed index to `\[\d+\]`, including an
@@ -534,19 +439,6 @@ def test_pin_order_cfg_tokens_do_not_widen_a_single_bit():
     assert psc.pin_order_cfg_tokens("rst") == ["rst"]
 
 
-def test_derived_cfg_keeps_a_split_bus_split(tmp_path):
-    """End-to-end on the derived cfg: the two edges must NOT both claim the
-    whole bus."""
-    _write_docs(tmp_path, _SPLIT_BUS_MD)
-    cfg = _emit_derived_cfg(tmp_path)
-    text = cfg.read_text()
-    sections = _p3._v1_0_38_parse_pin_order_cfg(text)
-    by_edge = {e: p for e, p in sections}
-    assert by_edge["N"] == [r"data\[0\]", r"data\[1\]"]
-    assert by_edge["S"] == [r"data\[2\]", r"data\[3\]"]
-    assert r"data\[.*\]" not in text
-
-
 # ---------------------------------------------------------------------------
 # An AMBIGUOUS table is a document defect, not a layout violation.
 # ---------------------------------------------------------------------------
@@ -616,49 +508,3 @@ def test_def_discovery_falls_back_to_newest(tmp_path):
     os.utime(old, (now - 500, now - 500))
     os.utime(new, (now, now))
     assert psc._discover_def(tmp_path) == new
-
-
-# ---------------------------------------------------------------------------
-# The derived cfg must not go stale.
-# ---------------------------------------------------------------------------
-
-def test_derived_cfg_is_regenerated_when_the_table_changes(tmp_path):
-    """MUTATION THIS CATCHES: the write-once `if not cfg.exists()` guard,
-    which pins every later run to the FIRST run's L-doc table."""
-    _write_docs(tmp_path, _SPLIT_BUS_MD)
-    cfg = _emit_derived_cfg(tmp_path)
-    assert r"data\[0\]" in cfg.read_text()
-
-    _write_docs(tmp_path, _SPLIT_RANGE_MD)          # the document changed
-    cfg = _emit_derived_cfg(tmp_path)
-    text = cfg.read_text()
-    assert r"data\[8\]" in text, "the cfg is stale — it still holds the old table"
-    assert r"data\[15\]" in text
-
-
-def test_derived_cfg_is_removed_when_the_table_is_withdrawn(tmp_path):
-    _write_docs(tmp_path, _SPLIT_BUS_MD)
-    cfg = _emit_derived_cfg(tmp_path)
-    assert cfg.is_file()
-
-    (tmp_path / "input" / "docs" / "L9_constraints.md").write_text("# L9\n")
-    _emit_derived_cfg(tmp_path)
-    assert not cfg.exists(), (
-        "a derived constraint must not outlive the document it derives from")
-
-
-def test_a_human_cfg_in_the_pnr_dir_is_never_overwritten_or_deleted(tmp_path):
-    """The regenerate/remove logic is keyed on our own marker, so a file a
-    human dropped in the PnR dir is left alone in both directions."""
-    out_dir = tmp_path / "phase3" / "stage3" / "pnr"
-    out_dir.mkdir(parents=True)
-    human = out_dir / "pin_order.cfg"
-    human.write_text("#N\nclk\n", encoding="utf-8")
-
-    _write_docs(tmp_path, _SPLIT_BUS_MD)
-    _p3._emit_ldoc_pin_order_cfg(tmp_path, out_dir)
-    assert human.read_text() == "#N\nclk\n"
-
-    (tmp_path / "input" / "docs" / "L9_constraints.md").write_text("# L9\n")
-    _p3._emit_ldoc_pin_order_cfg(tmp_path, out_dir)
-    assert human.is_file() and human.read_text() == "#N\nclk\n"

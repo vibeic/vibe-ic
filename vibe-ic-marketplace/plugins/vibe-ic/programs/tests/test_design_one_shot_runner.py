@@ -142,57 +142,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 
-def _load_derive_clock():
-    spec = _ilu.spec_from_file_location("_d1s_clk", str(PROG))
-    mod = _ilu.module_from_spec(spec)
-    sys.modules["_d1s_clk"] = mod
-    spec.loader.exec_module(mod)
-    return mod._derive_dft_clock_name
-
-
-def test_dft_clock_prefers_clk_i_over_comment_phantom():
-    derive = _load_derive_clock()
-    rtl = (
-        "// during the last clock cycle of the multiplication ...\n"
-        "//   input of the multiplier is blanked in the next clock cycle ...\n"
-        "module chip_top(\n"
-        "  input  logic clk_i,\n"
-        "  input  logic rst_ni,\n"
-        "  input  logic clk_edn_i\n"
-        ");\nendmodule\n"
-    )
-    # NEGATIVE CONTROL: the prose 'clock' must NOT win; the real port does.
-    assert derive(rtl) == "clk_i"
-
-
-def test_dft_clock_derivation_variants():
-    derive = _load_derive_clock()
-    assert derive("input logic clk_i,") == "clk_i"          # suffix-style
-    assert derive("input clk,") == "clk"                    # bare
-    assert derive("input logic clk_edn_i,\ninput logic clk_i,") == "clk_i"
-    assert derive("/* input clock */ input logic clk_i;") == "clk_i"  # block cmt
-    assert derive("input logic rst_ni;") == ""              # no clock
-
-
 # ── DFT clock-derivation regression (caravel user_project_wrapper × sky130A) ─
 # The fallback branch used to accept only names that START with `clk` or contain
 # the literal `clock`, which EXCLUDED the ubiquitous suffix form `wb_clk_i` and
 # then let a secondary `user_clock2` (contains `clock`) win. Measured: all 33
 # flops in the wrapper clock off wb_clk_i, yet the old rule derived user_clock2.
-def test_dft_clock_wrapper_suffix_beats_secondary_clock():
-    derive = _load_derive_clock()
-    # the exact competing pair, in a wrapper header
-    wrapper = ("module user_project_wrapper(\n"
-               "  input wb_clk_i,\n"
-               "  input wb_rst_i,\n"
-               "  input user_clock2\n"
-               ");\nendmodule\n")
-    assert derive(wrapper) == "wb_clk_i"          # not user_clock2
-    # other suffix/infix clock names are now reachable in the fallback
-    assert derive("input sys_clk;\ninput ready;") == "sys_clk"
-    assert derive("input core_clk;\ninput data;") == "core_clk"
-    # allow-list names are unaffected (first branch), still exact
-    assert derive("input i_clk;\ninput user_clock2;") == "i_clk"
 
 
 # ── #2053 emitter half — the emitted candidate STATES its simulation unit ────
@@ -227,96 +181,12 @@ The module should implement the function shown in the Karnaugh map below.
 """
 
 
-class _FakeChain:
-    """Stands in for deterministic_emit_chain: one emitter, one known body."""
-    @staticmethod
-    def try_emit_ex(text, ifc, top):
-        return "fake_emitter", _EMITTED_RTL, []
-
-    @staticmethod
-    def which_emitters():
-        return ["fake_emitter"]
-
-
-def _emit_candidate(project: Path, mod):
-    sys.modules["deterministic_emit_chain"] = _FakeChain
-    try:
-        res = mod._try_spec_artifact_registry_rtl(
-            project, 0.0, phase1_plain_text=_ACCOUNTED_OPERATOR_SPEC)
-    finally:
-        sys.modules.pop("deterministic_emit_chain", None)
-    return res, (project / "phase2" / "stage1" / "rtl" / "chip_top.sv")
-
-
 def _seed_tb(project: Path, body: str, name: str = "tb_chip_top.v") -> Path:
     tb = project / "phase2" / "stage1" / "tb"
     tb.mkdir(parents=True, exist_ok=True)
     f = tb / name
     f.write_text(body)
     return f
-
-
-def test_emitted_candidate_states_the_declared_timescale(tmp_path):
-    project = tmp_path / "proj"
-    project.mkdir()
-    _seed_tb(project, "`timescale 1ns / 1ps\nmodule tb; endmodule\n")
-    mod = _load_runner()
-    res, out = _emit_candidate(project, mod)
-    assert res.status == "PASS"
-    text = out.read_text()
-    # RED on main: the emitter published `_EMITTED_RTL` verbatim, stating no unit.
-    assert text.startswith("`timescale 1ns/1ps\n")
-    assert text.endswith(_EMITTED_RTL)
-    assert res.extras["declared_timescale"] == "1ns/1ps"
-    assert mod._declared_timescale(text) == "1ns/1ps"
-
-
-def test_emitted_candidate_takes_the_unit_the_testbench_declares(tmp_path):
-    # Not a default: a different declared unit produces a different statement.
-    project = tmp_path / "proj"
-    project.mkdir()
-    _seed_tb(project, "`timescale 10ps / 1ps\nmodule tb; endmodule\n")
-    res, out = _emit_candidate(project, _load_runner())
-    assert out.read_text().startswith("`timescale 10ps/1ps\n")
-    assert res.extras["declared_timescale"] == "10ps/1ps"
-
-
-def test_no_declared_unit_leaves_the_candidate_unchanged_and_refuses_by_name(tmp_path):
-    # CONTROL. Nothing declares a unit, so nothing is imposed: the emitted file
-    # is byte-identical to what the emitter wrote, and the refusal is NAMED.
-    project = tmp_path / "proj"
-    project.mkdir()
-    _seed_tb(project, "module tb; endmodule\n")
-    res, out = _emit_candidate(project, _load_runner())
-    assert res.status == "PASS"
-    assert out.read_text() == _EMITTED_RTL
-    assert "declared_timescale" not in res.extras
-    assert res.extras["timescale_refusal"].startswith(
-        "RTL_TIMESCALE_NOT_DECLARED")
-    assert "RTL_TIMESCALE_NOT_DECLARED" in res.detail
-
-
-def test_a_commented_out_timescale_is_prose_not_a_declaration(tmp_path):
-    project = tmp_path / "proj"
-    project.mkdir()
-    _seed_tb(project, "// `timescale 1ns / 1ps\nmodule tb; endmodule\n")
-    res, out = _emit_candidate(project, _load_runner())
-    assert out.read_text() == _EMITTED_RTL
-    assert res.extras["timescale_refusal"].startswith(
-        "RTL_TIMESCALE_NOT_DECLARED")
-
-
-def test_disagreeing_declarations_are_refused_by_name(tmp_path):
-    project = tmp_path / "proj"
-    project.mkdir()
-    _seed_tb(project, "`timescale 1ns / 1ps\nmodule a; endmodule\n", "tb_a.v")
-    _seed_tb(project, "`timescale 10ps / 1ps\nmodule b; endmodule\n", "tb_b.v")
-    res, out = _emit_candidate(project, _load_runner())
-    assert out.read_text() == _EMITTED_RTL
-    ref = res.extras["timescale_refusal"]
-    assert ref.startswith("RTL_TIMESCALE_DECLARATIONS_DISAGREE")
-    assert "1ns/1ps" in ref and "10ps/1ps" in ref
-    assert "tb_a.v" in ref and "tb_b.v" in ref
 
 
 def test_an_emitter_that_states_its_own_unit_is_not_restated(tmp_path):

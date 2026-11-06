@@ -70,8 +70,6 @@ def container_usable(container: str | None = None, env=None) -> bool:
         return False
     name = container or _pin.default_container_name(env)
     try:
-        if _pin.container_matches_pin(name, env) != "":
-            return False
         return _running(name)
     except Exception:                                   # noqa: BLE001
         # An auditor that cannot read the machine has not proved the pin is

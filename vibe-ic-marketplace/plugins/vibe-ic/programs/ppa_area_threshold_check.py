@@ -138,6 +138,9 @@ Exit codes:
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+import shlex
+
 # --- sibling-import path (vibe-ic#2104) ------------------------------------
 # `programs/` is a flat directory whose modules import each other by BARE
 # name. Python puts a file's own directory on `sys.path` only when that file
@@ -161,7 +164,7 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -1154,10 +1157,10 @@ def synth_stat_in_container(rtl_path: Path, top: str, container: str
     (so we never depend on a particular bind-mount layout), synthesised with the
     canonical recipe, and the full transcript (which contains the `stat` block)
     is returned. NEVER fabricates a count."""
-    stage = f"/tmp/ppa_area_{abs(hash((str(rtl_path), top)))}"
+    stage = _vtmp.mkdtemp(prefix="ppa-area-")
     base = rtl_path.name
     # fresh staging dir + copy the RTL in
-    rc, _o, e = _docker_exec(container, f"rm -rf {stage} && mkdir -p {stage}",
+    rc, _o, e = _docker_exec(container, f"mkdir -p {shlex.quote(stage)}",
                              timeout=30)
     if rc != 0:
         return None, f"could not create container staging dir: {e[-200:]}"

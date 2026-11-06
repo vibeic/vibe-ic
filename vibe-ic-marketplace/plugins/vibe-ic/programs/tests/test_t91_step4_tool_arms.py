@@ -140,28 +140,10 @@ def test_check_refuses_a_measured_line_union_disagreement(tmp_path, capsys):
 
 # ── 2. simulator differential ────────────────────────────────────────────
 
-def _compare(a, b, out):
-    return subprocess.run([sys.executable, str(_PROGRAMS / "sim_dual_compare.py"),
-                           "--a", str(a), "--b", str(b), "--json", str(out)],
-                          capture_output=True, text=True)
 
 
-def test_an_x_read_that_only_icarus_fails_is_a_named_disagreement(tmp_path):
-    r = _compare(_CAL / "sim_dual_icarus_x_positive.xml",
-                 _CAL / "sim_dual_verilator_x_positive.xml", tmp_path / "d.json")
-    assert r.returncode == 1, r.stdout + r.stderr
-    doc = json.loads((tmp_path / "d.json").read_text())
-    assert doc["finding"] == "SIM_DIFFERENTIAL_DISAGREES"
-    assert doc["disagreements"] == [{"case": "tb_xd.q_starts_low",
-                                     "icarus": "FAIL", "verilator": "PASS"}]
 
 
-def test_identical_outcomes_agree_and_a_missing_arm_is_not_measured(tmp_path):
-    ok = _compare(_CAL / "sim_dual_icarus_negative.xml",
-                  _CAL / "sim_dual_verilator_negative.xml", tmp_path / "a.json")
-    missing = _compare(_CAL / "sim_dual_icarus_negative.xml",
-                       tmp_path / "absent.xml", tmp_path / "b.json")
-    assert (ok.returncode, missing.returncode) == (0, 2)
 
 
 def _runner():

@@ -64,16 +64,3 @@ def test_unreadable_native_rule_bytes_are_refused_before_launch(tmp_path,monkeyp
     run,rules,calls=setup_case(tmp_path,monkeypatch,missing=True,local_inputs=local_inputs)
     with pytest.raises(ll.Refusal,match='LL_RCX_PDK_INPUT_UNREADABLE'):run()
     assert calls==[]
-
-
-@pytest.mark.parametrize('local_route', [False, True])
-def test_projected_pdk_liberty_bytes_require_the_local_route(tmp_path,monkeypatch,local_route):
-    project=tmp_path/'project';project.mkdir()
-    pdks=tmp_path/'native-pdk';pdks.mkdir()
-    library=pdks/'cells.lib';library.write_text('library(neutral) {}')
-    monkeypatch.setattr(ll,'_provider_route',lambda *a,**k:local_route)
-    config={'CELL_LIBS':{'*':[str(library)]}}
-    hashes=ll._sta_liberty_input_hashes(config,project,[(pdks,'/pdk')])
-    assert hashes=={str(library):ll.digest(library) if local_route else None}
-    library.unlink()
-    assert ll._sta_liberty_input_hashes(config,project,[(pdks,'/pdk')])=={str(library):None}

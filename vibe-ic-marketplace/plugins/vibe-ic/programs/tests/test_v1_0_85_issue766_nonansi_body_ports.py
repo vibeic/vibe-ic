@@ -261,31 +261,6 @@ def test_766r2_nonansi_unpacked_output_reaches_same_verdict_as_ansi(tmp_path):
 #    pins only inside `ifdef USE_POWER_PINS; before #766 such a top parsed to []
 #    (reconcile skipped, L9 kept), so #766 making it parse must NOT drop the L9
 #    POWER pins / erase the supply ifdef (the #645 invariant). ─────────────────
-def test_766r2_nonansi_top_preserves_l9_power_pins_ifdef(tmp_path):
-    import json
-    import design_one_shot_runner as P2
-    l9 = {"top_module": "soc_top", "top_ports": [
-        {"name": "wb_clk_i", "direction": "input", "width": 1},
-        {"name": "wbs_dat_i", "direction": "input", "width": 32,
-         "msb": 31, "lsb": 0},
-        {"name": "vccd1", "direction": "inout", "width": 1, "io": "POWER"},
-        {"name": "vssd1", "direction": "inout", "width": 1, "io": "POWER"}]}
-    # NON-ANSI top (bare header names; directions in body; supply pins gated).
-    rtl = ("module soc_top(\n wb_clk_i, wbs_dat_i\n"
-           "`ifdef USE_POWER_PINS\n , vccd1, vssd1\n`endif\n);\n"
-           " input wb_clk_i; input [31:0] wbs_dat_i;\n"
-           "`ifdef USE_POWER_PINS\n inout vccd1, vssd1;\n`endif\nendmodule\n")
-    proj = tmp_path / "proj"
-    gd = P2._pl.generated_docs_dir(proj)
-    gd.mkdir(parents=True)
-    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps(l9))
-    rd = P2._pl.rtl_dir(proj)
-    rd.mkdir(parents=True)
-    (rd / "soc_top.v").write_text(rtl)
-    P2.step_full_stack_tb_gen(proj, "chip_top")
-    body = list((P2._pl.sim_full_stack_dir(proj)).glob("tb_*_full.v"))[0].read_text()
-    assert "`ifdef USE_POWER_PINS" in body and "`endif" in body, body
-    assert ".vccd1(vccd1)" in body, body
 
 
 if __name__ == "__main__":

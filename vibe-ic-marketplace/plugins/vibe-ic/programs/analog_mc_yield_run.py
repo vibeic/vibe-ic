@@ -41,7 +41,7 @@ import math
 import re
 import shlex
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -589,12 +589,8 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         mc_include_line = f".lib {pdk_lib} {mc_section}"
         mc_model_section = mc_section
 
-    mc_root = deck.parent / "mc_runs"
-    mc_root.mkdir(parents=True, exist_ok=True)
-    # Retain earlier native failures and samples when the same canonical
-    # producer is retried. The first run preserves the historical layout.
-    mc_dir = (Path(tempfile.mkdtemp(prefix='run-', dir=mc_root))
-              if any(mc_root.glob('mc_*.sp')) else mc_root)
+    mc_dir = Path(tempfile.mkdtemp(prefix="mc_runs-",
+                                  dir=tempfile.current_run("analog", "statistics")))
     deck_body = deck.read_text(errors="replace")
     section_copies = None
     if native:
@@ -680,13 +676,13 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
                         "partial_measurement": sim_status["partial"],
                         "sim_warnings": sim_status["warnings"],
                         **({"execution": sim_status} if ngspice_bin else {}),
-                        "log": str(log.relative_to(project)), **meas})
+                        "log": str(log), **meas})
 
     failed = [row for row in per_run if not row.get('ok')]
     native_evidence = {
         'mc_native_failed': len(failed),
         'mc_failure_logs': [row['log'] for row in failed],
-        'mc_log_dir': str(mc_dir.relative_to(project)),
+        'mc_log_dir': str(mc_dir),
         'mc_model_bindings': section_copies['bindings'] if section_copies else [],
     }
     if selected_binary:
@@ -775,7 +771,7 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         "mc_spec_yield": spec_yield,
         "mc_spec_source": spec_src,
         "_mc_provenance": "real_ngspice_mc",
-        "mc_log_dir": str(mc_dir.relative_to(project)),
+        "mc_log_dir": str(mc_dir),
         "mc_model_section": mc_model_section,
         "mc_pdk_source": (native.get("source") if native else pdk),
         **native_evidence,

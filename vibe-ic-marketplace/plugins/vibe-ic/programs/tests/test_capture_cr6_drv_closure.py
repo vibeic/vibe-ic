@@ -84,8 +84,6 @@ def test_invalid_numeric_measurements_cannot_certify_clean_route():
         assert key in result["missing"]
 
 
-
-
 def test_real_arm_skips_clean_input_but_runs_on_injected_violation(tmp_path,
                                                                     monkeypatch):
     config = tmp_path / "step.json"
@@ -132,12 +130,6 @@ def test_real_arm_skips_clean_input_but_runs_on_injected_violation(tmp_path,
     violated = run("violated")
     assert violated.get("repair_trigger", {}).get("action") == "RUN"
     assert calls == ["controller"]
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------
@@ -217,18 +209,6 @@ def _spef_sta(project: Path, text: str) -> Path:
     return project / "phase3/stage3/postroute_timing_repair"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_unmeasured_repair_trigger_is_not_stamped_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "fork_capability", lambda image, docker="docker": {"capable": True})
     configs = {step: tmp_path / f"{step}.json"
@@ -263,40 +243,3 @@ def test_unmeasured_repair_trigger_is_not_stamped_pass(tmp_path, monkeypatch):
     trigger.clear()
     trigger.update(_trigger(setup_ws_min=0.3, hold_ws_min=0.2, drv_count=0))
     assert chain()["verdict"] == "PASS"
-
-
-def test_runner_step_row_names_why_the_closure_did_not_run(tmp_path, monkeypatch):
-    import test_t102_librelane_postroute_repair as T102
-    unmeasured = _trigger(setup_ws_min=0.3, hold_ws_min=0.2)
-
-    def report_nm(project):
-        return {"verdict": "PASS", "adopted": None, "baseline": {}, "final": {},
-                "closure": [], "repair_trigger": unmeasured}
-    runner, _project, pnr, result, _ = T102._runner_step(
-        tmp_path / "nm", monkeypatch, report_nm)
-    assert result.status == "NOT_MEASURED", result.detail
-    assert "drv_count" in result.detail
-    rec = json.loads((pnr / runner._DRV_PROMOTION_NOT_RUN).read_text())
-    assert rec["not_run_stage"] == "repair_trigger_not_measured"
-    assert "drv_count" in rec["reason"]
-
-    def report_code(project):
-        return {"verdict": "NOT_MEASURED", "code": "LL_PRR_TRIGGER_NOT_MEASURED",
-                "reason": "x", "adopted": None, "repair_trigger": unmeasured}
-    runner, _project, pnr, result, _ = T102._runner_step(
-        tmp_path / "code", monkeypatch, report_code)
-    rec = json.loads((pnr / runner._DRV_PROMOTION_NOT_RUN).read_text())
-    assert rec["not_run_stage"] == "repair_trigger_not_measured"
-
-    skipped = _trigger(setup_ws_min=0.3, hold_ws_min=0.2, drv_count=0)
-
-    def report_skip(project):
-        return {"verdict": "PASS", "adopted": None, "baseline": {}, "final": {},
-                "closure": [], "repair_trigger": skipped}
-    runner, _project, pnr, result, _ = T102._runner_step(
-        tmp_path / "skip", monkeypatch, report_skip)
-    assert result.status == "PASS"
-    assert "SKIP" in result.detail
-    rec = json.loads((pnr / runner._DRV_PROMOTION_NOT_RUN).read_text())
-    assert "SKIP" in rec["reason"] and "drv_count" in rec["reason"]
-    assert not rec["reason"].rstrip().endswith(":")

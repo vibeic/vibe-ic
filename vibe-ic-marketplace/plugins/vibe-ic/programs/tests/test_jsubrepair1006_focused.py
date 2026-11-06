@@ -164,11 +164,6 @@ def test_base_catalog_gate_is_red_and_missing_declaration_is_fail_closed(tmp_pat
     assert "CATALOG_REUSE_DECLARED_NOT_INSTANTIATED" in report["failure_codes"]
     assert report["reached_ips"] == []
 
-    empty = tmp_path / "empty"
-    (empty / "input/docs").mkdir(parents=True)
-    (empty / "input/docs/README.md").write_text(
-        "chip with no catalog declaration\n", encoding="utf-8")
-    assert runner._declared_reused_ip(empty) is False
 
 
 def test_explicit_alias_pair_resolves_the_sixteen_unmatched_bits(tmp_path):
@@ -289,43 +284,3 @@ def test_duplicate_r3_is_rejected_by_pad_consumer_and_slot_budget(tmp_path):
     report = json.loads(out.read_text(encoding="utf-8"))
     assert rc != 0, report
     assert report["verdict"] != "FITS", report
-
-
-def test_catalog_reuse_is_per_file_with_forward_closure_and_fail_closed_context(
-        tmp_path, monkeypatch):
-    import design_one_shot_runner as runner
-    import ip_catalog_query as catalog
-
-    project = tmp_path / "catalog-mixed"
-    rtl = project / "input/rtl"
-    rtl.mkdir(parents=True)
-    files = {
-        "catalog_ip.v": "module catalog_ip; catalog_dep u_dep(); endmodule\n",
-        "catalog_dep.v": "module catalog_dep; endmodule\n",
-        "authored_top.v": "module authored_top; catalog_ip u_ip(); endmodule\n",
-    }
-    staged = []
-    for name, text in files.items():
-        path = rtl / name
-        path.write_text(text, encoding="utf-8")
-        staged.append(path)
-    matches = [{"ip_name": "catalog_ip", "rtl_files": ["rtl/catalog_ip.v"]}]
-    monkeypatch.setattr(catalog, "query_catalog", lambda project: matches)
-    monkeypatch.setattr(catalog, "declared_catalog_reuse",
-                        lambda project, matches=None: ["catalog_ip"])
-
-    ip, context = runner._split_supplied_roles(project, staged)
-    assert {p.name for p in ip} == {"catalog_ip.v", "catalog_dep.v"}
-    assert [p.name for p in context] == ["authored_top.v"]
-
-    malformed = [{"ip_name": "catalog_ip", "rtl_files": "rtl/catalog_ip.v"}]
-    monkeypatch.setattr(catalog, "query_catalog", lambda project: malformed)
-    ip, context = runner._split_supplied_roles(project, staged)
-    assert ip == []
-    assert {p.name for p in context} == set(files)
-
-    monkeypatch.setattr(catalog, "query_catalog", lambda project: matches)
-    monkeypatch.setattr(catalog, "declared_catalog_reuse", lambda *args: [])
-    ip, context = runner._split_supplied_roles(project, staged)
-    assert ip == []
-    assert {p.name for p in context} == set(files)

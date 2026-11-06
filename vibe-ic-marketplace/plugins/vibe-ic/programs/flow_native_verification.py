@@ -162,7 +162,7 @@ def eqy_pad_views(directory, top, script, pads, models, commands, boundary):
             path = directory / f"{side}_core.ys"
             path.write_text(f"read_json {_word(core / (side + '.json'))}\n"
                 + "\n".join(projection) + "\n"
-                + f"hierarchy -top {top}\nclean -purge\n"
+                + f"hierarchy -top {top}\nclean\n"
                 + f"write_json {_word(core / (side + '.json'))}\n"
                 + f"write_verilog -noattr {_word(core / (side + '.v'))}\n")
             completed = commands.run(["yosys", "-s", path])

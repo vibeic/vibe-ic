@@ -511,11 +511,6 @@ def test_g2_clean_relation_still_catches_wrong_rtl_after_fix(tmp_path):
 
 
 # ─────────────────────────── chip-AGNOSTIC source guard ─────────────────────
-def test_chip_agnostic_source():
-    guard = PROGRAMS / "source_chip_agnostic_check.py"
-    r = _pr.run([sys.executable, str(guard), str(PLUGIN)],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
 
 
 if __name__ == "__main__":

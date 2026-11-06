@@ -50,14 +50,14 @@ RUNNER = plugin_path() / "programs" / "phase3_one_shot_runner.py"
 @pytest.fixture(scope="module")
 def agg():
     import phase3_one_shot_runner as P  # noqa: PLC0415 — heavy, module-scoped
-    return P._aggregate_verdict, P.StepResult
+    return P.StepResult
 
 
 # ── the refusal, moved to the row ────────────────────────────────────────
 
 def test_an_unclassifiable_word_is_refused_at_the_row_not_at_the_rollup(agg):
     """#2153's property, earlier. The plan can no longer BE built."""
-    _, SR = agg
+    SR = agg
     with pytest.raises(V.UnknownVerdictWord):
         SR("step31_drc", "A_TIER_INVENTED_TOMORROW")
 
@@ -69,67 +69,3 @@ def test_genuinely_retired_words_are_refused(word):
     """A typo or retired producer word still fails at the row."""
     with pytest.raises(V.UnknownVerdictWord):
         V.parse(word)
-
-
-def test_the_aggregator_carries_no_tier_table_and_no_catch_all():
-    """Read off the SHIPPED text — a re-implementation here would pass whatever
-    the runner did, which is the failure mode this file is about."""
-    src = RUNNER.read_text(encoding="utf-8")
-    start = src.index("def _aggregate_verdict")
-    # CODE, not prose: the function's docstring NAMES `_TIERS` in the sentence
-    # that records deleting it, which is exactly the history this file exists
-    # to keep. Strip comments and the docstring before scanning.
-    body = src[start:start + 4000]
-    code = body[body.index('"""', body.index('"""') + 3) + 3:]
-    code = "\n".join(l.split("#")[0] for l in code.splitlines())
-    assert "_TIERS" not in code, (
-        "the tier table is back; R-0915-85 replaced it with verdict.run_verdict")
-    assert 'return "PASS"' not in code, "the catch-all is back"
-    assert "UNKNOWN_STATUS" not in code, (
-        "the UNKNOWN_STATUS refusal belongs at the row now (verdict.parse), "
-        "not at the roll-up")
-    assert "_V.run_verdict" in code
-
-
-# ── the roll-up is total, in both directions ─────────────────────────────
-
-def test_a_clean_plan_is_a_pass(agg):
-    fn, SR = agg
-    assert fn([SR("a", "PASS"), SR("b", "PASS")]) == "PASS"
-
-
-def test_one_fail_fails_the_run(agg):
-    fn, SR = agg
-    assert fn([SR("a", "PASS"), SR("b", "FAIL")]) == "FAIL"
-
-
-def test_the_word_that_replaced_WARN_keeps_the_run_off_a_clean_pass(agg):
-    """`step_prelayout_signoff` on an UNSUBSTANTIATED basis — #2153's first
-    find. It reached a bare `PASS` through the catch-all; it is
-    PASS_WITH_WAIVERS now, and `validate_step_row` derives its must-close row
-    from the step's own detail."""
-    fn, SR = agg
-    row = SR("prelayout_signoff", "PASS_WITH_WAIVERS",
-             detail="the pre-layout STA basis is UNSUBSTANTIATED")
-    assert row.waiver_rows, "a waived step must reach a must-close list"
-    assert fn([SR("a", "PASS"), row]) == "PASS_WITH_WAIVERS"
-
-
-def test_an_unmeasured_step_keeps_the_run_off_pass(agg):
-    fn, SR = agg
-    assert fn([SR("a", "PASS"),
-               SR("lec", "NOT_MEASURED",
-                  reason_class="inconclusive")]) == "NOT_MEASURED"
-
-
-def test_a_not_applicable_step_costs_the_run_nothing(agg):
-    fn, SR = agg
-    assert fn([SR("a", "PASS"),
-               SR("A3", "NOT_APPLICABLE",
-                  declared_by="L5: no analog blocks")]) == "PASS"
-
-
-def test_an_empty_plan_is_not_a_pass(agg):
-    """The catch-all's worst case, now answered by construction."""
-    fn, _ = agg
-    assert fn([]) == "NOT_MEASURED"

@@ -342,7 +342,6 @@ def _native_passive_case(root, roles=("cap",), power=0.0):
 
 def _native_measurement(root, block, roles, power, ports=("TOP", "VSS")):
     """Synthetic loader-contract fixture; this does not run characterization."""
-    producer = importlib.import_module("analog_a8_hardmacro_emit")
     b = root / "phase3/analog" / block
     topology = {"ports": list(ports),
                 "rails": {"vdd": ports[0], "vss": ports[1]}}
@@ -355,8 +354,7 @@ def _native_measurement(root, block, roles, power, ports=("TOP", "VSS")):
                 "source_gds": "fixture layout bytes",
                 "source_netlist": f".subckt {block} {' '.join(ports)}\n.ends {block}\n",
                 "native_log": f"ngspice-47\npwr = {power:.12g}\n"}
-    rec = {"schema": producer._A8_MEASUREMENT_SCHEMA,
-           "status": "MEASURED", "block": block, "metric": "cell_leakage_power",
+    rec = {"status": "MEASURED", "block": block, "metric": "cell_leakage_power",
            "value": power, "unit": "W", "provenance": "real_ngspice",
            "simulator": "ngspice-47", "image_digest": "sha256:" + "a" * 64,
            "native_binary": {"path": "/fixture/ngspice", "sha256": "c" * 64,

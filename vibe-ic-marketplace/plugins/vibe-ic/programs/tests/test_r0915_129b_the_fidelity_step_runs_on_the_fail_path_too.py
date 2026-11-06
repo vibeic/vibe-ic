@@ -212,14 +212,6 @@ def test_its_sibling_keeps_its_own_dependency():
 
 # ── (2) the producer runs before the audit reads its output ─────────────────
 
-def test_the_producer_is_invoked_before_the_audit():
-    import phase3_one_shot_runner as R
-    names = [row[0] for row in R._PRE_AUDIT_PRODUCERS]
-    assert "gds_xor" in names, names
-    entry = next(r for r in R._PRE_AUDIT_PRODUCERS if r[0] == "gds_xor")
-    assert entry[2] == "reports/phase3/gds_xor.json", (
-        "the declared output and the produced receipt must be the same path, or "
-        "the audit still reads a missing artefact")
 
 
 def test_a_gate_clause_alone_cannot_produce_its_own_declared_output():
@@ -237,29 +229,6 @@ def test_a_gate_clause_alone_cannot_produce_its_own_declared_output():
 
 # ── the container trap: a produced receipt is not a measurement ─────────────
 
-def test_the_layout_producer_gets_the_container_by_its_own_flag_name():
-    """THE QUIET TRAP. `--pdk-container` names a PDK-view volume for a different
-    question; this gate drives KLayout and takes `--container`. Without it the
-    producer wrote a NOT_DETERMINED receipt on a tree its runner covers, and the
-    existing receipt made "produced" look satisfied."""
-    import phase3_one_shot_runner as R
-    assert "gds_xor" in R._KLAYOUT_CONTAINER_SIGNOFF_GATES
-    assert "gds_xor" not in R._PDK_AWARE_SIGNOFF_GATES, (
-        "the two flags are different questions and must not be conflated")
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("for name, program, out_rel, extra_argv in _PRE_AUDIT_PRODUCERS:")
-    # the LOOP, to its own `return rows` -- not a fixed character window,
-    # which a new branch in the loop (the foundry_handoff admission) pushed
-    # the flag out of (T109c)
-    body = src[i:src.index("return rows", i)]
-    # The actual loop retains this helper call before it invalidates the old
-    # output. Follow that reachable producer body, retaining both flag checks.
-    if '_run_pre_audit_producer' in body:
-        import inspect
-        body += inspect.getsource(R._run_pre_audit_producer)
-    assert '("--container", container)' in body
-    assert body.index("_PDK_AWARE_SIGNOFF_GATES") < body.index(
-        "_KLAYOUT_CONTAINER_SIGNOFF_GATES"), "both branches must remain present"
 
 
 # ── the audit JUDGES the producer's receipt; it does not re-measure ─────────

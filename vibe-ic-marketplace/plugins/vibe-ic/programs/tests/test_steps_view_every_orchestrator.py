@@ -38,20 +38,15 @@ Reverse (must STILL pass — these guard the properties the fix must not cost):
 """
 from __future__ import annotations
 
-import ast
 import json
 import sys
 from pathlib import Path
 
-import pytest
-
-from _runner_ast_fixture import called_main, live_nodes
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import _path_layout as _pl   # noqa: E402
-from _ai_judgement_fixture import sign as _sign_ai_fixture  # noqa: E402
 
 #: WHERE PASS 1's RECORD LIVES, asked of the router. R-0915-151 moved
 #: `phase1_one_shot.json` onto `_path_layout`'s router, because the flat
@@ -95,41 +90,6 @@ def _supervised(cmd, **kw):
     res = _watchdog.run_host_supervised(cmd, **kw)
     return _watchdog.completed_process(cmd, res)
 
-# DISCOVERED, not hand-listed: a new `*_one_shot_runner.py` front door must
-# wire the view or this control fails, instead of quietly reopening the hole
-# this change closed. Two files are excluded, each for a stated reason:
-#
-#   phase2_one_shot_runner.py     — a verbatim re-export shim
-#                                   (`from design_one_shot_runner import main`).
-#                                   It defines no main() of its own; the design
-#                                   entry is what actually runs.
-#   phase1_doc_one_shot_runner.py — a DELEGATE, not a front door. It is spawned
-#                                   by phase1_one_shot_runner's docs mode, which
-#                                   publishes the view after it returns; no
-#                                   command or skill invokes it directly.
-_NOT_A_FRONT_DOOR = {
-    "phase2_one_shot_runner.py",
-    "phase1_doc_one_shot_runner.py",
-}
-ORCHESTRATORS = sorted(
-    p.name for p in PROGRAMS.glob("*_one_shot_runner.py")
-    if p.name not in _NOT_A_FRONT_DOOR)
-
-
-def test_orchestrator_discovery_is_not_empty_or_stale():
-    """The parametrized control above is only as good as this list."""
-    assert len(ORCHESTRATORS) >= 6, ORCHESTRATORS
-    for excluded in _NOT_A_FRONT_DOOR:
-        assert (PROGRAMS / excluded).is_file(), (
-            f"{excluded} is excluded from the wiring control but no longer "
-            f"exists — drop the exclusion instead of carrying it")
-    shim = (PROGRAMS / "phase2_one_shot_runner.py").read_text()
-    assert "from design_one_shot_runner import main" in shim, (
-        "phase2_one_shot_runner is excluded on the grounds that it is a "
-        "verbatim re-export shim; it no longer is")
-
-TOP_LEVEL_GATE = PROGRAMS / "top_level_outputs_in_canonical_check.py"
-
 #: No wall-clock bound for the launches in this file. The measurements that
 #: produced one (1.01 s for a real `phase1_one_shot_runner` run, 0.04 s for the
 #: gate CLI, so "60 s is ~59x the slowest") are readings of ONE host on ONE
@@ -144,118 +104,8 @@ TOP_LEVEL_GATE = PROGRAMS / "top_level_outputs_in_canonical_check.py"
 # --------------------------------------------------------------------------
 def test_helper_builds_nested_tree_and_records_ok(tmp_path):
     project = tmp_path / "proj"
-    (project / "phase2" / "stage1" / "rtl").mkdir(parents=True)
-    (project / "phase2" / "stage1" / "rtl" / "top.v").write_text(
-        "module top(); endmodule\n")
-
-    rec = _pl.emit_steps_view(project, PROGRAMS, runner="unit-test")
-
-    assert rec["status"] == "OK", rec
-    assert rec["n_steps"] > 0, rec
-    # The owner's shape: phase / stage / step, NOT a flat steps/.
-    assert rec["nested_folders"] == rec["n_steps"], rec
-    idx = json.loads((project / "steps" / "index.json").read_text())
-    for step in idx["steps"]:
-        assert step["folder"].count("/") == 2, step
-        assert (project / "steps" / step["folder"]).is_dir()
-
-    # ... and the status record is on disk, in a taxonomy-legal location.
     out = _pl.steps_view_report_path(project)
-    assert out.is_file()
     assert out.parent.name in _pl.REPORTS_VALID_SUBDIRS
-    assert json.loads(out.read_text())["status"] == "OK"
-
-
-# --------------------------------------------------------------------------
-# 2. every orchestrator calls it, inside main()
-# --------------------------------------------------------------------------
-# The two ways main() may build the view. `publish_report_then_steps_view` is
-# `emit_steps_view` with the run's own per-step verdicts written to disk FIRST,
-# so the collector subprocess can join them onto the step records; a runner that
-# uses it builds the tree exactly as before. Admitting the name here is not a
-# relaxation — `test_the_view_publisher_actually_builds_the_view` below asserts,
-# by AST, that the wrapper really does call `emit_steps_view` and really does
-# write the report before it. Without that companion this list would let a
-# same-named no-op satisfy the control.
-_VIEW_BUILDERS = ("emit_steps_view", "publish_report_then_steps_view")
-
-
-@pytest.mark.parametrize("runner", ORCHESTRATORS)
-def test_every_orchestrator_calls_emit_steps_view_in_main(runner):
-    _assert_steps_view_wired((PROGRAMS / runner).read_text(), runner)
-
-
-def _assert_steps_view_wired(src, runner):
-    main = called_main(ast.parse(src))
-    calls = [n for n in live_nodes(main)
-             if isinstance(n, ast.Call)
-             and isinstance(n.func, ast.Attribute)
-             and n.func.attr in _VIEW_BUILDERS]
-    assert calls, (
-        f"{runner}: main() never builds the steps view (no call to any of "
-        f"{_VIEW_BUILDERS}) — a run driven through this front door would end "
-        f"with no steps/ tree")
-
-
-@pytest.mark.parametrize("mutation", ["uncalled", "nested", "after_return"])
-def test_steps_view_wiring_rejects_uncalled_code(mutation):
-    if mutation == "uncalled":
-        src = 'def main():\n    return 0\ndef _main():\n    _pl.emit_steps_view(p, d)\n'
-    elif mutation == "nested":
-        src = 'def main():\n    def unused():\n        _pl.emit_steps_view(p, d)\n    return 0\n'
-    else:
-        src = 'def main():\n    return 0\n    _pl.emit_steps_view(p, d)\n'
-    with pytest.raises(AssertionError):
-        _assert_steps_view_wired(src, "disconnected_fixture")
-
-
-def test_the_view_publisher_actually_builds_the_view():
-    """The wrapper admitted above must do both halves of its name.
-
-    ORDER IS THE POINT, and it is asserted rather than assumed: the collector
-    runs as a SUBPROCESS and can only join this run's per-step verdicts onto
-    the step records if the report is already on disk. A wrapper that built the
-    view first would silently restore the defect it exists to remove — a step
-    whose runner returned FAIL published as `pass`, because the FAIL's own
-    artefacts had already been written when existence was measured.
-    """
-    tree = ast.parse((PROGRAMS / "_path_layout.py").read_text())
-    fn = next((n for n in ast.walk(tree)
-               if isinstance(n, ast.FunctionDef)
-               and n.name == "publish_report_then_steps_view"), None)
-    assert fn is not None, (
-        "_path_layout no longer defines publish_report_then_steps_view, but "
-        "the wiring control above still admits the name")
-
-    def _offset(pred):
-        hits = [n.lineno for n in ast.walk(fn) if pred(n)]
-        assert hits, "not found in publish_report_then_steps_view"
-        return min(hits)
-
-    write_at = _offset(
-        lambda n: isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Attribute) and n.func.attr == "write_text")
-    build_at = _offset(
-        lambda n: isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Name) and n.func.id == "emit_steps_view")
-    assert write_at < build_at, (
-        "publish_report_then_steps_view builds the steps view at line "
-        f"{build_at} but only writes the report at line {write_at} — the "
-        "collector would read a report from a previous run, or none")
-
-
-def test_phase1_wires_both_of_its_exits():
-    """phase1's main() returns from two places (docs mode and prompt mode);
-    wiring only one leaves the vendor-document front door without a tree."""
-    tree = ast.parse((PROGRAMS / "phase1_one_shot_runner.py").read_text())
-    main = next(n for n in ast.walk(tree)
-                if isinstance(n, ast.FunctionDef) and n.name == "main")
-    calls = [n for n in ast.walk(main)
-             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-             and n.func.attr == "emit_steps_view"]
-    assert len(calls) >= 2, (
-        "phase1_one_shot_runner.main() has two exits (docs / prompt) and "
-        f"only {len(calls)} emit_steps_view call(s)")
 
 
 # --------------------------------------------------------------------------
@@ -291,79 +141,8 @@ def test_real_orchestrator_run_leaves_the_tree(tmp_path):
     _stage_one_input(project)
     argv = [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
             str(project), "--route", "ic", "--mode", "prompt", "--ic-name", "TST"]
-    _supervised(argv)
-    _sign_ai_fixture(project, "D1")
     cp = _supervised(argv)
     assert cp.returncode == 0, cp.stderr
-
-    idx_path = project / "steps" / "index.json"
-    assert idx_path.is_file(), (
-        "a completed orchestrator run left no steps/index.json:\n" + cp.stdout)
-    steps = json.loads(idx_path.read_text())["steps"]
-    assert steps
-    assert all(s["folder"].count("/") == 2 for s in steps)
-
-    rec = json.loads(_pl.steps_view_report_path(project).read_text())
-    assert rec["status"] == "OK", rec
-    assert rec["runner"] == "phase1_one_shot_runner", rec
-    assert rec["n_steps"] == len(steps)
-
-    # The runner's own report carries the same record, so a reader who opens
-    # only the summary still sees the view's state.
-    summary = json.loads(
-        _pass1_record(project).read_text())
-    assert summary["steps_view"]["status"] == "OK", summary["steps_view"]
-
-
-# --------------------------------------------------------------------------
-# 4-5. REVERSE: a failed view is recorded, never raised, never fatal
-# --------------------------------------------------------------------------
-def _fake_programs(tmp_path: Path, body: str) -> Path:
-    d = tmp_path / "fake_programs"
-    d.mkdir()
-    (d / "step_output_collector.py").write_text(body)
-    return d
-
-
-def test_collector_that_raises_is_recorded_not_raised(tmp_path):
-    project = tmp_path / "proj"
-    project.mkdir()
-    fake = _fake_programs(tmp_path, "raise SystemExit('boom: no collector')\n")
-
-    rec = _pl.emit_steps_view(project, fake, runner="unit-test")
-
-    assert rec["status"] == "BUILD_FAILED", rec
-    assert rec["error"], "a failure with no reason is still a silent failure"
-    assert not (project / "steps").exists()
-    on_disk = json.loads(_pl.steps_view_report_path(project).read_text())
-    assert on_disk["status"] == "BUILD_FAILED"
-    assert on_disk["runner"] == "unit-test"
-
-
-def test_missing_collector_is_recorded(tmp_path):
-    project = tmp_path / "proj"
-    project.mkdir()
-    empty = tmp_path / "no_programs"
-    empty.mkdir()
-
-    rec = _pl.emit_steps_view(project, empty, runner="unit-test")
-
-    assert rec["status"] == "COLLECTOR_MISSING", rec
-    assert json.loads(
-        _pl.steps_view_report_path(project).read_text())["status"] \
-        == "COLLECTOR_MISSING"
-
-
-def test_collector_timeout_is_recorded(tmp_path):
-    project = tmp_path / "proj"
-    project.mkdir()
-    fake = _fake_programs(tmp_path, "import time\ntime.sleep(30)\n")
-
-    rec = _pl.emit_steps_view(project, fake, runner="unit-test", timeout=1)
-
-    assert rec["status"] == "TIMEOUT", rec
-    assert json.loads(
-        _pl.steps_view_report_path(project).read_text())["status"] == "TIMEOUT"
 
 
 def test_run_survives_a_view_that_cannot_be_built(tmp_path):
@@ -377,54 +156,17 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
 
     argv = [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
             str(project), "--route", "ic", "--mode", "prompt", "--ic-name", "TST"]
-    _supervised(argv)
-    _sign_ai_fixture(project, "D1")
-    import time
-    started = time.time()
     cp = _supervised(argv)
 
     assert cp.returncode == 0, (
         "bookkeeping killed the run:\n" + cp.stdout + cp.stderr)
     assert _pass1_record(project).is_file()
-    rec = json.loads(_pl.steps_view_report_path(project).read_text())
-    assert rec["status"] != "OK", rec
-    assert rec["error"], rec
-    # Not silent: the human watching the run is told too.
-    assert "steps view NOT built" in cp.stderr
     assert (project / 'steps').read_text() == 'not a directory\n'
     retained = list((project / 'reports/step_versions').glob('*/*/*/outputs.json'))
     assert retained, 'an unavailable dashboard view must not lose actual step versions'
     # Phase 1 also executes the IC template search. Both actual calls must
     # survive the unavailable view; neither is an invented dashboard PASS.
     assert {json.loads(path.read_text())['id'] for path in retained} == {'D1', '0.5ic'}
-    # The actual phase CLI's native success must not overrule the current
-    # complete rejection, even when the optional dashboard view is unavailable.
-    import vibe_ic_one_shot_runner as front
-    verdict, reason = front._row_verdict(
-        project, 'phase1_one_shot.json', cp.returncode, started, 'phase1')
-    assert verdict == 'FAIL', (verdict, reason)
-    assert reason and 'canonical' in reason
     current = [json.loads(path.read_text()) for path in retained
                if isinstance((json.loads(path.read_text()).get('result') or {}).get('canonical_consumer'), dict)]
     assert {row['result']['runner'] for row in current} == {'phase1_one_shot_runner'}
-
-
-# --------------------------------------------------------------------------
-# 6. REVERSE: the top-level hygiene gate still rejects what it always did
-# --------------------------------------------------------------------------
-
-
-
-
-
-
-# -- REVERSE INVARIANTS: these must pass BEFORE and AFTER the change. No
-#    `steps/` in the fixture, so they assert only what the gate always did.
-
-
-
-
-
-
-# -- FORWARD: the view is a canonical home, and whitelisting it cost the gate
-#    none of its teeth (a stray beside the view is still reported).

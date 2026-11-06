@@ -9,7 +9,7 @@ import os
 import re
 import shlex
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -119,7 +119,7 @@ def _authored_rtl_top(rtl: list[Path]) -> str:
             include = " ".join("-I" + shlex.quote(str(parent)) for parent in
                                {path.parent, *(p.parent for p in rtl)})
             reads.append("read_verilog -sv " + include + " " + shlex.quote(str(path)))
-        script = "; ".join([*reads, "hierarchy -auto-top",
+        script = "; ".join([*reads, "hierarchy -auto-top", "proc",
                              "write_json " + shlex.quote(str(output))])
         try:
             completed = subprocess.run(["yosys", "-Q", "-T", "-p", script],

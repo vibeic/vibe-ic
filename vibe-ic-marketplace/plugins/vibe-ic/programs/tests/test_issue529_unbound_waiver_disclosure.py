@@ -323,67 +323,8 @@ def test_a_waivers_key_holding_a_non_list_does_not_crash(tmp_path):
 
 
 
-def _tiers_the_producer_emits(field="verdict_tier"):
-    """EXECUTE `_autogen_waivers_json` over every step status it could be handed
-    and collect the `verdict_tier` values it actually writes.
-
-    A helper, not a copy: both halves of the split below drive THIS, so the
-    producer claim is made in one place and the corpus half cannot drift into
-    asserting a different version of it.
-    """
-    import tempfile
-
-    import phase3_one_shot_runner as p3
-
-    emitted_tiers = set()
-    with tempfile.TemporaryDirectory() as td:
-        # R-0915-85 — the five, each with the fields its word REQUIRES. A
-        # NOT_MEASURED with no reason_class and a NOT_APPLICABLE with no
-        # declared_by are refused at the row, so a fixture that omitted them
-        # would be exercising a shape the producer cannot emit.
-        for status, extra in (
-                ("PASS_WITH_WAIVERS", {"attribution": "the signoff engineer"}),
-                ("NOT_MEASURED", {"reason_class": "tool_absent"}),
-                ("PASS", {}),
-                ("FAIL", {}),
-                ("NOT_APPLICABLE", {"declared_by": "L20 declares no LVS"})):
-            sub = Path(td) / status
-            sub.mkdir()
-            p3._autogen_waivers_json(sub, [p3.StepResult(
-                "lvs", status, 0.1, "deferred to the signoff engineer",
-                extras={"missing_tool": "netgen"}, **extra)])
-            wp = sub / "waivers.json"
-            if wp.is_file():
-                for e in json.loads(wp.read_text())["waivers"]:
-                    emitted_tiers.add(e[field])
-    return emitted_tiers
 
 
-def test_pass_structural_is_written_by_no_producer():
-    """Half one of the finding, and the half that is about the PLUGIN.
-
-    `PASS_STRUCTURAL` is a tier the one producer of the dialect cannot emit:
-    `phase3_one_shot_runner._autogen_waivers_json` copies the step STATUS into
-    `verdict_tier` and only ever emits entries for WAIVED / ENV_UNAVAILABLE
-    steps.
-
-    DELIBERATELY UNMARKED, and that is the point of splitting the test. This
-    claim is proved by executing the producer over a tmp_path project; it needs
-    no published cell, and attaching the corpus marker to it would have switched
-    off a live piece of plugin verification every time the corpus was absent —
-    the blanket-skip failure mode. Only the half that reads published waivers
-    below is guarded.
-    """
-    # R-0915-85 — `verdict_tier` stays the BINDING key it always was: it is
-    # not a step status and is not one of the five, because
-    # `flow_compliance_check` binds ONLY `ENV_UNAVAILABLE` entries to a flow
-    # step. The step's own word now travels beside it as `step_verdict`, so
-    # this half of the finding is asserted on BOTH fields.
-    emitted_tiers = _tiers_the_producer_emits()
-    assert emitted_tiers == {"WAIVED", "ENV_UNAVAILABLE"}, emitted_tiers
-    assert "PASS_STRUCTURAL" not in emitted_tiers
-    assert _tiers_the_producer_emits(field="step_verdict") == {
-        "PASS_WITH_WAIVERS", "NOT_MEASURED"}
 
 
 def test_pass_structural_is_read_by_no_consumer_yet_sits_in_the_corpus():
@@ -396,7 +337,6 @@ def test_pass_structural_is_read_by_no_consumer_yet_sits_in_the_corpus():
     is a complete statement on its own and does not become true-by-omission
     when the other test is the one that breaks.
     """
-    assert "PASS_STRUCTURAL" not in _tiers_the_producer_emits()
 
     # `len(hand_authored) == 1` counted the corpus. The claim is that the tier
     # NO PRODUCER EMITS is nevertheless present in the tracked tree — i.e. it

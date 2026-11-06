@@ -28,8 +28,6 @@ set ::env(MAX_CAPACITANCE_CONSTRAINT) 0.18
 """
 
 
-
-
 @pytest.mark.parametrize("container", ["", "legacy-name"])
 def test_local_pdk_values_use_the_current_image_files(tmp_path, monkeypatch, container):
     library = "quartz_sc"
@@ -92,8 +90,6 @@ def test_missing_local_pdk_files_are_named_and_not_fabricated(tmp_path, monkeypa
         f"NOT_READ: pinned PDK config {root}/libs.tech/librelane/quartz_sc/config.tcl"]
 
 
-
-
 def test_design_docs_override_pdk_then_liberty(tmp_path, monkeypatch):
     assert env is not None
     docs = tmp_path / "input" / "docs"
@@ -105,7 +101,7 @@ def test_design_docs_override_pdk_then_liberty(tmp_path, monkeypatch):
                         lambda *_: ({"set_clock_uncertainty": ("0.31", "pinned PDK"),
                                     "set_max_transition": ("2.7", "pinned PDK"),
                                     "set_max_capacitance": ("0.18", "pinned PDK")}, []))
-    values, unread = p3._sdc_environment_values(tmp_path, "lib.lib", "pin", 3.0, 0.2)
+    values, unread = env._sdc_environment_values(tmp_path, "lib.lib", "pin", 3.0, 0.2)
     assert not unread
     assert values["set_clock_uncertainty"][0] == "0.07"
     assert values["set_clock_uncertainty"][1].startswith("design doc ")
@@ -120,27 +116,19 @@ def test_negated_table_value_is_not_a_design_declaration(tmp_path):
     (docs / "L9_constraints.md").write_text(
         "| `CLOCK_UNCERTAINTY_CONSTRAINT` | not 0.07 |\n"
         "| `SYNTH_DRIVING_CELL` | not quartz_sc__inv_2/Z |\n")
-    values, unread = p3._sdc_environment_design_values(tmp_path)
+    values, unread = env._sdc_environment_design_values(tmp_path)
     assert values == {}
     assert unread == []
 
 
 def test_unreadable_pdk_is_disclosed_not_fabricated(tmp_path):
     assert env is not None
-    values, unread = p3._sdc_environment_values(tmp_path, "", "", None, None)
+    values, unread = env._sdc_environment_values(tmp_path, "", "", None, None)
     assert values == {}
     assert unread and all(item.startswith("NOT_READ:") for item in unread)
-    text = p3._sdc_environment_prefix(values, unread)
+    text = env._sdc_environment_prefix(values, unread)
     assert "NOT_READ:" in text
     assert not any(line.startswith("set_") for line in text.splitlines())
-
-
-
-
-
-
-
-
 
 
 def test_readable_but_non_declaring_pdk_names_every_absent_command(tmp_path, monkeypatch):

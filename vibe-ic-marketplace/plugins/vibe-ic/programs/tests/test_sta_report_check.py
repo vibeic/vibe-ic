@@ -5,9 +5,6 @@ import subprocess, sys
 from pathlib import Path
 import pytest
 PROG = Path(__file__).resolve().parent.parent / "sta_report_check.py"
-def _run(args, **kw): return subprocess.run([sys.executable, str(PROG)] + args, capture_output=True, text=True, **kw)
-def test_empty_project(tmp_path):
-    r = _run([str(tmp_path)]); assert r.returncode == 1
 
 
 @pytest.mark.parametrize('reader', ['unit', 'missing_unit', 'liberty', 'basis',

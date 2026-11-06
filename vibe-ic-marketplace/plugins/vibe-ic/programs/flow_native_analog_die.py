@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 from types import SimpleNamespace
+import vibeic_temp
 
 
 NATIVE = {
@@ -32,7 +33,9 @@ def _earlier_state(project, name):
             break
         preceding.append(row["name"])
     for previous in reversed(preceding):
-        states = sorted((project / "steps" / previous).glob("**/state_out.json"),
+        states = sorted([*(path for parent in (project / "steps", vibeic_temp.current_run())
+                           for path in (parent / previous).glob("**/state_out.json")),
+                         *(project / "reports/native").glob(f"*/{previous}/**/state_out.json")],
                         key=lambda path: path.stat().st_mtime_ns, reverse=True)
         for path in states:
             config = path.with_name("config.json")

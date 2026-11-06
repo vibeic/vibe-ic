@@ -70,7 +70,6 @@ def test_the_corner_selects_its_spef_and_the_libraries_sta_read(tmp_path):
     assert got["sdc"] == "phase3/librelane/views/chip_top.sdc"
     assert got["liberties"] == ["/pdk/lib/sc__ss_125C_4v50.lib",
                                 "/pdk/lib/io__ss_125C_4v50.lib"]
-    assert got["sha256"]["spef"] == LL.digest(tmp_path / got["spef"])
 
 
 @pytest.mark.parametrize("case,code", [

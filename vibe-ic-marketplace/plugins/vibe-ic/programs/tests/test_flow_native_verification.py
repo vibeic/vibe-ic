@@ -203,6 +203,82 @@ def test_native_formal_retries_enum_methods_with_original_assertions(tmp_path, c
         assert "next" in result["detail"] and "unproved_required_properties" not in result["metrics"],result
 
 
+@pytest.mark.parametrize("kind", ["anyseq", "anyconst"])
+@pytest.mark.parametrize("different", [False, True])
+@pytest.mark.parametrize("declaration", ["wire", "variable", "fixed"])
+def test_slang_formal_preserves_declared_free_inputs(tmp_path, kind, different, declaration):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    package = tmp_path / "types.sv"
+    package.write_text("package types; typedef enum logic[1:0] {S0,S1,S2} state_t; endpackage\n")
+    harness = tmp_path / "proof.sv"
+    harness.write_text("module proof import types::*; (input clk);\n"
+        f"(* {kind} *) {'wire ' if declaration == 'wire' else ''}state_t state;\n"
+        + ("assign state=S0;\n" if declaration == "fixed" else "")
+        + "function automatic bit outside_table(state_t sig);\n"
+        "state_t value; return sig!=value.first(); endfunction\n"
+        "reg valid=0; always @(posedge clk) begin valid<=1;\n"
+        f"assert(outside_table(state) {'!=' if different else '=='} (state!=S0));\n"
+        + ("if(valid) assert(state==$past(state));\n" if kind == "anyconst" else "")
+        + "cover(state==S1); end endmodule\n")
+    deck = tmp_path / "proof.sby"
+    deck.write_text(emit_invariant_sby([str(package)],str(harness),"proof",[],[],prove_depth=8,bmc_depth=8))
+    originals = {p:p.read_bytes() for p in (package,harness,deck)}
+    output = tmp_path / "native"
+    output.mkdir()
+    result = formal(tmp_path,output,{"top":"proof","properties":[str(deck)]},Commands(output))
+    rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove","SymbiYosys.bmc"}]
+    expected = "NOT_MEASURED" if declaration != "wire" else "FAIL" if different else "PASS"
+    assert len(rows)==2 and {r["status"] for r in rows}=={expected},result
+    if declaration != "wire":
+        assert kind in result["detail"] and "free" in result["detail"],result
+        assert "unproved_required_properties" not in result["metrics"],result
+        assert {p:p.read_bytes() for p in originals}==originals
+        return
+    models = list(output.rglob("model/cover_inputs.json"))
+    assert len(models)==2
+    for model in models:
+        modules = json.loads(model.read_text())["modules"]
+        drivers = [cell for module in modules.values() for cell in module["cells"].values()
+                   if cell["type"] == "$"+kind]
+        assert drivers and sum(len(c["connections"]["Y"]) for c in drivers)==2
+    assert {p:p.read_bytes() for p in originals}==originals
+
+
+def test_slang_formal_preserves_generated_harness_free_inputs(tmp_path):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    import formal_harness_gen
+    from formal_property_run import emit_invariant_sby
+
+    rtl = tmp_path / "unit.sv"
+    rtl.write_text("package types; typedef enum logic[1:0] {S0,S1} state_t; endpackage\n"
+        "module unit(input clk,rst,input [2:0] data,output reg [2:0] q); import types::*;\n"
+        "function automatic bit outside_table(state_t sig);\n"
+        "state_t value; return sig!=value.first(); endfunction\n"
+        "always @(posedge clk) if(rst) q<=0; else q<=data ^ {3{outside_table(S0)}}; endmodule\n")
+    harness = tmp_path / "formal_unit.sv"
+    generated = formal_harness_gen.generate(rtl=[rtl],top="unit",out=harness,assertion_form="immediate")
+    assert generated["verdict"]=="EMITTED",generated
+    original = harness.read_bytes()
+    assert b"(* anyseq *)" in original
+    deck = harness.with_suffix(".sby")
+    deck.write_text(emit_invariant_sby([str(rtl)],str(harness),"formal_unit",[],[],prove_depth=8,bmc_depth=8))
+    output = tmp_path / "native"
+    output.mkdir()
+    result = formal(tmp_path,output,{"top":"unit","properties":[str(deck)]},Commands(output))
+    rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove","SymbiYosys.bmc"}]
+    assert len(rows)==2 and {r["status"] for r in rows}=={"PASS"},result
+    assert len(list(output.rglob("slang_frontend.sby")))==2
+    for model in output.rglob("model/cover_inputs.json"):
+        modules = json.loads(model.read_text())["modules"]
+        assert sum(len(c["connections"]["Y"]) for m in modules.values() for c in m["cells"].values()
+                   if c["type"]=="$anyseq")==4
+    assert harness.read_bytes()==original
+
+
 def test_native_formal_keeps_an_uncompilable_sv_model_unmeasured(tmp_path):
     if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v")):
         pytest.skip("Native formal tools are required")
@@ -823,6 +899,44 @@ def test_chip_eqy_uses_native_power_view_and_keeps_supply_checks(tmp_path, chang
         for side in ("gold", "gate"):
             ports = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]["ports"]
             assert not any(name in {"supply_high", "supply_low"} or name.endswith((".VP", ".VN")) for name in ports)
+
+
+@pytest.mark.parametrize("different", [False, True])
+def test_chip_eqy_preserves_mapped_state_alias_matchpoints(tmp_path, different):
+    if not shutil.which("eqy"):
+        pytest.skip("Native EQY is required")
+    reset_docs(tmp_path)
+    gold, gate, cells, pads, lef = [tmp_path / name for name in
+        ("gold.v", "gate.v", "cells.lib", "pads.v", "pads.lef")]
+    wrapper = ("module unit(input clk,rst_n,a,output q); wire ic,ir,ia,oq;\n"
+        "INPAD pclk(.PAD(clk),.Y(ic));\nINPAD prst(.PAD(rst_n),.Y(ir));\n"
+        "INPAD pa(.PAD(a),.Y(ia));\nOUTPAD pq(.A(oq),.PAD(q));\n")
+    gold.write_text(wrapper + "core u_core(ic,ir,ia,oq); endmodule\n"
+        "module core(input clk,rst_n,a,output q); reg [8:0] stored;\n"
+        "always @(posedge clk) if(!rst_n) stored<=0; else stored<={stored[7:0],a};\n"
+        "assign q=stored[8]^stored[0]; endmodule\n")
+    data = "~ia" if different else "ia"
+    gate.write_text(wrapper + "reg [8:0] implemented; wire [8:0] \\u_core.stored ;\n"
+        "assign \\u_core.stored = implemented; assign oq=implemented[8]^implemented[0];\n"
+        "always @(posedge ic) if(!ir) implemented<=0; "
+        f"else implemented<={{implemented[7:0],{data}}}; endmodule\n")
+    cells.write_text("library(neutral) {}\n")
+    pads.write_text("(* blackbox *) module INPAD(input PAD,output Y); endmodule\n"
+        "(* blackbox *) module OUTPAD(input A,output PAD); endmodule\n")
+    lef.write_text("MACRO INPAD\n CLASS PAD INPUT ;\nEND INPAD\n"
+        "MACRO OUTPAD\n CLASS PAD OUTPUT ;\nEND OUTPAD\n")
+    config = {"DESIGN_NAME": "unit", "VERILOG_FILES": [str(gold)],
+        "DEFAULT_CORNER": "typical", "LIB": {"typical": [str(cells)]},
+        "PAD_VERILOG_MODELS": [str(pads)], "PAD_LEFS": [str(lef)]}
+    result = eqy(tmp_path, tmp_path, {}, Commands(tmp_path), state={"nl": str(gate)}, config=config)
+    rows = {row["name"]: row["status"] for row in result["native_steps"]}
+    assert rows["Yosys.Wrapper"] == "PASS", result
+    assert rows["Yosys.EQY.Core"] == ("FAIL" if different else "PASS"), result
+    for side in ("gold", "gate"):
+        module = json.loads((tmp_path / "core" / (side + ".json")).read_text())["modules"]["unit"]
+        assert "u_core.stored" in module["netnames"], side
+    matched = (tmp_path / "scratch/matched.ids").read_text()
+    assert "u_core.stored[0]" in matched
 
 
 @pytest.mark.parametrize("direct_output", [False, True])

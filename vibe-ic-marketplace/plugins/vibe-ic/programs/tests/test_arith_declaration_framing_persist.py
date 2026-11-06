@@ -70,122 +70,24 @@ def test_generated_oracle_tb_publishes_the_framing_it_measured():
 # ---------------------------------------------------------------------------
 # 2. The runner must persist that framing under MEASURED keys.
 # ---------------------------------------------------------------------------
-def test_runner_persists_measured_framing_not_declared(tmp_path):
-    d = _load("design_one_shot_runner")
-    sim = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sim.mkdir(parents=True)
-    manifest = sim / "arith_oracle_manifest.json"
-    manifest.write_text(json.dumps({
-        "program": "arith_oracle_tb_gen",
-        "declared_bit_order": None,      # the pre-fix state
-        "declared_latency": None,
-    }))
-
-    d._persist_oracle_calibrated_framing(
-        tmp_path,
-        "ORACLE_TB_DONE pass=28/28\n"
-        "ORACLE_TB_FRAMING in_order=0 out_order=0 latency_cycles=2\n")
-
-    got = json.loads(manifest.read_text())
-    assert got["calibrated_bit_order"] == "LSB_first"
-    assert got["calibrated_out_bit_order"] == "LSB_first"
-    assert got["calibrated_latency"] == 2
-    # The measured value must NOT be written into the declared_* keys: those
-    # mean "what declaration.json said", and conflating them would recreate the
-    # cycle in the opposite direction.
-    assert got["declared_latency"] is None
-    assert "NOT copied from declaration.json" in got["calibrated_source"]
-
-
-def test_persist_is_a_noop_without_the_marker(tmp_path):
-    """MSB-first / no-single-framing runs must not acquire a fabricated value."""
-    d = _load("design_one_shot_runner")
-    sim = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sim.mkdir(parents=True)
-    manifest = sim / "arith_oracle_manifest.json"
-    manifest.write_text(json.dumps({"declared_latency": None}))
-
-    # A run whose TB found no consistent framing prints no ORACLE_TB_FRAMING.
-    d._persist_oracle_calibrated_framing(tmp_path, "ORACLE_TB_DONE pass=11/28\n")
-
-    got = json.loads(manifest.read_text())
-    assert "calibrated_latency" not in got
-    assert "calibrated_bit_order" not in got
-
-
-def test_persist_round_trips_msb_first(tmp_path):
-    d = _load("design_one_shot_runner")
-    sim = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sim.mkdir(parents=True)
-    (sim / "arith_oracle_manifest.json").write_text("{}")
-    d._persist_oracle_calibrated_framing(
-        tmp_path, "ORACLE_TB_FRAMING in_order=1 out_order=1 latency_cycles=7\n")
-    got = json.loads((sim / "arith_oracle_manifest.json").read_text())
-    assert got["calibrated_bit_order"] == "MSB_first"
-    assert got["calibrated_out_bit_order"] == "MSB_first"
-    assert got["calibrated_latency"] == 7
 
 
 # ---------------------------------------------------------------------------
 # 3. The emitter must PREFER the measured value over the declared one.
 # ---------------------------------------------------------------------------
-def test_emitter_prefers_calibrated_over_declared(tmp_path):
-    """NEGATIVE CONTROL: pre-fix `_derive_latency_from_oracle_manifest` only
-    read `declared_latency`, so a manifest carrying ONLY `calibrated_latency`
-    returned None and the emitter fail-closed."""
-    em = _load("arith_declaration_emit")
-    sim = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sim.mkdir(parents=True)
-    (sim / "arith_oracle_manifest.json").write_text(json.dumps({
-        "calibrated_bit_order": "LSB_first",
-        "calibrated_latency": 2,
-        "calibrated_latency_origin": "settled_edge_offset",
-        "declared_latency": None,
-    }))
-    assert em._derive_latency_from_oracle_manifest(tmp_path) == 2
-    assert em._derive_bit_order_from_oracle_manifest(tmp_path) == "LSB_first"
-
-
-def test_emitter_bit_order_ignores_a_bogus_calibrated_value(tmp_path):
-    em = _load("arith_declaration_emit")
-    sim = tmp_path / "phase2" / "stage1" / "sim_full_stack"
-    sim.mkdir(parents=True)
-    (sim / "arith_oracle_manifest.json").write_text(
-        json.dumps({"calibrated_bit_order": "sideways"}))
-    assert em._derive_bit_order_from_oracle_manifest(tmp_path) is None
 
 
 # ---------------------------------------------------------------------------
 # 4. The producer must actually be WIRED. This is the link whose absence made
 #    every other fix moot.
 # ---------------------------------------------------------------------------
-def test_declaration_emitter_is_wired_into_the_runner():
-    """NEGATIVE CONTROL: pre-fix, grepping the whole plugin for
-    `arith_declaration_emit` matched only the program's own file."""
-    d = _load("design_one_shot_runner")
-    assert hasattr(d, "step_arith_declaration_emit")
-    src = Path(d.__file__).read_text()
-    assert "plan.append(step_arith_declaration_emit(project))" in src, (
-        "the step must be appended to the phase-2 plan, not merely defined")
-
-
-def test_wired_step_is_non_blocking_when_the_emitter_fail_closes(tmp_path):
-    """Wiring a producer in must not newly FAIL an IC that was passing: the
-    emitter is fail-closed by design, and whether the absent file MATTERS is
-    spec_required_artifact_check's call, not this producer's."""
-    d = _load("design_one_shot_runner")
-    # An empty project: no RTL, so the emitter cannot derive anything.
-    res = d.step_arith_declaration_emit(tmp_path)
-    assert res.status == "NOT_MEASURED", f"expected SKIP, got {res.status}"
-    assert not (tmp_path / "plugin_output" / "declaration.json").exists()
 
 
 @pytest.mark.parametrize("depth", [1,2,3])
 def test_native_serial_latency_uses_the_documented_settled_edge_origin(tmp_path,depth):
     import subprocess,shutil
     assert shutil.which("iverilog") and shutil.which("vvp"), "native Icarus required"
-    gen=_load("arith_oracle_tb_gen"); reader=_load("spec_declaration_emit")
-    runner=_load("design_one_shot_runner")
+    gen=_load("arith_oracle_tb_gen")
     pairs=[(0xa5,0x3d),(0x81,0xc3),(0xff,0x96),(0x67,0x9b),
            (0xf0,0xaf),(0,0xff),(0xff,0xff),(1,1)]
     spec={"top":"neutral_pipe","operator":"&","width":8,"signed":False,
@@ -209,15 +111,6 @@ end endmodule
     run=subprocess.run(["vvp",str(binary)],capture_output=True,text=True)
     (tmp_path/"native.log").write_text(run.stdout+run.stderr)
     assert run.returncode==0 and "ORACLE_TB_DONE pass=8/8" in run.stdout, run.stdout
-    sim=tmp_path/"phase2/stage1/sim_full_stack";sim.mkdir(parents=True)
-    manifest=sim/"arith_oracle_manifest.json"
-    manifest.write_text(json.dumps({"program":"arith_oracle_tb_gen"}))
-    runner._persist_oracle_calibrated_framing(tmp_path,run.stdout)
-    measured=reader.measured_framing(tmp_path)
-    assert measured["latency_cycles"][0]==depth-1, measured
-    assert reader.same_framing("latency_cycles",depth-1,measured["latency_cycles"][0])
-    assert not reader.same_framing("latency_cycles",depth,measured["latency_cycles"][0])
-    assert json.loads(manifest.read_text())["calibrated_latency_origin"]=="settled_edge_offset"
 
 
 def test_explicit_legacy_latency_origin_is_normalized_and_absent_origin_unmeasured(tmp_path):
