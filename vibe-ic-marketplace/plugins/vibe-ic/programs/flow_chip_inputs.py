@@ -154,14 +154,11 @@ def _side_ports(project: Path, ports: list[dict]):
     available = {bit for bits in by_name.values() for bit in bits}
     sides = {side: [] for side in SIDES}
     if placement is not None:
-        renames = placement_docs.declared_renames(project)
-        declared, unresolved = placement_docs.expand_renamed_side_ports(
-            placement, params, ports, renames,
-            exact_carriers=placement_docs.input_delegated_rename_names(project, renames))
+        declared, unresolved = placement_docs.expand_side_ports(placement, params)
         if unresolved:
             raise ValueError(f"Unresolved pad placement: {unresolved}")
         groups, records = placement_docs.resolve_declared_pad_groups(
-            placement, ports, renames=renames, params=params)
+            placement, ports, params=params, project=project)
         if any(not record["resolved_nets"] for record in records):
             raise ValueError(f"Unresolved pad placement groups: {records}")
         for side in SIDES:
@@ -564,8 +561,9 @@ def _wrapper(core: str, top: str, ports: list[dict], chosen: dict, ordered: dict
             regular = electrical._named_connections(instance, entry["master"],
                 [(pin, net) for pin, net in pairs.items() if pin not in pg], buses)
             power = [f".{pin}({_identifier(net)})" for pin, net in pairs.items() if pin in pg]
-            if entry.get("is_ring_connector"):
-                lines.append("    (* keep = 1 *)")
+            # Every selected pad is a physical ring instance, including a
+            # receiver whose core-side output is unused after optimization.
+            lines.append("    (* keep = 1 *)")
             lines.extend([f"    {entry['master']} {_identifier(instance)} (", "        " + ", ".join(regular)])
             if power:
                 lines.extend(["`ifdef USE_POWER_PINS", ("        , " if regular else "        ") + ", ".join(power), "`endif"])
