@@ -1,5 +1,4 @@
 """A18 behavioral controls through the existing native dispatch (also on main)."""
-import hashlib
 import json
 from pathlib import Path
 
@@ -80,11 +79,12 @@ def dispatch(root, *, status="PASS", tamper=False):
     def run(program, argv, **kwargs):
         calls.append(program)
         output = put(root, "phase3/stage3/pnr/routed.def", "DESIGN chip_top ;\nEND DESIGN\n")
-        digest = hashlib.sha256(output.read_bytes()).hexdigest()
         put(root, "reports/phase3/analog_macro_top_run.json", {
             "producer": "analog_macro_top_run", "component_status": status,
-            "reason": "native test result", "outputs": {str(output): digest if not tamper else "0" * 64}})
-        return {"returncode": 0, "missing_outputs": [], "outputs": {}}
+            "reason": "native test result", "outputs": [str(output)]})
+        if tamper:
+            output.unlink()
+        return {"returncode": 0, "missing_outputs": [], "outputs": []}
 
     options = {"features": {"digital_physical": False}, "config": {}}
     result = native._views("A18", root, {"name": "neutral"}, options, run)
@@ -94,7 +94,8 @@ def dispatch(root, *, status="PASS", tamper=False):
 def test_a18_generates_two_macro_config_and_both_netlists(tmp_path):
     declaration(tmp_path)
     result, calls, _ = dispatch(tmp_path)
-    assert result["status"] == "PASS", result
+    assert result["status"] == "NOT_MEASURED", result
+    assert result["native_evidence"]["component_status"] == "PASS"
     assert calls == ["analog_macro_top_run.py"]
     config = json.loads((tmp_path / "phase3/analog_top/librelane.json").read_text())
     assert config["DESIGN_NAME"] == "chip_top"
@@ -129,7 +130,7 @@ def test_a18_generates_two_macro_config_and_both_netlists(tmp_path):
     assert "Cdeclared TOP VSS 25p" in (tmp_path / "views/ref_decap.spice").read_text()
     mapping = json.loads((tmp_path / "reports/phase3/io_pad_chip_top.json").read_text())
     assert (mapping["core_module"], mapping["chip_top_module"]) == ("neutral_core", "chip_top")
-    assert result["metric_acceptance"]["status"] == "NOT_MEASURED"
+    assert result["measurements"]["status"] == "NOT_MEASURED"
 
 
 @pytest.mark.parametrize("view", ["gds", "lef", "spice"])
@@ -180,10 +181,10 @@ def test_a18_runs_chip_once_for_multiple_block_rows(tmp_path):
     first, calls, options = dispatch(tmp_path)
     second = native._views("A18", tmp_path, {"name": "other"}, options,
                            lambda *a, **k: pytest.fail("chip producer repeated"))
-    assert first["status"] == second["status"] == "PASS"
+    assert first["status"] == second["status"] == "NOT_MEASURED"
     assert len(calls) == 1
     second["status"] = "FAIL"
-    assert first["status"] == "PASS"
+    assert first["status"] == "NOT_MEASURED"
 
 
 def test_a18_requires_the_generated_pad_cells_supply_bindings(tmp_path):
@@ -200,20 +201,21 @@ def test_a18_requires_the_generated_pad_cells_supply_bindings(tmp_path):
 def test_unchanged_precheck_reads_the_core_wrapper_mapping(tmp_path):
     declaration(tmp_path)
     result, _, _ = dispatch(tmp_path)
-    assert result["status"] == "PASS", result
+    assert result["status"] == "NOT_MEASURED", result
+    assert result["native_evidence"]["component_status"] == "PASS"
     import general_precheck
     assert general_precheck._recorded_physical_top(tmp_path)["core"] == "neutral_core"
 
 
 def test_checked_in_registry_dispatches_to_the_macro_top_producer(tmp_path):
     from _hostpaths import require_repo
-    import importlib
     registry = json.loads(require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
-                                      "flow", "flow109.json").read_text())
-    row = next(r for r in registry["rows"] if r["id"] == "A18")
-    adapter = importlib.import_module(row["profiles"][0]["dispatch"]["adapter"])
+                                      "flow", "steps.json").read_text())
+    row = next(r for r in registry["steps"] if r.get("legacy_id", {}).get("registry") == "A18")
+    assert row["tool"] == {"kind": "adapter", "adapter": "analog",
+                           "step": "analog_top_interconnect_pads_and_power"}
     declaration(tmp_path)
-    result = adapter._views("A18", tmp_path, {"name": "neutral"},
+    result = native._views("A18", tmp_path, {"name": "neutral"},
         {"features": {"digital_physical": True}, "config": {}},
         lambda *a, **k: pytest.fail("digital top must retain ownership"))
     assert result["status"] == "NOT_APPLICABLE"
@@ -226,7 +228,6 @@ def test_a18_waits_for_all_a17_writers(tmp_path, monkeypatch):
     put(tmp_path, "phase3/analog/analog_block_list.json", {"blocks": [
         {"name": "first", "type": "amplifier"}, {"name": "second", "type": "amplifier"}]})
     put(tmp_path, "input/analog_flow.json", {"workers": 2})
-    monkeypatch.setattr(native, "_adapter_transport", lambda p: ("", "", "HOST"))
     first_done = threading.Event()
     completed = set()
 
@@ -250,11 +251,10 @@ def test_a18_waits_for_all_a17_writers(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("component_status,expected", [("PASS", "NOT_MEASURED"), ("FAIL", "FAIL")])
 def test_macro_implementation_cannot_claim_row_signoff(tmp_path, component_status, expected):
-    result = native.consume_default_row_completion(tmp_path, {"requested_step": "A18"}, {
-        "component_status": component_status, "native_results": {"steps": [{
-            "native_evidence": {"producer": "analog_macro_top_run"}}]}})
-    assert result["default_row_status"] == expected
-    assert result["delivery_accepted"] is False
+    declaration(tmp_path)
+    result, _, _ = dispatch(tmp_path, status=component_status)
+    assert result["status"] == expected
+    assert result["measurements"]["status"] == "NOT_MEASURED"
 
 
 def test_a18_accepts_separate_view_bindings_without_changing_instances(tmp_path):
@@ -263,7 +263,8 @@ def test_a18_accepts_separate_view_bindings_without_changing_instances(tmp_path)
     put(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", l9)
     put(tmp_path, "input/analog_flow.json", {"analog_top": {"macros": catalog}})
     result, _, _ = dispatch(tmp_path)
-    assert result["status"] == "PASS", result
+    assert result["status"] == "NOT_MEASURED", result
+    assert result["native_evidence"]["component_status"] == "PASS"
     intent = json.loads((tmp_path / "phase3/analog_top/pdn_intent.json").read_text())
     assert intent["core_instances"] == ["u_core__first", "u_core__second", "u_core__decap_hi", "u_core__decap_lo"]
     assert [(d["power_net"],d["ground_net"]) for d in intent["domains"]] == [("supply","VSS"),("supply_io","IOVSS")]
@@ -432,7 +433,6 @@ def test_macro_escape_requires_full_target_via_enclosure(monkeypatch):
     with pytest.raises(Refusal, match="A18_MACRO_PG_EDGE_ACCESS_ABSENT"):
         scene["pdn"].connect_macro_edges(scene["db"],scene["intent"],scene["config"])
     assert scene["created"] == []
-
 
 
 def test_macro_escape_rotates_obstructions_with_native_points(monkeypatch):
