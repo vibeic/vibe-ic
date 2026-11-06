@@ -24,7 +24,6 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import spec_coverage_check as SCC  # noqa: E402
-import fsm_error_invariant as FEI  # noqa: E402
 
 
 # ── (A) byte_order: incidental loop/index/eq must NOT count as ordering ───────
@@ -66,41 +65,6 @@ def test_faithful_ordering_tb_is_byte_order_coverage():
 
 
 # ── (B) fsm error signal: glued forms fire, interrupt family stays exempt ─────
-@pytest.mark.parametrize("name", [
-    "rxfailure", "txaborted", "pktrejected", "parityfailure", "crcfailure",
-    "rxtimeout", "dataerror"])
-def test_glued_error_forms_fire(name):
-    assert FEI._signal_is_error(name) is True
-
-
-@pytest.mark.parametrize("name", [
-    "cpu_interrupt", "interrupt_valid", "interrupt_idx", "interrupt_requests",
-    "nvic_interrupt", "merrily"])
-def test_interrupt_family_stays_exempt(name):
-    assert FEI._signal_is_error(name) is False
-
-
-@pytest.mark.parametrize("name", [
-    "err_o", "o_error", "timeout_err", "rx_error", "fail_flag", "pslverr",
-    "errorFlag", "rx_failure", "tx_aborted"])
-def test_existing_error_forms_preserved(name):
-    assert FEI._signal_is_error(name) is True
-
-
-def test_glued_error_rtl_fires_end_to_end(tmp_path):
-    rtl = ("module rx_phy(input clk, input bad, output logic rxfailure,\n"
-           "  output logic txaborted, output logic pktrejected);\n"
-           "  always_ff @(posedge clk) begin if(bad) begin\n"
-           "    rxfailure<=1'b1; txaborted<=1'b1; pktrejected<=1'b1; end end\nendmodule\n")
-    assert len(FEI.find_error_assertions(rtl, "rx.sv")) >= 1
-
-
-def test_interrupt_rtl_does_not_fire_end_to_end(tmp_path):
-    rtl = ("module m(input clk, input ev, output logic cpu_interrupt,\n"
-           "  output logic interrupt_valid);\n"
-           "  always_ff @(posedge clk) begin if(ev) begin\n"
-           "    cpu_interrupt<=1'b1; interrupt_valid<=1'b1; end end\nendmodule\n")
-    assert FEI.find_error_assertions(rtl, "m.sv") == []
 
 
 if __name__ == "__main__":

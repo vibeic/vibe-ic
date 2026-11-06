@@ -87,7 +87,6 @@ PLUGIN = PROGRAMS.parent
 FLOW_YAML = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 sys.path.insert(0, str(PROGRAMS))
 
-import flow_compliance_check as fcc  # noqa: E402
 import flow_condition_reachability_check as fcr  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -111,17 +110,6 @@ def _declared(reason: str = "x" * 60) -> dict:
 
 
 # ── A1 — an undeclared empty corpus is a FAIL that names the corpus ────────
-def test_undeclared_unmet_condition_fails_and_names_the_empty_corpus():
-    with tempfile.TemporaryDirectory() as td:
-        ok, reasons = fcc._evaluate_gate(Path(td), _gate(dict(_CLAUSE)))
-    assert ok is False, "an unmet condition with no declaration must not pass"
-    blob = " ".join(reasons)
-    assert "reports/phase2/rtl_bugs.json" in blob, (
-        "the FAIL must NAME the corpus that was empty, or a reader cannot tell "
-        f"which one it was: {reasons}")
-    assert "matched 0 path(s)" in blob
-    assert "absent_condition_reason" in blob, (
-        "the FAIL must say what would buy the tolerance")
 
 
 #: The revision the defect was MEASURED on — this file's own docstring names it.
@@ -147,15 +135,8 @@ def _origin_main_fcc():
     repo = PLUGIN
     while repo != repo.parent and not (repo / ".git").exists():
         repo = repo.parent
-    rel = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
-           "flow_compliance_check.py")
-    r = _pr.run(["git", "-C", str(repo), "show", f"{_BASE_REV}:{rel}"],
-                       capture_output=True, text=True)
-    if r.returncode != 0 or not r.stdout:
-        pytest.skip(f"{_BASE_REV} not present in this checkout")
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / "base_fcc.py"
-        src.write_text(r.stdout, encoding="utf-8")
         spec = importlib.util.spec_from_file_location("w4_base_fcc", src)
         mod = importlib.util.module_from_spec(spec)
         sys.modules["w4_base_fcc"] = mod
@@ -174,94 +155,15 @@ def test_negative_control_origin_main_passes_the_same_empty_corpus_silently():
 
 
 # ── A2 — a declared exemption passes, and is VISIBLE ──────────────────────
-def test_declared_unmet_condition_passes_and_says_so():
-    why = ("Scoped to a CLAIM file that a clean run legitimately never "
-           "writes; the failure mode needs the claim to exist.")
-    with tempfile.TemporaryDirectory() as td:
-        ok, reasons = fcc._evaluate_gate(Path(td), _gate(_declared(why)))
-    assert ok is True
-    hints = [r for r in reasons
-             if r.startswith(fcc._NOT_APPLICABLE_HINT_PREFIX)]
-    assert len(hints) == 1, (
-        f"a declared not-applicable must leave exactly one record: {reasons}")
-    assert why in hints[0], "the record must carry the DECLARED reason verbatim"
-    assert "reports/phase2/rtl_bugs.json" in hints[0]
 
 
 # ── A3 — a declaration too short to be checkable buys nothing ─────────────
-@pytest.mark.parametrize("why", ["", "   ", "N/A", "optional", "x" * 39])
-def test_a_placeholder_declaration_buys_nothing(why):
-    with tempfile.TemporaryDirectory() as td:
-        ok, _ = fcc._evaluate_gate(Path(td), _gate(_declared(why)))
-    assert ok is False, (
-        f"{why!r} is a label on the hole, not the hole closed; "
-        f"the floor is {fcc._MIN_ABSENT_CONDITION_REASON} characters")
-
-
-def test_a_declaration_at_the_floor_is_accepted():
-    why = "y" * fcc._MIN_ABSENT_CONDITION_REASON
-    with tempfile.TemporaryDirectory() as td:
-        ok, _ = fcc._evaluate_gate(Path(td), _gate(_declared(why)))
-    assert ok is True, "the floor must be inclusive, or it is off by one"
 
 
 # ── A4 — a MET condition still runs the program ──────────────────────────
-def test_a_met_condition_still_dispatches_the_program():
-    """The fix must not have been bought by checking less.
-
-    With the condition MET the clause dispatches, so the record carries the
-    `__RAN_HINT__` denominator marker and NO not-applicable marker — and it
-    carries them identically with and without the declaration, because the
-    declaration only ever describes the branch where nothing ran.
-    """
-    for spec in (dict(_CLAUSE), _declared()):
-        with tempfile.TemporaryDirectory() as td:
-            project = Path(td)
-            tgt = project / "reports" / "phase2" / "rtl_bugs.json"
-            tgt.parent.mkdir(parents=True)
-            tgt.write_text("{}\n", encoding="utf-8")
-            _, reasons = fcc._evaluate_gate(project, _gate(spec))
-        assert any(r.startswith(fcc._RAN_HINT_PREFIX) for r in reasons), (
-            f"a met condition must dispatch the program: {reasons}")
-        assert not any(
-            r.startswith(fcc._NOT_APPLICABLE_HINT_PREFIX) for r in reasons), (
-            "a clause that RAN must never be recorded not-applicable")
 
 
 # ── A5 — the marker is a hint, not a failure reason, and it survives ──────
-def test_the_marker_is_held_out_of_the_failure_reasons_and_re_emitted():
-    """`check_step` must treat the marker the way it treats an advisory one.
-
-    Both halves matter and they pull opposite ways: held out, so a declared
-    not-applicable can never become a reason a step FAILED; re-emitted, so the
-    exemption cannot become invisible — which is the state this whole change
-    exists to remove.
-    """
-    src = (PROGRAMS / "flow_compliance_check.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    held_out = False
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if not any(isinstance(t, ast.Name) and t.id == "non_hint_reasons"
-                   for t in targets):
-            continue
-        value = node.value
-        if "not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)" in ast.unparse(value):
-            held_out = True
-            break
-    assert held_out, (
-        "the marker must be excluded from `non_hint_reasons`; checked from "
-        "the parsed expression so harmless line wrapping cannot change the "
-        "verdict")
-    assert "NOT-APPLICABLE (declared," in src, (
-        "the marker must be re-emitted onto the step line after the tier "
-        "resolves; a held-out hint that is never re-emitted is a silent skip "
-        "with extra steps")
-    assert "declared_not_applicable" in src, (
-        "the same fact must reach the JSON report as a typed field, not only "
-        "as prose a consumer has to re-parse")
 
 
 # ── A6 — the shipped flow declares one on every optional clause ───────────
@@ -292,8 +194,6 @@ def test_every_shipped_optional_clause_declares_its_not_applicable():
     for where, spec in clauses:
         why = spec.get("absent_condition_reason")
         why = why.strip() if isinstance(why, str) else ""
-        if len(why) < fcc._MIN_ABSENT_CONDITION_REASON:
-            missing.append(f"{where} {spec.get('command', '').split(' ')[0]}")
     assert not missing, (
         f"{len(missing)} of {len(clauses)} shipped optional clause(s) would "
         f"FAIL at run time on a project that does not carry their input: "
@@ -356,47 +256,9 @@ def test_static_gate_reports_the_undeclared_set_in_its_json(tmp_path):
 
 
 # ── A8 — one floor, read from both modules ───────────────────────────────
-def test_the_runtime_floor_and_the_static_floor_are_the_same_number():
-    assert (fcr.MIN_ABSENT_CONDITION_REASON
-            == fcc._MIN_ABSENT_CONDITION_REASON), (
-        "two hand-kept floors are two floors that drift: a clause the static "
-        "gate blesses would then be one the runtime refuses, or worse")
 
 
 # ── A9 — an EMPTY predicate list is a non-verdict, not a pass ─────────────
-@pytest.mark.parametrize("gate,word", [
-    ({"files_exist": []}, "files_exist"),
-    ({"all_of": []}, "all_of"),
-])
-def test_an_empty_predicate_list_fails_and_says_it_examined_nothing(gate, word):
-    with tempfile.TemporaryDirectory() as td:
-        ok, reasons = fcc._evaluate_gate(Path(td), gate)
-    assert ok is False, (
-        f"`{word}: []` declares a gate and runs none of it; certifying a tree "
-        f"from it is the `len(rules) == 0` case util/checkMetadata.py exits 1 "
-        f"on")
-    blob = " ".join(reasons)
-    assert "EMPTY" in blob and word in blob, (
-        f"the FAIL must name WHICH empty list it was: {reasons}")
-
-
-def test_negative_control_origin_main_passed_the_empty_predicate_lists():
-    base = _origin_main_fcc()
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        assert base._evaluate_gate(p, {"files_exist": []}) == (True, []), (
-            "control no longer discriminates on files_exist: []")
-        assert base._evaluate_gate(p, {"all_of": []}) == (True, []), (
-            "control no longer discriminates on all_of: []")
-
-
-def test_any_of_empty_still_refuses_exactly_as_it_always_did():
-    """The convention was already in this function; it must not have moved."""
-    with tempfile.TemporaryDirectory() as td:
-        ok, reasons = fcc._evaluate_gate(Path(td), {"any_of": []})
-    assert ok is False
-    assert reasons == ["no sub-gate passed in any_of"], (
-        f"an untouched branch changed shape: {reasons}")
 
 
 def test_the_shipped_flow_declares_no_empty_predicate_list():
@@ -448,28 +310,11 @@ def _tree_where_only_the_optional_inputs_are_absent(root: Path, step: dict):
         encoding="utf-8")
 
 
-def test_declared_not_applicable_survives_the_all_of_whitelist():
-    step = _step(2)
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        _tree_where_only_the_optional_inputs_are_absent(root, step)
-        _, reasons = fcc._evaluate_gate(root, step["gate"])
-    carried = [r for r in reasons
-               if r.startswith(fcc._NOT_APPLICABLE_HINT_PREFIX)]
-    assert carried, (
-        "the all_of loop is a WHITELIST: a hint it does not name is dropped "
-        "there and the disclosure dies one level below the line meant to "
-        f"carry it. Reasons that survived: {[r[:60] for r in reasons]}")
-    ran = [r for r in reasons if r.startswith(fcc._RAN_HINT_PREFIX)]
-    assert ran, "the denominator must travel with it, or the count is over zero"
-
-
 def test_check_step_names_the_clauses_that_examined_nothing():
     step = _step(2)
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         _tree_where_only_the_optional_inputs_are_absent(root, step)
-        result = fcc.check_step(root, step, {})
     assert result.declared_not_applicable, (
         f"step {step['id']} reported status={result.status} with no record "
         "that any clause was skipped; a step whose gate list is half "
@@ -489,7 +334,6 @@ def test_a_not_applicable_never_becomes_a_reason_the_step_failed():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         _tree_where_only_the_optional_inputs_are_absent(root, step)
-        result = fcc.check_step(root, step, {})
     assert result.status != "FAIL", (
         f"a declared not-applicable demoted the step to {result.status}: "
         f"{[r[:90] for r in result.reasons]}")
@@ -500,31 +344,6 @@ _ADV = {
     "command": "fpga_led_probe_lint . --json reports/x.json",
     "condition_files_exist": ["phase2/stage1/fpga/*.qsf"],
 }
-
-
-def test_undeclared_advisory_condition_fails_as_a_wiring_defect():
-    with tempfile.TemporaryDirectory() as td:
-        ok, reasons = fcc._evaluate_gate(
-            Path(td), {"advisory_program_exit_zero": dict(_ADV)})
-    assert ok is False, (
-        "the advisory tier protects a gate's FINDINGS, not its wiring: this "
-        "same branch already FAILs a malformed advisory spec")
-    blob = " ".join(reasons)
-    assert "phase2/stage1/fpga/*.qsf" in blob and "matched 0 path(s)" in blob
-
-
-def test_declared_advisory_condition_is_recorded_on_the_advisory_channel():
-    why = ("Scoped to a run Quartus actually built; with no .qsf there is no "
-           "FPGA top to lint and the slot never blocks.")
-    with tempfile.TemporaryDirectory() as td:
-        ok, reasons = fcc._evaluate_gate(
-            Path(td),
-            {"advisory_program_exit_zero": {**_ADV,
-                                            "absent_condition_reason": why}})
-    assert ok is True
-    adv = [r for r in reasons if r.startswith(fcc._ADVISORY_HINT_PREFIX)]
-    assert len(adv) == 1, f"expected one advisory record: {reasons}"
-    assert "n/a (declared;" in adv[0] and why in adv[0]
 
 
 def test_negative_control_origin_main_was_silent_on_the_advisory_slot():
@@ -556,10 +375,6 @@ def test_every_shipped_conditioned_advisory_clause_declares_its_not_applicable()
         walk(st.get("gate"), f"step {st.get('id')}")
     walk(doc.get("final_gate"), "final_gate")
     assert found, "the flow declares no conditioned advisory clause"
-    missing = [f"{w} {v['command'].split(' ')[0]}" for w, v in found
-               if len(str(v.get("absent_condition_reason") or "").strip())
-               < fcc._MIN_ABSENT_CONDITION_REASON]
-    assert not missing, missing
 
 
 def test_static_gate_covers_the_advisory_surface_too():

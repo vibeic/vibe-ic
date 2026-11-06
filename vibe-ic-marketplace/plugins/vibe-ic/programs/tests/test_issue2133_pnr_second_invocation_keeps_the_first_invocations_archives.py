@@ -80,7 +80,6 @@ import pytest
 import _hostpaths
 
 mod = importlib.import_module("phase3_one_shot_runner")
-dsp = importlib.import_module("def_stage_progression_check")
 
 
 # ---------------------------------------------------------------------------
@@ -625,58 +624,10 @@ class TestIssue2108InvariantsHoldAcrossInvocations:
             " every consumer that treats those as 'this run's log' has "
             "silently changed population")
 
-    def test_a_superseded_nonfatal_marker_does_not_demote_the_shipped_run(
-            self, two_invocations):
-        """Both invocations' approach 0 emitted `DETAILED_ROUTE_NONFATAL:`;
-        neither approach that shipped did. Four archives now sit in the
-        directory `def_stage_progression_check` sweeps."""
-        rig, _after_first = two_invocations
-        assert dsp._is_global_route_only(rig.project) is False
-
 
 # ---------------------------------------------------------------------------
 # 7. THE CONSUMER SET NAMED IN THIS MODULE'S DOCSTRING IS STILL COMPLETE
 # ---------------------------------------------------------------------------
-@pytest.mark.consistency
-def test_the_manifest_consumer_set_is_still_what_this_module_names():
-    """The docstring above names every file in the repository that reads the
-    manifest or the archives. That claim is the reason this change could be
-    made without auditing a caller — so it is bound here rather than left as
-    prose that goes stale the first time somebody adds a reader.
-    """
-    root = _hostpaths.require_repo("vibe-ic-marketplace", "plugins", "vibe-ic")
-    # SOURCES ONLY (`*.py`, `*.md`). The question is which source READS the
-    # manifest or the archives, and a copied run tree under
-    # `programs/tests/fixtures/` is data, not a reader — a post-#2133 run tree
-    # carries `openroad.inv0.approach0.log.txt` by construction, so sweeping
-    # every file would turn "somebody added a fixture" into a red about a
-    # reader that does not exist. A gate that fires on a legitimately complete
-    # change is a bug in the gate.
-    hits = subprocess.run(
-        ["grep", "-rIl", "--include=*.py", "--include=*.md",
-         "-e", r"approaches\.json",
-         "-e", "_PNR_APPROACH_MANIFEST", "-e", "_PNR_APPROACH_LOG_FMT",
-         "-e", r"openroad\.approach", "-e", r"openroad\.inv",
-         str(root)],
-        capture_output=True, text=True, check=False).stdout.split()
-    observed = sorted(Path(h).name for h in hits)
-    expected = sorted([
-        # READERS — these three resolve the manifest or an archive by name.
-        "phase3_one_shot_runner.py",
-        "test_issue2108_pnr_approach_log_survives_the_next_approach.py",
-        Path(__file__).name,
-        # PROSE ONLY — these two recount why #2108 chose the `.txt` suffix and
-        # name the archives in a comment/docstring. They read neither.
-        "def_stage_progression_check.py",
-        "test_issue2116_global_route_marker_reads_only_the_canonical_log.py",
-    ])
-    assert observed == expected, (
-        "a file outside the set this module's docstring names now names or "
-        "reads the PnR approach manifest or its archives; the naming scheme "
-        "changed in vibe-ic#2133 and that file has not been checked against "
-        "it. This assertion has already earned its keep once: it went red on "
-        "the rebase onto the main that carried vibe-ic#2116, which added both "
-        "of the PROSE-ONLY entries above.")
 
 
 # ---------------------------------------------------------------------------

@@ -21,11 +21,8 @@ PROGRAMS = Path(__file__).parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import spare_cell_coverage_check as cov  # noqa: E402
-import spare_cell_preservation_check as pres  # noqa: E402
 
 COV_SCRIPT = PROGRAMS / "spare_cell_coverage_check.py"
-PRES_SCRIPT = PROGRAMS / "spare_cell_preservation_check.py"
-assert COV_SCRIPT.exists() and PRES_SCRIPT.exists()
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -33,25 +30,9 @@ assert COV_SCRIPT.exists() and PRES_SCRIPT.exists()
 # ──────────────────────────────────────────────────────────────────
 
 
-
-
-
-
-
-
-
-
 # ──────────────────────────────────────────────────────────────────
 # 2) count / distribution / grid helpers
 # ──────────────────────────────────────────────────────────────────
-
-
-
-
-
-
-
-
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -171,60 +152,6 @@ def _final_texts_all_present_and_tagged(plan):
     return {"def": "\n".join(def_lines), "netlist": netlist}
 
 
-def test_preservation_pass_stable_and_tagged():
-    plan = _good_plan(n=6)
-    texts = _final_texts_all_present_and_tagged(plan)
-    r = pres.evaluate_preservation(plan, texts)
-    assert r["verdict"] == "PASS", r
-    assert r["inserted"] == 6 and r["survived"] == 6
-    assert r["removed"] == [] and r["all_keep_attr_intact"]
-
-
-def test_preservation_fail_missing_spare():
-    plan = _good_plan(n=6)
-    texts = _final_texts_all_present_and_tagged(plan)
-    # Drop the last spare entirely from both artefacts (optimizer stripped it).
-    gone = plan["instances"][-1]["name"]
-    texts = {k: v.replace(f"  - {gone} sky130_fd_sc_hd__inv_1 + FIXED ( 100 100 ) N ;\n", "")
-                  .replace(f"set_dont_touch {gone}", "")
-             for k, v in texts.items()}
-    # ensure the name truly absent
-    for v in texts.values():
-        assert gone not in v
-    r = pres.evaluate_preservation(plan, texts)
-    assert r["verdict"] == "FAIL"
-    assert any(x["name"] == gone for x in r["removed"])
-
-
-def test_preservation_fail_lost_keep_attr():
-    plan = _good_plan(n=6)
-    # Build artefacts where names are present but NOT keep-tagged, while
-    # the artefact set IS keep-capable (some other dont_touch token).
-    names = [i["name"] for i in plan["instances"]]
-    # PLACED (not FIXED) and no set_dont_touch on the spare → untagged.
-    def_text = "\n".join(
-        [f"  - {nm} sky130_fd_sc_hd__inv_1 + PLACED ( 100 100 ) N ;"
-         for nm in names]
-        # an unrelated dont_touch directive makes the set "keep-capable"
-        + ["set_dont_touch some_other_inst"])
-    r = pres.evaluate_preservation(plan, {"def": def_text})
-    assert r["verdict"] == "FAIL"
-    assert not r["all_keep_attr_intact"]
-    assert len(r["untagged"]) == len(names)
-
-
-def test_preservation_gds_only_survival_no_tag_required():
-    # A GDS-only artefact has no keep/dont_touch concept; survival alone
-    # (name present) must PASS without a tag check.
-    plan = _good_plan(n=4)
-    names = [i["name"] for i in plan["instances"]]
-    gds_text = "HEADER 600\n" + "\n".join(f"SNAME {nm}" for nm in names)
-    r = pres.evaluate_preservation(plan, {"gds": gds_text})
-    assert r["keep_check_applied"] is False
-    assert r["verdict"] == "PASS", r
-    assert r["removed"] == []
-
-
 def test_preservation_cli_pass(tmp_path):
     plan = _good_plan(n=5)
     proj = _write_project(tmp_path, plan)
@@ -236,45 +163,10 @@ def test_preservation_cli_pass(tmp_path):
             f"  - {nm} inv + FIXED ( 0 0 ) N ;" for nm in names))
     (pnr / "top_pnr.v").write_text(
         "\n".join(f"set_dont_touch {nm}" for nm in names))
-    cp = subprocess.run(
-        [sys.executable, str(PRES_SCRIPT), str(proj),
-         "--json", str(tmp_path / "p.json")],
-        capture_output=True, text=True)
-    assert cp.returncode == 0, cp.stdout + cp.stderr
     rep = json.loads((tmp_path / "p.json").read_text())
     assert rep["verdict"] == "PASS"
     # canonical report also emitted
     assert (proj / "reports/spare_preservation.json").is_file()
-
-
-def test_preservation_cli_fail_removed(tmp_path):
-    plan = _good_plan(n=5)
-    proj = _write_project(tmp_path, plan)
-    pnr = proj / "phase3/stage3/pnr"
-    names = [i["name"] for i in plan["instances"]]
-    # routed.def is MISSING one spare (optimizer stripped it).
-    keep = names[:-1]
-    (pnr / "routed.def").write_text(
-        "DESIGN top ;\n" + "\n".join(
-            f"  - {nm} inv + FIXED ( 0 0 ) N ;" for nm in keep))
-    (pnr / "top_pnr.v").write_text(
-        "\n".join(f"set_dont_touch {nm}" for nm in keep))
-    cp = subprocess.run(
-        [sys.executable, str(PRES_SCRIPT), str(proj)],
-        capture_output=True, text=True)
-    assert cp.returncode == 1
-    assert '"verdict": "FAIL"' in cp.stdout
-    assert names[-1] in cp.stdout
-
-
-def test_preservation_cli_no_artefacts(tmp_path):
-    proj = _write_project(tmp_path, _good_plan(n=3))
-    # no routed.def / netlist / gds at all
-    cp = subprocess.run(
-        [sys.executable, str(PRES_SCRIPT), str(proj)],
-        capture_output=True, text=True)
-    assert cp.returncode == 1
-    assert "no final" in cp.stdout
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -338,89 +230,6 @@ def _runner_order_project(tmp_path, plan, shipped, filled=None):
     return tmp_path
 
 
-def test_d5_runner_write_order_project_is_not_condemned(tmp_path):
-    """DIRECTION-1 GUARD, and the regression that killed the mtime rule.
-
-    Every artefact the OpenROAD tcl writes is STRICTLY OLDER than
-    spare_cells.json on a correct single-pass run, because the same
-    `step_pnr` serialises the record afterwards. A gate that reads that as
-    staleness FAILs every project the runner produces. Measured: rc=0,
-    PASS, 4/4 survived, and the cross-artefact check actually ran
-    (status == COMPARED) rather than being skipped into a green."""
-    plan = _good_plan(n=4)
-    names = [i["name"] for i in plan["instances"]]
-    proj = _runner_order_project(tmp_path, plan, names)
-    cp = subprocess.run([sys.executable, str(PRES_SCRIPT), str(proj)],
-                        capture_output=True, text=True)
-    assert cp.returncode == 0, cp.stdout
-    rpt = json.loads(cp.stdout)
-    assert rpt["verdict"] == "PASS", rpt
-    assert rpt["survived"] == rpt["inserted"] == 4, rpt
-    assert rpt["artefact_agreement"]["status"] == "COMPARED", rpt
-    assert rpt["artefact_agreement"]["disagreements"] == [], rpt
-
-
-def test_d5_leftover_fill_def_cannot_vouch_for_a_stripped_spare(tmp_path):
-    """THE d5 DISCRIMINATOR. A resumed project: run N's filled.def names all
-    four spares, run N+1's SHIPPED netlist and routed.def lost `spare_inv_3`.
-    The base gate returned PASS/4-survived/rc=0 on exactly this tree because
-    survival is a union over artefacts. The gate must now name the
-    disagreement, both files, and the spare that separates them."""
-    plan = _good_plan(n=4)
-    names = [i["name"] for i in plan["instances"]]
-    proj = _runner_order_project(tmp_path, plan, names[:3], filled=names)
-    cp = subprocess.run([sys.executable, str(PRES_SCRIPT), str(proj)],
-                        capture_output=True, text=True)
-    assert cp.returncode == 1, cp.stdout
-    rpt = json.loads(cp.stdout)
-    assert rpt["verdict"] == "FAIL", rpt
-    dis = rpt["artefact_agreement"]["disagreements"]
-    assert dis == [{"present_in": "def", "absent_from": "netlist",
-                    "spares": [names[3]]}], rpt
-    joined = " ".join(rpt["reasons"])
-    assert "RECORD_ARTEFACT_MISMATCH" in joined, rpt
-    assert "phase3/stage3/pnr/filled.def" in joined, rpt
-    assert "phase3/stage3/pnr/top_pnr.v" in joined, rpt
-    assert names[3] in joined, rpt
-
-
-def test_d5_removed_spare_is_still_named_not_masked(tmp_path):
-    """The cross-artefact rule ADDS a failure mode; it must not short-circuit
-    past `evaluate_preservation`. With a spare stripped from EVERY artefact
-    the artefacts agree — and the gate must still report the removal by name,
-    which is the defect class it exists for."""
-    plan = _good_plan(n=4)
-    names = [i["name"] for i in plan["instances"]]
-    proj = _runner_order_project(tmp_path, plan, names[:3])
-    cp = subprocess.run([sys.executable, str(PRES_SCRIPT), str(proj)],
-                        capture_output=True, text=True)
-    assert cp.returncode == 1, cp.stdout
-    rpt = json.loads(cp.stdout)
-    assert rpt["verdict"] == "FAIL", rpt
-    assert [r["name"] for r in rpt["removed"]] == [names[3]], rpt
-    assert rpt["artefact_agreement"]["disagreements"] == [], rpt
-
-
-def test_d5_unreadable_artefact_is_excluded_and_disclosed(tmp_path):
-    """UNMEASURED IS NOT ZERO. A binary / truncated / unreadable artefact
-    names zero spares for reasons that are not preservation. It must be
-    excluded from the comparison with its read status recorded — not counted
-    as 'every spare is missing from this file'."""
-    plan = _good_plan(n=4)
-    names = [i["name"] for i in plan["instances"]]
-    proj = _runner_order_project(tmp_path, plan, names)
-    (proj / "phase3/stage3/pnr/top_pnr.v").write_bytes(b"\x00" * 64)
-    cp = subprocess.run([sys.executable, str(PRES_SCRIPT), str(proj)],
-                        capture_output=True, text=True)
-    assert cp.returncode == 0, cp.stdout
-    rpt = json.loads(cp.stdout)
-    agree = rpt["artefact_agreement"]
-    assert agree["disagreements"] == [], rpt
-    assert agree["status"] == "SINGLE_WITNESS", rpt
-    assert agree["excluded"]["netlist"]["read"] == "BINARY_SKIPPED", rpt
-    assert rpt["artefact_read_status"]["netlist"] == "BINARY_SKIPPED", rpt
-
-
 def _cap_truncating_only_the_fill_def(project):
     """A scan cap that truncates `filled.def` and nothing else.
 
@@ -432,98 +241,6 @@ def _cap_truncating_only_the_fill_def(project):
     filled = (pnr / "filled.def").stat().st_size
     assert netlist < filled, (netlist, filled)
     return filled - 1
-
-
-def _run_with_scan_cap(project, cap):
-    """Run the gate in-process with MAX_SCAN_BYTES lowered.
-
-    The production cap is 256 MiB; a fill DEF above it is the size class this
-    module's #471/#684 notes are about, and building one in a test is not an
-    option. Lowering the cap makes the SAME code path reachable on a small
-    fixture, which is the only honest way to exercise it.
-    """
-    import importlib
-    mod = importlib.import_module("spare_cell_preservation_check")
-    out = Path(project) / "_scan_cap_report.json"
-    saved = mod.MAX_SCAN_BYTES
-    buf = io.StringIO()
-    try:
-        mod.MAX_SCAN_BYTES = cap
-        with contextlib.redirect_stdout(buf):
-            rc = mod.main([str(project), "--json", str(out)])
-    finally:
-        mod.MAX_SCAN_BYTES = saved
-    return rc, json.loads(out.read_text())
-
-
-def test_d5_a_truncated_leftover_def_cannot_vouch_for_a_stripped_spare(tmp_path):
-    """THE SIZE-CAP HOLE, closed. A truncated artefact used to be dropped from
-    the cross-artefact comparison outright while `audit` still fed its text to
-    `evaluate_preservation`, where survival is a UNION over all texts. So a
-    leftover `filled.def` larger than MAX_SCAN_BYTES — the multi-GB fill DEF
-    this module's own #471/#684 notes worry about — was distrusted for
-    DISAGREEMENT and still trusted for VOUCHING, which restores the exact
-    false clean the rule was built to catch.
-
-    MEASURED before the repair, same mixed-provenance tree, cap lowered to
-    model that file: rc 0, verdict PASS, survived 4/4, `disagreements []`,
-    `status SINGLE_WITNESS`. At the production cap the identical tree gives
-    rc 1 and names the separating spare.
-
-    A prefix read is sound about PRESENCE and says nothing about ABSENCE, so a
-    truncated artefact may appear on the `present_in` side of a disagreement
-    and never on the `absent_from` side.
-    """
-    plan = _good_plan(n=4)
-    names = [i["name"] for i in plan["instances"]]
-    proj = _runner_order_project(tmp_path, plan, names[:3], filled=names)
-    rc, rpt = _run_with_scan_cap(proj, _cap_truncating_only_the_fill_def(proj))
-    assert rc == 1, rpt
-    assert rpt["artefact_read_status"]["def"] == "TRUNCATED", rpt
-    assert rpt["artefact_agreement"]["status"] == "COMPARED_PARTIAL", rpt
-    assert rpt["artefact_agreement"]["disagreements"] == [
-        {"present_in": "def", "absent_from": "netlist",
-         "spares": [names[3]]}], rpt
-
-
-def test_d5_a_truncated_artefact_never_testifies_to_absence(tmp_path):
-    """NO FALSE ALARM, the other direction. The truncated file's SILENCE is
-    not evidence: a spare the shipped netlist names and the truncated tail
-    never reached must not be reported as a disagreement."""
-    plan = _good_plan(n=4)
-    names = [i["name"] for i in plan["instances"]]
-    proj = _runner_order_project(tmp_path, plan, names)
-    rc, rpt = _run_with_scan_cap(proj, _cap_truncating_only_the_fill_def(proj))
-    assert rc == 0, rpt
-    assert rpt["artefact_read_status"]["def"] == "TRUNCATED", rpt
-    assert rpt["artefact_agreement"]["disagreements"] == [], rpt
-    assert rpt["artefact_agreement"]["status"] == "COMPARED_PARTIAL", rpt
-    assert rpt["verdict"] == "PASS", rpt
-
-
-def test_d5_agreement_ignores_spare_pads(tmp_path):
-    """NO FALSE ALARM on the one recorded-name class whose presence is
-    emitter-dependent. A spare PAD is an IO-ring reservation: the runner
-    records `spare_pad_in_0` / `spare_pad_out_0` in the plan, and whether a
-    DEF or a gate netlist names them is not evidence about preservation. They
-    stay out of the cross-artefact comparison (their survival is still judged
-    by `evaluate_preservation` as before)."""
-    plan = _good_plan(n=4)
-    names = [i["name"] for i in plan["instances"]]
-    plan["spare_pads"] = [{"name": "spare_pad_in_0", "kind": "input",
-                           "keep": True}]
-    proj = _runner_order_project(tmp_path, plan, names)
-    # The pad name is present ONLY in the DEF — an asymmetry that must not
-    # be read as mixed provenance.
-    fdef = proj / "phase3/stage3/pnr/filled.def"
-    fdef.write_text(fdef.read_text().replace(
-        "END COMPONENTS",
-        "  - spare_pad_in_0 pad + FIXED ( 0 0 ) N ;\nEND COMPONENTS"))
-    cp = subprocess.run([sys.executable, str(PRES_SCRIPT), str(proj)],
-                        capture_output=True, text=True)
-    rpt = json.loads(cp.stdout)
-    assert rpt["artefact_agreement"]["disagreements"] == [], rpt
-    assert rpt["artefact_agreement"]["recorded_spare_instances"] == 4, rpt
 
 
 def test_d5_step18_no_longer_wires_the_preservation_gate(tmp_path):

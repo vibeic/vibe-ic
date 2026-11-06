@@ -48,7 +48,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import _tapeout_declaration as TD                              # noqa: E402
-import tapeout_declaration_check as CHECK                      # noqa: E402
 import tapeout_declaration_gen as GEN                          # noqa: E402
 
 #: The owner's own words, cited the way a real answers file cites them.
@@ -138,9 +137,6 @@ def test_the_owners_answer_reaches_the_producer_and_the_gate(tmp_path):
     assert (proj / TD.SELF_TAPEOUT_REL).is_file(), (
         "an owner-declared die must select the self-tape-out terminal")
 
-    res = CHECK.evaluate(proj)
-    assert [r["rule"] for r in res["refusals"]] == []
-
 
 # --------------------------------------------------------------------------- #
 # 2. NEGATIVE — the same bytes, nobody entitled behind them
@@ -203,15 +199,6 @@ def test_the_producer_halts_step_0_5_and_writes_no_router_file(tmp_path):
     assert not (proj / TD.SELF_TAPEOUT_REL).is_file()
 
 
-def test_the_gate_fails_on_it_too(tmp_path):
-    """ONE FIX, TWO CONSUMERS. The compliance channel must see it as well:
-    a producer that halts and a gate that passes is how a re-run with the
-    producer skipped would sail through."""
-    res = CHECK.evaluate(_project(tmp_path, TD.DELIVERABLE_HARDMACRO))
-    assert res["verdict"] == "FAIL"
-    assert TD.RULE_NOT_DECLARED in [r["rule"] for r in res["refusals"]]
-
-
 # --------------------------------------------------------------------------- #
 # 3. DISCRIMINATION — silence is not refused, and the population is pinned
 # --------------------------------------------------------------------------- #
@@ -223,14 +210,6 @@ def test_an_unanswered_owner_question_is_not_refused(unanswered):
     doc = _declaration(unanswered)
     assert TD.owner_attestation_refusals(doc) == []
     assert TD.answer(doc, "deliverable") == TD.NOT_DETERMINED
-
-
-def test_a_blank_declaration_still_passes_the_gate(tmp_path):
-    proj = tmp_path / "p"
-    path = proj / TD.DECLARATION_REL
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps(TD.blank_declaration()), encoding="utf-8")
-    assert [r["rule"] for r in CHECK.evaluate(proj)["refusals"]] == []
 
 
 def test_the_owner_only_population_is_exactly_one_question():

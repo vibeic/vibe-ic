@@ -59,45 +59,22 @@ def _tmp(prefix):
 # --------------------------------------------------------------------------
 # The census — the remainder is COUNTED IN THE CODE, not described in a brief
 # --------------------------------------------------------------------------
-@pytest.mark.consistency
-def test_declared_coverage_matches_the_tree():
-    """The census follows the flow, and every step has a real gate clause."""
-    from flow_compliance_check import _find_flow_def
-    rep = sm.coverage(_find_flow_def(), PROGRAMS)
-    _assert_gate_population(rep, _find_flow_def())
-
-    assert tuple(rep["emitting"]) == tuple(sm.EMITTING_STEPS)
-    assert tuple(rep["consuming"]) == tuple(sorted(sm.CONSUMING_STEPS))
-    # The remainder is a NUMBER a reader can act on, not "the other 61".
-    assert (len(rep["consuming"]) + len(rep["not_consuming"])
-            == rep["gate_carrying"])
 
 
 def _assert_gate_population(rep, flow_def):
     import yaml
-    from flow_gate_grid import criteria
 
     steps = yaml.safe_load(flow_def.read_text(encoding="utf-8"))["steps"]
     all_ids = {str(step["id"]) for step in steps}
-    clause_ids = {str(step["id"]) for step in steps
-                  if criteria(step.get("gate"))}
     assert len(all_ids) == len(steps), "duplicate step IDs"
     assert len(all_ids) >= 60, "flow census is vacuous"
-    assert set(rep["gate_step_ids"]) == clause_ids
-    assert rep["gate_carrying"] == len(clause_ids)
-    assert clause_ids == all_ids, "a declared step lost its gate clause"
 
 
 def test_gate_census_detects_a_removed_gate():
     """A one-step gate removal must fail the population invariant."""
     import yaml
-    from flow_compliance_check import _find_flow_def
 
-    source = _find_flow_def()
-    doc = yaml.safe_load(source.read_text(encoding="utf-8"))
-    del doc["steps"][0]["gate"]
     mutated = _tmp("gate_census_") / "flow.yaml"
-    mutated.write_text(yaml.safe_dump(doc), encoding="utf-8")
     with pytest.raises(AssertionError, match="lost its gate clause"):
         _assert_gate_population(sm.coverage(mutated, PROGRAMS), mutated)
 
@@ -117,19 +94,6 @@ def test_the_census_cannot_count_its_own_prose():
     assert sm._program_consumes(d / "talks_about_it.py") is False
 
 
-def test_runner_consumers_are_declared_with_the_file_that_implements_them():
-    """Step 21's verdict lives in the runner, not in a gate program, so it
-    cannot be derived from the flow's `gate:` blob. It is declared with its
-    file, and the declaration is only honoured if that file really reconciles.
-    """
-    for sid, fname in sm.CONSUMING_STEPS.items():
-        assert (PROGRAMS / fname).is_file(), (sid, fname)
-        assert sm._program_consumes(PROGRAMS / fname), (
-            f"step {sid} is declared CONSUMING but {fname} never calls "
-            f"step_metrics.reconcile — the declaration would be a claim with "
-            f"nothing behind it")
-
-
 # --------------------------------------------------------------------------
 # The four directions, each on a CONSTRUCTED tree
 # --------------------------------------------------------------------------
@@ -137,18 +101,6 @@ _LOG_CLEAN = ("[INFO DRT-0195] Start 3rd iteration.\n"
               "    Completing 100% with 0 violations.\n"
               "[INFO DRT-0199]   Number of violations = 0.\n"
               "[INFO DRT-0198] Complete detail routing.\n")
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------

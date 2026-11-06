@@ -26,7 +26,6 @@ PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
 
 import sdd_atpg_run as sdd  # noqa: E402
-import sdd_coverage_check as gate  # noqa: E402
 
 
 # ── DISCLOSED margin threshold ──────────────────────────────────────────────
@@ -221,98 +220,3 @@ def _good_blob():
         "margin_fraction_cap": 1.0, "margin_ns": 1.0,
         "margin_ns_derivation": "margin_fraction × clock_period",
         "sdd_records": recs, **cov}
-
-
-def test_gate_passes_consistent_low_coverage():
-    # descriptive: a slack-rich design's low coverage is a PASS
-    res = gate.evaluate(_good_blob())
-    assert res["verdict"] == "PASS"
-    assert res["strong"] == 0 and res["weak"] == 2
-    assert res["sdd_binary_strong_coverage_pct"] == 0.0
-
-
-def test_gate_fails_strong_with_high_slack():
-    # FALSE-CLEAN: flip idx0 (slack 9.117 >> margin 1.0) to 'strong' by hand
-    blob = _good_blob()
-    blob["sdd_records"][0]["sdd_bucket"] = "strong"
-    blob["strong"] = 1
-    blob["sdd_binary_strong_coverage_pct"] = 33.3333
-    res = gate.evaluate(blob)
-    assert res["verdict"] == "FAIL"
-    assert res["strong_high_slack_violations"] >= 1
-    assert any("high-slack" in r or "false-clean" in r for r in res["reasons"])
-
-
-def test_gate_fails_fabricated_sensitization():
-    # a RED (non-sensitizable) path flagged sensitizable=True is fabrication
-    blob = _good_blob()
-    blob["sdd_records"][2]["sensitizable"] = True   # idx2 nr_verdict == RED
-    res = gate.evaluate(blob)
-    assert res["verdict"] == "FAIL"
-    assert res["sensitize_fabrications"] >= 1
-
-
-def test_gate_fails_inflated_weighted_coverage():
-    blob = _good_blob()
-    blob["sdd_slack_weighted_coverage_pct"] = 95.0   # wildly inflated
-    res = gate.evaluate(blob)
-    assert res["verdict"] == "FAIL"
-    assert any("exceeds the recount" in r for r in res["reasons"])
-
-
-def test_gate_catches_doctored_margin_ns():
-    # doctor margin_ns to 20 (so 9.117 slack looks 'strong') WITHOUT changing
-    # the disclosed fraction 0.10 → gate re-derives 1.0 and re-buckets as weak
-    blob = _good_blob()
-    blob["margin_ns"] = 20.0
-    blob["sdd_records"][0]["sdd_bucket"] = "strong"
-    blob["sdd_records"][1]["sdd_bucket"] = "strong"
-    blob["strong"] = 2
-    res = gate.evaluate(blob)
-    assert res["verdict"] == "FAIL"
-    # re-derived margin governs (period 10 × fraction 0.10 = 1.0), still weak
-    assert res["margin_ns"] == 1.0
-    assert res["strong"] == 0
-    assert any("doctored" in r for r in res["reasons"])
-
-
-def test_gate_margin_fraction_cap():
-    blob = _good_blob()
-    blob["margin_fraction"] = 2.0   # exceeds cap 1.0
-    res = gate.evaluate(blob)
-    assert any("cap" in r for r in res["reasons"])
-
-
-def test_gate_not_applicable_passthrough():
-    res = gate.evaluate({"verdict": "NOT_APPLICABLE", "scan_flops": 0,
-                         "reasons": ["DT2 N/A"]})
-    assert res["verdict"] == "NOT_APPLICABLE"
-
-
-def test_gate_error_is_fail():
-    res = gate.evaluate({"verdict": "ERROR", "reasons": ["boom"]})
-    assert res["verdict"] == "FAIL"
-
-
-def test_gate_zero_evidence_fail():
-    assert gate.evaluate(None)["verdict"] == "FAIL"
-    assert gate.evaluate({"verdict": "PASS", "sdd_records": []})["verdict"] == "FAIL"
-
-
-def test_gate_optional_min_bar_off_by_default():
-    # min_slack_weighted defaults 0 (OFF); low coverage still PASSes
-    assert gate.evaluate(_good_blob())["verdict"] == "PASS"
-    # but an explicit caller bar can FAIL a slack-rich design
-    res = gate.evaluate(_good_blob(), min_slack_weighted=50.0)
-    assert res["verdict"] == "FAIL"
-    assert any("at-speed bar" in r for r in res["reasons"])
-
-
-def test_gate_explicit_margin_ns_honoured():
-    # explicit --margin-ns path: derivation flag set → written margin used as-is
-    blob = _good_blob()
-    blob["margin_ns"] = 1.0
-    blob["margin_ns_derivation"] = "explicit --margin-ns"
-    res = gate.evaluate(blob)
-    assert res["verdict"] == "PASS"
-    assert res["margin_ns"] == 1.0

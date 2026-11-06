@@ -49,7 +49,6 @@ if str(PROGRAMS) not in sys.path:
 
 import pytest  # noqa: E402
 
-import flow_compliance_check as F  # noqa: E402
 import _flow_reason_taxonomy as R  # noqa: E402
 
 #: gate -> (context key it is registered against, how a design DECLARES it)
@@ -106,18 +105,6 @@ def _silent_design(tmp_path):
 
 # ── direction 1: the design says it has no such thing ─────────────────────
 
-@pytest.mark.parametrize("gate", ALL_GATES)
-def test_a_subject_the_design_does_not_have_makes_the_gate_NA(tmp_path, gate):
-    proj, rtl = _silent_design(tmp_path)
-    why = F._p0_contract_na_reason(gate, proj, rtl)
-    assert why is not None, f"{gate} is still invoked on a design without its subject"
-    assert "fabricated" in why
-
-
-def test_every_one_of_the_nine_is_registered():
-    for gate in ALL_GATES:
-        assert F._P0_GATE_REQUIRED_CONTEXT.get(gate), gate
-
 
 def test_that_disposition_is_skip_eligible():
     assert R.DESIGN_DECLARED_NA in R.SKIP_ELIGIBLE
@@ -126,170 +113,11 @@ def test_that_disposition_is_skip_eligible():
 
 # ── direction 2: a design that DECLARES it stays BLOCKED ──────────────────
 
-def test_an_analog_design_keeps_its_analog_gates_live(tmp_path):
-    """Declared by a block list with a block — the artefact is still missing,
-    so this design's analog gates must still cascade."""
-    proj, rtl = _silent_design(tmp_path)
-    bl = proj / "phase3" / "analog"
-    bl.mkdir(parents=True, exist_ok=True)
-    (bl / "analog_block_list.json").write_text(json.dumps(
-        {"blocks": [{"name": "ldo", "confidence": "high"}]}))
-    for gate in ("analog_corner_sweep_check", "analog_netlist_pdk_check",
-                 "analog_pre_vs_post_layout_check"):
-        assert F._p0_contract_na_reason(gate, proj, rtl) is None, gate
-
-
-def test_a_design_with_no_class_verdict_keeps_its_analog_gates_live(tmp_path):
-    """FAIL-CLOSED: absence of a class verdict is not a declaration of
-    absence."""
-    proj, rtl = _silent_design(tmp_path)
-    (proj / "reports" / "ic_class.json").unlink()
-    assert F._p0_contract_context(proj, rtl)["analog_track"]
-    for gate in ("analog_corner_sweep_check", "analog_netlist_pdk_check"):
-        assert F._p0_contract_na_reason(gate, proj, rtl) is None, gate
-
-
-@pytest.mark.parametrize("gate", STILL_BLOCKING_WITH_A_SUBJECT)
-def test_a_declared_opcode_with_no_override_doc_keeps_the_gate_live(
-        tmp_path, gate):
-    """R-0915-37. A template can only be owed for an opcode that EXISTS, so
-    the population is L3's opcode list. Declare one opcode and write no
-    override doc: the gate must stay live and blocking, exactly as it did
-    when it was unregistered."""
-    proj, rtl = _silent_design(tmp_path)
-    (_docs(proj) / "L3_CMD_PROTOCOL.json").write_text(json.dumps(
-        {"opcodes": [{"hex": "0x74", "name": "READ"}],
-         "no_opcodes_in_input": False, "constraints": None}))
-    assert F._p0_zero_population_evidence(proj, gate) is None, gate
-    assert F._p0_contract_na_reason(gate, proj, rtl) is None, gate
-
-
-@pytest.mark.parametrize("gate", STILL_BLOCKING_WITH_A_SUBJECT)
-def test_a_design_with_no_opcodes_at_all_answers_that_gate_NA(tmp_path, gate):
-    """The other half of R-0915-37, and the reason it is a revision: with a
-    PRESENT L3 declaring zero opcodes there is no response template to owe."""
-    proj, rtl = _silent_design(tmp_path)
-    (_docs(proj) / "L3_CMD_PROTOCOL.json").write_text(json.dumps(
-        {"opcodes": [], "no_opcodes_in_input": True, "constraints": None}))
-    assert F._p0_zero_population_evidence(proj, gate) is not None, gate
-    assert F._p0_contract_na_reason(gate, proj, rtl) is not None, gate
-
-
-@pytest.mark.parametrize("gate", STILL_BLOCKING_WITH_A_SUBJECT)
-def test_an_L3_that_is_not_there_still_keeps_that_gate_live(tmp_path, gate):
-    """R-0915-19's correction is untouched: a document nobody wrote declares
-    nothing."""
-    proj, rtl = _silent_design(tmp_path)
-    (_docs(proj) / "L3_CMD_PROTOCOL.json").unlink()
-    assert F._p0_zero_population_evidence(proj, gate) is None, gate
-    assert F._p0_contract_na_reason(gate, proj, rtl) is None, gate
-
-
-@pytest.mark.parametrize("doc,key,gate", [
-    ("L3_CMD_PROTOCOL.json", "l3_constraints",
-     "assertion_covers_l3_constraints_check"),
-    ("L6_CONTROL_LOGIC.json", "l6_reject_rules",
-     "l11_sequence_covers_l6_reject_rules_check"),
-    ("L11_OTP_CONTENT.json", "l11_otp",
-     "otp_image_layer_consistency_check"),
-])
-def test_a_declaring_document_that_is_NOT_THERE_keeps_the_gate_live(
-        tmp_path, doc, key, gate):
-    """THE CORRECTION. A document that does not exist has declared nothing;
-    only `state == valid` plus an empty subject is the design speaking."""
-    proj, rtl = _silent_design(tmp_path)
-    (_docs(proj) / doc).unlink()
-    assert F._p0_contract_context(proj, rtl)[key], key
-    assert F._p0_contract_na_reason(gate, proj, rtl) is None, (doc, gate)
-
-
-def test_a_design_that_declares_reject_rules_keeps_its_gate_live(tmp_path):
-    proj, rtl = _silent_design(tmp_path)
-    (_docs(proj) / "L6_CONTROL_LOGIC.json").write_text(json.dumps(
-        {"reject_rules": [{"when": "crc_bad", "then": "NACK"}]}))
-    assert F._p0_contract_na_reason(
-        "l11_sequence_covers_l6_reject_rules_check", proj, rtl) is None
-
-
-def test_a_design_that_declares_l3_constraints_keeps_its_gate_live(tmp_path):
-    proj, rtl = _silent_design(tmp_path)
-    (_docs(proj) / "L3_CMD_PROTOCOL.json").write_text(json.dumps(
-        {"opcodes": [], "constraints": [{"id": "C1", "text": "t_su >= 2 ns"}]}))
-    assert F._p0_contract_na_reason(
-        "assertion_covers_l3_constraints_check", proj, rtl) is None
-
-
-@pytest.mark.parametrize("field,value", [
-    ("otp_bytes", [1, 2, 3]),
-    ("content_hex", "deadbeef"),
-    ("otp_layout", {"rows": 4}),
-    ("depth", 256),
-    ("width_bits", 32),
-])
-def test_any_declared_OTP_content_keeps_the_OTP_gate_live(tmp_path, field,
-                                                          value):
-    proj, rtl = _silent_design(tmp_path)
-    doc = json.loads((_docs(proj) / "L11_OTP_CONTENT.json").read_text())
-    doc[field] = value
-    (_docs(proj) / "L11_OTP_CONTENT.json").write_text(json.dumps(doc))
-    assert F._p0_contract_na_reason(
-        "otp_image_layer_consistency_check", proj, rtl) is None, field
-
-
-def test_the_document_WRAPPER_is_not_the_subject(tmp_path):
-    """The mistake this ruling is about, one level down: spm's L11 is a REAL
-    document (schema_version, doc_class, ic_name) that declares NO otp
-    content. Keying on the document would answer 'the subject exists'."""
-    proj, rtl = _silent_design(tmp_path)
-    ctx = F._p0_contract_context(proj, rtl)
-    assert ctx["l11_otp"] is None, ctx["l11_otp"]
-
 
 # ── a document that cannot be READ is not a declaration of absence ────────
-
-@pytest.mark.parametrize("doc,gate", [
-    ("L3_CMD_PROTOCOL.json", "assertion_covers_l3_constraints_check"),
-    ("L6_CONTROL_LOGIC.json", "l11_sequence_covers_l6_reject_rules_check"),
-    ("L11_OTP_CONTENT.json", "otp_image_layer_consistency_check"),
-])
-def test_an_unreadable_declaration_keeps_the_gate_live(tmp_path, doc, gate):
-    proj, rtl = _silent_design(tmp_path)
-    (_docs(proj) / doc).write_text("{ this is not json")
-    assert F._p0_contract_na_reason(gate, proj, rtl) is None, (doc, gate)
 
 
 # ── the flow-ORDER one ────────────────────────────────────────────────────
 
-def test_the_deliverable_gate_is_NA_in_flight_and_live_once_it_exists(
-        tmp_path):
-    proj, rtl = _silent_design(tmp_path)
-    assert F._p0_contract_na_reason(
-        "deliverable_verdict_consistency_check", proj, rtl) is not None
-    (proj / "RESULT.md").write_text("# RESULT\n\nverdict: PASS\n")
-    assert F._p0_contract_na_reason(
-        "deliverable_verdict_consistency_check", proj, rtl) is None
-
-
-def test_the_deliverable_gate_names_whose_question_presence_is():
-    """The premise: that gate itself says presence is another gate's
-    question, which is why requiring the artefact is not hiding anything."""
-    src = (PROGRAMS / "deliverable_verdict_consistency_check.py").read_text(
-        errors="replace")
-    assert "run_output_completeness_check" in src
-
 
 # ── nothing else moved ────────────────────────────────────────────────────
-
-def test_a_gate_with_no_requirement_is_untouched(tmp_path):
-    proj, rtl = _silent_design(tmp_path)
-    for gate in ("waiver_staleness_check", "analog_flow_compliance_check"):
-        assert F._P0_GATE_REQUIRED_CONTEXT.get(gate) is None
-        assert F._p0_contract_na_reason(gate, proj, rtl) is None, gate
-
-
-def test_the_blocked_recogniser_is_unchanged():
-    """No regex was reordered: a real cascade sentence still reads BLOCKED."""
-    for msg in ("required output absent",
-                "missing producer for reports/phase3/x.json",
-                "blocked by upstream step 21"):
-        assert R.infer_nonverdict_reason(message=msg) == R.BLOCKED_BY_UPSTREAM

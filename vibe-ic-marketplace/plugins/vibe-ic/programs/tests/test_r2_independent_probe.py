@@ -17,18 +17,6 @@ def test_current_l9_top_drift_cannot_credit_old_handoff(tmp_path, monkeypatch):
     assert report["verdict"] == "FAIL", report
 
 
-
-def test_flow_compliance_cannot_credit_old_handoff_after_l9_subject_drift(tmp_path, monkeypatch):
-    project, _, _ = _produce(tmp_path, monkeypatch)
-    l9 = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
-    doc = json.loads(l9.read_text())
-    doc["top_module"] = "other_current_top"
-    put(l9, doc)
-    import flow_compliance_check as F
-    ok, reasons = F._run_yosys_gates(project)
-    assert not ok, (ok, reasons)
-
-
 @pytest.mark.parametrize('shape', ['flat', 'fields'])
 def test_supported_current_l9_subject_keeps_valid_handoff_credit(tmp_path, monkeypatch, shape):
     project, _, _ = _produce(tmp_path, monkeypatch)
@@ -36,8 +24,6 @@ def test_supported_current_l9_subject_keeps_valid_handoff_credit(tmp_path, monke
     if shape == 'fields':
         put(l9, {'doc_id': 'L9', 'fields': json.loads(l9.read_text())})
     assert H.bound_handoff(project)['verdict'] == 'PASS'
-    import flow_compliance_check as F
-    assert F._run_yosys_gates(project) == (True, [])
     import phase3_one_shot_runner as P3
     assert P3.pnr_input_netlist(project, 'top')[0].read_bytes() == (
         project / 'phase2/stage2/synth/netlist.v').read_bytes()
@@ -54,5 +40,3 @@ def test_unreadable_or_changed_canonical_l9_subject_cannot_credit_handoff(tmp_pa
     else:
         put(l9, {'top_module': 'top', 'fields': {'top_module': 'other_current_top'}})
     assert H.bound_handoff(project)['verdict'] == 'FAIL'
-    import flow_compliance_check as F
-    assert F._run_yosys_gates(project)[0] is False

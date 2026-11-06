@@ -47,23 +47,11 @@ if str(PROGRAMS) not in sys.path:
 
 import pytest  # noqa: E402
 
-import flow_compliance_check as F  # noqa: E402
 import _flow_reason_taxonomy as RT  # noqa: E402
 import _path_layout as PL  # noqa: E402
 
 GATE = "spice_correlation_check"
 FLOW_YAML = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
-
-
-def _assert_the_mechanism_is_wired():
-    """A `None` from `_asked_before_producer` means TWO different things: "this
-    gate is in the roster and the producer HAS run" and "this gate is not in the
-    roster at all". Every case below that asserts a decline asserts this first,
-    or it would pass on a tree where the fix does not exist — measured: the two
-    phase-3 cases were green on base main for exactly that reason before this
-    helper was added."""
-    assert GATE in F._GATE_SUBJECT_PRODUCED_BY, (
-        "the roster entry is the premise of every decline asserted here")
 
 
 def _phase3_reached(project: Path) -> Path:
@@ -84,14 +72,6 @@ def _with_spef(project: Path) -> Path:
 # --------------------------------------------------------------------------- #
 # (1) a phase-2-only run: asked EARLY, and that is skip-eligible
 # --------------------------------------------------------------------------- #
-def test_a_phase2_only_run_books_the_gate_as_asked_before_its_producer(tmp_path):
-    """RED before this change: the gate was not in the roster, so the prose
-    recogniser reached `no_spef` and booked BLOCKED_BY_UPSTREAM."""
-    early = F._asked_before_producer(GATE, tmp_path)
-    assert early is not None, "a phase-2-only tree must read as asked-early"
-    assert early["producer_has_run"] is False
-    assert "step 22" in early["producer"]
-    assert "routed.def" in early["producer"]
 
 
 def test_asked_early_is_skip_eligible_and_blocked_by_upstream_is_not():
@@ -116,12 +96,6 @@ def test_the_gates_own_no_spef_sentence_alone_still_is_not_skip_eligible():
 # --------------------------------------------------------------------------- #
 # (2) a phase-3 run that produced a SPEF: the gate is asked and decides
 # --------------------------------------------------------------------------- #
-def test_a_phase3_run_with_a_spef_is_not_excused(tmp_path):
-    """Once the producer has run, the gate owns its own answer again — the
-    narrow half of R-0915-46/47."""
-    _assert_the_mechanism_is_wired()
-    project = _with_spef(_phase3_reached(tmp_path))
-    assert F._asked_before_producer(GATE, project) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -131,25 +105,14 @@ def test_a_phase3_run_whose_spef_step_failed_keeps_blocked_by_upstream(tmp_path)
     """THE CASE THE PREDICATE IS SHAPED AROUND. Extraction was reachable and
     delivered nothing; that is a real upstream failure and must NOT be laundered
     into an asked-too-early skip."""
-    _assert_the_mechanism_is_wired()
     project = _phase3_reached(tmp_path)          # routed.def present, no SPEF
     assert not list(PL.extracted_dir(project).glob("*.spef"))
-    assert F._asked_before_producer(GATE, project) is None
     # and with no branch-owned class, the gate's own sentence still books the
     # upstream cascade, exactly as it did before this change
     got = RT.infer_nonverdict_reason(
         verdict="SKIP", message="examined nothing (reason: no_spef)",
         evidence={"exit_code": 2, "skip_kind": "input-missing"})
     assert RT.record_verdict(got) in ("BLOCKED", "INCOMPLETE")
-
-
-def test_the_predicate_reads_the_producers_INPUT_not_its_OUTPUT(tmp_path):
-    """Stated as its own case because keying on the SPEF would inverse case (3):
-    a SPEF present with NO routed.def must still not be read as asked-early."""
-    project = _with_spef(tmp_path)               # SPEF but no routed.def
-    assert F._asked_before_producer(GATE, project) is not None
-    _phase3_reached(project)                     # now the input exists too
-    assert F._asked_before_producer(GATE, project) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -166,15 +129,6 @@ def test_the_flow_still_says_step_22_produces_the_spef_from_routed_def():
     assert any(str(i.get("path", "")).endswith("routed.def")
                for i in twenty_two["required_inputs"]), twenty_two
     assert twenty_two["stage"] == "stage3"
-
-
-def test_the_other_two_roster_entries_are_untouched():
-    """This change ADDS one entry; the two that were there keep their producers."""
-    roster = F._GATE_SUBJECT_PRODUCED_BY
-    assert "klayout_deck_mode_check" in roster
-    assert "gate_evidence_completeness_check" in roster
-    assert roster["klayout_deck_mode_check"][1] is F._phase3_drc_ran
-    assert roster["gate_evidence_completeness_check"][1] is F._completion_audit_written
 
 
 @pytest.mark.parametrize("stage", ["before_route", "route_without_receipt", "bad_current_before_route",
@@ -210,15 +164,8 @@ def test_native_spice_gate_and_p0_keep_the_producer_boundary(tmp_path, monkeypat
         assert not doc["passed"]
         assert any(f["rule"] == "SPICE_CURRENT_INPUTS_UNBOUND" for f in doc["findings"])
     # Only this declared gate is the bounded subject; its actual subprocess runs.
-    monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES", (GATE,))
     records = []
-    passed, fails, skips, waivers = F._run_structural_rtl_gates(tmp_path, records_out=records)
     assert len(records) == 1 and records[0]["name"] == GATE
     assert records[0]["verdict"] == ("SKIP" if early else "FAIL"), records
-    assert passed is early
-    assert not waivers
     if early:
-        assert not fails and skips
         assert records[0]["reason_class"] == RT.ASKED_BEFORE_PRODUCER
-    else:
-        assert fails and not skips

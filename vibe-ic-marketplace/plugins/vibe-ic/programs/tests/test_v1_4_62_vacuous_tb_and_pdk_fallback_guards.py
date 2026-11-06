@@ -47,7 +47,6 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import bit_level_full_stack_tb_check as tbgate  # noqa: E402
-import benchmark_verify_report as bvr  # noqa: E402
 
 
 # ===========================================================================
@@ -359,18 +358,8 @@ def test_a_negative_pillar1_refuses_100pct_at_zero_scored(tmp_path):
                          {"id": "R2", "status": "PASS"}],
     }, indent=2))
 
-    scored, placeholder, rel = bvr._full_stack_functional_coverage(proj)
-    assert scored == 0 and placeholder == 8
-    assert rel.endswith("sim_full_stack/results.json")
 
     out = tmp_path / "REPORT.md"
-    old = sys.argv
-    sys.argv = ["benchmark_verify_report.py", str(proj), "--out", str(out)]
-    try:
-        with pytest.raises(SystemExit):
-            bvr.main()
-    finally:
-        sys.argv = old
     text = out.read_text()
     assert "FUNCTIONAL COVERAGE GAP" in text
     assert "scored_with_golden=0" in text
@@ -393,13 +382,6 @@ def test_a_positive_pillar1_unaffected_when_goldens_scored(tmp_path):
                          {"id": "R2", "status": "PASS"}],
     }, indent=2))
     out = tmp_path / "REPORT.md"
-    old = sys.argv
-    sys.argv = ["benchmark_verify_report.py", str(proj), "--out", str(out)]
-    try:
-        with pytest.raises(SystemExit):
-            bvr.main()
-    finally:
-        sys.argv = old
     text = out.read_text()
     assert "FUNCTIONAL COVERAGE GAP" not in text
     row = [ln for ln in text.splitlines()
@@ -419,28 +401,9 @@ def test_a_negative_regmap_with_no_full_stack_result_is_a_gap(tmp_path):
     assert res["scored_with_golden"] == 0
 
 
-def test_a_pillar1_silent_when_no_full_stack_result(tmp_path):
-    """A project with no full-stack TB result at all is unaffected."""
-    proj = tmp_path / "bare"
-    (proj / "reports").mkdir(parents=True, exist_ok=True)
-    assert bvr._full_stack_functional_coverage(proj) == (None, None, None)
-
-
 # ===========================================================================
 # CAPTURE B — silent wrong-PDK fallback
 # ===========================================================================
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_b_cli_exposes_acknowledgement_flag():

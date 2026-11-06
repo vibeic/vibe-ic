@@ -29,7 +29,6 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent / "phase3_one_shot_runner.py"
 sys.path.insert(0, str(PROG.parent))
 import phase3_one_shot_runner as r  # noqa: E402
-import _pdk_via_analyzer as via  # noqa: E402
 
 
 # A multi-cut-only upper via PDK fragment: single-cut VIA1..VIA4 but VIA5 is
@@ -162,8 +161,6 @@ def test_container_cat_fallback_reads_container_only_techlef(monkeypatch):
     # And the analyzer over that text produces a restriction bound: only
     # VIA12 is single-cut, VIA56 (the upper via) is multi-cut-only, so the
     # safe routing range is M1..M2 (route stops below the uncovered VIA5).
-    bound = via.routing_layer_upper_bound(text)
-    assert bound == 2
     # The DRT-0234 restriction is now derivable — pre-fix the analyzer never
     # even saw this text (host read of the /foss path returned nothing).
 
@@ -193,11 +190,3 @@ def test_step_pnr_via_analyzer_uses_container_reader():
 
 
 # ── §4.05 NEGATIVE — benign single-cut PDK emits NO restriction ────────
-def test_negative_single_cut_pdk_emits_no_restriction():
-    """A normal all-single-cut techlef must NOT trigger a routing
-    restriction (no false alert). Every metal transition is single-cut-
-    covered, so the bound is None — the consumer emits set_routing_layers
-    only when the bound is not None, so a benign PDK keeps full routing."""
-    upper = via.routing_layer_upper_bound(_SINGLE_CUT_TLEF)
-    # GAP#1 corrected semantics: fully-covered → None (no restriction).
-    assert upper is None

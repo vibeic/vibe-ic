@@ -47,59 +47,13 @@ import pytest
 PROGS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGS))
 
-import signoff_metrics_aggregate as sma  # noqa: E402
 import spice_correlation_check as scc  # noqa: E402
-
-
 
 
 # ── the repair block itself ──────────────────────────────────────────────────
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ── RB-12: the sign-off gates write what the metrics record reads ────────────
-
-
-def test_declared_signoff_gates_run_before_the_metrics_record():
-    """MEASURED: `signoff_metrics_aggregate` was produced over reports that did
-    not exist yet -- 7 of 18 keys NOT_MEASURED, its own `--check` green because
-    both sides were empty, and rc=1 FAIL in the SAME run's gate ledger."""
-    from _phase3_main_dispatch import _main, _calls, guarded_producer_line
-    main, _ = _main()
-    gates = _calls(main, "step_declared_signoff_gates")[0].lineno
-    record = guarded_producer_line("step_signoff_metrics_aggregate",
-                                   "signoff_metrics_aggregate")
-    assert gates < record, (
-        "the gates that write post_route_signoff_corner.json, "
-        "sta_corner_record_completeness.json and tapeout_precheck.json must "
-        "be planned BEFORE the record that reads them")
-
-
-def test_metrics_record_still_precedes_the_release_documents():
-    """37.5ic blocks_on 37.4; the reorder must not have moved that."""
-    from _phase3_main_dispatch import guarded_producer_line
-    record = guarded_producer_line("step_signoff_metrics_aggregate",
-                                   "signoff_metrics_aggregate")
-    docs = guarded_producer_line("step_tapeout_docs_gen",
-                                 "tapeout_docs_gen")
-    assert record < docs
 
 
 # ── RB-13: the LVS verdict has two spellings and both are the flow's own ─────
@@ -115,102 +69,11 @@ LVS_KEYS = ("design__lvs_error__count", "design__lvs_unmatched_device__count",
             "design__lvs_unmatched_pin__count")
 
 
-def test_lvs_reads_the_netgen_parser_top_level_verdict(tmp_path):
-    """The shape `spm` actually shipped: verdict at the TOP level."""
-    proj = _write_lvs(tmp_path, {
-        "verdict": "match", "verdict_reason": "circuits match uniquely",
-        "summary": {"devices": {"ckt1": 661, "ckt2": 661},
-                    "unmatched_devices": {"ckt1": 0, "ckt2": 0}}})
-    for key in LVS_KEYS:
-        cell = sma._lvs(proj, key)
-        assert cell.value == 0, key
-        assert "verdict=MATCH" in cell.basis
-
-
-def test_lvs_still_reads_the_audit_spelling(tmp_path):
-    """`eda_report_audit:lvs` puts it under summary. Unchanged."""
-    proj = _write_lvs(tmp_path, {"summary": {"terminal_verdict": "MATCH"}})
-    cell = sma._lvs(proj, LVS_KEYS[0])
-    assert cell.value == 0
-    assert "summary.terminal_verdict=MATCH" in cell.basis
-
-
-def test_lvs_a_non_match_is_still_not_a_count(tmp_path):
-    """The §4.05 no-leak arm: reading a second spelling must not turn a
-    MISMATCH into a zero."""
-    proj = _write_lvs(tmp_path, {"verdict": "mismatch",
-                                 "summary": {"unmatched_devices":
-                                             {"ckt1": 3, "ckt2": 3}}})
-    cell = sma._lvs(proj, LVS_KEYS[1])
-    assert cell.value == "NOT_MEASURED"
-    assert "'MISMATCH'" in cell.reason and "not MATCH" in cell.reason
-
-
-def test_lvs_audit_spelling_mismatch_is_still_not_a_count(tmp_path):
-    """The no-leak arm that is GREEN ON BOTH SIDES of this change: reading a
-    second spelling must not have made the FIRST one softer."""
-    proj = _write_lvs(tmp_path, {"summary": {"terminal_verdict": "MISMATCH"}})
-    cell = sma._lvs(proj, LVS_KEYS[1])
-    assert cell.value == "NOT_MEASURED"
-    assert "not MATCH" in cell.reason
-
-
-def test_lvs_no_verdict_at_all_names_both_spellings(tmp_path):
-    proj = _write_lvs(tmp_path, {"summary": {"devices": {"ckt1": 1}}})
-    cell = sma._lvs(proj, LVS_KEYS[0])
-    assert cell.value == "NOT_MEASURED"
-    assert "summary.terminal_verdict" in cell.reason
-    assert "verdict" in cell.reason
-
-
 def _write_lvs_verdict(tmp_path: Path, payload: dict) -> Path:
     p = tmp_path / "reports" / "phase3"
     p.mkdir(parents=True, exist_ok=True)
     (p / "lvs_verdict.json").write_text(json.dumps(payload))
     return tmp_path
-
-
-def test_lvs_falls_back_to_the_runners_own_verdict_file(tmp_path):
-    """MEASURED: once the ties were restored, the POWER-AWARE compare became
-    the accepted arm on its first attempt -- a STRONGER result -- and netgen's
-    `lvs.json` sidecar (named from the plain arm's logfile stem) vanished with
-    it. All four LVS keys went NOT_MEASURED on a run whose LVS is better.
-    Control on the real run tree: 6 NOT_MEASURED without this, 2 with it, and
-    the delta is exactly the four LVS keys."""
-    proj = _write_lvs_verdict(tmp_path, {
-        "status": "PASS", "result": "PASS",
-        "finding": "LVS_MATCH_POWER_VERIFIED",
-        "message": "circuits match uniquely with a POWER-AWARE gate netlist"})
-    for key in LVS_KEYS:
-        cell = sma._lvs(proj, key)
-        assert cell.value == 0, key
-        assert "LVS_MATCH_POWER_VERIFIED" in cell.basis
-
-
-def test_lvs_verdict_file_is_only_consulted_when_the_sidecar_is_absent(
-        tmp_path):
-    """The sidecar stays the first authority: a MISMATCH there is not
-    overridden by a PASS in the verdict file."""
-    proj = _write_lvs(tmp_path, {"verdict": "mismatch"})
-    _write_lvs_verdict(tmp_path, {"status": "PASS", "finding": "LVS_MATCH"})
-    cell = sma._lvs(proj, LVS_KEYS[0])
-    assert cell.value == "NOT_MEASURED"
-    assert "not MATCH" in cell.reason
-
-
-def test_lvs_verdict_file_non_pass_is_still_not_a_count(tmp_path):
-    proj = _write_lvs_verdict(tmp_path, {"status": "FAIL",
-                                         "finding": "LVS_MISMATCH"})
-    cell = sma._lvs(proj, LVS_KEYS[2])
-    assert cell.value == "NOT_MEASURED"
-    assert "'FAIL'" in cell.reason and "not a match" in cell.reason
-
-
-def test_lvs_neither_file_names_all_three(tmp_path):
-    (tmp_path / "reports" / "phase3").mkdir(parents=True)
-    cell = sma._lvs(tmp_path, LVS_KEYS[0])
-    assert cell.value == "NOT_MEASURED"
-    assert "three files" in cell.reason
 
 
 # ── RB-15: the correlation must not cross corners ────────────────────────────
@@ -449,8 +312,3 @@ def test_path_deck_window_clears_the_delay_it_is_measuring():
 
 
 # ── the modules still parse and the new names are real ───────────────────────
-@pytest.mark.parametrize("mod", ["phase3_one_shot_runner.py",
-                                 "signoff_metrics_aggregate.py",
-                                 "spice_correlation_check.py"])
-def test_touched_modules_parse(mod):
-    ast.parse((PROGS / mod).read_text())

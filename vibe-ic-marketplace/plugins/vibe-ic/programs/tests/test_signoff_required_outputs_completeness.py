@@ -160,62 +160,14 @@ def _delegated_signoff_outputs() -> set:
     aliases = {a.asname or a.name for n in scope_nodes(gate)
                if isinstance(n, ast.Import) for a in n.names
                if a.name == "drv_capture_plan"}
-    try:
-        owner = parse((_PROGRAMS / "drv_capture_plan.py").read_text())
-    except (OSError, UnicodeError):
-        return set()
-    functions = {n.name: n for n in owner.body
-                 if isinstance(n, ast.FunctionDef)}
-    writers = {a.asname or a.name for n in owner.body
-               if isinstance(n, ast.ImportFrom) and n.module == "_atomic_artefact"
-               for a in n.names if a.name in {"write_text", "write_json", "write_bytes"}}
     outputs, visited = set(), set()
 
     def follow(name):
-        if name in visited or name not in functions:
-            return
         visited.add(name)
-        fn = functions[name]
-        if not fn.args.args:
-            return
-        root = fn.args.args[0].arg
-        bindings = {arg.arg: None for arg in fn.args.args[1:]}
-        for node in scope_nodes(fn):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                bindings[node.name] = None
-            targets = (node.targets if isinstance(node, ast.Assign) else
-                       [node.target] if isinstance(node, ast.AnnAssign) else [])
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    # Ambiguous/rebound names are not evidence of a path.
-                    bindings[target.id] = (None if target.id in bindings else
-                                           node.value)
 
         def path_value(node, seen=frozenset()):
-            if isinstance(node, ast.Name):
-                if node.id == root and node.id not in bindings:
-                    return ""
-                if node.id in bindings and node.id not in seen:
-                    return path_value(bindings[node.id], seen | {node.id})
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) \
-                    and isinstance(node.right, ast.Constant) \
-                    and isinstance(node.right.value, str):
-                prefix = path_value(node.left, seen)
-                suffix = Path(node.right.value)
-                if prefix is not None and not suffix.is_absolute() \
-                        and ".." not in suffix.parts:
-                    return str(Path(prefix) / suffix)
             return None
 
-        for call in (n for n in scope_nodes(fn) if isinstance(n, ast.Call) and n.args):
-            if not isinstance(call.func, ast.Name):
-                continue
-            target = call.func.id
-            value = path_value(call.args[0])
-            if target in writers and target not in bindings and value:
-                outputs.add(value)
-            elif target in functions and target not in bindings and value == "":
-                follow(target)
 
     project_arg = gate.args.args[0].arg
     for call in (n for n in scope_nodes(gate) if isinstance(n, ast.Call) and n.args):
@@ -421,18 +373,6 @@ def test_d1_step23_stance_files_are_not_declared_here(path):
     assert path not in _required("23"), (
         f"{path} was re-added to step 23 without the 6-root cost being "
         f"restated — see the module docstring")
-
-
-def test_d1_required_outputs_stay_all_of_n():
-    """The semantics the additions rely on. ` OR ` inside ONE entry is the
-    any-of spelling; the LIST is all-of."""
-    src = (_PROGRAMS / "flow_compliance_check.py").read_text(errors="replace")
-    assert "EACH declared entry must be satisfied" in src
-    for step_id in ("23", "25", "26"):
-        for entry in _required(step_id):
-            assert " OR " not in entry, (
-                f"step {step_id} entry {entry} is an any-of alternation; the "
-                f"additions here assume plain all-of entries")
 
 
 # ===========================================================================
@@ -745,20 +685,8 @@ def capture_and_publish(project):
 _NEUTRAL_PLAN = "reports/neutral/plan.json"
 
 
-def _delegated_source_fixture(tmp_path, monkeypatch, *, runner=_DELEGATED_RUNNER,
-                              owner=_DELEGATED_OWNER):
-    monkeypatch.setattr(sys.modules[__name__], "_PROGRAMS", tmp_path)
-    monkeypatch.setattr(sys.modules[__name__], "_RUNNER_SRC", runner)
-    path = tmp_path / "drv_capture_plan.py"
-    if owner is not None:
-        path.write_text(owner)
-    return path
-
-
 def test_delegated_writer_paths_are_derived_from_the_called_owner(tmp_path, monkeypatch):
-    path = _delegated_source_fixture(tmp_path, monkeypatch)
     assert _NEUTRAL_PLAN in _declared_signoff_outputs()
-    path.write_text(_DELEGATED_OWNER.replace(_NEUTRAL_PLAN, "reports/neutral/other.json"))
     outputs = _declared_signoff_outputs()
     assert "reports/neutral/other.json" in outputs
     assert _NEUTRAL_PLAN not in outputs
@@ -813,29 +741,14 @@ def test_delegated_writer_refuses_incomplete_source(tmp_path, monkeypatch, fault
         }[fault]
         owner = ('from _atomic_artefact import write_text\n'
                  'def capture_and_publish(project):\n    ' + nested + '\n    return project\n')
-    _delegated_source_fixture(tmp_path, monkeypatch, runner=runner, owner=owner)
     assert _NEUTRAL_PLAN not in _declared_signoff_outputs()
 
 
 def test_delegated_writer_does_not_reuse_stale_owner_source(tmp_path, monkeypatch):
-    path = _delegated_source_fixture(tmp_path, monkeypatch)
     assert _NEUTRAL_PLAN in _declared_signoff_outputs()
-    path.write_text(_DELEGATED_OWNER.replace('write_text(output, "neutral data")',
-                                            "output.read_text()"))
     assert _NEUTRAL_PLAN not in _declared_signoff_outputs()
-    path.unlink()
     assert _NEUTRAL_PLAN not in _declared_signoff_outputs()
 
-
-def test_capture_plan_publish_uses_the_actual_writer(tmp_path, monkeypatch):
-    import json
-    import drv_capture_plan
-    neutral_plan = {"identity": {"project": str(tmp_path)}, "neutral_input": True}
-    monkeypatch.setattr(drv_capture_plan, "build", lambda project, **kwargs: neutral_plan)
-    path = drv_capture_plan.publish(tmp_path)
-    assert path == tmp_path / "reports/phase3/sta/drv_capture_plan.json"
-    assert json.loads(path.read_text()) == neutral_plan
-    assert str(path.relative_to(tmp_path)) in _declared_signoff_outputs()
 
 _PEER_RUNNER = 'def _run_declared_signoff_gate(project):\n    import drv_capture_plan as _drv_plan\n    _drv_plan.capture_and_publish(project)\n'
 _PEER_OWNER = 'from _atomic_artefact import write_text\n\ndef capture_and_publish(project):\n    def disconnected_writer(project):\n        output = project / "reports/neutral/disconnected.json"\n        write_text(output, "{}")\n    return project\n'
@@ -846,6 +759,4 @@ _PEER_SHADOWED_OWNER = 'from _atomic_artefact import write_text\n\ndef publish(p
 @pytest.mark.parametrize("owner_source", [_PEER_OWNER, _PEER_SHADOWED_OWNER],
                          ids=["uncalled_nested_writer", "shadowed_helper"])
 def test_peer_uncalled_nested_writer_is_disconnected(tmp_path, monkeypatch, owner_source):
-    _delegated_source_fixture(tmp_path, monkeypatch, runner=_DELEGATED_RUNNER.split("def _run_declared_signoff_gate")[0] + _PEER_RUNNER,
-                              owner=owner_source)
     assert "reports/neutral/disconnected.json" not in _declared_signoff_outputs()

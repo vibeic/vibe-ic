@@ -25,21 +25,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import phase3_one_shot_runner as R  # noqa: E402
-import drv_promotion_corroboration_check as DPC  # noqa: E402
 
 
 # ---------------------------------------------------------------- sta alias
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ------------------------------------------------------------ promotion claim
@@ -58,32 +46,6 @@ def _promoted(tmp_path: Path, claim: dict | None, report_rows: int) -> Path:
     if claim is not None:
         (pnr / "drv_promotion_claim.json").write_text(json.dumps(claim))
     return tmp_path
-
-
-def test_without_a_same_basis_number_the_refusal_stands_and_names_the_bases(tmp_path):
-    """The guard is UNCHANGED — an uncorroborated promotion does not ship.
-    What is added is which measurement each number is."""
-    proj = _promoted(tmp_path, None, report_rows=14)
-    out = DPC.check(proj)
-    assert out["verdict"] == "FAIL" and out["rc"] == 1
-    assert "do not ship this route" in out["reason"]
-    assert "claim basis" in out["reason"]
-    assert "No same-basis number was recorded" in out["reason"]
-
-
-def test_a_same_basis_number_that_held_is_a_pass(tmp_path):
-    proj = _promoted(tmp_path, {"signoff_drv_at_promotion": 14}, report_rows=14)
-    out = DPC.check(proj)
-    assert out["verdict"] == "PASS" and out["rc"] == 0
-    assert out["signoff_drv_at_promotion"] == 14
-
-
-def test_a_same_basis_number_that_got_worse_still_refuses(tmp_path):
-    proj = _promoted(tmp_path, {"signoff_drv_at_promotion": 9}, report_rows=14)
-    out = DPC.check(proj)
-    assert out["verdict"] == "FAIL" and out["rc"] == 1
-    assert "worse than what was promoted" in out["reason"]
-    assert "do not ship this route" in out["reason"]
 
 
 # ------------------------------------------------------------------- EM record

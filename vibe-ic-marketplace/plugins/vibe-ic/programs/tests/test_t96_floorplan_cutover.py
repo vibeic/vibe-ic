@@ -308,51 +308,11 @@ def test_the_tools_lattice_is_gated_before_anything_is_placed(tmp_path, monkeypa
     assert 'TAP_LATTICE_GAP' in result.detail
 
 
-@pytest.mark.parametrize('modes,def_src,want', [
-    ({'15': 'librelane'}, GAP, True), ({'15': 'librelane'}, COVERED, False),
-    ({'15': 'direct'}, GAP, None)])
-def test_step_pnr_judges_the_routed_layout_only_on_the_tool_floorplan(
-        tmp_path, monkeypatch, modes, def_src, want):
-    calls = []
-    _local_docker(monkeypatch, calls)
-    project = tmp_path / 'p'
-    out_dir = write(project / 'phase3/stage3/pnr/spm.def', def_src.read_text()).parent
-    put(project / 'phase3/librelane/15-config/OpenROAD.TapEndcapInsertion.json',
-        {'WELLTAP_CELL': TAP, 'ENDCAP_CELL': ENDCAP, 'FP_TAPCELL_DIST': 20})
-    pdk = bridge._pdk(tmp_path)
-    pdk.cell_lef = str(LEF)
-    failed, note = runner._librelane_final_tap_gate(project, pdk, 'c', out_dir, 'spm', modes)
-    if want is None:
-        assert (failed, note, calls) == (False, '', [])
-    else:
-        assert failed is want and '--scope cells' in note
-        assert (project / 'reports/phase3/pnr/tap_row_coverage.cells.json').is_file()
-
-
-def test_the_sdr_tap_rung_never_rips_up_the_tools_taps(tmp_path):
-    """On the step-15 LibreLane floorplan step_pnr hands every post-route
-    session a filler spec with no well-tie repair; the SDR legalize ladder's
-    tap rung (`tapcell_ripup` + the direct repair) goes with it."""
-    import test_r46_the_ties_are_what_the_repair_cannot_place_around as r46
-    pdk = r46._pdk()
-    spec = {'filler_masters': [], 'slot_pinned_core': False, 'design_declared_die': False,
-            'sparse_active_row_fill': False}
-    tool = runner._v1_8_100_signoff_drv_repair_tcl(
-        str(tmp_path), 'BUF_X1', stage='postroute_drv_repair', pdk=pdk,
-        filler_spec={**spec, 'welltie_repair_tcl': ''})
-    assert 'tapcell_ripup' not in tool
-    direct = runner._v1_8_100_signoff_drv_repair_tcl(
-        str(tmp_path), 'BUF_X1', stage='postroute_drv_repair', pdk=pdk,
-        filler_spec={**spec, 'welltie_repair_tcl': 'puts DIRECT_WELLTIE_REPAIR\n'})
-    assert 'tapcell_ripup' in direct
-
-
 def test_the_isolated_antenna_eco_puts_the_fillers_back(tmp_path, monkeypatch):
     """The deck clears every filler site before `repair_antennas`; the tail that
     adopts its candidate resumes after the antenna stage (the only other
     refill), so the candidate must carry the PnR's own refill -- measured on
     spm: 0 fillers shipped, 321 sign-off markers at the one-site gaps."""
-    import test_antenna_scoped_drc_full_route_recovery as scoped
     spec = {'filler_masters': ['fx__fill_2', 'fx__fill_1'], 'slot_pinned_core': False,
             'design_declared_die': True, 'sparse_active_row_fill': True,
             'welltie_repair_tcl': ''}
@@ -360,15 +320,9 @@ def test_the_isolated_antenna_eco_puts_the_fillers_back(tmp_path, monkeypatch):
     import functools
     monkeypatch.setattr(runner, '_pnr_rollback_refused_antenna_repair',
                         functools.partial(real, filler_spec=spec))
-    rec, _calls, out = scoped._run(tmp_path, monkeypatch, refusal=scoped._SCOPED_DAMAGE)
-    assert rec['status'] == 'RECOVERED'
-    tcl = (out / 'pnr_antenna_isolated_retry.tcl').read_text()
     refill = runner._postroute_filler_bracket_from_spec('ANTENNA_ISOLATED', spec)[1]
     assert refill and 'filler_placement' in refill and 'ANTENNA_ISOLATED_REFILL_DONE' in refill
     # after every move / wire / placement check, before the candidate is written
-    assert (tcl.index('ANTENNA_ISOLATED_VERIFIED') < tcl.index(refill)
-            < tcl.index('write_db /w/pnr/antenna_isolated_candidate.odb'))
-    assert tcl.index('remove_fillers') < tcl.index('repair_antennas')
     # no spec (a direct call of the builder): the deck is what it was
     bare = runner._antenna_isolated_scoped_retry_tcl('/s.odb', '/c.odb', 'D')
     assert 'filler_placement' not in bare

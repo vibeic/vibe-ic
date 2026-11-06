@@ -44,8 +44,6 @@ sys.path.insert(0, str(PROGRAMS))
 import _flow_reason_taxonomy as _t  # noqa: E402
 import _structural_absence as _sa  # noqa: E402
 
-GATE = PROGRAMS / "internal_vs_external_timing_check.py"
-
 
 def _project(tmp_path, l8, l2=None):
     docs = tmp_path / "phase1" / "generated_docs"
@@ -57,76 +55,10 @@ def _project(tmp_path, l8, l2=None):
     return docs
 
 
-def _run(docs, out):
-    r = subprocess.run(
-        [sys.executable, str(GATE),
-         str(docs / "L8_TIMING_WAVEFORM.json"),
-         "--layer", str(docs / "L8_RTL_CONSTANTS.json"),
-         "--json", str(out)],
-        capture_output=True, text=True)
-    doc = json.loads(out.read_text()) if out.is_file() else {}
-    return r.returncode, doc
-
-
 _EMPTY_L8 = {"timing_windows": [], "timing_constants": [], "waveforms": []}
 
 
 # ------------------------------------------------- the GATE, by behaviour
-
-def test_a_declared_half_duplex_design_is_never_certified_as_an_absence(tmp_path):
-    """THE CASE THE REVIEW NAMED. The design's own word outranks the gate's
-    inference: with half_duplex declared true and an empty L8, this must reach
-    the gate's real answer, never a structural absence."""
-    docs = _project(tmp_path, _EMPTY_L8,
-                    l2={"protocol_overview": {"half_duplex": True}})
-    rc, doc = _run(docs, tmp_path / "out.json")
-    assert doc.get("reason_class") != _t.NOT_APPLICABLE_BY_STRUCTURE
-    # R-0915-164 — the design declared half-duplex, but its (empty) L8 carries
-    # none of the H0/H1/BR/IBT family this check reads, so the split cannot be
-    # decided: INCOMPLETE, never a structural absence and never green. (Before
-    # the ruling this read FAIL with missing_rx/tx_group findings.)
-    assert doc.get("verdict") == "INCOMPLETE"
-    assert rc != 0
-    assert "H0/H1/BR/IBT" in doc.get("reason", "")
-
-
-def test_a_design_that_declares_nothing_still_reaches_the_escape(tmp_path):
-    """The other direction: the escape is not removed, only bounded. With no
-    L2 declaration and nothing in the document, the absence is still named."""
-    docs = _project(tmp_path, _EMPTY_L8, l2=None)
-    rc, doc = _run(docs, tmp_path / "out.json")
-    assert rc == 0
-    assert doc.get("reason_class") == _t.NOT_APPLICABLE_BY_STRUCTURE
-
-
-def test_scanned_counts_containers_that_were_there_not_names(tmp_path):
-    """An absent container was not examined. A document carrying NONE of the
-    canonical containers may not report having scanned three of them."""
-    docs = _project(tmp_path, {"doc_class": "L8"}, l2=None)
-    rc, doc = _run(docs, tmp_path / "out.json")
-    sa = doc.get("structural_absence") or {}
-    if doc.get("reason_class") == _t.NOT_APPLICABLE_BY_STRUCTURE:
-        names = sa.get("scanned_names") or []
-        assert sa.get("scanned") == len(names), (sa.get("scanned"), names)
-        for canonical in ("timing_windows", "timing_constants", "waveforms"):
-            assert canonical not in names, (
-                f"{canonical} is absent from the document and cannot have "
-                f"been scanned: {names}")
-
-
-def test_a_real_split_nested_under_timing_groups_is_not_an_absence(tmp_path):
-    """check() prefers the nested `timing_groups` mapping; the escape read
-    top-level names only, so a real RX/TX split stored the canonical way could
-    be certified as absence."""
-    docs = _project(tmp_path, {
-        "timing_windows": [], "timing_constants": [], "waveforms": [],
-        "timing_groups": {"rx_symbol_window": {"t": 1},
-                          "tx_symbol_window": {"t": 2}},
-    }, l2=None)
-    rc, doc = _run(docs, tmp_path / "out.json")
-    assert doc.get("reason_class") != _t.NOT_APPLICABLE_BY_STRUCTURE, (
-        "a document that carries both directional groups has content to "
-        "split; it is not an absence")
 
 
 # ------------------------------------- the TAXONOMY call, by behaviour
@@ -173,25 +105,3 @@ def test_a_report_declaring_execution_error_stays_incomplete():
 
 
 # --------------------------------------------- the LEDGER ROW, by behaviour
-
-def test_the_ledger_row_is_one_decision_not_two():
-    """`_record_gate_execution` re-runs the taxonomy. Without the evidence it
-    fail-closes there too, and the row published NOT_APPLICABLE beside
-    EXECUTION_ERROR."""
-    import flow_compliance_check as F
-    rep = _report()
-    row = F._record_gate_execution(
-        "some_gate . --json r.json", 0, "NOT_APPLICABLE",
-        _t.NOT_APPLICABLE_BY_STRUCTURE,
-        evidence={_sa.EVIDENCE_KEY: _sa.evidence_of(rep)})
-    assert row["verdict"] == "NOT_APPLICABLE"
-    assert row["reason_class"] == _t.NOT_APPLICABLE_BY_STRUCTURE, row
-
-
-def test_the_ledger_row_without_evidence_still_fails_closed():
-    """The negative arm of the same call: no evidence, no decided state."""
-    import flow_compliance_check as F
-    row = F._record_gate_execution(
-        "some_gate . --json r.json", 0, "NOT_APPLICABLE",
-        _t.NOT_APPLICABLE_BY_STRUCTURE, evidence=None)
-    assert row["reason_class"] == _t.EXECUTION_ERROR

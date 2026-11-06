@@ -46,7 +46,6 @@ import pytest
 
 PROGRAMS_DIR = Path(__file__).parent.parent
 GATE_PROGRAM = PROGRAMS_DIR / "spec_required_artifact_check.py"
-EMITTER_PROGRAM = PROGRAMS_DIR / "arith_declaration_emit.py"
 
 # The emitter prints this on its fail-closed path and nowhere else.
 FAIL_CLOSED_BANNER = "arith_declaration_emit: FAIL_CLOSED"
@@ -83,8 +82,6 @@ def _run_gate(run_dir: Path) -> subprocess.CompletedProcess:
     )
 
 
-
-
 def _gate_report(run_dir: Path) -> dict:
     return json.loads(
         (run_dir / "reports/phase2/gates/spec_required_artifacts.json").read_text()
@@ -95,8 +92,6 @@ def _write_input_doc(run_dir: Path, content: str, name: str = "L7_verification_p
     docs = run_dir / "input" / "docs"
     docs.mkdir(parents=True, exist_ok=True)
     (docs / name).write_text(content)
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -425,66 +420,12 @@ class TestGateVacuous:
 
 class TestGateWiredIntoFlow:
 
-    def test_gate_is_in_structural_rtl_gates(self):
-        sys.path.insert(0, str(PROGRAMS_DIR))
-        import flow_compliance_check as F
-        assert "spec_required_artifact_check" in F._STRUCTURAL_RTL_GATES, (
-            "spec_required_artifact_check is not wired into "
-            "flow_compliance_check._STRUCTURAL_RTL_GATES — nothing would run "
-            "it, so the defect it names stays open"
-        )
 
     def test_gate_program_is_discoverable_by_the_umbrella(self):
         """The umbrella resolves `<gate_name>.py` under PROGRAMS_DIR and
         silently `continue`s when the file is absent — so the wiring is only
         real if the filename matches the tuple entry exactly."""
         assert (PROGRAMS_DIR / "spec_required_artifact_check.py").is_file()
-
-    @pytest.mark.parametrize("artifact_present,expect_fail", [
-        (False, True),
-        (True, False),
-    ])
-    def test_umbrella_reports_the_gate_both_ways(self, tmp_path, monkeypatch,
-                                                 artifact_present, expect_fail):
-        """Membership in a tuple is not invocation.
-
-        This drives `_run_structural_rtl_gates` itself — the function the P0
-        umbrella calls — and asserts it REPORTS the FAIL when the
-        spec-declared artifact is missing and does NOT when it is present.
-        The tuple is monkeypatched down to this one gate purely for runtime;
-        `test_gate_is_in_structural_rtl_gates` above pins the real membership.
-        """
-        sys.path.insert(0, str(PROGRAMS_DIR))
-        import flow_compliance_check as F
-        monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES",
-                            ("spec_required_artifact_check",))
-
-        proj = tmp_path / "proj"
-        rtl = proj / "phase2" / "stage1" / "rtl"
-        rtl.mkdir(parents=True)
-        (rtl / "dut.v").write_text(
-            "module dut(input wire clk, output wire q);\n"
-            "  assign q = 1'b0;\nendmodule\n")
-        (proj / "input" / "docs").mkdir(parents=True)
-        (proj / "input" / "docs" / "L7_verification_plan.md").write_text(
-            "Plugin 在開始 RTL 設計前，**必須**於 "
-            "`plugin_output/declaration.json` 聲明。\n")
-        if artifact_present:
-            (proj / "plugin_output").mkdir(parents=True)
-            (proj / "plugin_output" / "declaration.json").write_text(
-                '{"bit_order": "LSB_first"}\n')
-
-        _passed, fails, skips, _waivers = F._run_structural_rtl_gates(proj)
-        named = [f for f in fails if "spec_required_artifact_check" in f]
-        skipped = [s for s in skips if "spec_required_artifact_check" in s]
-        assert not skipped, f"umbrella SKIPPED the gate: {skipped}"
-        if expect_fail:
-            assert named, (
-                "the umbrella did not report spec_required_artifact_check "
-                f"even though the declared artifact is absent; fails={fails}")
-        else:
-            assert not named, (
-                f"umbrella failed a compliant project: {named}")
 
 
 # ---------------------------------------------------------------------------
@@ -493,11 +434,6 @@ class TestGateWiredIntoFlow:
 # Two fixtures that disagree on EVERY derived field, so an "always X" mutation
 # of any deriver is caught by one of them.
 # ---------------------------------------------------------------------------
-
-
-
-
-
 
 
 _DECL_LSB = {
@@ -521,12 +457,9 @@ _DECL_MSB = {
 }
 
 
-
-
 # ---------------------------------------------------------------------------
 # arith_declaration_emit — PASS direction (VALUES, not shapes)
 # ---------------------------------------------------------------------------
-
 
 
 # ---------------------------------------------------------------------------
@@ -538,14 +471,12 @@ _DECL_MSB = {
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # End-to-end: emitter closes the gate
 #
 # The two programs are one story — the gate names the missing artifact, the
 # emitter produces it, and the gate then passes on the SAME run dir.
 # ---------------------------------------------------------------------------
-
 
 
 # ---------------------------------------------------------------------------

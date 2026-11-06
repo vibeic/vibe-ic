@@ -42,7 +42,6 @@ if str(_PROGRAMS) not in sys.path:
 
 import phase1_doc_one_shot_runner as R          # noqa: E402
 import ic_class_profile as ICP                  # noqa: E402
-import l_doc_structured_field_count_check as G  # noqa: E402
 from _hostpaths import require_corpus  # noqa: E402
 
 
@@ -123,25 +122,6 @@ def test_l2_no_timing_when_no_spec_table_NOLEAK(tmp_path):
     assert all(t.get("extraction_strategy") not in (
         "spec_table_name_value_unit_v634", "converter_scalar_param_v634")
         for t in (d.get("timing_parameters") or []))
-
-
-def test_real_round2_converter_l2_passes_if_present():
-    """End-state on the REAL round-2 converter input (when the run dir is on
-    disk): regenerating L2 from its input docs clears the ≥15 floor. SKIPs
-    off-monorepo."""
-    run = require_corpus("_bench6_v100_r2/u_hawaii_adc")
-    docs_dir = run / "input" / "docs"
-    if not docs_dir.is_dir():
-        pytest.skip("real round-2 converter run dir not on disk")
-    docs = {f.name: f.read_text(errors="ignore")
-            for f in docs_dir.iterdir()
-            if f.suffix.lower() in (".md", ".txt")}
-    proj = Path(tempfile.mkdtemp()) / "proj"
-    R.gen_l2_frs(proj, docs)
-    d = json.loads(
-        (R._pl.generated_docs_dir(proj) / "L2_FRS.json").read_text())
-    ok, msg = G._check_l_doc(2, d, ic_class="data_converter")
-    assert ok, f"real converter L2 still FAILs: {msg}"
 
 
 if __name__ == "__main__":

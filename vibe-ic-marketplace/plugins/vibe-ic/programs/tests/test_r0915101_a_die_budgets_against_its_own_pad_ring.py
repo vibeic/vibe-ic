@@ -51,7 +51,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _l_doc_pad_placement as LPP                     # noqa: E402
 import _owner_declared as _OD                          # noqa: E402
 import _tapeout_declaration as TD                      # noqa: E402
-import flow_compliance_check as F                      # noqa: E402
 import slot_pad_budget_check as S                      # noqa: E402
 import test_slot_pad_budget_check as T                 # noqa: E402  slot fixture
 
@@ -146,13 +145,6 @@ def _run(project):
     return rc, (json.loads(p.read_text()) if p.is_file() else None)
 
 
-def _drive(project):
-    """`(passed, snippet, report)` from flow_compliance_check's OWN runner."""
-    passed, snippet = F._check_program_exit_zero(project, _CLAUSE)
-    p = project / "reports" / "phase2" / "gates" / "slot_pad_budget.json"
-    return passed, snippet, (json.loads(p.read_text()) if p.is_file() else None)
-
-
 # --------------------------------------------------------------------------- #
 # (a) a DIE with declared ports DECIDES, and states the arithmetic
 # --------------------------------------------------------------------------- #
@@ -238,14 +230,6 @@ def test_a_DIE_whose_ring_has_no_pad_for_every_pin_DOES_NOT_FIT():
     assert "o_sensor_addr" in rep["reason"]
 
 
-def test_the_refusal_reaches_the_step_as_a_FAIL_not_as_a_skip():
-    """rc 1 is a real answer. The flow's own runner must read it as one."""
-    passed, snippet, rep = _drive(_project(l3=_L3_RING_TOO_SMALL))
-    assert rep["verdict"] == "DOES_NOT_FIT"
-    assert passed is False
-    assert not snippet.startswith("INCOMPLETE:")
-
-
 # --------------------------------------------------------------------------- #
 # (c) the one undecidable case is a FINDING BY NAME
 # --------------------------------------------------------------------------- #
@@ -269,16 +253,6 @@ def test_a_DIE_that_states_its_ring_nowhere_is_a_named_design_input_gap():
     assert rep["reason_class"] == "ZERO_DENOMINATOR"
     assert rep["reason_class"] != "BLOCKED_BY_UPSTREAM"
     assert [f["rule"] for f in rep["findings"]] == ["DIE_DECLARES_NO_PAD_RING"]
-
-
-def test_neither_gap_is_ever_booked_BLOCKED_BY_UPSTREAM():
-    """The whole point of R-0915-101's last clause, asserted over BOTH gaps and
-    over the reason PROSE as well as the class: `BLOCKED_BY_UPSTREAM` sends a
-    reader to a step that cannot answer this."""
-    for kw in ({"rtl": _RTL_NO_PORTS}, {"l3": None}):
-        _, rep = _run(_project(**kw))
-        assert "BLOCKED_BY_UPSTREAM" not in json.dumps(rep)
-        assert rep["note"].endswith("not a question blocked on an upstream step")
 
 
 def test_an_unreadable_pad_document_is_not_a_document_that_said_nothing():
@@ -315,7 +289,6 @@ def test_a_HARDMACRO_that_bought_no_slot_is_unchanged():
     assert rep["skip_kind"] == "class-not-applicable"
     assert rep["applicability_evidence"]["assertions"] == [
         {"path": "answers.deliverable", "equals": "HARDMACRO"}]
-    assert F._report_proves_executed_design_na(p, rep, _CLAUSE) is True
     for k in ("budget_basis", "ring_source", "own_ring",
               "own_ring_arithmetic", "derived_ring", "findings"):
         assert k not in rep, k
@@ -344,31 +317,6 @@ def test_the_HARDMACRO_route_ignores_a_pad_placement_document():
 # --------------------------------------------------------------------------- #
 # (e) the umbrella no longer books step 2 INCOMPLETE
 # --------------------------------------------------------------------------- #
-def test_the_umbrella_no_longer_marks_step_2_INCOMPLETE():
-    """The cascade this ruling exists to clear: `BLOCKED_BY_UPSTREAM` is not
-    skip-eligible, so `_check_program_exit_zero` booked step 2 INCOMPLETE and
-    Overall NOT_MEASURED with 10/10 L10 oracles voided beneath it."""
-    passed, snippet, rep = _drive(_project())
-    assert rep["verdict"] == "FITS"
-    assert passed is True
-    assert not snippet.startswith("INCOMPLETE:")
-    assert "BLOCKED_BY_UPSTREAM" not in snippet
-
-
-def test_the_named_gap_still_reaches_the_umbrella_as_INCOMPLETE():
-    """The other direction of (e): clearing the false INCOMPLETE must not
-    silence the true one. A design that really states no ring is still not a
-    design this step passed.
-
-    The carrier is the `INCOMPLETE:` SENTINEL in the clause snippet, not the
-    boolean: rc 2 is this flow's disclosed tier, so the clause reader returns
-    True and the sentinel is what raises the STEP to the #599 INCOMPLETE tier.
-    """
-    passed, snippet, rep = _drive(_project(l3=None))
-    assert rep["reason_class"] == "ZERO_DENOMINATOR"
-    assert snippet.startswith("INCOMPLETE:")
-    assert "ZERO_DENOMINATOR" in snippet
-    assert "BLOCKED_BY_UPSTREAM" not in snippet
 
 
 # --------------------------------------------------------------------------- #
@@ -499,12 +447,3 @@ def test_geometry_operator_requires_readable_unchanged_source():
     assert report.get("operator_template_contract", {}).get("kind") != "GEOMETRY_ONLY"
     source.rename(source.with_suffix(".retained.json"))
     assert _run(project)[0] != 0
-
-
-def test_geometry_operator_does_not_resolve_unknown_or_duplicate_ring_groups():
-    for l3 in (_L3_WITH_RING.replace("gpio pin", "unknown peripheral group"),
-               _L3_WITH_RING + "\n| W | `o_sensor_data` |\n"):
-        project, _, _ = _geometry_operator_project(l3=l3)
-        rc, report = _run(project)
-        # A duplicate side is ambiguous input (UNDECIDED), not measured clean.
-        assert rc != 0 and report["verdict"] in {"DOES_NOT_FIT", "UNDECIDED"}

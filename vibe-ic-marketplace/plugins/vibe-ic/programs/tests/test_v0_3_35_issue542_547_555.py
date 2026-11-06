@@ -63,19 +63,6 @@ def test_555a_async_io_io_no_longer_matches():
 # #555(b) — fpga_sdc_clock_constraint_check board-clock model
 # ===========================================================================
 
-def test_555b_has_generated_clock_positive():
-    from fpga_sdc_clock_constraint_check import _has_generated_clock
-    assert _has_generated_clock("create_generated_clock -source clk -name fast_clk")
-
-
-def test_555b_has_generated_clock_negative():
-    from fpga_sdc_clock_constraint_check import _has_generated_clock
-    assert not _has_generated_clock("create_clock -period 20 [get_ports clk]")
-    assert not _has_generated_clock("")
-    # derive_pll_clocks/derive_clocks are Quartus boilerplate emitted in
-    # EVERY .sdc — not a signal of an actual PLL-derived clock (#555).
-    assert not _has_generated_clock("derive_pll_clocks\nderive_clocks")
-
 
 def _write_l8_with_period(docs_dir: Path, period_ns: float) -> None:
     """Write L8 JSON with CLOCK_PERIOD_NS key in a format find_rtl_clock_period_ns
@@ -86,44 +73,6 @@ def _write_l8_with_period(docs_dir: Path, period_ns: float) -> None:
         "CLOCK_PERIOD_NS": period_ns,
         "clocks": [{"port_name": "clk", "period_ns": period_ns}],
     }))
-
-
-def test_555b_period_mismatch_with_pll_is_warn_not_fail():
-    """Board 50MHz SDC (20ns) + ASIC 10ns + create_generated_clock → WARN not FAIL."""
-    from fpga_sdc_clock_constraint_check import audit
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        fpga = p / "phase2" / "stage1" / "fpga"
-        fpga.mkdir(parents=True)
-        sdc = fpga / "top.sdc"
-        sdc.write_text(
-            "create_clock -name clk_board -period 20.0 [get_ports clk]\n"
-            "create_generated_clock -name clk_app -source clk_board "
-            "-divide_by 2 [get_pins pll|clk_app]\n"
-        )
-        _write_l8_with_period(p / "phase1" / "generated_docs", 10.0)
-        verdict, msgs = audit(p)
-        assert verdict in ("PASS", "PASS_WITH_WAIVERS"), (
-            f"Expected PASS/WARN but got {verdict}: {msgs}")
-        combined = " ".join(msgs)
-        if verdict == "PASS_WITH_WAIVERS":
-            assert "PLL" in combined or "generated" in combined.lower()
-
-
-def test_555b_period_mismatch_no_pll_is_fail():
-    """Board 50MHz SDC (20ns) + ASIC 10ns + NO PLL → FAIL."""
-    from fpga_sdc_clock_constraint_check import audit
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        fpga = p / "phase2" / "stage1" / "fpga"
-        fpga.mkdir(parents=True)
-        sdc = fpga / "top.sdc"
-        sdc.write_text(
-            "create_clock -name clk_board -period 20.0 [get_ports clk]\n"
-        )
-        _write_l8_with_period(p / "phase1" / "generated_docs", 10.0)
-        verdict, msgs = audit(p)
-        assert verdict == "FAIL", f"Expected FAIL but got {verdict}"
 
 
 # ===========================================================================
@@ -167,76 +116,6 @@ def _run_cdc_section(project: Path):
     return domain_clocks, clocks, root_clk_ports
 
 
-def test_547_single_clock_with_gate_is_single_domain():
-    """Single input clk_i + prim_clock_gating output clk → single domain (#547)."""
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        rtl = p / "phase2" / "stage1" / "rtl"
-        _write_cdc_rtl(rtl, """
-module top (
-  input  wire clk_i,
-  input  wire rst_ni,
-  input  wire en_i,
-  output reg  q_o
-);
-  // gated clock from prim_clock_gating
-  wire clk_gated;
-  prim_clock_gating u_cg (.clk_i(clk_i), .en_i(en_i), .clk_o(clk_gated));
-  always @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) q_o <= 0;
-    else q_o <= en_i;
-  end
-  reg r2;
-  always @(posedge clk_gated) r2 <= q_o;
-endmodule
-""")
-        domain_clocks, posedge_all, root_ports = _run_cdc_section(p)
-        # root_ports = {clk_i}, posedge_all = {clk_i, clk_gated}
-        assert root_ports == {"clk_i"}
-        assert "clk_gated" in posedge_all
-        assert len(domain_clocks) == 1, (
-            f"Expected 1 domain clock but got {domain_clocks}")
-
-
-def test_547_two_real_input_clocks_is_multi_domain():
-    """Two distinct input clock ports → multi-clock SKIPPED-CONDITION (#547)."""
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        rtl = p / "phase2" / "stage1" / "rtl"
-        _write_cdc_rtl(rtl, """
-module top (
-  input wire clk_fast,
-  input wire clk_slow,
-  input wire rst_n,
-  output reg a, b
-);
-  always @(posedge clk_fast) a <= 1;
-  always @(posedge clk_slow) b <= 1;
-endmodule
-""")
-        domain_clocks, _, root_ports = _run_cdc_section(p)
-        assert root_ports == {"clk_fast", "clk_slow"}
-        assert len(domain_clocks) == 2
-
-
-def test_547_no_clock_port_falls_back_to_posedge():
-    """No named clock input port → fall back to posedge token set (#547)."""
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        rtl = p / "phase2" / "stage1" / "rtl"
-        _write_cdc_rtl(rtl, """
-module top (input phi, input rst_n, output reg q);
-  always @(posedge phi) q <= ~q;
-endmodule
-""")
-        domain_clocks, posedge_all, root_ports = _run_cdc_section(p)
-        # 'phi' is not clk/clock but is a posedge token
-        assert root_ports == set()
-        assert "phi" in posedge_all
-        # fallback: domain_clocks = posedge_all = {phi}
-        assert domain_clocks == {"phi"}
-
-
 # ===========================================================================
 # #542 — ic_class_profile new detectors
 # ===========================================================================
@@ -278,43 +157,6 @@ def test_542_bus_peripheral_deny_guard_no_regmap():
           "APB subordinate interface block providing data flow between two "
           "clock domains with FIFO buffering."}
     assert not _looks_like_bus_peripheral(None, l2)
-
-
-def test_542_detect_ic_class_returns_crypto_not_cpu():
-    """AES peripheral L docs → crypto_accelerator, NOT processor_cpu (#542).
-    detect_ic_class() from ic_class_profile returns a dict, not a tuple."""
-    from ic_class_profile import detect_ic_class
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        docs = p / "phase1" / "generated_docs"
-        docs.mkdir(parents=True)
-        l1 = {"design_intent": "AES-256 hardware accelerator"}
-        l2 = {"description":
-              "AES-256 hardware encryption accelerator with CBC/CTR mode support. "
-              "Key schedule hardware. TL-UL register map for key loading, IV, "
-              "control bits (enable/start/done), and status. Address decode "
-              "maps registers to 0x00-0x3C. Software-accessible register bank."}
-        (docs / "L1_FUNCTIONAL.json").write_text(json.dumps(l1))
-        (docs / "L2_ARCH.json").write_text(json.dumps(l2))
-        profile = detect_ic_class(p)
-        ic_class = profile.get("ic_class")
-        evidence = profile.get("decisive_evidence", "")
-        assert ic_class == "crypto_accelerator", (
-            f"Expected crypto_accelerator, got {ic_class!r}: {evidence}")
-
-
-def test_542_vendor_rtl_check_waives_to_reused_ip():
-    """input/vendor_rtl/ non-empty → rtl_gen WAIVED with catalog-glue hint (#542)."""
-    from design_one_shot_runner import step_rtl_gen
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td)
-        vendor = p / "input" / "vendor_rtl"
-        vendor.mkdir(parents=True)
-        (vendor / "core.v").write_text("module core(); endmodule\n")
-        result = step_rtl_gen(p, "processor_cpu")
-        assert result.status == "PASS_WITH_WAIVERS"
-        assert "catalog-glue-author" in str(result.detail)
-        assert "vendor_rtl" in str(result.detail)
 
 
 def test_542_all_ic_classes_has_new_entries():

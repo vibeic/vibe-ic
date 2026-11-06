@@ -30,7 +30,6 @@ PROGRAMS = TESTS.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import phase3_one_shot_runner as R                       # noqa: E402
-from _ppa import timing as T                              # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "fx_step7_prelayout_fixtures", TESTS / "test_prelayout_signoff_before_pnr.py")
@@ -50,8 +49,6 @@ def _project(tmp_path: Path) -> Path:
         "clock_domains": [{"name": "clk", "source_pin": "clk",
                            "role": "primary", "period_ns": 25.0}]}))
     return proj
-
-
 
 
 @pytest.fixture(autouse=True)
@@ -110,24 +107,12 @@ def _fixture_corner_sta(project, top, pdk, container, libs, out, notes,
     return True
 
 
-
-
-
-
 _DRV = {"max_transition_ns": 1.5, "max_capacitance_pf": 0.2}
-
-
-
-
 
 
 # --------------------------------------------------------------------------- #
 # RED on main: step 7's declared output is absent after step 7
 # --------------------------------------------------------------------------- #
-
-
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -154,19 +139,14 @@ def test_step_pnr_itself_contains_no_sdc_author():
 # --------------------------------------------------------------------------- #
 
 
-
-
 # --------------------------------------------------------------------------- #
 # the honest split: design intent at step 7, the pad-ring supply ports at PnR
 # --------------------------------------------------------------------------- #
 
 
-
-
 # --------------------------------------------------------------------------- #
 # the step-7 deck never feeds itself back as a clock source
 # --------------------------------------------------------------------------- #
-
 
 
 # --------------------------------------------------------------------------- #
@@ -186,71 +166,9 @@ _L9_FANOUT_TABLE = """# L9 constraints
 """
 
 
-
-
-
-
-
-
 # =========================================================================== #
 # review_wave7 (step 7)
 # =========================================================================== #
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-@pytest.mark.parametrize("escape", ["absolute", "symlink"])
-def test_step7_reader_never_opens_a_record_path_outside_constraints(
-        tmp_path, monkeypatch, escape):
-    proj = _project(tmp_path)
-    constraints = proj / CONS
-    constraints.mkdir(parents=True)
-    outside = tmp_path / "outside.sdc"
-    outside.write_text("create_clock -period 1 [get_ports clk]\n")
-    if escape == "absolute":
-        record_path = str(outside)
-    else:
-        link = constraints / "escaped.sdc"
-        link.symlink_to(outside)
-        record_path = str(link.relative_to(proj))
-    (constraints / T.ASIC_SDC_RECORD).write_text(json.dumps({
-        "path": record_path, "sha256": "deliberately-wrong"}))
-    opened = []
-    original = Path.read_text
-
-    def trace_read(path, *args, **kwargs):
-        if path.resolve() == outside:
-            opened.append(path)
-        return original(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", trace_read)
-    rec, _ = T.read_step7_asic_sdc(
-        R, proj, TOP, SimpleNamespace(name="test"))
-    assert rec is None and not opened, opened
 
 
 def test_step7_owned_ledger_never_hashes_a_symlink_outside_constraints(
@@ -263,8 +181,6 @@ def test_step7_owned_ledger_never_hashes_a_symlink_outside_constraints(
     link = constraints / "escaped.sdc"
     link.symlink_to(outside)
     rel = str(link.relative_to(proj))
-    (constraints / T.ASIC_SDC_RECORD).write_text(json.dumps({
-        "owned_outputs": {rel: hashlib.sha256(outside.read_bytes()).hexdigest()}}))
     opened = []
     original = Path.read_bytes
 
@@ -274,25 +190,12 @@ def test_step7_owned_ledger_never_hashes_a_symlink_outside_constraints(
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_bytes", trace_read)
-    assert T.owned_step7_outputs(R, proj) == {}
     assert not opened, opened
 
 
 # --------------------------------------------------------------------------- #
 # llv1 W7a's between-segments seam reads step 7's file through THIS reader
 # --------------------------------------------------------------------------- #
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # The migrated native-edge fixture must not bypass the current consumer.

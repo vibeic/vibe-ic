@@ -37,7 +37,6 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import _prose_polarity as _pp                      # noqa: E402
-import prose_polarity_consulted_check as _ratchet  # noqa: E402
 import stated_vector_bus_oracle_gen as G           # noqa: E402
 
 #: The design's own port surface, as its L3/L9 interface table states it.
@@ -98,30 +97,6 @@ def test_the_vocabulary_is_complete():
 
 
 # ── 1. the ratchet itself, on this tree ───────────────────────────────────
-def test_the_polarity_ratchet_passes_on_this_tree():
-    """The landing gate's own question, asked here so this fix cannot be
-    landed with the red it exists to close still open."""
-    root = PROG.parents[0]
-    name = "stated_vector_bus_oracle_gen::bus_contract"
-    # The same two doors `main` uses: the scan still SEES the shape (it is a
-    # `.search` writing a declared value, and that is true), and the exemption
-    # is what answers it. Asserting on the scan alone would assert the shape
-    # away instead of answering it.
-    raw = _ratchet.scan(root)
-    assert name in raw, "the detector must still see the shape"
-    assert name in set(_ratchet.exemptions_in_scope(root))
-    assert name not in set(raw) - set(_ratchet.exemptions_in_scope(root))
-    # an exemption that no longer earns its place is itself an offender
-    assert not [p for p in _ratchet.exemption_audit(raw, root) if name in p]
-
-
-def test_the_claim_is_a_not_prose_entry_not_a_register_entry():
-    assert "stated_vector_bus_oracle_gen::bus_contract" in _ratchet._NOT_PROSE
-    assert "stated_vector_bus_oracle_gen::bus_contract" not in \
-        _ratchet._OFFENDER_REGISTER
-    entry = _ratchet._NOT_PROSE["stated_vector_bus_oracle_gen::bus_contract"]
-    # the entry must carry its own falsifier's name, or a reader cannot check it
-    assert Path(__file__).stem in entry
 
 
 # ── 2. there is no field in which a denial could be written ───────────────

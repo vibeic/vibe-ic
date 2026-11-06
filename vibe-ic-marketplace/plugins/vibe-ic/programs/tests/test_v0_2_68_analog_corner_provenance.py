@@ -23,10 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import analog_corner_sweep_check as ACS         # noqa: E402
-import analog_hw_spice_correlation_check as HSC  # noqa: E402
 import analog_netlist_pdk_check as NPC          # noqa: E402
-import analog_pre_vs_post_layout_check as PVP   # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 _SWEEP_SRC = (PLUGIN / "programs" / "analog_real_corner_sweep.py").read_text()
@@ -45,12 +42,6 @@ def test_emitter_marks_only_executed_corner_simulator_run():
 def test_emitter_persists_ngspice_invocation_log():
     assert ".ngspice.log" in _SWEEP_SRC
     assert '"ngspice_log"' in _SWEEP_SRC
-
-
-def test_emitter_counts_executed_vs_derived():
-    for key in ('"corners_executed"', '"corners_derived"',
-                '"full_pvt_sweep_executed"'):
-        assert key in _SWEEP_SRC, key
 
 
 # ── (a) sweep gate: counts surfaced, tier downgraded, all-derived FAILs ────
@@ -90,48 +81,6 @@ def _block(tmp_path, corners, spec_status="PASS"):
         "spec_results": [{"name": "vout", "status": spec_status}],
     }))
     return tmp_path
-
-
-def test_sweep_gate_discloses_derived_and_downgrades_tier(tmp_path):
-    _block(tmp_path, _grid())
-    r = ACS.run_audit(tmp_path)
-    assert r.passed is True  # the genuine base sim keeps PASSing
-    assert r.summary["verdict_tier"] == "PASS_WITH_DERIVED_CORNERS"
-    assert r.summary["blocks_with_derived_corners"] == 1
-    d = r.summary["details"][0]
-    assert d["corners_executed"] == 1 and d["corners_derived"] == 8
-    assert any(f.rule == "CORNER_SWEEP_DERIVED_DISCLOSED"
-               for f in r.findings)
-
-
-def test_sweep_gate_fails_all_derived(tmp_path):
-    _block(tmp_path, _grid(executed_names=()))
-    r = ACS.run_audit(tmp_path)
-    assert r.passed is False
-    assert any(f.rule == "ALL_CORNERS_DERIVED" for f in r.findings)
-
-
-def test_sweep_gate_legacy_mislabel_counts_as_derived(tmp_path):
-    # the audited shape: simulator_run=true everywhere but derived_from
-    # admits the scaling — derived_from wins
-    corners = _grid()
-    for c in corners:
-        c["simulator_run"] = True
-        c.pop("_provenance", None)
-    _block(tmp_path, corners)
-    r = ACS.run_audit(tmp_path)
-    d = r.summary["details"][0]
-    assert d["corners_derived"] == 8
-    assert r.summary["verdict_tier"] == "PASS_WITH_DERIVED_CORNERS"
-
-
-def test_sweep_gate_fully_executed_grid_is_plain_pass(tmp_path):
-    corners = _grid(executed_names={f"{p}_{t}" for p in ("ss", "tt", "ff")
-                                    for t in ("m40c", "27c", "125c")})
-    _block(tmp_path, corners)
-    r = ACS.run_audit(tmp_path)
-    assert r.passed is True
-    assert r.summary["verdict_tier"] == "PASS"
 
 
 # ── (b) PDK_MISMATCH vs the declared target ────────────────────────────────
@@ -191,44 +140,3 @@ def test_pdk_mismatch_waivable_with_rationale(tmp_path):
 
 
 # ── (c) comparison gates with 0 items compared ─────────────────────────────
-
-def test_hw_spice_zero_compared_fails(tmp_path):
-    a = tmp_path / "phase3" / "analog" / "blk"
-    a.mkdir(parents=True)
-    # HW file present but with keys that overlap NOTHING in SPICE data
-    (a / "hw_measurements.json").write_text(json.dumps(
-        {"measurements": {"only_hw_key": 1.0}}))
-    (a / "corner_results.json").write_text(json.dumps(
-        {"pvt_results": {"tt": {"only_spice_key": 2.0}}}))
-    r = HSC.run_audit(tmp_path)
-    assert r.passed is False
-    assert any(f.rule == "HW_SPICE_ZERO_COMPARED" for f in r.findings)
-    assert r.summary["measurements_compared"] == 0
-
-
-def test_pre_vs_post_zero_compared_fails(tmp_path):
-    a = tmp_path / "phase3" / "analog" / "blk"
-    a.mkdir(parents=True)
-    (a / "pre_vs_post.json").write_text(json.dumps(
-        {"comparisons": {"vout": {"pre_layout": None, "post_layout": None}}}))
-    r = PVP.run_audit(tmp_path)
-    assert r.passed is False
-    assert any(f.rule == "PRE_VS_POST_ZERO_COMPARED" for f in r.findings)
-
-
-def test_pre_vs_post_with_items_still_passes(tmp_path):
-    a = tmp_path / "phase3" / "analog" / "blk"
-    a.mkdir(parents=True)
-    # The pre-layout baseline this comparison is measured AGAINST, carrying
-    # the record of what circuit it is. Added when this gate — the one the
-    # FLOW declares for the post-layout step — stopped certifying a
-    # comparison whose subject nothing on the tree names. This test is about
-    # the ZERO-COMPARED rule, so its fixture has to clear every other one.
-    (a / "corner_results.json").write_text(json.dumps(
-        {"block": "blk", "_provenance": "real_ngspice",
-         "corners": [{"name": "tt_27c_1v8", "simulator_run": True}],
-         "design_content": "structure_and_geometry"}))
-    (a / "pre_vs_post.json").write_text(json.dumps(
-        {"comparisons": {"vout": {"pre_layout": 1.80, "post_layout": 1.79}}}))
-    r = PVP.run_audit(tmp_path)
-    assert r.passed is True

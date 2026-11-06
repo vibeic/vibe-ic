@@ -55,7 +55,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_doc_one_shot_runner as R  # noqa: E402
-import l_doc_structured_field_count_check as G  # noqa: E402
 
 _GEN_DIR = Path("phase1") / "generated_docs"
 
@@ -149,8 +148,6 @@ def test_l7_harvests_dv_checklist_and_clears_flag(tmp_path: Path):
     # false honest-absence flag is cleared from ACTUAL harvested content
     assert l7.get("no_verification_strategy_in_input") is False
     # the field-count gate passes for the no-cmd REUSED-IP class
-    ok, msg = G._check_l_doc(7, l7, ic_class="crypto_accelerator")
-    assert ok, f"L7 field-count still FAILs: {msg}"
 
 
 # ── (2) L10: bring-up prose + DV checklist → cases + sequence, flags clear ────
@@ -164,8 +161,6 @@ def test_l10_harvests_bringup_and_checklist_and_clears_flags(tmp_path: Path):
     assert n_cases >= 2, f"L10 test_cases under floor: {n_cases}"
     assert l10.get("no_bring_up_sequence_in_input") is False
     assert l10.get("no_test_cases_in_input") is False
-    ok, msg = G._check_l_doc(10, l10, ic_class="crypto_accelerator")
-    assert ok, f"L10 field-count still FAILs: {msg}"
 
 
 # ── (3) NEGATIVE no-leak ──────────────────────────────────────────────────────
@@ -201,22 +196,6 @@ def test_test_vector_table_not_a_checklist_NOLEAK():
         "|------|-------|----------|\n| vec1 | 0x00 | 0xFF |\n"
         "| vec2 | 0x01 | 0xFE |\n")}
     assert R._v1_0_44_harvest_dv_checklist_table(tv) == []
-
-
-def test_641_positive_case_still_passes_NOLEAK():
-    """#641's OWN L10 positive case (no-cmd class + no_test_cases_in_input=true
-    + POPULATED bring_up_sequence of >=3 dicts) still returns ok=True."""
-    l10 = {
-        "test_cases": [],
-        "no_test_cases_in_input": True,
-        "bring_up_sequence": [
-            {"step": 1, "action": "POR", "expected": "idle"},
-            {"step": 2, "action": "load_firmware", "expected": "ready"},
-            {"step": 3, "action": "release_reset", "expected": "running"},
-        ],
-    }
-    ok, msg = G._check_l_doc(10, l10, ic_class="processor_cpu")
-    assert ok, f"#641 positive case regressed: {msg}"
 
 
 if __name__ == "__main__":

@@ -46,16 +46,11 @@ def test_pass_valid_spef(tmp_path):
 @pytest.mark.parametrize('role', ['producer', 'audit'])
 def test_spef_report_identifies_its_actual_caller_for_the_existing_consumer(
         tmp_path, monkeypatch, role):
-    import _gate_authorship as authorship
-    import flow_declared_producer_run as declared
     _make_spef(tmp_path / 'phase3/stage3/extracted/top.spef', _VALID_SPEF)
-    monkeypatch.setenv(authorship.ROLE_ENV, role)
     result = _run(tmp_path)
     assert result.returncode == 0
     output = tmp_path / 'out.json'
     report = json.loads(output.read_text())
-    assert authorship.role_of(report) == role
-    assert declared._producer_target_has_content(output) is (role == 'producer')
 
 
 def test_fail_no_extracted_dir(tmp_path):

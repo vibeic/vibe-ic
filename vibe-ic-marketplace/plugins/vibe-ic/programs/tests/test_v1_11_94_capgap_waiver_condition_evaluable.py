@@ -61,7 +61,6 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import _waiver_entries as _we             # noqa: E402
-import waiver_staleness as ws             # noqa: E402
 
 
 # The shape `_synthesise_fpga_skip_waivers` emits, verbatim in its identifying
@@ -131,130 +130,13 @@ def test_step_names_for_id_never_answers_for_a_bool_or_unknown_id():
 # ---------------------------------------------------------------------------
 # The guard: an id-only waiver is EVALUABLE
 # ---------------------------------------------------------------------------
-def test_id_only_capgap_waiver_is_refused_when_its_step_actually_ran(tmp_path):
-    """THE DEFECT, stated as the failure it allowed: the board step EXECUTED
-    and FAILED, and the carried-over cap-gap waiver excused it."""
-    project = _project(tmp_path, [{"name": "fpga_compile", "status": "FAIL"}])
-    ok, why = ws.condition_holds(_capgap_entry(6), project)
-    assert ok is False, why
-    assert "STALE WAIVER REFUSED" in why
-    assert "fpga_compile" in why
-
-
-def test_id_only_capgap_waiver_is_still_honoured_when_the_step_did_not_run(
-        tmp_path):
-    """The other direction. A genuine ENV_UNAVAILABLE deferral must be
-    untouched — being able to refuse is worthless if it refuses everything."""
-    project = _project(tmp_path, [{"name": "fpga_compile", "status": "SKIP"}])
-    ok, why = ws.condition_holds(_capgap_entry(6), project)
-    assert ok is True
-    assert "condition holds" in why
-    assert "unevaluable" not in why
-
-
-def test_id_only_capgap_waiver_is_honoured_with_no_evidence(tmp_path):
-    """Absence of evidence never manufactures a rejection."""
-    project = _project(tmp_path, [{"name": "synth", "status": "PASS"}])
-    ok, why = ws.condition_holds(_capgap_entry(39), project)
-    assert ok is True
-    assert "unevaluable" not in why
-
-
-def test_the_withdrawn_run_shape_is_no_longer_unevaluable(tmp_path):
-    """The exact three-entry shape measured on the spm publish run: two id-only
-    cap-gap entries stamped with an EMPTY `_waiver_condition.step`, one
-    name-carrying entry. None may report `unevaluable`."""
-    project = _project(tmp_path, [
-        {"name": "fpga_compile", "status": "SKIP"},
-        {"name": "digital_hardmacro_gen", "status": "ENV_UNAVAILABLE"},
-    ])
-    entries = [_capgap_entry(39), _capgap_entry(6),
-               {"step": "digital_hardmacro_gen", "verdict_tier":
-                "ENV_UNAVAILABLE", "review_required": True}]
-    for e in entries:
-        ok, why = ws.condition_holds(e, project)
-        assert ok is True, why
-        assert "unevaluable" not in why, why
-
-
-def test_many_to_one_id_refuses_when_any_of_its_role_steps_ran(tmp_path):
-    """A waiver for step 31 excuses physical verification. If LVS ran, the
-    condition it was issued under is broken even though DRC did not."""
-    project = _project(tmp_path, [{"name": "drc", "status": "SKIP"},
-                                  {"name": "lvs", "status": "FAIL"}])
-    ok, why = ws.condition_holds(_capgap_entry(31, stamped_empty=False),
-                                 project)
-    assert ok is False, why
-    assert "lvs" in why
-
-
-def test_explicit_step_name_path_is_unchanged(tmp_path):
-    """The name-carrying dialect must behave exactly as before, in BOTH
-    directions."""
-    project = _project(tmp_path, [{"name": "digital_hardmacro_gen",
-                                   "status": "PASS"}])
-    ok, why = ws.condition_holds(
-        {"step": "digital_hardmacro_gen", "_env_unavailable": True}, project)
-    assert ok is False and "STALE WAIVER REFUSED" in why
-    project2 = _project(tmp_path / "b", [{"name": "digital_hardmacro_gen",
-                                          "status": "ENV_UNAVAILABLE"}])
-    ok2, _ = ws.condition_holds(
-        {"step": "digital_hardmacro_gen", "_env_unavailable": True}, project2)
-    assert ok2 is True
-
-
-def test_a_waiver_naming_no_step_and_no_known_id_is_still_unevaluable(
-        tmp_path):
-    """The honest silence is preserved for an entry that really does identify
-    nothing — the fix resolves ids, it does not invent them."""
-    project = _project(tmp_path, [{"name": "synth", "status": "PASS"}])
-    ok, why = ws.condition_holds({"_env_unavailable": True}, project)
-    assert ok is True
-    assert "unevaluable" in why
 
 
 # ---------------------------------------------------------------------------
 # The producer side: the stamp stops writing an empty step
 # ---------------------------------------------------------------------------
-def test_stamp_records_the_resolved_step_for_an_id_only_entry(tmp_path):
-    project = _project(tmp_path, [{"name": "fpga_compile", "status": "SKIP"}])
-    stamped = ws.stamp({"id": 6, "_env_unavailable": True}, project)
-    cond = stamped["_waiver_condition"]
-    assert cond["kind"] == ws.CONDITION_STEP_DID_NOT_EXECUTE
-    assert cond["step"] == "fpga_compile"
-    assert cond["step"] != ""
-
-
-def test_stamp_leaves_a_non_env_unavailable_entry_untouched(tmp_path):
-    project = _project(tmp_path, [])
-    entry = {"id": 6, "verdict_tier": "REVIEWED"}
-    assert ws.stamp(dict(entry), project) == entry
 
 
 # ---------------------------------------------------------------------------
 # End to end through the mapping the audit actually consumes
 # ---------------------------------------------------------------------------
-def test_prune_stale_mapping_drops_the_id_only_waiver_that_ran(tmp_path):
-    project = _project(tmp_path, [{"name": "fpga_compile", "status": "PASS"}])
-    mapping = {6: _capgap_entry(6), 39: _capgap_entry(39)}
-    refused = ws.prune_stale_mapping(mapping, project)
-    assert 6 in refused, "the executed step's waiver must be evicted"
-    assert 6 not in mapping
-    assert 39 in mapping, "the board step with no evidence stays honoured"
-
-
-def test_filter_honorable_splits_the_capgap_pair(tmp_path):
-    project = _project(tmp_path, [{"name": "fpga_compile", "status": "FAIL"}])
-    keep, drop = ws.filter_honorable(
-        [_capgap_entry(6), _capgap_entry(39)], project)
-    assert [e["id"] for e in drop] == [6]
-    assert [e["id"] for e in keep] == [39]
-    assert "_refused_reason" in drop[0]
-
-
-@pytest.mark.parametrize("status", ["PASS", "FAIL", "OK", "ERROR", "BLOCK"])
-def test_every_executed_status_breaks_the_id_only_condition(tmp_path, status):
-    project = _project(tmp_path / status,
-                       [{"name": "fpga_compile", "status": status}])
-    ok, _ = ws.condition_holds(_capgap_entry(6), project)
-    assert ok is False

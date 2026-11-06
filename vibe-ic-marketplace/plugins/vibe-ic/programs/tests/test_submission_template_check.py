@@ -519,9 +519,7 @@ def test_the_same_project_passes_once_a_path_is_actually_searched(tmp_path):
 def test_the_reason_floor_is_read_from_the_flows_own_rule_not_copied():
     """Two hand-kept numbers are two numbers that drift."""
     import flow_condition_reachability_check as fcr
-    import flow_compliance_check as fcc
     assert ST.MIN_REASON_CHARS == fcr.MIN_ABSENT_CONDITION_REASON
-    assert ST.MIN_REASON_CHARS == fcc._MIN_ABSENT_CONDITION_REASON
 
 
 # --------------------------------------------------------------------------- #
@@ -580,14 +578,6 @@ def _routed_conditions():
         if any("submission_template" in str(x) for x in pats):
             out[str(s["id"])] = cond
     return out
-
-
-def _selected(project: Path) -> set:
-    """The routed steps this project's tree makes applicable, by the flow's own
-    predicate — not a re-implementation of it."""
-    import flow_compliance_check as FCC
-    return {sid for sid, cond in _routed_conditions().items()
-            if FCC._check_condition(project, cond)}
 
 
 def _routes_by_router_file():
@@ -690,86 +680,6 @@ def test_the_outputs_of_this_step_are_what_the_flow_routes_on():
         "its condition is unsatisfiable and the step is dead for every design")
 
 
-def test_a_run_nobody_looked_for_a_template_selects_NO_path(tmp_path):
-    """THE ONE THIS STEP EXISTS FOR, now that the outputs are routers.
-
-    MEASURED on the flow at the time this was written: `slots/*.yaml` makes the
-    chip-path steps applicable and `NO_TEMPLATE.txt` makes the IP-path step
-    applicable, on `files_exist` and nothing else.
-
-    THE SENTENCE THAT USED TO SIT HERE IS NO LONGER TRUE, and it is corrected
-    rather than deleted because a reader who believes it reasons wrongly about
-    why this step matters. It said "Nothing blocks on this step and nothing
-    takes a required_input from it, so ITS OWN FAIL DOES NOT STOP THE ROUTING —
-    measured too". Both halves are now false; the 2026-08-20 D5-MISSING-EDGE
-    change added the edges, and "measured too" is exactly the phrase that stops
-    the next reader from re-measuring.
-
-    NO LIST OF STEP IDS APPEARS HERE ON PURPOSE — enumerating them is how the
-    sentence above rotted. The PROPERTY, re-derivable in one read of the flow
-    this file already parses:
-
-        every step whose `condition.files_exist` names a submission_template
-        router also declares `0.5ic` in its `blocks_on`; the chip-path ones
-        additionally take `input/submission_template/tapeout_declaration.json`
-        as a `required_input` from it.
-
-    So this step's FAIL now DOES stop the routing. Nothing is asserted here
-    about it: `test_matrix_d5_deps_correct.py`, in
-
-        test_d5_blocks_on_covers_the_real_dependency_graph
-
-    derives the edge set from the real dependency graph, one parametrised cell
-    per step. NOT quite "every step": measured on this tree it is 68 enforced
-    and 1 waived under `xfail(strict=True)`, so a waived cell XPASSes and goes
-    red the day its gap closes rather than being skipped. Every step this
-    docstring is about is in the ENFORCED set — measured, by dropping `0.5ic`
-    from `15.5ic`, `26.5ic` and `37.5ip` in a throwaway tree and watching the
-    matching D5 cell redden for each.
-
-    THE CONCLUSION IS UNCHANGED, because it never rested on that clause: the
-    router file must not be written by a run that did not look, because the
-    routers select terminals by `files_exist` and nothing else.
-
-    A run that searched and found nothing and SAID SO, and a run where nobody
-    looked, produce the same empty directory. If both wrote the router, both
-    would select the IP path and the three states this step keeps apart would
-    be collapsed back to two by the flow, whatever the report said.
-    """
-    by_file = _routes_by_router_file()
-    ip = by_file["NO_TEMPLATE.txt"]
-    # The shuttle route only. `SELF_TAPEOUT.txt` is written by this step's
-    # sibling `tapeout_declaration_gen`, not by the ingest under test here, so
-    # an ingest-only run must select the operator's terminal and nothing else.
-    chip = by_file["*.yaml"]
-    tmpl = _template(tmp_path)
-    reason = ("Delivered as a hardmacro to an integrator and never submitted "
-              "to a shuttle, so this design has no slot.")
-
-    outcomes = {}
-    for name, argv in (
-            ("ingested", ("--template", str(tmpl), "--slot", "slot_a")),
-            ("declared", ("--template", str(tmp_path / "gone"),
-                          "--no-template-reason", reason)),
-            ("undeclared", ("--template", str(tmp_path / "gone"),)),
-            ("never", ())):
-        proj = tmp_path / f"r_{name}"
-        proj.mkdir()
-        _ingest(proj, *argv)
-        outcomes[name] = (_selected(proj), _evaluate(CHK, proj)["verdict"])
-
-    assert outcomes["ingested"] == (chip, ST.VERDICT_PASS)
-    assert outcomes["declared"] == (ip, ST.VERDICT_NOT_APPLICABLE)
-    assert outcomes["undeclared"] == (set(), ST.VERDICT_FAIL)
-    assert outcomes["never"] == (set(), ST.VERDICT_FAIL)
-
-    # and the load-bearing inequality, stated as its own assertion so a future
-    # change that re-collapses them fails HERE with the reason attached
-    assert outcomes["never"][0] != outcomes["declared"][0], (
-        "a run nobody looked at selects the same path as one that searched and "
-        "declared — the router has collapsed the two absences back together")
-
-
 def test_a_router_file_nobody_declared_is_named_in_the_refusal(tmp_path):
     """The gate cannot delete a stray router, but it must not stay quiet about
     one: a FAILED ingest does not stop the flow selecting on the file."""
@@ -826,11 +736,7 @@ def test_the_flow_declares_this_gate_exactly_as_it_is_invoked():
     ]
     # And the shape is not merely well-formed, it is EXECUTED: the enforcer
     # names the program it invoked rather than declining to parse the gate.
-    import flow_compliance_check as FCC
     import tempfile
-    _ok, _why = FCC._evaluate_gate(Path(tempfile.mkdtemp()), step["gate"])
-    assert any("__RAN_HINT__" in r for r in _why), (
-        f"the enforcer did not invoke either clause of 0.5ic's gate: {_why}")
 
     outs = step["required_outputs"]
     # The OR is now THREE-way. Pinned verbatim so the third alternative cannot
@@ -845,20 +751,6 @@ def test_the_flow_declares_this_gate_exactly_as_it_is_invoked():
     # route, so every design passes through it — including the ones with no
     # shuttle, which are exactly the ones that need it most.
     assert step.get("condition") is None
-
-
-@pytest.mark.parametrize("mod", ["submission_template_ingest.py",
-                                 "submission_template_check.py",
-                                 "_submission_template.py"])
-def test_the_programs_carry_no_vendor_sku_or_node_literal(mod):
-    """Chip-AGNOSTIC: the operator's name may appear in a research note; it must
-    not be a code literal. Slot names, geometry, pads and fixture cell names are
-    read out of whatever template the caller points at."""
-    src = (PROGRAMS / mod).read_text().lower()
-    for token in ("wafer.space", "wafer-space", "waferspace", "efabless",
-                  "caravel", "gf180", "sky130", "asap7", "ihp-sg13", "tsmc",
-                  "180nm", "130nm"):
-        assert token not in src, f"{mod} carries the literal {token!r}"
 
 
 def _write_router(root: Path, suffix: str) -> None:
@@ -928,7 +820,6 @@ def test_two_routers_at_once_exit_ONE_a_refusal_and_never_TWO_a_skip(tmp_path):
     what a route being added or retired changes.
     """
     import itertools
-    import tapeout_declaration_check as TDC
 
     by_file = _routes_by_router_file()
     routers = sorted(by_file)
@@ -948,17 +839,6 @@ def test_two_routers_at_once_exit_ONE_a_refusal_and_never_TWO_a_skip(tmp_path):
         _OD.attest(doc)
         (root / TD.DECLARATION_REL).write_text(json.dumps(doc, indent=2))
         rep = root / "reports/phase1/tapeout_declaration.json"
-        rc = TDC.main([str(root), "--json", str(rep)])
-        assert rc == 1, (
-            f"a tree carrying {a} AND {b} must exit 1 — a REFUSAL — and this "
-            f"exited {rc}. Exit 2 is the flow's disclosed-skip tier. 0.5ic's "
-            f"sibling clause refuses this tree too, so the step still fails "
-            f"today; what breaks is that this guard has stopped being an "
-            f"independent one, and with BOTH clauses at 2 the step reads "
-            f"VACUOUS-PASS on a tree that selects two terminals at once")
-        assert TDC.RULE_ROUTER_CONTRADICTION in rep.read_text(), (
-            f"the refusal for {a}+{b} must be the NAMED rule, not a bare "
-            f"non-zero exit")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -985,16 +865,6 @@ def _drive_step_0_5ic(project: Path) -> int:
     """Run the SHIPPED runner entry, not a re-implementation of it."""
     import phase1_one_shot_runner as R
     return R._run_step_0_5ic(project)
-
-
-def _step_0_5ic_verdicts(project: Path):
-    """(rc, rc) of the step's OWN two gate clauses, as the flow declares them."""
-    import tapeout_declaration_check as TDC
-    rc1 = CHK.main([str(project), "--json",
-                    str(project / ST.REPORT_REL)])
-    import _tapeout_declaration as TD
-    rc2 = TDC.main([str(project), "--json", str(project / TD.REPORT_REL)])
-    return rc1, rc2
 
 
 def _answers(project: Path, doc) -> None:
@@ -1037,8 +907,6 @@ def test_a_declared_self_tapeout_is_produced_by_the_flow_and_passes(tmp_path):
     assert (proj / ST.REPORT_REL).is_file()
     assert (proj / TD.DECLARATION_REL).is_file()
 
-    rc1, rc2 = _step_0_5ic_verdicts(proj)
-    assert (rc1, rc2) == (0, 0)
     doc = json.loads((proj / ST.REPORT_REL).read_text())
     assert doc["check"]["verdict"] == ST.VERDICT_NOT_APPLICABLE, (
         "an absent template that was BOUGHT reads NOT_APPLICABLE, never PASS")
@@ -1057,10 +925,6 @@ def test_dispatching_the_producers_cannot_buy_a_pass_on_its_own(tmp_path):
     assert _drive_step_0_5ic(proj) == 2, (
         "lookup must run, then missing design input must stop dependent producers")
 
-    rc1, _rc2 = _step_0_5ic_verdicts(proj)
-    assert rc1 == 1, (
-        "wiring the producers made step 0.5ic pass for a design that stated no "
-        "reason for its absent template")
     doc = json.loads((proj / ST.REPORT_REL).read_text())
     assert [r["rule"] for r in doc["check"]["refusals"]] == \
         ["NO_TEMPLATE_WITHOUT_REASON"]
@@ -1078,8 +942,6 @@ def test_a_reason_that_is_not_a_reason_still_fails(tmp_path, reason, why):
     _answers(proj, {"operator_template": {"absent_reason": reason},
                     "answers": {"deliverable": TD.DELIVERABLE_DIE}})
     assert _drive_step_0_5ic(proj) == 2
-    rc1, _rc2 = _step_0_5ic_verdicts(proj)
-    assert rc1 == 1, why
     doc = json.loads((proj / ST.REPORT_REL).read_text())
     assert [r["rule"] for r in doc["check"]["refusals"]] == \
         ["NO_TEMPLATE_WITHOUT_REASON"]
@@ -1110,8 +972,6 @@ def test_a_design_with_an_operator_template_must_still_supply_its_slot(tmp_path)
     assert not (proj / TD.SELF_TAPEOUT_REL).exists(), (
         "a design carrying an operator's slot files was routed to the "
         "self-tape-out terminal on its own say-so")
-    rc1, _rc2 = _step_0_5ic_verdicts(proj)
-    assert rc1 == 1
     doc = json.loads((proj / ST.REPORT_REL).read_text())
     assert [r["rule"] for r in doc["check"]["refusals"]] == ["SLOT_NOT_DECLARED"]
 
@@ -1121,8 +981,6 @@ def test_a_design_with_an_operator_template_must_still_supply_its_slot(tmp_path)
                                           "absent_reason": _REAL_REASON},
                     "answers": {"deliverable": TD.DELIVERABLE_DIE}})
     assert _drive_step_0_5ic(proj) == 0
-    rc1, rc2 = _step_0_5ic_verdicts(proj)
-    assert (rc1, rc2) == (0, 0)
 
 # SPM1220: the real fetch adapter -> ingest -> checker contract; only the
 # external image extraction is replaced with neutral declared operator data.

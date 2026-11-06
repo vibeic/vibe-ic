@@ -62,7 +62,6 @@ if str(PROG) not in sys.path:
 
 import _flow_reason_taxonomy as T        # noqa: E402
 import _structural_absence as SA         # noqa: E402
-import flow_compliance_check as F        # noqa: E402
 import fmeda_fault_injection_coverage as fi  # noqa: E402
 
 CLS = SA.NOT_APPLICABLE_BY_STRUCTURE
@@ -127,32 +126,10 @@ def _run_producer(project: Path, out_rel="reports/phase2/safety/f.json"):
     return cp, report
 
 
-
-
 # ── 1. the reader's half of guard (i): the report channel must carry it ───
 def _break_step(cmd: str) -> dict:
     return {"id": "T1", "name": "reader probe", "stage": "stage1",
             "gate": {"program_exit_zero": cmd}}
-
-
-@pytest.mark.parametrize("cmd,names_json", [
-    ("break_handler_safety_check phase2/stage1/rtl", False),
-    ("break_handler_safety_check phase2/stage1/rtl "
-     "--json reports/probe/break.json", True),
-])
-def test_the_report_channel_and_the_stdout_channel_agree(tmp_path, cmd,
-                                                         names_json):
-    """ONE checker, ONE tree, ONE rc. Whether the clause names `--json` may
-    not decide whether the class arrives."""
-    proj = _project(tmp_path, PLAIN_RTL)
-    res = F.check_step(proj, _break_step(cmd), waivers={})
-    joined = " ".join(res.reasons)
-    assert res.status != "NOT_MEASURED", (res.status, res.reason_class, cmd)
-    assert CLS in joined, res.reasons
-    assert "INCOMPLETE" not in joined, res.reasons
-    if names_json:
-        rep = json.loads((proj / "reports/probe/break.json").read_text())
-        assert SA.evidence_of(rep) is not None, "the enumeration must be there"
 
 
 def test_a_class_token_with_no_enumeration_is_still_refused():
@@ -207,8 +184,6 @@ def test_the_second_gate_mirrors_the_class_and_does_not_re_derive_it(tmp_path):
     assert SA.evidence_of(gate) == SA.evidence_of(
         json.loads((proj / "reports/phase2/safety/fmeda_coverage.json"
                     ).read_text())), "the two gates must not disagree"
-
-
 
 
 # ── 3. the other direction: a safety design keeps FS1 MEASURED ────────────

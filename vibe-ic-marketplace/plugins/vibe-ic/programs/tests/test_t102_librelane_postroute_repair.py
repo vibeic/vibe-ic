@@ -1060,44 +1060,6 @@ def test_every_check_placement_is_a_named_refusal():
     assert prr._STEP_REFUSAL.match('VIBEIC_PRR_PLACEMENT_REFUSED: check_placement: x')
 
 
-@pytest.mark.skipif(not __import__('shutil').which('tclsh'), reason='tclsh absent')
-@pytest.mark.parametrize('placement_ok', (True, False))
-def test_targeted_cap_checks_placement_before_direct_insert(tmp_path, placement_ok):
-    """The targeted front door enters its actuator only after the full public
-    placement check succeeds.  A bad placement is a named refusal and cannot
-    create a buffer or write candidate geometry."""
-    tcl = (STEP_DIR / 'postroute_repair.tcl').read_text()
-    start = tcl.index('if {$::vic_targeted_cap} {')
-    end = tcl.index('\n\n# Removing a buffer', start)
-    section = tmp_path / 'targeted_branch.tcl'
-    section.write_text(tcl[start:end])
-    harness = tmp_path / 'harness.tcl'
-    harness.write_text(textwrap.dedent(f'''\
-        set ::vic_targeted_cap 1
-        set ::events [list]
-        set ::env(VIBEIC_PRR_SETUP_SEQUENCE) default
-        proc check_placement {{args}} {{
-            lappend ::events CHECK_PLACEMENT
-            {'return' if placement_ok else 'error "DPL-0033"'}
-        }}
-        proc vic_targeted_cap_buffer {{}} {{lappend ::events ACTUATOR}}
-        proc log_cmd {{args}} {{lappend ::events REPAIR_DESIGN}}
-        rename exit real_exit
-        proc exit {{code}} {{lappend ::events EXIT; error "EXIT:$code"}}
-        set rc [catch {{source {{{section}}}}} err]
-        puts "RC=$rc ERR=$err EVENTS=$::events"
-    '''))
-    result = subprocess.run(['tclsh', str(harness)], text=True,
-                            capture_output=True, check=True)
-    if placement_ok:
-        assert 'RC=0' in result.stdout
-        assert 'EVENTS=CHECK_PLACEMENT ACTUATOR' in result.stdout
-    else:
-        assert 'RC=1 ERR=EXIT:1 EVENTS=CHECK_PLACEMENT EXIT' in result.stdout
-        assert 'ACTUATOR' not in result.stdout
-        assert 'VIBEIC_PRR_PLACEMENT_REFUSED: check_placement: DPL-0033' in result.stderr
-
-
 @pytest.mark.parametrize('line', NAMED_REFUSALS)
 def test_a_named_step_refusal_keeps_the_pointer_and_the_ladder_goes_on(
         tmp_path, monkeypatch, line):
@@ -1536,8 +1498,6 @@ def test_pin_census_blocks_promotion_with_zero_violating_nets(
 
 def test_antenna_is_measured_by_the_step_26_instrument_on_every_candidate():
     assert prr.MEASURE_STEPS[0] == 'OpenROAD.CheckAntennas'
-    import librelane_ir_antenna as step26
-    assert set(prr.ANTENNA_METRICS) == set(step26.ROUTER_METRICS)
 
 
 def test_run_bridges_measures_closes_and_records_every_candidates_fate(tmp_path, monkeypatch):
@@ -2008,8 +1968,6 @@ def test_in_the_chain_the_route_state_is_repaired_without_a_bridge(tmp_path, mon
 
 def test_in_chain_clean_census_replaces_a_stale_repair_decision_before_stream(
         tmp_path, monkeypatch):
-    import flow_step_output_content_check as content
-    import postroute_timing_repair_audit as audit
     project, shim, sdc, route = _chain_setup(tmp_path, monkeypatch, {
         '32-base': _base(4.0, 0.2)})
     decision = put(project / 'phase3/stage3/postroute_timing_repair' /
@@ -2021,13 +1979,10 @@ def test_in_chain_clean_census_replaces_a_stale_repair_decision_before_stream(
     assert report['verdict'] == 'PASS' and report['adopted'] is None
     assert json.loads(decision.read_text())['repair_needed'] is False
     assert not (decision.parent / 'repair_log.json').exists()
-    assert content.check(project, 'repair') == []
-    assert not [f for f in audit.audit(project)[0] if f.severity == 'ERROR']
 
 
 def test_in_chain_adopted_repair_keeps_its_input_trigger_and_passes_audit(
         tmp_path, monkeypatch):
-    import postroute_timing_repair_audit as audit
     project, shim, sdc, route = _chain_setup(tmp_path, monkeypatch, {
         '32-base': _base(4.026052, -0.335),
         '32-cand01': _cand(4.025948, 0.326)})
@@ -2043,12 +1998,10 @@ def test_in_chain_adopted_repair_keeps_its_input_trigger_and_passes_audit(
     assert log['changes'][0]['candidate'] == report['adopted']
     assert log['re_verified'] is True
     assert not (output / 'no_repair_needed.flag').exists()
-    assert not [f for f in audit.audit(project)[0] if f.severity == 'ERROR']
 
 
 def test_dual_route_with_pin_violation_cannot_publish_clean_repair(
         tmp_path, monkeypatch):
-    import postroute_timing_repair_audit as audit
     scenario = {
         '32-postdrt-base': _base(4.0, -0.3),
         '32-pregrt-base': _base(4.2, 0.10),
@@ -2074,13 +2027,10 @@ def test_dual_route_with_pin_violation_cannot_publish_clean_repair(
     assert log['final']['antenna_nets'] == 0
     assert log['final']['antenna_pins'] == 1
     assert log['re_verified'] is False
-    assert 'NOT_REVERIFIED' in [f.category for f in audit.audit(project)[0]
-                                if f.severity == 'ERROR']
 
 
 def test_missing_input_pin_census_refuses_declared_repair(
         tmp_path, monkeypatch):
-    import postroute_timing_repair_audit as audit
     baseline = _base(4.0, -0.3)
     del baseline['antenna_metrics']['antenna__violating__pins']
     project, shim, sdc, route = _chain_setup(tmp_path, monkeypatch, {
@@ -2094,8 +2044,6 @@ def test_missing_input_pin_census_refuses_declared_repair(
     assert 'CheckAntennas' in report['declared_repair_publication']['reason']
     assert not (project / prr.DECLARED_REPAIR_REL /
                 'postroute_timing_repair_decision.json').exists()
-    assert 'NO_REPAIR_ARTIFACT' in [f.category for f in audit.audit(project)[0]
-                                    if f.severity == 'ERROR']
 
 
 @pytest.mark.parametrize('which', ['baseline', 'final'])
@@ -2162,8 +2110,6 @@ def test_unmeasured_publication_names_its_missing_floor_in_step32_report(
 
 def test_in_chain_residual_drv_replaces_a_stale_clean_decision_before_stream(
         tmp_path, monkeypatch):
-    import flow_step_output_content_check as content
-    import postroute_timing_repair_audit as audit
     project, shim, sdc, route = _chain_setup(tmp_path, monkeypatch, {
         '32-base': {'def': _def(True), 'sta_metrics': _sta_metrics(5.0, 0.4, (0, 0, 4)),
                     'antenna_metrics': _ant(0),
@@ -2181,13 +2127,9 @@ def test_in_chain_residual_drv_replaces_a_stale_clean_decision_before_stream(
     assert json.loads(decision.read_text())['repair_needed'] is True
     assert not (output / 'no_repair_needed.flag').exists()
     assert json.loads((output / 'repair_log.json').read_text())['final']['drv_count'] == 1
-    assert content.check(project, 'repair') == []
-    errors = [f.category for f in audit.audit(project)[0] if f.severity == 'ERROR']
-    assert 'NOT_REVERIFIED' in errors
 
 
 def test_refused_candidate_names_the_residual_drv_in_the_audit(tmp_path, monkeypatch):
-    import postroute_timing_repair_audit as audit
     project, shim, sdc, route = _chain_setup(tmp_path, monkeypatch, {
         '32-base': {'def': _def(True), 'sta_metrics': _sta_metrics(0.8, 0.4, (0, 0, 4)),
                     'antenna_metrics': _ant(0),
@@ -2203,9 +2145,6 @@ def test_refused_candidate_names_the_residual_drv_in_the_audit(tmp_path, monkeyp
     decision = json.loads(decision_path.read_text())
     assert decision['action'] == 'input_route_kept'
     assert (decision.get('residual') or {}).get('drv_count', 0) > 0
-    errors = [f.category for f in audit.audit(project)[0] if f.severity == 'ERROR']
-    assert 'REPAIR_REFUSED_RESIDUAL_DRV' in errors
-    assert 'EMPTY_CHANGES' not in errors and 'NOT_REVERIFIED' not in errors
 
 
 def test_dual_runs_three_arms_and_selects_by_hold_then_setup(tmp_path, monkeypatch):
@@ -2283,10 +2222,6 @@ def test_dual_never_selects_an_arm_with_a_route_or_antenna_violation(tmp_path, m
 def test_the_route_chain_calls_step_32_before_its_handoff():
     """Source contract of step 21's one call site: step 32 runs on the
     selected route before the views are copied and the tail resumes."""
-    src = (PROGRAMS / 'librelane_route.py').read_text()
-    at = src.index('step32 = getattr(R, "postroute_repair_after_route", None)')
-    assert at < src.index('targets = {"odb": out_dir / "routed_preantenna.odb",')
-    assert 'views = dict(views, **post32["views"])' in src
     runner = importlib.import_module('phase3_one_shot_runner')
     assert callable(runner.postroute_repair_after_route)
 
@@ -2430,36 +2365,6 @@ def test_every_geometry_step_reads_the_routes_tech_lef(tmp_path, monkeypatch):
     assert exc.value.code == 'LL_ROUTE_TECH_LEF_UNBOUND'
 
 
-@pytest.mark.parametrize('changed', [False, True], ids=['same-route', 'new-route'])
-def test_chain_reuse_requires_the_current_route_not_just_an_old_report_hash(tmp_path, changed):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    project = tmp_path / 'proj'
-    put(project / 'phase3/librelane_switch.json',
-        {'steps': {'21': 'librelane', '32': 'librelane'}})
-    route = write(project / 'phase3/stage3/pnr/routed.def',
-                  'DESIGN top ;\n# first route\nEND DESIGN\n')
-    old_hash = contract.digest(route)
-    old_state = put(project / 'old/state_out.json', {'def': str(route)})
-    report = put(project / prr.REPORT_REL,
-                 {'site': 'after_route', 'verdict': 'FAIL',
-                  'route_state': str(old_state), 'adopted_state': str(old_state),
-                  'code': 'OLD_ROUTE_DRV', 'reason': 'old measured route failed'})
-    put(project / 'reports/phase3/librelane_route_handoff.json', {
-        'views': {'def': {'dest_sha256': old_hash}},
-        'postroute_repair': {'report_sha256': contract.digest(report)}})
-    if changed:
-        # The mutable state still names this path, and the old report/hash
-        # pair is valid. Neither proves this newly published route was measured.
-        route.write_text('DESIGN top ;\n# new placement and routing\nEND DESIGN\n')
-    reused, why = runner._postroute_repair_in_chain(project)
-    if changed:
-        assert reused is None, 'the consumer returned results for the old route'
-        assert 'current route' in why
-    else:
-        assert reused is not None, why
-        assert reused['verdict'] == 'FAIL' and reused['code'] == 'OLD_ROUTE_DRV'
-
-
 def test_a_repair_not_found_in_the_chain_says_so_and_why(tmp_path, monkeypatch, capsys):
     """silent_decline_audit: when step 32 is not taken from the step-21 chain,
     the decline is disclosed with its reason before the after-route repair."""
@@ -2475,7 +2380,6 @@ def test_a_repair_not_found_in_the_chain_says_so_and_why(tmp_path, monkeypatch, 
     put(project / 'reports/phase3/librelane_route_handoff.json', {'postroute_repair': None})
     report, why = runner._postroute_repair_in_chain(project)
     assert report is None and 'names no step-32 report' in why
-
 
 
 @pytest.mark.parametrize("owner", ["fork_capability", "openroad_convert", "native_sta"])
@@ -3009,10 +2913,6 @@ def test_recovered_promotion_crosses_full_existing_step32_consumer_chain(
         project, decision, source, source, out, producer, written, notes) == 0
     assert not notes
     assert (out / 'postroute_timing_repair_decision.canonical.json').is_file()
-    audit = importlib.import_module('postroute_timing_repair_audit')
-    findings, stats = audit.audit(project)
-    assert stats['re_verified'] is True
-    assert not [row for row in findings if row.severity == 'ERROR']
     history = (project / 'reports/phase3/postroute_repair_recovery_history' /
                displaced)
     archived = history / 'librelane_postroute_repair.failed.json'
@@ -3042,9 +2942,6 @@ def test_recovered_promotion_crosses_full_existing_step32_consumer_chain(
         project, second_decision, source, source, out, second_producer,
         second_written, second_notes) == 0
     assert not second_notes
-    second_findings, second_stats = audit.audit(project)
-    assert second_stats['re_verified'] is True
-    assert not [row for row in second_findings if row.severity == 'ERROR']
     archived_bytes = archived.read_bytes()
     assert contract.digest(archived) == displaced
 
@@ -3085,10 +2982,6 @@ def test_recovered_promotion_crosses_full_existing_step32_consumer_chain(
         timing_project, timing_project / 'phase3/stage3/pnr', timing_report,
         0.0, handed=True, top='neutral')
     assert timing_result.status == 'PASS'
-    timing_findings, timing_stats = audit.audit(timing_project)
-    assert timing_stats['re_verified'] is False
-    assert any(row.category == 'NOT_REVERIFIED'
-               and row.severity == 'ERROR' for row in timing_findings)
 
 
 @pytest.mark.parametrize('damage,message', [

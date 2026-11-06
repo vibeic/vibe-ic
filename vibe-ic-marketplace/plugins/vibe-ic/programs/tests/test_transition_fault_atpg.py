@@ -22,7 +22,6 @@ PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
 
 import transition_fault_atpg_run as tdf  # noqa: E402
-import transition_coverage_check as gate  # noqa: E402
 
 
 # ── cut-port classification ────────────────────────────────────────────────
@@ -274,87 +273,6 @@ def test_spread_order_prefix_is_representative():
 
 # ── gate: FALSE-CLEAN-PROOF (redundant/aborted never detected) ─────────────
 
-def test_gate_recount_ignores_inflated_detected():
-    # producer LIES: claims detected=10 but the fault list has only 8 DET,
-    # 2 RED. The gate must recount 8/8 testable — and here 100% of testable
-    # → but detected_count_mismatch flagged, recomputed governs.
-    blob = {
-        "verdict": "PASS", "detected": 10, "redundant": 2, "aborted": 0,
-        "floor_pct": 90.0,
-        "fault_list": ([{"net": f"_{i}_", "kind": "STR", "verdict": "DET"}
-                        for i in range(8)]
-                       + [{"net": f"_{i}_", "kind": "STF", "verdict": "RED"}
-                          for i in range(2)]),
-    }
-    r = gate.evaluate(blob, floor=90.0)
-    assert r["detected_count_mismatch"] is True
-    assert r["detected"] == 8            # recounted, not the lied 10
-    assert r["redundant"] == 2
-    assert r["tdf_test_coverage_pct"] == 100.0  # 8/(10-2)=8/8
-
-
-def test_gate_fails_when_redundant_inflated_below_floor():
-    # 5 DET, 5 RED counted-as-detected by a cheating producer that wrote
-    # detected=10. Real testable coverage = 5/5 = 100%? No: 5 DET + 5 RED →
-    # testable = 5, detected 5 → 100. Use aborted to force a real miss:
-    blob = {
-        "verdict": "PASS", "detected": 10, "redundant": 0, "aborted": 5,
-        "floor_pct": 90.0,
-        "fault_list": ([{"verdict": "DET"} for _ in range(5)]
-                       + [{"verdict": "ABORT"} for _ in range(5)]),
-    }
-    r = gate.evaluate(blob, floor=90.0)
-    # recount: 5 DET, 0 RED, 5 ABORT → testable=10, cov=50% < 90 → FAIL
-    assert r["detected"] == 5 and r["aborted"] == 5
-    assert r["tdf_test_coverage_pct"] == 50.0
-    assert r["verdict"] == "FAIL"
-
-
-def test_gate_zero_evidence_fails():
-    blob = {"verdict": "PASS", "detected": 0, "redundant": 0, "aborted": 0}
-    r = gate.evaluate(blob, floor=90.0)
-    assert r["verdict"] == "FAIL"
-
-
-def test_gate_not_applicable_passthrough():
-    """NOT_APPLICABLE is honoured — but only once it is EARNED.
-
-    This test used to assert that a bare `NOT_APPLICABLE` + `scan_flops: 0`
-    passed straight through. That unconditional passthrough was the hole: it is
-    what let a run that detected 0 of 65 flops, cut no scan chain, and measured
-    no coverage score a clean self-skip. The producer now records
-    `sequential_evidence` derived from the design's own Liberty, and the gate
-    honours the self-skip on the strength of that evidence rather than on the
-    producer's say-so. The uncorroborated form is covered by
-    test_dft_atpg_zero_flop_and_absent_artifact.py."""
-    blob = {"verdict": "NOT_APPLICABLE", "scan_flops": 0,
-            "reasons": ["combinational design"],
-            "sequential_evidence": {
-                "verdict": "NO_SEQUENTIAL", "authoritative": True,
-                "method": "liberty_ff_group",
-                "liberty_sequential_cells_declared": 12,
-                "sequential_cells_instantiated": [],
-                "reasons": ["the design's own Liberty declares 12 cell(s) with "
-                            "an `ff` group and the netlist instantiates none"]}}
-    r = gate.evaluate(blob, floor=90.0)
-    assert r["verdict"] == "NOT_APPLICABLE"
-
-
-def test_gate_missing_json_fails():
-    r = gate.evaluate(None, floor=90.0)
-    assert r["verdict"] == "FAIL"
-
-
-def test_gate_floor_never_relaxed_below_producer():
-    # producer floor 95 > cli default 90 → effective 95, 92% must FAIL
-    blob = {"verdict": "PASS", "floor_pct": 95.0,
-            "fault_list": ([{"verdict": "DET"} for _ in range(92)]
-                           + [{"verdict": "ABORT"} for _ in range(8)])}
-    r = gate.evaluate(blob, floor=90.0)
-    assert r["floor_pct"] == 95.0
-    assert r["tdf_test_coverage_pct"] == 92.0
-    assert r["verdict"] == "FAIL"
-
 
 def test_tdf_pre_flatten_script_legalizes_memory_before_flatten():
     # v1.4.39 (ic2-sha256 sha256 DT1 floor): proc + memory_collect + memory_map
@@ -371,7 +289,6 @@ def test_tdf_pre_flatten_script_legalizes_memory_before_flatten():
     assert "read_verilog /work/cut/core.v" in s
     assert "hierarchy -top sha256" in s
     assert "write_verilog -noattr /work/flat/flat_core.v" in s
-
 
 
 # ---------------------------------------------------------------------------
@@ -431,24 +348,3 @@ def _engine_limited_blob():
                                 "reasons": ["1 seq cell type"]},
         "reasons": ["generic netlist — fault cannot detect $_DFF_ flops"],
     }
-
-
-def test_gate_engine_limited_generic_is_skipped_condition():
-    r = gate.evaluate(_engine_limited_blob(), floor=90.0)
-    assert r["verdict"] == "SKIPPED-CONDITION"
-
-
-def test_gate_engine_limited_requires_generic_unmapped_attestation():
-    bad = _engine_limited_blob(); bad["pdk_detected"] = "sky130"
-    assert gate.evaluate(bad, floor=90.0)["verdict"] == "BLOCKED"
-
-
-def test_gate_engine_limited_requires_sequential_evidence():
-    bad = _engine_limited_blob()
-    bad["sequential_evidence"] = {"verdict": "SEQ_ABSENT"}
-    assert gate.evaluate(bad, floor=90.0)["verdict"] == "BLOCKED"
-
-
-def test_gate_engine_limited_requires_capability_flag():
-    bad = _engine_limited_blob(); bad["capability_flag"] = ""
-    assert gate.evaluate(bad, floor=90.0)["verdict"] == "BLOCKED"

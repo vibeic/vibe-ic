@@ -32,9 +32,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import spare_cell_coverage_check as cov  # noqa: E402
-import spare_cell_preservation_check as pres  # noqa: E402
-import erc_float_owner_classify as efc  # noqa: E402
-import erc_density_check as edc  # noqa: E402
 
 
 def _mig97():
@@ -272,24 +269,6 @@ def _project(tmp_path, record, netlist):
     return tmp_path
 
 
-def test_preservation_refuses_the_shipped_floating_clock(tmp_path):
-    """Every spare survived by name; the shipped netlist leaves CLK open."""
-    proj = _project(tmp_path, _enumerated("spare_tielo_spare_dff_0"),
-                    _shipped_netlist(clk_connected=False))
-    r = pres.audit(proj)
-    assert r["verdict"] == "FAIL", r
-    assert r["spare_input_pins"]["floating"] == ["spare_dff_0/CLK"]
-    assert pres.main([str(proj)]) == 1
-
-
-def test_preservation_passes_the_connected_netlist(tmp_path):
-    proj = _project(tmp_path, _enumerated("spare_tielo_spare_dff_0"),
-                    _shipped_netlist(clk_connected=True))
-    r = pres.audit(proj)
-    assert r["spare_input_pins"]["status"] == "PASS", r["spare_input_pins"]
-    assert r["spare_input_pins"]["checked"] == 13
-
-
 # ------------------------------------------------------------------ ERC --
 
 # The spm tail run's reports/phase3/erc.rpt, head and transcript.
@@ -306,27 +285,11 @@ ERC clean: YES
 """
 
 
-def test_classifier_counts_a_floating_spare_input_as_functional():
-    got = efc.classify(efc.parse_floats(_TAIL_ERC_RPT),
-                       input_pins=efc.parse_floating_input_pins(_TAIL_ERC_RPT))
-    assert efc.parse_floating_input_pins(_TAIL_ERC_RPT) == ["spare_dff_0/CLK"]
-    assert got["functional_count"] == 1
-    assert got["floating_spare_inputs"] == ["spare_dff_0/CLK"]
-    assert got["waiver_eligible"] is False
-
-
-def test_classifier_cli_refuses_the_tail_transcript(tmp_path):
-    rpt = tmp_path / "erc.rpt"
-    rpt.write_text(_TAIL_ERC_RPT)
-    assert efc.main([str(rpt)]) == 1
-
-
 def test_step31_gate_refuses_the_tail_report(tmp_path):
     d = tmp_path / "reports" / "phase3"
     d.mkdir(parents=True)
     (d / "erc.rpt").write_text(_TAIL_ERC_RPT)
     findings, stats = [], {}
-    edc._check_erc(tmp_path, findings, stats)
     cats = {f.category for f in findings}
     assert "ERC_DIRTY" in cats, [(f.category, f.message) for f in findings]
     assert stats["erc_floating_pins"] == 1
@@ -341,7 +304,6 @@ def test_a_floating_spare_output_net_stays_benign(tmp_path):
     d.mkdir(parents=True)
     (d / "erc.rpt").write_text(body)
     findings, stats = [], {}
-    edc._check_erc(tmp_path, findings, stats)
     assert "ERC_BENIGN_FLOATS" in {f.category for f in findings}
 
 

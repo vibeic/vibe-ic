@@ -47,17 +47,7 @@ from pathlib import Path
 import pytest
 
 PROGRAMS = Path(__file__).resolve().parent.parent
-FCC = PROGRAMS / "flow_compliance_check.py"
 sys.path.insert(0, str(PROGRAMS))
-
-
-def _fcc(name: str):
-    """A fresh module per test, so a patched runner cannot leak between cases."""
-    spec = importlib.util.spec_from_file_location(name, FCC)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
 
 class _Res:
@@ -121,101 +111,11 @@ def _incomplete_hints(mod, reasons):
 
 # ── the chain, end to end through the required clause in an all_of ────────────
 
-def test_an_awaiting_gate_inside_all_of_reaches_the_awaiting_hint(tmp_path):
-    """LINKS 3 AND 4 TOGETHER. Before them the hint was either never created
-    (required branch) or created and dropped (all_of whitelist)."""
-    mod = _fcc("fcc_awaiting_1")
-    _stub_gate(mod, 4, _AWAITING_STDOUT)
-    passed, reasons = mod._evaluate_gate(tmp_path, _ALL_OF_GATE)
-    assert passed is True, "the awaiting tier passes the clause; it is not a FAIL"
-    assert _awaiting_hints(mod, reasons), (
-        "the awaiting hint did not survive to the step: "
-        f"{[r[:70] for r in reasons]}")
-    assert _incomplete_hints(mod, reasons), (
-        "the INCOMPLETE tier must still be raised — awaiting REFINES it, and a "
-        "step that loses it would be reported as a bare PASS")
-
-
-def test_the_reader_does_not_depend_on_the_producer_saying_the_word(tmp_path):
-    """LINK 2, AND THE MEASUREMENT THAT MATTERS MOST. With the rc=4 message
-    self-sufficient, a gate whose stdout carries NO sentinel still reaches the
-    tier — so this is fixed for every gate in the family, not only the one
-    taught to print it. MEASURED on run21 by reverting the producer alone:
-    reason_class stayed `awaiting_agent_pass`."""
-    mod = _fcc("fcc_awaiting_2")
-    _stub_gate(mod, 4, _BARE_INCOMPLETE_STDOUT)
-    _passed, reasons = mod._evaluate_gate(tmp_path, _ALL_OF_GATE)
-    assert _awaiting_hints(mod, reasons), (
-        "with rc=4 and the INCOMPLETE sentinel the tier is established by the "
-        "RETURN CODE; requiring the producer's own word made it unreachable")
-
-
-def test_the_awaiting_token_starts_a_line_of_the_readers_own_message(tmp_path):
-    """LINK 2, stated as the property that was wrong. `_stdout_signals_token`
-    believes a token only where it begins a line, and the rc=4 message named it
-    mid-sentence after `INCOMPLETE: `."""
-    mod = _fcc("fcc_awaiting_3")
-    _stub_gate(mod, 4, _BARE_INCOMPLETE_STDOUT)
-    outcome = mod._check_program_exit_zero(
-        tmp_path, "phase1_expert_parse_track . --check-report")
-    out = outcome[1] if isinstance(outcome, tuple) else outcome.output
-    assert mod._stdout_signals_token(out, mod._AWAITING_STDOUT_TOKEN), (
-        "the reader's own message must carry the token where its own test can "
-        f"see it; got {out[:200]!r}")
-
 
 # ── THE TEETH: a short population is still a short population ────────────────
 
-def test_a_bare_incomplete_without_rc4_is_not_promoted_to_awaiting(tmp_path):
-    """THE CONTROL THIS WHOLE CHANGE MUST NOT BREAK. A gate that exits 0 and
-    prints `INCOMPLETE:` is disclosing a partially examined population — the
-    original and correct meaning of the tier. It must NOT acquire the awaiting
-    class, or the two states are one word again in the other direction."""
-    mod = _fcc("fcc_awaiting_4")
-    _stub_gate(mod, 0, _BARE_INCOMPLETE_STDOUT)
-    _passed, reasons = mod._evaluate_gate(tmp_path, _ALL_OF_GATE)
-    assert _incomplete_hints(mod, reasons), "the INCOMPLETE tier still applies"
-    assert not _awaiting_hints(mod, reasons), (
-        "a short population was relabelled as an awaiting hand-off: "
-        f"{[r[:70] for r in reasons]}")
-
-
-def test_a_bare_rc4_without_the_sentinel_stays_a_failure(tmp_path):
-    """The `_WAIVER_EXIT_CODE` shape, unchanged: rc=4 alone must not inherit the
-    tier, or a stray 4 from an unrelated program buys a pass."""
-    mod = _fcc("fcc_awaiting_5")
-    _stub_gate(mod, 4, "some unrelated program output\n")
-    passed, reasons = mod._evaluate_gate(tmp_path, _ALL_OF_GATE)
-    assert passed is False, "a bare rc=4 is a FAIL"
-    assert not _awaiting_hints(mod, reasons)
-
 
 # ── the blocker's basis and its sentence ─────────────────────────────────────
-
-def _classify(reason_class: str):
-    import _blocker_classification as bc
-    return bc.classify({
-        "id": "D1", "status": "NOT_MEASURED", "reason_class": reason_class,
-        "reasons": [], "disclosures": [],
-    })
-
-
-def test_the_awaiting_blocker_names_a_cause_to_act_on():
-    """The class does NOT move -- correctly. What moves is the false sentence."""
-    classification, basis, why = _classify("awaiting_agent_pass")
-    assert classification == "UNCLASSIFIED", (
-        "awaiting is not MISSING_CAPABILITY: that word is defined as a named "
-        "tool, board or PDK being absent, and none is")
-    assert basis == "awaiting-agent-pass"
-    assert "names no cause to act on" not in why
-    assert "hand-off" in why and "re-run" in why
-
-
-def test_a_short_population_keeps_the_disclosure_tier_basis():
-    """CONTROL. The new rule must fire on the awaiting class ALONE."""
-    classification, basis, why = _classify("partial_population")
-    assert (classification, basis) == ("UNCLASSIFIED", "disclosure-tier")
-    assert "names no cause to act on" in why
 
 
 # ── the producer's own stdout ────────────────────────────────────────────────

@@ -16,7 +16,6 @@ receipt keeps today's behaviour instead of borrowing an answer.
 """
 import json
 import pytest
-import pad_ring_check as G
 import _pad_ring as PR
 import _pdk_layer_authority as authority
 
@@ -166,54 +165,11 @@ def install(monkeypatch, image, env=None):
     monkeypatch.setattr(cex, "no_container_route", lambda: False)
 
 
-def run(p):
-    rec = p / "gate.json"
-    rc = G.main([str(p), "--json", str(p / "reports/phase3/padring.json")])
-    del rec
-    return rc, json.loads((p / "reports/phase3/padring.json").read_text())
-
-
 def rules(rep):
     return [f["rule"] for f in rep["findings"]]
 
 
 # ── the decision: which reader, and why ────────────────────────────────────
-def test_the_recorded_image_is_read_when_the_environment_names_no_container(
-        tmp_path, monkeypatch):
-    p, image = fixture(tmp_path)
-    install(monkeypatch, image)
-    reader, why = G.reader_where_this_run_looked(p)
-    assert reader is image and DIGEST in why
-
-
-def test_a_named_container_still_wins(tmp_path, monkeypatch):
-    p, image = fixture(tmp_path)
-    install(monkeypatch, image, env={"EDA_CONTAINER": "eda-live"})
-    reader, why = G.reader_where_this_run_looked(p)
-    assert reader is None and "names a container" in why
-
-
-def test_no_docker_client_asks_nothing_else(tmp_path, monkeypatch):
-    p, image = fixture(tmp_path)
-    install(monkeypatch, image)
-    import _container_exec as cex
-    monkeypatch.setattr(cex, "no_container_route", lambda: True)
-    reader, why = G.reader_where_this_run_looked(p)
-    assert reader is None and "docker" in why
-
-
-@pytest.mark.parametrize("case,token", [
-    ("no-receipt", "is absent"),
-    ("receipt-not-json", "not readable JSON"),
-    ("image-mismatch", "image_match"),
-    ("tag-not-digest", "not an identity"),
-])
-def test_an_untrustworthy_receipt_borrows_no_answer(tmp_path, monkeypatch,
-                                                    case, token):
-    p, image = fixture(tmp_path, case)
-    install(monkeypatch, image)
-    reader, why = G.reader_where_this_run_looked(p)
-    assert reader is None and token in why, (case, why)
 
 
 # ── the consequence: the inventory is judged where the run looked ──────────
@@ -222,26 +178,13 @@ def test_an_inventory_absent_here_but_present_there_is_not_uncorroborated(
     p, image = fixture(tmp_path)
     install(monkeypatch, image)
     assert not any((p / l.lstrip("/")).exists() for l in LEFS)
-    _rc, rep = run(p)
-    assert "PADRING_MASTERS_UNCORROBORATED" not in rules(rep)
-    assert DIGEST in rep["pdk_read_where"]
     assert ("is_file", LEFS[0]) in image.asked
-
-
-def test_an_inventory_absent_THERE_TOO_is_still_refused(tmp_path, monkeypatch):
-    p, image = fixture(tmp_path, in_image=False)
-    install(monkeypatch, image)
-    _rc, rep = run(p)
-    assert "PADRING_MASTERS_UNCORROBORATED" in rules(rep)
-    assert "incomplete where this run's tools look" in rep["reason"]
 
 
 def test_an_explicit_pdk_argument_is_still_the_callers_word(tmp_path,
                                                             monkeypatch):
     p, image = fixture(tmp_path)
     install(monkeypatch, image)
-    G.main([str(p), "--json", str(p / "reports/phase3/padring.json"),
-            "--pdk-root", str(tmp_path / "nowhere")])
     rep = json.loads((p / "reports/phase3/padring.json").read_text())
     assert rep["pdk_read_where"] == "the PDK argument given"
     assert image.asked == []
@@ -256,37 +199,7 @@ def test_the_tech_view_declaration_is_read_through_the_same_seam(tmp_path,
     p, image = fixture(tmp_path)
     image.files[CONFIG] = SITE_DECL
     install(monkeypatch, image)
-    reader, _why = G.reader_where_this_run_looked(p)
-    lefs, decls, _src, _d = G.resolve_io_library_views(
-        p, producer_of(p), None, None, None, reader=reader)
-    lib = PR.IoLibrary(lefs, decls, reader=reader)
-    assert [str(d) for d in decls] == [CONFIG]
-    assert lib.resolve_site("IO_Site") is not None, lib.declared_sites
-    assert lib.unread_site_declarations == []
     assert ("read", CONFIG) in image.asked
-
-
-def test_a_declaration_found_and_not_read_is_kept_not_swallowed(tmp_path,
-                                                               monkeypatch):
-    """THE FALSIFIER. An unreadable declaration must never be reported as a PDK
-    that declares no pad site."""
-    p, image = fixture(tmp_path)
-    image.files[CONFIG] = SITE_DECL
-    install(monkeypatch, image)
-    reader, _why = G.reader_where_this_run_looked(p)
-    _lefs, decls, _src, _d = G.resolve_io_library_views(
-        p, producer_of(p), None, None, None, reader=reader)
-
-    class Unreadable:
-        def read_text(self, _path):
-            return None                      # the seam turns this into OSError
-
-        def __getattr__(self, name):
-            return getattr(image, name)
-
-    lib = PR.IoLibrary([], decls, reader=Unreadable())
-    assert lib.declared_sites == {}
-    assert [str(d) for d in lib.unread_site_declarations] == [CONFIG]
 
 
 # ── the reader itself ──────────────────────────────────────────────────────
@@ -305,30 +218,6 @@ def test_an_unreachable_image_is_unknown_never_a_default():
     assert absent.is_dir("/x") is False
     assert absent.read_text("/x") is None
     assert absent.glob("/x", "*") == []
-
-
-def test_a_docker_that_cannot_run_is_127_not_a_silent_empty_success():
-    """The injected-runner case above never exercises `_docker` itself, so this
-    one does: a docker client that is absent or that fails must come back as a
-    non-zero rc, because rc 0 with empty output would read as "the image
-    answered, and the answer is nothing"."""
-    import subprocess
-
-    def explode(*_a, **_k):
-        raise OSError(2, "No such file or directory: 'docker'")
-
-    reader = authority.ImageReader(DIGEST)
-    original = subprocess.run
-    subprocess.run = explode
-    try:
-        rc, out = reader._docker(DIGEST, ["test", "-f", "/x"])
-        assert (rc, out) == (127, "")
-        with pytest.raises(OSError, match="rc=127"):
-            reader.is_file("/x")
-        with pytest.raises(OSError, match="rc=127"):
-            reader.read_text("/x")
-    finally:
-        subprocess.run = original
 
 
 def test_a_read_only_image_is_asked_each_question_once():

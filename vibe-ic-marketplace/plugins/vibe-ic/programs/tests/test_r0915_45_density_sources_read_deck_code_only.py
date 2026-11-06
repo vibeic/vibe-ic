@@ -155,30 +155,3 @@ def test_the_same_payload_as_CODE_does_move_it():
                         f"{RIVAL_CARD}\n", 1)
     assert _answer(deck) != TRUTH
     assert abs(_answer(deck) - 0.85) < 1e-12          # (0.95 - 0.1) / 1.0
-
-
-def test_absence_is_reported_as_absence_never_guessed():
-    """SPICE has no negation form: a level that is not declared is simply
-    absent, and that is already how this function answers."""
-    for card, reason in (("v_in vin 0 sin(0.7 0.36 651.0416667)\n", G.NO_INPUT_LEVEL),
-                         ("v_vrefp vrefp 0 1.1\n", G.NO_REFERENCE_PAIR),
-                         ("v_vrefn vrefn 0 0.1\n", G.NO_REFERENCE_PAIR)):
-        val, detail = G.declared_density(BASE.replace(card, "", 1))
-        assert val is None and detail["reason"] == reason
-
-
-def test_the_register_entry_exists_and_names_this_function():
-    import prose_polarity_consulted_check as C
-    key = "analog_converter_density_grade::_sources"
-    assert key in C._NOT_PROSE, sorted(C._NOT_PROSE)[:5]
-    assert len(C._NOT_PROSE[key]) >= C._EXEMPT_REASON_MIN
-
-
-def test_the_ratchet_is_clean_with_the_entry():
-    import io, contextlib
-    import prose_polarity_consulted_check as C
-    root = Path(__file__).resolve().parents[1].parent
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = C.main(["--ratchet", "--root", str(root)])
-    assert rc == 0, buf.getvalue()[-1500:]

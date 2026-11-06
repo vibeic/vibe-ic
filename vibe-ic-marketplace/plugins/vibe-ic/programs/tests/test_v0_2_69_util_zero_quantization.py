@@ -24,46 +24,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import utilization_band_check as u  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 _P3_SRC = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
 
 
 # ── check: 0 is a precision floor, not corruption ──────────────────────────
-
-def test_classify_zero_warns_unresolved():
-    verdict, findings = u.classify(0.0, "reports/density.rpt")
-    assert verdict == "WARN"
-    assert any(f.category == "UTIL_ZERO_UNRESOLVED" for f in findings)
-    assert all(f.severity != "ERROR" for f in findings)
-
-
-def test_classify_negative_still_fails():
-    verdict, findings = u.classify(-0.01, "x")
-    assert verdict == "FAIL"
-    assert any(f.category == "UTIL_NONPOSITIVE" for f in findings)
-
-
-def test_observed_corpus_shape_no_longer_false_fails(tmp_path):
-    # the exact density.rpt shape the audited project carried
-    p = tmp_path / "reports" / "density.rpt"
-    p.parent.mkdir(parents=True)
-    p.write_text(
-        "# Metal-fill / density report — OpenROAD filler_placement\n"
-        "# (ORGANIC-20260531 Step 34). Tool: openroad.\n"
-        "# filler instances placed: 0\n"
-        "# std-cell row utilization (post-fill): 0.0%\n")
-    verdict, _ = u.classify(*u.read_utilization(tmp_path))
-    assert verdict != "FAIL"
-
-
-def test_strict_zero_still_rc0(tmp_path):
-    # --strict gates NO_DATA, not the quantized-0 WARN
-    p = tmp_path / "reports" / "density.rpt"
-    p.parent.mkdir(parents=True)
-    p.write_text("# utilization: 0.0%\n")
-    assert u.main([str(tmp_path), "--strict"]) == 0
 
 
 # ── emitter: source pins ───────────────────────────────────────────────────

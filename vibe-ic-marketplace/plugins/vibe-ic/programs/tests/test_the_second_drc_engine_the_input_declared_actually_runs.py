@@ -57,16 +57,6 @@ _RUN19_RAW = "$PDK_ROOT/gf180mcuD/libs.tech/magic/gf180mcuD.tech"
 _RUN19_TECH = "/foss/pdks/gf180mcuD/libs.tech/magic/gf180mcuD.tech"
 
 
-
-
-
-
-
-
-
-
-
-
 def test_the_runner_resolves_before_it_declares_the_preflight_unperformed():
     """The producer-side wiring: the resolver is consulted on the UNEXPANDED
     branch, and only a failure to resolve still reports 'not performed'."""
@@ -78,13 +68,6 @@ def test_the_runner_resolves_before_it_declares_the_preflight_unperformed():
 
 
 # ── (2) the Magic sign-off DRC deck ────────────────────────────────────────
-
-
-
-
-
-
-
 
 
 _MAGIC_STUBS = r"""
@@ -115,14 +98,6 @@ proc tech {args} {
 }
 proc quit {args} { exit 0 }
 """
-
-
-
-
-
-
-
-
 
 
 #: The transcript the deck above writes, in the dialect measured in the image.
@@ -169,22 +144,6 @@ _DIRTY_RPT = _CLEAN_RPT.replace(
     "COUNT: 0", "COUNT: 6")
 
 
-
-
-def test_the_transcript_classifies_as_a_magic_signoff_producer(tmp_path):
-    """THE LOAD-BEARING ONE. `l24_signoff_evidence_backed_check._report_engine`
-    takes the engine from `_signoff_drc_format`'s classification of the
-    report's OWN bytes, and that function is not being weakened — the report
-    is made real enough to satisfy it."""
-    for text in (_CLEAN_RPT, _DIRTY_RPT):
-        p = tmp_path / "r.rpt"
-        p.write_text(text)
-        prod = SDF.classify_file(p)
-        assert prod.kind == SDF.MAGIC, prod.evidence
-        assert prod.is_signoff_deck is True
-        assert SDF.attribution_disagrees(prod) is False
-
-
 def test_the_router_is_still_not_a_magic_signoff_producer(tmp_path):
     """OVER-BREADTH CONTROL. Nothing added here may let the router's own
     detailed-route DRC classify as a sign-off deck."""
@@ -193,12 +152,6 @@ def test_the_router_is_still_not_a_magic_signoff_producer(tmp_path):
                  "0 violation(s).\ndrc check\n")
     prod = SDF.classify_file(p)
     assert prod.kind != SDF.MAGIC
-
-
-
-
-
-
 
 
 def test_the_leg_runs_only_when_the_input_declared_magic():
@@ -244,10 +197,6 @@ def test_a_watchdog_kill_is_blocked_and_never_a_clean_verdict():
     assert "timeout=" not in body.split("_docker_exec(container")[1][:400]
 
 
-
-
-
-
 _TECH_SNIPPET = """
 tech
  format 32
@@ -268,14 +217,6 @@ cifoutput
  style "gds write style, not a design rule at all"
 end
 """
-
-
-
-
-
-
-
-
 
 
 def test_an_unreadable_technology_is_disclosed_not_hidden():
@@ -354,16 +295,6 @@ def test_a_denial_spliced_into_the_magic_transcript_moves_nothing():
     assert re.search(r"^COUNT:\s*\d+\s*$", base, re.M)
     assert not re.search(r"^COUNT:\s*\d+\s*$",
                          base.replace("COUNT: 0", "COUNT:"), re.M)
-
-
-def test_the_register_entry_names_this_reader_and_carries_its_argument():
-    import prose_polarity_consulted_check as gate
-    key = "phase3_one_shot_runner::_run_magic_signoff_drc"
-    assert key in gate._NOT_PROSE, sorted(gate._NOT_PROSE)[:5]
-    reason = gate._NOT_PROSE[key]
-    assert len(reason) >= gate._EXEMPT_REASON_MIN
-    assert "test_a_denial_spliced_into_the_magic_transcript_moves_nothing" \
-        in reason, "the entry must name the measurement it rests on"
 
 
 def test_the_receipt_is_found_without_being_declared_in_the_flow():

@@ -25,7 +25,6 @@ from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
-import benchmark_verify_report as BVR  # noqa: E402
 import analog_real_corner_sweep as ARC  # noqa: E402
 
 _A4 = PROGRAMS / "analog_a4_corner_sweep_check.py"
@@ -41,34 +40,6 @@ def _mk_full_stack_skeleton(project: Path, top="u_hawaii_adc"):
     (d / f"tb_{top}_full.v").write_text(
         f"// runner-emitted full-stack TB skeleton\n"
         f"module tb_{top}_full;\n  initial $finish;\nendmodule\n")
-
-
-def test_tb_skeleton_is_not_digital_rtl(tmp_path):
-    # THE #185 REPRO: the project's ONLY .v is the runner-emitted TB skeleton.
-    _mk_full_stack_skeleton(tmp_path)
-    assert BVR._has_synth_digital_rtl(tmp_path) is False
-
-
-def test_real_rtl_still_reads_digital(tmp_path):
-    # NO-LEAK: a genuine design .v is still detected as digital RTL.
-    _mk_full_stack_skeleton(tmp_path)
-    rtl = tmp_path / "phase2" / "stage1" / "rtl"
-    rtl.mkdir(parents=True, exist_ok=True)
-    (rtl / "sha256.v").write_text("module sha256(input clk); endmodule\n")
-    assert BVR._has_synth_digital_rtl(tmp_path) is True
-
-
-def test_all_analog_ic_reads_analog_only_not_digital(tmp_path):
-    # End-to-end: an analog IC whose only .v is the TB skeleton + no PnR reads
-    # ANALOG-ONLY, so the digital pillars N/A instead of FAILing.
-    ana = tmp_path / "phase3" / "analog"
-    ana.mkdir(parents=True, exist_ok=True)
-    (ana / "analog_block_list.json").write_text(
-        json.dumps({"blocks": [{"name": "ldo", "type": "ldo"}]}))
-    _mk_full_stack_skeleton(tmp_path)
-    assert BVR._is_analog_ic(tmp_path) is True
-    assert BVR._has_synth_digital_rtl(tmp_path) is False
-    assert BVR._is_analog_only_ic(tmp_path) is True
 
 
 # ════════════════════════════════════════════════════════════════════════

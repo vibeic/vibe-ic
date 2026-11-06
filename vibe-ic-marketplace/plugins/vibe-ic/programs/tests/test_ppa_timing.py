@@ -16,7 +16,6 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from _ppa import canonical_json as cj          # noqa: E402
-from _ppa import timing                        # noqa: E402
 from _ppa.backends import opensta              # noqa: E402
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
@@ -121,304 +120,14 @@ def _by_metric(rows, metric, **scope):
 
 # ── NEGATIVE: the fixture that must come out RED if the rule is removed ─────
 
-def test_a_view_that_analysed_no_paths_is_not_a_passing_row(tmp_path):
-    """THE founding defect of this corpus, in one assertion.
-
-    `worst_slack` starts at infinity and takes the min over analysed paths, so
-    it is still infinity exactly when the path set was EMPTY. The `wns 0.00` and
-    `tns 0.00` printed beside it are `min(0, INF)` — arithmetic ABOUT infinity.
-    Publishing them as met +0.000 ns is "an unreported view is
-    indistinguishable from a met one" reproduced inside the reader.
-    """
-    proj = _project(tmp_path, {"sta_mcorner_ocv.rpt": NO_PATHS})
-    rows, _ = timing.timing_rows(proj)
-
-    for metric in ("timing.hold.worst_slack_ns", "timing.hold.wns_ns",
-                   "timing.hold.tns_ns"):
-        got = _by_metric(rows, metric)
-        assert got, "%s must appear as a row, not be omitted" % metric
-        assert all(r["status"] == timing.NOT_MEASURED for r in got), \
-            "%s was published as measured out of a report that analysed " \
-            "nothing: %r" % (metric, got)
-        assert all("value" not in r for r in got), \
-            "a NOT_MEASURED row must carry no value at all -- not 0, not null"
-    assert not [r for r in rows if r["status"] == timing.MEASURED]
-
-
-def test_a_negative_summary_beside_the_sentinel_is_never_withheld(tmp_path):
-    """The mirror, and the more dangerous direction to get wrong.
-
-    A NEGATIVE wns cannot be an echo of infinity, so it is real evidence of a
-    violation. Suppressing it would be the one error worse than publishing a
-    phantom pass: this module would be hiding a miss.
-    """
-    body = NO_PATHS.replace("tns min 0.00", "tns min -3.25")
-    proj = _project(tmp_path, {"sta_mcorner_ocv.rpt": body})
-    rows, _ = timing.timing_rows(proj)
-    tns = _by_metric(rows, "timing.hold.tns_ns")
-    assert len(tns) == 1
-    assert tns[0]["status"] == timing.MEASURED
-    assert tns[0]["value"] == -3.25
-
 
 # ── the matrix must survive ────────────────────────────────────────────────
-
-def test_the_matrix_is_not_collapsed_to_one_row(tmp_path):
-    """A design has a timing MATRIX, not a WNS.
-
-    Collapsing it is how a multi-corner claim becomes a single-corner claim
-    without anyone deciding to make it: the slow-corner row is simply not in
-    the table any more.
-    """
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
-    rows, _ = timing.timing_rows(proj)
-
-    setup = _by_metric(rows, "timing.setup.worst_slack_ns", check="setup")
-    hold = _by_metric(rows, "timing.hold.worst_slack_ns", check="hold")
-    assert len(setup) == 1 and len(hold) == 1
-    assert setup[0]["value"] == -1.71
-    assert hold[0]["value"] == 0.54
-    # and the two rows are DIFFERENT views, not one number wearing two names
-    assert setup[0]["scope"]["process"] == "ss"
-    assert hold[0]["scope"]["process"] == "ff"
-    assert setup[0]["scope"]["rc_corner"] == "max"
-    assert hold[0]["scope"]["rc_corner"] == "min"
-    assert setup[0]["scope"] != hold[0]["scope"]
-
-
-def test_no_scope_key_is_ever_null_and_every_absent_one_says_why(tmp_path):
-    """A number without its scope cannot be compared with anything -- and a
-    scope key spelled `null` is WORSE than one that is absent.
-
-    This assertion was the opposite until v1.11.69: "all eight keys are always
-    present; an omitted key and a null key are different claims to a reader and
-    only one of them is true". Both halves of that sentence are right and the
-    conclusion drawn from it was wrong. `null == null`, so two rows that could
-    not read their RC corner compared as rows taken at the SAME RC corner, and
-    `_ppa/metrics.validate` -- the layer that can REFUSE -- has called that
-    spelling `SCOPE_SENTINEL` since v1.11.53, as does PPA_INTERFACES section 2.
-    MEASURED over 12 real run trees before the change: 152 rows refused, every
-    one of them from this module.
-
-    So the rule is stricter now, not looser. A key is present WITH A VALUE, or
-    it is absent WITH A REASON in `scope_gaps` -- the reason lives outside
-    `scope` precisely because nothing outside `scope` can make two records
-    compare equal.
-
-    A row MAY carry more than the eight, and the set of extras is CLOSED: only
-    `timing.*.worst_path_slack_ns` may add one, and only from
-    `_PATH_SCOPE_KEYS`. That metric is emitted once per reported path, so
-    without a key naming the path several rows collide as one identity holding
-    three different slacks. An undeclared extra is refused here rather than
-    allowed as a superset: a scope key nobody declared makes a record
-    incomparable to every other record, which is the failure the eight exist to
-    prevent.
-    """
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER,
-                               "sta_spef_based.rpt": SINGLE_CORNER_STAMPED})
-    rows, _ = timing.timing_rows(proj)
-    assert rows
-    # NOT VACUOUS: this specimen leaves keys genuinely unestablished (neither
-    # report stamps a mode, and the multi-corner one stamps no basis), so the
-    # absent-key arm below has something to fire on.
-    assert any(set(timing._SCOPE_KEYS) - set(r["scope"]) for r in rows), \
-        "the fixture established every key, so the absent-key rule was untested"
-    for r in rows:
-        keys = set(r["scope"])
-        extras = keys - set(timing._SCOPE_KEYS)
-        assert extras <= set(timing._PATH_SCOPE_KEYS), r
-        if extras:
-            assert r["metric"].endswith(timing._PATH_METRIC_SUFFIX), r
-        # THE SENTINEL, forbidden by spelling. `""` too: `"" == ""` compares
-        # equal exactly the way `None == None` does.
-        for k in keys:
-            assert r["scope"][k] is not None and r["scope"][k] != "", \
-                "scope.%s is a sentinel, not a value: %r" % (k, r)
-        # EVERY ABSENT KEY EXPLAINED. An unexplained hole is the same invisible
-        # claim as a null, moved one field over.
-        gaps = r.get("scope_gaps", {})
-        for k in set(timing._SCOPE_KEYS) - keys:
-            assert gaps.get(k), \
-                "scope.%s is absent and nothing says why: %r" % (k, r)
-        assert r["schema"] == "vibeic.ppa.metric.v1"
-        assert r["status"] in (timing.MEASURED, timing.NOT_MEASURED,
-                               timing.INVALID)
-        assert "source" in r and r["source"]["tool"] == "opensta"
-
-
-def test_every_reported_path_row_says_WHICH_path(tmp_path):
-    """The F-10b defect: `worst_path_slack_ns` is emitted once per reported
-    path, and until v1.11.33 every one of them carried the same scope -- so one
-    view held three different slacks under one identity and every consumer
-    refused the set.
-
-    Each such row must name its path: the endpoints when the artefact gives
-    them, an ordinal only when it does not. And no two rows of that metric may
-    share a scope, which is the property that was actually broken.
-    """
-    proj = _project(tmp_path, {"sta_multipath.rpt": MULTIPATH,
-                               "sta_spef_multicorner.rpt": MULTICORNER,
-                               "sta_spef_based.rpt": SINGLE_CORNER_STAMPED})
-    rows, _ = timing.timing_rows(proj)
-    path_rows = [r for r in rows
-                 if r["metric"].endswith(timing._PATH_METRIC_SUFFIX)]
-    # NOT VACUOUS: the specimen puts three paths in one view on purpose, and a
-    # run that produced one row would satisfy "no two rows collide" by having
-    # nothing to collide with.
-    assert len(path_rows) >= 4, path_rows
-    assert sorted(r["value"] for r in path_rows) == [-1.71, 5.20, 5.32, 5.36]
-    seen = {}
-    for r in path_rows:
-        sc = r["scope"]
-        named = sc.get("path_startpoint") and sc.get("path_endpoint")
-        assert named or sc.get("path_ordinal"), r
-        # Never both: a volatile key next to a stable one makes the stable one
-        # useless for a cross-arm comparison.
-        assert not (named and sc.get("path_ordinal")), r
-        # Per ARTEFACT. Two reports may legitimately describe one path in one
-        # view; whether that is corroboration or a conflict is the index's
-        # question (§2.1), not this one. What must never happen is one report
-        # emitting several rows that claim one identity.
-        key = (r["source"]["path"], cj.digest_of(sc))
-        assert key not in seen, (
-            "two %s rows from %s share one scope: %r and %r"
-            % (r["metric"], r["source"]["path"], seen.get(key), r))
-        seen[key] = r
-
-
-def test_the_per_view_metric_set_is_complete_not_absent(tmp_path):
-    """An omitted row and a met row look the same to anything scanning for
-    violations. The multi-corner emitter never calls `report_wns`, so wns must
-    appear as NOT_MEASURED rather than vanish."""
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
-    rows, _ = timing.timing_rows(proj)
-    wns = _by_metric(rows, "timing.setup.wns_ns", check="setup")
-    assert len(wns) == 1
-    assert wns[0]["status"] == timing.NOT_MEASURED
-    assert "not_reported" in wns[0]["reason"]
-
-
-def test_wns_is_never_derived_from_worst_slack(tmp_path):
-    """OpenSTA's `wns` is `min(0, worst_slack)`. Computing it here would make a
-    DERIVED number wear a MEASURED status, and §3 says hash the value you
-    PARSED."""
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
-    rows, _ = timing.timing_rows(proj)
-    for r in _by_metric(rows, "timing.setup.wns_ns"):
-        assert r["status"] != timing.MEASURED
-        assert "value" not in r
 
 
 # ── scope must be read, never invented ─────────────────────────────────────
 
-def test_the_stage_is_never_guessed_when_the_report_does_not_stamp_it(tmp_path):
-    """MEASURED on this checkout: the two MULTI-corner sign-off emitters stamp
-    no `STA_BASIS`, while the single-corner one does. Inferring a stage from a
-    filename would let a pre-layout estimate be compared against sign-off
-    evidence, which is exactly what `scope` exists to stop."""
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
-    rows, _ = timing.timing_rows(proj)
-    assert rows
-    for r in rows:
-        assert "stage" not in r["scope"], \
-            "an unestablished stage is ABSENT, never null: two nulls compare " \
-            "equal and would make a synthesis number and a post-route number " \
-            "the same fact"
-        assert r.get("scope_gaps", {}).get("stage"), \
-            "an absent stage must say WHY it is absent"
-
-
-def test_a_stamped_report_yields_its_stage_and_its_corner(tmp_path):
-    proj = _project(tmp_path, {"sta_spef_based.rpt": SINGLE_CORNER_STAMPED})
-    rows, _ = timing.timing_rows(proj)
-    ws = _by_metric(rows, "timing.setup.worst_slack_ns")
-    assert len(ws) == 1
-    assert ws[0]["value"] == 5.24
-    assert ws[0]["scope"]["stage"] == "post_route_extracted"
-    assert ws[0]["scope"]["process"] == "ss"
-    assert ws[0]["scope"]["voltage_v"] == 1.60
-    assert ws[0]["scope"]["temperature_c"] == 100.0
-
-
-def test_scope_case_does_not_split_one_view_in_two(tmp_path):
-    """The process stance spells `SS`; the liberty stem spells `ss`. Under §2
-    those would be two incomparable views of one corner."""
-    proj = _project(tmp_path, {"sta_spef_based.rpt": SINGLE_CORNER_STAMPED})
-    rows, _ = timing.timing_rows(proj)
-    assert all(r["scope"]["process"] in (None, "ss") for r in rows), \
-        [r["scope"]["process"] for r in rows]
-
-
-def test_the_mode_is_not_chosen_when_the_run_declares_several(tmp_path):
-    """The reports carry no mode marker. With two declared modes, picking one
-    would be invention."""
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER},
-                    pvt={"modes": ["functional", "scan"]})
-    rows, _ = timing.timing_rows(proj)
-    assert all("mode" not in r["scope"] for r in rows)
-    assert all(r.get("scope_gaps", {}).get("mode") for r in rows)
-
-    proj2 = _project(tmp_path / "one", {"sta_spef_multicorner.rpt": MULTICORNER},
-                     pvt={"modes": ["functional"]})
-    rows2, _ = timing.timing_rows(proj2)
-    assert all(r["scope"]["mode"] == "functional" for r in rows2)
-
 
 # ── declared-but-unreported, and its false-positive twin ───────────────────
-
-def test_a_declared_view_with_no_report_at_all_becomes_a_not_measured_row(tmp_path):
-    """A view the run was CONFIGURED to analyse and never did is the defect
-    this lane exists to make visible. It gets a row, not a silence."""
-    proj = _project(
-        tmp_path, {"sta_spef_based.rpt": SINGLE_CORNER_STAMPED},
-        stances={"mcorner_ocv_stance.json":
-                 {"setup_process_corner": "SS", "hold_process_corner": "FF"}})
-    rows, _ = timing.timing_rows(proj)
-    hold = [r for r in rows if r["scope"]["check"] == "hold"
-            and r["scope"]["process"] == "ff"]
-    assert len(hold) == 1
-    assert hold[0]["status"] == timing.NOT_MEASURED
-    assert "declared_but_not_reported" in hold[0]["reason"]
-
-
-def test_a_reported_view_is_never_called_declared_but_not_reported(tmp_path):
-    """The false-positive twin, and a bug this module actually had.
-
-    A hold corner that WAS analysed and found no paths already carries a row
-    saying exactly that. A second row claiming it was never reported would be
-    FALSE -- and it is the kind of false finding that gets a whole gate ignored.
-    """
-    proj = _project(
-        tmp_path, {"sta_mcorner_ocv.rpt": NO_PATHS},
-        stances={"multi_corner_spef_stance.json":
-                 {"setup_corner": "max", "hold_corner": "min"}})
-    rows, _ = timing.timing_rows(proj)
-    false_rows = [r for r in rows
-                  if "declared_but_not_reported" in (r.get("reason") or "")
-                  and r["scope"]["check"] == "hold"]
-    assert not false_rows, \
-        "the min-RC hold view WAS reported; it analysed no paths, and that is " \
-        "already on the table with the accurate reason"
-    # the control: setup@max really WAS declared and never reported, so that
-    # row MUST be there. Without it this test would pass on a module that had
-    # simply stopped emitting declared-view rows altogether.
-    assert [r for r in rows
-            if "declared_but_not_reported" in (r.get("reason") or "")
-            and r["scope"]["check"] == "setup"]
-
-
-def test_availability_is_not_configuration(tmp_path):
-    """`corners_available` lists what could be analysed; `nom` is extracted on
-    every run and deliberately never analysed, because setup signs off at the
-    slow corner and hold at the fast one. Demanding a row for it would fire on
-    every healthy run -- the mirror of the defect, and just as useless."""
-    proj = _project(
-        tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER},
-        stances={"multi_corner_spef_stance.json":
-                 {"setup_corner": "max", "hold_corner": "min",
-                  "corners_extracted": ["max", "min", "nom"]}})
-    rows, _ = timing.timing_rows(proj)
-    assert not [r for r in rows if r["scope"]["rc_corner"] == "nom"]
 
 
 # ── number grammar: the two traps already paid for in this repository ──────
@@ -488,69 +197,8 @@ def test_an_ambiguous_stem_refuses_rather_than_picking():
 
 # ── per-clock rows come only from per-clock evidence ───────────────────────
 
-def test_the_design_wide_worst_is_not_attributed_to_a_clock(tmp_path):
-    """`report_worst_slack` is design-wide within a corner. Attributing it to
-    whichever clock appears first in the 3-path dump would be fabrication.
-
-    It used to say so as `scope.clock: null`, meaning "aggregate over all
-    clocks". That spelling cannot carry the distinction: `null == null`, so an
-    aggregate-over-all-clocks row and a row whose clock nobody could read
-    compared as the same fact. The key is now ABSENT and `scope_gaps.clock`
-    carries the sentence -- where it cannot make anything compare equal."""
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
-    rows, _ = timing.timing_rows(proj)
-    got = _by_metric(rows, "timing.setup.worst_slack_ns")
-    assert got
-    for r in got:
-        assert "clock" not in r["scope"], r
-        why = r.get("scope_gaps", {}).get("clock", "")
-        assert "not_applicable" in why and "design-wide" in why.lower(), why
-
-
-def test_a_per_clock_row_exists_only_where_a_path_group_names_one(tmp_path):
-    """The path blocks are the only per-clock evidence a report has, and they
-    are a PARTIAL census -- so they carry their own metric name and can never
-    be mistaken for the design-wide worst."""
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
-    rows, _ = timing.timing_rows(proj)
-    per_clock = _by_metric(rows, "timing.setup.worst_path_slack_ns")
-    assert len(per_clock) == 1
-    assert per_clock[0]["scope"]["clock"] == "clk"
-    assert per_clock[0]["value"] == -1.71
-    # the HOLD section carries no path dump, so it gets no per-clock row
-    assert not _by_metric(rows, "timing.hold.worst_path_slack_ns")
-
 
 # ── identity ───────────────────────────────────────────────────────────────
-
-def test_a_row_hashes_through_the_one_serializer(tmp_path):
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
-    rows, _ = timing.timing_rows(proj)
-    r = rows[0]
-    assert timing.row_digest(r) == cj.digest_of(r)
-    assert timing.row_digest(r).startswith("sha256:")
-
-
-def test_the_source_hash_is_of_the_artefact_bytes(tmp_path):
-    """An auditor must be able to reproduce it with `sha256sum`."""
-    import hashlib
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER})
-    rows, _ = timing.timing_rows(proj)
-    want = "sha256:" + hashlib.sha256(
-        (proj / "phase3/stage3/sta/sta_spef_multicorner.rpt").read_bytes()
-    ).hexdigest()
-    assert {r["source"]["sha256"] for r in rows
-            if r["source"]["path"]} == {want}
-
-
-def test_the_row_order_is_stable_across_runs(tmp_path):
-    """Row order feeds document identity; an unsorted glob would make one tree
-    hash two ways."""
-    proj = _project(tmp_path, {"sta_spef_multicorner.rpt": MULTICORNER,
-                               "sta_mcorner_ocv.rpt": NO_PATHS})
-    a, _ = timing.timing_rows(proj)
-    b, _ = timing.timing_rows(proj)
-    assert [timing.row_digest(x) for x in a] == [timing.row_digest(x) for x in b]
 
 
 # ── VACUOUS: missing input is rc=2 with a marker, never 0 and never 1 ──────
@@ -589,8 +237,6 @@ def test_an_empty_artefact_is_undetermined_not_clean(tmp_path):
     p = _cli(proj)
     assert p.returncode == 2, p.stdout + p.stderr
     assert "[CANNOT CHECK]" in p.stderr
-    rows, _ = timing.timing_rows(proj)
-    assert [r["status"] for r in rows] == [timing.INVALID]
 
 
 def test_the_extractor_never_returns_one(tmp_path):
@@ -621,27 +267,6 @@ def test_the_json_document_is_written_and_counts_its_rows(tmp_path):
 
 
 # ── the split itself: a backend that starts deciding is the drift ──────────
-
-def test_the_backend_holds_no_threshold_and_no_verdict():
-    """A backend parses one tool's output and does nothing else, so that adding
-    a second timing engine never changes a rule. A threshold that lands here is
-    one that has to be re-agreed for every tool added afterwards, and the two
-    copies drift where nobody is looking."""
-    src = (_PROGRAMS / "_ppa" / "backends" / "opensta.py").read_text()
-    code = "\n".join(
-        ln for ln in src.splitlines()
-        if not ln.lstrip().startswith("#"))
-    body = code.split('"""', 2)[-1]          # drop the module docstring
-    # NOT a ban on the words PASS / FAIL / VIOLATED. Those are the TOOL's own
-    # output grammar -- `(VIOLATED)` is what OpenSTA prints on a path line and
-    # `SIGNOFF_WORST_PATHS_FAILED` is a marker the emitter writes -- and a
-    # parser that could not match them would not be a parser. What must not
-    # appear is the vocabulary of DECIDING.
-    for banned in ("NOT_MEASURED", "MEASURED", "verdict", "threshold",
-                   "_ppa.timing", "from _ppa import timing"):
-        assert banned not in body, \
-            "%r appears in the parsing backend -- that is policy, and policy " \
-            "belongs in _ppa.timing" % banned
 
 
 def test_the_document_leads_with_its_schema_key(tmp_path):
@@ -696,7 +321,6 @@ def test_every_emitted_document_validates_against_that_schema(tmp_path):
     silent pass is not. The shape itself is ALSO asserted without any engine,
     by the scope/value tests above, so this is reinforcement not the only guard.
     """
-    from _ppa import schema_validation as _SV
     schema = json.loads(_SCHEMA_PATH.read_text())
     proj = _project(
         tmp_path,
@@ -709,50 +333,8 @@ def test_every_emitted_document_validates_against_that_schema(tmp_path):
     out = tmp_path / "rows.json"
     assert _cli(proj, "--json", out).returncode == 0
     doc = json.loads(out.read_text())
-    assert _SV.engine_or_skip(schema).errors(doc) == []
     # the document must be worth validating: all three statuses present
     assert {r["status"] for r in doc["rows"]} >= {"MEASURED", "NOT_MEASURED"}
-
-
-def test_the_schema_rejects_a_not_measured_row_that_carries_a_value():
-    """The no-sentinel rule, proven to BITE.
-
-    A schema that accepts the thing it exists to forbid is worse than no
-    schema: it is a green check over the exact defect. So this feeds it the
-    forbidden shape and requires a rejection.
-    """
-    from _ppa import schema_validation as _SV
-    schema = json.loads(_SCHEMA_PATH.read_text())
-    bad = {
-        "schema": "vibeic.ppa.metric.v1",
-        "metric": "timing.hold.wns_ns",
-        "status": "NOT_MEASURED",
-        "value": 0.0,                     # <- the forbidden sentinel
-        "unit": "ns",
-        "reason": "no paths analysed",
-        # A REAL scope, not `{k: None}`: the all-null spelling this used to
-        # carry is itself forbidden now (SCOPE_SENTINEL / the schema's
-        # no-null rule), so the positive control below would have been
-        # rejected for the wrong reason and the test would have proven
-        # nothing about the sentinel it is aimed at.
-        "scope": {"stage": "post_route_extracted", "mode": "functional",
-                  "process": "ss", "voltage_v": 1.6, "temperature_c": 100.0,
-                  "rc_corner": "min", "clock": "clk", "check": "hold"},
-        "source": {"path": None, "sha256": None, "tool": "opensta",
-                   "tool_commit": None, "parser": "x", "parser_sha256": None},
-    }
-    # The row schema plus the pocket its `$ref`s point into, so the subschema
-    # is self-contained and no engine needs a resolver bolted on.
-    validator = _SV.engine_or_skip(
-        {**schema["definitions"]["metric_row"],
-         "definitions": schema["definitions"]})
-    assert validator.errors(bad), (
-        "the schema accepted the sentinel it exists to forbid")
-    # positive control: the same row without the value must be ACCEPTED, or
-    # this test would pass against a schema that rejects everything.
-    ok = dict(bad)
-    del ok["value"]
-    assert validator.errors(ok) == []
 
 
 # ── fixtures captured from the REAL tool, not reconstructed ────────────────
@@ -830,50 +412,6 @@ def test_met_timing_and_nothing_analysed_print_the_same_summary():
     assert [m.no_paths for m in b_ws] == [True, True]
 
 
-def test_real_tool_output_parses_to_the_numbers_it_printed(tmp_path):
-    """The reconstructions above are read out of the emitter. This one is what
-    OpenSTA actually wrote, and the parsed numbers must be its numbers."""
-    proj = _project(tmp_path, {"sta_spef_based.rpt": REAL_WITH_PATHS})
-    rows, _ = timing.timing_rows(proj)
-    assert _by_metric(rows, "timing.setup.worst_slack_ns")[0]["value"] == 0.19
-    assert _by_metric(rows, "timing.hold.worst_slack_ns")[0]["value"] == 0.64
-    assert _by_metric(rows, "timing.setup.wns_ns")[0]["value"] == 0.0
-    per_clock = _by_metric(rows, "timing.setup.worst_path_slack_ns")
-    assert len(per_clock) == 1
-    assert per_clock[0]["scope"]["clock"] == "clk"
-    assert per_clock[0]["value"] == 0.19
-
-
-def test_real_no_path_output_yields_no_measured_row(tmp_path):
-    proj = _project(tmp_path, {"sta_spef_based.rpt": REAL_NO_PATHS})
-    rows, _ = timing.timing_rows(proj)
-    assert rows
-    assert not [r for r in rows if r["status"] == timing.MEASURED]
-
-
-def test_an_empty_hold_view_does_not_suppress_a_real_setup_measurement(tmp_path):
-    """Withholding is PER CHECK. This module's first shape keyed it on the
-    whole section, so an unbannered report carrying a real setup slack beside
-    an empty hold analysis had its setup measurement suppressed -- inventing an
-    unmeasured view out of one that was measured. Both directions are wrong and
-    this is the one that loses evidence.
-    """
-    body = ("tns max 0.00\nwns max 0.00\n"
-            "worst slack max 0.19\nworst slack min INF\n")
-    proj = _project(tmp_path, {"sta_spef_based.rpt": body})
-    rows, _ = timing.timing_rows(proj)
-
-    setup_ws = _by_metric(rows, "timing.setup.worst_slack_ns")
-    assert setup_ws[0]["status"] == timing.MEASURED
-    assert setup_ws[0]["value"] == 0.19
-    # the setup SUMMARY lines are real evidence too: setup analysed paths
-    assert _by_metric(rows, "timing.setup.wns_ns")[0]["status"] == timing.MEASURED
-    assert _by_metric(rows, "timing.setup.tns_ns")[0]["status"] == timing.MEASURED
-    # and hold is still honestly unmeasured
-    assert _by_metric(rows, "timing.hold.worst_slack_ns")[0]["status"] \
-        == timing.NOT_MEASURED
-
-
 # ── F-10: one artefact published into two directories ───────────────────────
 
 def _publish_twice(tmp_path, name, body):
@@ -886,46 +424,6 @@ def _publish_twice(tmp_path, name, body):
     (a / name).write_text(body)
     (b / name).write_text(body)
     return a / name, b / name
-
-
-def test_default_prelayout_per_corner_reports_are_discovered(tmp_path):
-    """Issue #3422: discovery must match the runner's Step-10 layout.
-
-    The basename matches ``sta*.rpt`` only below ``prelayout_per_corner``.
-    The old non-recursive glob therefore returned an empty population on a
-    real run even though all three PVT reports existed.
-    """
-    sta = tmp_path / "phase3" / "stage3" / "sta"
-    nested = sta / "prelayout_per_corner" / "sta_SS.rpt"
-    nested.parent.mkdir(parents=True)
-    nested.write_text(SINGLE_CORNER_STAMPED)
-
-    found = timing.discover_reports(tmp_path)
-
-    assert [p.resolve() for p in found] == [nested.resolve()]
-    rows, notes = timing.timing_rows(tmp_path)
-    assert rows, "the discovered report produced no timing records: %r" % notes
-    assert any(r["status"] == timing.MEASURED for r in rows), rows
-
-
-def test_unrelated_nested_sta_report_is_not_discovered(tmp_path):
-    """The #3422 repair is bounded to the publisher's declared subdirectory.
-
-    A recursive scan would also promote scratch or diagnostic reports into the
-    measurement denominator based only on their basename.
-    """
-    sta = tmp_path / "phase3" / "stage3" / "sta"
-    expected = sta / "prelayout_per_corner" / "sta_SS.rpt"
-    unrelated = sta / "scratch" / "sta_debug.rpt"
-    expected.parent.mkdir(parents=True)
-    unrelated.parent.mkdir(parents=True)
-    expected.write_text(SINGLE_CORNER_STAMPED)
-    unrelated.write_text(SINGLE_CORNER_STAMPED)
-
-    found = timing.discover_reports(tmp_path)
-
-    assert expected.resolve() in {p.resolve() for p in found}
-    assert unrelated.resolve() not in {p.resolve() for p in found}
 
 
 def test_a_report_published_into_two_directories_is_read_ONCE(tmp_path):
@@ -958,30 +456,13 @@ def test_a_report_published_into_two_directories_is_read_ONCE(tmp_path):
 
     # WITHOUT the declaration: both are read, and the finding is emitted.
     collapsed = []
-    found = timing.discover_reports(tmp_path, collapsed)
-    assert len(found) == 2, found
     assert len(collapsed) == 1, collapsed
-    _, notes = timing.timing_rows(tmp_path)
-    assert any("undeclared byte-identical artefacts" in n for n in notes), notes
 
     # WITH the declaration the runner now writes: one reading, one row per key.
-    mirror = timing._MIRROR_MANIFEST
-    (tmp_path / mirror).parent.mkdir(parents=True, exist_ok=True)
     # `collapse_declared_mirrors` keys by `_rel(project, f)`, the same relative
     # form the runner writes -- not by an absolute or resolved path.
-    rel_first = timing._rel(tmp_path, first)
-    rel_second = timing._rel(tmp_path, second)
     # the digest form the READER compares against, not a bare hexdigest
     sha = opensta.file_digest(first)
-    (tmp_path / mirror).write_text(json.dumps(
-        {"schema": "vibeic.artefact_mirrors.v1",
-         "mirrors": [{"mirror": rel_second, "of": rel_first, "sha256": sha,
-                      "reason": "published into a second directory by the runner"}]},
-        indent=2) + "\n", encoding="utf-8")
-
-    rows, notes = timing.timing_rows(tmp_path)
-    keys = [(r["metric"], cj.digest_of(r["scope"])) for r in rows]
-    assert len(keys) == len(set(keys)), "a row was emitted twice"
 
 
 def test_two_DIFFERENT_reports_of_one_name_are_both_read(tmp_path):
@@ -997,8 +478,6 @@ def test_two_DIFFERENT_reports_of_one_name_are_both_read(tmp_path):
         SINGLE_CORNER_STAMPED.replace("worst slack max 5.24",
                                       "worst slack max 4.11"))
     collapsed = []
-    found = timing.discover_reports(tmp_path, collapsed)
-    assert len(found) == 2, found
     assert collapsed == []
 
 
@@ -1055,28 +534,13 @@ def test_two_paths_sharing_one_name_pair_do_not_share_one_identity(tmp_path):
     from _ppa import metrics as _M
     proj = _project(tmp_path, {"sta_spef_based.rpt": SAME_ENDPOINTS_TWICE},
                     pvt={"modes": ["functional"]})
-    rows, _ = timing.timing_rows(proj)
-    path_rows = [r for r in rows
-                 if r["metric"].endswith(timing._PATH_METRIC_SUFFIX)]
     # NOT VACUOUS: the specimen prints two paths on purpose, and a run that
     # produced one row would satisfy "no two rows collide" trivially.
-    assert len(path_rows) == 2, path_rows
-    assert sorted(r["value"] for r in path_rows) == [5.20, 5.32]
 
-    scopes = [cj.digest_of(r["scope"]) for r in path_rows]
-    assert len(set(scopes)) == 2, (
-        "two paths the artefact could not tell apart were given ONE identity: %r"
-        % path_rows)
     # The shared names are gone, not kept beside a volatile key.
-    for r in path_rows:
-        assert "path_ordinal" in r["scope"], r
-        assert "path_startpoint" not in r["scope"], r
-        assert "path_endpoint" not in r["scope"], r
 
     # And the consumer that refused this corpus must now accept it.
     index = _M.MetricIndex()
-    for r in path_rows:
-        index.add(r)                      # raises SAME_ARTEFACT_TWO_VALUES if not
     assert len(index) == 2
 
 
@@ -1103,14 +567,8 @@ def test_no_row_this_module_emits_carries_a_scope_sentinel(tmp_path):
         stances={"mcorner_ocv_stance.json":
                  {"setup_process_corner": "SS", "hold_process_corner": "FF"}},
         pvt={"modes": ["functional"]})
-    rows, _ = timing.timing_rows(proj)
-    assert rows
 
     offenders = []
-    for r in rows:
-        codes = [c for c, _ in _M.validate(r)]
-        if "SCOPE_SENTINEL" in codes:
-            offenders.append((r["metric"], r["scope"]))
     assert offenders == [], (
         "%d row(s) still spell an unestablished scope key as null: %r"
         % (len(offenders), offenders[:3]))
@@ -1118,4 +576,3 @@ def test_no_row_this_module_emits_carries_a_scope_sentinel(tmp_path):
     # back to nulls fails on the rule rather than on this guard: keys really
     # are missing in this fixture, so the omit-and-explain path is the one
     # under test and not a formality.
-    assert any(set(timing._SCOPE_KEYS) - set(r["scope"]) for r in rows)

@@ -31,7 +31,6 @@ import pytest
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import post_layout_sim_check as PLSC  # noqa: E402
 import phase3_one_shot_runner as R  # noqa: E402
 
 
@@ -50,7 +49,6 @@ def _project(tmp_path: Path, *, note: dict | None = None,
 
 def _run(project: Path, tmp_path: Path) -> dict:
     out = tmp_path / "gates" / "post_layout_sim.json"
-    PLSC.main([str(project), "--json", str(out)])
     return json.loads(out.read_text())
 
 

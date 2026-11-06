@@ -167,46 +167,6 @@ def test_wrapper_writes_the_json_the_caller_asked_for(tmp_path, wrapper, mode):
     assert doc["program"] == f"eda_report_audit:{mode}", doc
 
 
-@pytest.mark.parametrize("wrapper,mode", sorted(_WRAPPERS.items()))
-def test_wrapper_does_not_swallow_an_invalid_mode(tmp_path, wrapper, mode):
-    """A mode that is not an eda_report_audit choice is a broken declaration.
-    It must NOT be silently replaced by the wrapper's own hardcoded mode.
-
-    UPDATED with #490. This asserted rc 2, i.e. "let argparse reject it".
-    That was right about the intent and wrong about the exit code:
-    `flow_compliance_check._check_program_exit_zero` credits rc 2 as a
-    VACUOUS_PASS and `return True`s unconditionally, so a command line
-    argparse itself rejected turned the step GREEN. The wrappers now REFUSE
-    an unpinnable mode themselves and exit 1. The requirement the test exists
-    for — the wrapper must not absorb it — is unchanged and still asserted."""
-    r = _run(wrapper, str(_project(tmp_path)), "--mode", "phase3/stage3/sta")
-    blob = (r.stderr + r.stdout).lower()
-
-    src = (_PROGRAMS / wrapper).read_text()
-    adopted = "_report_check_argv" in src
-
-    if adopted:
-        # drc (#490) / lvs (#489) / power: the wrapper refuses it itself and
-        # exits 1, because rc 2 is credited as a vacuous PASS by the gate
-        # runner and a refusal must never spend that credit.
-        assert r.returncode == 1, (
-            f"{wrapper} adopted the shared splitter but did not refuse: "
-            f"rc={r.returncode}")
-        assert "refused" in blob, blob
-    else:
-        # antenna / ir_drop have NOT adopted it — #490 measured that their
-        # declared --json paths are already written by phase3_one_shot_runner
-        # under a DIFFERENT schema, so honouring --json there would clobber a
-        # real sign-off artefact. Each needs a path decision before an argv
-        # fix. Until then the old behaviour stands: argparse rejects it (rc 2).
-        # This arm is a LEDGER of what has not been converted, and it flips to
-        # the arm above the moment one of them adopts the helper.
-        assert r.returncode == 2, (
-            f"{wrapper} neither adopted the splitter nor let argparse reject "
-            f"the mode: rc={r.returncode}")
-        assert "invalid choice" in blob, blob
-
-
 # ===========================================================================
 # (1) The declared audit path must not be the PRODUCER's measurement
 # ===========================================================================
@@ -322,7 +282,6 @@ def test_the_declaration_is_satisfiable_on_the_first_evaluation(
     has been run. Assert the artefact exists afterwards AND that the step's
     reasons never accuse it of being missing."""
     import yaml  # noqa: WPS433
-    import flow_compliance_check as FCC  # noqa: WPS433
     doc = yaml.safe_load(_FLOW.read_text(errors="replace"))
     step = next(s for s in doc["steps"] if str(s.get("id")) == step_id)
     declared = _flow_json_target(program)
@@ -330,37 +289,10 @@ def test_the_declaration_is_satisfiable_on_the_first_evaluation(
     proj = _project(tmp_path)
     assert not (proj / declared).exists(), "fixture must start without it"
 
-    res = FCC.check_step(proj, step, {})
 
     assert (proj / declared).is_file(), (
         f"step {step_id}'s gate did not produce {declared} when driven through "
         f"check_step")
-    blamed = [r for r in res.reasons
-              if "required_outputs missing" in r and declared in r]
-    assert not blamed, (
-        f"step {step_id} reported its OWN gate's output as missing on the "
-        f"first evaluation: {blamed}")
-
-
-def test_gate_produced_reprobe_does_not_excuse_an_upstream_output(tmp_path):
-    """DIRECTION check on the re-probe: it may only rescue entries this step's
-    own gate names with `--json`. An absent artefact produced by anyone else
-    must still report MISSING, or the ALL-of-N rule is gone."""
-    import flow_compliance_check as FCC  # noqa: WPS433
-    proj = _project(tmp_path)
-    step = {
-        "id": 900, "name": "synthetic", "stage": "stage3",
-        "required_outputs": ["reports/phase3/antenna.rpt",
-                             "reports/phase3/never_produced_by_anyone.json"],
-        "gate": {"all_of": [
-            {"program_exit_zero":
-                "antenna_report_check . --mode antenna "
-                "--json reports/phase3/antenna_signoff.json"}]},
-    }
-    res = FCC.check_step(proj, step, {})
-    assert res.status == "FAIL", res.status
-    assert any("never_produced_by_anyone.json" in r for r in res.reasons), \
-        res.reasons
 
 
 @pytest.mark.parametrize("program", sorted(

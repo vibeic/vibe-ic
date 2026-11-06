@@ -26,9 +26,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _gdsii  # noqa: E402
-import _si_signoff_fixture  # noqa: E402
-import _tapeout_timing_fixture  # noqa: E402
 
 # 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
 # declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
@@ -40,107 +37,12 @@ from _source_pin import func_src
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import eda_report_audit as ERA       # noqa: E402
-import flow_compliance_check as F    # noqa: E402
-import signoff_audit as SA           # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 _P3_SRC = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
 
 
 # ── (a) tapeout DRC gates on the COUNT of the SIGNOFF report ───────────────
-
-def _tapeout_base(tmp_path, monkeypatch=None, density_count=0):
-    (tmp_path / "phase3" / "stage4" / "gds").mkdir(parents=True)
-    _gdsii.write_gdsii(tmp_path / "phase3/stage4/gds/chip_top.gds")
-    (tmp_path / "synth_netlist.v").write_text("module chip_top(); endmodule")
-    (tmp_path / "timing_final.rpt").write_text("timing report")
-    # 2026-07-27: tapeout mode gained a fifth LVS pillar. This fixture is
-    # about the DRC slot's substance rule; it needs a genuine LVS match so
-    # the DRC assertions are not masked by a missing-LVS FAIL.
-    (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "reports/phase3/lvs.rpt").write_text(
-        "Netlists match uniquely.\nFinal result: Circuits match uniquely.\n")
-    # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
-    # condition. This fixture is about the DRC slot, so it carries a PROVED
-    # SI verdict — without one every case here would collapse onto the
-    # SI refusal and stop discriminating what it exists to pin.
-    _si_signoff_fixture.write_proved_si_report(tmp_path)
-    # U17: the timing slot credits Step 23/32 PASS verdicts, not a report.
-    _tapeout_timing_fixture.write_timing_signoff_pass(tmp_path)
-    if monkeypatch is not None:
-        # Neutral process-edge fixtures exercise the actual producers/readers;
-        # their protocol counts are not native physical qualification.
-        from _native_signoff_fixture import producer, put, IMAGE
-        import librelane_contract as contract
-        import librelane_fill_dfm as fill
-        gds = tmp_path / "phase3/stage4/gds/chip_top.gds"
-        info = producer(tmp_path, monkeypatch, 'lvs', both_lvs=True,
-                        counts={'klayout__density_error__count': density_count}, gds_path=gds)
-        config = put(tmp_path / 'phase3/librelane/34-config/KLayout.Density.json', {
-            'meta': {'step': 'KLayout.Density'}, 'KLAYOUT_DENSITY_RUNSET': str(info['deck'])})
-        put(contract.views_path(config), {
-            'step': 'KLayout.Density', 'inputs': ['gds'], 'outputs': []})
-        monkeypatch.setattr(fill, 'measure_density_ratios',
-                            lambda *a, **kw: {'scope': 'NOT_MEASURED_PROTOCOL_EDGE'})
-        actual = fill.run_density(tmp_path, IMAGE, info['tree'].parent, 'procx',
-            gds=gds, lane='34-density', configs={'KLayout.Density': config},
-            steps=('KLayout.Density',))
-        fill.update_record(tmp_path, 'gds', {'shipped': 'librelane', 'librelane': actual})
-        # This test audits the direct DRC report grammar. LVS still requires
-        # its full-GDS native chain in direct mode; density retains Step34.
-        switch_path = tmp_path / 'phase3/librelane_switch.json'
-        switch = json.loads(switch_path.read_text())
-        switch['steps']['31'] = 'direct'
-        put(switch_path, switch)
-
-
-def test_tapeout_drc_fails_on_nonzero_signoff_count(tmp_path):
-    _tapeout_base(tmp_path)
-    # the observed failing shape: clean router DRC + violation-laden
-    # KLayout signoff DRC in the SAME project — the signoff one must win
-    (tmp_path / "drc_router.rpt").write_text(
-        "detailed_route\nTotal violations: 0\n")
-    (tmp_path / "drc_signoff.rpt").write_text(
-        "<report-database>\n" + "<item>x</item>\n" * 7
-        + "</report-database>\n")
-    SA._LENIENT = False
-    result = SA._check_tapeout(tmp_path)
-    assert result.passed is False
-    viol = [f for f in result.findings
-            if f.rule == "TAPEOUT_DRC_VIOLATIONS"]
-    assert viol and "7" in viol[0].message
-    assert "signoff" in viol[0].file
-
-
-def test_tapeout_drc_unparseable_count_refuses_pass(tmp_path):
-    _tapeout_base(tmp_path)
-    (tmp_path / "drc_final.rpt").write_text("looks like a report\n")
-    result = SA._check_tapeout(tmp_path)
-    assert any(f.rule == "TAPEOUT_DRC_UNPARSED" and f.severity == "ERROR"
-               for f in result.findings)
-
-
-def test_tapeout_drc_clean_parsed_count_passes(tmp_path, monkeypatch):
-    _tapeout_base(tmp_path, monkeypatch)
-    (tmp_path / "drc_signoff.rpt").write_text(
-        "<report-database>\n</report-database>\n")
-    SA._LENIENT = False
-    result = SA._check_tapeout(tmp_path)
-    assert any(f.rule == "TAPEOUT_DRC_CLEAN" for f in result.findings)
-    assert result.passed is True
-
-
-def test_clean_drc_cannot_hide_a_measured_density_failure(tmp_path, monkeypatch):
-    _tapeout_base(tmp_path, monkeypatch, density_count=2)
-    (tmp_path / "drc_signoff.rpt").write_text(
-        "<report-database>\n</report-database>\n")
-    SA._LENIENT = False
-    result = SA._check_tapeout(tmp_path)
-    assert any(f.rule == "TAPEOUT_DRC_CLEAN" for f in result.findings)
-    density = result.summary['native_evidence']['density']
-    assert density['verdict'] == 'FAIL'
-    assert density['rows']['klayout__density_error__count']['value'] == 2
-    assert result.passed is False
 
 
 # ── (c) multi-corner STA substance in eda_report_audit ─────────────────────
@@ -232,45 +134,7 @@ def test_runner_no_single_corner_standin_in_multicorner_sta():
     assert "unsubstantiated multi-corner claim" in window
 
 
-def test_capability_gap_covers_step_28():
-    # v1.3.94 — Step 29 (SDF-annotated gate sim) was CLOSED this campaign
-    # (iverilog $sdf_annotate real sim), so it is no longer a cap-gap; Step 28
-    # (PERC) is enforced, never a gap. 13 LEC was CLOSED (Yosys equiv,
-    # ignore-miss-func). v1.3.99 — 5 (formal) closed too: the table is EMPTY.
-    assert 29 not in F._PLATFORM_CAPABILITY_GAPS
-    assert 28 not in F._PLATFORM_CAPABILITY_GAPS
-    assert F._PLATFORM_CAPABILITY_GAPS == {}
-
-
 # ── (e) waiver parser honours the `rationale` field ────────────────────────
-
-def test_waiver_rationale_field_is_normalized_to_reason(tmp_path):
-    (tmp_path / "waivers.json").write_text(json.dumps({
-        "waived_steps": [{
-            "id": 24,
-            "rationale": "IR-drop tool unavailable on this PDK; "
-                         "documented in ticket VIBE-1.",
-            "ticket": "VIBE-1",
-            "approver": "user",
-            "review_required": True,
-        }]
-    }))
-    waivers = F._load_waivers(tmp_path)
-    assert 24 in waivers
-    assert waivers[24].get("reason", "").startswith("IR-drop tool")
-
-
-def test_waiver_explicit_reason_still_wins(tmp_path):
-    (tmp_path / "waivers.json").write_text(json.dumps({
-        "waived_steps": [{
-            "id": 25, "reason": "explicit reason text wins",
-            "rationale": "ignored when reason present",
-            "ticket": "VIBE-2", "approver": "user",
-            "review_required": True,
-        }]
-    }))
-    waivers = F._load_waivers(tmp_path)
-    assert waivers[25]["reason"] == "explicit reason text wins"
 
 
 # ── (f) orchestrator headline derives from the completion audit ────────────

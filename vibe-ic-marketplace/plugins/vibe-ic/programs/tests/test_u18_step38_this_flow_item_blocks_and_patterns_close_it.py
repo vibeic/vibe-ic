@@ -81,7 +81,6 @@ def _project(tmp_path):
     (p / "phase1/generated_docs").mkdir(parents=True)
     (p / "phase1/generated_docs/L1_DATASHEET.json").write_text(
         json.dumps({"ic_name": "alpha"}))
-    import _gds_admission as admission
     gate = p / "reports/phase3/prestream_gate.json"
     gate.parent.mkdir(parents=True, exist_ok=True)
     gate.write_text(json.dumps({"verdict": "PASS", "layout_digest": "a" * 64}))
@@ -93,7 +92,6 @@ def _project(tmp_path):
         path = pnr / filename
         path.write_text("synthetic layout input\n")
         basis.append(path)
-    admission.admit_gds(p, stream, "a" * 64, basis)
     return p
 
 

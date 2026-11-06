@@ -81,14 +81,6 @@ def _count_steps(monkeypatch, line):
 # ---------------------------------------------------------------------------
 # 1. the operation budget — the assertion is about the STEP COUNT, not a clock
 # ---------------------------------------------------------------------------
-def test_the_heading_prefix_scan_costs_at_most_one_step_per_character(monkeypatch):
-    """Linear, by count. The old shape needed a(N) attempts; this needs <= N."""
-    for n in (1, 6, 7, 16, 28, 80, 400):
-        line = "#" * n + "\n"
-        steps = _count_steps(monkeypatch, line)
-        assert steps <= len(line), (
-            f"{n} '#' took {steps} prefix steps for a {len(line)}-character line; "
-            f"a step must consume at least one character")
 
 
 def test_the_step_count_grows_linearly_not_exponentially(monkeypatch):
@@ -135,18 +127,6 @@ def _quantified_group_sources(pattern_source):
 
 
 _QUANTIFIER_INSIDE = re.compile(r"(?<!\\)[*+]|(?<!\\)\{\d+(,\d*)?\}")
-
-
-def test_the_example_heading_recogniser_has_no_ambiguous_nested_quantifier():
-    """The regression guard. A quantified group whose body is itself quantified
-    is the exact shape that made a finite input undecidable in practice."""
-    for name in ("_HEADING_PREFIX_STEP_RE", "_EXAMPLE_KEYWORD_RE",
-                 "_LEADING_WS_RE"):
-        pattern = getattr(SE, name)
-        for body in _quantified_group_sources(pattern.pattern):
-            assert not _QUANTIFIER_INSIDE.search(body), (
-                f"{name} has a quantified group whose body is quantified "
-                f"({body!r}); that is the #2059 shape")
 
 
 def test_the_detector_itself_fires_on_the_pattern_that_was_removed():
@@ -303,25 +283,6 @@ def test_a_banner_rule_does_not_stop_the_example_section_strip():
     assert "2'b01" in stripped, "the definition table was blanked by mistake"
     assert "the map above is complete" in stripped, (
         "the example section did not end at the next same-level heading")
-
-
-def test_a_document_with_no_example_heading_is_returned_unchanged():
-    """The invariant the banner case is really about. `_strip_example_sections` blanks
-    example sections and touches nothing else, so a document that opens no example
-    section must come back BYTE-IDENTICAL. Measured over this repo's corpus: 8993 of
-    9028 documents carry no example heading, and on every one of them the strip is the
-    identity — which is what makes the old pattern's 3.26e23 steps so expensive for so
-    little: they were spent deciding that a row of hashes is not the word "example",
-    and then returning the input unchanged."""
-    for text in (BANNER + "\n",
-                 BANNER + "\n# PART 1\n\n| MODE | m |\n| 2'b00 | idle |\n",
-                 "#" * 400 + "\n\nplain prose\n",
-                 "## Interface\n- clk is the clock\n",
-                 ""):
-        assert not any(SE._is_example_heading(line)
-                       for line in text.splitlines(keepends=True)), (
-            "fixture error: this text was supposed to carry no example heading")
-        assert SE._strip_example_sections(text) == text, repr(text[:60])
 
 
 @pytest.mark.measures

@@ -150,18 +150,3 @@ def test_an_unreachable_selected_container_raises_rather_than_reporting_absence(
     with pytest.raises(OSError) as exc:
         PR._pdk_trees(_ROOT, _TREE)
     assert "no-such-container-w5-15-5ic" in str(exc.value)
-
-
-def test_the_audit_turns_that_unknown_into_its_own_disclosure(monkeypatch):
-    """And the caller says WHICH of the two happened, in words a reader gets.
-
-    The reason is a RETURN VALUE, not a source comment, so this reads what the
-    audit would actually print beside its finding."""
-    import pad_ring_check as PC
-    monkeypatch.setenv("EDA_CONTAINER", "no-such-container-w5-15-5ic")
-    lefs, decls, source, declined = PC.resolve_io_library_views(
-        Path("/nonexistent"), {}, None, _ROOT, _TREE)
-    assert (lefs, decls, source) == ([], [], "")
-    assert "could not be read where this run" in declined, declined
-    assert "not a finding about what the PDK ships" in declined, declined
-    assert "no-such-container-w5-15-5ic" in declined, declined

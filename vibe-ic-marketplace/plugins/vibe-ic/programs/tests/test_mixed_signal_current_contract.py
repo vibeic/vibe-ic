@@ -198,9 +198,6 @@ def test_normal_current_interface_consumes_retained_pdk_namespace(current_interf
     assert not (project / "reports/analog/mixed_signal/native_runs").exists()
 
 
-
-
-
 @pytest.fixture
 def explicit_multiblock_project(current_interface_project, monkeypatch):
     """SOURCE_CONTROL ancestry, two block types and three explicit instances."""

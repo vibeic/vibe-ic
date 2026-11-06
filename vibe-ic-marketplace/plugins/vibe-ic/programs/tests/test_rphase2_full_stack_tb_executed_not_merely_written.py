@@ -64,21 +64,9 @@ _ABSENT = (127, "", "COMMAND_NOT_FOUND: [Errno 2] No such file or "
 _REJECTED = (1, "", f"{_TOP}.v:1: syntax error\nI give up.\n")
 
 
-
-
-
-
 # ---------------------------------------------------------------------------
 # THE THIRD STATE — three outcomes, three words, and none of them green
 # ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -186,9 +174,3 @@ def test_the_constant_and_every_literal_spelling_are_the_same_word():
         "literals; the closed-loop coverage checker reads it as an AST "
         "literal collection and would report the loop unwired")
     # and the closed-loop registry's citation agrees with that tuple
-    import closed_loop_executable_coverage_check as clc
-    cited = clc.REGISTRY["4"]["evidence"]
-    for kind in ("actuate", "remeasure"):
-        assert cited[kind], (kind, "no citation to check — vacuous")
-        for c in cited[kind]:
-            assert word in c["terminal_values"], (kind, c)

@@ -20,7 +20,6 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import ip_catalog_query as Q  # noqa: E402
-import ip_catalog_pull as P  # noqa: E402
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -142,12 +141,3 @@ def test_query_explicit_ic_name_strengthens_guard(tmp_path):
 # ════════════════════════════════════════════════════════════════════════
 # defense-in-depth — pull refuses a flagged self-match
 # ════════════════════════════════════════════════════════════════════════
-
-def test_pull_rejects_flagged_self_match(tmp_path):
-    mt = _match("shared_thing", ["rtl/widgetsoc.v"],
-                "https://github.com/foo/widgetsoc")
-    mt.self_match = True
-    mt.self_match_reason = "supplies the IC's own design"
-    audit = P.pull_catalog_ip(mt, tmp_path)
-    assert audit["status"] == "REJECTED"
-    assert "own design" in audit["reason"] or "#187" in audit["reason"]

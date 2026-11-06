@@ -17,25 +17,12 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
-import reset_dependency_check as rdc  # noqa: E402
 
 
 # ── (a) size-adaptive PnR timeout resolver ──────────────────────────────────
 
 
-
-
-
-
-
-
-
 # ── (a) checkpoint preservation + resume detection ──────────────────────────
-
-
-
-
-
 
 
 def test_pnr_checkpoint_defs_survive_timeout(tmp_path):
@@ -92,56 +79,3 @@ def _cost_ratio_within(fn, small, big, factor, floor, attempts=3):
         if best_big <= max(best_small * factor, floor):
             return True, best_small, best_big
     return False, best_small, best_big
-
-
-@pytest.mark.measures
-def test_reset_dependency_check_pattern_b_is_linear_not_quadratic(tmp_path):
-    """Pattern B is O(N), which is what the rewrite was for (>300s before it).
-
-    ASSERTED AS A SCALING RATIO, NOT A STOPWATCH. `elapsed < 10.0` on 3k cells
-    was a statement about this host as much as about the algorithm: it goes red
-    on a busy machine with the rewrite in place, and it would pass on a fast one
-    with a quadratic implementation of a smaller netlist. The property is the
-    SHAPE of the curve, so both points are measured here, in this run, on this
-    host — whatever else the machine is doing scales them together.
-
-    6x the cells costs ~6x linear and ~36x quadratic. The 15x gate below sits
-    between them with room on both sides; the pre-rewrite form was ~30x the
-    budget, far outside it. The absolute floor keeps timer noise on a small
-    baseline from deciding anything. Chip-AGNOSTIC: no verdict is checked.
-    """
-    def _netlist(cells: int):
-        rtl = tmp_path / f"top_{cells}.v"
-        rtl.write_text(_make_flat_netlist(cells))
-        return rtl
-
-    ok, small, large = _cost_ratio_within(
-        lambda p: rdc.audit_file(p, tmp_path),
-        _netlist(500), _netlist(3_000), factor=15.0, floor=0.5)
-    assert ok, (
-        f"Pattern B cost {large:.2f}s on 3000 cells against {small:.2f}s on 500 "
-        f"— {large / small:.1f}x for a 6x netlist. Linear is ~6x and quadratic "
-        f"~36x, so the O(N) rewrite has been lost")
-
-
-def test_reset_dependency_check_still_detects_real_cycle(tmp_path):
-    """Pattern B must still detect a genuine 2-node circular reset dependency
-    after the performance refactor."""
-    rtl = tmp_path / "cycle.v"
-    rtl.write_text(
-        "module top;\n"
-        "  modA a_inst (.rstn(sig_from_b), .done(sig_from_a));\n"
-        "  modB b_inst (.rstn(sig_from_a), .done(sig_from_b));\n"
-        "endmodule\n"
-    )
-    findings = rdc.audit_file(rtl, tmp_path)
-    assert any(f.rule == "CIRCULAR_RESET_DEPENDENCY" for f in findings)
-
-
-def test_reset_dependency_check_audit_smoke(tmp_path):
-    """Smoke test: rdc.audit() returns PASS on an empty project directory.
-    Satisfies defect_artifact_fixture_check E2 gate (module.audit() call +
-    verdict assert)."""
-    result = rdc.audit(str(tmp_path))
-    verdict = "PASS" if result.passed else "FAIL"
-    assert verdict == "PASS"

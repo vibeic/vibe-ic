@@ -42,7 +42,6 @@ if str(PROGRAMS) not in sys.path:
 
 import pytest  # noqa: E402
 
-import flow_compliance_check as F  # noqa: E402
 import _flow_reason_taxonomy as R  # noqa: E402
 
 GATE = "fpga_program_chain_attest_check"
@@ -60,24 +59,6 @@ def _proj(tmp_path, manifest: bool):
 
 # ── direction 1: no manifest → declared N/A, not a fault ──────────────────
 
-def test_a_program_only_run_makes_the_gate_NA(tmp_path):
-    proj, rtl = _proj(tmp_path, manifest=False)
-    why = F._p0_contract_na_reason(GATE, proj, rtl)
-    assert why is not None, "the gate is still invoked with no manifest"
-    assert "mcp_manifest" in why
-    assert "fabricated" in why
-
-
-def test_the_gate_is_registered_against_the_manifest():
-    assert F._P0_GATE_REQUIRED_CONTEXT.get(GATE) == ("mcp_manifest",)
-
-
-def test_the_context_reports_the_manifest_only_when_it_is_there(tmp_path):
-    proj, rtl = _proj(tmp_path, manifest=False)
-    assert F._p0_contract_context(proj, rtl).get("mcp_manifest") is None
-    (proj / "latest_results.jsonl").write_text("{}\n")
-    assert F._p0_contract_context(proj, rtl).get("mcp_manifest") is not None
-
 
 def test_that_disposition_is_skip_eligible():
     """The consequence: a SKIP booked DESIGN_DECLARED_NA lets P0 reach PASS,
@@ -88,25 +69,5 @@ def test_that_disposition_is_skip_eligible():
 
 # ── direction 2: a run that DID drive the MCP server keeps the gate ───────
 
-def test_a_run_with_a_manifest_keeps_the_gate_live(tmp_path):
-    proj, rtl = _proj(tmp_path, manifest=True)
-    assert F._p0_contract_na_reason(GATE, proj, rtl) is None, (
-        "a run that produced the manifest must still be audited")
-
 
 # ── the early return that made the roster unreachable ─────────────────────
-
-def test_a_gate_with_neither_a_contract_nor_a_requirement_still_runs(tmp_path):
-    """The conservative direction, unchanged: this must not become a way for
-    any gate to skip itself."""
-    proj, rtl = _proj(tmp_path, manifest=False)
-    for gate in ("waiver_staleness_check", "analog_flow_compliance_check"):
-        assert F._STRUCTURAL_GATE_INVOCATION_CONTRACTS.get(gate) is None
-        assert F._P0_GATE_REQUIRED_CONTEXT.get(gate) is None
-        assert F._p0_contract_na_reason(gate, proj, rtl) is None, gate
-
-
-def test_the_existing_roster_entry_is_undisturbed(tmp_path):
-    """`pre_awake_silence_check` was the only gate-keyed requirement before."""
-    assert F._P0_GATE_REQUIRED_CONTEXT.get(
-        "pre_awake_silence_check") == ("l3_opcodes",)

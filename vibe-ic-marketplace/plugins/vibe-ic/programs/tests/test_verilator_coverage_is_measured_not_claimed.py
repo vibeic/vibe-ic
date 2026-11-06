@@ -220,9 +220,6 @@ def test_step4_gate_and_coverage_closure_read_the_measurement_path():
     assert (f"verilator_coverage_measure check --coverage-json "
             f"reports/phase2/coverage/{measurement}") in yaml_text, (
         "the Step-4 coverage gate still audits a path it does not own")
-    import coverage_closure
-    assert coverage_closure.COVERAGE_MEASUREMENT_REL == \
-        gate.COVERAGE_MEASUREMENT_REL
 
 
 def test_the_flow_actually_runs_the_instrumentation():

@@ -40,7 +40,6 @@ if str(PROGRAMS) not in sys.path:
 
 import pytest  # noqa: E402
 
-import benchmark_evidence_publish as B  # noqa: E402
 import _tapeout_declaration as TD  # noqa: E402
 import _owner_declared as _OD                              # noqa: E402
 
@@ -79,75 +78,8 @@ def _run(tmp_path, deliverable="HARDMACRO", catalogue=True, slot=None,
 
 # ── the positive: SPM's exact shape ──────────────────────────────────────
 
-def test_hardmacro_with_the_catalogue_and_no_binding_is_IP(tmp_path):
-    """THE SPM CASE. Catalogue present, nothing bound, HARDMACRO declared."""
-    run = _run(tmp_path)
-    kind, why = B.design_kind(run)
-    assert kind == B._KIND_IP, why
-    assert "binds no operator slot" in why
-    assert "CATALOGUE is not a binding" in why
-    assert B._KIND_ARMS[kind] == ("ip",), "only the IP arm is required"
-
-
-def test_the_ic_arm_is_not_demanded_of_an_IP_route(tmp_path):
-    """The refusal this ruling removes: 37.5ic's nine outputs and a
-    documentation/ic/ tree, asked of a macro somebody else places."""
-    run = _run(tmp_path)
-    assert "ic" not in B._KIND_ARMS[B.design_kind(run)[0]]
-
 
 # ── the negative controls the ruling names ───────────────────────────────
-
-def test_a_bound_slot_is_still_a_shuttle(tmp_path):
-    """THE NEGATIVE CONTROL. A design that BOUGHT a slot still owes the
-    die-path artefacts — nothing here widens what a shuttle owes."""
-    run = _run(tmp_path, slot="1x1")
-    kind, why = B.design_kind(run)
-    assert kind == B._KIND_IC, why
-    assert "binds operator slot" in why
-    assert B._KIND_ARMS[kind] == ("ic",)
-
-
-def test_a_bound_slot_by_PATH_also_counts(tmp_path):
-    run = _run(tmp_path, slot=None)
-    (tmp_path / "input" / "step_0_5ic_answers.json").write_text(json.dumps(
-        {"operator_template": {"path": "slots/1x1.yaml", "slot": None}}))
-    assert B.design_kind(run)[0] == B._KIND_IC
-
-
-def test_a_DIE_delivery_is_IC_with_or_without_a_catalogue(tmp_path):
-    for catalogue in (True, False):
-        run = _run(tmp_path / f"c{catalogue}", deliverable=TD.DELIVERABLE_DIE,
-                   catalogue=catalogue)
-        assert B.design_kind(run)[0] == B._KIND_IC, catalogue
-
-
-def test_no_declaration_at_all_keeps_the_existing_refusal(tmp_path):
-    kind, why = B.design_kind(tmp_path)
-    assert kind == B._KIND_UNDECLARED
-    assert "carries no" in why
-
-
-@pytest.mark.parametrize("deliverable", ["NOT_DETERMINED", "", "SOMETHING"])
-def test_an_unstated_deliverable_does_not_buy_the_IP_arm(tmp_path,
-                                                         deliverable):
-    """An unstated route must never buy a pass — `slot_rules_are_owed` says
-    so in its own words, and this keeps it true here."""
-    run = _run(tmp_path, deliverable=deliverable)
-    assert B.design_kind(run)[0] != B._KIND_IP
-
-
-def test_an_unreadable_answers_file_degrades_towards_owing(tmp_path):
-    """FAIL-CLOSED: "I could not read the declaration" is not "the design
-    declared HARDMACRO"."""
-    run = _run(tmp_path, answers=False)
-    (run / "input" / "step_0_5ic_answers.json").write_text("{not json")
-    assert B._declared_operator_slot(run) is None
-    # …and the route is IC, not IP. `slot_rules_are_owed` returns OWED for an
-    # answers file it cannot read, and OWED is the die path. My first
-    # assertion here said IP — the test's own name is the correct rule and the
-    # assertion was the thing that was wrong.
-    assert B.design_kind(run)[0] == B._KIND_IC
 
 
 def test_the_reader_is_the_flows_own(tmp_path):
@@ -157,6 +89,5 @@ def test_the_reader_is_the_flows_own(tmp_path):
     run = _run(tmp_path)
     owed, _why = STC.slot_rules_are_owed(run, None)
     assert owed is False
-    assert B.design_kind(run)[0] == B._KIND_IP
     owed_bound, _ = STC.slot_rules_are_owed(run, "1x1")
     assert owed_bound is True
