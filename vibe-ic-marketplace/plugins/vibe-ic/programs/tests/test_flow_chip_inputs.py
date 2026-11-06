@@ -16,7 +16,7 @@ def native_inputs(tmp_path):
         pytest.skip("native Chip preparation requires the installed sky130A PDK")
     rtl = _write(tmp_path / "broken.v", "module unit(input clk); invalid syntax; endmodule\n")
     return {"DESIGN_NAME": "unit", "PDK": "sky130A", "VERILOG_FILES": [str(rtl)],
-            "CLOCK_PORT": "clk", "CLOCK_PERIOD": 10}
+            "CLOCK_PORT": "clk", "CLOCK_PERIOD": 10, "SYNTH_STRATEGY": "AREA 0"}
 
 
 def test_native_sizing_reports_failed_yosys_run_to_observer(tmp_path, native_inputs):
@@ -57,6 +57,32 @@ def test_native_sizing_records_the_core_state_for_activity(tmp_path, native_inpu
     state = json.loads(Path(sizing["state_out"]).read_text())
     assert sizing["top"] == "unit"
     assert Path(state["nl"]).is_file()
+
+
+def test_core_sizing_chooses_native_smaller_timing_feasible_strategy(tmp_path, native_inputs):
+    Path(native_inputs["VERILOG_FILES"][0]).write_text(
+        "module unit(input clk, reset_n, output reg [15:0] q);\n"
+        "always @(posedge clk) if (!reset_n) q <= 0; else q <= q + 1; endmodule\n")
+    native_inputs["CLOCK_PERIOD"] = 20
+    baseline, automatic = tmp_path / "baseline", tmp_path / "automatic"
+    baseline.mkdir()
+    automatic.mkdir()
+    _, _, original_area, _ = chip._native_core(tmp_path, native_inputs, baseline)
+    config = {key: value for key, value in native_inputs.items() if key != "SYNTH_STRATEGY"}
+
+    cwd = Path.cwd()
+    native, _, area, runs = chip._native_core(tmp_path, config, automatic)
+
+    assert Path.cwd() == cwd
+    assert area < original_area
+    selection = json.loads(next(automatic.glob("core_*/synthesis_exploration/selection.json")).read_text())
+    feasible = {key: row for key, row in selection["results"].items()
+                if float(row["timing__setup__ws"]) >= 0}
+    assert native["SYNTH_STRATEGY"] == selection["strategy"] == min(
+        feasible, key=lambda key: float(feasible[key]["design__instance__area"]))
+    assert native["CLOCK_PERIOD"] == 20
+    assert any(run["name"] == "LibreLane.SynthesisExploration" for run in runs)
+    assert not list(baseline.glob("core_*/synthesis_exploration"))
 
 
 @pytest.mark.parametrize("failure", [None, "missing_input", "tool_failure"])

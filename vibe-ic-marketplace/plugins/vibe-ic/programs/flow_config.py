@@ -20,6 +20,7 @@ SETTING_ALIASES = {
     "FP_PDN_SKIPTRIM": "PDN_SKIPTRIM",
 }
 SETTINGS = {
+    "SYNTH_STRATEGY",
     "MAX_FANOUT_CONSTRAINT", "MAX_TRANSITION_CONSTRAINT",
     "MAX_CAPACITANCE_CONSTRAINT", "FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT",
     "PDN_VOFFSET", "PDN_HOFFSET", "PDN_SKIPTRIM", "PDN_CORE_RING",
@@ -49,6 +50,45 @@ def native_defaults(config):
     if caps and slews:
         changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
     return config.copy(**changes)
+
+
+def explore_synthesis(config, state, directory, on_tool_run=None):
+    """Choose from LibreLane's own exploration results at the configured timing."""
+    import os
+    import time
+    from librelane.flows import Flow
+
+    directory = Path(directory).resolve()
+    explorer = Flow.factory.get("SynthesisExploration")(config)
+    started, code = time.monotonic(), 1
+    directory.mkdir(parents=True, exist_ok=True)
+    cwd = Path.cwd()
+    try:
+        os.chdir(directory)
+        explorer.start(with_initial_state=state, _force_run_dir=str(directory))
+        code = 0
+    finally:
+        os.chdir(cwd)
+        if on_tool_run is not None:
+            on_tool_run({"name": "LibreLane.SynthesisExploration", "ran": True,
+                "exit_code": code, "status": "FAIL" if code else "PASS",
+                "tool_seconds": time.monotonic() - started, "reports": str(directory)})
+    results = {step.id.removeprefix("sta-"): step.state_out.metrics
+               for step in explorer.step_objects
+               if step.id.startswith("sta-") and step.state_out is not None}
+    eligible = [strategy for strategy, metrics in results.items()
+                if metrics["timing__setup__ws"] >= 0]
+    chosen = min(eligible, key=lambda strategy: results[strategy]["design__instance__area"],
+                 default=None)
+    (directory / "selection.json").write_text(json.dumps({
+        "strategy": chosen, "clock_period_ns": config["CLOCK_PERIOD"],
+        "results": {strategy: {key: metrics[key] for key in (
+            "design__instance__area", "timing__setup__ws", "timing__setup__tns")}
+            for strategy, metrics in results.items()},
+        "detail": "Minimum area meeting setup timing." if chosen else
+                  "No timing-feasible strategy; the configured strategy remains for native evaluation."
+    }, indent=2, default=str) + "\n")
+    return chosen
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -81,7 +121,8 @@ def _settings(fields: dict, pdk: str) -> dict:
         if scope and not (fnmatch.fnmatch(pdk.lower(), str(scope).lower())
                           or pdk.lower().startswith(str(scope).lower().rstrip("*_"))):
             continue
-        value = _value(row.get("value"))
+        value = row.get("value")
+        value = (str(value).strip() if value is not None else None) if key == "SYNTH_STRATEGY" else _value(value)
         if value is None:
             continue
         if token == "PL_TARGET_DENSITY":

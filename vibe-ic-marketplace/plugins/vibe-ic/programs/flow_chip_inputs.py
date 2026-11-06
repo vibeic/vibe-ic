@@ -83,7 +83,7 @@ def netlist_area(config, state, toolbox, directory, on_tool_run=None):
 
 
 def _native_core(project: Path, core_config: dict, destination: Path, on_tool_run=None):
-    from flow_config import native_defaults
+    from flow_config import explore_synthesis, native_defaults
     from librelane.common import Toolbox
     from librelane.flows import Flow
     from librelane.state import DesignFormat, State
@@ -104,6 +104,11 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
             on_tool_run(run)
     try:
         for name in ("Yosys.JsonHeader", "Yosys.Synthesis"):
+            if name == "Yosys.Synthesis" and "SYNTH_STRATEGY" not in core_config:
+                strategy = explore_synthesis(owner.config, state, run_root / "synthesis_exploration", observed)
+                if strategy is not None:
+                    owner.config = owner.config.copy(SYNTH_STRATEGY=strategy)
+                    native = owner.config.to_raw_dict()
             step = Step.factory.get(name)(owner.config, state)
             directory = run_root / name.lower().replace(".", "_")
             directory.mkdir(parents=True, exist_ok=True)

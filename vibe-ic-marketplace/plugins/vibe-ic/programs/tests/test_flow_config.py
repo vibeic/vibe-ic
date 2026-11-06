@@ -308,12 +308,15 @@ def test_declaration_values_keep_native_units_and_pdk_scope(project):
         {"kind": "flow_setting", "token": "FP_CORE_UTIL", "value": "20%"},
         {"kind": "flow_setting", "token": "PL_TARGET_DENSITY", "value": "0.25"},
         {"kind": "flow_setting", "token": "SYNTH_MAX_FANOUT", "value": "8"},
+        {"kind": "flow_setting", "token": "SYNTH_STRATEGY", "value": "DELAY 4"},
+        {"kind": "flow_setting", "token": "SYNTH_STRATEGY", "value": None},
         {"kind": "flow_setting", "token": "FP_CORE_UTIL", "value": "55", "scope": "other*"},
     ])
     config = build_config(project)
     assert config["FP_CORE_UTIL"] == 20
     assert config["PL_TARGET_DENSITY_PCT"] == 25
     assert config["MAX_FANOUT_CONSTRAINT"] == 8
+    assert config["SYNTH_STRATEGY"] == "DELAY 4"
     assert "CTS_SINK_CLUSTERING_SIZE" not in config
 
 
@@ -324,6 +327,26 @@ def test_conflicting_limits_are_not_silently_selected(project):
     ])
     with pytest.raises(ValueError, match="Conflicting L19"):
         build_config(project)
+
+
+@pytest.mark.parametrize("feasible", [False, True])
+def test_strategy_selection_rejects_smaller_area_with_failed_timing(tmp_path, monkeypatch, feasible):
+    pytest.importorskip("librelane")
+    from types import SimpleNamespace
+    from librelane.flows import Flow
+    from flow_config import explore_synthesis
+
+    directory = tmp_path / "exploration"
+    steps = [SimpleNamespace(id="sta-" + strategy, state_out=SimpleNamespace(metrics={
+        "design__instance__area": area, "timing__setup__ws": slack, "timing__setup__tns": min(slack, 0)}))
+        for strategy, area, slack in (("AREA 0", 1, -1), ("DELAY 0", 2, 0 if feasible else -1))]
+    flow = SimpleNamespace(step_objects=steps, start=lambda **kwargs: None)
+    monkeypatch.setattr(Flow.factory, "get", lambda name: lambda config: flow)
+
+    assert explore_synthesis({"CLOCK_PERIOD": 10}, None, directory) == ("DELAY 0" if feasible else None)
+    report = json.loads((directory / "selection.json").read_text())
+    assert report["strategy"] == ("DELAY 0" if feasible else None)
+    assert ("Minimum area" if feasible else "No timing-feasible strategy") in report["detail"]
 
 
 def test_missing_rtl_is_missing_input(project):
