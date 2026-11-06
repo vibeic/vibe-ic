@@ -71,6 +71,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
+import _progress_run as _pr
 import hashlib
 import json
 import re

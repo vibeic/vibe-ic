@@ -1281,9 +1281,6 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
             wrapper = (Path(project) / wrapper_rel).read_text()
             io_cells = {}
             io_views = pads_record.get("io_library_liberty") or []
-            linked = _native_linked_pad_views(project, io_views)
-            if linked is not None:
-                io_views = list(linked[0])
             for path in io_views:
                 body, _ = _read_pdk_file(path, container, to_container_path)
                 unit = re.search(r'\btime_unit\s*:\s*"([0-9]+\s*[pnu]s)"', body or "")
