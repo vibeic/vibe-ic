@@ -428,6 +428,10 @@ def retention_stimulus_request(project: Path, case: dict, dut: str, inputs, outp
             "authored_tb": f"phase2/stage1/sim/tb/{case.get('name') or case.get('id')}.v"}
 
 
+STRICT_WRITE_POLICY = "block_first_and_held_sampled_edges"
+COMPLETE_WRITE_POLICY = "complete_issued_transaction_then_block"
+
+
 def declared_retention_memory(project: Path, dut: str,
                               inputs: List[Tuple[str, str]],
                               outputs: List[Tuple[str, str]]) -> Tuple[Optional[dict], str]:
@@ -501,6 +505,12 @@ def declared_retention_memory(project: Path, dut: str,
                                 or enable in memory.values()):
             return None, "NOT_MEASURED: selected SRAM read enable does not bind to a scalar output"
         memory.update(read_latency_cycles=latency, read_enable=enable)
+    policy = decl.get("reset_write_policy", STRICT_WRITE_POLICY)
+    if policy not in (STRICT_WRITE_POLICY, COMPLETE_WRITE_POLICY):
+        return None, "NOT_MEASURED: unsupported declared reset_write_policy"
+    for key in ("reset_write_policy", "reset_write_policy_source"):
+        if key in decl:
+            memory[key] = decl[key]
     memory.update(protocol=decl["sram_interface_protocol"], depth=1 << abits, dut=dut,
                   declaration_sha256=hashlib.sha256(raw).hexdigest())
     preload, refusal = _declared_retention_preload(decl, memory["depth"])
@@ -518,7 +528,7 @@ def declared_retention_memory(project: Path, dut: str,
 
 def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
                            memory: dict) -> str:
-    """Actual byte model, idle reset and active/pending reset, including edge zero."""
+    """Actual byte model with the declaration's first-edge transaction policy."""
     name = case["name"]
     clk = _pick_clock(inputs)
     rst, low = _pick_reset(inputs)
@@ -526,8 +536,10 @@ def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
     depth = memory["depth"]
     raddr, waddr, data, rdata, we = (memory[k] for k in
                                    ("raddr", "waddr", "wdata", "rdata", "we"))
+    complete_inflight = memory.get("reset_write_policy") == COMPLETE_WRITE_POLICY
     lines = [f"// Auto-generated RESET-INVARIANT oracle TB for case={name}",
-             f"// family={FAMILY_HOLD} — actual byte retention, no first-edge exception",
+             f"// family={FAMILY_HOLD} — actual byte retention, "
+             + (COMPLETE_WRITE_POLICY if complete_inflight else "no first-edge exception"),
              RETENTION_HEADER + json.dumps(memory, sort_keys=True),
              "`timescale 1ns/1ps", f"module {name};"]
     for n, w in inputs:
@@ -568,12 +580,21 @@ def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
               '      $write("RESET_RETENTION BASELINE arm=%0d bytes=", arm);',
               f'      for (_i = 0; _i < {depth}; _i = _i + 1) $write("%02x", retention_mem[_i]);',
               '      $display("");',
+              *(["      // Apply only the transaction issued BEFORE reset assertion.",
+                 "      // Never learn the expectation from post-reset storage or outputs.",
+                 f"      if ({we} === 1'b1 && ^({waddr}) !== 1'bx && {waddr} < {depth}",
+                 f"          && ^({data}) !== 1'bx) retention_before[{waddr}] = {data};"]
+                if complete_inflight else []),
               f"      {rst} = 1'b{asserted};",
               f"      for (edge_number = 0; edge_number < {RETENTION_EDGES}; edge_number = edge_number + 1) begin",
               f"        @(posedge {clk}); @(negedge {clk});",
               '        $write("RESET_RETENTION SAMPLE arm=%0d edge=%0d bytes=", arm, edge_number);',
               f'        for (_i = 0; _i < {depth}; _i = _i + 1) $write("%02x", retention_mem[_i]);',
               f'        $display(" post_edge_we=%b", {we});',
+              *([f"        if ({we} !== 1'b0) begin",
+                 "          errors = errors + 1;",
+                 f'          $display("[TB {name}] FAIL: reset did not block writes after the sampled edge");',
+                 "        end"] if complete_inflight else []),
               f"        for (_i = 0; _i < {depth}; _i = _i + 1) begin",
               "          if (retention_mem[_i] !== retention_before[_i]) begin",
               "            errors = errors + 1;",
@@ -605,7 +626,8 @@ def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
               f'      $display("RESET_RETENTION PENDING address=%0d before=%02x data=%02x", {waddr}, retention_mem[{waddr}], {data});',
               "      observe_reset(1);",
               f'      if (errors != 0) begin $display("[TB {name}] FAIL — %0d byte checks failed", errors); $fatal(1); end',
-              f'      $display("[TB {name}] PASS — actual byte retention including first sampled edge");',
+              f'      $display("[TB {name}] PASS — actual byte retention including first sampled edge'
+              + (' under declared in-flight policy' if complete_inflight else '') + '");',
               "      $finish;", "    end", "  end", "endmodule"]
     return "\n".join(lines) + "\n"
 
@@ -613,11 +635,12 @@ def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
 def retention_measurement(transcript: str, memory: dict) -> dict:
     """Decode actual bytes; missing pending transition/edge zero is not retention."""
     depth = memory["depth"]
-    baselines, samples = {}, {}
+    baselines, samples, write_states = {}, {}, {}
     for arm, data in re.findall(r"(?m)^RESET_RETENTION BASELINE arm=([01]) bytes=([0-9a-fA-F]+)$", transcript):
         baselines[arm] = data.lower()
-    for arm, edge, data in re.findall(r"(?m)^RESET_RETENTION SAMPLE arm=([01]) edge=(\d+) bytes=([0-9a-fA-F]+) post_edge_we=[01]$", transcript):
+    for arm, edge, data, we in re.findall(r"(?m)^RESET_RETENTION SAMPLE arm=([01]) edge=(\d+) bytes=([0-9a-fA-F]+) post_edge_we=([01])$", transcript):
         samples.setdefault(arm, {})[int(edge)] = data.lower()
+        write_states.setdefault(arm, {})[int(edge)] = we
     p = re.search(r"(?m)^RESET_RETENTION PENDING address=(\d+) before=([0-9a-fA-F]{2}) data=([0-9a-fA-F]{2})$", transcript)
     pending = {"address": int(p[1]), "before": p[2].lower(), "data": p[3].lower()} if p else None
     complete = (set(baselines) == {"0", "1"} and pending is not None
@@ -625,7 +648,15 @@ def retention_measurement(transcript: str, memory: dict) -> dict:
                 and baselines["1"][2 * pending["address"]:2 * pending["address"] + 2] == pending["before"]
                 and all(len(baselines[a]) == 2 * depth and set(samples.get(a, {})) == set(range(RETENTION_EDGES))
                         and all(len(s) == 2 * depth for s in samples[a].values()) for a in ("0", "1")))
-    changed = complete and any(s != baselines[a] for a in ("0", "1") for s in samples[a].values())
+    policy = memory.get("reset_write_policy", STRICT_WRITE_POLICY)
+    complete = complete and policy in (STRICT_WRITE_POLICY, COMPLETE_WRITE_POLICY)
+    expected = dict(baselines)
+    if complete and policy == COMPLETE_WRITE_POLICY:
+        offset = 2 * pending["address"]
+        expected["1"] = baselines["1"][:offset] + pending["data"] + baselines["1"][offset + 2:]
+    changed = complete and (any(s != expected[a] for a in ("0", "1") for s in samples[a].values())
+                           or (policy == COMPLETE_WRITE_POLICY and any(
+                               we != "0" for states in write_states.values() for we in states.values())))
     return {"complete": bool(complete), "changed": bool(changed), "baselines": baselines,
             "samples": {a: {str(k): v for k, v in rows.items()} for a, rows in samples.items()},
             "pending": pending}
@@ -692,6 +723,8 @@ def retention_case_state(project: Optional[Path], case_id: str, record: dict) ->
         if not measured["complete"] or measured != evidence.get("measurement"):
             return _l10x.NOT_EXECUTED, "NOT_MEASURED: complete current byte snapshots and first sampled edge are missing"
         if measured["changed"]:
+            if memory.get("reset_write_policy") == COMPLETE_WRITE_POLICY:
+                return _l10x.FAIL, "actual memory bytes or writes violated the declared reset-retention policy"
             return _l10x.FAIL, "actual memory bytes changed during reset, including its first sampled edge"
         return _l10x.PASS, "current native actual bytes retained across idle and pending reset, including edge zero"
     except (OSError, KeyError, TypeError, ValueError):

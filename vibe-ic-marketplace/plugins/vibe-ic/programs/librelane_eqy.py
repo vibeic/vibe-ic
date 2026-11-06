@@ -23,7 +23,8 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
                *, synthesis: Optional[dict] = None, views: Optional[Path] = None,
                liberty_files: Optional[list[Path]] = None,
                model_verilog: Optional[list[Path]] = None,
-               timeout: Optional[int] = None) -> str:
+               timeout: Optional[int] = None,
+               group_all: bool = True) -> str:
     from lec_run import (fsm_encfile_beside_netlist, fsm_signal_names,
                          _equiv_splitnets)
     encoding = fsm_encfile_beside_netlist(str(netlist))
@@ -68,8 +69,7 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         observable_matchpoint_names(top).rstrip(), "",
         "[match *]", "gold-nomatch /^_[0-9]+_$/",
         "gate-nomatch /^_[0-9]+_$/", "",
-        "[collect *]", "group *", "",
-        "[partition *]", "amend *", "",
+        *(["[collect *]", "group *", "", "[partition *]", "amend *", ""] if group_all else []),
         "[strategy sat]", "use sat", "depth 5", *budget, "",
         "[strategy pdr]", "use sby", "engine abc pdr -rfi", *budget, ""])
 

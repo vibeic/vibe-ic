@@ -98,7 +98,7 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
         text = Path(netlist).read_text()
         used = netlist_used_cells(text)
-        liberty = []
+        liberty, pad_liberty, functional_liberty = [], set(), set()
         for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
             libraries = config.get(key) or []
             groups = ([paths for pattern, paths in libraries.items()
@@ -110,7 +110,9 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
                     values = [path for path in values if not path.is_file()
                               or used.intersection(_LIB_CELL_RE.findall(path.read_text()))]
                 liberty.extend(values)
+                (pad_liberty if key == "PAD_LIBS" else functional_liberty).update(values)
         liberty = list(dict.fromkeys(liberty))
+        pad_liberty.difference_update(functional_liberty)
         if not liberty:
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
         defined = {name for path in liberty if path.is_file()
@@ -122,7 +124,8 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
             physical.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
             models.append("read_verilog -lib " + _word(physical))
         script.write_text("\n".join([
-            *["read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
+            *["read_liberty" + (" -lib" if path in pad_liberty else "")
+              + " -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
             *models,
             "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
             "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
@@ -136,7 +139,10 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     normalized = commands.run(["yosys", "-s", script])
     if normalized is None or normalized.returncode or not graph.is_file():
         return commands.result(reports=[raw, script], detail="Native CDC graph normalization did not complete.")
-    netlist = native.load(graph, top)
+    try:
+        netlist = native.load(graph, top)
+    except native.Refusal as exc:
+        return commands.result(reports=[raw, graph, script], detail=str(exc))
     native._load_latched_clock_gates(netlist)
     crossing, reset = {}, {}
     findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
@@ -600,7 +606,9 @@ def formal(project, directory, tool, commands):
                         native_read += "--top " + top_match[1] + " "
                     native_read += "-I " + _word(config.parent / "src") + " " + reads[0][1]
                     native_read += ("\nsetundef -undriven -anyseq a:anyseq>0"
-                                    "\nsetundef -undriven -anyconst a:anyconst>0")
+                                    "\nsetundef -anyseq a:anyseq>0 %ci1 t:$buf %i"
+                                    "\nsetundef -undriven -anyconst a:anyconst>0"
+                                    "\nsetundef -anyconst a:anyconst>0 %ci1 t:$buf %i")
                     retry = config.parent / "slang_frontend.sby"
                     retry.write_text(original_body[:reads[0].start()] + native_read + original_body[reads[0].end():])
                     destination = config.parent / "slang_frontend"
@@ -673,9 +681,16 @@ def formal(project, directory, tool, commands):
     return result
 
 
-def macro_views(project, directory, tool, commands):
+def macro_views(project, directory, tool, commands, route=None):
     """Use the existing pre-netlist macro integration component's own verdict."""
     from ip_integration_check import audit
+    from flow_macro_views import produce
+    try:
+        produced = produce(project, directory, commands, route or {})
+    except (OSError, ValueError, ImportError) as exc:
+        return {**commands.result(detail=str(exc)), "ran": False, "exit_code": None}
+    if produced is not None:
+        return produced
     started = time.perf_counter()
     report = audit(project)
     path = directory / "macro_views.json"
@@ -842,6 +857,8 @@ def execute(project, directory, tool, route, *, state=None, config=None):
     parent = tempfile.current_run("adapter", directory.name) / directory.name
     work = Path(tempfile.mkdtemp(prefix="native_", dir=parent))
     commands = Commands(work)
+    if tool.get("adapter") == "macro_views":
+        return macro_views(project, work, tool, commands, route)
     if tool.get("adapter") == "path_delay_atpg":
         from flow_atpg import path_delay
         return path_delay(project, work, state=state, config=config)

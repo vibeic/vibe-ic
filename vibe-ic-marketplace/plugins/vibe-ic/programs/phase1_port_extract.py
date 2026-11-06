@@ -1501,9 +1501,12 @@ def annotate_timing_ports(project: Path, content: Dict, extracted=None) -> int:
                               r"(unused|asynchronous)(?:\s+by\s+(?:this|the)\s+design|"
                               r"\s+(?:input|output|port|signal))?\s*(?=[);.]|$)", description, re.I)
             if (match and not _prose_is_denied(description, ignore_bracketed=False)
-                    and not re.search(r"\b(?:if|when|during|may|might|could|unless|only)\b",
+                    and not re.search(r"\b(?:if|when|during|may|maybe|might|could|unless|only|perhaps|uncertain)\b",
                                       description, re.I)):
-                add(name, match[1].lower(), [{"file": source, "line": row["line"]}])
+                kind = match[1].lower()
+                opposite = r"\b(?:active|used|required)\b" if kind == "unused" else r"\bsynchronous\b"
+                add(name, None if re.search(opposite, description, re.I) else kind,
+                    [{"file": source, "line": row["line"]}])
             elif re.search(r"\b(?:unused|asynchronous)\b", description, re.I):
                 add(name, None, [])
         if Path(source).suffix.lower() != ".sdc":
