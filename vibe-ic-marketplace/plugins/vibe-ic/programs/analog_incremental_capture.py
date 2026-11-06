@@ -542,7 +542,7 @@ def validate_point(record: dict) -> tuple:
             return False, "native conversion log reports a numerical/analysis failure"
     try:
         decoded = decode_capture(path, tuple(record["clock"]), record["incremental_decode"], record["settings"])
-    except (OSError, EOFError, ValueError) as exc:
+    except (OSError, EOFError, ValueError, KeyError, TypeError) as exc:
         return False, "native capture cannot be decoded: " + str(exc)
     if not decoded.get("conversions"):
         return False, "no complete observed native reset conversion"

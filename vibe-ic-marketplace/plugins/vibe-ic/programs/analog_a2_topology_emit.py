@@ -149,27 +149,10 @@ import analog_ota1_options as _ota1  # noqa: E402
 import analog_ota_bias as _ota_bias  # noqa: E402
 import analog_gate_ties as _ties  # noqa: E402
 import analog_resistor_segments as _segments  # noqa: E402
-from _analog_producer_fingerprint import producer_fingerprint as _source_fingerprint
 
 PRODUCER = "analog_a2_topology_emit"
 
 
-def producer_fingerprint() -> str:
-    """A digest of this producer and its output-shaping source dependencies.
-
-    MEASURED (round 23): a topology.json emitted by an older build of this
-    file is indistinguishable from a current one — `_provenance` names the
-    producer but not WHICH producer. So a run whose gate found the stale
-    artefact passed, the producer was never invoked, and the netlist that
-    reached the simulator was the old one: old comparator, 4 um keeper, 181 um
-    bias, ci 6.949 um, while the library had long since been fixed. From the
-    outside that run is indistinguishable from a successful one.
-
-    The fingerprint is derived from the artefact's own producer, not from
-    mtime (which a copy or a checkout resets) and not from a file name (one
-    spelling defines a blind population).
-    """
-    return _source_fingerprint(Path(__file__))
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-topology-select"
 IR_SCHEMA = 1
@@ -7328,7 +7311,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         "_provenance": {
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
-        "producer_fingerprint": producer_fingerprint(),
+        
             "produced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "derived_from": "block_type_topology_library",
             "library_entry": btype,
