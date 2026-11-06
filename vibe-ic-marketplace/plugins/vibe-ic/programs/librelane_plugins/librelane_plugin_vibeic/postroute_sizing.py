@@ -43,5 +43,5 @@ class PostRouteSizing(ResizerStep):
         views, metrics = super().run(state_in, env=env, **kwargs)
         if metrics.get("vibeic__postroute__changed") == 0:
             # Keep the input's fillers, wires and extracted parasitics together.
-            return {}, metrics
+            return {}, {"vibeic__postroute__changed": 0}
         return views, metrics
