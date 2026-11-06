@@ -173,3 +173,13 @@ def test_delivered_dc_deck_runs_native_ngspice_with_original_supply(tmp_path):
     measurement, why = emit.load_native_measurement(tmp_path, "cell", block / "cell.gds", topology)
     assert measurement is not None, why
     assert measurement["value"] == pytest.approx(2.3 ** 2 / 1e6)
+
+
+def test_actual_spec_interface_mismatch_cannot_describe_design_scope(measured):
+    _, block, topology = measured
+    (block / "topology.json").write_text(json.dumps(topology))
+    (block / "netlist_provenance.json").write_text(json.dumps({"_provenance": {"design_content": "structure_and_geometry"}}))
+    (block / "spec.json").write_text(json.dumps({"block": "cell", "interface": {"pins": [{"name": "different"}]}}))
+    result, why = load(measured)
+    assert result is not None, why
+    assert common.hardmacro_content(block).klass == common.CONTENT_UNDISCLOSED

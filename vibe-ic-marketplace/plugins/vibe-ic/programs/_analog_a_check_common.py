@@ -953,6 +953,14 @@ def _a8_declared_content(block_dir: Path) -> Optional[BoundedContent]:
         topology = json.loads((block_dir / "topology.json").read_text())
         if not isinstance(topology, dict):
             return None
+        specification = block_dir / "spec.json"
+        if specification.is_file():
+            spec = json.loads(specification.read_text())
+            pins = spec.get("interface", {}).get("pins", [])
+            if (spec.get("block") != block or not isinstance(pins, list)
+                    or [pin.get("name") for pin in pins if isinstance(pin, dict)]
+                    != topology.get("ports")):
+                return None
         measurement, _ = producer.load_native_measurement(
             project, block, block_dir / f"{block}.gds", topology)
         if measurement is None:
