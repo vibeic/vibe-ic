@@ -307,7 +307,7 @@ def execute(project, context):
         report['executable'] = prepared['executable']
         parent = project / 'reports/flow109/attempts'
         parent.mkdir(parents=True, exist_ok=True)
-        attempt = Path(tempfile.mkdtemp(prefix='D67-', dir=parent))
+        attempt = Path(tempfile.mkdtemp(prefix='D67-', dir=tempfile.current_run() / 'package_electrical'))
         for item in prepared['resolved']:
             case = item['case']
             model = attempt / (case['id'] + '.model.sp')

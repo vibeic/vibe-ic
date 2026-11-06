@@ -358,6 +358,26 @@ def _declared_blocks(project):
 
 def run_window(project, args, *, features=None):
     project = Path(project).resolve()
+    with tempfile.execution("analog", project.name, keep=getattr(args, "keep_temp", False),
+                            destination=project / "reports/analog_native") as work:
+        try:
+            result = _run_window(project, args, features=features)
+        finally:
+            if work.publish() is not None:
+                for folder in ("reports", "phase3"):
+                    for path in (project / folder).glob("**/*.json"):
+                        try:
+                            before = json.loads(path.read_text())
+                        except (ValueError, OSError):
+                            continue
+                        after = tempfile.relocate(before, work.mapping)
+                        if after != before:
+                            write_json(path, after)
+        return tempfile.relocate(result, work.mapping)
+
+
+def _run_window(project, args, *, features=None):
+    project = Path(project).resolve()
     entry = getattr(args, "entry_step", None) or "A01"
     exit_ = getattr(args, "exit_step", None) or "A19"
     if entry not in STEPS or exit_ not in STEPS or STEPS.index(entry) > STEPS.index(exit_):
@@ -378,7 +398,7 @@ def run_window(project, args, *, features=None):
     names = [block.get("name") or block.get("block") for block in blocks]
     parent = project / "reports" / "analog_native"
     parent.mkdir(parents=True, exist_ok=True)
-    attempt = Path(tempfile.mkdtemp(prefix="run-", dir=parent))
+    attempt = Path(tempfile.mkdtemp(prefix="run-", dir=tempfile.current_run("analog", project.name) / "analog_window"))
     container = getattr(args, "container", None) or config.get("container", "")
     image = getattr(args, "image", None) or config.get("image", "")
     transport = getattr(args, "transport", None) or ("CONTAINER" if container else "HOST")

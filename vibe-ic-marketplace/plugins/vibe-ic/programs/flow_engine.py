@@ -769,7 +769,8 @@ def run(project: Path | str, *, table: dict | None = None, route: dict | None = 
                           from_name=from_name, to_name=to_name, pdk=pdk)
         finally:
             if work.publish() is not None:
-                paths = [*(project / "steps").glob("**/*.json"), project / "reports/flow_engine.json"]
+                paths = [path for folder in ("steps", "reports", "phase1", "phase2", "phase3")
+                         for path in (project / folder).glob("**/*.json")]
                 for path in paths:
                     try:
                         before = read_json(path)

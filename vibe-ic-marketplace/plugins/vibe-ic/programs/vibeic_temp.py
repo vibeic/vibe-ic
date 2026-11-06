@@ -189,6 +189,7 @@ class Execution:
         self.owner_pid = owner_pid
         self.published = None
         self.mapping = {}
+        self.publication_failed = False
 
     def __enter__(self):
         self.previous = {key: os.environ.get(key) for key in _ENV_KEYS}
@@ -201,6 +202,7 @@ class Execution:
     def publish(self, destination=None):
         if self.published is not None:
             return self.published
+        self.publication_failed = True
         destination = Path(destination) if destination is not None else (
             self.destination / self.run.name if self.destination is not None else None)
         preserved = {}
@@ -218,6 +220,7 @@ class Execution:
             preserved[str(self.tmp)] = str(self.run / "scratch")
             preserved[str(self.tmp.resolve())] = str(self.run / "scratch")
         if destination is not None and not any(path.is_file() for path in self.run.rglob("*")):
+            self.publication_failed = False
             return None
         if destination is not None:
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -242,6 +245,7 @@ class Execution:
                         path.write_text(json.dumps(changed, indent=2) + "\n")
                     finally:
                         path.chmod(mode)
+        self.publication_failed = False
         return self.published
 
     def detach(self):
@@ -255,17 +259,24 @@ class Execution:
             if self.destination is not None or self.keep:
                 self.publish()
         finally:
-            if not self.keep:
-                _remove(self.run)
-                _owned_runs.pop(self.run, None)
-            _remove(self.tmp)
-            _owned_tmp.discard(self.tmp)
-            for key, value in self.previous.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-            _stdlib.tempdir = os.environ.get("TMPDIR")
+            try:
+                if self.publication_failed:
+                    _owned_runs.pop(self.run, None)
+                    print(f"Results were not copied; unfinished run retained: {self.run}", file=sys.stderr)
+                elif not self.keep:
+                    _remove(self.run)
+                    _owned_runs.pop(self.run, None)
+            finally:
+                try:
+                    _remove(self.tmp)
+                    _owned_tmp.discard(self.tmp)
+                finally:
+                    for key, value in self.previous.items():
+                        if value is None:
+                            os.environ.pop(key, None)
+                        else:
+                            os.environ[key] = value
+                    _stdlib.tempdir = os.environ.get("TMPDIR")
 
 
 execution = Execution
@@ -277,12 +288,14 @@ def finish(record):
         parent = root() / ("runs" if kind == "run" else "tmp")
         if path.is_symlink() or path.parent.resolve() != parent.resolve():
             raise ValueError("Not an execution folder under VIBEIC_TMP: " + str(path))
-    if record.get("keep"):
-        if paths["tmp"].is_dir():
-            shutil.copytree(paths["tmp"], paths["run"] / "scratch", dirs_exist_ok=True)
-    else:
-        _remove(paths["run"])
-    _remove(paths["tmp"])
+    try:
+        if record.get("keep"):
+            if paths["tmp"].is_dir():
+                shutil.copytree(paths["tmp"], paths["run"] / "scratch", dirs_exist_ok=True)
+        else:
+            _remove(paths["run"])
+    finally:
+        _remove(paths["tmp"])
 
 
 def _active(path):
@@ -338,11 +351,12 @@ def delete_runs(names, *, older_than_day=False):
 
 
 def _cleanup():
-    for path, keep in list(_owned_runs.items()):
-        if not keep:
+    paths = [path for path, keep in _owned_runs.items() if not keep] + list(_owned_tmp)
+    for path in paths:
+        try:
             _remove(path)
-    for path in list(_owned_tmp):
-        _remove(path)
+        except OSError as exc:
+            print(f"Temporary cleanup failed for {path}: {exc}", file=sys.stderr)
 
 
 def main():

@@ -400,7 +400,7 @@ def verilate_professional_tb_and_run(
     # Every attempt owns fresh files. Retain earlier JUnit, raw coverage,
     # logs, execution records and builds, including a failed rerun.
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
-    attempt = Path(tempfile.mkdtemp(prefix=f'attempt_{stamp}_', dir=run_dir))
+    attempt = Path(tempfile.mkdtemp(prefix=f'attempt_{stamp}_', dir=tempfile.current_run() / 'coverage'))
     build = build / attempt.name / 'build'
     build.mkdir(parents=True, exist_ok=True)
     run_dir = attempt
@@ -1604,7 +1604,7 @@ def prepare_professional_coverage_report(path: Path) -> None:
         history = path.parent / (path.stem + '.history')
         history.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
-        folder = Path(tempfile.mkdtemp(prefix=f'attempt_{stamp}_', dir=history))
+        folder = Path(tempfile.mkdtemp(prefix=f'attempt_{stamp}_', dir=tempfile.current_run() / 'coverage_history'))
         previous = folder / path.name
         shutil.copy2(path, previous)
     path.write_text(json.dumps({

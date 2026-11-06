@@ -94,7 +94,7 @@ def _native_core(project: Path, core_config: dict, destination: Path, on_tool_ru
                                      pdk_root=os.environ.get("PDK_ROOT"))
     owner.config = native_defaults(owner.config)
     native = owner.config.to_raw_dict()
-    run_root = Path(tempfile.mkdtemp(prefix="core_", dir=destination))
+    run_root = Path(tempfile.mkdtemp(prefix="core_", dir=tempfile.current_run() / "core_inputs"))
     toolbox = Toolbox(str(run_root / "tool_tmp"))
     state = State()
     runs = []

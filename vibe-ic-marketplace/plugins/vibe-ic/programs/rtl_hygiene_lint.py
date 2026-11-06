@@ -7102,7 +7102,7 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
     if any(not re.fullmatch(r'[A-Za-z_]\w*=[0-9+-]+', p) for p in parameters):
         raise ValueError('native top parameters must be NAME=integer')
     output_dir.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix='native-elaboration-', dir=output_dir))
+    work = Path(tempfile.mkdtemp(prefix='native-elaboration-', dir=tempfile.current_run() / 'elaboration'))
     tracked = set(files)
     for directory in include_dirs:
         tracked.update(p for p in directory.rglob('*')

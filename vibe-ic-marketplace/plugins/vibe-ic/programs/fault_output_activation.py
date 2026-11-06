@@ -141,7 +141,7 @@ def recover(project: Path, *, cut_rel: str, tv_rel: str, coverage_rel: str,
     inputs = {canonical_name(p["name"]) for p in schema["inputs"]}
     if inputs != cut_inputs - {clock}:
         raise ValueError("stimulus schema must control every cut input except clock")
-    base = project / "phase2/stage2/dft/output_activation"
+    base = tempfile.current_run() / "output_activation"
     base.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="attempt_", dir=base))
     shutil.copyfile(tv, work / "original_vectors.json")

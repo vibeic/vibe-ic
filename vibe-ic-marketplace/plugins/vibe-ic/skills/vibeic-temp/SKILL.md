@@ -24,6 +24,10 @@ python3 "$CLAUDE_PLUGIN_ROOT/programs/vibeic_temp.py" delete 'runs/<selected-nam
 
 When the user asks to remove every leftover older than a day:
 
+Apply the preservation rules above to the listing first. Use the bulk command
+only when every eligible folder is authorized for deletion. If any eligible
+folder must be preserved, pass the remaining exact names to `delete` instead.
+
 ```bash
 python3 "$CLAUDE_PLUGIN_ROOT/programs/vibeic_temp.py" delete --older-than-day
 ```

@@ -78,7 +78,7 @@ def execute(project):
         path = Path(shutil.which(executable)).resolve()
         tools[name] = {"path": str(path)}
     flow = AnalogMacroTop(generated["config"], design_dir=str(project), **selection)
-    run_dir = tempfile.mkdtemp(prefix="run-", dir=project / DEST)
+    run_dir = tempfile.mkdtemp(prefix="run-", dir=tempfile.current_run() / "macro_top")
     state = flow.start(with_initial_state=State({DesignFormat.NETLIST: LanePath(generated["netlist"])}),
                        _force_run_dir=run_dir)
     # Routing can alter contacts; verify the actual final database as well.

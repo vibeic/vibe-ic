@@ -155,6 +155,22 @@ def test_explicit_keep_preserves_run_but_always_cleans_scratch(root):
     assert (work.run / "native.log").read_text() == "retained\n"
 
 
+def test_run_cleanup_error_still_cleans_scratch_and_restores_environment(root, monkeypatch):
+    previous = os.environ["TMPDIR"]
+    remove = temp._remove
+    def deny_run(path):
+        if path == work.run:
+            raise PermissionError("run cleanup failed")
+        remove(path)
+    with pytest.raises(PermissionError, match="run cleanup failed"):
+        with temp.execution("neutral", "cleanup-error") as work:
+            monkeypatch.setattr(temp, "_remove", deny_run)
+    monkeypatch.setattr(temp, "_remove", remove)
+    remove(work.run)
+    assert not work.tmp.exists()
+    assert os.environ["TMPDIR"] == previous
+
+
 def test_process_exit_removes_owned_tmp(root):
     environment = dict(os.environ)
     environment.pop("VIBEIC_EXEC_TMP", None)
@@ -260,3 +276,38 @@ def test_cleanup_removes_read_only_owned_tool_folders(root):
         (folder / "native.log").write_text("native result\n")
         folder.chmod(0o555)
     assert not work.tmp.exists()
+
+
+def test_watchdog_job_stamp_uses_the_execution_scratch(root):
+    import _docker_watchdog as watchdog
+    assert Path(watchdog.new_job_pidfile()).parent == temp.scratch()
+
+
+def test_copy_failure_preserves_uncopied_results_and_cleans_scratch(root, tmp_path, monkeypatch):
+    def fail_copy(*args, **kwargs):
+        raise OSError("destination unavailable")
+    monkeypatch.setattr(temp.shutil, "copytree", fail_copy)
+    with pytest.raises(OSError, match="destination unavailable"):
+        with temp.execution("neutral", "copy-error", destination=tmp_path / "project/results") as work:
+            (work.run / "native.log").write_text("uncopied result\n")
+    assert not work.tmp.exists()
+    assert (work.run / "native.log").read_text() == "uncopied result\n"
+    temp._remove(work.run)
+
+
+def test_analog_window_copies_native_reports_before_cleanup(root, tmp_path, monkeypatch):
+    import analog_native_flow as analog
+    project = tmp_path / "project"
+    paths = []
+    def native(*args, **kwargs):
+        run = temp.current_run()
+        paths.extend([run, temp.scratch()])
+        report = run / "native.log"
+        report.write_text("native output\n")
+        return {"outputs": [str(report)]}
+    monkeypatch.setattr(analog, "_run_window", native)
+    result = analog.run_window(project, SimpleNamespace())
+    report = Path(result["outputs"][0])
+    assert report.is_relative_to(project / "reports/analog_native")
+    assert report.read_text() == "native output\n"
+    assert all(not path.exists() for path in paths)

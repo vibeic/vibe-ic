@@ -1183,7 +1183,7 @@ def docker_executor(job_path: Path, work: Path) -> Tuple[int, str]:
              f"/vibeic/programs/{Path(__file__).name} --inside {job_path}")
     argv = ["docker", "run", *_vtmp.docker_mounts(), "--rm", *_dmem.docker_memory_flags(),
             "--name", name, "--user", f"{_os.getuid()}:{_os.getgid()}",
-            "-e", "HOME=/tmp", "-v", f"{work}:{work}",
+            "-e", f"HOME={tempfile.scratch()}", "-v", f"{work}:{work}",
             "-v", f"{HERE}:/vibeic/programs:ro",
             "--entrypoint", "bash", image, "-c", inner]
     res = _wd.run_host_supervised(argv, stall_grace_s=STALL_GRACE_S,

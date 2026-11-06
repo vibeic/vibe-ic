@@ -159,7 +159,7 @@ def _declared_testbench(project, name, config, destination):
 
 
 def _attempt(project, step, name):
-    root = project / "reports" / "analog_native" / step / name
+    root = tempfile.current_run("analog", project.name) / step / name
     root.mkdir(parents=True, exist_ok=True)
     return Path(tempfile.mkdtemp(prefix="run-", dir=root))
 

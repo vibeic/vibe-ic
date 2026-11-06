@@ -9,7 +9,7 @@ import os
 import re
 import shlex
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 from decimal import Decimal
 from pathlib import Path
 from typing import Any

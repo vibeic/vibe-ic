@@ -62,7 +62,7 @@ def main():
             raise ValueError('invalid explicit Magic geometry authority')
         # A new cwd prevents the PDK generator from entering a shared-temp
         # fallback and deleting another invocation's working files.
-        workspace = Path(tempfile.mkdtemp(prefix='magic-provider-', dir=str(rep.parent)))
+        workspace = Path(tempfile.mkdtemp(prefix='magic-provider-', dir=tempfile.current_run() / "sealring"))
         target = workspace / 'provider-output'
         target.mkdir()
         command = [os.environ.get('MAGIC_PROVIDER_PYTHON', 'python3'), str(script),

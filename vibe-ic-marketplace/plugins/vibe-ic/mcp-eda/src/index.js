@@ -298,7 +298,7 @@ server.tool(
         }
       }
 
-      writeManifest("/tmp", {
+      writeManifest(scratchPath(), {
         step: "fpga_program",
         status: body.success ? "PASS" : "FAIL",
         tool: "Quartus Programmer (Wave 33 wrapper → device_fpga_de10lite_program)",
@@ -395,7 +395,7 @@ exit
         session_id: MCP_SESSION_ID,
       };
     }
-    writeManifest("/tmp", {
+    writeManifest(scratchPath(), {
       step: "fpga_program",
       status: success ? "PASS" : "FAIL",
       tool: "Vivado Programmer",
@@ -540,7 +540,7 @@ quit
     const techCheck = dockerExec(`export PATH=${TOOLS}/bin:$PATH && ${techExistsCmd}`, 5000);
     const techMissing = (techCheck.output || "").includes("TECH_MISSING");
     if (pdk === "custom" && techMissing) {
-      writeManifest(output_dir || "/tmp", {
+      writeManifest(output_dir || scratchPath(), {
         step: "extraction",
         status: "DEFERRED",
         tool: "Magic",
@@ -939,7 +939,7 @@ server.tool(
       const suffix = engine === "klayout_python" ? ".py" : engine === "klayout_drc" ? ".drc" : "";
       tmpFile = scratchPath(`run_tcl_${Date.now()}_${Math.floor(Math.random() * 100000)}${suffix}`);
       const b64 = Buffer.from(script, "utf-8").toString("base64");
-      const writeRes = dockerExec(`echo '${b64}' | base64 -d > ${tmpFile}`, 30000);
+      const writeRes = dockerExec(`echo '${b64}' | base64 -d > ${shq(tmpFile)}`, 30000);
       if (!writeRes.success) {
         return wrapResult({ success: false, t0, error: writeRes.error, output: writeRes.output });
       }
@@ -1142,9 +1142,9 @@ print('GDS_CELL_SAMPLE=' + ','.join(names[:10]))
 `;
       const gdsTmp = scratchPath(`pdk_lint_${Date.now()}_${Math.floor(Math.random() * 100000)}.py`);
       const gdsB64 = Buffer.from(gdsScript, "utf-8").toString("base64");
-      const gdsWrite = dockerExec(`echo '${gdsB64}' | base64 -d > ${gdsTmp}`, 30000);
+      const gdsWrite = dockerExec(`echo '${gdsB64}' | base64 -d > ${shq(gdsTmp)}`, 30000);
       const gdsRes = gdsWrite.success
-        ? dockerExec(`${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -b -r ${gdsTmp} 2>&1`, 60000)
+        ? dockerExec(`${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -b -r ${shq(gdsTmp)} 2>&1`, 60000)
         : gdsWrite;
       const gdsMatch = (gdsRes.output || "").match(/^GDS_CELL_COUNT=(\d+)[ \t]*$/m);
       const gdsCount = gdsMatch ? Number(gdsMatch[1]) : null;
@@ -1413,7 +1413,7 @@ server.tool(
     let imageHash = null;
     try { imageHash = sha256File(output); } catch (_) { /* ok */ }
 
-    writeManifest("/tmp", {
+    writeManifest(scratchPath(), {
       step: "device_camera_capture",
       status: result.success ? "PASS" : "FAIL",
       tool: "ffmpeg",
@@ -1535,7 +1535,7 @@ print(json.dumps({
       result = { success: false, error: (err.stderr || err.message || "") };
     }
 
-    writeManifest("/tmp", {
+    writeManifest(scratchPath(), {
       step: "device_camera_led_diff",
       status: result.success ? "PASS" : "FAIL",
       tool: "python+PIL",
@@ -1694,7 +1694,7 @@ server.tool(
       timeline,
     };
 
-    writeManifest("/tmp", { step: "eda_scope_protocol_decode", status: ambiguousCount > 0 ? "WARN" : "PASS", ambiguous: ambiguousCount });
+    writeManifest(scratchPath(), { step: "eda_scope_protocol_decode", status: ambiguousCount > 0 ? "WARN" : "PASS", ambiguous: ambiguousCount });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
@@ -1758,7 +1758,7 @@ server.tool(
       diffs,
     };
 
-    writeManifest("/tmp", { step: "eda_pass_reference_scope_diff", status: diffs.length > 0 ? "DIFF" : "MATCH", diff_count: diffs.length });
+    writeManifest(scratchPath(), { step: "eda_pass_reference_scope_diff", status: diffs.length > 0 ? "DIFF" : "MATCH", diff_count: diffs.length });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
@@ -1861,7 +1861,7 @@ ${signals.map((s, i) => `      <signal name="${s}" tap_mode="classic" node_index
         depth,
         clock: clock_signal,
       };
-      writeManifest("/tmp", { step: "eda_rtl_signaltap_autogen", status: "PASS", signals: signals.length, target });
+      writeManifest(scratchPath(), { step: "eda_rtl_signaltap_autogen", status: "PASS", signals: signals.length, target });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } else {
       // Generate Vivado ILA .tcl
@@ -1885,7 +1885,7 @@ ${signals.map((s, i) => `set_property port_width 1 [get_debug_ports u_ila_0/prob
         depth,
         clock: clock_signal,
       };
-      writeManifest("/tmp", { step: "eda_rtl_signaltap_autogen", status: "PASS", signals: signals.length, target });
+      writeManifest(scratchPath(), { step: "eda_rtl_signaltap_autogen", status: "PASS", signals: signals.length, target });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   }
