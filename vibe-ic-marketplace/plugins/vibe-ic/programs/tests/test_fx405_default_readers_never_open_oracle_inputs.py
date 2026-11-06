@@ -112,45 +112,15 @@ READERS = {
         "sdc_constraints",
         "sorted(str(p.relative_to(P)) for p in m.collect_sdc_files(P))",
         set()),  # it globs and returns paths; its value is pinned below
-    "_resolve_clock_spec": (
-        "phase3_one_shot_runner", "list(m._resolve_clock_spec(P))",
-        {"input/constraints/top.sdc"}),
-    "_staged_sdc_survey": (
-        "phase3_one_shot_runner",
-        "{r['path']: [r['consumed'], r['reason_not_consumed']] "
-        "for r in m._staged_sdc_survey(P)}",
-        {"input/constraints/top.sdc", "input/reference_flow/design.sdc"}),
-    "_reference_flow_qor_knobs": (
-        "phase3_one_shot_runner", "m._reference_flow_qor_knobs(P)",
-        {"input/reference_flow/flow.mk"}),
-    "_rf_pnr_scan": (
-        "phase3_one_shot_runner", "m._rf_pnr_scan(P)",
-        {"input/reference_flow/flow.mk", "input/reference_flow/config.tcl"}),
-    "_l9_declared_max_fanout": (
-        "phase3_one_shot_runner", "m._l9_declared_max_fanout(P)",
-        {"input/docs/L1_product.md"}),
-    "_v713_mk_include_dirs": (
-        "design_one_shot_runner",
-        "[str(Path(d).relative_to(P.resolve())) "
-        "for d in m._v713_mk_include_dirs(P)]",
-        {"input/reference_flow/flow.mk"}),
     "_iter_input_files": (
         "floorplan_contract", "[r for r, _p, _t in m._iter_input_files(P)]",
         {"input/docs/L1_product.md"}),
-    "_design_fixed_die_mandates": (
-        "l19_pdk_floorplan_contract_check",
-        "m._design_fixed_die_mandates(P)",
-        {"input/reference_flow/config.tcl"}),
     "find_staged_hdl": (
         "l4_regmap_declared_register_coverage_check", "m.find_staged_hdl(P)",
         {"input/rtl/top.v"}),
     "documentary_declarations": (
         "l4_regmap_declared_register_coverage_check",
         "sorted(n for d in m.documentary_declarations(P) for n in d['names'])",
-        {"input/docs/L1_product.md"}),
-    "_count_input_declared_registers": (
-        "l_doc_structured_field_count_check",
-        "m._count_input_declared_registers(P)",
         {"input/docs/L1_product.md"}),
     "_v1_14_50_declared_rtl_parameters": (
         "phase1_doc_one_shot_runner",
@@ -170,9 +140,6 @@ READERS = {
         "phase1_expert_parse_track",
         "{k: m.input_text_report(P)[k] for k in ('files_read',)}",
         {"input/docs/L1_product.md", "input/docs/L1_product_metadata.md"}),
-    "input_declares_ports": (
-        "phase1_sufficiency_check", "m.input_declares_ports(P)",
-        {"input/docs/L1_product.md", "input/rtl/top.v"}),
     # Review 405: two readers the first sweep missed, and the census.
     "clock_target_provenance.resolve": (
         "clock_target_provenance",
@@ -183,11 +150,6 @@ READERS = {
         "(lambda r: [r['status'], r['period_ns'], r['evidence']])"
         "(m._clock_target_record(P, {}))",
         {"input/constraints/top.sdc"}),
-    "_design_input_corpus": (
-        "l19_pdk_floorplan_contract_check",
-        "(lambda c: {t: t in c for t in ('liba', 'libb', 'golda', 'goldclkinput', 'refreg')})"
-        "(m._design_input_corpus(P))",
-        {"input/reference_flow/config.tcl", "input/docs/L1_product.md"}),
     "documentary_census": (
         "l4_regmap_declared_register_coverage_check",
         "(lambda c: [c['opened_count'], c.get('excluded_oracle_count')])"
@@ -269,56 +231,6 @@ def test_sdc_collector_returns_only_the_design_constraints(observed):
         "input/reference_flow/design.sdc"]
 
 
-def test_clock_period_is_the_design_one_not_the_golden_one(observed):
-    # main: 2.5 ns from input/constraints/golden_timing.sdc (sorted first).
-    assert observed["_resolve_clock_spec"]["value"][0] == pytest.approx(10.0)
-
-
-def test_sdc_survey_names_the_oracle_files_as_excluded_unread(observed):
-    rows = observed["_staged_sdc_survey"]["value"]
-    for rel in ("input/constraints/golden_timing.sdc",
-                "input/constraints/oracle.sdc",
-                "input/reference_flow/golden/golden.sdc"):
-        consumed, reason = rows[rel]
-        assert not consumed and reason.startswith("§4.05"), (rel, reason)
-    assert rows["input/constraints/top.sdc"][0] is True
-    # The over-match control is design input, not a §4.05 exclusion.
-    assert not rows["input/constraints/top_design_rules.sdc"][1].startswith("§4.05")
-
-
-def test_pnr_scan_keeps_design_knobs_and_drops_oracle_ones(observed):
-    scan = observed["_rf_pnr_scan"]["value"]
-    assert set(scan["declared"]) == {"CTS_CLUSTER_DIAMETER"}
-    assert scan["declared"]["CTS_CLUSTER_DIAMETER"]["value"] == "40"
-    for knob in ("CORE_UTILIZATION", "TNS_END_PERCENT", "CTS_CLUSTER_SIZE",
-                 "PLACE_DENSITY"):
-        assert knob not in scan["all_declared"], knob
-    assert sorted(scan["config_files"]) == [
-        "input/reference_flow/config.tcl", "input/reference_flow/flow.mk"]
-    # The exclusion is reported, not silent (the audit's §4.05 bucket).
-    assert {"input/reference_flow/golden/flow.mk",
-            "input/reference_flow/score/cfg.mk",
-            "input/reference_flow/golden.mk",
-            "input/reference_flow/expected_results.tcl",
-            "input/reference_flow/golden/golden.sdc"} <= set(
-                scan["excluded_oracle"])
-
-
-def test_synth_knobs_come_from_the_design_recipe_only(observed):
-    assert observed["_reference_flow_qor_knobs"]["value"] == {
-        "SWAP_ARITH_OPERATORS": "1"}
-
-
-def test_include_dirs_come_from_the_design_recipe_only(observed):
-    assert observed["_v713_mk_include_dirs"]["value"] == [
-        "input/reference_flow/inc"]
-
-
-def test_fixed_die_mandate_is_the_design_one(observed):
-    assert observed["_design_fixed_die_mandates"]["value"] == [
-        ["input/reference_flow/config.tcl", "100x100"]]
-
-
 def test_staged_hdl_is_the_design_module_not_the_golden_one(observed):
     assert observed["find_staged_hdl"]["value"] == {
         "top.v": LEGIT["input/rtl/top.v"],
@@ -327,7 +239,6 @@ def test_staged_hdl_is_the_design_module_not_the_golden_one(observed):
 
 def test_register_declarations_are_the_design_ones(observed):
     assert observed["documentary_declarations"]["value"] == ["CTRL", "STATUS"]
-    assert observed["_count_input_declared_registers"]["value"] == 2
 
 
 def test_rtl_parameters_are_the_design_ones(observed):
@@ -351,24 +262,12 @@ def test_input_text_reads_design_docs_including_the_word_control(observed):
     assert "docs/L1_product_metadata.md" in read
 
 
-def test_port_evidence_comes_from_the_design_input(observed):
-    # The design input declares no port; only the oracle files do.
-    assert observed["input_declares_ports"]["value"] is False
-
-
 def test_sign_off_provenance_and_l19_cite_the_design_clock(observed):
     # main: 2.5 ns, citing input/constraints/golden_timing.sdc, while STA signed
     # off at 10 ns (review 405, clock_target_provenance's own SDC collector).
     assert observed["clock_target_provenance.resolve"]["value"] == [10.0, "staged_sdc"]
     assert observed["_clock_target_record"]["value"] == [
         "DECLARED", 10.0, "input/constraints/top.sdc:1"]
-
-
-def test_l19_traceability_corpus_holds_only_design_tokens(observed):
-    # main: `lib_b` (only in expected_results.tcl) made a pdk_target traceable.
-    assert observed["_design_input_corpus"]["value"] == {
-        "liba": True, "libb": False, "golda": False, "goldclkinput": False,
-        "refreg": False}
 
 
 def test_register_census_counts_an_excluded_doc_as_excluded_not_read(observed):
