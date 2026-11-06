@@ -45,7 +45,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Optional, TypeVar
+from typing import Any, Callable, Iterable, Mapping, Optional, TypeVar
 
 from _atomic_artefact import write_json as _atomic_write_json
 from _atomic_artefact import write_text as _atomic_write_text
@@ -203,82 +203,11 @@ class _ProcessOutcome:
     stdout: str | None = None
     stderr: str | None = None
     invocation_id: str | None = None
-    receipt_path: str | None = None
-    receipt_sha256: str | None = None
     invocation: dict | None = None
 
 
-_RUNNER_REPORT_NAMES = ("phase1_one_shot.json", "phase2_one_shot.json",
-                        "phase3_one_shot.json", "vibe_ic_one_shot.json")
-_RUNNER_CONTEXT_ENV = "VIBEIC_RUNNER_INVOCATION_CONTEXT"
-_RUNNER_PARENT_CONTEXT_ENV = "VIBEIC_PARENT_RUNNER_INVOCATION_CONTEXT"
-
-
-def _runner_source_snapshot(argv: list[str], *, consumer: str | None = None) -> dict:
-    """Bind argv, resolved executable, runner and issued dispatcher source."""
-    def source(value: str) -> dict:
-        path = Path(value).resolve(strict=True)
-        raw = path.read_bytes()
-        return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
-
-    executable = shutil.which(argv[0]) or argv[0]
-    return {"argv": list(argv), "executable": source(executable),
-            "runner": source(argv[1]), "consumer": source(consumer or __file__)}
-
-
-def _runner_report_snapshot(project: Path) -> dict:
-    """Bind canonical reports to their bytes and filesystem generation.
-
-    Filesystem generation is retained for audit, not used as gate generation.
-    No receipt in runner_invocations is itself a runner report.
-    """
-    reports = {}
-    for name in _RUNNER_REPORT_NAMES:
-        path = project / "reports" / "orchestrator" / name
-        try:
-            raw = path.read_bytes()
-            stat = path.stat()
-            document = _strict_json_loads(raw)
-            valid = isinstance(document, dict)
-        except (OSError, ValueError):
-            continue
-        reports[name] = {
-            "sha256": hashlib.sha256(raw).hexdigest(), "valid": valid,
-            "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns,
-            "inode": stat.st_ino, "size": stat.st_size,
-            "project": document.get("project") if valid else None,
-            "runner_binding": document.get("runner_binding") if valid else None,
-        }
-    return reports
-
-
-def _runner_fresh_reports(before: dict, after: dict) -> list[str]:
-    """A rewrite of old identical bytes is replay, even with a new inode/mtime.
-
-    Native producers' generation binding changes for every invocation, including
-    legitimate repeated measurements of identical RTL and identical verdicts.
-    Legacy reports remain usable when they have genuinely new report content.
-    """
-    return [name for name, record in after.items() if record["valid"]
-            and record["sha256"] != before.get(name, {}).get("sha256")]
-
-
-def _runner_refusal_line(process: _ProcessOutcome) -> tuple[str, str] | None:
-    """Return the owning runner's refusal token and verbatim line, if any."""
-    for line in ((process.stderr or "").splitlines()
-                 + (process.stdout or "").splitlines()):
-        refusal = re.match(r"^REFUSED:\s*([A-Z][A-Z0-9_]*)\b", line)
-        if refusal:
-            return refusal[1], line
-    return None
-
-
-def _runner_material_snapshot(project: Path) -> dict:
-    """Bind the input and emitted file populations, without opening escapes.
-
-    The before/after pair records legitimate Program output changes. Consumers
-    require the AFTER population and bytes, never the pre-generation RTL.
-    """
+def _candidate_material_snapshot(project: Path) -> dict:
+    """Inventory the public inputs and RTL referred to by an AI repair contract."""
     project = Path(project).resolve()
     material = {}
     for label, relative in (("input", "input"),
@@ -323,42 +252,8 @@ def _runner_material_snapshot(project: Path) -> dict:
     return material
 
 
-def _runner_receipt_paths(project: Path, invocation: dict) -> None:
-    """Check the record and separately archived stream bytes together."""
-    archive = project / "reports" / "orchestrator" / "runner_invocations"
-    Path(invocation["record_path"]).resolve().relative_to(archive.resolve())
-    for stream in ("stdout", "stderr"):
-        value = invocation[stream]
-        if value is None:
-            if invocation[stream + "_path"] is not None or invocation[stream + "_sha256"] is not None:
-                raise ValueError("unavailable capture has fabricated log evidence")
-            continue
-        path = Path(invocation[stream + "_path"])
-        path.resolve().relative_to(archive.resolve())
-        if (path.read_bytes() != value.encode("utf-8")
-                or _sha256_text(value) != invocation[stream + "_sha256"]):
-            raise ValueError(stream + " log changed")
-
-
-def _material_matches_repaired_output(expected: dict, current: dict) -> bool:
-    """Allow only the working RTL output to differ for a proven repair."""
-    if not isinstance(expected, dict) or not isinstance(current, dict):
-        return False
-    output_keys = {"output_rtl", "output_rtl_sha256"}
-    return ({key: value for key, value in expected.items()
-             if key not in output_keys}
-            == {key: value for key, value in current.items()
-                if key not in output_keys}
-            and expected.get("output_rtl") != current.get("output_rtl")
-            and expected.get("output_rtl_sha256")
-            != current.get("output_rtl_sha256"))
-
-
 def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
-                        project: Path, *, require_phase2: bool = True,
-                        historical: bool = False,
-                        allow_repaired_output: bool = False,
-                        repaired_output_sha256: str | None = None) -> dict | None:
+                        project: Path, *, require_phase2: bool = True) -> dict | None:
     from flow_engine_frontend import native_diagnostics
     return native_diagnostics(process, argv, project, require_phase2)
 
@@ -375,12 +270,6 @@ def _collect_runner_result(process: _ProcessOutcome, argv: list[str],
         return {"id": pid, "ok": False, "reason": process.error,
                 "runner_diagnostics": diagnostic}
     got = bio.collect(fmt, pid, project, **kwargs)
-    # The collector reads the same material just measured, even if another
-    # writer moved a file during that read. Task freezing repeats this check.
-    after = _runner_diagnostics(process, argv, project)
-    if after and after.get("reason"):
-        return {"id": pid, "ok": False, "reason": after["reason"],
-                "runner_diagnostics": after}
     if diagnostic:
         got = {**got, "runner_diagnostics": diagnostic}
     return got
@@ -455,107 +344,35 @@ def _reference_model_next(project) -> dict:
                 "in-scope gate failure")}
 
 
-def _runner_reentry_reason(task: dict, result: dict, *,
-                           allow_repaired_output: bool = False,
-                           repaired_output_sha256: str | None = None) -> str | None:
-    """Legacy refusal exits cannot establish that the stored gates ran.
-
-    Normal rc 0/1 remains supported, including bounded NOT_MEASURED outcomes.
-    A receipt from a refused/failed invocation is never a gate measurement.
-    """
+def _runner_reentry_reason(task: dict, result: dict) -> str | None:
+    """Re-enter when the process failed or its native tools left no report."""
     verification = task.get("program_verification") or {}
     if not isinstance(verification, dict):
         return "Program verification record is malformed"
     invocation = verification.get("runner_invocation")
     if isinstance(invocation, dict):
-        if invocation.get("status") != "COMPLETED":
-            return str(invocation.get("error") or "RUNNER_INVOCATION_NOT_MEASURED")
-        try:
-            project = Path(task["project"]).resolve()
-            invocation_project = Path(invocation["project"]).resolve()
-            if invocation_project != project:
-                regate = _verified_program_regate(task)
-                if (regate is None or invocation_project !=
-                        (Path(regate["archive_path"]) / "staged_project").resolve()):
-                    raise ValueError("invocation project is not this task's gate producer")
-            if _strict_json_loads(Path(invocation["record_path"]).read_text()) != invocation:
-                raise ValueError("invocation record changed")
-            diagnostic = _stored_runner_diagnostics(
-                invocation, allow_repaired_output=allow_repaired_output,
-                repaired_output_sha256=repaired_output_sha256)
-            if diagnostic and diagnostic.get("reason"):
-                raise ValueError(diagnostic["reason"])
-            current_material = _runner_material_snapshot(project)
-            if (allow_repaired_output
-                    and (not isinstance(repaired_output_sha256, str)
-                         or current_material.get("output_rtl_sha256")
-                         != repaired_output_sha256)):
-                raise ValueError("repaired RTL hash is not the admitted hash")
-            repaired_output_bound = (
-                allow_repaired_output
-                and isinstance(repaired_output_sha256, str)
-                and current_material.get("output_rtl_sha256") == repaired_output_sha256)
-            if (invocation["material_after"] != current_material
-                    and not (repaired_output_bound
-                             and _material_matches_repaired_output(
-                                 invocation["material_after"],
-                                 current_material))):
-                raise ValueError("working input/output population or content changed")
-            _runner_frozen_material(invocation, task["candidate_snapshot"])
-            if (invocation.get("project") != str(invocation_project)
-                    or invocation.get("rc") != verification.get("runner_rc")
-                    or invocation.get("output_rtl_sha256") != task.get("rtl_sha256")
-                    or invocation.get("prompt_sha256") != task.get("prompt_sha256")):
-                raise ValueError("invocation does not bind this task")
-            if verification.get("runner_argv") != invocation["argv"]:
-                raise ValueError("invocation options differ from the frozen task")
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            return f"RUNNER_INVOCATION_NOT_MEASURED: {exc}"
+        if invocation.get("error"):
+            return str(invocation["error"])
+        diagnostic = _stored_runner_diagnostics(invocation)
+        if diagnostic and diagnostic.get("reason"):
+            return str(diagnostic["reason"])
         return None
     rc = verification.get("runner_rc", result.get("rc"))
     if type(rc) is int and rc not in (0, 1):
-        return f"RUNNER_INVOCATION_NOT_MEASURED: legacy exit {rc} has no invocation evidence"
+        return f"Runner exited {rc} without a native result"
     return None
 
 
-def _stored_runner_diagnostics(invocation: dict, *,
-                               allow_repaired_output: bool = False,
-                               repaired_output_sha256: str | None = None) -> dict | None:
-    """Re-use the live collection contract for a frozen invocation record."""
-    path = Path(invocation["record_path"])
-    raw = path.read_bytes()
-    if _strict_json_loads(raw) != invocation:
-        raise ValueError("invocation record changed")
+def _stored_runner_diagnostics(invocation: dict) -> dict | None:
+    """Read the native tool report for a recorded process outcome."""
     process = _ProcessOutcome(
-        rc=invocation["rc"], error=invocation["error"],
-        stdout=invocation["stdout"], stderr=invocation["stderr"],
-        invocation_id=invocation["invocation_id"], receipt_path=str(path),
-        receipt_sha256=hashlib.sha256(raw).hexdigest(), invocation=invocation)
-    diagnostic = _runner_diagnostics(
-        process, invocation["argv"], Path(invocation["project"]),
-        historical=True,
-        allow_repaired_output=allow_repaired_output,
-        repaired_output_sha256=repaired_output_sha256)
+        rc=invocation.get("rc"), error=invocation.get("error"),
+        stdout=invocation.get("stdout"), stderr=invocation.get("stderr"),
+        invocation_id=invocation.get("invocation_id"), invocation=invocation)
     if process.error:
         raise ValueError(process.error)
-    return diagnostic
-
-
-def _runner_frozen_material(invocation: dict, candidate: dict) -> None:
-    """The frozen RTL population and raw bytes must be the measured output."""
-    expected = {name: {"sha256": record["sha256"], "size": record["size"]}
-                for name, record in invocation["material_after"]["output_rtl"].items()
-                if "/" not in name and Path(name).suffix in {".v", ".sv"}}
-    paths = [Path(p) for p in candidate["rtl_paths"]]
-    actual = {}
-    for index, path in enumerate(paths):
-        raw = path.read_bytes()
-        prefix = f"{index:02d}_"
-        if not path.name.startswith(prefix):
-            raise ValueError("frozen RTL filename differs from archive population")
-        actual[path.name[len(prefix):]] = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
-    if actual != expected or len(actual) != len(paths):
-        raise ValueError("frozen RTL population/content differs from runner output")
+    return _runner_diagnostics(process, invocation.get("argv") or [],
+                               Path(invocation["project"]))
 
 
 def _own_child_pids() -> list[int]:
@@ -741,113 +558,51 @@ class _RunnerBudget:
                    and Path(argv[1]).name == "vibe_ic_one_shot_runner.py"
                    and not argv[2].startswith("-") else None)
         rc, error, stdout, stderr = None, None, None, None
-        before, after = {}, {}
-        material_before = material_after = None
-        source_before = source_after = None
-        started_ns = finished_ns = None
+        started_ns = time.time_ns()
         try:
             with self._heavy:
-                before = _runner_report_snapshot(project) if project else {}
-                material_before = _runner_material_snapshot(project) if project else None
-                source_before = _runner_source_snapshot(argv) if project else None
-                started_ns = time.time_ns()
-                if project:
-                    _atomic_write_json(project / "reports" / "orchestrator" / "runner_invocations" / "latest.json", {
-                        "invocation_id": invocation_id, "argv": argv,
-                        "project": str(project), "started_ns": started_ns,
-                    })
-                    # A private per-call env, including when worker_threads=0.
-                    # Never mutate a shared worker environment across siblings.
-                    kwargs["env"] = dict(kwargs.get("env") or os.environ)
-                    if "--container" in argv:
-                        kwargs["env"]["VIBEIC_EDA_CONTAINER"] = argv[argv.index("--container") + 1]
-                    kwargs["env"][_RUNNER_CONTEXT_ENV] = json.dumps({
-                        "invocation_id": invocation_id, "argv": argv,
-                        "project": str(project), "source": source_before,
-                    }, sort_keys=True)
-                launch_snapshot = getattr(_D1_LAUNCH_CONTEXT, "snapshot", None)
-                if launch_snapshot is not None:
-                    owner_project, task, route, activation = _D1_LAUNCH_CONTEXT.authority
-                    _require_route_admission(owner_project.parent.parent, task, route)
-                    if (_read_current_receipt(owner_project, "route_decision")["receipt"] != route
-                            or _read_current_receipt(owner_project, "d1_activation")["receipt"] != activation):
-                        raise ValueError("D1_SNAPSHOT_CURRENT_AUTHORITY_REPLACED")
-                    _assert_d1_snapshot_current(launch_snapshot)
-                    context = _strict_json_loads(kwargs["env"][_RUNNER_CONTEXT_ENV])
-                    context["d1_snapshot_sha256"] = launch_snapshot.digest
-                    kwargs["env"][_RUNNER_CONTEXT_ENV] = json.dumps(context, sort_keys=True)
-                if expected_repaired_output_sha256 is not None:
-                    current_output_sha256 = _runner_material_snapshot(project).get(
-                        "output_rtl_sha256")
-                    if current_output_sha256 != expected_repaired_output_sha256:
-                        raise ValueError(
-                            "RUNNER_MATERIAL_UNBOUND: repaired RTL changed at runner launch")
+                kwargs["env"] = dict(kwargs.get("env") or os.environ)
+                if "--container" in argv:
+                    kwargs["env"]["VIBEIC_EDA_CONTAINER"] = argv[argv.index("--container") + 1]
+                if expected_repaired_output_sha256 is not None and project is not None:
+                    current = _sha256_text(_candidate_text(_rtl_files(project)))
+                    if current != expected_repaired_output_sha256:
+                        raise ValueError("AI-reviewed repair RTL changed before runner launch")
                 proc = subprocess.run(argv, **kwargs)
                 rc = int(proc.returncode)
-                stdout = getattr(proc, "stdout", None)
-                stderr = getattr(proc, "stderr", None)
+                stdout, stderr = getattr(proc, "stdout", None), getattr(proc, "stderr", None)
         except subprocess.TimeoutExpired as exc:
             stdout, stderr = exc.stdout, exc.stderr
             error = (f"RUNNER_WORKER_FAILED: TimeoutExpired: runner exceeded "
-                     f"VIBEIC_SOLVE_RUNNER_TIMEOUT_S={self.timeout_s:g}s "
-                     f"and was killed")
+                     f"VIBEIC_SOLVE_RUNNER_TIMEOUT_S={self.timeout_s:g}s and was killed")
         except Exception as exc:                         # noqa: BLE001
             error = f"{type(exc).__name__}: {exc}"
-        finally:
-            finished_ns = time.time_ns()
-            after = _runner_report_snapshot(project) if project else {}
-            try:
-                material_after = _runner_material_snapshot(project) if project else None
-                source_after = _runner_source_snapshot(argv) if project else None
-            except (OSError, ValueError) as exc:
-                error = f"RUNNER_MATERIAL_UNBOUND: {exc}; runner_error={error}"
-        # TimeoutExpired may carry bytes even when text=True was requested.
         stdout = stdout.decode(errors="replace") if isinstance(stdout, bytes) else stdout
         stderr = stderr.decode(errors="replace") if isinstance(stderr, bytes) else stderr
-        fresh = _runner_fresh_reports(before, after)
         if error is None:
-            terminal_error = _runner_terminal_error(rc, stdout or "", stderr or "")
-            # A killed/crashed worker cannot complete a gate. Fresh bounded
-            # handoff reports remain usable; a process failure is different.
-            if terminal_error and terminal_error.startswith("RUNNER_WORKER_FAILED:"):
-                error = terminal_error
-            elif not fresh:
-                error = terminal_error
-            if project and not fresh and error is None and rc not in (0, 1):
-                error = f"RUNNER_INVOCATION_NOT_MEASURED: exit {rc} published no fresh runner report"
-        receipt_path = receipt_sha256 = invocation = None
-        if project:
-            path = project / "reports" / "orchestrator" / "runner_invocations" / f"{invocation_id}.json"
-            receipt = {
-                "schema": "vibeic.runner_invocation.v1", "invocation_id": invocation_id,
-                "argv": argv, "project": str(project), "rc": rc, "error": error,
-                "d1_snapshot_sha256": getattr(getattr(_D1_LAUNCH_CONTEXT, "snapshot", None), "digest", None),
-                "stdout": stdout, "stderr": stderr,
-                "started_ns": started_ns, "finished_ns": finished_ns,
-                "reports_before": before, "reports_after": after,
-                "material_before": material_before, "material_after": material_after,
-                "source_before": source_before, "source_after": source_after,
-                "prompt_sha256": (material_after or {}).get("prompt_sha256"),
-                "output_rtl_sha256": (material_after or {}).get("output_rtl_sha256"),
+            error = _runner_terminal_error(rc, stdout or "", stderr or "")
+        invocation = None
+        if project is not None:
+            directory = project / "reports/orchestrator/runner_invocations"
+            path = directory / f"{invocation_id}.json"
+            invocation = {
+                "invocation_id": invocation_id, "argv": argv, "project": str(project),
+                "rc": rc, "error": error, "stdout": stdout, "stderr": stderr,
+                "started_ns": started_ns, "finished_ns": time.time_ns(),
                 "record_path": str(path),
-                "status": ("REFUSED" if error and "RUNNER_INVOCATION_REFUSED" in error
-                           else "WORKER_ERROR" if error else "COMPLETED"),
+                "status": "WORKER_ERROR" if error else "COMPLETED",
             }
             try:
                 for stream, value in (("stdout", stdout), ("stderr", stderr)):
-                    stream_path = path.with_suffix(f".{stream}.txt")
-                    receipt[stream + "_path"] = str(stream_path) if value is not None else None
-                    receipt[stream + "_sha256"] = _sha256_text(value) if value is not None else None
                     if value is not None:
-                        _write_immutable_text(stream_path, value)
-                _write_immutable_json(path, receipt)
-                receipt_path = str(path)
-                receipt_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
-                invocation = receipt
+                        stream_path = path.with_suffix(f".{stream}.txt")
+                        _atomic_write_text(stream_path, value)
+                        invocation[stream + "_path"] = str(stream_path)
+                _atomic_write_json(path, invocation)
+                _atomic_write_json(directory / "latest.json", invocation)
             except OSError as exc:
-                error = f"RUNNER_DIAGNOSTICS_WRITE_FAILED: {exc}; runner_error={error}"
-        return _ProcessOutcome(rc, error, stdout, stderr, invocation_id,
-                               receipt_path, receipt_sha256, invocation)
+                invocation["log_error"] = str(exc)
+        return _ProcessOutcome(rc, error, stdout, stderr, invocation_id, invocation)
 
 
 @dataclass(frozen=True)
@@ -1364,7 +1119,8 @@ def _required_gate_ledger(solve_result: Any) -> dict:
     if not isinstance(verification, dict):
         ledger["why"] = "The runner reported no tool results."
         return ledger
-    for source in (verification.get("ran"), verification.get("not_attempted")):
+    for source in (verification.get("ran"), verification.get("not_attempted"),
+                   verification.get("unclassified_status")):
         for name, status in (source or {}).items():
             if status not in {"NOT_APPLICABLE", "SKIPPED-BY-ENTRY", "SKIPPED-BY-EXIT"}:
                 ledger["in_scope"][name] = str(status)
@@ -1899,27 +1655,20 @@ def _verified_program_regate(task: dict) -> dict | None:
         if (declaration["schema"] != _PROGRAM_REGATE_SCHEMA
                 or declaration["actor"] != "PROGRAM"
                 or declaration["program_identity"] != regate["program_identity"]
-                or declaration["runner_invocation"] != invocation
-                or declaration["signed_input_sha256"] != signed
+                    or declaration["signed_input_sha256"] != signed
                 or declaration["output_rtl_sha256"] != produced
                 or declaration["author_record_sha256"] != author_hash
                 or preimage["author_record_sha256"] != author_hash
                 or preimage["signed_input_sha256"] != signed
                 or preimage["validation"]["verdict"] != "PASS"
                 or invocation["status"] != "COMPLETED"
-                or invocation["material_before"] != preimage["input_material"]
-                or invocation["material_before"]["output_rtl_sha256"] != signed
-                or invocation["material_after"]["output_rtl_sha256"] != produced
-                or _runner_material_snapshot(Path(task["project"])) != invocation["material_after"]
-                or invocation["material_before"]["input"] != invocation["material_after"]["input"]
                 or declaration["repair_contract"] != _program_output_repair_contract(
                     task["repair_provenance"]["repair_contract"],
-                    regate["program_identity"], invocation["material_after"])):
+                    regate["program_identity"], _candidate_material_snapshot(Path(task["project"])))):
             return None
         diagnostic = _stored_runner_diagnostics(invocation)
         if diagnostic and diagnostic.get("reason"):
             return None
-        _runner_frozen_material(invocation, task["candidate_snapshot"])
         measured = _read_json_regular(archive / "runner_result.json")
         if (measured["runner_invocation"] != invocation
                 or measured["collected"]["repair_contract"]["verdict"] != "PASS"
@@ -2065,11 +1814,6 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
         diagnostic = _stored_runner_diagnostics(runner_invocation)
         if diagnostic and diagnostic.get("reason"):
             raise ValueError(diagnostic["reason"])
-        material = _runner_material_snapshot(project)
-        if (material != runner_invocation["material_after"]
-                or runner_rc != runner_invocation["rc"]
-                or _sha256_text(str(got.get("completion") or "")) != material["output_rtl_sha256"]):
-            raise ValueError("RUNNER_MATERIAL_UNBOUND: task freeze differs from invocation/collected output")
     prompt = project / "input" / "phase1_prompt.md"
     paths = _rtl_files(project)
     completion = str(got.get("completion") or "")
@@ -2087,7 +1831,6 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
         diagnostic = _stored_runner_diagnostics(runner_invocation)
         if diagnostic and diagnostic.get("reason"):
             raise ValueError(diagnostic["reason"])
-        _runner_frozen_material(runner_invocation, candidate)
     if candidate_origin == "PROGRAM":
         program_candidate = candidate
     import emit_attestation as emit_attestation          # noqa: PLC0415
@@ -4342,9 +4085,7 @@ def _validate_ai_review(task: dict, *,
     review and not a permanent convergence failure.
     """
     task_reasons: list[str] = _public_input_reasons(task)
-    invocation_reason = _runner_reentry_reason(
-        task, {}, allow_repaired_output=allow_repaired_output,
-        repaired_output_sha256=repaired_output_sha256)
+    invocation_reason = _runner_reentry_reason(task, {})
     if invocation_reason:
         task_reasons.append(invocation_reason)
     if task.get("schema") != _REVIEW_TASK_SCHEMA:
@@ -6018,8 +5759,7 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
     """Derive supplied input from a measured canonical re-entry, not authorship.
 
     A Program re-entry keeps its PROGRAM origin. It may consume the existing
-    supplied-RTL collection contract only with a current receipt and explicit
-    Step-2 entry. Native keeps its declared exit; legacy requires Step 2 -> 2.
+    supplied-RTL collection contract with an explicit Step-2 entry.
     FAIL stays a measured failure for the unchanged
     required-gate ledger; unavailable/blocked validation supplies no authority.
     """
@@ -6030,7 +5770,6 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
     verification = task.get("program_verification") or {}
     invocation = verification.get("runner_invocation")
     if (not isinstance(invocation, dict)
-            or invocation.get("schema") != "vibeic.runner_invocation.v1"
             or invocation.get("status") != "COMPLETED"
             or verification.get("rtl_gen") != "NOT_APPLICABLE"):
         return False
@@ -6136,97 +5875,46 @@ def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
                         input_contract, delivery_target)
 
 
-def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
-                             *, force_current: bool = False,
-                             route_receipt: dict | None = None,
-                             task_sha256: str | None = None,
-                             source_sha256: str | None = None,
-                             ldoc_root_handle: str | None = None,
-                             delivery_route: str = "ip") -> dict:
-    """Materialize canonical Phase-1 provenance before a mid-flow entry.
-
-    This prerequisite is BLOCKING: missing or mutable provenance must stop the
-    owning loop instead of silently producing a non-canonical benchmark sample.
-
-    Routing still decides the task's owning loop first. A debug/optimization
-    task may therefore *solve* from a later step, but it must not bypass the
-    one Phase-1 front door that binds its prompt to L-doc provenance. The
-    D1-only pass is accepted by its produced provenance rather than the broad
-    runner rc: Phase 1 may honestly return nonzero for an outstanding expert
-    handoff after it has emitted all hash-bound L-docs.
-    """
-    import emit_attestation as emit_attestation          # noqa: PLC0415
-    import route_decision as rd                          # noqa: PLC0415
-
-    project = Path(project).resolve()
-    existing = emit_attestation.phase1_provenance(project)
-    if existing.get("ran") is True and not force_current:
-        return {"status": "REUSED", "runner_rc": None,
-                "provenance": existing}
-
-    prompt = project / "input" / "phase1_prompt.md"
+def _phase1_native_status(project: Path) -> str:
+    """Read the Phase-1 tool result without a second authenticity verdict."""
+    root = Path(project)
     try:
-        prompt_before = _sha256_text(prompt.read_text(errors="replace"))
-        rtl_before = _sha256_text(_candidate_text(_rtl_files(project)))
-    except OSError as exc:
-        return {"status": "BLOCKED", "runner_rc": None,
-                "reason": f"front-door input is unreadable: {exc}"}
+        engine = _read_json_regular(root / "reports/flow_engine.json")
+    except (OSError, ValueError):
+        engine = {}
+    rows = engine.get("steps", []) if isinstance(engine, dict) else []
+    for row in reversed(rows if isinstance(rows, list) else []):
+        if isinstance(row, dict) and row.get("name") == "requirements_and_delivery_route":
+            return str(row.get("status") or "NOT_MEASURED")
+    try:
+        owner = _read_json_regular(root / "reports/orchestrator/phase1_one_shot.json")
+    except (OSError, ValueError):
+        return "NOT_MEASURED"
+    return str(owner.get("verdict") or "NOT_MEASURED") if isinstance(owner, dict) else "NOT_MEASURED"
 
-    argv = _solver_argv(
-        runner, project, "D1", "D1", delivery_route,
-        delivery_target=_rtl_delivery_target(route_receipt))
+
+def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
+                             *, delivery_route: str = "ip",
+                             route_receipt: dict | None = None,
+                             force_current: bool = False) -> dict:
+    """Run document extraction when its native result is unavailable."""
+    import emit_attestation as emit_attestation
+    project = Path(project).resolve()
+    if _phase1_native_status(project) == "PASS" and not force_current:
+        return {"status": "REUSED", "runner_rc": None,
+                "provenance": emit_attestation.phase1_provenance(project)}
+    argv = _solver_argv(runner, project, "D1", "D1", delivery_route,
+                        delivery_target=_rtl_delivery_target(route_receipt))
     process = runner_budget.run(argv)
     diagnostic = _runner_diagnostics(process, argv, project, require_phase2=False)
-    diagnostics = {"runner_diagnostics": diagnostic} if diagnostic else {}
-    diagnostics["runner_invocation"] = getattr(process, "invocation", None)
-    if diagnostic and diagnostic.get("reason"):
-        return {"status": "BLOCKED", "runner_rc": process.rc,
-                "reason": diagnostic["reason"], **diagnostics}
-    if process.error is not None:
-        return {"status": "BLOCKED", "runner_rc": process.rc,
-                "reason": process.error, **diagnostics}
-    try:
-        prompt_after = _sha256_text(prompt.read_text(errors="replace"))
-        rtl_after = _sha256_text(_candidate_text(_rtl_files(project)))
-    except OSError as exc:
-        return {"status": "BLOCKED", "runner_rc": process.rc,
-                "reason": f"front-door output is unreadable: {exc}", **diagnostics}
-    if prompt_before != prompt_after or rtl_before != rtl_after:
-        return {"status": "BLOCKED", "runner_rc": process.rc,
-                "reason": "D1-only front door changed the prompt or supplied RTL", **diagnostics}
-    provenance = emit_attestation.phase1_provenance(project)
-    if provenance.get("ran") is not True:
-        return {"status": "BLOCKED", "runner_rc": process.rc,
-                "reason": "D1-only front door produced no L documents", **diagnostics}
-    result = {"status": "GENERATED", "runner_rc": process.rc,
-              "provenance": provenance, **diagnostics}
-    if force_current:
-        # The report producer is the authority for D1's typed verdict.  A
-        # digest and ``ran: true`` alone describe provenance, not gate success.
-        import _path_layout as _pl                    # noqa: PLC0415
-        report_path = _pl.report_path(project, "phase1_one_shot.json")
-        try:
-            report_bytes = report_path.read_bytes()
-            report = _strict_json_loads(report_bytes.decode("utf-8"))
-        except (OSError, ValueError, TypeError) as exc:
-            return {**result, "d1_gate_error": f"D1_GATE_REPORT_UNREADABLE: {exc}"}
-        if not isinstance(report, dict) or not isinstance(report.get("verdict"), str):
-            return {**result, "d1_gate_error": "D1_GATE_REPORT_SCHEMA_INVALID"}
-        invocation_id = str(process.invocation_id or "")
-        if source_sha256 is None or task_sha256 is None or ldoc_root_handle is None:
-            return {**result, "d1_gate_error": "D1_GATE_BINDING_INPUT_MISSING"}
-        result["d1_gate"] = rd.make_d1_gate(
-            verdict=str(report.get("verdict") or ""),
-            route_receipt=route_receipt or {},
-            provenance=provenance,
-            source_sha256=source_sha256,
-            task_sha256=task_sha256,
-            ldoc_root_handle=ldoc_root_handle,
-            invocation_id=invocation_id,
-            report_sha256=hashlib.sha256(report_bytes).hexdigest(),
-            waiver_receipt=(report.get("waiver_receipt")
-                            if isinstance(report.get("waiver_receipt"), dict)
-                            else None))
+    status = _phase1_native_status(project)
+    result = {"status": "GENERATED" if status == "PASS" and not process.error else "BLOCKED",
+              "runner_rc": process.rc, "native_verdict": status,
+              "runner_diagnostics": diagnostic, "runner_invocation": process.invocation,
+              "provenance": emit_attestation.phase1_provenance(project)}
+    if process.error or (diagnostic or {}).get("reason") or status != "PASS":
+        result["status"] = "BLOCKED"
+        result["reason"] = process.error or (diagnostic or {}).get("reason") or f"Phase-1 native result: {status}"
     return result
 
 
@@ -6580,333 +6268,11 @@ def _publish_current_receipt(project: Path, kind: str, value: dict,
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def _prepare_route_d1(project: Path, task: dict, route_receipt: dict,
-                      *, run_scope: str) -> dict:
-    """Publish the existing source-authorized pending state, without a verdict."""
-    import route_decision as rd                            # noqa: PLC0415
-
-    project = Path(project).resolve()
-    run_scope = str(run_scope or uuid.uuid4().hex)
-    if not run_scope or "/" in run_scope or "\\" in run_scope:
-        raise ValueError("D1_RUN_SCOPE_INVALID")
-    run_p = project.parent.parent
-    decision, reasons = _validate_ai_route(task, run_p)
-    if decision is None or decision.get("route_receipt") != route_receipt:
-        raise ValueError("ROUTE_ADMISSION_AI_INVALID: " + ", ".join(reasons))
-    _seal_route_admission(run_p, task, decision)
-    source_sha = str(route_receipt.get("source_sha256") or "")
-    if not source_sha:
-        raise ValueError('D1_ACTIVATION_SOURCE_MISSING' + (": " + "_activate_route_d1.route_receipt.source_sha256 is empty after route admission validation"))
-    task_sha = str(task.get("task_sha256") or "")
-    pending = rd.write_d1_pending(
-        _receipt_current_pointer(project, "d1_pending"), route_receipt=route_receipt,
-        source_sha256=source_sha, task_sha256=task_sha)
-    _publish_current_receipt(project, "d1_pending", pending,
-                             digest_field="activation_sha256",
-                             run_id=f"{task_sha}:d1-pending:{run_scope}")
-    pending_current = _read_current_receipt(project, "d1_pending")
-    if pending_current["receipt"].get("activation_sha256") != pending.get("activation_sha256"):
-        raise ValueError("D1_PENDING_CURRENT_POINTER_MISMATCH")
-    rd.admit_canonical_step(
-        step="D1", pending=pending, activation=None,
-        route_receipt=route_receipt, task_sha256=task_sha,
-        source_sha256=source_sha)
-    _require_route_admission(run_p, task, route_receipt, require_d1=False)
-    return pending
-
-
-def _activate_route_d1(project: Path, task: dict, route_receipt: dict,
-                       runner: Path, runner_budget,
-                       *, run_scope: str | None = None,
-                       delivery_route: str = "ip") -> tuple[dict, dict, dict]:
-    """Qualify full D1 workflows after publishing source-authorized pending."""
-    import emit_attestation as emit_attestation          # noqa: PLC0415
-    import route_decision as rd                          # noqa: PLC0415
-
-    project = Path(project).resolve()
-    run_scope = str(run_scope or uuid.uuid4().hex)
-    pending = _prepare_route_d1(project, task, route_receipt, run_scope=run_scope)
-    source_sha = route_receipt["source_sha256"]
-    task_sha = task["task_sha256"]
-    run_p = project.parent.parent
-    ldoc_root = project / "phase1" / "generated_docs"
-    ldoc_handle = _sha256_text(str(ldoc_root.resolve()))
-    frontdoor = _ensure_phase1_frontdoor(
-        runner, project, runner_budget, force_current=True,
-        route_receipt=route_receipt, task_sha256=task_sha,
-        source_sha256=source_sha, ldoc_root_handle=ldoc_handle,
-        delivery_route=delivery_route)
-    if frontdoor.get("status") == "BLOCKED":
-        # Keep the named pending state. Never manufacture activation on a
-        # refusal, even if stale L-docs happen to be on disk.
-        raise RuntimeError(
-            "D1_ENTRY_PENDING: canonical D1 did not activate: "
-            f"{frontdoor.get('reason')}")
-    provenance = frontdoor.get("provenance") or emit_attestation.phase1_provenance(project)
-    d1_gate = frontdoor.get("d1_gate")
-    if not isinstance(d1_gate, dict):
-        raise RuntimeError(frontdoor.get("d1_gate_error") or
-                           "D1_ENTRY_PENDING: current D1 gate receipt missing")
-    activation = rd.activate_d1(
-        pending=pending, route_receipt=route_receipt,
-        provenance=provenance, source_sha256=source_sha,
-        task_sha256=task_sha, ldoc_root_handle=ldoc_handle,
-        d1_gate=d1_gate)
-    _publish_current_receipt(project, "d1_activation", activation,
-                             digest_field="activation_sha256",
-                             run_id=(f"{task_sha}:d1-activation:{run_scope}:"
-                                     f"{d1_gate.get('invocation_id')}"))
-    activation_current = _read_current_receipt(project, "d1_activation")
-    if (activation_current["receipt"].get("activation_sha256")
-            != activation.get("activation_sha256")):
-        raise ValueError("D1_ACTIVATION_CURRENT_POINTER_MISMATCH")
-    _seal_owned_d1_admission(run_p, task, activation)
-    return frontdoor, pending, activation
-
-
-@dataclass(frozen=True)
-class _D1EvidenceSnapshot:
-    project: Path
-    report: tuple
-    prompt: tuple
-    ldocs: tuple
-    directories: tuple
-    activation_sha256: str | None
-    digest: str
-    author_inputs: tuple = ()
-
-
-_D1_LAUNCH_CONTEXT = threading.local()
-
-
-def _d1_file_generation(path: Path) -> tuple:
-    st = path.lstat()
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("D1_SNAPSHOT_FILE_NOT_REGULAR")
-    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
-
-
-def _capture_d1_evidence(project: Path) -> _D1EvidenceSnapshot:
-    """Read each evidence file once; bytes and file generations are immutable."""
-    import _path_layout as _pl                     # noqa: PLC0415
-    project = Path(project).resolve()
-    docs = project / "phase1" / "generated_docs"
-    report_path = _pl.report_path(project, "phase1_one_shot.json")
-    directories = []
-    for root in (docs, report_path.parent, project / "input"):
-        for directory in (root, *root.parents):
-            if directory == project.parent:
-                break
-            if directory.is_symlink() or not directory.is_dir():
-                raise ValueError("D1_SNAPSHOT_DIRECTORY_INVALID")
-            st = directory.stat()
-            generation = (st.st_dev, st.st_ino)
-            if (directory, generation) not in directories:
-                directories.append((directory, generation))
-    def capture(path):
-        generation = _d1_file_generation(path)
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        with os.fdopen(fd, "rb") as handle:
-            opened = os.fstat(handle.fileno())
-            if (opened.st_dev, opened.st_ino) != generation[:2]:
-                raise ValueError("D1_SNAPSHOT_PATH_REPLACED")
-            data = handle.read()
-        if generation != _d1_file_generation(path):
-            raise ValueError("D1_SNAPSHOT_GENERATION_CHANGED")
-        return (path, data, generation)
-    prompt = capture(project / "input" / "phase1_prompt.md")
-    report = capture(report_path)
-    ldocs = tuple(capture(p) for p in sorted(docs.glob("L*.json")))
-    BEHAVIORAL_REFINEMENT_INPUT = "phase1/behavioral_refinement.facts.yaml"
-    author = project / BEHAVIORAL_REFINEMENT_INPUT
-    author_inputs = (capture(author),) if author.exists() or author.is_symlink() else ()
-    if not ldocs:
-        raise ValueError('D1_SNAPSHOT_LDOCS_MISSING' + f": {docs}: glob L*.json yielded no D1 layer documents")
-    try:
-        activation_sha = _read_current_receipt(project, "d1_activation")["receipt"]["activation_sha256"]
-    except (OSError, ValueError, KeyError):
-        activation_sha = None
-    digest = _receipt_sha256_json({
-        "project": str(project),
-        "files": [{"path": str(p), "sha256": hashlib.sha256(b).hexdigest(),
-                   "generation": g} for p, b, g in (prompt, report, *ldocs, *author_inputs)],
-    })
-    snapshot = _D1EvidenceSnapshot(project, report, prompt, ldocs,
-                                   tuple(directories), activation_sha, digest, author_inputs)
-    _assert_d1_snapshot_current(snapshot)
-    return snapshot
-
-
-def _assert_d1_snapshot_current(snapshot: _D1EvidenceSnapshot) -> None:
-    """Refuse generation replacement, including identical bytes at a new path."""
-    for path, generation in snapshot.directories:
-        if path.is_symlink() or not path.is_dir():
-            raise ValueError("D1_SNAPSHOT_DIRECTORY_REPLACED")
-        st = path.stat()
-        if (st.st_dev, st.st_ino) != generation:
-            raise ValueError("D1_SNAPSHOT_DIRECTORY_REPLACED")
-    docs = snapshot.project / "phase1" / "generated_docs"
-    if tuple(sorted(docs.glob("L*.json"))) != tuple(p for p, _, _ in snapshot.ldocs):
-        raise ValueError("D1_SNAPSHOT_LDOC_SET_CHANGED")
-    BEHAVIORAL_REFINEMENT_INPUT = "phase1/behavioral_refinement.facts.yaml"
-    author = snapshot.project / BEHAVIORAL_REFINEMENT_INPUT
-    current_author = (author,) if author.exists() or author.is_symlink() else ()
-    if current_author != tuple(p for p, _, _ in snapshot.author_inputs):
-        raise ValueError("D1_SNAPSHOT_AUTHOR_INPUT_SET_CHANGED")
-    for path, _, generation in (snapshot.prompt, snapshot.report, *snapshot.ldocs,
-                                *snapshot.author_inputs):
-        if _d1_file_generation(path) != generation:
-            raise ValueError("D1_SNAPSHOT_GENERATION_CHANGED")
-
-
-def _d1_invalidation_path(project: Path, activation_sha: str) -> Path:
-    return (_route_anchor_dir(project.parent.parent) / "d1_invalidations" /
-            project.name / f"{activation_sha}.json")
-
-
-def _validate_d1_snapshot(snapshot: _D1EvidenceSnapshot, route_receipt: dict,
-                          activation: dict, task_sha256: str,
-                          *, authority_project: Path | None = None) -> None:
-    """Validate exactly the captured bytes; never re-read the report for a PASS."""
-    import route_decision as _rd                   # noqa: PLC0415
-    project = Path(authority_project or snapshot.project).resolve()
-    _rd.require_d1_activation(
-        activation, route_receipt, task_sha256=str(task_sha256),
-        ldoc_root_handle=_sha256_text(str((project / "phase1" / "generated_docs").resolve())))
-    if _d1_invalidation_path(project, activation["activation_sha256"]).exists():
-        raise ValueError("D1_CURRENT_ACTIVATION_INVALIDATED")
-    gate = activation.get("d1_gate")
-    if not isinstance(gate, dict) or gate.get("verdict") != "PASS":
-        raise ValueError("D1_CURRENT_GATE_NOT_PLAIN_PASS")
-    if _sha256_text(snapshot.prompt[1].decode("utf-8")) != route_receipt.get("source_sha256"):
-        raise ValueError("D1_CURRENT_PROMPT_PROVENANCE_MISMATCH")
-    provenance = hashlib.sha256()
-    for p, data, _ in snapshot.ldocs:
-        # L-docs are authority too: ambiguous JSON is never a valid generation.
-        _strict_json_loads(data.decode("utf-8"))
-        provenance.update(p.name.encode("utf-8") + b"\0" +
-                          hashlib.sha256(data).hexdigest().encode("utf-8") + b"\n")
-    if provenance.hexdigest() != activation.get("d1_provenance_sha256"):
-        raise ValueError("D1_CURRENT_LDOC_PROVENANCE_MISMATCH")
-    report_bytes = snapshot.report[1]
-    report = _strict_json_loads(report_bytes.decode("utf-8"))
-    if not isinstance(report, dict) or report.get("verdict") != "PASS":
-        raise ValueError("D1_CURRENT_REPORT_NOT_PASS")
-    if hashlib.sha256(report_bytes).hexdigest() != gate.get("report_sha256"):
-        raise ValueError("D1_CURRENT_REPORT_DIGEST_MISMATCH")
-    binding = report.get("runner_binding")
-    if (not isinstance(binding, dict)
-            or binding.get("schema") != "vibeic.runner_report_binding.v1"
-            or binding.get("invocation_id") != gate.get("invocation_id")
-            or binding.get("project") != str(project)
-            or binding.get("report_name") != "phase1_one_shot.json"):
-        raise ValueError("D1_CURRENT_REPORT_INVOCATION_MISMATCH")
-    _assert_d1_snapshot_current(snapshot)
-
-
-def _validate_live_d1_for_launch(project: Path, route_receipt: dict,
-                                 activation: dict, task_sha256: str) -> _D1EvidenceSnapshot:
-    """BLOCKING: a historical or invalidated D1 is never a live launch permit."""
-    snapshot = _capture_d1_evidence(project)
-    _validate_d1_snapshot(snapshot, route_receipt, activation, task_sha256)
-    return snapshot
-
-
-def _run_from_d1_snapshot(budget, argv: list, snapshot: _D1EvidenceSnapshot,
-                          receipt: dict, activation: dict, task_sha: str,
-                          *, authority_project: Path | None = None,
-                          expected_repaired_output_sha256: str | None = None):
-    """Validate one captured generation and bind that generation to submission."""
-    if receipt.get("input_contract") == "original":
-        # Original-source requests use the same runner/material binding. They
-        # do not manufacture a D1 activation or claim document qualification.
-        try:
-            owner_project = Path(authority_project or argv[2]).resolve()
-            run_p = owner_project.parent.parent
-            task = _read_json_regular(run_p / "ai_route_tasks" / f"{task_sha}.json")
-            _require_route_admission(run_p, task, receipt, require_d1=False)
-            if _read_current_receipt(owner_project, "route_decision")["receipt"] != receipt:
-                raise ValueError("ROUTE_REENTRY_ROUTE_RECEIPT_STALE")
-            if _invocation_rtl_input({"argv": argv}) != "original":
-                raise ValueError("RUNNER_RTL_INPUT_INVALID")
-            process = budget.run(
-                argv, **({"expected_repaired_output_sha256": expected_repaired_output_sha256}
-                         if expected_repaired_output_sha256 is not None else {}))
-            _require_route_admission(run_p, task, receipt, require_d1=False)
-            return process
-        except (OSError, ValueError, TypeError) as exc:
-            return _ProcessOutcome(rc=None, error=f"ORIGINAL_INPUT_LAUNCH_REFUSED: {exc}")
-    try:
-        owner_project = Path(authority_project or snapshot.project).resolve()
-        run_p = owner_project.parent.parent
-        task = _read_json_regular(run_p / "ai_route_tasks" / f"{task_sha}.json")
-        _require_route_admission(run_p, task, receipt)
-        if (_read_current_receipt(owner_project, "route_decision")["receipt"] != receipt
-                or _read_current_receipt(owner_project, "d1_activation")["receipt"] != activation):
-            raise ValueError("D1_SNAPSHOT_CURRENT_AUTHORITY_REPLACED")
-        _validate_d1_snapshot(snapshot, receipt, activation, task_sha,
-                              authority_project=authority_project)
-        _D1_LAUNCH_CONTEXT.snapshot = snapshot
-        _D1_LAUNCH_CONTEXT.authority = (owner_project, task, receipt, activation)
-        _assert_d1_snapshot_current(snapshot)
-        if expected_repaired_output_sha256 is not None:
-            current_output_sha256 = _runner_material_snapshot(owner_project).get(
-                "output_rtl_sha256")
-            if current_output_sha256 != expected_repaired_output_sha256:
-                raise ValueError(
-                    "RUNNER_MATERIAL_UNBOUND: repaired RTL changed before runner launch")
-        return budget.run(
-            argv,
-            **({"expected_repaired_output_sha256":
-                expected_repaired_output_sha256}
-               if expected_repaired_output_sha256 is not None else {}))
-    except (OSError, ValueError, TypeError) as exc:
-        return _ProcessOutcome(rc=None, error=f"D1_SNAPSHOT_LAUNCH_REFUSED: {exc}")
-    finally:
-        _D1_LAUNCH_CONTEXT.snapshot = None
-        _D1_LAUNCH_CONTEXT.authority = None
-        _restore_d1_evidence(snapshot)
-
-
-def _restore_d1_evidence(snapshot: _D1EvidenceSnapshot) -> None:
-    """Record invalidation instead of writing historical bytes to live paths.
-
-    The name is retained for the existing span-finalization call sites. Any
-    changed evidence, even an identical-byte path replacement, invalidates this
-    activation permanently. Only a new typed D1 invocation can create a permit.
-    """
-    try:
-        _assert_d1_snapshot_current(snapshot)
-        return
-    except (OSError, ValueError) as exc:
-        reason = str(exc)
-    archive = (snapshot.project / "reports" / "orchestrator" / "d1_history" /
-               snapshot.digest)
-    history = {
-        "schema": "vibeic.invalidated_d1_snapshot.v1",
-        "snapshot_sha256": snapshot.digest, "reason": reason,
-        "activation_sha256": snapshot.activation_sha256,
-        "files": [{"path": str(p), "bytes_hex": b.hex(), "generation": g}
-                  for p, b, g in (snapshot.prompt, snapshot.report, *snapshot.ldocs)],
-    }
-    # Invalidation is outside the downstream-writable root. The archive is
-    # historical evidence and cannot be consumed as a current pointer.
-    if snapshot.activation_sha256:
-        _write_immutable_json(
-            _d1_invalidation_path(snapshot.project, snapshot.activation_sha256),
-            {"schema": history["schema"], "reason": reason,
-             "activation_sha256": snapshot.activation_sha256,
-             "snapshot_sha256": snapshot.digest})
-    _write_immutable_json(archive / "snapshot.json", history)
-
-
 def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
                                    fmt: str | None, run_p: Path, pid: str,
                                    result: dict, route_worklist: list[dict],
                                    allow_d1_only: bool,
-                                   supplied_rtl: bool = False,
-                                   snapshot_sink: dict | None = None,
-                                   d1_snapshot: _D1EvidenceSnapshot | None = None) -> dict:
+                                   supplied_rtl: bool = False) -> dict:
     """Single route/D1 admission used by resume and explicit Program re-entry."""
     import route_decision as _rd                   # noqa: PLC0415
     import task_nature_route as _tnr                # noqa: PLC0415
@@ -6942,7 +6308,6 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
         return {"status": "REFUSED", "reason": str(exc)}
 
     expected_exit = str(receipt["verify_through"])
-    rtl_only = _rtl_delivery_target(receipt) == "rtl"
     # Preserve the issued delivery family independently of the evidence window.
     expected_route = _tnr.delivery_route_for_target(
         str(receipt["delivery_target"]),
@@ -6957,71 +6322,34 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
 
     if receipt.get("input_contract") == "original":
         try:
-            _require_route_admission(run_p, task, receipt, require_d1=False)
+            _require_route_admission(run_p, task, receipt)
         except (OSError, ValueError, TypeError, KeyError) as exc:
             return {"status": "REFUSED", "reason": str(exc)}
         return {"status": "ACTIVE", "route_receipt": receipt, "task": task,
-                "project": project, "activation": None,
+                "project": project,
                 "input_contract": "original", "entry_step": str(receipt["entry_step"]),
                 "exit_step": expected_exit, "delivery_route": expected_route,
                 "effective_entry": "2" if supplied_rtl else str(receipt["entry_step"])}
 
-    current_activation = None
-    activation_root = _receipt_history_dir(project, "d1_activation").parent
-    activation_seen = isinstance(result.get("d1_activation"), dict) or any(
-        path.exists() or path.is_symlink() for path in (
-        _receipt_current_pointer(project, "d1_activation"),
-        _receipt_history_head(project, "d1_activation"), activation_root))
-    try:
-        current_activation = _read_current_receipt(project, "d1_activation")
-        activation = current_activation["receipt"]
-        if activation.get("route_receipt_sha256") != receipt.get("receipt_sha256"):
-            raise ValueError("ROUTE_REENTRY_D1_ROUTE_MISMATCH")
-        if d1_snapshot is None:
-            launch_snapshot = _validate_live_d1_for_launch(
-                project, receipt, activation, str(task.get("task_sha256") or ""))
-        else:
-            launch_snapshot = d1_snapshot
-            _validate_d1_snapshot(launch_snapshot, receipt, activation,
-                                  str(task.get("task_sha256") or ""))
-        if snapshot_sink is not None:
-            prior = snapshot_sink.get(str(pid))
-            if prior is not None and prior.digest != launch_snapshot.digest:
-                raise ValueError("D1_SNAPSHOT_PLANNED_GENERATION_CHANGED")
-            snapshot_sink[str(pid)] = launch_snapshot
-    except (OSError, ValueError, TypeError, KeyError) as exc:
-        # Only a genuinely absent activation may be retried at D1.  Existing
-        # but stale/foreign evidence is a hard refusal and may not be used to
-        # authorize even a later D1 span.
-        if (current_activation is None and not activation_seen
-                and (allow_d1_only or rtl_only)):
-            try:
-                _require_route_admission(run_p, task, receipt, require_d1=False)
-            except (OSError, ValueError, TypeError, KeyError) as authority_error:
-                return {"status": "REFUSED", "reason": str(authority_error)}
-            separate_d1 = (str(receipt["entry_step"]) == "D1"
-)
-            return {"status": "ACTIVE" if rtl_only and not separate_d1 else "D1_ONLY",
-                    "reason": str(exc),
-                    "route_receipt": receipt, "task": task, "project": project,
-                    "activation": None, "entry_step": str(receipt["entry_step"]),
-                    "exit_step": expected_exit, "delivery_route": expected_route,
-                    "effective_entry": "2" if supplied_rtl else str(receipt["entry_step"])}
-        return {"status": "REFUSED", "reason": f"ROUTE_REENTRY_D1_INVALID: {exc}"}
     try:
         _require_route_admission(run_p, task, receipt)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         return {"status": "REFUSED", "reason": str(exc)}
+    status = _phase1_native_status(project)
+    if status != "PASS":
+        return {"status": "D1_ONLY" if allow_d1_only else "REFUSED",
+                "reason": f"Phase-1 native result: {status}", "project": project,
+                "route_receipt": receipt, "task": task,
+                "entry_step": str(receipt["entry_step"]), "exit_step": expected_exit,
+                "delivery_route": expected_route, "effective_entry": "D1"}
     effective_entry = "2" if supplied_rtl else str(receipt["entry_step"])
     if not supplied_rtl and effective_entry == "D1" and expected_exit != "D1":
-        # Use the same post-prerequisite owner selected on initial entry.
         order = {sid: i for i, sid in enumerate(_rd.canonical_dag()["steps"])}
         effective_entry = next(
             sid for sid in _tnr.NATURE_ENTRY[receipt["task_nature"]]["then"]
             if sid in order and order[sid] <= order[expected_exit])
     return {"status": "ACTIVE", "route_receipt": receipt, "task": task,
-            "project": project, "activation": activation,
-            "entry_step": str(receipt["entry_step"]),
+            "project": project, "entry_step": str(receipt["entry_step"]),
             "exit_step": expected_exit, "delivery_route": expected_route,
             "effective_entry": effective_entry}
 
@@ -7311,8 +6639,7 @@ def _route_admission_path(run_p: Path, task: dict) -> Path:
 def _seal_route_admission(run_p: Path, task: dict, decision: dict) -> None:
     """Seal validated AI authority outside the worker-writable run root.
 
-    A changed response requires a new issued task/anchor and a fresh typed D1
-    call. Publishing a replacement route, mode or activation is insufficient.
+    A changed AI response requires its own issued task and input anchor.
     """
     anchor = _read_route_input_anchor(run_p)
     _, capability_path = _route_anchor_paths(run_p)
@@ -7335,8 +6662,7 @@ def _seal_route_admission(run_p: Path, task: dict, decision: dict) -> None:
     _write_bound_route_record(path, body)
 
 
-def _require_route_admission(run_p: Path, task: dict, receipt: dict,
-                              *, require_d1: bool = True) -> None:
+def _require_route_admission(run_p: Path, task: dict, receipt: dict) -> None:
     """BLOCKING: writable receipts never create AI or user mode authority."""
     anchor = _read_route_input_anchor(run_p)
     task_hash = task.get("task_sha256")
@@ -7381,66 +6707,6 @@ def _require_route_admission(run_p: Path, task: dict, receipt: dict,
         raise ValueError("ROUTE_ADMISSION_AI_RESPONSE_CHANGED")
     if receipt != sealed.get("route_receipt"):
         raise ValueError("ROUTE_ADMISSION_ROUTE_OR_MODE_REPLACED")
-    if receipt.get("input_contract") == "original":
-        if require_d1:
-            raise ValueError("ORIGINAL_RTL_INPUT_HAS_NO_D1_ADMISSION")
-        return
-    import route_decision as _rd                   # noqa: PLC0415
-    pending = _read_current_receipt(Path(task["project"]), "d1_pending")["receipt"]
-    expected_pending = _rd.write_d1_pending(
-        _receipt_current_pointer(Path(task["project"]), "d1_pending"),
-        route_receipt=receipt, source_sha256=receipt["source_sha256"],
-        task_sha256=task_hash)
-    if pending != expected_pending:
-        raise ValueError("ROUTE_ADMISSION_PENDING_REPLACED")
-    if require_d1:
-        activation = _read_current_receipt(Path(task["project"]), "d1_activation")["receipt"]
-        d1_path = _owned_d1_admission_path(run_p, task, activation)
-        if d1_path.parent.is_symlink() or d1_path.parent.parent.is_symlink():
-            raise ValueError("D1_OWNER_ADMISSION_LINKED")
-        owned = _read_json_regular(d1_path)
-        owned_body = {k: v for k, v in owned.items() if k != "admission_mac"}
-        owned_mac = hmac.new(
-            capability_path.read_bytes(),
-            json.dumps(owned_body, sort_keys=True, allow_nan=False).encode("utf-8"),
-            hashlib.sha256).hexdigest()
-        if (not isinstance(owned.get("admission_mac"), str)
-                or not hmac.compare_digest(owned["admission_mac"], owned_mac)
-                or owned.get("schema") != "vibeic.coordinator_d1_admission.v1"
-                or owned.get("anchor_sha256") != anchor["anchor_sha256"]
-                or owned.get("task_sha256") != task_hash
-                or owned.get("activation") != activation):
-            raise ValueError("D1_OWNER_ADMISSION_REPLACED")
-
-
-def _owned_d1_admission_path(run_p: Path, task: dict, activation: dict) -> Path:
-    digest = str(activation.get("activation_sha256") or "")
-    if not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise ValueError("D1_OWNER_ADMISSION_DIGEST_INVALID")
-    return _route_admission_path(run_p, task).parent / "d1" / task["task_sha256"] / f"{digest}.json"
-
-
-def _seal_owned_d1_admission(run_p: Path, task: dict, activation: dict) -> None:
-    """Seal only D1 gates measured by the coordinator's fresh typed call.
-
-    A worker can replace all its JSON, but cannot issue a new D1 generation
-    just by rewriting the invocation id, report digest and activation together.
-    """
-    anchor = _read_route_input_anchor(run_p)
-    _, capability = _route_anchor_paths(run_p)
-    body = {
-        "schema": "vibeic.coordinator_d1_admission.v1",
-        "anchor_sha256": anchor["anchor_sha256"],
-        "task_sha256": task["task_sha256"], "activation": activation,
-    }
-    body["admission_mac"] = hmac.new(
-        capability.read_bytes(), json.dumps(body, sort_keys=True, allow_nan=False).encode("utf-8"),
-        hashlib.sha256).hexdigest()
-    path = _owned_d1_admission_path(run_p, task, activation)
-    if path.parent.is_symlink() or path.parent.parent.is_symlink():
-        raise ValueError("D1_OWNER_ADMISSION_LINKED")
-    _write_bound_route_record(path, body)
-
 
 def _claim_names_nature(claim: str, nature: str) -> bool:
     """True when an evidence claim cites `nature` (``_`` and space alike)."""
@@ -7888,16 +7154,7 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
     import flow_phase_attribution as fpa
     pid = str(result["id"])
     project = state["project"]
-    report = _read_json_regular(project / "reports/orchestrator/phase2_one_shot.json")
-    owner = report["runner_binding"]["invocation_id"]
-    if not isinstance(owner, str) or not re.fullmatch(r"[0-9a-f]{32}", owner):
-        raise ValueError("RETAINED_HANDOFF_OWNER_INVALID")
-    archive = project / "reports/orchestrator/runner_invocations"
-    matches = [path for path in archive.glob("*.json") if path.name != "latest.json"
-               and _read_json_regular(path).get("invocation_id") == owner]
-    if matches != [archive / f"{owner}.json"]:
-        raise ValueError("RETAINED_HANDOFF_OWNER_MISSING_OR_AMBIGUOUS")
-    invocation = _read_json_regular(matches[0])
+    invocation = _read_json_regular(project / "reports/orchestrator/runner_invocations/latest.json")
     receipt = state["route_receipt"]
     diagnostic = _stored_runner_diagnostics(invocation)
     if not diagnostic or diagnostic.get("reason"):
@@ -7908,7 +7165,7 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
         state["exit_step"], state["delivery_route"],
         str(receipt.get("input_contract") or "structured"),
         _rtl_delivery_target(receipt))
-    expected[0] = invocation["argv"][0]  # its recorded interpreter is checked below
+    expected[0] = invocation["argv"][0]
     if "--container" not in invocation["argv"] and "--container" in expected:
         # Historical runners inherited their selection through the environment.
         index = expected.index("--container")
@@ -7916,9 +7173,7 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
     if (invocation.get("status") != "COMPLETED" or invocation.get("error")
             or invocation.get("rc") not in (0, 1)
             or invocation.get("project") != str(project)
-            or invocation.get("record_path") != str(matches[0])
             or invocation.get("argv") != expected
-            or invocation.get("prompt_sha256") != state["task"]["prompt_sha256"]
             or result.get("public_original_input") != state["task"]["public_original_input"]):
         raise ValueError("RETAINED_HANDOFF_INVOCATION_MISMATCH")
     got = bio.collect(fmt, pid, project,
@@ -7962,10 +7217,9 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
         candidate_origin="PROGRAM" if review else "AI_BACKUP_PENDING",
         awaiting_ai=True, awaiting_ai_review=bool(review), awaiting_ai_backup=bool(backup),
         retained_handoff_recovery={
-            "status": "RECOVERED", "invocation_id": owner,
+            "status": "RECOVERED", "invocation_id": invocation.get("invocation_id"),
             "observed_runner_invocation": observed,
-            "consumer": {"path": str(Path(__file__).resolve()),
-                         "sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}})
+            "consumer": str(Path(__file__).resolve())})
     if review:
         result["review_task"] = review["review_path"]
     for key in ("worker_status", "worker_error", "worker_retryable"):
@@ -8177,7 +7431,6 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
         exit_step = None
         verdict: dict = {}
         route_receipt = None
-        activation = None
         effective_entry = None
         # Two facts a failing row must still report. The route-level
         # AI-backup declaration is a pure function of the routing verdict, so
@@ -8243,74 +7496,26 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             # Full-design delivery still qualifies D1 before its later span.
             rtl_delivery = _rtl_delivery_target(route_receipt) == "rtl"
             input_contract = str(route_receipt.get("input_contract") or "structured")
-            admitted_steps = []
+            _seal_route_admission(run_p, route_task, verdict)
+            _require_route_admission(run_p, route_task, route_receipt)
+            admitted_steps = list(route_receipt["verify_closed_steps"])
             if input_contract == "original":
-                _seal_route_admission(run_p, route_task, verdict)
-                _require_route_admission(run_p, route_task, route_receipt, require_d1=False)
-                phase1_frontdoor = {
-                    "status": "NOT_IN_SCOPE",
-                    "input_contract": "original",
-                    "reason": "bounded RTL uses the unchanged original request",
-                }
+                phase1_frontdoor = {"status": "NOT_IN_SCOPE", "input_contract": "original",
+                                    "reason": "bounded RTL uses the unchanged original request"}
                 effective_entry = entry
-                activation = None
-                planned_snapshot = None
-                admitted_steps = list(route_receipt["verify_closed_steps"])
-            elif (rtl_delivery and entry == "D1"
-):
-                phase1_frontdoor, pending, activation = _activate_route_d1(
-                    proj, route_task, route_receipt, runner, runner_budget,
-                    run_scope=run_scope,
-                    delivery_route=str(verdict.get("delivery_route") or "ip"))
-                effective_entry = str(tnr.NATURE_ENTRY[verdict["entry_nature"]]["then"][0])
-            elif rtl_delivery:
-                pending = _prepare_route_d1(
-                    proj, route_task, route_receipt, run_scope=run_scope)
-                state = _validated_route_reentry_state(
-                    bench=bench, dataset=ds, fmt=fmt, run_p=run_p, pid=pid,
-                    result={"route_receipt": route_receipt},
-                    route_worklist=routed_tasks, allow_d1_only=False)
-                if state.get("status") != "ACTIVE":
-                    raise ValueError(str(state.get("reason") or "ROUTE_REENTRY_REFUSED"))
-                activation = state["activation"]
-                effective_entry = entry
-                if entry != "D1":
-                    phase1_frontdoor = _ensure_phase1_frontdoor(
-                        runner, proj, runner_budget,
-                        route_receipt=route_receipt,
-                        delivery_route=str(verdict.get("delivery_route") or "ip"))
-                    if phase1_frontdoor.get("status") == "BLOCKED":
-                        raise RuntimeError(str(phase1_frontdoor.get("reason")))
             else:
-                phase1_frontdoor, pending, activation = _activate_route_d1(
-                    proj, route_task, route_receipt, runner, runner_budget,
-                    run_scope=run_scope,
+                phase1_frontdoor = _ensure_phase1_frontdoor(
+                    runner, proj, runner_budget, route_receipt=route_receipt,
                     delivery_route=str(verdict.get("delivery_route") or "ip"))
-            if not rtl_delivery and entry == "D1":
-                nature_row = tnr.NATURE_ENTRY[verdict["entry_nature"]]
-                candidates = [str(x) for x in nature_row.get("then") or []]
-                order = {sid: i for i, sid in enumerate(rd.canonical_dag()["steps"])}
-                effective_entry = next(
-                    (sid for sid in candidates
-                     if sid in order and order[sid] <= order[exit_step]), None)
-            elif not rtl_delivery:
+                if phase1_frontdoor.get("status") == "BLOCKED":
+                    raise RuntimeError(str(phase1_frontdoor.get("reason")))
                 effective_entry = entry
-            if activation is not None:
-                rd.require_d1_activation(
-                    activation, route_receipt, task_sha256=route_task["task_sha256"],
-                    ldoc_root_handle=_sha256_text(str((proj / "phase1" / "generated_docs").resolve())))
-                planned_snapshot = _validate_live_d1_for_launch(
-                    proj, route_receipt, activation, route_task["task_sha256"])
-                admitted_steps = rd.admit_route_closure(
-                    pending=pending, activation=activation,
-                    route_receipt=route_receipt,
-                    task_sha256=route_task["task_sha256"],
-                    source_sha256=route_receipt["source_sha256"],
-                    ldoc_root_handle=_sha256_text(
-                        str((proj / "phase1" / "generated_docs").resolve())))
+                if entry == "D1":
+                    order = {sid: i for i, sid in enumerate(rd.canonical_dag()["steps"])}
+                    effective_entry = next((str(sid) for sid in tnr.NATURE_ENTRY[nature].get("then", [])
+                                            if sid in order and order[sid] <= order[exit_step]), None)
             if effective_entry is None:
-                # A D1-only proof still has a receipt and activation but no
-                # downstream runner span to launch.
+                # The selected document-only window has no RTL span.
                 process = _ProcessOutcome(rc=0, stdout="", stderr="")
                 got = {"ok": True, "completion": "", "rtl_gen": None}
                 rc = 0
@@ -8319,17 +7524,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                     runner, proj, effective_entry, exit_step,
                     str(verdict.get("delivery_route") or "ip"), input_contract,
                     _rtl_delivery_target(route_receipt))
-                if activation is None:
-                    _require_route_admission(run_p, route_task, route_receipt,
-                                             require_d1=False)
-                    process = runner_budget.run(argv)
-                else:
-                    d1_snapshot = _capture_d1_evidence(proj)
-                    if d1_snapshot.digest != planned_snapshot.digest:
-                        raise ValueError("D1_SNAPSHOT_PLANNED_GENERATION_CHANGED")
-                    process = _run_from_d1_snapshot(
-                        runner_budget, argv, d1_snapshot, route_receipt, activation,
-                        route_task["task_sha256"])
+                process = runner_budget.run(argv)
                 if process.error is not None:
                     raise RuntimeError(process.error)
                 rc = int(process.rc)
@@ -8384,7 +7579,6 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 "phase1_frontdoor": phase1_frontdoor,
                 "route_receipt": route_receipt,
                 "delivery_route": verdict.get("delivery_route") or "ip",
-                "d1_activation": activation,
                 "effective_entry": effective_entry,
                 "admitted_steps": admitted_steps,
                 "candidate_origin": (
@@ -8455,7 +7649,6 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 "phase1_frontdoor": phase1_frontdoor,
                 "route_receipt": route_receipt,
                 "delivery_route": verdict.get("delivery_route") or "ip",
-                "d1_activation": activation,
                 "effective_entry": effective_entry,
                 "candidate_origin": "NONE",
                 "route_ai_backup": route_backup,
@@ -8479,7 +7672,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             "bench": bench, "format": fmt, "dataset": str(ds),
             "config": _read_json_regular(run_p / ".bench_config.json"),
             "routes": routed_tasks, "decisions": route_decisions,
-            "source": _runner_source_snapshot([sys.executable, str(runner)]),
+            "runner": str(runner),
             "program_source": _program_source_identity(),
         })
     results: list[dict] = []
@@ -8689,15 +7882,12 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         route_worklist = []
     route_task_by_id = {str(t.get("id")): t for t in route_worklist}
 
-    planned_d1_snapshots: dict[str, _D1EvidenceSnapshot] = {}
-
-    def _route_reentry_state(pid: str, result: dict, *, allow_d1_only: bool,
-                             d1_snapshot=None) -> dict:
+    def _route_reentry_state(pid: str, result: dict, *, allow_d1_only: bool) -> dict:
         return _validated_route_reentry_state(
             bench=bench, dataset=dataset, fmt=fmt, run_p=run_p, pid=str(pid),
             result=result, route_worklist=list(route_worklist),
             allow_d1_only=allow_d1_only, supplied_rtl=False,
-            snapshot_sink=planned_d1_snapshots, d1_snapshot=d1_snapshot)
+)
 
     queued = set(task_by_id) | {str(row.get("id")) for row in backup}
     for result in results:
@@ -8833,29 +8023,19 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 return _ResumeRunnerOutcome(
                     problem_id=pid, rc=None, collected_json=None,
                     error=str(state.get("reason") or "D1_ONLY_REENTRY_REFUSED"))
-            latest = proj / "reports" / "orchestrator" / "runner_invocations" / "latest.json"
-            prior_latest = latest.read_bytes() if latest.is_file() else None
-            try:
-                frontdoor, _, _ = _activate_route_d1(
-                    proj, state["task"], state["route_receipt"], runner, runner_budget,
-                    delivery_route=delivery_route)
-            except Exception as exc:                     # noqa: BLE001
-                invocation = None
-                if latest.is_file() and latest.read_bytes() != prior_latest:
-                    pointer = _read_json_regular(latest)
-                    record = latest.parent / f"{pointer['invocation_id']}.json"
-                    if record.is_file():
-                        invocation = _read_json_regular(record)
-                return _ResumeRunnerOutcome(
-                    problem_id=pid, rc=(invocation or {}).get("rc"), collected_json=None,
-                    error=f"D1_ONLY_REENTRY_REFUSED: {exc}", invocation=invocation)
+            frontdoor = _ensure_phase1_frontdoor(
+                runner, proj, runner_budget, route_receipt=state["route_receipt"],
+                delivery_route=delivery_route, force_current=True)
+            if frontdoor.get("status") == "BLOCKED":
+                return _ResumeRunnerOutcome(problem_id=pid, rc=frontdoor.get("runner_rc"),
+                    collected_json=None, error=str(frontdoor.get("reason")),
+                    invocation=frontdoor.get("runner_invocation"))
             if state["exit_step"] == "D1":
                 return _ResumeRunnerOutcome(
                     problem_id=pid, rc=frontdoor.get("runner_rc"), collected_json=None,
                     error="D1_ONLY_REENTRY_COMPLETED_WITHOUT_DOWNSTREAM_SPAN",
                     invocation=frontdoor.get("runner_invocation"))
-            # Reopen the just-created activation through normal admission below,
-            # then continue the originally requested author/verification closure.
+            # Continue the originally requested window after document extraction.
         # The caller performs a state check before constructing a job. Repeat
         # it here at the actual fan-out seam so a pointer/anchor mutation after
         # planning cannot turn a valid plan into a later-span bypass.
@@ -8865,19 +8045,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             return _ResumeRunnerOutcome(
                 problem_id=pid, rc=None, collected_json=None,
                 error=str(state.get("reason") or "ROUTE_REENTRY_REFUSED"))
-        d1_snapshot = None
-        if state["activation"] is not None:
-            d1_snapshot = _capture_d1_evidence(proj)
-            state = _route_reentry_state(
-                str(pid), result_by_id.get(str(pid)) or {},
-                allow_d1_only=False, d1_snapshot=d1_snapshot)
-            if state.get("status") != "ACTIVE":
-                return _ResumeRunnerOutcome(
-                    problem_id=pid, rc=None, collected_json=None,
-                    error=str(state.get("reason") or "ROUTE_REENTRY_REFUSED"))
         if expected_repaired_output_sha256 is not None:
             try:
-                current_output_sha256 = _runner_material_snapshot(proj).get(
+                current_output_sha256 = _candidate_material_snapshot(proj).get(
                     "output_rtl_sha256")
             except (OSError, ValueError, TypeError) as exc:
                 return _ResumeRunnerOutcome(
@@ -8906,15 +8076,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             if step is not None:
                 argv = _solver_argv(runner, proj, step, step, state["delivery_route"],
                                     input_contract, _rtl_delivery_target(state["route_receipt"]))
-            if state["activation"] is None:
-                _require_route_admission(run_p, state["task"], state["route_receipt"],
-                                         require_d1=False)
-                process = runner_budget.run(argv)
-            else:
-                process = _run_from_d1_snapshot(
-                    runner_budget, argv, d1_snapshot, state["route_receipt"],
-                    state["activation"], state["task"]["task_sha256"],
-                    expected_repaired_output_sha256=expected_repaired_output_sha256)
+            _require_route_admission(run_p, state["task"], state["route_receipt"])
+            process = runner_budget.run(argv, **({"expected_repaired_output_sha256": expected_repaired_output_sha256}
+                                                if expected_repaired_output_sha256 is not None else {}))
             if process.error or process.rc:
                 break
         diagnostic = _runner_diagnostics(process, argv, proj)
@@ -9354,9 +8518,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                         repair_provenance = candidate_provenance
                         repair_challenge = challenge
                         repair_output_sha256 = str(working_hash)
-        invocation_reason = _runner_reentry_reason(
-            task, result, allow_repaired_output=repair_state,
-            repaired_output_sha256=repair_output_sha256)
+        invocation_reason = _runner_reentry_reason(task, result)
         if not invocation_reason and working_hash == task.get("rtl_sha256"):
             invocation = (task.get("program_verification") or {}).get("runner_invocation")
             pending = ((gate_ledger.get("unmeasured_required") or [])
@@ -9365,16 +8527,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                     and all(name in gate_ledger["in_scope"] for name in pending)
                     and (not gate_ledger.get("failed_required") or native_repair)
                     and isinstance(invocation, dict)):
-                current_source = _runner_source_snapshot([sys.executable, str(runner)])
-                if any(invocation["source_before"][name]["sha256"]
-                       != current_source[name]["sha256"]
-                       for name in ("runner", "consumer")):
-                    invocation_reason = (
-                        "RUNNER_REQUIRED_GATES_REMEASURE: Program source changed")
-                elif (not result.get("accepted")
-                      and not gate_ledger.get("failed_required")):
-                    invocation_reason = (
-                        "RUNNER_REQUIRED_GATES_REMEASURE: native gates unmeasured")
+                if not result.get("accepted") and not gate_ledger.get("failed_required"):
+                    invocation_reason = "Native required tools remain unmeasured"
             if not invocation_reason:
                 invocation_reason = _reference_model_reentry_reason(proj, result)
             if invocation_reason and Path(str(task.get("review_path") or "")).is_file():
@@ -9406,13 +8560,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             prompt_hash, frozen_hash, stated, frozen_paths = _current_task_material(task)
             reasons = _validate_candidate_snapshot(task.get("candidate_snapshot"), pid)
             reasons += _public_input_reasons(task)
-            old_invocation = (task.get("program_verification") or {}).get("runner_invocation")
-            if isinstance(old_invocation, dict) and old_invocation.get("material_after") is not None:
-                try:
-                    if _runner_material_snapshot(proj) != old_invocation["material_after"]:
-                        reasons.append("unchanged invocation-bound input/output population required for runner re-entry")
-                except (OSError, ValueError) as exc:
-                    reasons.append(f"runner re-entry material is unreadable: {exc}")
             if (prompt_hash != task.get("prompt_sha256") or frozen_hash != task.get("rtl_sha256")
                     or stated != frozen_paths
                     or _sha256_text(_candidate_text(_rtl_files(proj))) != task.get("rtl_sha256")):
@@ -9450,9 +8597,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             _write_immutable_json(archive / "prior_task.json", task)
             _write_immutable_json(archive / "prior_result.json", result)
             if recover_unmeasured:
-                for name, path in (("prior_review.json", task["review_path"]),
-                                   ("prior_invocation.json", old_invocation["record_path"])):
-                    _write_immutable_text(archive / name, Path(path).read_bytes().decode("utf-8"))
+                _write_immutable_text(archive / "prior_review.json", Path(task["review_path"]).read_text())
+                _write_immutable_json(archive / "prior_invocation.json",
+                    (task.get("program_verification") or {}).get("runner_invocation"))
                 if response.exists():
                     response.replace(archive / "prior_response.json")
             repair_plans.append({
@@ -10870,7 +10017,7 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
             refuse("staged work tree does not hash to the signed input")
         bio.public_original_input(
             staged, pid, task["prompt_sha256"], expected=task["public_original_input"])
-        input_material = _runner_material_snapshot(staged)
+        input_material = _candidate_material_snapshot(staged)
         preservation = provenance["repair_contract"].get("preservation", {})
         for row in preservation.get("sources", []):
             source_relative = row["path"][4:] if row["path"].startswith("rtl/") else row["path"]
@@ -10885,7 +10032,7 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
             required_top=_required_scorer_top(_entry(bench), fmt))
         if not preimage.get("ok") or (preimage.get("repair_contract") or {}).get("verdict") != "PASS":
             refuse("author preimage contract failed: " + str(preimage.get("reason")))
-        if _runner_material_snapshot(staged) != input_material:
+        if _candidate_material_snapshot(staged) != input_material:
             refuse("signed preimage changed during contract validation")
         preimage_path = archive / "preimage_contract.json"
         _write_immutable_json(preimage_path, {
@@ -10902,11 +10049,7 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
             admission["exit_step"], admission["delivery_route"],
             input_contract=str(admission["route_receipt"].get("input_contract") or "structured"),
             delivery_target=_rtl_delivery_target(admission["route_receipt"]))
-        d1_snapshot = _capture_d1_evidence(staged)
-        process = _run_from_d1_snapshot(
-            _RunnerBudget(1, 1, worker_threads), argv, d1_snapshot,
-            admission["route_receipt"], admission["activation"],
-            admission["task"]["task_sha256"], authority_project=project)
+        process = _RunnerBudget(1, 1, worker_threads).run(argv)
         if (ea.phase1_provenance(staged) != task["phase1_provenance"]
                 or _sha256_text((staged / "input" / "phase1_prompt.md").read_text())
                 != task["prompt_sha256"]):
@@ -10916,19 +10059,16 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
         declaration_path = archive / "output_contract.json"
         if not process.error and not (diagnostic and diagnostic.get("reason")):
             invocation = process.invocation
-            if (not isinstance(invocation, dict) or invocation.get("status") != "COMPLETED"
-                    or invocation.get("material_before") != input_material
-                    or invocation["material_after"]["input"] != input_material["input"]):
-                refuse("Program transformation lacks completed current input/output provenance")
+            output_material = _candidate_material_snapshot(staged)
             bio.public_original_input(
                 staged, pid, task["prompt_sha256"], expected=task["public_original_input"])
             output_contract = _program_output_repair_contract(
-                provenance["repair_contract"], identity, invocation["material_after"])
+                provenance["repair_contract"], identity, output_material)
             _write_immutable_json(declaration_path, {
                 "schema": _PROGRAM_REGATE_SCHEMA, "actor": "PROGRAM",
                 "program_identity": identity, "runner_invocation": invocation,
                 "signed_input_sha256": signed,
-                "output_rtl_sha256": invocation["material_after"]["output_rtl_sha256"],
+                "output_rtl_sha256": output_material["output_rtl_sha256"],
                 "author_record_sha256": material[str(record_path)],
                 "preimage_contract_sha256": hashlib.sha256(preimage_path.read_bytes()).hexdigest(),
                 "repair_contract": output_contract})
