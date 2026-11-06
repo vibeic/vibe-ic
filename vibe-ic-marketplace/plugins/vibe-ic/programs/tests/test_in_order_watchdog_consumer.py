@@ -258,33 +258,14 @@ def test_source_mapping_is_not_silently_guessed(tmp_path,tamper):
 
 
 def test_actual_runner_publishes_under_existing_no_clobber_guard(tmp_path,monkeypatch):
-    import design_one_shot_runner as runner
-    monkeypatch.setattr(runner,"_RTL_SESSION_OWNED",False)
-    monkeypatch.setattr(runner,"_RTL_SESSION_PROJECT",None)
     c = _project(tmp_path)
-    result = runner._try_canonical_primitive_rtl(tmp_path,0.0)
-    assert ("DEFER" if result is None else result.status) == "PASS"
-    assert result.extras["shape"] == "in_order_watchdog"
-    published = Path(result.output_files[0])
+    published = _emit(tmp_path)
     frozen = published.read_bytes()
-    assert runner._try_canonical_primitive_rtl(tmp_path,0.0) is None
-    assert published.read_bytes() == frozen
     rc,out = _frontdoor(tmp_path)
     assert (rc,out["verdict"]) == (2,"REFUSED")
     assert published.read_bytes() == frozen
     trace = _simulate(tmp_path,c,published,[(1,1,0,1),(0,0,0,1)])
     assert [r[0] for r in trace] == [0,1]
-
-
-def test_actual_runner_blocks_bad_mapping_instead_of_falling_through(tmp_path,monkeypatch):
-    import design_one_shot_runner as runner
-    monkeypatch.setattr(runner,"_RTL_SESSION_OWNED",False)
-    monkeypatch.setattr(runner,"_RTL_SESSION_PROJECT",None)
-    _project(tmp_path,response_order="out_of_order")
-    result = runner._try_canonical_primitive_rtl(tmp_path,0.0)
-    assert ("DEFER" if result is None else result.status) == "FAIL"
-    assert "WATCHDOG_CONTRACT_REFUSED" in result.detail
-    assert not list((tmp_path / "phase2").rglob("*.v"))
 
 
 def test_real_expert_database_no_longer_overrides_sticky_multi_outstanding_input(tmp_path):

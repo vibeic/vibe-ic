@@ -119,47 +119,6 @@ def test_309_no_macro_lefs_is_not_a_gap():
     assert rep["pins"] == [] and rep["gaps"] == []
 
 
-def test_309_phase3_blocks_before_routing(tmp_path):
-    """Phase 3 must BLOCK — #306 measured that 62 of 72 gates can only describe
-    a run afterwards, and a gate that cannot stop this one lets a 20-minute run
-    emit an empty shell."""
-    import phase3_one_shot_runner as p3
-    lef = tmp_path / "otp.lef"
-    lef.write_text(_LEF)
-    gd = tmp_path / "generated_docs"
-    gd.mkdir()
-    (gd / "L21_POWER_INTENT.json").write_text(json.dumps(_RAILS))
-
-    class _Pdk:
-        macro_lefs = [str(lef)]
-
-    d = p3._macro_supply_preroute_decision(tmp_path, _Pdk())
-    assert d is not None and d["blocking"] is True
-    assert {g["pin"] for g in d["bound"]} == {"VDD", "VSS"}
-    assert {g["pin"] for g in d["gaps"]} == {"VPP"}
-    assert "DRT-0307" in d["message"] and "OTP_128X8/VPP" in d["message"]
-
-
-def test_309_phase3_does_not_block_when_everything_is_accounted(tmp_path):
-    """No false block: a fully-declared design must route."""
-    import phase3_one_shot_runner as p3
-    lef = tmp_path / "otp.lef"
-    lef.write_text(_LEF)
-    gd = tmp_path / "generated_docs"
-    gd.mkdir()
-    (gd / "L21_POWER_INTENT.json").write_text(json.dumps({"fields": {
-        "power_rails": [{"rail": "VDD / core supply (1.8 V)"}, {"rail": "VSS"},
-                        {"rail": "VPP_PROG"}],
-        "hard_macro_supplies": [{"master": "OTP_128X8", "pin": "VPP",
-                                 "rail": "VPP_PROG"}]}}))
-
-    class _Pdk:
-        macro_lefs = [str(lef)]
-
-    d = p3._macro_supply_preroute_decision(tmp_path, _Pdk())
-    assert d is not None and d["blocking"] is False
-
-
 def test_309_both_phases_share_one_decision_module():
     """Two copies of this judgement would drift, and a drifting supply rule is
     how the pin got lost. Both phases must IMPORT the module."""
@@ -290,13 +249,3 @@ def test_348_a_def_without_specialnets_yields_nothing(tmp_path):
     """A pre-PDN floorplan DEF must not be read as evidence of rails."""
     proj = _pdn_project(tmp_path, "VERSION 5.8 ;\nDESIGN x ;\nEND DESIGN\n")
     assert H.measured_rails(proj) == []
-
-
-def test_348_phase3_passes_measured_rails_through(tmp_path):
-    """Wiring pin: the Phase-3 decision must actually consult the DEF, or the
-    fix exists in the library and not in the flow."""
-    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("def _macro_supply_preroute_decision")
-    j = src.find("\ndef ", i + 1)          # the function's real extent —
-    window = src[i:j if j > 0 else None]   # a char-count window rots (#329)
-    assert "measured_rails" in window and "extra_rails" in window

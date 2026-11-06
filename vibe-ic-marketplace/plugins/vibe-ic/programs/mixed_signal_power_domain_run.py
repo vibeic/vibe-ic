@@ -25,7 +25,7 @@ import re
 import shlex
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -61,7 +61,7 @@ def read_json(path):
 
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
+    with tempfile.atomic_file(mode="w", dir=path.parent, delete=False) as f:
         json.dump(value, f, indent=2, sort_keys=True)
         f.write("\n")
     Path(f.name).replace(path)

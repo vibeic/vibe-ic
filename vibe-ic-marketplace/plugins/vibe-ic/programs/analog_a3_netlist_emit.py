@@ -116,7 +116,7 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -2304,7 +2304,7 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
     # `stage_deck_inputs`, and the measured ngspice behaviour in
     # `_portable_lib_path` (a relative `.lib` resolves against the directory
     # of the FILE carrying the directive, not the process CWD).
-    root = f"/tmp/a3emit_{block}_{int(time.time())}"
+    root = tempfile.mkdtemp(prefix="a3emit-")
     deck_rel = f"{_CANONICAL_ANALOG}/{block}"
     stage = f"{root}/{deck_rel}"
     try:

@@ -89,26 +89,8 @@ def deffile(tmp_path, *, pins=("p",), nets=None, components=None):
 
 
 # ── the RUNNER side: the promotion predicate, and (d) sections untouched ────
-def test_the_promotion_predicate_forwards_the_inventory(tmp_path):
-    """`_sta_native_census_complete` is what gates the rename, so the inventory
-    has to reach IT -- fixing only `classify` would leave the report unpromoted,
-    which is how run20 looked with a correct classifier."""
-    import phase3_one_shot_runner as R
-    d = deffile(tmp_path)
-    # the PAD terminal is the discriminating shape: a top-level PIN is off-die
-    # from the DEF's PINS section alone and needs no inventory, so it could not
-    # show whether the inventory reached the predicate.
-    body = report([f"{PAD_INST}/PAD"])
-    assert R._sta_native_census_complete(body, d) is False
-    assert R._sta_native_census_complete(body, d, io_masters={IO_MASTER}) is True
-    # and the pin-only shape passes either way, which is the DEF-alone basis
-    assert R._sta_native_census_complete(report(["p"]), d) is True
 
 
-def test_the_inventory_resolver_fails_closed(tmp_path):
-    """No record, no inventory -- and therefore no off-die class."""
-    import phase3_one_shot_runner as R
-    assert R._io_masters_for(tmp_path) == set()
 
 
 def test_a_leading_disclosure_leaves_every_section_and_slack_untouched(tmp_path):

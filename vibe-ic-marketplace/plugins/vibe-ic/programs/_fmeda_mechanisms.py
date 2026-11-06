@@ -1,6 +1,8 @@
 """Run native codeword-boundary diagnostic injection from engineering inputs."""
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import json
 import os
 from pathlib import Path
@@ -131,7 +133,7 @@ def elaborate(project: Path, doc: dict) -> dict:
             image = None
         if not image:
             raise NotMeasured("native Yosys unavailable and no local tool image")
-        argv = ["docker", "run", "--rm", "--network", "none", "--cpus", "8",
+        argv = ["docker", "run", *_vtmp.docker_mounts(), "--rm", "--network", "none", "--cpus", "8",
                 *memory.docker_memory_flags(), "-u", f"{os.getuid()}:{os.getgid()}",
                 "-v", f"{project}:{project}", "--entrypoint", "yosys", image, *argv[1:]]
     try:

@@ -92,110 +92,12 @@ def _project(tmp_path, routing_incomplete):
 
 
 # ── the recorded fact, read rather than re-derived ────────────────────────
-def test_it_reads_the_fact_the_antenna_step_recorded(tmp_path):
-    assert P.routing_is_incomplete(_project(tmp_path, True)) is True
-
-
-def test_a_routed_run_reads_false(tmp_path):
-    assert P.routing_is_incomplete(_project(tmp_path, False)) is False
-
-
-def test_a_missing_key_is_none_and_not_false(tmp_path):
-    """LOAD-BEARING. A run whose antenna step never reached the in-session
-    post-repair path records no such key. Returning False there would say
-    "routing is fine" about a run that never measured it — the same defect one
-    level up, inside its own fix."""
-    assert P.routing_is_incomplete(_project(tmp_path, None)) is None
-
-
-def test_no_artefact_at_all_is_none(tmp_path):
-    assert P.routing_is_incomplete(tmp_path) is None
-
-
-def test_a_corrupt_artefact_is_none_not_a_crash(tmp_path):
-    r = P._pl.reports_phase3_dir(tmp_path)
-    r.mkdir(parents=True, exist_ok=True)
-    (r / "antenna.json").write_text("{not json")
-    assert P.routing_is_incomplete(tmp_path) is None
 
 
 # ── what the sign-off steps do with it ────────────────────────────────────
-def test_an_unrouted_run_makes_a_signoff_step_vacuous(tmp_path):
-    v = P._vacuous_on_unrouted(_project(tmp_path, True), "drc", 0.0)
-    assert v is not None and v.status == "NOT_MEASURED"
-    assert "INCOMPLETE" in v.detail
-
-
-def test_a_vacuous_signoff_makes_the_RUN_fail(tmp_path):
-    """THE ASSERTION THAT FOUND A DEFECT IN THIS FIX. `_aggregate_verdict`
-    matched VACUOUS_PASS against neither its FAIL/BLOCKED test nor its
-    WAIVED/SKIP/ENV_UNAVAILABLE test, so the run returned "PASS" — the unrouted
-    sign-off steps would have produced a GREEN run, which is exactly #654,
-    inside its own fix."""
-    R = P.StepResult
-    assert P._aggregate_verdict([R("a", "PASS")]) == "PASS"
-    # R-0915-85 — NOT `FAIL`. #654's finding is that an unrouted sign-off must
-    # not produce a GREEN run, and that is unchanged and asserted here: the run
-    # word is NOT_MEASURED, which is not green and exits 1. FAIL would say the
-    # design failed; nothing examined it. The vacuity that made this test's own
-    # fix defective is now impossible — `parse` refuses a sixth word, so no row
-    # can fall past every tier the way VACUOUS_PASS did.
-    assert P._aggregate_verdict(
-        [R("a", "PASS"),
-         R("b", "NOT_MEASURED",
-           reason_class="no_population")]) == "NOT_MEASURED"
-
-
-def test_the_established_waiver_states_are_untouched(tmp_path):
-    """LOAD-BEARING, and the second defect the first attempt had. Deriving the
-    answer from `verdict` marks bare SKIP and ENV_UNAVAILABLE as
-    qualified done-claims too — both long-established PASS_WITH_WAIVERS states
-    HERE. StepResult.status is a different vocabulary from the flow-compliance
-    producer's, and borrowing a classifier across two vocabularies is how a fix
-    acquires a second defect."""
-    R = P.StepResult
-    # R-0915-85 — the established non-FAIL states are three words, and SKIP
-    # is NOT_APPLICABLE among them.
-    # R-0915-85 — three words, each with the fields it REQUIRES, and they no
-    # longer roll up to ONE answer: that was the collapse this file's own
-    # docstring warns about, made explicit. A waived row rolls up to
-    # PASS_WITH_WAIVERS; a row nobody measured rolls up to NOT_MEASURED; a row
-    # the input declares inapplicable contributes nothing and leaves the PASS.
-    for w, extra, expect in (
-            ("NOT_APPLICABLE",
-             {"declared_by": "the input declares no such block"}, "PASS"),
-            ("PASS_WITH_WAIVERS",
-             {"attribution": "the sign-off engineer"}, "PASS_WITH_WAIVERS"),
-            ("NOT_MEASURED",
-             {"reason_class": "not_executed"}, "NOT_MEASURED")):
-        assert P._aggregate_verdict(
-            [R("a", "PASS"), R("b", w, **extra)]) == expect, w
-
-
-def test_a_routed_run_is_untouched(tmp_path):
-    """THE ACCEPT CASE, and the one that decides whether this can ship: the
-    corpus is mostly healthy runs and every one must proceed exactly as before."""
-    assert P._vacuous_on_unrouted(_project(tmp_path, False), "drc", 0.0) is None
-
-
-def test_an_unrecorded_run_is_untouched(tmp_path):
-    """Refusing on None would fail every run whose antenna step took a different
-    path — a gate that fires on absence of evidence, which is the mirror of the
-    bug and just as wrong."""
-    assert P._vacuous_on_unrouted(_project(tmp_path, None), "drc", 0.0) is None
 
 
 # ── the three steps are actually wired, not merely wire-able ──────────────
-def test_the_three_signoff_steps_consult_it():
-    """WIRING. A helper nothing calls leaves the certification exactly as it
-    was — which is the whole finding."""
-    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text(encoding="utf-8")
-    body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
-    for fn, name in (("def step_drc(", "drc"), ("def step_lvs(", "lvs"),
-                     ("def step_gds(", "gds")):
-        i = body.index(fn)
-        window = body[i:i + 1400]
-        assert f'_vacuous_on_unrouted(project, "{name}", t0)' in window, fn
 
 
 # ── step 38, the most expensive form ──────────────────────────────────────

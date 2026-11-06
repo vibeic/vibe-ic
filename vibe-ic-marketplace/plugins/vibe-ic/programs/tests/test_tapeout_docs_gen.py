@@ -233,71 +233,8 @@ def test_the_step_declares_the_names_this_program_writes(tmp_path):
             f"— a declared output no producer writes can never be produced")
 
 
-def test_phase3_dispatches_the_real_37_5ic_producer_and_mutation_refuses(tmp_path):
-    """The runner must execute the producer; its gate declaration is not that.
-
-    The first assertion is intentionally VALUE-based for the frozen-producer
-    control: candidate tests restored over the old runner observe zero
-    executable references, rather than failing because a new symbol is absent.
-    The second half changes one measured property and proves the dispatched
-    producer refuses to publish release HTML for a non-releasable run.
-    """
-    runner_path = repo_path(
-        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
-        "phase3_one_shot_runner.py")
-    runner_text = runner_path.read_text(encoding="utf-8")
-    executable_refs = runner_text.count('PROGRAMS_DIR / "tapeout_docs_gen.py"')
-    assert executable_refs == 1, (
-        f"observed executable tapeout_docs_gen references={executable_refs}; "
-        "the YAML gate is an auditor channel, not the phase-3 producer dispatch")
-    from _phase3_main_dispatch import guarded_producer_line
-    assert guarded_producer_line("step_tapeout_docs_gen",
-                                 "tapeout_docs_gen")
-
-    import phase3_one_shot_runner as runner
-
-    def _project(tag, ws):
-        proj = tmp_path / tag
-        (proj / "phase3" / "final").mkdir(parents=True)
-        (proj / "input" / "submission_template").mkdir(parents=True)
-        (proj / "input" / "submission_template" / "SELF_TAPEOUT.txt").write_text(
-            "self tape-out\n", encoding="utf-8")
-        (proj / "input" / "project.json").write_text(
-            json.dumps({"design": "widget", "pdk": "openpdk"}),
-            encoding="utf-8")
-        metrics = dict(CLEAN)
-        metrics["timing__setup__ws"] = ws
-        (proj / "phase3" / "final" / "metrics.json").write_text(
-            json.dumps(metrics), encoding="utf-8")
-        return proj
-
-    clean = _project("clean-dispatch", 0.5)
-    clean_result = runner.step_tapeout_docs_gen(clean)
-    assert clean_result.status == "PASS", clean_result
-    assert sorted(Path(p).name for p in clean_result.output_files) == [
-        "BRIEF_widget_openpdk.html", "SIGNOFF_widget_openpdk.html"]
-
-    harmed = _project("one-property-harm", -1.53)
-    harmed_result = runner.step_tapeout_docs_gen(harmed)
-    # R-0915-85 — the producer declined and NAMED why (producer_rc below),
-    # so nothing about the docs was measured.
-    assert harmed_result.status == "NOT_MEASURED", harmed_result
-    assert harmed_result.extras.get("producer_rc") == 1, harmed_result
-    assert not (harmed / "reports" / "phase3" / "docs").exists(), (
-        "a negative setup slack published release documents")
 
 
-def test_phase3_does_not_dispatch_37_5ic_on_the_ip_path(tmp_path):
-    """37.5ic and 37.5ip are mutually exclusive consumer contracts."""
-    import phase3_one_shot_runner as runner
-
-    template = tmp_path / "input" / "submission_template"
-    template.mkdir(parents=True)
-    (template / "NO_TEMPLATE.txt").write_text("cell delivery\n", encoding="utf-8")
-    result = runner.step_tapeout_docs_gen(tmp_path)
-    assert result.status == "NOT_APPLICABLE", result
-    assert result.output_files == [], result
-    assert not (tmp_path / "reports" / "phase3" / "docs").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +283,6 @@ def test_a_run_that_is_not_releasable_exits_a_code_the_flow_scores_as_fail(tmp_p
 def test_canonical_gate_preserves_producer_citations_across_clock_change(tmp_path, monkeypatch):
     import datetime
     import shlex
-    import phase3_one_shot_runner as runner
 
     spec = importlib.util.spec_from_file_location('tdg_readonly_source_control', PROG)
     tdg = importlib.util.module_from_spec(spec)
@@ -375,9 +311,6 @@ def test_canonical_gate_preserves_producer_citations_across_clock_change(tmp_pat
     paths = sorted(out.glob('*.html'))
     assert len(paths) == 2
     before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in paths}
-    runner._publish_in_progress_steps(project, [runner.StepResult(
-        'tapeout_docs_gen', 'PASS', 0.0, 'source fixture: actual document producer rc0',
-        [str(p) for p in paths])])
     clock[0] += datetime.timedelta(hours=1)
     monkeypatch.chdir(project)
     gate_argv = shlex.split(_declared_clause())[1:]

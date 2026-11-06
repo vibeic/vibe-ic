@@ -107,7 +107,7 @@ def test_the_validity_qualifier_still_works(tmp_path):
     import sys as _s
     _s.path.insert(0, str(Path(__file__).resolve().parent))
     from _qualified_by_fixture import (INPUT_DOC, stage_field,
-                                       write_expectation, sign)
+                                       write_expectation)
     lines = ["| `o_data` | 8-bit | output | write data |",
              "| `o_we` | 1-bit | output | write enable |",
              "| `o_q` | 1-bit | output | serial data |",
@@ -122,7 +122,6 @@ def test_the_validity_qualifier_still_works(tmp_path):
                 basis=basis(2, 3), row_width=1)
     write_expectation(proj, "o_data", "o_we", "high")
     write_expectation(proj, "o_q", "o_cyc", "high")
-    sign(proj, "D1")
     q = riv.declared_output_qualifiers(proj, _OUT, _IN)
     assert [r["qualifier"] for r in q["o_data"]] == ["o_we"]
     assert "o_q" not in q

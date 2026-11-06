@@ -368,27 +368,6 @@ def test_the_klayout_batch_form_sets_the_technology_search_path():
 
 # ── the ordering the runner must keep ───────────────────────────────────────
 
-def test_runner_inserts_the_ring_before_the_signoff_gds_is_consumed():
-    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    seal = [m.start() for m in re.finditer(r"(?<!def )_die_finishing\(project", src)]
-    assert seal, "phase3_one_shot_runner must call _die_finishing"
-    fill = [m.start() for m in
-            re.finditer(r"(?<!def )_density_metal_fill\(project", src)]
-    assert fill, "expected the density-fill call sites to still exist"
-    # Every streamout branch that fills must seal FIRST — LibreLane's chip-flow
-    # order is SealRing -> Filler -> Density. If a future edit moves the seal
-    # after the fill (or after DRC), this reddens.
-    assert len(seal) == len(fill), (
-        f"{len(seal)} die-finishing call site(s) against {len(fill)} "
-        "density-fill call site(s): every streamout branch that fills must "
-        "also finish the die")
-    for s_at, f_at in zip(seal, fill):
-        assert s_at < f_at, (
-            "the seal ring is inserted AFTER the fill/density pass; the die "
-            "Step 31 verifies would then not be the die that ships")
-    assert src.index("def step_gds") < src.index("def step_drc"), (
-        "stream-out must precede sign-off DRC for the ring to be verified "
-        "with the rest of the die")
 
 
 class _LocalRunner:

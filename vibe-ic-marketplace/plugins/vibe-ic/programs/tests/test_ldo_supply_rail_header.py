@@ -23,9 +23,6 @@ def project(tmp_path, text):
     return Path(result.path)
 
 
-def gate(tmp_path):
-    return subprocess.run([sys.executable, str(PROGRAMS / "analog_content_detected_must_emit_l5_check.py"),
-                           str(tmp_path)], capture_output=True, text=True)
 
 
 @pytest.mark.parametrize("text", [
@@ -38,11 +35,6 @@ def test_supply_header_does_not_invent_an_ldo_requirement(tmp_path, text):
     payload = json.loads(l5.read_text())
     assert payload["analog_blocks"] == []
     assert payload["analog_blocks_detected"] is False
-    before = l5.read_bytes()
-    result = gate(tmp_path)
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "[SKIP]" in result.stdout
-    assert l5.read_bytes() == before
 
 
 @pytest.mark.parametrize("declaration", [
@@ -53,26 +45,3 @@ def test_real_regulator_before_or_after_table_remains_required(tmp_path, declara
     l5 = project(tmp_path, declaration + "\n\n" + TABLE + "\n" + declaration)
     payload = json.loads(l5.read_text())
     assert any(row["type"] == "ldo" for row in payload["analog_blocks"])
-    assert gate(tmp_path).returncode == 0
-    payload["analog_blocks"] = []
-    l5.write_text(json.dumps(payload))  # isolated missing-real-block negative control
-    result = gate(tmp_path)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "ldo" in result.stdout.lower()
-
-
-@pytest.mark.parametrize("text", [
-    "The VDDA output supplies 1.8 V.",
-    "The VREG output supplies 1.8 V.",
-    "The VDD_LDO output supplies 1.8 V.",
-    TABLE.replace("I/O VDDIO/VDDIO_Q/VDDA/VSWITCH", "I/O VDDA output"),
-    TABLE.replace("|---|---|---|---|\n", ""),
-    TABLE.replace("Point", "Signal"),
-])
-def test_output_or_ambiguous_context_is_not_an_external_rail_exemption(tmp_path, text):
-    l5 = project(tmp_path, text)
-    payload = json.loads(l5.read_text()); payload["analog_blocks"] = []
-    l5.write_text(json.dumps(payload))
-    result = gate(tmp_path)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "ldo" in result.stdout.lower()

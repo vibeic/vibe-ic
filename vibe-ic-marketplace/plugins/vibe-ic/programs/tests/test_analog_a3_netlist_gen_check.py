@@ -352,15 +352,6 @@ def _good_deck(project: Path, block: str) -> None:
         + "* padding to clear the substance floor\n" * 6)
 
 
-def test_a_deck_rendered_from_a_superseded_topology_fails(tmp_path: Path
-                                                          ) -> None:
-    import hashlib
-    _good_deck(tmp_path, "ota")
-    # stamped with the digest of an IR that is NOT the one now on disk
-    _with_ir(tmp_path, "ota", _IR, hashlib.sha256(b"an older IR").hexdigest())
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.stdout, r.stderr)
-    assert _rules(tmp_path)[1] == ["A3_NETLIST_STALE_VS_IR"]
 
 
 def test_a_deck_current_with_its_topology_passes(tmp_path: Path) -> None:

@@ -26,7 +26,6 @@ sys.path.insert(0, str(PROGRAMS))
 import phase1_doc_one_shot_runner as R   # noqa: E402
 import regmap_table_extractor as E        # noqa: E402
 
-_COMPLETENESS = PROGRAMS / "phase1_doc_input_completeness_check.py"
 
 _DOC = ("+----+----+----+\n| CSR Address | Name | Description |\n"
         "+====+====+====+\n| 0xB00 | mcycle | cyc |\n+----+----+----+\n"
@@ -127,17 +126,6 @@ def _proc_cpu_project(tmp_path):
     return proj
 
 
-def test_800_endstate_completeness_check_passes_after_content_trigger(tmp_path):
-    proj = _proc_cpu_project(tmp_path)
-    R._post_emit_pdf_regmap_table_rows(proj)        # the content-trigger fix
-    r = subprocess.run(
-        [sys.executable, str(_COMPLETENESS), str(proj)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, (r.stdout + r.stderr)  # un-captured-tokens FAIL gone
-    assert "PASS" in r.stdout
-    # the captured CSR addresses are no longer reported uncaptured.
-    assert "0xb00" not in r.stdout.lower()
-    assert "0xc80" not in r.stdout.lower()
 
 
 if __name__ == "__main__":

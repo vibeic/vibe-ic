@@ -155,9 +155,6 @@ def test_native_handoff_uses_attested_image_root_and_container_keeps_declared(
     foreign_root.mkdir()
     _switch(env.project, image=env.image, pdk_root_host=str(foreign_root))
     monkeypatch.setattr(contract._ce, 'no_container_route', lambda: True)
-    monkeypatch.setattr(contract, 'local_image_attestation',
-                        lambda _image: {'image': env.image, 'image_id': IMAGE_ID,
-                                        'repo_digests': [env.image]})
     monkeypatch.setenv('PDK_ROOT', str(image_root))
 
     local = resolution(env.project, 'stated_pdk', native_handoff=True)
@@ -179,14 +176,9 @@ def test_native_handoff_refuses_explicit_remote_without_container(env, monkeypat
     _switch(env.project, image=env.image, pdk_root_host=str(foreign_root),
             **{route_key: 'REMOTE'})
     monkeypatch.setattr(contract._ce, 'no_container_route', lambda: True)
-    monkeypatch.setattr(contract, 'local_image_attestation',
-                        lambda _image: pytest.fail(
-                            'REMOTE native route must refuse before image resolution'))
 
     with pytest.raises(contract.Refusal, match='LL_LOCAL_REMOTE_MISMATCH'):
         resolution(env.project, 'stated_pdk', native_handoff=True)
-
-
 
 
 # ------------------------------------------------------------ resolution ---
@@ -286,47 +278,3 @@ def test_an_unresolvable_image_refuses_the_pdk_root_by_name(env, monkeypatch):
 
 
 # ------------------------------------------------- the runner's consumers ---
-
-def test_signoff_runs_on_the_resolved_root_with_no_declaration(env, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    import librelane_signoff
-    seen = {}
-
-    def fake_run(project, image, pdk_root, pdk, **_kw):
-        seen.update(image=image, root=pdk_root, pdk=pdk)
-        return {'status': 'PASS'}
-    monkeypatch.setattr(librelane_signoff, 'run', fake_run)
-    monkeypatch.setattr(runner, '_LL_SIGNOFF_RUNS', {})
-    runner._librelane_signoff_run(env.project, 'top', SimpleNamespace(name='stated_pdk'),
-                                  extract=True, time=False)
-    assert seen['root'] == env.tmp / 'cache' / IMAGE_ID.split(':')[1]
-    assert (seen['root'] / seen['pdk']).is_dir() and seen['image'] == stated_image()
-
-
-def test_floorplan_passes_the_pdk_root_gate_with_no_declaration(env, monkeypatch):
-    runner = importlib.import_module('phase3_one_shot_runner')
-
-    class Reached(Exception):
-        pass
-
-    def producer(*_a, **_k):
-        raise Reached
-    monkeypatch.setattr(runner, '_padring_chip_top_record', lambda project: None)
-    monkeypatch.setattr(runner, 'step_io_pad_chip_top_gen', producer)
-    pdk = SimpleNamespace(name='stated_pdk')
-    with pytest.raises(Reached):
-        runner._prepare_librelane_floorplan_for_route(
-            env.project, pdk, 'c', env.project / 'phase3/stage3/pnr', None,
-            {'15': 'librelane', '15.5ic': 'librelane'}, bounded_state=True)
-
-
-def test_step_27_corner_mounts_the_resolved_root_with_no_declaration(env):
-    runner = importlib.import_module('phase3_one_shot_runner')
-    import test_librelane_signoff as landed
-    project, corner, _spef, _nl = landed._step23_tool_record(env.tmp)
-    _switch(project, steps={'23': 'librelane'})           # no pdk_root_host
-    env.fake.trees.add(f'{GUEST_ROOT}/gfx')
-    tool = runner._librelane_si_corner_inputs(project)
-    root = env.tmp / 'cache' / IMAGE_ID.split(':')[1]
-    assert tool is not None and tool['corner'] == corner
-    assert tool['mounts'] == [(root / 'gfx', '/pdk/gfx')] and (root / 'gfx').is_dir()

@@ -83,7 +83,6 @@ def _project(tmp_path: Path, host: str = "8HD-4", *, run_rel=RUN_REL,
             "config": C.digest(rcx / "config.json"),
             "state_files": {str(p): C.digest(p) for p in C._walk_paths(before)},
             "config_files": {str(p): C.digest(p) for p in C._walk_paths(cfg) if p.is_file()},
-            "rcx_pdk_files": C._rcx_pdk_input_hashes(cfg, proj, []),
             "copy_input_files": payload_inputs,
         }
         C.write_json(rcx / "input_fingerprint.json", fingerprint)

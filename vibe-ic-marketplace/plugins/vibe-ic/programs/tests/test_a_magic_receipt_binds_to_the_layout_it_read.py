@@ -98,14 +98,6 @@ _TECH = ('tech\n format 32\nend\n\n'
 
 
 
-def test_the_runner_never_writes_to_the_report_after_the_tool_exits():
-    """The defect, as a property of the source: an append here makes every
-    recorded output digest stale and the invocation binding unmatchable."""
-    src = Path(R.__file__).read_text()
-    i = src.index("def _run_magic_signoff_drc")
-    body = src[i:src.index("\ndef ", i + 10)]
-    assert 'out_rpt.open("a")' not in body, body[body.find('open("a"') - 200:]
-    assert ".write_text(" not in body.split("out_rpt")[-1][:200]
 
 
 

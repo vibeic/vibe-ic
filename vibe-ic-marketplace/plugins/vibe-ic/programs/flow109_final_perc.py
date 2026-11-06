@@ -1,6 +1,8 @@
 """Native CVC electrical screen over the selected netlist and extracted SPICE."""
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import json
 from pathlib import Path
 import re
@@ -100,7 +102,7 @@ cvc_rv cvcrc > cvc.stdout 2> cvc.stderr
     import _docker_memory as _dmem
     import librelane_contract as _ll
     network, command = _ll.native_tool_command(image, ["bash", "-lc", shell])
-    argv = ["docker", "run", *_dmem.docker_memory_flags(
+    argv = ["docker", "run", *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(
             {"VIBEIC_DOCKER_MEMORY": "16g"}), "--rm", "--network", network,
             "--cpus", "4",
             "-v", f"{Path(project).resolve()}:{Path(project).resolve()}",

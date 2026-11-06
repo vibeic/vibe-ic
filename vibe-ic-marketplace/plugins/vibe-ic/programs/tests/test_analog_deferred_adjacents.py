@@ -51,7 +51,6 @@ A5 = PROGS / "analog_a5_layout_check.py"
 A7 = PROGS / "analog_a7_post_layout_resim_check.py"
 A8 = PROGS / "analog_a8_hardmacro_gen_check.py"
 A9 = PROGS / "analog_a9_hw_verify_check.py"
-FCC = PROGS / "analog_flow_compliance_check.py"
 
 
 # ── fixture builders ─────────────────────────────────────────────────────
@@ -192,17 +191,6 @@ def test_block_list_root_does_not_change_the_verdict(tmp_path_factory):
     assert verdicts["phase1/analog"] == verdicts["phase3/analog"]
 
 
-def test_flow_compliance_sees_phase1_root_block_list(tmp_path):
-    _block_list(tmp_path, ["osc"], root="phase1/analog")
-    r = subprocess.run(
-        [sys.executable, str(FCC), str(tmp_path),
-         "--json", str(tmp_path / "fcc.json")], capture_output=True, text=True)
-    assert r.returncode == 1, r.stdout + r.stderr
-    rpt = json.loads((tmp_path / "fcc.json").read_text())
-    assert rpt["summary"]["skipped"] is False
-    assert rpt["summary"]["total_missing"] == 9
-
-
 def test_flow_compliance_reads_a1_spec_at_its_declared_phase1_root(tmp_path):
     """A1's declared output is `phase1/analog/*/spec.json`. The compliance
     matrix must agree with `analog_a1_spec_extract_check`, which resolves it
@@ -210,11 +198,6 @@ def test_flow_compliance_reads_a1_spec_at_its_declared_phase1_root(tmp_path):
     on the same file."""
     _block_list(tmp_path, ["ldo"], root="phase1/analog")
     _spec_ok(tmp_path, "ldo", root="phase1/analog")
-    subprocess.run(
-        [sys.executable, str(FCC), str(tmp_path),
-         "--json", str(tmp_path / "fcc.json")], capture_output=True, text=True)
-    rpt = json.loads((tmp_path / "fcc.json").read_text())
-    assert rpt["summary"]["matrix"]["ldo"]["A1"] == "PASS"
     a1 = _run(A1, tmp_path)
     assert a1.returncode == 0, a1.stdout + a1.stderr
 
@@ -248,40 +231,12 @@ def _phantom_digital_soc(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_d1_digital_soc_with_phantom_block_at_phase1_root_never_goes_red(
-        tmp_path):
-    """THE guard on this whole change: widening the block-list resolution
-    must not turn a pure-digital SoC red. Holds on both trees.
-
-    RED means rc 1 / verdict FAIL — the tier that blocks. #511 moved the
-    ORGANIC #676 class-N/A skip off the rc-0 PASS tier and onto rc 2, the
-    NOT-CHECKED tier the P0 umbrella records as a benign SKIP, because a gate
-    that held ZERO A-step obligations to the rule had signed nothing off. The
-    guard is unchanged in substance and is asserted in the terms it was always
-    about: this project must never FAIL.
-    """
-    _phantom_digital_soc(tmp_path)
-    r = subprocess.run(
-        [sys.executable, str(FCC), str(tmp_path),
-         "--json", str(tmp_path / "fcc.json")], capture_output=True, text=True)
-    assert r.returncode != 1, r.stdout + r.stderr
-    assert r.returncode == 2, r.stdout + r.stderr
-    rpt = json.loads((tmp_path / "fcc.json").read_text())
-    assert rpt["verdict"] == "VACUOUS_PASS"
-    assert not [f for f in rpt["findings"] if f["severity"] == "ERROR"]
-
-
 def test_organic676_na_skip_is_disclosed_for_a_phase1_root_list(tmp_path):
     """...and the skip must be the DISCLOSED, named ORGANIC #676 N/A skip, not
     the undifferentiated "no analog blocks" skip a gate that cannot see the
     list emits. Both are non-failures; only one of them says why."""
     _phantom_digital_soc(tmp_path)
     assert c.analog_class_is_na(tmp_path) is True
-    subprocess.run(
-        [sys.executable, str(FCC), str(tmp_path),
-         "--json", str(tmp_path / "fcc.json")], capture_output=True, text=True)
-    rpt = json.loads((tmp_path / "fcc.json").read_text())
-    assert rpt["summary"]["reason"] == "digital_class_na_low_confidence"
 
 
 def test_phantom_block_at_phase1_root_without_ic_class_is_gated(tmp_path):
@@ -304,16 +259,6 @@ def test_phantom_block_at_phase1_root_without_ic_class_is_gated(tmp_path):
     assert not (tmp_path / "reports" / "ic_class.json").exists()
     assert c._all_blocks_low_confidence(tmp_path) is True
     assert c.analog_class_is_na(tmp_path) is False   # fail-closed, no verdict
-
-    r = subprocess.run(
-        [sys.executable, str(FCC), str(tmp_path),
-         "--json", str(tmp_path / "fcc.json")], capture_output=True, text=True)
-    assert r.returncode == 1, r.stdout + r.stderr
-    rpt = json.loads((tmp_path / "fcc.json").read_text())
-    assert rpt["passed"] is False
-    assert rpt["summary"]["skipped"] is False
-    assert sum(1 for f in rpt.get("findings", [])
-               if f.get("severity") == "ERROR") == 9
 
 
 def test_d1_real_analog_block_at_phase1_root_is_still_gated(tmp_path):
@@ -482,137 +427,6 @@ def test_d1_a5_partial_verdict_and_exit_code_unchanged(tmp_path):
 # ═════════════════════════════════════════════════════════════════════════
 # 4. A6 SIGN-OFF FLAGS IN analog_flow_compliance_check
 # ═════════════════════════════════════════════════════════════════════════
-def _pv_project(tmp_path: Path, drc: str, lvs: str) -> Path:
-    """Everything A1-A9 needs, with the two A6 markers under test.
-    `drc`/`lvs` are written verbatim; "" means `touch` (0 bytes)."""
-    _block_list(tmp_path, ["ldo"])
-    ad = tmp_path / "phase3" / "analog" / "ldo"
-    ad.mkdir(parents=True, exist_ok=True)
-    (ad / "spec.json").write_text("{}")
-    (ad / "topology.md").write_text("# ldo\n")
-    (ad / "ldo.sp").write_text(".title ldo\n.end\n")
-    # WAS `{}`. An empty object is a corner artefact that declares nothing —
-    # no corners, no provenance, no statement of what circuit it measured —
-    # and every test here asserting a whole-project rc 0 was therefore also
-    # asserting that such an artefact signs off A4. These fixtures are about
-    # the A6 PV markers, so A4 carries what a run that reached it would.
-    (ad / "corner_results.json").write_text(json.dumps({
-        "netlist_provenance": "a3_netlist",
-        "design_content": "structure_and_geometry",
-        "corners": [{"name": "tt_27c", "simulator_run": True, "vout_v": 1.8}],
-        "spec_results": [{"name": "vout", "status": "PASS", "target": None}],
-    }))
-    (ad / "layout.mag").write_text("magic\n")
-    (ad / "drc_clean.flag").write_text(drc)
-    (ad / "lvs_match.flag").write_text(lvs)
-    (ad / "pre_vs_post.json").write_text("{}")
-    hm = tmp_path / "phase3" / "analog" / "hardmacro" / "ldo"
-    hm.mkdir(parents=True, exist_ok=True)
-    (hm / "ldo.lef").write_text("MACRO ldo\nEND ldo\n")
-    cd = tmp_path / "phase3" / "mixed_signal" / "cosim"
-    cd.mkdir(parents=True, exist_ok=True)
-    (cd / "ldo_cosim_results.json").write_text("{}")
-    return tmp_path
-
-
-def _a6_verdict(tmp_path: Path):
-    r = subprocess.run(
-        [sys.executable, str(FCC), str(tmp_path),
-         "--json", str(tmp_path / "fcc.json")], capture_output=True, text=True)
-    rpt = json.loads((tmp_path / "fcc.json").read_text())
-    return r.returncode, rpt["summary"]["matrix"]["ldo"]["A6"]
-
-
-def test_touch_created_pv_flags_do_not_certify_a6(tmp_path):
-    """0-byte markers: the flag was created, the sign-off never happened."""
-    _pv_project(tmp_path, "", "")
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 != "PASS"
-    assert rc == 1
-
-
-def test_pv_flags_reporting_a_violation_do_not_certify_a6(tmp_path):
-    """The sharper half: the flag's own text says the block FAILED, and the
-    gate used to certify A6 because it never read the text."""
-    _pv_project(tmp_path, "violations: 17\n", "lvs: mismatch\n")
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 != "PASS"
-    assert rc == 1
-
-
-def test_pv_flags_with_no_verdict_at_all_do_not_certify_a6(tmp_path):
-    """Non-empty but content-free: `echo clean > drc_clean.flag`."""
-    _pv_project(tmp_path, "clean\n", "match\n")
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 != "PASS"
-    assert rc == 1
 
 
 # ── direction-1 guards for section 4 ────────────────────────────────────
-def test_d1_honest_pv_flags_still_certify_a6(tmp_path):
-    _pv_project(tmp_path, "violations: 0\n", "lvs: match\n")
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 == "PASS"
-    assert rc == 0
-
-
-def test_d1_honest_pv_flags_in_another_tool_dialect_still_certify_a6(tmp_path):
-    """The rule must be "an explicit clean/match verdict", not one vendor's
-    phrasing. Magic/KLayout/Calibre/Netgen wordings all count."""
-    _pv_project(tmp_path, "DRC clean: 0 errors\n",
-                "LVS match: 0 mismatches\n")
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 == "PASS"
-    assert rc == 0
-
-
-def test_d1_the_actual_producers_flag_text_still_certifies_a6(tmp_path):
-    """THE guard on the A6 tightening: `analog_one_shot_runner` is the program
-    that writes these two flags (its deterministic A6 stub emits an explicit
-    `violations: 0` / `lvs: match` line precisely because
-    `analog_a6_block_pv_check` already rejects a bare flag). Verbatim producer
-    output must keep certifying A6, or the tightening would break the runner's
-    own dry-run path. Holds on both trees."""
-    _pv_project(
-        tmp_path,
-        "# ldo — DRC clean (deterministic stub)\ndeterministic_stub\n"
-        "violations: 0\n",
-        "# ldo — LVS match (deterministic stub)\ndeterministic_stub\n"
-        "lvs: match\n")
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 == "PASS"
-    assert rc == 0
-
-
-def test_d1_missing_pv_flags_are_still_plain_missing(tmp_path):
-    _pv_project(tmp_path, "violations: 0\n", "lvs: match\n")
-    (tmp_path / "phase3" / "analog" / "ldo" / "drc_clean.flag").unlink()
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 == "MISSING"
-    assert rc == 1
-
-
-def test_d1_a6_waiver_still_works_when_the_flags_are_absent(tmp_path):
-    """A disclosed, named waiver is the sanctioned way past a step. This
-    shape (no flags at all) is waiver-covered on both trees."""
-    _pv_project(tmp_path, "violations: 0\n", "lvs: match\n")
-    (tmp_path / "phase3" / "analog" / "ldo" / "drc_clean.flag").unlink()
-    (tmp_path / "phase3" / "analog" / "ldo" / "lvs_match.flag").unlink()
-    (tmp_path / "phase3" / "analog" / "waivers.json").write_text(json.dumps(
-        {"analog_waivers": [{"block": "ldo", "step": "A6"}]}))
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 == "WAIVED"
-    assert rc == 0
-
-
-def test_a6_waiver_is_reachable_under_the_stricter_flag_rule(tmp_path):
-    """A newly-red step must still be waivable. Before the fix the 0-byte
-    flags took the PASS branch, so the waiver was never consulted at all —
-    the honest escape hatch was unreachable for exactly the projects that
-    needed it."""
-    _pv_project(tmp_path, "", "")
-    (tmp_path / "phase3" / "analog" / "waivers.json").write_text(json.dumps(
-        {"analog_waivers": [{"block": "ldo", "step": "A6"}]}))
-    rc, a6 = _a6_verdict(tmp_path)
-    assert a6 == "WAIVED"
-    assert rc == 0

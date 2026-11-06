@@ -31,6 +31,8 @@ chip-AGNOSTIC: pure tool-version comparison; no design knowledge.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import json
 import os
@@ -106,7 +108,7 @@ def probe_image(image: str, runner=None) -> Tuple[int, str]:
     # today and this call tripped it the moment the file was renamed — the
     # ratchet keyed the exemption to the old filename.)
     import _docker_memory as _dmem  # noqa: PLC0415
-    return runner(["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+    return runner(["docker", "run", *_vtmp.docker_mounts(), "--rm", *_dmem.docker_memory_flags(),
                    "--entrypoint", "sh", image, "-c", _PROBE_CMD])
 
 

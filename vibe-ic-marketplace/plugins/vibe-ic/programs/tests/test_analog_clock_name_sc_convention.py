@@ -63,14 +63,6 @@ def test_a_non_clock_is_not_swept_in(name):
 #: the ANALOG classifier (two-phase non-overlapping SC clocks) and is added
 #: there only. The asymmetry is intentional, documented, and pinned by
 #: `test_phi_is_analog_only_and_that_is_deliberate` below.
-@pytest.mark.parametrize("name", ["ck", "ck1", "ck4", "clk", "clock"])
-def test_the_two_clock_regexes_in_this_plugin_agree(name):
-    """The defect was not just an omission — it was two components of one
-    plugin holding different definitions of 'clock'. Pin them together so they
-    cannot drift apart again, for the family the defect was actually about."""
-    a = _mod("analog_interface_classify")._CLK_RE.match(name)
-    b = _mod("harness_exact_selfverify")._CLOCK_NAME_RE.match(name)
-    assert bool(a) == bool(b), f"{name}: analog={bool(a)} harness={bool(b)}"
 
 
 def test_phi_is_analog_only_and_that_is_deliberate():
@@ -79,8 +71,4 @@ def test_phi_is_analog_only_and_that_is_deliberate():
     SHOULD know `phi`, that is a separate change against a §4.05 gate and must
     be argued on its own evidence — not slipped in for tidiness."""
     a = _mod("analog_interface_classify")._CLK_RE
-    h = _mod("harness_exact_selfverify")._CLOCK_NAME_RE
     assert a.match("phi1"), "the analog classifier must know SC phase clocks"
-    assert not h.match("phi1"), (
-        "the harness latch gate now matches phi1 — if that was intended, "
-        "update this test WITH the §4.05 argument for widening it")

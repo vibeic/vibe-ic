@@ -5,6 +5,8 @@ failed measurement into PASS. Consumers refuse changed inputs and outputs.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import hashlib
 import json
 import re
@@ -207,7 +209,7 @@ def native_argv(project, tool, args, *, image=None):
     from librelane_contract import resolve_image
     from _docker_memory import docker_memory_flags
     image = image or resolve_image(Path(project))
-    return ["docker", "run", *docker_memory_flags(), "--rm", "--network", "none",
+    return ["docker", "run", *_vtmp.docker_mounts(), *docker_memory_flags(), "--rm", "--network", "none",
             "-v", f"{Path(project).resolve()}:{Path(project).resolve()}",
             image, "--skip", tool, *args]
 

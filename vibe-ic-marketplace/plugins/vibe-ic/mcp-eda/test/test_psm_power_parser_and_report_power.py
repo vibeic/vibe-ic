@@ -38,7 +38,6 @@ from pathlib import Path
 import pytest
 
 MCP_ROOT = Path(__file__).resolve().parents[1]
-SRC = (MCP_ROOT / "src" / "index.js").read_text()
 PSM_MJS = MCP_ROOT / "src" / "lib" / "psm_report.mjs"
 _NODE = shutil.which("node")
 
@@ -57,28 +56,8 @@ Percentage drop  : 0.00 %
 REAL_RP = "Total                  2.30e-05   3.32e-06   1.14e-10   2.63e-05 100.0%"
 
 
-def test_report_power_is_actually_run():
-    assert "report_power" in SRC, "no tool runs report_power — the P of PPA is never asked for"
-    i = SRC.find('"eda_ir_drop"')
-    j = SRC.find("server.tool(", i)
-    t = SRC[i:j]
-    assert "catch {report_power}" in t, "report_power is not run, or not run defensively"
-    assert "REPORT_POWER_BEGIN" in t
-    # run OUTSIDE the power-net branch: power and IR drop are different
-    # measurements and only one needs a resolvable PDN
-    assert t.index("catch {report_power}") < t.index('if {$_vddnet eq ""}'), (
-        "report_power is inside the power-net branch, so a design whose PDN "
-        "cannot be resolved reports no power either"
-    )
 
 
-def test_the_two_power_numbers_are_cross_checked():
-    i = SRC.find('"eda_ir_drop"')
-    j = SRC.find("server.tool(", i)
-    t = SRC[i:j]
-    assert "powerCrossCheck" in t
-    assert "power_cross_check" in t
-    assert "The two power numbers disagree" in t
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not installed")

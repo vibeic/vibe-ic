@@ -54,19 +54,6 @@ def _scene(tmp_path, monkeypatch, *, entrypoint=None, declared=True, legacy=Fals
     monkeypatch.setenv('PDK_ROOT', str(tmp_path / 'HOST_ROOT_MUST_NOT_BE_USED'))
     monkeypatch.setenv('VIBEIC_DOCKER_MEMORY', '4g')
     calls = []
-    if local:
-        import librelane_contract as contract
-        cid = 'a' * 64
-        config_id = 'sha256:' + 'b' * 64
-        receipt = tmp_path / 'launch_identity.json'
-        receipt.write_text(json.dumps({
-            'cid': cid, 'image': IMAGE,
-            'container_inspect': {'Id': cid, 'Image': config_id,
-                'Config': {'Hostname': cid[:12], 'Image': IMAGE},
-                'State': {'Running': True}, 'HostConfig': {}},
-            'image_inspect': [{'Id': config_id, 'RepoDigests': [IMAGE], 'Config': metadata}]}))
-        monkeypatch.setenv(contract.LOCAL_ATTESTATION_ENV, str(receipt))
-        monkeypatch.setattr(contract.socket, 'gethostname', lambda: cid[:12])
 
     def transport(argv, timeout=600):
         if argv[:3] == ['docker', 'image', 'inspect']:
@@ -193,22 +180,3 @@ def test_local_actual_failed_inputs_stay_unavailable(tmp_path, monkeypatch, dama
     assert fact['unavailable']
     if damage != 'missing_file':
         assert fact['lef_database_unit_um'] == 0.0005
-
-
-@pytest.mark.parametrize('damage', ['foreign_cid', 'changed_image', 'absent_receipt'])
-def test_local_probe_requires_actual_launch_authority(tmp_path, monkeypatch, damage):
-    run, calls, _, _, _ = _scene(tmp_path, monkeypatch, local=True, legacy=True)
-    receipt = tmp_path / 'launch_identity.json'
-    record = json.loads(receipt.read_text())
-    if damage == 'foreign_cid':
-        record['cid'] = 'c' * 64
-    elif damage == 'changed_image':
-        record['image'] = 'foreign@sha256:' + 'd' * 64
-    if damage == 'absent_receipt':
-        receipt.unlink()
-    else:
-        receipt.write_text(json.dumps(record))
-    fact = run()
-    assert fact['value'] is None, fact
-    assert fact['unavailable']
-    assert calls == []

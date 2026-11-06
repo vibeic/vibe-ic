@@ -65,6 +65,8 @@ it is given.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import os
 import shlex
 import shutil
@@ -117,7 +119,7 @@ def docker_exec_argv(container: str, *rest: str,
                          opts: Sequence[str] = ()) -> list:
     """Build an exec command, or a fresh run with the selected image and mounts."""
     if os.environ.get("VIBEIC_A4_FRESH_PROBES") != "1":
-        return ["docker", "exec", *opts, container, *rest]
+        return ["docker", "exec", *_vtmp.container_env(), "-w", str(_vtmp.scratch()), *opts, container, *rest]
     # Fleet policy: keep the selected image and bind mounts, and run each
     # probe in a fresh container. The canonical A4 corner launcher is unchanged.
     inspected = subprocess.run(
@@ -151,7 +153,7 @@ def docker_exec_argv(container: str, *rest: str,
         argv += ["-w", config["WorkingDir"]]
     if config.get("User"):
         argv += ["-u", config["User"]]
-    return [*argv, *opts, image, "--skip", *rest]
+    return [*argv, *_vtmp.docker_mounts(), *opts, image, "--skip", *rest]
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +697,7 @@ def local_engine_cwd():
     carries no input and loses no output.
 
     Tool/PDK/chip-AGNOSTIC: names no tool, PDK or design."""
-    import tempfile as _tempfile
+    import vibeic_temp as _tempfile
     return _tempfile.TemporaryDirectory(prefix="vibeic_local_engine_")
 
 

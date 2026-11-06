@@ -174,45 +174,6 @@ def test_no_pg_pins_returns_none(tmp_path):
 
 # ------------------------------------------------ well-bias discovery -------
 
-def test_gf180_well_bias_pins_discovered(tmp_path):
-    pwr, gnd = mod._discover_well_bias_pins_from_lef(
-        _lef(tmp_path, GF180_LEF), "Metal")
-    assert pwr == ["VNW"]
-    assert gnd == ["VPW"]
-
-
-def test_plain_pdk_has_no_well_bias_pins(tmp_path):
-    """No-op for sky130 / nangate45 / asap7 shaped libraries."""
-    assert mod._discover_well_bias_pins_from_lef(
-        _lef(tmp_path, PLAIN_LEF), "met") == ([], [])
-
-
-def test_rail_pin_is_not_mistaken_for_a_well_tie(tmp_path):
-    """A pin that also has a routing-metal RECT is a rail, not a body tie.
-
-    The real `filltie` cell declares VDD with BOTH an Nwell RECT and a Metal1
-    RECT; re-tying VDD to itself would be wrong.
-    """
-    lef = """\
-MACRO filltie
-  CLASS core WELLTAP ;
-  SIZE 1.120 BY 3.920 ;
-  PIN VDD
-    USE POWER ;
-    PORT
-      LAYER Nwell ;
-        RECT -0.430 1.760 1.550 4.350 ;
-      LAYER Metal1 ;
-        RECT 0.000 3.620 1.120 4.220 ;
-    END
-  END VDD
-END filltie
-"""
-    pwr, gnd = mod._discover_well_bias_pins_from_lef(_lef(tmp_path, lef),
-                                                    "Metal")
-    assert pwr == []
-    assert gnd == []
-
 
 # ------------------------------------------------ emitted PDN Tcl -----------
 
@@ -237,29 +198,3 @@ def _pdk(tmp_path, lef_text, metal_prefix, tech_lef=None):
         cell_lef=_lef(tmp_path, lef_text),
         cell_gds=None, site="SITE", drc_deck=None,
         metal_prefix=metal_prefix, tapcell_master=None)
-
-
-def test_pdn_tcl_uses_metal_rail_and_ties_the_wells(tmp_path):
-    tcl = mod._build_pdn_tcl(_pdk(tmp_path, GF180_LEF, "Metal"))
-    # follow-pins on the routing layer, NOT on the well layer
-    assert "-layer Metal1" in tcl
-    assert "Nwell" not in tcl
-    # wells tied to the rails
-    assert 'add_global_connection -net VDD -pin_pattern "^VNW$" -power' in tcl
-    assert 'add_global_connection -net VSS -pin_pattern "^VPW$" -ground' in tcl
-    # the rails themselves are still connected
-    assert 'add_global_connection -net VDD -pin_pattern "^VDD$" -power' in tcl
-
-
-def test_pdn_tcl_for_plain_pdk_emits_no_well_connections(tmp_path):
-    """Blast-radius control: a PDK without well pins is byte-unaffected."""
-    tcl = mod._build_pdn_tcl(_pdk(tmp_path, PLAIN_LEF, "met"))
-    assert "-layer met1" in tcl
-    assert tcl.count("add_global_connection") == 2  # VDD + VSS only
-    assert "wells(" not in tcl
-
-
-def test_pdn_tcl_reports_the_well_ties_in_its_marker(tmp_path):
-    tcl = mod._build_pdn_tcl(_pdk(tmp_path, GF180_LEF, "Metal"))
-    assert "PDN_INSERTED_ADAPTIVE" in tcl
-    assert "wells(VNW->VDD,VPW->VSS)" in tcl

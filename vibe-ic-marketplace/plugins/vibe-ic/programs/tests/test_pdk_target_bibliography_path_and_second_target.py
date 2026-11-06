@@ -46,12 +46,7 @@ class _PdkBoundaryReached(Exception):
 
 def _front_door_pdk(project, monkeypatch, pdk_args):
     import phase1_one_shot_runner as front
-    from types import SimpleNamespace
 
-    monkeypatch.setattr(front._runner_lock, "acquire_or_reenter",
-                        lambda *a: SimpleNamespace(release=lambda: None))
-    monkeypatch.setattr(front, "_run_step_0_5ic", lambda *a, **k: 0)
-    monkeypatch.setattr(front, "run_phase1_second_track", lambda *a: 0)
 
     def affected_boundary(project, **kwargs):
         p1._emit_l19_to_l23_skeletons(project)
@@ -210,14 +205,6 @@ def test_a_name_elsewhere_in_the_document_is_not_co_declared(
         encoding="utf-8")
     tok, _snip, src, line = p1._extract_pdk_target_with_provenance(tmp_path)
     assert p1._declared_pdk_alternates(tmp_path, src, line, tok) == []
-
-
-
-
-
-
-
-
 
 
 # ---------------------------------------------------------------------------

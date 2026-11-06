@@ -23,10 +23,10 @@ import _container_exec as ce                       # noqa: E402
 
 def test_deadline_is_inside_the_container_not_only_on_the_client():
     argv = ce.container_deadline_argv("somecontainer", "sleep 600", 30)
-    assert argv[:3] == ["docker", "exec", "somecontainer"]
+    assert argv[:2] == ["docker", "exec"]
+    assert argv[argv.index("somecontainer") + 1] == "timeout"
     # `timeout` must sit BEFORE the shell, so it is the tool's parent and can
     # signal it. After the shell it would be a word in the command string.
-    assert argv[3] == "timeout"
     assert argv.index("timeout") < argv.index("bash")
     assert "30" in argv
 

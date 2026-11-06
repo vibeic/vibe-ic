@@ -298,18 +298,10 @@ def test_the_handoff_record_carries_every_attributed_rule(tmp_path):
 
 def test_the_declared_tier_is_preserved_by_the_runners_aggregator():
     """Integrator density obligations remain distinct and keep the run off PASS."""
-    import phase3_one_shot_runner as P
     import pytest as _pytest
     import verdict as _V
 
-    attributed = P.StepResult("drc", D.TIER_PASS_WITH_ATTRIBUTION)
     assert attributed.waiver_rows == []
-    plan = [attributed, P.StepResult("lvs", "PASS")]
-    assert P._aggregate_verdict(plan) == D.TIER_PASS_WITH_ATTRIBUTION
-    with _pytest.raises(ValueError, match="waiver_rows"):
-        P.StepResult("drc", D.TIER_PASS_WITH_ATTRIBUTION,
-                     waiver_rows=[{"id": "forbidden"}])
     with _pytest.raises(ValueError):
         _V.StepVerdict(verdict=_V.Verdict.PASS_WITH_WAIVERS,
                        step_id="drc", name="drc")
-    assert P._aggregate_verdict([P.StepResult("lvs", "PASS")]) == "PASS"

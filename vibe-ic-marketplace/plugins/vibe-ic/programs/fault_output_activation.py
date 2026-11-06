@@ -17,7 +17,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
-import tempfile
+import vibeic_temp as tempfile
 
 import yaml
 
@@ -141,13 +141,12 @@ def recover(project: Path, *, cut_rel: str, tv_rel: str, coverage_rel: str,
     inputs = {canonical_name(p["name"]) for p in schema["inputs"]}
     if inputs != cut_inputs - {clock}:
         raise ValueError("stimulus schema must control every cut input except clock")
-    base = project / "phase2/stage2/dft/output_activation"
+    base = tempfile.current_run() / "output_activation"
     base.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="attempt_", dir=base))
     shutil.copyfile(tv, work / "original_vectors.json")
     shutil.copyfile(cov, work / "original_coverage.yml")
-    relative = work.relative_to(project).as_posix()
-    ctr = mounted_root.rstrip("/") + "/" + relative
+    ctr = str(work)
     targets = targets[:max_targets]
     report.update(work_dir=str(work), selected_targets=len(targets),
                   input_hashes={str(p): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -156,8 +155,9 @@ def recover(project: Path, *, cut_rel: str, tv_rel: str, coverage_rel: str,
     if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", top):
         raise ValueError("unsupported top identifier")
     script = tdf._tdf_pre_flatten_script(liberty, cut_rel, top,
-                                        relative + "/flat.v") + "check -assert\n"
+                                        "__vibeic_temp_flat.v") + "check -assert\n"
     script = script.replace("/work/", mounted_root.rstrip("/") + "/")
+    script = script.replace(mounted_root.rstrip("/") + "/__vibeic_temp_flat.v", ctr + "/flat.v")
     for i, (name, level) in enumerate(targets):
         if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$./-]*", name):
             raise ValueError("unsupported SAT target identifier")
