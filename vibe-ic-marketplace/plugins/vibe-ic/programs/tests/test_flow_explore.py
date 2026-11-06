@@ -88,6 +88,11 @@ sys.exit({'PASS':0,'FAIL':1,'NOT_MEASURED':2}[status])
     assert explorer.OVERRIDES.parent == Path("work/flow")
     summary = (output / "RESULT.md").read_text()
     assert all(row["name"] in summary for row in result["variants"])
+    comparison = result["variants"][1]["comparison_to_reference"]
+    assert comparison["power"]["verdict"] == ("NOT_MEASURED" if power is None else
+            "SUBJECT_BETTER" if power < 3 else "BASELINE_BETTER")
+    assert comparison["setup_slack"]["verdict"] == "TIE"
+    assert comparison["setup_slack"]["delta_pct"] is None
 
 
 def test_variants_preserve_other_native_exclusions_and_settings(tmp_path):
