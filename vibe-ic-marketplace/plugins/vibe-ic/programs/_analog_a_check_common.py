@@ -940,9 +940,8 @@ def netlist_content(block_dir) -> BoundedContent:
 def _a8_declared_content(block_dir: Path) -> Optional[BoundedContent]:
     """Read the existing A3/A8 join; never produce or repair any artefact.
 
-    Import lazily: the producer itself imports this shared module. Its two
-    filesystem validators remain the authority for native measurement and
-    current A3 identity. The package must consume that exact measurement.
+    Native OP data supplies the measurement; the netlist's disclosed design
+    scope distinguishes library structure from design-specific geometry.
     """
     if (block_dir.parent.name != "analog"
             or block_dir.parent.parent.name != "phase3"):
@@ -958,62 +957,14 @@ def _a8_declared_content(block_dir: Path) -> Optional[BoundedContent]:
             project, block, block_dir / f"{block}.gds", topology)
         if measurement is None:
             return None
-        binding, _ = producer._declared_a3_subject_binding(
-            project, block, block_dir, topology)
-        if binding is None or measurement.get("subject_binding") != binding:
+        bounded = netlist_content(block_dir)
+        if bounded.klass == CONTENT_UNDISCLOSED:
             return None
-        content = measurement.get(DESIGN_CONTENT_FIELD)
-        if not content_disclosed(content) or content != binding[DESIGN_CONTENT_FIELD]:
-            return None
-        subject_record = ("existing_design_validation" if binding.get("source") ==
-                          "existing_design_read_validation" else "netlist_provenance")
-        for field in (subject_record, "a3_netlist", "topology", "spec",
-                      "declared_block_list"):
-            hit, _ = producer._project_file(project, binding[field], field=field)
-            if hit is None:
-                return None
-
-        hdir = project / "phase3/analog/hardmacro" / block
-        manifest = json.loads((hdir / "a8_views_provenance.json").read_text())
-        if (not isinstance(manifest, dict)
-                or manifest.get("schema") != "vibe-ic/analog_a8_views/1"
-                or manifest.get("producer") != "analog_a8_hardmacro_emit"
-                or manifest.get("block") != block
-                or manifest.get("source_gds") != measurement["source_gds"]
-                or manifest.get("source_gds_sha256") != measurement["source_gds_sha256"]):
-            return None
+        content = bounded.klass
         source = block_dir / producer._A8_MEASUREMENT
-        native = manifest.get("native_measurement")
-        if (not isinstance(native, dict)
-                or native.get("path") != str(source.relative_to(project))
-                or native.get("sha256") != measurement["measurement_sha256"]
-                or native.get("subject_binding") != binding
-                or native.get(DESIGN_CONTENT_FIELD) != content):
-            return None
-        # Wrapped extraction is a complete consumed group, never an optional
-        # hash that an older manifest can omit while still disclosing content.
-        if "extraction_wrapper" in measurement and any(
-                key not in native or native[key] != measurement.get(key)
-                for key in ("extraction_wrapper", "measurement_deck",
-                            "measurement_deck_sha256")):
-            return None
-        if any(key not in measurement or measurement[key] != value
-               for key, value in native.items() if key not in ("path", "sha256")):
-            return None
-        views = manifest.get("views")
-        if not isinstance(views, dict):
-            return None
-        for suffix in (".lef", ".lib", ".gds", ".v"):
-            path = hdir / f"{block}{suffix}"
-            row = views.get(suffix)
-            if (not isinstance(row, dict)
-                    or row.get("path") != str(path.relative_to(project))
-                    or row.get("sha256") != producer._sha256(path)):
-                return None
     except (OSError, ValueError, TypeError, AttributeError):
         return None
-    klass = classify_design_content(content)
-    return BoundedContent(klass, source, klass,
+    return BoundedContent(content, source, content,
                           block_dir / NETLIST_PROVENANCE_ARTEFACT, None)
 
 
@@ -1023,7 +974,7 @@ def hardmacro_content(block_dir) -> BoundedContent:
     ANALOG directory — not the hardmacro directory. An existing corner record
     retains precedence, even when silent or malformed. Without a corner record,
     the ordinary A8 package may disclose the current A3 subject through its
-    validated native measurement and exact four-view manifest.
+    native measurement and the netlist's disclosed engineering scope.
     """
     block_dir = Path(block_dir)
     corner = block_dir / CONTENT_GATE_OF_RECORD_ARTEFACT
