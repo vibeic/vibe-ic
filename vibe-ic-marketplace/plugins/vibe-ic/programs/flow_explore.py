@@ -11,6 +11,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -18,8 +19,8 @@ import time
 
 from flow_config import _load
 from flow_ppa_objective import compare_native, final_violation_metrics, objective_weights
-from flow_ppa_variants import (MAX_UTIL, RECOVERY, SAMPLE_SEED, SIZING,
-                               native_candidates, pinned_settings, selected_level)
+from flow_ppa_variants import (L2_SETTINGS, MAX_UTIL, RECOVERY, SAMPLE_SEED, SIZING,
+                               level_two_axes, native_candidates, pinned_settings, selected_level)
 
 
 ENTRY = Path(__file__).with_name("vibe_ic_one_shot_runner.py")
@@ -34,9 +35,26 @@ METRICS = {
 }
 
 
-def variants(project, *, level=1, resolved=None):
+def variants(project, *, level=1, resolved=None, activity=None):
     original = _load(project / OVERRIDES)
-    return native_candidates(project, original, resolved or {}, level=level)
+    return native_candidates(project, original, resolved or {}, level=level, activity=activity)
+
+
+def native_activity(rows):
+    calls = [call for row in rows for call in row.get("native_steps", [])
+             if call.get("ran") and call.get("exit_code") == 0]
+    activity = {"steps": sorted({call["name"] for call in calls}), "cts_preclustering": None}
+    for call in calls:
+        if call["name"] != "OpenROAD.CTS":
+            continue
+        path = Path(call["reports"]) / "openroad-cts.log"
+        if path.is_file():
+            text = path.read_text()
+            if re.search(r"CTS-020[46]\]", text) and "CTS-0019]" in text:
+                activity["cts_preclustering"] = True
+            elif "CTS-0023]" in text and activity["cts_preclustering"] is None:
+                activity["cts_preclustering"] = False
+    return activity
 
 
 def run_variant(project, output, variant, cores, flow_args, ppa_level=0):
@@ -70,12 +88,14 @@ def run_variant(project, output, variant, cores, flow_args, ppa_level=0):
                     config = _load(Path(directory) / "config.json")
                     settings.update({key: config[key] for key in (
                         "CLOCK_PERIOD", "PDK", "STD_CELL_LIBRARY", "STA_CORNERS",
-                        "EXTRA_EXCLUDED_CELLS", RECOVERY, *MAX_UTIL, *SIZING)
+                        "EXTRA_EXCLUDED_CELLS", "MAX_FANOUT_CONSTRAINT",
+                        RECOVERY, *MAX_UTIL, *SIZING, *L2_SETTINGS)
                         if key in config})
         row.update(exit_code=completed.returncode,
             rows=[{"name": step["name"], "status": step["status"]} for step in rows],
             metrics={key: metrics.get(key) for key in METRICS.values()},
             resolved_settings=settings,
+            native_activity=native_activity(rows),
             violation_metrics=final_violation_metrics(metrics),
             state="COMPLETED" if completed.returncode == 0 else "FAILED",
             all_pass=completed.returncode == 0 and bool(rows) and all(step["status"] == "PASS" for step in rows))
@@ -101,7 +121,8 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None):
     started = time.monotonic()
     baseline = variants(project, level=0)[0]
     reference = run_variant(project, output, baseline, groups[0], flow_args, level)
-    candidates = variants(project, level=level, resolved=reference["resolved_settings"])
+    activity = reference.get("native_activity", {})
+    candidates = variants(project, level=level, resolved=reference["resolved_settings"], activity=activity)
     rows = [reference, *[{"name": name, "project": str(output / name), "overrides": overrides,
                           "state": "PROPOSED", "exit_code": None, "rows": [],
                           "metrics": {}, "all_pass": False} for name, overrides in candidates[1:]]]
@@ -113,7 +134,11 @@ def explore(project, output, *, cpus=8, jobs=2, flow_args=(), ppa_level=None):
               "sampling_seed": SAMPLE_SEED if level == 2 else None,
               "pinned_native_settings": sorted(pinned_settings(project)),
               "knob_families": ["minimum drive exclusion", "recover_power", "resizer max utilization",
-                                "candidate cell sizing area/leakage limits"]}
+                                "candidate cell sizing area/leakage limits"],
+              "native_activity": activity}
+    if level == 2:
+        axes, skipped = level_two_axes(reference["resolved_settings"], activity)
+        report.update(knob_families=report["knob_families"] + sorted(axes), skipped_knobs=skipped)
     report_path = output / "results.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     pending = iter(enumerate(candidates[1:], 1))

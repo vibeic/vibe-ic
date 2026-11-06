@@ -17,10 +17,18 @@ resizer maximum utilization, and candidate cell area/leakage sizing limits.
 Document-pinned settings are removed from the proposal space. Identical remaining
 overrides are deduplicated, so a constrained design can have fewer candidates.
 
-The initial Level 2 implementation samples sixteen combinations of these same
-native settings with a private seed42 shuffle ported from the old Cartesian
-proposer. It currently executes locally; additional AutoTuner knobs and fleet
-dispatch are the next separate port. This is not the final Level 2 space.
+Level 2 samples up to24 effective native combinations using private seed42,
+porting the old baseline-first Cartesian proposal policy with bounded index
+sampling. It adds total-site global/detailed padding, native density targets,
+timing/routability-driven placement, global/per-layer route adjustment and active
+PL/GRT resizer settings. CTS cluster size/diameter are sampled when the reference
+native log shows preclustering actually ran; a clustering announcement alone
+does not establish this. The report names skipped/inactive axes. Padding aliases
+and global/per-layer route aliases are deduplicated by their native effect.
+Document density aliases pin the canonical density target. Native ORFS's density
+addon is used by Stage A; LibreLane consumes its native density-target setting.
+Execution currently stays local within the CPU budget; the generic spool port
+is pending. This is not a fleet search-engine implementation.
 Levels 3 and 4 require the native-tool result handoff and are not implemented by
 this knob enumerator. Level 3 belongs to the unchanged native tools; Level 4
 enhances their best all-PASS result. This change adds no independent search engine.
@@ -61,6 +69,6 @@ filter candidate cells, not document area or power limits. PL setup/hold maximum
 utilization variables use LibreLane's existing post-CTS consumer. Forwarded but
 inert hold-TNS and setup-buffer-percent options are not counted as search axes.
 
-Recovery retains the existing setup/hold, legalization, ECO route and final
+Recovery retains setup/hold, legalization, native routing and final
 verification sequence. An emitted command or successful native return is not
 evidence of a measured improvement; the complete public result decides adoption.
