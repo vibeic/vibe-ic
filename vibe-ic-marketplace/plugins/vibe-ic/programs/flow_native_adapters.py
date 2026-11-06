@@ -606,7 +606,9 @@ def formal(project, directory, tool, commands):
                         native_read += "--top " + top_match[1] + " "
                     native_read += "-I " + _word(config.parent / "src") + " " + reads[0][1]
                     native_read += ("\nsetundef -undriven -anyseq a:anyseq>0"
-                                    "\nsetundef -undriven -anyconst a:anyconst>0")
+                                    "\nsetundef -anyseq a:anyseq>0 %ci1 t:$buf %i"
+                                    "\nsetundef -undriven -anyconst a:anyconst>0"
+                                    "\nsetundef -anyconst a:anyconst>0 %ci1 t:$buf %i")
                     retry = config.parent / "slang_frontend.sby"
                     retry.write_text(original_body[:reads[0].start()] + native_read + original_body[reads[0].end():])
                     destination = config.parent / "slang_frontend"
