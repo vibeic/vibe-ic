@@ -2,7 +2,7 @@
 """Compare public native runs on copies; adopt the best passing native override.
 
 Arguments after -- go to the public entry. The chosen settings are written to
-input/native_overrides.json; native measurements remain in the chosen copy.
+work/flow/native_overrides.json; native measurements remain in the chosen copy.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from flow_config import _load, native_excluded_cells
 
 
 ENTRY = Path(__file__).with_name("vibe_ic_one_shot_runner.py")
-OVERRIDES = Path("input/native_overrides.json")
+OVERRIDES = Path("work/flow/native_overrides.json")
 METRICS = {
     "Cells": "design__instance__count", "Area (um2)": "design__instance__area",
     "Core (um2)": "design__core__area", "Power (W)": "power__total",

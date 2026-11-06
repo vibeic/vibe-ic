@@ -26,6 +26,7 @@ def test_public_variants_select_by_passing_rows_area_then_power(
     (project / "reports").mkdir()
     (project / "reports/original.txt").write_text("retained source results\n")
     original = {"SYNTH_STRATEGY": "AREA 0"}
+    (project / explorer.OVERRIDES).parent.mkdir(parents=True)
     (project / explorer.OVERRIDES).write_text(json.dumps(original))
     (project / "input/case.json").write_text(json.dumps({"status": status,
         "area": area, "power": power, "baseline_pass": baseline_pass}))
@@ -36,7 +37,7 @@ p=Path(sys.argv[1])
 assert sys.argv[-2:]==['--engine','native']
 assert not (p/'reports/original.txt').exists()
 c=json.loads((p/'input/case.json').read_text())
-overrides=json.loads((p/'input/native_overrides.json').read_text())
+overrides=json.loads((p/'work/flow/native_overrides.json').read_text())
 allow='*_1' not in overrides['EXTRA_EXCLUDED_CELLS']
 (p/'affinity.json').write_text(json.dumps(sorted(os.sched_getaffinity(0))))
 deadline=time.monotonic()+3
@@ -71,12 +72,14 @@ sys.exit({'PASS':0,'FAIL':1,'NOT_MEASURED':2}[status])
         assert adopted == original
     assert source.read_text() == "module unit; endmodule\n"
     assert (project / "reports/original.txt").read_text() == "retained source results\n"
+    assert sorted(path.name for path in (project / "input").iterdir()) == ["case.json"]
+    assert explorer.OVERRIDES.parent == Path("work/flow")
     summary = (output / "RESULT.md").read_text()
     assert all(row["name"] in summary for row in result["variants"])
 
 
 def test_variants_preserve_other_native_exclusions_and_settings(tmp_path):
-    (tmp_path / "input").mkdir()
+    (tmp_path / explorer.OVERRIDES).parent.mkdir(parents=True)
     (tmp_path / explorer.OVERRIDES).write_text(json.dumps({
         "EXTRA_EXCLUDED_CELLS": ["custom*", "*_1"], "FP_CORE_UTIL": 40}))
     variants = dict(explorer.variants(tmp_path))

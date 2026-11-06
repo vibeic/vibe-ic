@@ -151,9 +151,10 @@ def test_plain_native_overrides_apply_to_all_steps_after_platform_defaults(tmp_p
     from librelane.config import Config
     from flow_config import native_defaults
 
-    (tmp_path / "input").mkdir()
     override = {"EXTRA_EXCLUDED_CELLS": ["custom*", "*dly*", "*delay*"]}
-    (tmp_path / "input/native_overrides.json").write_text(json.dumps(override))
+    path = tmp_path / "work/flow/native_overrides.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(override))
     config = Config({"PDK": "gf180mcuD", "DESIGN_DIR": str(tmp_path)})
 
     resolved = native_defaults(config)
@@ -188,8 +189,8 @@ def declarations(project, rows):
 
 
 def test_plain_native_overrides_reach_native_configuration(project):
-    path = project / "input/native_overrides.json"
-    path.parent.mkdir()
+    path = project / "work/flow/native_overrides.json"
+    path.parent.mkdir(parents=True)
     value = {"EXTRA_EXCLUDED_CELLS": ["custom*"]}
     path.write_text(json.dumps(value))
     assert build_config(project)["EXTRA_EXCLUDED_CELLS"] == value["EXTRA_EXCLUDED_CELLS"]
