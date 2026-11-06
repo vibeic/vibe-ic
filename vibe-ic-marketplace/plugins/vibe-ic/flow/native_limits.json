@@ -3164,14 +3164,6 @@
         ]
       },
       {
-        "old_name": "klayout__antenna_error__count",
-        "class": "N",
-        "reason": "Existing native metric/report number and numeric limit unchanged.",
-        "native_metrics": [
-          "klayout__antenna_error__count"
-        ]
-      },
-      {
         "old_name": "route__antenna_violation__count",
         "class": "D",
         "reason": "Native antenna__violating__nets and antenna__violating__pins in this row."
