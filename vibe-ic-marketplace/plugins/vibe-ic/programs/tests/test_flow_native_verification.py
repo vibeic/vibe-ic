@@ -236,7 +236,7 @@ def test_native_formal_retries_enum_methods_with_original_assertions(tmp_path, c
 
 @pytest.mark.parametrize("kind", ["anyseq", "anyconst"])
 @pytest.mark.parametrize("different", [False, True])
-@pytest.mark.parametrize("declaration", ["wire", "variable", "fixed"])
+@pytest.mark.parametrize("declaration", ["wire", "variable", "fixed", "partial"])
 def test_slang_formal_preserves_declared_free_inputs(tmp_path, kind, different, declaration):
     if not all(shutil.which(name) for name in ("sby", "yosys", "sv2v", "yices-smt2")):
         pytest.skip("Native formal tools are required")
@@ -248,6 +248,8 @@ def test_slang_formal_preserves_declared_free_inputs(tmp_path, kind, different, 
     harness.write_text("module proof import types::*; (input clk);\n"
         f"(* {kind} *) {'wire ' if declaration == 'wire' else ''}state_t state;\n"
         + ("assign state=S0;\n" if declaration == "fixed" else "")
+        + ("assign state=state_t'(2'b0x);\n" if declaration == "partial" else "")
+        + "(* keep *) wire unrelated_x=1'bx;\n"
         + "function automatic bit outside_table(state_t sig);\n"
         "state_t value; return sig!=value.first(); endfunction\n"
         "reg valid=0; always @(posedge clk) begin valid<=1;\n"
@@ -261,15 +263,20 @@ def test_slang_formal_preserves_declared_free_inputs(tmp_path, kind, different, 
     output.mkdir()
     result = formal(tmp_path,output,{"top":"proof","properties":[str(deck)]},Commands(output))
     rows = [r for r in result["native_steps"] if r["name"] in {"SymbiYosys.prove","SymbiYosys.bmc"}]
-    expected = "NOT_MEASURED" if declaration != "wire" else "FAIL" if different else "PASS"
+    expected = "NOT_MEASURED" if declaration in {"fixed","partial"} else "FAIL" if different else "PASS"
     assert len(rows)==2 and {r["status"] for r in rows}=={expected},result
-    if declaration != "wire":
+    models = list(output.rglob("model/cover_inputs.json"))
+    assert len(models)==2
+    for model in models:
+        modules = json.loads(model.read_text())["modules"]
+        assert any(m["netnames"].get("unrelated_x",{}).get("bits")==["x"] for m in modules.values())
+    if declaration in {"fixed","partial"}:
         assert kind in result["detail"] and "free" in result["detail"],result
+        if declaration == "partial":
+            assert "1/2" in result["detail"],result
         assert "unproved_required_properties" not in result["metrics"],result
         assert {p:p.read_bytes() for p in originals}==originals
         return
-    models = list(output.rglob("model/cover_inputs.json"))
-    assert len(models)==2
     for model in models:
         modules = json.loads(model.read_text())["modules"]
         drivers = [cell for module in modules.values() for cell in module["cells"].values()
