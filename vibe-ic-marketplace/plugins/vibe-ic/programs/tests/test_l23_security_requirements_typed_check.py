@@ -22,6 +22,8 @@ import json
 import sys
 from pathlib import Path
 
+PROG = (Path(__file__).resolve().parent.parent
+        / "l23_security_requirements_typed_check.py")
 if str(PROG.parent) not in sys.path:
     sys.path.insert(0, str(PROG.parent))
 

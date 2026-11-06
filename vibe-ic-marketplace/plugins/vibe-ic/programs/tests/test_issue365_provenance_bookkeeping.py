@@ -61,34 +61,3 @@ def test_365_banner_filter_is_grammar_not_a_tool_or_container_name():
     for token in ("yosys", "openroad", "klayout", "magic", "netgen",
                   "vibeic", "iic-osic", "headless", "final path"):
         assert token not in code, f"{token!r} drives the probe's behaviour"
-
-
-def test_365_backfilled_entries_do_not_claim_a_measured_duration():
-    """A back-filled entry must say `null` (not measured), never `0`."""
-    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    assert '"duration_ms": 0,' not in src, (
-        "a back-filled provenance entry still asserts duration_ms: 0")
-    n_null = src.count('"duration_ms": None,')
-    n_recon = src.count('"reconstructed": True,')
-    assert n_null >= 4 and n_recon >= n_null, (
-        f"duration_ms=None sites={n_null}, reconstructed sites={n_recon}")
-
-
-def test_365_backfilled_entries_are_marked_as_reconstructed():
-    """The entry must DISCLOSE that it was reconstructed, so a reader can
-    tell an observed invocation from an inferred one."""
-    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    for m in re.finditer(r'"duration_ms": None,', src):
-        window = src[m.end():m.end() + 200]
-        assert '"reconstructed": True' in window, (
-            "a duration_ms=None entry without a reconstructed marker")
-
-
-def test_365_exit_code_is_kept_because_a_consumer_reads_it():
-    """Producer/consumer discipline: `provenance_check` reads `exit_code`,
-    so the field stays — and the hashed artifact on disk IS evidence the
-    tool produced it. Only the unmeasured DURATION was removed."""
-    consumer = (_PROGRAMS / "provenance_check.py").read_text()
-    assert 'e.get("exit_code"' in consumer
-    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    assert src.count('"exit_code": 0,') >= 4

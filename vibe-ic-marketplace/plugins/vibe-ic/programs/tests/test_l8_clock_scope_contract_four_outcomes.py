@@ -227,3 +227,13 @@ def test_report_path_is_the_producers_own_constant():
     import submission_template_fetch as F  # noqa: PLC0415
     assert S.RUN_PDK_REPORT_REL == F.REPORT_REL
     assert sdc_gen._RUN_PDK_REPORT_REL == F.REPORT_REL
+
+
+def test_outcome2_names_itself_in_the_summary(tmp_path):
+    """R-0915-6: the summary must SAY `unscoped_design_owned`. A fallback a
+    reader cannot see is a fallback nobody can audit."""
+    assert S.UNSCOPED_SUMMARY_TOKEN == "unscoped_design_owned"
+
+
+def test_outcome4_and_outcome3_are_distinct_rules(tmp_path):
+    assert S.NOT_MEASURED != S.MISMATCH
