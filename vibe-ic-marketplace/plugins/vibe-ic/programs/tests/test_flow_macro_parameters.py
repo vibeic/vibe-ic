@@ -127,3 +127,18 @@ def test_missing_parent_parameter_metadata_does_not_use_child_defaults(tmp_path,
     assert engine.evaluate(engine.ToolResult(**result), []) == "NOT_MEASURED", result
     assert "did not resolve child parameters" in result["detail"] and "WIDTH" in result["detail"]
     assert children == []
+
+
+def test_parent_uses_native_shared_macro_definition_context(tmp_path, monkeypatch):
+    source = design(tmp_path)
+    (source / "widths.v").write_text("`define BUS_WIDTH 9\n")
+    wrapper = source / "wrapper.v"
+    wrapper.write_text(wrapper.read_text().replace("parameter BUS=9", "parameter BUS=`BUS_WIDTH"))
+    config = source / "wrapper.json"
+    raw = json.loads(config.read_text())
+    raw["VERILOG_FILES"] = [str(source / "widths.v"), str(wrapper)]
+    config.write_text(json.dumps(raw))
+    result, children, _ = execute(tmp_path, monkeypatch)
+    assert len(children) == 1, result
+    child_config = json.loads((children[0] / "work/flow/native_overrides.json").read_text())
+    assert child_config["SYNTH_PARAMETERS"] == ["WIDTH=9"]

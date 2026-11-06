@@ -66,6 +66,9 @@ def native_hierarchy(config, directory, commands):
     directory.mkdir(parents=True, exist_ok=True)
     arguments = ["--top", config["DESIGN_NAME"], "--dump-ast", "--ast-compilation-only",
                  *(config.get("SLANG_ARGUMENTS") or [])]
+    if not config.get("USE_SLANG"):
+        # Native read_verilog retains macro definitions across its input files.
+        arguments.append("--single-unit")
     arguments += ["-G" + value for value in config.get("SYNTH_PARAMETERS") or []]
     defines = [*(config.get("VERILOG_DEFINES") or []), "__librelane__", "__pnr__",
                "PDK_" + config["PDK"].replace("-", "_"), "SCL_" + config["STD_CELL_LIBRARY"]]
