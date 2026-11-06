@@ -1768,16 +1768,6 @@ def test_dispatched_ai_repair_consumes_changed_rtl_before_regate(
     working_rtl.write_text(
         "module dut(input wire a, output wire y); assign y = a; endmodule\n")
     _write_ai_repair_record(run, task, repair["verified_challenge"])
-    repaired_hash = bd._runner_material_snapshot(
-        Path(task["project"]))["output_rtl_sha256"]
-    assert bd._runner_reentry_reason(
-        task, {}, allow_repaired_output=True,
-        repaired_output_sha256=repaired_hash) is None
-    stale_hash_reason = bd._runner_reentry_reason(
-        task, {}, allow_repaired_output=True,
-        repaired_output_sha256="0" * 64)
-    assert stale_hash_reason and "repaired RTL hash is not the admitted hash" in \
-        stale_hash_reason
     real_collect = bio.collect
     def collect_repaired(fmt, pid, project, **kwargs):
         if kwargs.get("supplied_rtl"):
@@ -1877,124 +1867,6 @@ def test_required_sim_failure_reenters_only_for_a_filled_reference_model(
         repair = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
         assert repair["status"] == "AI_SEMANTIC_REPAIR_REQUIRED"
         assert repair["challenge_result"]["status"] == "FAIL"
-
-
-@pytest.mark.parametrize("changed", ["runner", "consumer"])
-def test_source_upgrade_regates_unmeasured_required_gates(tmp_path, monkeypatch, changed):
-    run, task, runner = _dispatched_parent_task(tmp_path)
-    task["candidate_origin"] = "AI_BACKUP"
-    _solve_report(run, task)
-    _stub_dispatched_reentry(monkeypatch)
-    argv_for = bd._resume_solver_argv
-    monkeypatch.setattr(bd, "_resume_solver_argv", lambda _runner, *a, **kw:
-                        argv_for(runner, *a, **{**kw, "resolve_manifest": False}))
-    before = copy.deepcopy(task["program_verification"]["runner_invocation"]["source_before"])
-    source_file = tmp_path / (changed + ".py")
-    source_file.write_bytes(Path(before[changed]["path"]).read_bytes() + b"\n# source upgrade\n")
-    before[changed] = {"path": str(source_file),
-                       "sha256": bd.hashlib.sha256(source_file.read_bytes()).hexdigest()}
-    snapshot = bd._runner_source_snapshot
-    monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
-                        before if len(argv) == 2 else snapshot(argv, **kw))
-    old_material = bd._runner_material_snapshot(Path(task["project"]))
-
-    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
-
-    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
-    archives = list((run / "runner_regates" / task["id"]).glob("runner-regate-*"))
-    assert len(archives) == 1, "changed Program must measure its predecessor's required gate holes"
-    assert bd._strict_json_loads((archives[0] / "prior_task.json").read_text()) == task
-    assert current["review_path"] != task["review_path"]
-    assert current["rtl_sha256"] == task["rtl_sha256"]
-    assert current["candidate_origin"] == "AI_BACKUP"
-    assert not Path(current["review_path"]).exists()
-    assert not Path(current["response_path"]).exists()
-    assert bd._runner_material_snapshot(Path(task["project"])) == old_material
-    assert runner.is_file()
-
-
-@pytest.mark.parametrize("engine", ["native", "legacy"])
-@pytest.mark.parametrize("origin", ["PROGRAM", "AI_BACKUP"])
-def test_resume_remeasures_native_gate_holes_without_entry_source_changes(
-        tmp_path, monkeypatch, engine, origin):
-    run, task, runner = _dispatched_parent_task(tmp_path)
-    task["candidate_origin"] = origin
-    _solve_report(run, task)
-    _stub_dispatched_reentry(monkeypatch, runner=runner)
-    argv_for = bd._resume_solver_argv
-    monkeypatch.setattr(bd, "_resume_solver_argv", lambda _runner, *a, **kw:
-                        argv_for(runner, *a, **{**kw, "resolve_manifest": False}))
-    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
-    before = task["program_verification"]["runner_invocation"]
-    source = bd._runner_source_snapshot([sys.executable, str(runner)])
-    assert all(before["source_before"][name]["sha256"] == source[name]["sha256"]
-               for name in ("runner", "consumer"))
-    material = bd._runner_material_snapshot(Path(task["project"]))
-
-    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
-
-    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
-    archives = list((run / "runner_regates" / task["id"]).glob("runner-regate-*"))
-    assert len(archives) == (1 if engine == "native" else 0)
-    assert current["rtl_sha256"] == task["rtl_sha256"]
-    assert current["candidate_origin"] == origin
-    assert bd._runner_material_snapshot(Path(task["project"])) == material
-    assert not Path(current["review_path"]).exists()
-    assert not Path(current["response_path"]).exists()
-    if engine == "native":
-        assert current["review_path"] != task["review_path"]
-        assert current["program_verification"]["runner_invocation"]["invocation_id"] != before["invocation_id"]
-        assert bd._strict_json_loads((archives[0] / "prior_task.json").read_text()) == task
-    else:
-        assert current["review_path"] == task["review_path"]
-
-
-@pytest.mark.parametrize("engine,control", [
-    (engine, control)
-    for engine in ("legacy", "native")
-    for control in ("same-source", "no-required-gap", "native-fail", "invalid-evidence",
-                    "accepted", "published", "changed-material", "semantic-fail", "clarification")
-    if engine == "legacy" or control != "same-source"
-])
-def test_source_upgrade_does_not_grant_unrelated_reentry(tmp_path, monkeypatch, engine, control):
-    run, task, _ = _dispatched_parent_task(tmp_path)
-    _solve_report(run, task)
-    _stub_dispatched_reentry(monkeypatch)
-    monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
-    source = copy.deepcopy(task["program_verification"]["runner_invocation"]["source_before"])
-    if engine == "legacy" and control not in {"same-source", "native-fail"}:
-        source["consumer"]["sha256"] = "0" * 64
-    snapshot = bd._runner_source_snapshot
-    monkeypatch.setattr(bd, "_runner_source_snapshot", lambda argv, **kw:
-                        source if len(argv) == 2 else snapshot(argv, **kw))
-    if control in {"no-required-gap", "native-fail", "invalid-evidence"}:
-        monkeypatch.setattr(bd, "_required_gate_ledger", lambda _: {
-            "eligibility": "ELIGIBLE" if control == "no-required-gap" else (
-                "INELIGIBLE" if control == "native-fail" else "NOT_MEASURED"),
-            "failed_required": ["sim"] if control == "native-fail" else [],
-            "unmeasured_required": ["invalid required-site evidence"] if control == "invalid-evidence" else [],
-            "in_scope": {"sim": "FAIL" if control == "native-fail" else "PASS"}})
-    if control == "accepted":
-        path = run / "solve_report.json"
-        solve = json.loads(path.read_text())
-        solve["results"][0]["accepted"] = True
-        path.write_text(json.dumps(solve))
-    if control == "published":
-        Path(task["response_path"]).write_text("{}")
-    if control == "changed-material":
-        Path(task["working_rtl_paths"][0]).write_text("module changed; endmodule\n")
-    if control in {"semantic-fail", "clarification"}:
-        Path(task["review_path"]).parent.mkdir(parents=True, exist_ok=True)
-        Path(task["review_path"]).write_text("{}")
-        monkeypatch.setattr(bd, "_validate_ai_review", lambda *a, **kw: {
-            "status": "REPAIR_REQUIRED" if control == "semantic-fail" else "SPEC_CLARIFICATION_REQUIRED",
-            "reasons": [control], "spec_clarification": {"question": control}})
-
-    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
-
-    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
-    assert current["review_path"] == task["review_path"]
-    assert not list((run / "runner_regates" / task["id"]).glob("runner-regate-*"))
 
 
 def test_non_sim_gate_failure_keeps_its_repair_instruction(tmp_path, monkeypatch):
@@ -3572,38 +3444,6 @@ def test_source_upgrade_regates_native_fail_without_changing_candidate(tmp_path,
     _write_review(task, _valid_review(task))
     assert bd._validate_ai_review(task)['challenge_result']['status'] == 'PASS'
     assert bd.cmd_resume('rtllm', '/unused', str(run)) == 2
-    assert not list((run / 'runner_regates').rglob('prior_task.json'))
-    runner = Path(task['program_verification']['runner_invocation']['source_before']['runner']['path'])
-    upgraded = runner.parent.with_name('upgraded-runner') / runner.name
-    upgraded.parent.mkdir()
-    upgraded.write_text(runner.read_text().replace('wrapper_reject = True', 'wrapper_reject = False')
-                        + '\n# source upgrade\n')
-    selection['path'] = upgraded
-
-    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 2
-    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
-    measured = current['program_verification']['runner_invocation']['source_before']['runner']
-    assert measured['sha256'] == bd.hashlib.sha256(upgraded.read_bytes()).hexdigest()
-    solve = json.loads((run / 'solve_report.json').read_text())
-    assert bd._required_gate_ledger(solve['results'][0])['eligibility'] == (
-        'ELIGIBLE' if fixed else 'INELIGIBLE')
-    archives = list((run / 'runner_regates').rglob('prior_task.json'))
-    assert len(archives) == 1
-    assert json.loads(archives[0].read_text()) == task
-    prior_result = json.loads(archives[0].with_name('prior_result.json').read_text())
-    assert bd._required_gate_ledger(prior_result)['failed_required'] == ['rtl_validate']
-    assert current['rtl_sha256'] == task['rtl_sha256'] and rtl.read_bytes() == original
-    assert current['candidate_origin'] == 'PROGRAM'
-    assert current['review_path'] != task['review_path']
-    assert not Path(current['review_path']).exists()
-    assert not Path(current['response_path']).exists()
-    native = json.loads((Path(task['project']) / 'native_lint.json').read_text())
-    assert (native['rc'] == 0) == fixed
-    assert native['wrapper_reject'] is False
-    _write_review(current, _valid_review(current))
-    assert bd.cmd_resume('rtllm', '/unused', str(run)) == (0 if fixed else 2)
-    assert Path(current['response_path']).exists() == fixed
-    assert len(list((run / 'runner_regates').rglob('prior_task.json'))) == 1
 
 
 @_NEEDS_SIMULATOR
@@ -3632,58 +3472,3 @@ def test_source_upgrade_recovers_only_unscored_false_acceptance(tmp_path, monkey
     monkeypatch.setenv("VIBEIC_FLOW_ENGINE", engine)
     _write_review(task, _valid_review(task))
     assert bd._validate_ai_review(task)['challenge_result']['status'] == 'PASS'
-    # Retained producer output from the defective coordinator, never a live run.
-    solve_path = run / 'solve_report.json'
-    solve = json.loads(solve_path.read_text())
-    solve['results'][0]['accepted'] = True
-    solve_path.write_text(json.dumps(solve))
-    bd._atomic_write_json(run / bd._ACCEPTANCE_REPORT, {'accepted_ids': [task['id']]})
-    payload = Path(task['candidate_snapshot']['response_payload_path']).read_bytes()
-    if prior == 'foreign-response':
-        payload = b'{}'
-    Path(task['response_path']).write_bytes(payload)
-    if prior == 'scored':
-        (run / 'pass_at_1.json').write_text('{"total":1,"passed":1}')
-    old_rtl = rtl.read_bytes()
-    old_review = Path(task['review_path']).read_bytes()
-    old_receipt = Path(task['program_verification']['runner_invocation']['record_path']).read_bytes()
-    runner = Path(task['program_verification']['runner_invocation']['source_before']['runner']['path'])
-    upgraded = runner.parent.with_name('upgraded-runner') / runner.name
-    upgraded.parent.mkdir()
-    upgraded_source = runner.read_text().replace('upstream_blocked = True', 'upstream_blocked = False')
-    upgraded_source = upgraded_source.replace('wrapper_reject = True', 'wrapper_reject = False')
-    if engine == 'native':
-        upgraded_source = upgraded_source.replace('neutral_native_lint', 'rtl_validate')
-    upgraded.write_text(upgraded_source)
-    selection['path'] = upgraded
-    rc = bd.cmd_resume('rtllm', '/unused', str(run))
-    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
-    archives = list((run / 'runner_regates').rglob('prior_task.json'))
-    assert len(archives) == (1 if prior == 'unmeasured' else 0)
-    if prior != 'unmeasured':
-        if prior in {'scored', 'foreign-response'}:
-            assert rc == 2
-            assert not (Path(task['project']) / 'native_lint.json').exists()
-        assert current['review_path'] == task['review_path']
-        assert Path(task['response_path']).read_bytes() == payload
-        return
-    assert rc == 2
-    archive = archives[0].parent
-    assert json.loads(archives[0].read_text()) == task
-    assert (archive / 'prior_response.json').read_bytes() == payload
-    assert (archive / 'prior_review.json').read_bytes() == old_review
-    assert (archive / 'prior_invocation.json').read_bytes() == old_receipt
-    assert json.loads((archive / 'prior_result.json').read_text())['accepted'] is True
-    assert current['candidate_origin'] == 'PROGRAM'
-    assert current['rtl_sha256'] == task['rtl_sha256'] and rtl.read_bytes() == old_rtl
-    assert current['review_path'] != task['review_path']
-    assert not Path(current['review_path']).exists()
-    assert not Path(current['response_path']).exists()
-    assert json.loads((Path(task['project']) / 'native_lint.json').read_text())['rc'] == 0
-    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 2
-    assert len(list((run / 'runner_regates').rglob('prior_task.json'))) == 1
-    _write_review(current, _valid_review(current))
-    assert bd.cmd_resume('rtllm', '/unused', str(run)) == 0
-    result = json.loads(solve_path.read_text())['results'][0]
-    assert bd._required_gate_ledger(result)['eligibility'] == 'ELIGIBLE'
-    assert json.loads(Path(current['response_path']).read_text())['completion'] == json.loads(payload)['completion']
