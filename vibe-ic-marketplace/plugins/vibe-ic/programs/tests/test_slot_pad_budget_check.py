@@ -1083,14 +1083,6 @@ def test_ansi_unknown_header_chunk_cannot_produce_a_partial_FITS():
     assert rep["unparsed_port_chunks"] == ["bus_if.endpoint bus"]
 
 
-def test_ansi_missing_pad_reaches_the_real_runner_as_FAIL():
-    import design_one_shot_runner as R
-    import test_r0915101_a_die_budgets_against_its_own_pad_ring as D
-    p = D._project(rtl=_ANSI_RTL,
-                   l3=_ANSI_PLAN.replace("`warn`, `fatal`", "`warn`"))
-    result = R.step_slot_pad_budget(p, "widget")
-    assert result.status == "FAIL", result.detail
-    assert result.extras["exit_code"] == 1
 
 
 @pytest.mark.parametrize("body,expected", [

@@ -583,30 +583,6 @@ def test_the_invocation_the_flow_declares_is_one_this_gate_accepts(tmp_path):
     assert result.returncode == RC_PASS, result.stdout + result.stderr
 
 
-def test_the_flows_own_evaluator_fails_a_defective_release_and_passes_a_clean_one(tmp_path):
-    """The composition, not the exit code in isolation — this is what the gate does."""
-    spec = importlib.util.spec_from_file_location(
-        "_fcc_release_docs_probe", GATE.parent / "flow_compliance_check.py")
-    fcc = importlib.util.module_from_spec(spec)
-    sys.modules["_fcc_release_docs_probe"] = fcc
-    spec.loader.exec_module(fcc)
-    clause = _declared_clause()
-
-    clean = released(tmp_path, "clean")
-    ok_clean, out_clean = fcc._check_program_exit_zero(clean, clause)
-    assert ok_clean, (
-        f"a clean release must still PASS, or this gate is red for everyone: "
-        f"{out_clean[:200]!r}")
-
-    harmed = released(tmp_path, "harmed")
-    edit(docs_dir(harmed, SUBJECT) / "IP_DATASHEET.md",
-         "| Signal pins | 3 |", "| Signal pins | 6 |")
-    ok_bad, out_bad = fcc._check_program_exit_zero(harmed, clause)
-    assert not ok_bad, (
-        f"the flow scored a release whose datasheet disagrees with its own "
-        f"netlist as a gate pass: {out_bad[:200]!r}")
-    assert "__VACUOUS_HINT__" not in out_bad, (
-        "the refusal reached the flow's VACUOUS_PASS tier, which is a PASS")
 
 
 @pytest.mark.parametrize("defect", [

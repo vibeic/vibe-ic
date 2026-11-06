@@ -23,7 +23,13 @@ def native_exec(monkeypatch, tmp_path):
         "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "args = sys.argv[1:]\n"
         "if len(args) < 3 or args[0] != 'exec': sys.exit(1)\n"
-        "command = args[2:]\n"
+        "index = 1\n"
+        "while args[index].startswith('-'):\n"
+        "    flag, value = args[index:index+2]\n"
+        "    if flag in ('-e', '--env'): key, val = value.split('=', 1); os.environ[key] = val\n"
+        "    elif flag in ('-w', '--workdir'): os.chdir(value)\n"
+        "    index += 2\n"
+        "command = args[index+1:]\n"
         "os.execvp(command[0], command)\n"
     )
     docker.chmod(0o755)
@@ -40,7 +46,8 @@ def native_exec(monkeypatch, tmp_path):
 
 def test_selected_container_and_exec_options_are_preserved(native_exec):
     assert ce.docker_exec_argv("selected", "cat", "/work/result", opts=("-w", "/work")) == [
-        "docker", "exec", "-w", "/work", "selected", "cat", "/work/result"
+        "docker", "exec", *ce._vtmp.container_env(), "-w", str(ce._vtmp.scratch()),
+        "-w", "/work", "selected", "cat", "/work/result"
     ]
 
 
@@ -54,7 +61,7 @@ def test_native_stdout_stderr_and_exit_code_are_returned(native_exec, native_rc)
     assert result.stderr == "native stderr"
     assert ce.describe_result(result, 5) is None
     commands = [json.loads(line) for line in native_exec.read_text().splitlines()]
-    assert any(command[:6] == ["exec", "selected", "timeout", "-k", "5", "5"]
+    assert any(command[command.index("selected"):][:5] == ["selected", "timeout", "-k", "5", "5"]
                for command in commands)
 
 
@@ -76,5 +83,5 @@ def test_supervised_native_result_and_pidfile_cleanup(native_exec, monkeypatch, 
     assert result.stdout == "native supervised output"
     assert not pidfile.exists()
     commands = [json.loads(line) for line in native_exec.read_text().splitlines()]
-    assert any(command[:4] == ["exec", "selected", "bash", "-c"] for command in commands)
+    assert any(command[command.index("selected"):][:3] == ["selected", "bash", "-c"] for command in commands)
     assert any("rm -f" in command[-1] for command in commands)

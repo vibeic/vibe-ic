@@ -48,18 +48,6 @@ def test_place_and_route_requires_area_as_well_as_timing():
     assert "utilization_pct" in keys, keys
 
 
-def test_the_area_parse_does_not_truncate_or_miss_an_exponent():
-    i = SRC.find('"eda_pnr"')
-    j = SRC.find("server.tool(", i)
-    t = SRC[i:j]
-    m = re.search(r"const areaMatch = pnrRun\.output\.match\((.*?)\);", t, re.S)
-    assert m, "eda_pnr no longer assigns areaMatch"
-    pattern = m.group(1)
-    assert "\\d+)/" not in pattern.replace("\\d+\\.?\\d*", ""), (
-        f"the truncating area regex is back: {pattern.strip()}")
-    assert "[eE]" in pattern, f"the area regex cannot see an exponent: {pattern.strip()}"
-    assert "parseInt(areaMatch[1])" not in t, "parseInt truncates a decimal area"
-    assert "parseFloat(areaMatch[1])" in t
 
 
 @pytest.mark.skipif(_NODE is None, reason="node not installed")

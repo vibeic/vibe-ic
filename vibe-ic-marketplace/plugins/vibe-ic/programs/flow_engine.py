@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 from typing import Any
+import vibeic_temp
 
 from flow_engine_timing import timing_summary
 
@@ -321,7 +322,7 @@ class NativeChain:
         os.environ["_OPENLANE_MAX_CORES"] = "8"
         self.owner = Flow.factory.get(kind)(config, design_dir=str(self.project),
                                             pdk_root=os.environ.get("PDK_ROOT"))
-        self.toolbox = Toolbox(str(self.project / "work/flow/tool_tmp"))
+        self.toolbox = Toolbox(str(vibeic_temp.current_run() / "tool_tmp"))
         self.owner.config = native_defaults(self.owner.config)
         self.config = self.owner.config.to_raw_dict()
         self.state = State()
@@ -696,15 +697,16 @@ def finish_step(project, row, tool, native, config, features, *, elapsed,
         native.reports.extend(preparation.reports)
         if preparation.exit_code:
             native.exit_code = preparation.exit_code
+    reader_observations = []
     for reader in tool.get("report_readers", []):
         module, function = reader["reader"].rsplit(".", 1)
         source = directory / reader["native_step"].lower().replace(".", "_")
         report = getattr(importlib.import_module(module), function)(
-            source, read_json(source / "config.json") or config)
+            source, read_json(source / "config.json") or config, project=project)
         native.metrics.update(report.get("metrics", {}))
         native.reports.extend(report.get("reports", []))
         native.detail += " " + report.get("detail", "")
-    reader_observations = []
+        reader_observations.extend(report.get("observations", []))
     checks = [check for check in row["checks"] if check.get("when") != "otherwise"
               or tool.get("selected_profile", "otherwise") == "otherwise"]
     for reader in tool.get("check_readers", []):
@@ -758,6 +760,30 @@ def keep_author_failure(directory: Path) -> None:
 
 
 def run(project: Path | str, *, table: dict | None = None, route: dict | None = None,
+        from_name: str | None = None, to_name: str | None = None,
+        pdk: str | None = None, keep_temp: bool = False) -> dict:
+    project = Path(project).resolve()
+    with vibeic_temp.execution("flow", project.name, keep=keep_temp,
+                               destination=project / "reports/native") as work:
+        try:
+            result = _run(project, table=table, route=route,
+                          from_name=from_name, to_name=to_name, pdk=pdk)
+        finally:
+            if work.publish() is not None:
+                paths = [path for folder in ("steps", "reports", "phase1", "phase2", "phase3")
+                         for path in (project / folder).glob("**/*.json")]
+                for path in paths:
+                    try:
+                        before = read_json(path)
+                    except (ValueError, OSError):
+                        continue
+                    after = vibeic_temp.relocate(before, work.mapping)
+                    if after != before:
+                        write_json(path, after)
+        return vibeic_temp.relocate(result, work.mapping)
+
+
+def _run(project: Path | str, *, table: dict | None = None, route: dict | None = None,
         from_name: str | None = None, to_name: str | None = None,
         pdk: str | None = None) -> dict:
     project = Path(project).resolve()
@@ -973,6 +999,7 @@ def main() -> int:
     command.add_argument("--from", dest="from_name")
     command.add_argument("--to", dest="to_name")
     command.add_argument("--pdk")
+    command.add_argument("--keep-temp", action="store_true")
     review = sub.add_parser("review")
     review.add_argument("--project", type=Path, required=True)
     review.add_argument("--step", required=True)
@@ -988,7 +1015,7 @@ def main() -> int:
         if args.action == "report":
             print(json.dumps(refresh_report(args.project), default=str))
             return 0
-        result = run(args.project, from_name=args.from_name, to_name=args.to_name, pdk=args.pdk)
+        result = run(args.project, from_name=args.from_name, to_name=args.to_name, pdk=args.pdk, keep_temp=args.keep_temp)
     except (ValueError, FileNotFoundError, KeyError) as exc:
         print(f"NOT_MEASURED: {exc}", file=sys.stderr)
         return 2

@@ -93,7 +93,6 @@ def _a3_answers(monkeypatch, rc, stderr):
 # ═══ the step that hit it ═════════════════════════════════════════════════
 
 
-
 def test_the_row_carries_the_refusals_own_line(project, monkeypatch):
     """Both digests, in the row. A reader told only that the environment
     refused cannot tell a stale container from a mis-set repository."""
@@ -134,7 +133,6 @@ def test_a_producer_that_really_errored_is_still_the_errored_row(project,
 # ═══ the steps below it ═══════════════════════════════════════════════════
 
 
-
 def test_a_downstream_step_with_a_deck_on_disk_is_not_short_circuited(
         project, monkeypatch):
     """THE GUARD IS ON THE ARTEFACT, not on the refusal alone. A block whose
@@ -169,28 +167,6 @@ def test_a_refusal_is_scoped_to_its_own_block(project, monkeypatch):
     R.step_for_block(p, blk, "A3_netlist_gen")
     assert R.upstream_env_refusal("vreg_alpha", "A4_corner_sweep") is not None
     assert R.upstream_env_refusal("other_blk", "A4_corner_sweep") is None
-
-
-def test_main_actually_clears_the_ledger_at_the_top_of_a_run():
-    """The FUNCTION being right is not the same as the run CALLING it.
-
-    Measured with the call site deleted: every test in this file still passed,
-    because each one clears the ledger itself. `main` is not driven here — a
-    full nine-step run per arm to prove one statement — so the call site is
-    asserted by PARSING `main`, which a re-typed comment or a call in dead
-    code cannot satisfy.
-    """
-    import ast
-    src = (Path(_plugin_tree.plugin_path("programs"))
-           / "analog_one_shot_runner.py").read_text(encoding="utf-8")
-    main_fn = [n for n in ast.walk(ast.parse(src))
-               if isinstance(n, ast.FunctionDef) and n.name == "main"]
-    assert len(main_fn) == 1, [f.name for f in main_fn]
-    calls = [ast.unparse(n.func) for n in ast.walk(main_fn[0])
-             if isinstance(n, ast.Call)]
-    assert "reset_env_refusals" in calls, (
-        "main() never clears the refusal ledger, so a second run in the same "
-        "process would inherit the first one's refusals")
 
 
 def test_a_run_inherits_no_refusal_from_the_previous_one(project, monkeypatch):

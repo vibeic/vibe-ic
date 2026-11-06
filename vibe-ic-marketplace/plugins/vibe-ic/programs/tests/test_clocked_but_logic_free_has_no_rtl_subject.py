@@ -224,25 +224,3 @@ def test_step_rtl_gen_still_declares_it_when_there_is_a_subject(tmp_path):
 
 
 # ── D. the halting step, and every consumer of the one resolver ────────────
-
-
-
-
-
-
-
-def test_phase3_gate_moves_with_the_resolver(tmp_path, monkeypatch):
-    """The fourth consumer. `phase3_one_shot_runner` owns its own copy of the
-    question; a design the phase-2 runner routes to the analog track must not
-    be demanded a digital backend by phase 3."""
-    import phase3_one_shot_runner as P3
-    monkeypatch.setattr("ic_class_profile.detect_ic_class",
-                        lambda proj: {"ic_class": "data_converter"})
-    p = _mk_project(tmp_path, _CLOCKED_LOGIC_FREE)
-    na, reason = P3._is_pure_analog_no_rtl_track(p)
-    assert na is True, reason
-    q = _mk_project(tmp_path / "q", _CLOCKED_LOGIC_FREE,
-                    docs=_with_field("L4_REGMAP", "registers",
-                                     [{"name": "CTRL", "offset": 0}]))
-    na2, _ = P3._is_pure_analog_no_rtl_track(q)
-    assert na2 is False

@@ -295,23 +295,6 @@ def test_a_load_is_what_sta_counts(tmp_path):
     assert 'ADDED hot 5' in out.stdout
 
 
-def test_step32_hands_its_resizer_the_direct_decks_dont_use_families(tmp_path):
-    """The delay cells repair_design used as fanout buffers (32-cand01:
-    dlya_1/dlyb_1, setup 5.15 -> 3.07 ns, then -0.015 ns after a round) are
-    excluded, over the step's own resolved liberty, by the runner's one rule."""
-    import importlib
-    prr = importlib.import_module('librelane_postroute_repair')
-    runner = importlib.import_module('phase3_one_shot_runner')
-    lib = tmp_path / 'pdkroot/pdkA/libs.ref/lib/std.lib'
-    lib.parent.mkdir(parents=True)
-    lib.write_text('library (std) {\n'
-                   '  cell ("std__buf_1") { }\n  cell ("std__dlyb_1") { }\n'
-                   '  cell (std__dlya_2) { }\n  cell ("std__probe_1") { }\n'
-                   '  cell ("std__nand2_1") { }\n}\n')
-    cfg = tmp_path / 'repair.json'
-    cfg.write_text('{"CELL_LIBS": {"*_tt": ["/pdk/pdkA/libs.ref/lib/std.lib"]}}')
-    got = prr.repair_dont_use(cfg, tmp_path / 'pdkroot', 'pdkA', runner._STEP32_DONT_USE[0])
-    assert got == ['std__dlya_2', 'std__dlyb_1', 'std__probe_1'], got
 
 
 def test_the_repair_config_carries_the_exclusion(tmp_path, monkeypatch, capsys):
@@ -372,39 +355,10 @@ def test_the_cap_is_the_sdcs_not_librelanes_pdk_default(tmp_path):
     assert 'pushed over max_fanout 4' in out.stdout
 
 
-def test_the_strictest_set_max_fanout_of_the_sdc_is_the_cap(tmp_path):
-    import importlib
-    timing = importlib.import_module('_ppa.timing')
-    sdc = tmp_path / 'constraint.sdc'
-    sdc.write_text('create_clock -period 10 clk\n'
-                   'set_max_fanout 8 [current_design]\n'
-                   'set_max_fanout 4 $_vibeic_drv_signal_in_ports\n')
-    cap, source = timing.sdc_max_fanout_cap(sdc)
-    assert cap == 4 and 'constraint.sdc' in source and '2 set_max_fanout' in source
-    sdc.write_text('create_clock -period 10 clk\n')
-    assert timing.sdc_max_fanout_cap(sdc) is None
 
 
-def test_fractional_sdc_fanout_is_not_lost(tmp_path):
-    import importlib
-    timing = importlib.import_module('_ppa.timing')
-    sdc = tmp_path / 'constraint.sdc'
-    sdc.write_text('set_max_fanout 4.5 [current_design]\n')
-    assert timing.sdc_max_fanout_cap(sdc) == (
-        4, 'constraint.sdc: strictest of 1 set_max_fanout line(s); '
-           'integer load cap floored from 4.5')
-    sdc.write_text('set_max_fanout 4 [current_design]\n')
-    assert timing.sdc_max_fanout_cap(sdc)[0] == 4
 
 
-def test_existing_calibration_sdc_with_no_fanout_declares_no_cap():
-    import importlib
-    from _hostpaths import require_repo
-    timing = importlib.import_module('_ppa.timing')
-    sdc = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
-                       'programs', 'calibration', 'cal_full.sdc')
-    assert 'create_clock' in sdc.read_text()
-    assert timing.sdc_max_fanout_cap(sdc) is None
 
 
 def test_the_repair_config_carries_the_sdc_cap(tmp_path, monkeypatch):

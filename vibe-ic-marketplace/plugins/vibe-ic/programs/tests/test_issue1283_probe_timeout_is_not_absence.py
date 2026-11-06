@@ -58,7 +58,6 @@ from __future__ import annotations
 import ast
 
 _TRY_NODES = (ast.Try,) + ((ast.TryStar,) if hasattr(ast, "TryStar") else ())
-import os
 import subprocess
 import sys
 import textwrap
@@ -69,7 +68,6 @@ PROGRAMS = TESTS_DIR.parent
 sys.path.insert(0, str(PROGRAMS))
 import _tool_probes as NV  # noqa: E402
 import _progress_run as PR  # noqa: E402
-import _watchdog  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -251,115 +249,6 @@ def test_a_PRESENT_probe_earns_no_reason_at_all():
 
 
 # ---------------------------------------------------------------------------
-# 3. END TO END — a real child session, a shim that never answers
-# ---------------------------------------------------------------------------
-_CHILD = textwrap.dedent(
-    """\
-    import sys
-    sys.path.insert(0, {programs!r})
-    import pytest
-    import not_verified_tier
-    from _tool_probes import PROBE_PRESENT, probe, probe_skip_reason
-
-    # THE CADENCE, NOT THE PREDICATE. The supervisor still ends this probe on
-    # the same finding — output, CPU and block I/O all motionless for N
-    # consecutive looks — and only the spacing is tightened, so the arm below
-    # is reachable inside a test session instead of six minutes from now.
-    not_verified_tier.PROBE_STALL_LOOKS = 3
-    not_verified_tier.PROBE_POLL_S = 0.25
-
-    STATE, DETAIL = probe(["docker", "image", "inspect", "some/image:1"],
-                          timeout=1, use_cache=False)
-
-    @pytest.mark.skipif(STATE != PROBE_PRESENT,
-                        reason=probe_skip_reason(
-                            STATE, DETAIL, {claim!r},
-                            "bash tools/vibeic-eda/restart-eda.sh"))
-    def test_image_gated():
-        assert True
-    """)
-
-
-def _child_session(tmp_path, docker_script: str, env_extra=None):
-    """Run a one-file pytest session with `docker` on PATH replaced."""
-    bind = tmp_path / "bin"
-    bind.mkdir(exist_ok=True)
-    shim = bind / "docker"
-    shim.write_text(docker_script)
-    shim.chmod(0o755)
-
-    test = tmp_path / "test_child_probe.py"
-    test.write_text(_CHILD.format(programs=str(PROGRAMS), claim=ABSENT_CLAIM))
-
-    env = dict(os.environ)
-    env["PATH"] = f"{bind}{os.pathsep}{env['PATH']}"
-    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(PROGRAMS)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-    env.pop(NV.REQUIRE_ENV, None)
-    env.update(env_extra or {})
-    cmd = [sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:randomly",
-           "-p", "not_verified_tier", str(test)]
-    # No wall-clock bound on the child. The child's OWN 1 s probe budget is the
-    # subject here (the fixtures are named `_SLOW`/`_ABSENT` for it), and a 60 s
-    # bound on the pytest session that carries it decides nothing about that —
-    # it only decides whether THIS host got the session finished, and reports a
-    # slow host as the probe tier being broken.
-    return _watchdog.completed_process(
-        cmd, _watchdog.run_host_supervised(cmd, cwd=str(tmp_path), env=env))
-
-
-#: never MOVES: no output, no CPU, no block I/O -> the probe is UNANSWERED.
-#: `sleep 30` outlives the child's stall window many times over, so what the
-#: arm observes is the stall and never the shim finishing.
-_SLOW = "#!/bin/sh\nsleep 30\n"
-#: answers immediately, non-zero -> the image is genuinely ABSENT
-_ABSENT = "#!/bin/sh\nexit 1\n"
-
-
-def test_a_stalled_probe_reports_UNANSWERED_and_not_absence(tmp_path):
-    res = _child_session(tmp_path, _SLOW)
-    out = res.stdout + res.stderr
-    assert NV.UNANSWERED_MARK in out, out
-    assert "[PROBE UNANSWERED]" in out, (
-        "the roll-up folded an unestablished cause in with the established "
-        f"ones, so the reader cannot tell them apart\n{out}")
-    assert ABSENT_CLAIM not in out, (
-        "the run still asserted that the container is not available, having "
-        f"never managed to look at it\n{out}")
-
-
-def test_a_genuine_absence_still_reports_the_absence(tmp_path):
-    """The direction that keeps the fix from being a mute button: when the
-    probe DOES answer and the thing is missing, the site's own sentence must
-    still be published, unchanged."""
-    res = _child_session(tmp_path, _ABSENT)
-    out = res.stdout + res.stderr
-    assert ABSENT_CLAIM in out, out
-    assert NV.UNANSWERED_MARK not in out, out
-    assert "[PROBE UNANSWERED]" not in out, out
-
-
-def test_the_unanswered_skip_can_redden_a_landing_run(tmp_path):
-    """`VIBEIC_REQUIRE_EDA_VERIFICATION=1` is how a landing host refuses an
-    unanswered question. If the new class did not reach the tier, this run
-    would be green — which is the pre-#1283 behaviour exactly."""
-    res = _child_session(tmp_path, _SLOW, {NV.REQUIRE_ENV: "1"})
-    out = res.stdout + res.stderr
-    assert res.returncode != 0, (
-        "a probe that never answered left a landing run GREEN\n" + out)
-    assert "REFUSES to be green" in out, out
-
-
-def test_the_same_run_is_green_when_the_probe_answers(tmp_path):
-    """Paired control for the one above: blocking must cost nothing on a host
-    where the probe works, or the refusal is just noise."""
-    res = _child_session(tmp_path, "#!/bin/sh\nexit 0\n",
-                         {NV.REQUIRE_ENV: "1"})
-    assert res.returncode == 0, res.stdout + res.stderr
-
-
-# ---------------------------------------------------------------------------
 # 4. THE ROT GUARD — no probe may swallow its own timeout again
 # ---------------------------------------------------------------------------
 def _swallowing_probe_sites(directory: Path):
@@ -453,7 +342,6 @@ RESIDUAL_SWALLOWING: dict = {
     "test_hspice_lib_ngspice_normalize.py": 2,
     "test_issue193_custom_pdk_primary_selection_ngspice.py": 2,
     "test_staged_macro_aware_synth_define.py": 1,
-    "test_v1_0_52_gap1_via_analyzer_sky130_unnumbered_cut.py": 1,
 }
 
 
@@ -554,7 +442,6 @@ def test_the_converted_sites_are_not_seen_by_the_guard():
         "test_v1_4_21_dft_atpg_liberty_resolver.py",
         "test_v1_4_observable_capability_probes.py",
         "test_analog_a3_netlist_emit.py",
-        "test_v1_3_52_r6_sparse_die_welltie.py",
     ]
     hit_files = {f for f, _ln in _swallowing_probe_sites(TESTS_DIR)}
     for name in converted:

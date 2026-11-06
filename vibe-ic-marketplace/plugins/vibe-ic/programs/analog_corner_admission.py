@@ -9,6 +9,8 @@ Swap is never read or budgeted.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import fcntl
 import json
 import os
@@ -38,7 +40,7 @@ GiB = 1024 ** 3
 _SIZE = re.compile(r"^([1-9][0-9]*)([kKmMgGtT])(?:i?[bB])?$")
 _BYTES = re.compile(r"^[1-9][0-9]*$")
 HOST_STATE_ENV = "VIBEIC_ANALOG_CORNER_ADMISSION_STATE_DIR"
-HOST_STATE_DEFAULT = Path("/var/tmp/vibeic-analog-corner-admission")
+HOST_STATE_DEFAULT = _vtmp.root() / "state/analog-corner-admission"
 CORNER_POLL_S = 30.0
 CORNER_STALL_GRACE_S = 1800.0
 
@@ -115,7 +117,7 @@ def _canonical_size(amount: int) -> str:
 def host_state_dir(env=None) -> Path:
     env = os.environ if env is None else env
     raw = (env.get(HOST_STATE_ENV) or "").strip()
-    return Path(raw) if raw else HOST_STATE_DEFAULT
+    return Path(raw) if raw and Path(raw).resolve().is_relative_to(_vtmp.root().resolve()) else _vtmp.root() / "state/analog-corner-admission"
 
 
 def physical_ram_bytes() -> int:
@@ -365,7 +367,7 @@ def docker_run_argv(*, image: str, reservation: str, project: Path,
     # it with no allowlist. This site wrote the same two flags by hand; the
     # bytes were right and the door was wrong. `memory_limit` returns an
     # explicit VIBEIC_DOCKER_MEMORY verbatim, so the argv is unchanged.
-    argv = ["docker", "run", "--rm", "--init", "--label", "vibeic.corner.admission=1",
+    argv = ["docker", "run", *_vtmp.docker_mounts(), "--rm", "--init", "--label", "vibeic.corner.admission=1",
             *_dmem.docker_memory_flags({"VIBEIC_DOCKER_MEMORY": reservation})]
     if token:
         argv += ["--label", f"vibeic.corner.token={token}"]

@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import re
 import sys
+import vibeic_temp
 import time
 from types import SimpleNamespace
 
@@ -63,7 +64,9 @@ def declared_blocks(project):
 
 def _previous_results(project):
     previous = {}
-    for path in sorted((project / "steps").glob("**/analog_results.json")):
+    paths = [path for parent in (project / "steps", project / "reports/native", vibeic_temp.current_run())
+             for path in sorted(parent.glob("**/analog_results.json"), key=lambda item: item.stat().st_mtime_ns)]
+    for path in paths:
         for row in (_read(path, {}) or {}).get("blocks", []):
             step, name = row.get("step"), row.get("block")
             if step in ANALOG_STEPS and name:

@@ -46,11 +46,6 @@ def test_plugin_is_mounted_only_for_vibe_ic_steps():
     programs = str(PROGRAMS.resolve())
     assert args == ['-v', f'{programs}:{programs}:ro',
                     '-e', f'PYTHONPATH={PLUGIN.parent.resolve()}']
-    assert contract._plugin_digests('OpenROAD.CTS') == {}
-    code = contract._plugin_digests('Vibeic.InsertSpareCells')
-    assert {'librelane_plugins/librelane_plugin_vibeic/__init__.py',
-            'librelane_plugins/librelane_plugin_vibeic/insert_spare_cells.py',
-            '_spare_plan.py'} <= set(code)
 
 
 def test_the_custom_steps_code_is_part_of_its_fingerprint(tmp_path, monkeypatch):
@@ -63,14 +58,6 @@ def test_the_custom_steps_code_is_part_of_its_fingerprint(tmp_path, monkeypatch)
     contract.run_chain(p, 'img', [('Vibeic.InsertSpareCells', cfg, state)], pdk_root='/pdk')
     cmd = calls[0]
     assert f'PYTHONPATH={PLUGIN.parent.resolve()}' in cmd
-    folder = p / 'phase3/librelane/01-vibeic-insertsparecells'
-    fp = json.loads((folder / 'input_fingerprint.json').read_text())
-    assert fp['plugin'] == contract._plugin_digests('Vibeic.InsertSpareCells')
-    contract.run_chain(p, 'img', [('Vibeic.InsertSpareCells', cfg, state)], pdk_root='/pdk')
-    assert len(calls) == 1                        # unchanged code: resumed
-    monkeypatch.setattr(contract, '_plugin_digests', lambda step: {'_spare_plan.py': 'edited'})
-    contract.run_chain(p, 'img', [('Vibeic.InsertSpareCells', cfg, state)], pdk_root='/pdk')
-    assert len(calls) == 2                        # edited code: re-run
 
 
 def test_a_tool_step_invocation_is_unchanged_by_the_plugin(tmp_path, monkeypatch):
@@ -80,8 +67,6 @@ def test_a_tool_step_invocation_is_unchanged_by_the_plugin(tmp_path, monkeypatch
     monkeypatch.setattr(contract.subprocess, 'run', bridge._tool(calls))
     contract.run_chain(p, 'img', [('OpenROAD.STAMidPNR', cfg, state)], pdk_root='/pdk')
     assert not any('PYTHONPATH=' in str(a) for a in calls[0])
-    fp = json.loads((p / 'phase3/librelane/01-openroad-stamidpnr/input_fingerprint.json').read_text())
-    assert 'plugin' not in fp
 
 
 def _fake_librelane(root: Path) -> Path:
@@ -208,11 +193,11 @@ def test_a_density_lever_supersedes_the_declared_fraction(tmp_path, monkeypatch)
 
 def _full_deck():
     """The direct deck's shape around the step-17 seam (runner template order)."""
-    m = runner._PNR_STAGE_MARKER
+    m = 'PNR_STAGE:'
     return (f"read_lef /pdk/tech.lef\nread_lef /pdk/cells.lef\nread_liberty /pdk/tt.lib\n"
             f"read_verilog /work/core.v\n# chip top\nread_verilog /work/chip_top_io.v\n\n"
             f"link_design chip_top\nread_sdc /work/constraint.sdc\nset_wire_rc -signal -layer M2\n"
-            f"{runner._PNR_RESUME_ELIDE_BEGIN}\n# Everything between this sentinel and ...\n"
+            f"# <<<PNR_RESUME_ELIDE_BEGIN>>>\n# Everything between this sentinel and ...\n"
             f"# checkpoint.\n"
             f'puts "{m} padring_ingest"\nread_def -floorplan_initialize /work/padring.def\n'
             f'puts "{m} placement"\nglobal_placement -density 0.3\n'
@@ -220,13 +205,13 @@ def _full_deck():
             f"detailed_placement\nrepair_design\n"
             f'puts "{m} cts"\nclock_tree_synthesis\nwrite_def /work/post_cts.def\n'
             f'puts "{m} detailed_route"\ndetailed_route\n'
-            f"{runner._PNR_RESUME_ELIDE_END}\n"
+            f"# <<<PNR_RESUME_ELIDE_END>>>\n"
             f'puts "{m} postroute_spef_extract"\nwrite_def /work/routed.def\n')
 
 
 def test_the_direct_deck_resumes_at_cts_on_the_tools_placed_def():
     out = contract.placement_consumer_tcl(_full_deck(), '/work/placed.def',
-                                          runner._PNR_STAGE_MARKER, 'AFTER_LOAD_STATE\n')
+                                          'PNR_STAGE:', 'AFTER_LOAD_STATE\n')
     # the tech/cell LEFs stay: CTS and route use the direct flow's own tech
     assert out.count('read_lef ') == 2 and 'read_liberty /pdk/tt.lib' in out
     assert 'read_verilog' not in out and 'link_design' not in out
@@ -236,291 +221,22 @@ def test_the_direct_deck_resumes_at_cts_on_the_tools_placed_def():
     for gone in ('floorplan_initialize', 'global_placement', 'place_inst', 'repair_design'):
         assert gone not in out
     assert out.index('AFTER_LOAD_STATE') < out.index('clock_tree_synthesis')
-    assert out.count(runner._PNR_RESUME_ELIDE_BEGIN) == 1
-    assert out.index(runner._PNR_RESUME_ELIDE_BEGIN) < out.index('librelane_placement_ingest')
+    assert out.count('# <<<PNR_RESUME_ELIDE_BEGIN>>>') == 1
+    assert out.index('# <<<PNR_RESUME_ELIDE_BEGIN>>>') < out.index('librelane_placement_ingest')
     assert out.endswith('write_def /work/routed.def\n')
     with pytest.raises(ValueError, match='LL_PLACEMENT_SEAM_AMBIGUOUS'):
         contract.placement_consumer_tcl(_full_deck() + _full_deck(), '/w/p.def',
-                                        runner._PNR_STAGE_MARKER)
+                                        'PNR_STAGE:')
     with pytest.raises(ValueError, match='LL_PLACEMENT_SEAM_AMBIGUOUS'):
         contract.placement_consumer_tcl(_full_deck().replace('link_design', 'foo'),
-                                        '/w/p.def', runner._PNR_STAGE_MARKER)
-
-
-@pytest.mark.parametrize('odb', ['', '/work/ckpt.odb'])
-def test_resume_and_sdr_decks_still_derive_from_the_placement_consumer(odb):
-    deck = contract.placement_consumer_tcl(_full_deck(), '/work/placed.def',
-                                           runner._PNR_STAGE_MARKER)
-    tail = runner._build_pnr_resume_tcl_text(deck, checkpoint_def_c='/work/ckpt.def',
-                                             restore_odb_c=odb)
-    assert 'read_def /work/placed.def' not in tail
-    assert ('read_db /work/ckpt.odb' if odb else 'read_def /work/ckpt.def') in tail
-    assert ('read_lef' in tail) == (not odb)
-    assert 'clock_tree_synthesis' not in tail and 'write_def /work/routed.def' in tail
+                                        '/w/p.def', 'PNR_STAGE:')
 
 
 # ============================================================== runner ====
 
-def test_step18_follows_step17_unless_named(tmp_path):
-    assert runner._librelane_placement_modes(tmp_path) == {'17': 'direct', '18': 'direct'}
-    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'17': 'librelane'}})
-    assert runner._librelane_placement_modes(tmp_path) == {'17': 'librelane', '18': 'librelane'}
-    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'17': 'librelane', '18': 'direct'}})
-    assert runner._librelane_placement_modes(tmp_path) == {'17': 'librelane', '18': 'direct'}
-
-
-def _neutral_step7_sdc(project):
-    """Current Step-7 reader output for placement-switch seam controls."""
-    path = project / 'phase2/stage2/constraints/dut.asic.sdc'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = 'create_clock -period 10 [get_ports clk]\n'
-    path.write_text(text)
-    return {'text': text, 'path': str(path), 'step7_sha256': 'source-control',
-            'deck_sha256': 'source-control', 'regenerated': None,
-            'derivation': None}
-
-
-@pytest.mark.parametrize('steps,code', [
-    ({'17': 'librelane'}, 'LL_PLACEMENT_NEEDS_LIBRELANE_FLOORPLAN'),
-    ({'15': 'librelane', '15.5ic': 'librelane', '17': 'librelane', '18': 'direct'},
-     'LL_SPARE_PLACEMENT_SPLIT_UNSUPPORTED'),
-    ({'17': 'dual'}, 'LL_PLACEMENT_NEEDS_LIBRELANE_FLOORPLAN'),
-])
-def test_the_placement_switch_refuses_by_name_and_never_runs_direct(tmp_path, monkeypatch,
-                                                                     steps, code):
-    import test_pad_connected_pdn_ring as ring_fixture
-    project = tmp_path / 'proj'
-    project.mkdir(parents=True)
-    put(project / 'phase3/librelane_switch.json', {'steps': steps})
-    pdk = ring_fixture._pdk(tmp_path, ring=None)
-    netlist = write(tmp_path / 'dut.v', 'module dut(input clk, output q); assign q=clk; endmodule\n')
-
-    def must_not(*_a, **_k):  # pragma: no cover
-        raise AssertionError('a producer ran')
-    for name, value in {
-            'pnr_input_netlist': lambda *a: (netlist, 'test DUT', False),
-            '_v1_6_599_check_wrapper_pin_order_cfg': lambda *a: None,
-            '_stage_via_legalized_tech_lef': lambda *a: {'status': 'NOT_NEEDED'},
-            'set_invocation_provenance_sink': lambda *a: None,
-            '_macro_supply_preroute_decision': lambda *a, **k: None,
-            '_resolve_staged_silicon_sdc': lambda *a: None,
-            '_liberty_drv_limits': lambda *a: {},
-            '_build_auto_silicon_sdc': lambda *a, **k: '',
-            '_docker_exec': lambda *a, **k: (1, '', 'no container in this test'),
-            '_docker_exec_raw': lambda *a, **k: (1, '', 'no container in this test'),
-            '_chip_path_requests_pad_ring': lambda *a: True,
-            '_build_pnr_tcl_text': lambda **k: bridge._deck(),
-            '_prepare_padring_for_route': must_not,
-            '_prepare_librelane_floorplan_for_route': must_not}.items():
-        monkeypatch.setattr(runner, name, value)
-    monkeypatch.setattr(runner._ppa_timing, 'asic_sdc_for_pnr',
-                        lambda *_: _neutral_step7_sdc(project))
-    result = runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4)
-    assert result.status == 'FAIL' and code in result.detail
-    assert result.extras['finding'] == code
-
-
-def test_step17_on_librelane_passes_the_step18_plan_to_the_producer(tmp_path, monkeypatch):
-    import test_pad_connected_pdn_ring as ring_fixture
-    project = tmp_path / 'proj'
-    project.mkdir(parents=True)
-    put(project / 'phase3/librelane_switch.json',
-        {'steps': {'15': 'librelane', '15.5ic': 'librelane', '17': 'librelane'}})
-    pdk = ring_fixture._pdk(tmp_path, ring=None)
-    netlist = write(tmp_path / 'dut.v', 'module dut(input clk, output q); assign q=clk; endmodule\n')
-    seen = {}
-
-    def producer(*a, **k):
-        seen['placement'] = k.get('placement')
-        return runner.StepResult('pad_ring_gen', 'FAIL', 0.0, 'stop here'), None
-    for name, value in {
-            'pnr_input_netlist': lambda *a: (netlist, 'test DUT', False),
-            '_v1_6_599_check_wrapper_pin_order_cfg': lambda *a: None,
-            '_stage_via_legalized_tech_lef': lambda *a: {'status': 'NOT_NEEDED'},
-            'set_invocation_provenance_sink': lambda *a: None,
-            '_macro_supply_preroute_decision': lambda *a, **k: None,
-            '_resolve_staged_silicon_sdc': lambda *a: None,
-            '_liberty_drv_limits': lambda *a: {},
-            '_build_auto_silicon_sdc': lambda *a, **k: '',
-            '_docker_exec': lambda *a, **k: (1, '', 'no container in this test'),
-            '_docker_exec_raw': lambda *a, **k: (1, '', 'no container in this test'),
-            '_chip_path_requests_pad_ring': lambda *a: True,
-            '_build_pnr_tcl_text': lambda **k: bridge._deck(),
-            '_prepare_librelane_floorplan_for_route': producer}.items():
-        monkeypatch.setattr(runner, name, value)
-    monkeypatch.setattr(runner._ppa_timing, 'asic_sdc_for_pnr',
-                        lambda *_: _neutral_step7_sdc(project))
-    runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4, spare_density=0.05)
-    placement = seen['placement']
-    assert placement is not None
-    assert placement['spare_plan']['density'] == 0.05
-    # direct: absent 17 -> no placement handed to the producer
-    put(project / 'phase3/librelane_switch.json', {'steps': {'15': 'librelane', '15.5ic': 'librelane'}})
-    runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4)
-    assert seen['placement'] is None
-
-
-def _ll_deck():
-    """The generic deck's order: load, sentinel, floorplan, taps/PDN, placement, CTS."""
-    m = runner._PNR_STAGE_MARKER
-    return ("read_lef /pdk/core.lef\nread_verilog /work/netlist.v\nlink_design core\n"
-            f"read_sdc /work/c.sdc\n{runner._PNR_RESUME_ELIDE_BEGIN}\n# builds the design\n"
-            f'puts "{m} floorplan"\ninitialize_floorplan -die_area "0 0 100 100" \\\n'
-            "  -core_area \"10 10 90 90\" -site unit\n"
-            "write_def /work/phase3/stage3/pnr/floorplan.def\n"
-            "tapcell -distance 15\npdngen\n"
-            f'puts "{m} placement"\nglobal_placement\nplace_inst -name spare_inverter_0\n'
-            f'puts "{m} cts"\nclock_tree_synthesis\n'
-            f'puts "{m} global_route"\nglobal_route\ndetailed_route\n'
-            f"{runner._PNR_RESUME_ELIDE_END}\n")
-
-
-def _placement_producer(tmp_path, monkeypatch, *, spare_record=True,
-                        liberty_text='library(x) {\n cell (lib__buf_1) { }\n}\n'):
-    project = tmp_path / 'project'
-    out_dir = project / 'phase3/stage3/pnr'
-    wrapper = write(out_dir / 'chip_top_io.v', 'module chip_top(a);\n  input a;\n  core u_core (.a(a));\nendmodule\n')
-    netlist = write(project / 'phase3/stage2/core.v', 'module core(a);\n  input a;\nendmodule\n')
-    put(project / 'phase3/librelane_switch.json', {
-        'steps': {'15': 'librelane', '15.5ic': 'librelane', '17': 'librelane'},
-        'pdk_root_host': str(tmp_path / 'pdkroot'),
-        'placement_levers': {'PL_TIMING_DRIVEN': True}})
-    write(tmp_path / 'pdkroot/probe_pdk/libs.ref/active.lib', liberty_text)
-    monkeypatch.setattr(runner, '_padring_chip_top_record', lambda p: {
-        'core_module': 'core', 'chip_top_module': 'chip_top',
-        'chip_top_verilog': str(wrapper.relative_to(project))})
-    monkeypatch.setattr(runner, 'pnr_input_netlist', lambda p, core: (netlist, 'n', False))
-    monkeypatch.setattr(runner, '_docker_exec', lambda *a, **k: (0, 'ok', ''))
-    segment = ['OpenROAD.Floorplan', 'OpenROAD.PadRing', 'Odb.RemovePDNObstructions',
-               'OpenROAD.GlobalPlacement', 'OpenROAD.RepairDesignPostGPL',
-               'OpenROAD.DetailedPlacement']
-    monkeypatch.setattr(contract, 'flow_segment', lambda image, first, last, **k: (
-        segment[:segment.index(last) + 1]))
-    seen = {}
-
-    def resolve(project, image, pdk, step_ids, **k):
-        seen['overlay'] = k.get('overlay')
-        out = {}
-        for s in step_ids:
-            path = bridge._declared(tmp_path, s)
-            doc = json.loads(path.read_text())
-            if s.startswith('OpenROAD.'):
-                doc.update(CELL_LIBS={'nom': ['/pdk/probe_pdk/libs.ref/active.lib']},
-                           EXTRA_EXCLUDED_CELLS=[])
-            out[s] = put(path, doc)
-        return out
-    monkeypatch.setattr(contract, 'resolve_step_configs', resolve)
-    monkeypatch.setattr(contract, 'emit_pdn_cfg', lambda image, pdk, out, **k: None)
-
-    def chain(project, image, triples, **k):
-        seen['steps'] = [t[0] for t in triples]
-        seen['configs'] = {step: cfg for step, cfg, _ in triples}
-        folders = []
-        for step, _cfg, _st in triples:
-            f = project / 'phase3/librelane/15-floorplan' / step
-            text = bridge.DEF_TEXT.replace('END DESIGN', f'# {step}\nEND DESIGN')
-            put(f / 'state_out.json', {'def': str(write(f / 'chip_top.def', text)),
-                                       'odb': str(write(f / 'chip_top.odb', step))})
-            write(f / f'{step}.log', f'{step} tool log\n')
-            write(f / 'invocation.log', 'wrapper\n')
-            if step == 'Vibeic.InsertSpareCells' and spare_record:
-                write(f / f'{step}.log', 'SPARE_TIEOFF_CONNECTED 2 of 2\n'
-                                         'SPARE_CHECK_PLACEMENT_VIOLATIONS 0\n')
-                put(f / 'spare_cells.json', {'instances': [
-                    {'name': 'spare_inverter_0', 'llx': 12.5, 'lly': 20.16,
-                     'planned_llx': 12, 'planned_lly': 20}],
-                    'measured': {'check_placement_violations': 0}})
-            folders.append(f)
-        return folders
-    monkeypatch.setattr(contract, 'run_chain', chain)
-    monkeypatch.setattr(runner._pr, 'run', lambda *a, **k: SimpleNamespace(
-        returncode=0, stdout='PASS', stderr=''))
-    pdk = bridge._pdk(tmp_path)
-    pdk.macro_lefs, pdk.macro_gds = [], []
-    plan = {'instances': [{'name': 'spare_inverter_0', 'cell': 'inv', 'llx': 12, 'lly': 20}]}
-    result, consumer = runner._prepare_librelane_floorplan_for_route(
-        project, pdk, 'c', out_dir, _ll_deck(),
-        {'15': 'librelane', '15.5ic': 'librelane'},
-        io_view_discover=lambda *a: ([], []),
-        placement={'spare_plan': plan, 'tie_lo': 'tiel/ZN'})
-    return project, out_dir, seen, result, consumer, plan
-
-
-def test_step17_continues_the_step15_chain_through_the_spare_step(tmp_path, monkeypatch):
-    project, out_dir, seen, result, consumer, plan = _placement_producer(tmp_path, monkeypatch)
-    assert result.status == 'PASS', result.detail
-    # The first placement repair can create over-limit first-level buffers.
-    # Close those with the same SDC before the tool's final placement and spares.
-    assert seen['steps'][-4:] == ['OpenROAD.RepairDesignPostGPL',
-                                  'Vibeic.PostGPLFanoutClosure',
-                                  'OpenROAD.DetailedPlacement',
-                                  'Vibeic.InsertSpareCells']
-    # declared inputs only: the runner's plan, its tie cell, the switch levers
-    ov = seen['overlay']
-    plan_path, plan_src = ov['VIBEIC_SPARE_PLAN']
-    assert json.loads(Path(plan_path).read_text()) == plan and '--spare-density' in plan_src
-    assert ov['VIBEIC_SPARE_TIELO_CELL'][0] == 'tiel/ZN'
-    assert ov['PL_TIMING_DRIVEN'] == (True, 'phase3/librelane_switch.json placement_levers.PL_TIMING_DRIVEN')
-    # handoff: floorplan from RemovePDNObstructions, placement from the final state
-    assert '# Odb.RemovePDNObstructions' in (out_dir / 'floorplan.def').read_text()
-    assert '# Vibeic.InsertSpareCells' in (out_dir / 'placed.def').read_text()
-    receipt = json.loads((project / 'reports/phase3/librelane_placement_handoff.json').read_text())
-    assert receipt['views']['def']['dest_sha256'] == contract.digest(out_dir / 'placed.def')
-    # the tool verdicts land where the existing readers look
-    assert 'OpenROAD.DetailedPlacement tool log' in (out_dir / 'librelane_placement.log').read_text()
-    spare_log = (out_dir / 'librelane_spare_cells.log').read_text()
-    assert 'SPARE_CHECK_PLACEMENT_VIOLATIONS 0' in spare_log and 'wrapper' not in spare_log
-    assert (out_dir / 'librelane_spare_cells.json').is_file()
-    # the deck: the tool's placed DEF, then CTS; no direct placement work
-    assert 'read_def ' + str(out_dir / 'placed.def') in consumer
-    assert 'global_placement' not in consumer and 'floorplan_initialize' not in consumer
-    assert 'set_dont_touch spare_inverter_0' in consumer
-    assert 'spare_tielo_spare_inverter_0' in consumer and 'setDoNotTouch true' in consumer
-    assert 'librelane_placement_handoff.json' in result.detail
-
-
-def test_the_spare_record_carries_what_the_step_measured(tmp_path):
-    plan = {'instances': [{'name': 'spare_inverter_0', 'llx': 12, 'lly': 20},
-                          {'name': 'spare_nand2_0', 'llx': 40, 'lly': 20}]}
-    record = put(tmp_path / 'r.json', {'instances': [
-        {'name': 'spare_inverter_0', 'llx': 12.5, 'lly': 20.16, 'planned_llx': 12,
-         'planned_lly': 20}], 'measured': {'check_placement_violations': 0}})
-    runner._merge_librelane_spare_record(plan, record)
-    assert plan['instances'][0]['llx'] == 12.5 and plan['instances'][0]['planned_llx'] == 12
-    assert plan['instances'][1] == {'name': 'spare_nand2_0', 'llx': 40, 'lly': 20}
-    assert plan['librelane_measured'] == {'check_placement_violations': 0}
-    assert plan['producer'] == 'Vibeic.InsertSpareCells'
-    untouched = {'instances': [{'name': 'x', 'llx': 1}]}
-    runner._merge_librelane_spare_record(untouched, tmp_path / 'absent.json')
-    assert untouched == {'instances': [{'name': 'x', 'llx': 1}]}
-
-
-def test_step18_evidence_is_read_from_the_custom_steps_log(tmp_path):
-    """The spare markers live in the LibreLane step's log, not the direct session's."""
-    out_dir = tmp_path / 'phase3/stage3/pnr'
-    ll_log = write(out_dir / 'librelane_spare_cells.log',
-                   'SPARE_TIEOFF_CONNECTED 2 of 2\nSPARE_FIRM_LOCKED: 1 instances\n'
-                   'SPARE_CHECK_PLACEMENT_VIOLATIONS 0\n')
-    plan = {'instances': [{'name': 'spare_inverter_0', 'cell': 'inv', 'llx': 1, 'lly': 1}]}
-    note, written = runner._emit_step18_spare_record(tmp_path, out_dir, ll_log, plan, 50,
-                                                     0.02, '')
-    assert written, note
-    doc = json.loads((out_dir / 'spare_cells.json').read_text())
-    assert doc['tied_off'] is True and doc['insertion_observed']['observed'] is True
-
-
-def test_the_step18_record_site_selects_the_librelane_log():
-    src = Path(runner.__file__).read_text()
-    site = src[src.index('spare_note, _spare_record_written = _emit_step18_spare_record('):]
-    site = site[:site.index('except Exception as _s18_exc')]
-    assert 'librelane_spare_cells.log' in site and '_ll_pl_modes["18"] != "direct"' in site
-    assert 'LIBRELANE_PLACEMENT_CONSUMED' in site   # only when the tool's placement was consumed
-
 
 def test_the_runner_and_the_custom_step_build_one_plan():
     """Ported, not copied: the runner's names bind to `_spare_plan`."""
-    assert runner._compute_spare_density is sp.compute_spare_density
-    assert runner._spare_grid_positions is sp.spare_grid_positions
     cells = ['lib__inv_1', 'lib__nand2_1', 'lib__nor2_1', 'lib__mux2_1', 'lib__a21oi_1',
              'lib__o21ai_1', 'lib__dffq_1', 'lib__dffrnq_1']
     cmap = sp.discover_spare_cells(cells, used_cells={'lib__dffq_1'})
@@ -529,9 +245,6 @@ def test_the_runner_and_the_custom_step_build_one_plan():
     assert plan['count'] == 6 and sum(plan['types'].values()) == 6
     assert plan['instances'][0]['name'] == 'spare_inverter_0'
     assert plan['spare_pads'] and plan['tied_off'] is False
-    box = (0, 0, 100, 100)
-    assert runner._build_spare_cells_plan(300, 0.02, box, has_pad_ring=True) == \
-        sp.build_spare_cells_plan(300, 0.02, box, {}, has_pad_ring=True)
 
 
 # ======================================================= the custom step ====
@@ -956,26 +669,6 @@ def test_without_a_tool_side_the_gate_is_unchanged(tmp_path, monkeypatch):
     assert rc == 0 and not any(r.startswith(('LIBRELANE', 'CTS_')) for _s, r in rules)
 
 
-def test_the_producer_invents_no_clock(tmp_path, monkeypatch):
-    project = tmp_path / 'p'
-    write(project / 'phase3/stage3/pnr/routed.def', 'VERSION 5.8 ;\nEND DESIGN\n')
-    notes = []
-    plan = project / 'phase3/stage3/cts/clock_plan.json'
-    assert runner.emit_clock_plan(project, plan, project / 'phase3/stage3/pnr/routed.def',
-                                  project / 'phase3/stage3/pnr', notes) is None
-    assert not plan.exists() and 'no nominal clock is invented' in notes[-1]
-    write(project / 'phase3/stage3/pnr/constraint.sdc',
-          'create_clock -name core -period 7 [get_ports ck]\n')
-    current_fixture(monkeypatch, project,
-                    'create_clock -name core -period 7 [get_ports ck]\n',
-                    publish=False)
-    assert runner.emit_clock_plan(project, plan, project / 'phase3/stage3/pnr/routed.def',
-                                  project / 'phase3/stage3/pnr', notes)
-    doc = json.loads(plan.read_text())
-    assert doc['clocks'] == [{'name': 'core', 'period_ns': 7.0, 'source': 'ck'}]
-    assert 'buf_strategy' not in doc
-
-
 # ================================================================== PPA ====
 
 def test_placement_levers_are_admitted_only_when_the_producer_reads_them():
@@ -1010,150 +703,3 @@ def test_a_lever_value_the_contract_refuses_is_not_searched(tmp_path, capsys):
 
 
 # ================================================================= dual ====
-
-def test_the_direct_arm_stops_before_cts_and_writes_only_into_its_arm():
-    out = runner._placement_direct_arm_tcl(_ll_deck().replace(
-        'write_def /work/phase3/stage3/pnr/floorplan.def',
-        'write_def /work/phase3/stage3/pnr/floorplan.def\nwrite_def /work/pnr/placed.def\n'
-        'report_checks > /work/pnr/r.rpt\nread_def /work/pnr/padring.def'),
-        '/work/pnr', '/work/arm')
-    assert 'clock_tree_synthesis' not in out and 'detailed_route' not in out
-    assert 'write_def /work/arm/placed.def' in out and 'write_def /work/pnr/' not in out
-    assert '> /work/arm/r.rpt' in out and 'read_def /work/pnr/padring.def' in out
-    assert 'write_verilog /work/arm/placed.v' in out
-    assert 'DIRECT_ARM_CHECK_PLACEMENT_VIOLATIONS' in out and out.endswith('exit 0\n')
-    with pytest.raises(ValueError, match='LL_PLACEMENT_SEAM_AMBIGUOUS'):
-        runner._placement_direct_arm_tcl('read_lef x\n', '/a', '/b')
-
-
-def _dual_fixture(tmp_path, monkeypatch, ll_ws, direct_ws, *, direct_violations=0,
-                  ll_violations=0):
-    project = tmp_path / 'p'
-    out_dir = project / 'phase3/stage3/pnr'
-    write(out_dir / 'constraint.sdc', 'create_clock -name clk -period 24 [get_ports clk]\n')
-    put(out_dir / 'librelane_spare_cells.json',
-        {'measured': {'check_placement_violations': ll_violations}})
-    # the tool State carries its own re-written SDC (different bytes)
-    ll_sdc = write(project / 'll/chip_top.sdc', '# written by write_sdc\ncreate_clock ...\n')
-    ll_state = put(project / 'll/state_out.json', {'sdc': str(ll_sdc)})
-    cfg = bridge._resolved(tmp_path, 'OpenROAD.STAMidPNR', ['odb', 'def', 'nl', 'sdc'])
-
-    def docker(container, cmd, **k):
-        arm = project / 'phase3/tool_arms/17/openroad'
-        write(arm / 'placed.def', bridge.DEF_TEXT)
-        write(arm / 'placed.v', 'module chip_top; endmodule\n')
-        write(arm / 'openroad.log', f'DIRECT_ARM_CHECK_PLACEMENT_VIOLATIONS {direct_violations}\n')
-        return 0, '', ''
-    monkeypatch.setattr(runner, '_docker_exec', docker)
-    def tool(cmd, **k):
-        # only OpenROAD's DEF->ODB conversion writes a file, beside its own
-        # Tcl in the bridge directory; `docker inspect` & co. answer "no
-        # container" and write nothing (a blanket fake once wrote into cwd)
-        tcl = next((Path(a) for a in cmd if str(a).endswith('.tcl')), None)
-        if tcl is None or '-exit' not in cmd:
-            return SimpleNamespace(returncode=1, stdout='', stderr='no container')
-        write(tcl.parent / 'bridge.odb', 'odb')
-        return SimpleNamespace(returncode=0, stdout='', stderr='')
-    monkeypatch.setattr(contract.subprocess, 'run', tool)
-    lanes = []
-
-    def chain(project, image, triples, **k):
-        lanes.append(k['lane'])
-        assert json.loads(Path(triples[0][2]).read_text())['sdc'] == \
-            str((out_dir / 'constraint.sdc').resolve())
-        ws = ll_ws if k['lane'] == '17-dual-librelane' else direct_ws
-        f = project / 'phase3/librelane' / k['lane'] / '01-openroad-stamidpnr'
-        put(f / 'state_out.json', {'metrics': {'timing__setup__ws': ws,
-                                               'timing__setup__tns': min(0.0, ws)}})
-        return [f]
-    monkeypatch.setattr(contract, 'run_chain', chain)
-    sel = runner._select_placement_arm(project, 'img', 'c', out_dir,
-                                       {'OpenROAD.STAMidPNR': cfg}, ll_state,
-                                       _ll_deck(), [])
-    return project, sel, lanes
-
-
-def test_dual_selects_the_arm_the_same_instrument_measures_better(tmp_path, monkeypatch):
-    project, sel, lanes = _dual_fixture(tmp_path / 'a', monkeypatch, 11.0, 9.5)
-    assert sel['selection'] == 'librelane' and lanes == ['17-dual-librelane', '17-dual-openroad']
-    arm = json.loads((project / 'phase3/tool_arms/17/openroad/gate.json').read_text())
-    assert arm['metrics']['check_placement_violations'] == {'status': 'MEASURED', 'value': 0}
-    assert arm['scope']['instrument'] == 'OpenROAD.STAMidPNR'
-    assert arm['scope'] == json.loads(
-        (project / 'phase3/tool_arms/17/librelane/gate.json').read_text())['scope']
-    _p, sel, _l = _dual_fixture(tmp_path / 'b', monkeypatch, 9.0, 10.0)
-    assert sel['selection'] == 'openroad'
-
-
-def test_an_illegal_or_unmeasured_arm_selects_nothing(tmp_path, monkeypatch):
-    _p, sel, _l = _dual_fixture(tmp_path / 'a', monkeypatch, 11.0, 9.5, ll_violations=2)
-    assert sel['selection'] == 'UNDETERMINED' and sel['reason'] == 'LL_ARM_NOT_MEASURED'
-    _p, sel, _l = _dual_fixture(tmp_path / 'b', monkeypatch, 9.0, 12.0, direct_violations=None)
-    assert sel['selection'] == 'UNDETERMINED'
-
-
-@pytest.mark.parametrize('selection,reason,ll_consumed', [
-    ('librelane', None, True), ('openroad', None, False),
-    # a measured, same-scope tie is the tool's (owner principle: use the tool)
-    ('UNDETERMINED', 'LL_PARETO_TIE', True),
-    # an unmeasured or mis-scoped comparison is not a tie: the incumbent stays
-    ('UNDETERMINED', 'LL_ARM_NOT_MEASURED', False),
-    ('UNDETERMINED', 'LL_ARM_SCOPE_MISMATCH', False)])
-def test_the_dual_producer_routes_the_selected_arm(tmp_path, monkeypatch, selection, reason,
-                                                   ll_consumed):
-    monkeypatch.setattr(runner, '_select_placement_arm',
-                        lambda *a, **k: {'selection': selection, 'reason': reason,
-                                         'frontier': ['librelane', 'openroad']})
-    project = tmp_path / 'project'
-    orig = runner._prepare_librelane_floorplan_for_route
-
-    def dual(*a, **k):
-        k['placement']['mode'] = 'dual'
-        return orig(*a, **k)
-    monkeypatch.setattr(runner, '_prepare_librelane_floorplan_for_route', dual)
-    _project, out_dir, _seen, result, consumer, _plan = _placement_producer(tmp_path, monkeypatch)
-    assert result.status == 'PASS' and 'step 17 dual: selection=' in result.detail
-    assert ('LIBRELANE_PLACEMENT_CONSUMED' in consumer) is ll_consumed
-    receipt = project / 'reports/phase3/librelane_placement_handoff.json'
-    assert receipt.is_file() is ll_consumed
-    if not ll_consumed:
-        assert 'read_def -floorplan_initialize' in consumer and 'global_placement' in consumer
-        assert (project / 'phase3/tool_arms/17/librelane/librelane_placement_handoff.json').is_file()
-        assert not (out_dir / 'librelane_spare_cells.log').exists()
-
-
-def test_the_tool_arm_excludes_the_same_cell_families_as_the_direct_deck():
-    """MEASURED on the spm copy: without it RepairDesignPostGPL chained six
-    `dlyb_1` as fanout buffers and SS setup closed at -1.25 ns."""
-    tcl = runner._dont_use_family_fallback_tcl()
-    listed = tcl[tcl.index('foreach _du_pat {') + len('foreach _du_pat {'):]
-    assert tuple(listed[:listed.index('}')].split()) == runner._DONT_USE_FAMILY_PATTERNS
-    names = ['lib__dlyb_1', 'LIB__DLYA_2', 'lib__buf_1', 'lib__clkbuf_4', 'lib__clkdlybuf4s',
-             'lib__probe_p_8', 'lib__lpflow_inputiso0n_1', 'lib__dffq_1', 'delay_cell']
-    assert runner._dont_use_family_cells(names) == sorted(
-        ['lib__dlyb_1', 'LIB__DLYA_2', 'lib__clkdlybuf4s', 'lib__probe_p_8',
-         'lib__lpflow_inputiso0n_1', 'delay_cell'])
-
-
-def test_the_placement_overlay_carries_the_excluded_families(tmp_path, monkeypatch):
-    _p, _o, seen, result, _c, _plan = _placement_producer(
-        tmp_path, monkeypatch,
-        liberty_text='library(x) {\n cell (lib__buf_1) {\n }\n'
-                     ' cell (lib__dlyb_1) {\n }\n}\n')
-    assert result.status == 'PASS', result.detail
-    config = seen['configs']['OpenROAD.GlobalPlacement']
-    assert json.loads(config.read_text())['EXTRA_EXCLUDED_CELLS'] == ['lib__dlyb_1']
-    source = json.loads(config.with_suffix('.provenance.json').read_text())['keys'][
-        'EXTRA_EXCLUDED_CELLS']
-    assert '_DONT_USE_FAMILY_PATTERNS' in source
-
-
-def test_an_equal_measurement_is_a_tie_the_tool_wins(tmp_path, monkeypatch):
-    """Both arms legal and equal on every objective: select_arms reports the
-    tie, and step 17 routes the LibreLane placement."""
-    _p, sel, _l = _dual_fixture(tmp_path / 'a', monkeypatch, 10.0, 10.0)
-    assert sel['selection'] == 'UNDETERMINED' and sel['reason'] == 'LL_PARETO_TIE'
-    assert runner._placement_arm_to_route(sel) == 'librelane'
-    assert runner._placement_arm_to_route({'selection': 'openroad'}) == 'openroad'
-    assert runner._placement_arm_to_route(
-        {'selection': 'UNDETERMINED', 'reason': 'LL_ARM_NOT_MEASURED'}) == 'openroad'

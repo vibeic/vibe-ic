@@ -77,6 +77,8 @@ chip-AGNOSTIC: no design, PDK, cell or corner literal selects a branch.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import json
 import hashlib
 import math
@@ -438,7 +440,7 @@ def _docker(image: str, project: Path, mounts: List[Tuple[Path, str]], argv: Lis
         volumes += ['-e', f'{key}={value}']
     import librelane_contract as ll
     network, native_argv = ll.native_tool_command(image, argv)
-    command = [docker, 'run', '--rm', '--network', network,
+    command = [docker, 'run', *_vtmp.docker_mounts(), '--rm', '--network', network,
                *_dmem.docker_memory_flags(), *volumes, '--workdir', str(cwd),
                '--entrypoint', native_argv[0], image, *native_argv[1:]]
     # The producer is called inside execution_resource_lease.native_boundary.

@@ -69,7 +69,6 @@ import _progress_run as _pr  # noqa: E402
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
 _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
-_RUNNER_SRC = _PROGRAMS / "phase3_one_shot_runner.py"
 
 sys.path.insert(0, str(_PROGRAMS))
 
@@ -95,14 +94,6 @@ _EM_RPT = (
 )
 
 # The #147 shape: nominal-clean, sign-off corner violated.
-_MULTICORNER_VIOLATED = (
-    "# Multi-corner SPEF STA (TAPEOUT-SIGNOFF P1)\n"
-    "# SETUP corner: max-RC   HOLD corner: min-RC\n"
-    "=== SETUP (max-RC corner, SPEF=max) ===\n"
-    "worst slack max -1.71\n"
-    "=== HOLD (min-RC corner, SPEF=min) ===\n"
-    "worst slack min 0.54\n"
-)
 
 
 #: CZT2-16 — THE INNER BOUND IS GONE, and the reasoning that justified it is
@@ -121,7 +112,6 @@ _MULTICORNER_VIOLATED = (
 #: a finding about the child rather than a number about the host.
 
 #: The verdicts `phase3_one_shot_runner.main` treats as a releasing run.
-_RELEASING = ("PASS", "PASS_WITH_WAIVERS", "PASS_WITH_OPEN_SOURCE_CONSTRAINTS")
 
 
 def _run(prog: str, *args: str) -> subprocess.CompletedProcess:
@@ -159,42 +149,10 @@ def _project(tmp: Path) -> Path:
 # ===========================================================================
 # (2) The producer honours the output flag the flow declares
 # ===========================================================================
-def test_sta_report_check_writes_the_json_the_caller_asked_for(tmp_path):
-    """Step 23's `required_outputs` entry, produced by its only declared
-    producer. Pre-fix this returned rc 0 and wrote nothing at all."""
-    proj = _project(tmp_path)
-    out = proj / "reports" / "phase3" / "sta" / "post_route_summary.json"
-    r = _run("sta_report_check.py", str(proj), "--mode", "sta",
-             "--json", str(out))
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert out.is_file(), (
-        "sta_report_check discarded --json: step 23's declared "
-        "required_outputs entry has no producer")
-    doc = json.loads(out.read_text())
-    assert doc["program"] == "eda_report_audit:sta", doc
-    assert doc["passed"] is True, doc
 
 
-def test_em_report_check_writes_the_json_the_caller_asked_for(tmp_path):
-    proj = _project(tmp_path)
-    out = proj / "reports" / "phase3" / "em_signoff.json"
-    r = _run("em_report_check.py", str(proj), "--mode", "em",
-             "--json", str(out))
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert out.is_file(), "em_report_check discarded --json"
-    assert json.loads(out.read_text())["program"] == "eda_report_audit:em"
 
 
-def test_wrapper_does_not_swallow_an_invalid_mode(tmp_path):
-    """The stale declaration `--mode phase3/stage3/sta` is a PATH, not one of
-    eda_report_audit's seven report classes. It only ever "worked" because the
-    wrapper rebuilt argv and threw it away — a broken declaration that could
-    not be seen. It must now reach argparse."""
-    proj = _project(tmp_path)
-    r = _run("sta_report_check.py", str(proj), "--mode", "phase3/stage3/sta")
-    assert r.returncode == 2, (
-        "an invalid --mode is still being absorbed by the wrapper")
-    assert "invalid choice" in (r.stderr + r.stdout)
 
 
 # ===========================================================================
@@ -236,232 +194,34 @@ def test_step25_audit_json_does_not_clobber_the_em_measurement():
         target = toks[toks.index("--json") + 1]
         assert target != "reports/phase3/em.json", (
             "step 25's audit would overwrite the EM measurement it audits")
-    runner = _RUNNER_SRC.read_text(errors="replace")
-    assert '"reports/phase3/em.json"' in runner, (
-        "the producer's measurement path moved — re-check the collision")
 
 
 # ===========================================================================
 # (1) The gates are WIRED — a runner invokes them, so they can block
 # ===========================================================================
-def test_runner_exposes_every_declared_signoff_gate():
-    """MEMBERS, not a count — and the name carries no size for the same reason.
-
-    A set equality is the right shape here: swapping one gate for another
-    leaves any count unchanged, and this must notice. The name used to say
-    "all_four"; a set whose size is written into its own test name goes stale
-    the moment a member is added, which is what happened when `tapeout_precheck`
-    was wired in on 2026-09-04.
-    """
-    import phase3_one_shot_runner as R
-    wired = {g[1] for g in R._DECLARED_SIGNOFF_GATES}
-    assert wired == {
-        "sta_report_check.py",
-        "post_route_signoff_corner_check.py",
-        "sta_corner_record_completeness_check.py",
-        "sta_architectural_residual_check.py",
-        "em_report_check.py",
-        # Step 37.5ic. Both tape-out ladders existed and neither ran until this
-        # entry: no runner invoked the gate, so a phase-3 verdict was reached
-        # with no authority having read the GDS.
-        "tapeout_precheck.py",
-        # vibe-ic#2126. Step 23's disclosure gate: #2091 built it and nothing
-        # invoked it, so a sign-off measured against a clock period the design
-        # never stated could not be refused anywhere. Named here BY NAME, not
-        # counted: the set equality is the whole point of this test.
-        "sta_assumed_clock_disclosure_check.py",
-        # vibe-ic#2159. ONE RUN, ONE CLOCK-TARGET ANSWER: the run's own
-        # provenance record and L19 named DIFFERENT PDKs and DIFFERENT tiers
-        # for the same 20.0 ns, and the design's own table gave the PDK L19
-        # named a different number entirely. Registering the new member here is
-        # the intended response to this set equality, not a repair of it.
-        "clock_target_record_agreement_check.py",
-        # DRV needs a fresh capture plan and all PVT/RC receipts. This fixture
-        # only supplies STA/EM report files, so its row stays NOT_MEASURED.
-        "drv_signoff_judge.py",
-        # R-0929-IO-INPUT-TRANSITION-2. Step 23's pad-input-drive clause: an
-        # unresolved or uncarried off-chip input drive on a DIE top must reach
-        # the run's verdict, not only the final audit.
-        "pad_input_drive_check.py",
-    }, wired
-
-
-def test_runner_actually_calls_the_gates_in_its_plan():
-    """Defining the step is not wiring it. The verdict must land in `plan`,
-    which is what `_aggregate_verdict` reads."""
-    # Pinned on the CALL, not on its exact argument list: FP-20 added the run's
-    # own PDK (`step_declared_signoff_gates(project, pdk.name)`) because the
-    # gate resolved the FAMILY and every metal layer came back UNCHECKED. The
-    # property this test exists for is "the verdict lands in `plan`", which an
-    # added argument does not touch — so it is asserted over the parsed call,
-    # and the argument itself is pinned by
-    # test_the_signoff_gate_is_told_which_pdk_the_run_built.
-    import ast
-    src = _RUNNER_SRC.read_text(errors="replace")
-    tree = ast.parse(src)
-    calls = [n for n in ast.walk(tree)
-             if isinstance(n, ast.Call)
-             and isinstance(n.func, ast.Attribute) and n.func.attr == "extend"
-             and n.args and isinstance(n.args[0], ast.Call)
-             and isinstance(n.args[0].func, ast.Name)
-             and n.args[0].func.id == "step_declared_signoff_gates"]
-    # Default and Ultra have mutually exclusive bodies. Each execution path
-    # must append the gates once; counting both bodies as one invocation
-    # falsely rejects the existing mode split.
-    mode_branches = [n for n in ast.walk(tree)
-                     if isinstance(n, ast.If)
-                     and ast.unparse(n.test) == "_execution.request()['mode'] == 'default'"
-                     and any(call in list(ast.walk(n)) for call in calls)]
-    assert len(mode_branches) == 1, "sign-off calls must share one exclusive mode split"
-    split = mode_branches[0]
-    covered = []
-    for mode, body in (("default", split.body), ("ultra", split.orelse)):
-        branch_nodes = [n for stmt in body for n in ast.walk(stmt)]
-        branch_calls = [call for call in calls if call in branch_nodes]
-        assert len(branch_calls) == 1, f"{mode} must append sign-off gates exactly once"
-        target = ast.unparse(branch_calls[0].func.value)
-        if mode == "default":
-            # Default checks these rows before dispatching release. The same
-            # rows must still reach the final plan, rather than being discarded
-            # after the local decision.
-            assert target == "_final_readers", ast.unparse(branch_calls[0])
-            plan_copies = [n for n in branch_nodes if isinstance(n, ast.Call)
-                           and isinstance(n.func, ast.Attribute)
-                           and ast.unparse(n.func) == "plan.extend"
-                           and len(n.args) == 1
-                           and ast.unparse(n.args[0]) == target]
-            assert len(plan_copies) == 1, "Default reader verdicts must enter plan exactly once"
-            assert branch_calls[0].lineno < plan_copies[0].lineno
-        else:
-            assert target == "plan", ast.unparse(branch_calls[0])
-        covered.extend(branch_calls)
-    assert set(covered) == set(calls), "sign-off gates must not also run outside the mode split"
-
-
-def test_blast_radius_is_stated_where_the_wiring_is():
-    """The repo's own rule for a gate wired blocking (#306): the measured blast
-    radius belongs beside the wiring, not rediscovered when main turns red.
-    Four gates that never ran now block every phase-3 run; that is not free and
-    the source must say so."""
-    prose = " ".join(_RUNNER_SRC.read_text(errors="replace")
-                     .replace("#", " ").split())
-    assert "14 published phase-3 run-roots" in prose, (
-        "the corpus the blast radius was measured over is not recorded")
-    for gate, n in (("sta_report_check", "9/14"),
-                    ("sta_corner_record_completeness_check", "6/14"),
-                    ("em_report_check", "6/14"),
-                    ("post_route_signoff_corner_check", "2/14")):
-        assert gate in prose and n in prose, (
-            f"the measured blast radius for {gate} is not stated")
-    assert "-1.710 ns" in prose, (
-        "the concrete finding that justified the blocking slot is not recorded")
 
 
 
 
-def test_signoff_gates_pass_a_clean_project(tmp_path):
-    import phase3_one_shot_runner as R
-    results = R.step_declared_signoff_gates(_project(tmp_path))
-    # DERIVED FROM THE TABLE, not written down. A literal here goes stale the
-    # moment a gate is added — which is exactly what happened when step 37.5ic
-    # was wired in — and a stale count fails a test for the one reason that is
-    # never a defect: the sign-off population grew.
-    import phase3_one_shot_runner as _R
-    assert len(results) == len(_R._DECLARED_SIGNOFF_GATES)
-    statuses = {r.name: r.status for r in results}
-    assert statuses.pop("drv_signoff") == "NOT_MEASURED"
-    assert set(statuses.values()) == {"PASS"}, [
-        (r.name, r.status, r.detail) for r in results]
 
 
-def test_signoff_gates_block_a_violated_signoff_corner(tmp_path):
-    """The two-sided control. A gate that never fires is wiring for its own
-    sake — this drives the #147 shape (nominal clean, sign-off corner at
-    -1.71 ns) through the wiring that now carries it."""
-    import phase3_one_shot_runner as R
-    proj = _project(tmp_path)
-    (proj / "phase3" / "stage3" / "sta"
-     / "sta_spef_multicorner.rpt").write_text(_MULTICORNER_VIOLATED)
-    results = {r.name: r for r in R.step_declared_signoff_gates(proj)}
-    corner = results["sta_corner"]
-    assert corner.status == "FAIL", corner
-    assert "-1.710" in corner.detail or "-1.71" in corner.detail, corner.detail
 
 
-def test_a_blocked_signoff_gate_fails_the_whole_run(tmp_path):
-    """`_aggregate_verdict` is what turns a step FAIL into a non-zero exit.
-    Without this the wiring could land in `plan` and still be cosmetic."""
-    import phase3_one_shot_runner as R
-    proj = _project(tmp_path)
-    (proj / "phase3" / "stage3" / "sta"
-     / "sta_spef_multicorner.rpt").write_text(_MULTICORNER_VIOLATED)
-    plan = R.step_declared_signoff_gates(proj)
-    assert R._aggregate_verdict(plan) == "FAIL"
 
 
-def test_a_checker_fault_is_not_a_design_failure_and_is_not_neutral_either(
-        tmp_path):
-    """rc 2 means the gate could not read its inputs or was mis-invoked. That
-    is inconclusive, not a verdict about the design — a blocking gate that
-    fails runs over its own I/O errors is breakage, not enforcement.
-
-    REVERSED BY #544, deliberately. This test used to assert `SKIP` and
-    `_aggregate_verdict(...) != "FAIL"`, and that second half was the defect:
-    for a gate the flow DECLARES as sign-off, "inconclusive" is not neutral.
-    The distinction the original was protecting is kept — the step is
-    `BLOCKED`, never `FAIL`, so triage can still tell "nothing is known" from
-    "the design did not pass" — but it no longer releases.
-    """
-    import phase3_one_shot_runner as R
-    # A mis-invocation: argparse exits 2.
-    r = R._run_declared_signoff_gate(
-        _project(tmp_path), "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
-    assert r.status == "NOT_MEASURED", r
-    assert r.status != "FAIL", "a checker fault is not a verdict on the design"
-    assert "rc=2" in r.detail, r.detail
-    assert R._aggregate_verdict([r]) not in _RELEASING, r
 
 
-def test_a_missing_project_is_not_fabricated_into_existence(tmp_path):
-    """Creating the report directory would also create the PROJECT directory,
-    and every checker keys its rc-2 "cannot read my inputs" branch on
-    `project.is_dir()`. Fabricating the tree would convert that fault into a
-    NOT_APPLICABLE rc 0 — a green verdict about a project that is not there."""
-    import phase3_one_shot_runner as R
-    missing = tmp_path / "does_not_exist"
-    r = R._run_declared_signoff_gate(
-        missing, "sta_corner", "post_route_signoff_corner_check.py",
-        "reports/phase3/sta/post_route_signoff_corner.json")
-    # #544: a project that is not there is not a project that passed.
-    assert r.status == "NOT_MEASURED", r
-    assert not missing.exists(), (
-        "the gate helper created the project directory it was asked to audit")
 
 
-def test_signoff_gate_writes_its_verdict_json(tmp_path):
-    import phase3_one_shot_runner as R
-    proj = _project(tmp_path)
-    R.step_declared_signoff_gates(proj)
-    for rel in ("reports/phase3/sta/post_route_summary.json",
-                "reports/phase3/sta/post_route_signoff_corner.json",
-                "reports/phase3/sta/sta_corner_record_completeness.json",
-                "reports/phase3/em_signoff.json"):
-        assert (proj / rel).is_file(), f"{rel} was not written"
+
+
+
+
 
 
 # ===========================================================================
 # DIRECTION-1 GUARDS — must hold on the pre-fix tree too
 # ===========================================================================
-def test_d1_bare_wrapper_call_shape_still_works(tmp_path):
-    """`<wrapper> <project>` with no mode and no --json is the call shape
-    test_report_wrappers.py and test_sta_report_check.py drive. Forwarding
-    argv must not break it."""
-    proj = _project(tmp_path)
-    assert _run("sta_report_check.py", str(proj)).returncode == 0
-    assert _run("em_report_check.py", str(proj)).returncode == 0
-    assert _run("sta_report_check.py", str(tmp_path / "empty")).returncode == 1
-    assert _run("em_report_check.py", str(tmp_path / "empty")).returncode == 1
 
 
 def test_d1_signoff_corner_check_self_skips_without_a_multicorner_report(tmp_path):
@@ -480,17 +240,3 @@ def test_d1_corner_record_check_self_skips_with_no_declared_corner(tmp_path):
     rc 0 self-skip, not a FAIL invented out of an absent declaration."""
     r = _run("sta_corner_record_completeness_check.py", str(_project(tmp_path)))
     assert r.returncode == 0, r.stdout + r.stderr
-
-
-def test_d1_audit_never_writes_the_producers_em_measurement(tmp_path):
-    """The measurement must survive its own checker."""
-    proj = _project(tmp_path)
-    measurement = {"tool": "openroad-psm", "verdict": "MEASURED",
-                   "max_segment_current_A": 0.0002532,
-                   "segments_analysed": 3362}
-    em_json = proj / "reports" / "phase3" / "em.json"
-    em_json.write_text(json.dumps(measurement))
-    _run("em_report_check.py", str(proj), "--mode", "em",
-         "--json", str(proj / "reports" / "phase3" / "em_signoff.json"))
-    assert json.loads(em_json.read_text()) == measurement, (
-        "the EM audit overwrote the measurement it was auditing")

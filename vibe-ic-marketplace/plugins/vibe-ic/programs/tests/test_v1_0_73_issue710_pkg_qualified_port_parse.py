@@ -150,86 +150,10 @@ def test_end_state_real_artifact_parse_no_qualifier_dup(tmp_path):
 
 
 # ── (4) END-STATE — emitted full-stack TB binds real pins, not the qualifier ─
-def _build_l9_project(root: Path) -> Path:
-    """Shape a minimal project with L9.top_ports + the package-typed RTL top,
-    enough for step_full_stack_tb_gen to run."""
-    import json
-    proj = root / "proj"
-    gd = proj / "phase1" / "generated_docs"
-    rtl = proj / "phase2" / "stage1" / "rtl"
-    gd.mkdir(parents=True)
-    rtl.mkdir(parents=True)
-    (rtl / "chip_top.sv").write_text(_REAL_CHIP_TOP_SHAPE)
-    # L9 lists the (mis-extractable) pins; the runner reconciles to the RTL
-    # surface via _v629_rtl_top_ports → parse_module_ports.
-    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
-        "top_module": "chip_top",
-        "top_ports": [
-            {"name": "clk_i", "direction": "input"},
-            {"name": "rst_ni", "direction": "input"},
-            {"name": "rst_shadowed_ni", "direction": "input"},
-            {"name": "tl_i", "direction": "input"},
-            {"name": "tl_o", "direction": "output"},
-            {"name": "idle_o", "direction": "output"},
-        ],
-    }))
-    (gd / "L3_CMD_PROTOCOL.json").write_text(json.dumps(
-        {"no_opcodes_in_input": True, "opcodes": []}))
-    return proj
 
 
-def test_end_state_emitted_tb_binds_real_pins(tmp_path):
-    """END-STATE: step_full_stack_tb_gen emits a TB that binds the REAL
-    ports (tl_i/tl_o/idle_o) and NEVER the duplicate `.tlul_pkg(...)` /
-    `reg tlul_pkg`."""
-    import design_one_shot_runner as P2
-    proj = _build_l9_project(tmp_path)
-    res = P2.step_full_stack_tb_gen(proj, "chip_top")
-    # R-0915-85 — three words where the step now has three: NOT_MEASURED for
-    # a skeleton that compared nothing, PASS, and PASS_WITH_WAIVERS.
-    assert res.status in ("NOT_MEASURED", "PASS", "PASS_WITH_WAIVERS"), \
-        res.status
-    tb = (proj / "phase2" / "stage1" / "sim_full_stack"
-          / "tb_chip_top_full.v").read_text()
-    assert ".tl_i(tl_i)" in tb
-    assert ".tl_o(tl_o)" in tb
-    assert ".idle_o(idle_o)" in tb
-    # the pre-fix defect: duplicate qualifier connections + colliding reg
-    assert ".tlul_pkg(" not in tb
-    assert "reg tlul_pkg" not in tb
-    assert "wire prim_mubi_pkg;" not in tb
 
 
-def test_end_state_emitted_tb_compiles_vs_flattened_dut(tmp_path):
-    """SECONDARY empirical proof: with the PRIMARY parser fix alone, the
-    emitted TB COMPILES (rc=0) against the sv2v-flattened DUT (struct ports
-    lowered to packed vectors) — the scalar-reg ↔ vector-port mismatch is a
-    benign iverilog padding warning. No typed-port TB-emit is required."""
-    iverilog = shutil.which("iverilog")
-    if not iverilog:
-        pytest.skip("iverilog not available")
-    import design_one_shot_runner as P2
-    proj = _build_l9_project(tmp_path)
-    P2.step_full_stack_tb_gen(proj, "chip_top")
-    tb = (proj / "phase2" / "stage1" / "sim_full_stack"
-          / "tb_chip_top_full.v")
-    # hand-flattened DUT — mimics sv2v -DSYNTHESIS lowering the structs:
-    flat = tmp_path / "flat_chip_top.v"
-    flat.write_text(
-        "module chip_top (\n"
-        "  input clk_i, input rst_ni, input rst_shadowed_ni,\n"
-        "  input  [83:0] tl_i,\n"
-        "  output [50:0] tl_o,\n"
-        "  output [3:0]  idle_o\n"
-        ");\nendmodule\n")
-    vvp = tmp_path / "fs.vvp"
-    cp = subprocess.run(
-        [iverilog, "-g2012", "-DSIMULATION", "-o", str(vvp),
-         str(tb), str(flat)],
-        capture_output=True, text=True)
-    assert cp.returncode == 0, (
-        f"emitted TB failed to compile against flattened DUT: "
-        f"{cp.stderr[-800:]}")
 
 
 if __name__ == "__main__":

@@ -42,9 +42,6 @@ def test_em_late_mapping_gap_preserves_earlier_measured_DC_violation(measured_ca
     paths['capture'].write_text(paths['capture'].read_text().replace('0 0.0001','0 0.01'))
     mapping=json.loads(paths['currents'].read_text());mapping.update(voltage_v=[.01,0],current_a=.01/1.0005)
     paths['currents'].write_text(json.dumps(mapping)+'\n'+json.dumps(dict(mapping,spice_resistor='foreign'))+'\n')
-    rec=power._read(paths['receipt'])
-    for path in (paths['capture'],paths['currents']):rec['outputs'][str(path)]=power._sha(path)
-    put(paths['receipt'],rec)
     try: result,_=grade(project,setting)
     except ValueError as exc:result={'status':'NOT_MEASURED','reason':str(exc)}
     assert result['status']=='FAIL', result
@@ -65,11 +62,8 @@ def test_em_aggregate_late_required_population_error_keeps_measured_failure(meas
     paths['capture'].write_text(paths['capture'].read_text().replace('0 0.0001','0 0.01'))
     mapping=json.loads(paths['currents'].read_text());mapping.update(voltage_v=[.01,0],current_a=.01/1.0005)
     put(paths['currents'],json.dumps(mapping)+'\n')
-    rec=power._read(paths['receipt'])
-    for path in (paths['capture'],paths['currents']):rec['outputs'][str(path)]=power._sha(path)
-    put(paths['receipt'],rec)
     pdf=put(project/'source-only.pdf','SOURCE_ONLY document-conversion edge; not qualification\n')
-    source=put(project/'source-limits.json',{'copy':str(pdf),'sha256':power._sha(pdf)})
+    source=put(project/'source-limits.json',{'copy':str(pdf)})
     monkeypatch.setattr(power,'_limit_document_text',lambda *args:(TABLE,{}))
     monkeypatch.setattr(power,'read_technology',lambda *args:(TECH,{}))
     result=power.run(project,'unit',{'limits_source':str(source),'magic_tech':'source-only.tech',

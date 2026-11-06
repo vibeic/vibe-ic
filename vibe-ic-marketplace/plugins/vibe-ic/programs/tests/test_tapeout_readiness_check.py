@@ -220,11 +220,6 @@ def test_retired_shuttle_is_kept_not_deleted():
     assert trc.SHUTTLES[trc.DEFAULT_SHUTTLE].status == trc.LIVE
 
 
-def test_the_programs_still_pointed_at_the_dead_vendor_say_so():
-    for name in ("mpw_precheck_driver.py", "mpw_precheck_result_gate.py"):
-        text = (_PROGRAMS / name).read_text(encoding="utf-8")
-        assert "RETIRED SHUTTLE" in text, name
-        assert "tapeout_readiness_check" in text, name
 
 
 

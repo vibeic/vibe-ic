@@ -6,7 +6,8 @@ from pathlib import Path
 MODULE = Path(__file__).parents[1] / "src" / "container_runtime.mjs"
 
 
-def test_bootstrap_pulls_latest_and_pins_the_digest_without_host_paths():
+def test_bootstrap_pulls_latest_and_pins_the_digest_without_host_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIBEIC_TMP", str(tmp_path))
     script = r'''
 const { ensureContainerRuntime } = await import(process.argv[1]);
 const calls = [];
@@ -43,7 +44,12 @@ console.log(JSON.stringify({ out, env, calls }));
     flat = json.dumps(record["calls"])
     assert '"pull", "ghcr.io/vibeic/vibeic-eda:latest"' in flat
     assert "--label" in flat and "org.vibeic.mcp-managed=true" in flat
-    assert "/mnt/" not in flat and "docker.sock" not in flat
+    created = next(call for call in record["calls"] if call[0] == "run")
+    mounts = {created[index + 1] for index, flag in enumerate(created[:-1]) if flag == "-v"}
+    assert mounts == {f"{Path.home()}:{Path.home()}", f"{tmp_path.resolve()}:{tmp_path}"}
+    assert "docker.sock" not in flat
+    assert not Path(record["env"]["TMPDIR"]).exists()
+    assert not Path(record["env"]["VIBEIC_RUN_DIR"]).exists()
 
 
 def test_bootstrap_refuses_to_replace_an_unmanaged_container():
@@ -106,3 +112,33 @@ console.log(JSON.stringify(calls));
     )
     calls = json.loads(result.stdout)
     assert [call[0] for call in calls] == ['pull', 'image', 'inspect', 'exec']
+
+
+def test_managed_runtime_gets_the_new_temporary_mount_even_when_image_is_current(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIBEIC_TMP", str(tmp_path))
+    script = r'''
+const { ensureContainerRuntime } = await import(process.argv[1]);
+const digest = 'sha256:' + '8'.repeat(64), calls = [];
+function run(_cmd, args) {
+  calls.push(args);
+  const ok = stdout => ({status: 0, stdout: stdout || ''});
+  if (args[0] === 'pull') return ok();
+  if (args[0] === 'image') return ok(JSON.stringify([{
+    Id: digest, RepoDigests: ['neutral.invalid/eda@' + digest]
+  }]));
+  if (args[0] === 'inspect') return ok(JSON.stringify([{
+    Image: digest, Config: {Labels: {'org.vibeic.mcp-managed': 'true'}},
+    State: {Running: true}, Mounts: []
+  }]));
+  if (['rm', 'run', 'exec'].includes(args[0])) return ok();
+  throw Error('unexpected call ' + JSON.stringify(args));
+}
+ensureContainerRuntime({env: {VIBEIC_EDA_AUTO_BOOTSTRAP: '1'}, run});
+console.log(JSON.stringify(calls));
+'''
+    result = subprocess.run(['node', '--input-type=module', '-e', script, MODULE.as_uri()],
+                            text=True, capture_output=True, check=True)
+    calls = json.loads(result.stdout)
+    assert [call[0] for call in calls] == ['pull', 'image', 'inspect', 'rm', 'run', 'exec']
+    created = next(call for call in calls if call[0] == 'run')
+    assert f'{tmp_path.resolve()}:{tmp_path}' in created

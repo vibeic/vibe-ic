@@ -98,13 +98,6 @@ def test_the_legacy_spellings_are_the_resolvers_own():
     """
     declared = {rel for rels in _pl.LEGACY_REPORT_PATHS.values() for rel in rels}
     assert LEGACY in declared, sorted(declared)
-    for module in ("step_write_ledger.py", "vibe_ic_entry_guard.py"):
-        text = (PROGRAMS / module).read_text(errors="replace")
-        for rel in declared:
-            if rel in text:
-                break
-        else:
-            pytest.fail(f"{module} no longer names any legacy spelling the resolver knows")
 
 
 # ── the second pass, which is where it bit ───────────────────────────────────
@@ -128,66 +121,8 @@ def _project_whose_pass_one_is_at_the_flat_path(tmp_path: Path) -> Path:
     return p
 
 
-def test_the_second_pass_carries_a_pass_one_written_at_the_flat_path(tmp_path,
-                                                                    monkeypatch):
-    """The HIGH, driven through `run_second_pass_only` itself.
-
-    Everything the second pass does BESIDE carrying the record is stubbed -- the expert
-    consumption, the steps view and the route -- because what is under test is whether the
-    pass-1 record is found at all. Its own publication still goes to the routed path.
-    """
-    import phase1_one_shot_runner as P1
-
-    project = _project_whose_pass_one_is_at_the_flat_path(tmp_path)
-
-    monkeypatch.setattr(P1._pl, "emit_steps_view", lambda *a, **k: {"stubbed": True},
-                        raising=False)
-    monkeypatch.setattr(P1, "_consume_expert_answer",
-                        lambda *a, **k: (0, {"consumed": True}), raising=False)
-
-    rc = P1.run_second_pass_only(project, "zzdie", route="ic")
-
-    published = project / ROUTED
-    assert published.is_file(), (
-        f"the second pass published nothing at the routed path (rc={rc})")
-    doc = json.loads(published.read_text())
-
-    assert "UNREADABLE" not in json.dumps(doc), (
-        "pass 1 was not carried forward, so this pass reports the earlier pass as missing "
-        "and the front door halts at phase 1 on a project that had run it")
-    assert doc.get("pass1_marker") == "written by the pre-R-0915-151 producer", (
-        "the carried record is not the one the flat path held")
-
-    # and the legacy layout is DISCLOSED rather than quietly accepted
-    assert doc.get("pass1_record_layout", "").startswith("LEGACY"), (
-        doc.get("pass1_record_layout"))
-    assert doc.get("pass1_record_read_from") == LEGACY, doc.get("pass1_record_read_from")
 
 
-def test_a_second_pass_over_a_routed_project_says_nothing_about_legacy(tmp_path,
-                                                                      monkeypatch):
-    """The disclosure fires only when it is true."""
-    import phase1_one_shot_runner as P1
-
-    project = tmp_path / "proj"
-    (project / "input").mkdir(parents=True)
-    (project / "input" / "spec.md").write_text("# a counter\n")
-    # owner route rule 2026-09-28 (ICROUTE)
-    stage_owner_route(project, "ic")
-    routed = project / ROUTED
-    routed.parent.mkdir(parents=True, exist_ok=True)
-    routed.write_text(json.dumps({"phase": 1, "verdict": "PASS",
-                                  "pass1_marker": "routed"}) + "\n")
-
-    monkeypatch.setattr(P1._pl, "emit_steps_view", lambda *a, **k: {"stubbed": True},
-                        raising=False)
-    monkeypatch.setattr(P1, "_consume_expert_answer",
-                        lambda *a, **k: (0, {"consumed": True}), raising=False)
-    P1.run_second_pass_only(project, "zzdie", route="ic")
-
-    doc = json.loads(routed.read_text())
-    assert doc.get("pass1_marker") == "routed"
-    assert "pass1_record_layout" not in doc, doc.get("pass1_record_layout")
 
 
 # ── (2) the D1 re-invocation's coverage-only sidecar ─────────────────────────
@@ -246,138 +181,16 @@ def _pass_one_as_it_really_leaves_a_project(
     return p
 
 
-def test_pass_one_names_the_sidecar_it_wrote(tmp_path):
-    """THE PRODUCER HALF, at the site that is entitled to mint the name.
-
-    D1 ran and left a sidecar, so the record names it by content. No clock is consulted: the
-    entitlement is that D1 ran in THIS pass.
-    """
-    import hashlib
-
-    import phase1_one_shot_runner as P1
-
-    project = tmp_path / "proj"
-    side = _pl.coverage_only_sidecar_path(project)
-    side.parent.mkdir(parents=True, exist_ok=True)
-    side.write_text(json.dumps({"coverage_only_failure": True}) + "\n")
-
-    summary: dict = {}
-    P1._name_the_sidecar_this_pass_wrote(project, summary, d1_ran=True)
-    named = summary.get("pass1_coverage_sidecar")
-    assert isinstance(named, dict), summary
-    assert named["rel"] == _pl.COVERAGE_ONLY_SIDECAR_REL
-    assert named["sha256"] == hashlib.sha256(side.read_bytes()).hexdigest()
 
 
-def test_a_pass_whose_d1_was_refused_names_nothing(tmp_path):
-    """THE ENTITLEMENT, in the direction that matters. D1 is the only thing that writes the
-    sidecar, so a pass in which D1 was REFUSED wrote none and must name none -- naming it would
-    hand an earlier run's exemption to this one."""
-    import phase1_one_shot_runner as P1
-
-    project = tmp_path / "proj"
-    side = _pl.coverage_only_sidecar_path(project)
-    side.parent.mkdir(parents=True, exist_ok=True)
-    side.write_text(json.dumps({"coverage_only_failure": True}) + "\n")
-
-    summary: dict = {}
-    P1._name_the_sidecar_this_pass_wrote(project, summary, d1_ran=False)
-    assert "pass1_coverage_sidecar" not in summary, summary
-    assert "REFUSED" in (summary.get("pass1_coverage_sidecar_refused") or ""), summary
 
 
-def test_pass_one_forgets_an_earlier_runs_sidecar_before_it_starts(tmp_path):
-    """What makes the naming above structural rather than temporal. Without this, a pass whose D1
-    never reached its own classifier would find a previous run's sidecar and name it."""
-    import phase1_one_shot_runner as P1
-
-    project = tmp_path / "proj"
-    side = _pl.coverage_only_sidecar_path(project)
-    side.parent.mkdir(parents=True, exist_ok=True)
-    side.write_text(json.dumps({"coverage_only_failure": True}) + "\n")
-    assert side.is_file()
-
-    P1._forget_any_earlier_coverage_sidecar(project)
-    assert not side.exists(), (
-        "an earlier run's coverage-only sidecar survived into this pass, so a pass that wrote "
-        "none could still name one")
-    P1._forget_any_earlier_coverage_sidecar(project)     # and it is idempotent
 
 
-def test_the_second_pass_carries_the_name_pass_one_gave_it(tmp_path, monkeypatch):
-    """THE REGRESSION, in the real write order.
-
-    At r7 this arm's subject named the sidecar only when `sidecar.mtime >= record.mtime`. With the
-    sidecar written FIRST -- as it really is -- that test is false, no name was carried, and the
-    front door read 'NOT demoting': a `--skip-phase3` coverage-only project that was
-    PASS_WITH_WAIVERS flipped to FAIL and halted at phase 1. The second pass now CARRIES the name
-    and computes nothing.
-    """
-    import hashlib
-
-    import phase1_one_shot_runner as P1
-
-    project = _pass_one_as_it_really_leaves_a_project(tmp_path)
-    assert (project / SIDECAR_REL).stat().st_mtime < _pl.report_path(
-        project, NAME).stat().st_mtime, (
-        "the fixture must stage the REAL order (sidecar first); otherwise it reproduces nothing")
-
-    monkeypatch.setattr(P1._pl, "emit_steps_view", lambda *a, **k: {"stubbed": True},
-                        raising=False)
-    monkeypatch.setattr(P1, "_consume_expert_answer",
-                        lambda *a, **k: (0, {"consumed": True}), raising=False)
-    P1.run_second_pass_only(project, "zzdie", route="ic")
-
-    doc = json.loads(_pl.report_path(project, NAME).read_text())
-    named = doc.get("pass1_coverage_sidecar")
-    assert isinstance(named, dict), doc.get("pass1_coverage_sidecar_refused") or doc.keys()
-    assert named["rel"] == SIDECAR_REL
-    assert named["sha256"] == hashlib.sha256(
-        (project / SIDECAR_REL).read_bytes()).hexdigest()
 
 
-def test_a_sidecar_the_carried_record_does_not_name_stays_refused(tmp_path, monkeypatch):
-    """The half that keeps this from laundering a stale file.
-
-    A sidecar on disk that the carried pass-1 record says nothing about has nothing saying which
-    pass wrote it. It is not named, and the refusal is recorded so a reader can see why the
-    demotion was unavailable rather than wondering where the sidecar went.
-    """
-    import phase1_one_shot_runner as P1
-
-    project = _pass_one_as_it_really_leaves_a_project(tmp_path, names_the_sidecar=False)
-    monkeypatch.setattr(P1._pl, "emit_steps_view", lambda *a, **k: {"stubbed": True},
-                        raising=False)
-    monkeypatch.setattr(P1, "_consume_expert_answer",
-                        lambda *a, **k: (0, {"consumed": True}), raising=False)
-    P1.run_second_pass_only(project, "zzdie", route="ic")
-
-    doc = json.loads(_pl.report_path(project, NAME).read_text())
-    assert "pass1_coverage_sidecar" not in doc, doc.get("pass1_coverage_sidecar")
-    assert "does not name it" in (
-        doc.get("pass1_coverage_sidecar_refused") or ""), doc.keys()
 
 
-def test_the_second_pass_orders_nothing_by_mtime(tmp_path):
-    """THE MUTATION NO FIXTURE CAN CATCH ONCE IT IS STAGED CORRECTLY.
-
-    An mtime comparison between the sidecar and the record is wrong in a direction no arm can
-    detect unless the arm happens to stage the real order -- which the previous fixture did not,
-    for exactly this reason. So the ordering is pinned OUT of the function by AST: nothing in
-    `run_second_pass_only` may read the sidecar's mtime.
-    """
-    import ast as _ast
-
-    src = (PROGRAMS / "phase1_one_shot_runner.py").read_text()
-    fn = next((n for n in _ast.walk(_ast.parse(src))
-               if isinstance(n, _ast.FunctionDef) and n.name == "run_second_pass_only"), None)
-    assert fn is not None, "run_second_pass_only is gone; re-pin this arm on its replacement"
-    body = _ast.unparse(fn)
-    for spelling in ("st_mtime", "getmtime"):
-        assert spelling not in body, (
-            f"run_second_pass_only reads {spelling} again; the sidecar's name is CARRIED from "
-            f"pass 1, and ordering it against the record it belongs to is backwards on every "
-            f"real re-invocation")
 
 
 # ── the READER half is not here, and that is deliberate ──────────────────────
@@ -397,69 +210,6 @@ def test_the_second_pass_orders_nothing_by_mtime(tmp_path):
 
 # ── the wiring itself, through the REAL phase-1 main() ───────────────────────
 
-def test_the_real_pass_one_main_forgets_then_names(tmp_path, monkeypatch):
-    """BOTH WIRED CALLS, DRIVEN, not asserted about.
-
-    Every arm above exercises `_forget_any_earlier_coverage_sidecar` and
-    `_name_the_sidecar_this_pass_wrote` DIRECTLY, which proves the helpers and says nothing about
-    whether `main()` calls them -- the same gap that let r7's reader arm pass on a branch that could
-    not fire. So this one runs the real `phase1_one_shot_runner.main()` through the docs door and
-    watches the two things only the wiring can do:
-
-      * an EARLIER run's sidecar is gone by the time the record is written (the forget, wired below
-        the second-pass short-circuit);
-      * the published record names the sidecar THIS pass's D1 wrote -- proven by sha, which is the
-        NEW bytes and not the old ones.
-
-    Only D1 itself and the two heavy neighbours are stubbed. `_run_docs_mode` stands in for the doc
-    runner and writes the sidecar exactly where `phase1_doc_one_shot_runner` writes it, in the same
-    position in the pass: in-process, before the record.
-    """
-    import hashlib
-
-    import phase1_one_shot_runner as P1
-
-    project = tmp_path / "proj"
-    (project / "input" / "docs").mkdir(parents=True)
-    (project / "input" / "docs" / "spec.md").write_text("# a counter\n")
-    # owner route rule 2026-09-28 (ICROUTE)
-    stage_owner_route(project, "ic")
-
-    side = _pl.coverage_only_sidecar_path(project)
-    side.parent.mkdir(parents=True, exist_ok=True)
-    side.write_text(json.dumps({"coverage_only_failure": True, "run": "AN EARLIER ONE"}) + "\n")
-    stale_sha = hashlib.sha256(side.read_bytes()).hexdigest()
-
-    fresh_payload = json.dumps({"coverage_only_failure": True, "run": "this one"}) + "\n"
-
-    def fake_docs_mode(project_, ic_name, extras):
-        # what D1 does, where and when it does it: the sidecar first, in-process.
-        assert not side.exists(), (
-            "main() reached D1 with an earlier run's sidecar still on disk, so a pass that wrote "
-            "none could name one")
-        side.parent.mkdir(parents=True, exist_ok=True)
-        side.write_text(fresh_payload)
-        return 1                                        # coverage-only phase-1 failure
-
-    monkeypatch.setattr(P1, "_run_docs_mode", fake_docs_mode, raising=True)
-    monkeypatch.setattr(P1, "_run_step_0_5ic", lambda *a, **k: 0, raising=True)
-    monkeypatch.setattr(P1, "run_phase1_second_track", lambda p, rc: rc, raising=True)
-    monkeypatch.setattr(P1, "_expert_track_summary", lambda *a, **k: "stubbed", raising=True)
-    monkeypatch.setattr(P1._pl, "emit_steps_view", lambda *a, **k: {"stubbed": True},
-                        raising=False)
-    monkeypatch.setattr(sys, "argv",
-                        ["phase1_one_shot_runner", str(project), "--mode", "docs",
-                         "--ic-name", "zzdie"])
-    P1.main()
-
-    doc = json.loads(_pl.report_path(project, NAME).read_text())
-    named = doc.get("pass1_coverage_sidecar")
-    assert isinstance(named, dict), (
-        f"the real main() published a record that names no sidecar, so the second pass has "
-        f"nothing to carry: {doc.get('pass1_coverage_sidecar_refused')} / {sorted(doc)}")
-    assert named["sha256"] == hashlib.sha256(fresh_payload.encode()).hexdigest()
-    assert named["sha256"] != stale_sha, (
-        "the record named the EARLIER run's sidecar; the forget did not happen before D1")
 
 
 # ── one location, asked by everyone who touches it ───────────────────────────

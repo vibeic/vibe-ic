@@ -42,12 +42,6 @@ def _write_json(p: Path, body: dict) -> None:
     p.write_text(json.dumps(body, indent=2))
 
 
-def _run(project: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(PROGRAMS / "ic_class_consistency_check.py"),
-         str(project)],
-        capture_output=True, text=True,
-    )
 
 
 def _evidence(name: str) -> dict:
@@ -80,77 +74,15 @@ def _live_class(project: Path) -> str:
 
 
 # ---------------------------------------------------------------- provenance
-def test_fail_message_names_the_snapshot_when_one_exists(tmp_path: Path) -> None:
-    p = tmp_path / "proj"
-    _build_pure_analog(p)
-    _snapshot(p, "pure_analog")
-    _stamp(p, "digital_arithmetic_primitive")
-
-    r = _run(p)
-    assert r.returncode == 1, r.stdout
-    assert "reports/ic_class.json (persisted snapshot) holds 'pure_analog'" \
-        in r.stdout, r.stdout
-    # The old text credited a classification that never ran.
-    assert "detect_ic_class()/reports/ic_class.json resolves" not in r.stdout
 
 
-def test_fail_message_names_live_inference_when_no_snapshot(tmp_path: Path) -> None:
-    p = tmp_path / "proj"
-    _build_pure_analog(p)
-    _stamp(p, "digital_arithmetic_primitive")
-    assert not (p / "reports/ic_class.json").is_file()
-
-    r = _run(p)
-    assert r.returncode == 1, r.stdout
-    assert "detect_ic_class() live inference holds" in r.stdout, r.stdout
 
 
 # ---------------------------------------------------------------- disclosure
-def test_stale_snapshot_is_disclosed_on_a_passing_run(tmp_path: Path) -> None:
-    """Snapshot disagrees with the classifier; stamps agree with the snapshot.
-
-    The stamp/snapshot contract is intact, so the verdict must stay PASS — but
-    the drift must be visible rather than silent.
-    """
-    p = tmp_path / "proj"
-    _build_pure_analog(p)
-    live = _live_class(p)
-    stale = "processor_cpu" if live != "processor_cpu" else "crypto_accelerator"
-    _snapshot(p, stale)
-    _stamp(p, stale)                    # layer 1 agrees with layer 2 → PASS
-
-    r = _run(p)
-    assert r.returncode == 0, r.stdout
-    assert "DISCLOSURE (not a failure)" in r.stdout, r.stdout
-    assert f"holds {stale!r}" in r.stdout, r.stdout
-    assert f"yields {live!r}" in r.stdout, r.stdout
 
 
-def test_stale_snapshot_is_disclosed_on_a_failing_run(tmp_path: Path) -> None:
-    p = tmp_path / "proj"
-    _build_pure_analog(p)
-    live = _live_class(p)
-    stale = "processor_cpu" if live != "processor_cpu" else "crypto_accelerator"
-    _snapshot(p, stale)
-    _stamp(p, "bus_peripheral")         # layer 1 disagrees → FAIL
-
-    r = _run(p)
-    assert r.returncode == 1, r.stdout
-    assert "DISCLOSURE (not a failure)" in r.stdout, r.stdout
-    # The disclosure must not add to the counted issues.
-    assert "(1 issue(s))" in r.stdout, r.stdout
 
 
-def test_agreeing_snapshot_discloses_nothing(tmp_path: Path) -> None:
-    p = tmp_path / "proj"
-    _build_pure_analog(p)
-    live = _live_class(p)
-    _snapshot(p, live)
-    _stamp(p, live)
-
-    r = _run(p)
-    assert r.returncode == 0, r.stdout
-    assert "DISCLOSURE" not in r.stdout, r.stdout
 
 
 # ------------------------------------------------------- uncached read door

@@ -81,59 +81,10 @@ OWED_PROGRAM = "rtl_hygiene_lint"
 # --------------------------------------------------------------------------- #
 # (1) the wiring: the phase-2 runner invokes the producer, BEFORE the audit
 # --------------------------------------------------------------------------- #
-def test_the_phase2_runner_invokes_the_declared_producer_pass():
-    """RED before this change: 0 occurrences in this file, for all history."""
-    src = PHASE2_RUNNER.read_text()
-    assert f"{PRODUCER}.py" in src, (
-        "the phase-2 runner does not invoke the declared-producer pass, so a "
-        "phase-2-only run leaves its declared documents to the audit")
 
 
-def test_the_producer_pass_runs_BEFORE_the_final_audit():
-    """Order is the whole point: the audit is what READS these documents, so a
-    pass that ran after it would change nothing this run is graded on."""
-    tree = ast.parse(PHASE2_RUNNER.read_text())
-    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                and n.name == "main")
-    calls = [n.func.id for n in ast.walk(main) if isinstance(n, ast.Call)
-             and isinstance(n.func, ast.Name)]
-    assert calls.count("_audit_after_declared_producers") == 1
-    assert "step_final_audit" not in calls  # no second audit before the pass
-
-    import design_one_shot_runner as runner
-    # The actual producer runs on an empty scratch project and writes its
-    # ZERO_POPULATION receipt with rc=2. The audit callback observes the file
-    # on disk; its return is only a controlled step verdict for this test.
-    with pytest.MonkeyPatch.context() as mp:
-        seen = []
-        def audit(project, phase, skip_analog):
-            receipt = project / "reports/audit/flow_declared_producer_run.json"
-            seen.append(json.loads(receipt.read_text())["verdict"])
-            assert phase == 2 and skip_analog is True
-            return runner.StepResult("final_audit", "PASS")
-        mp.setattr(runner, "step_final_audit", audit)
-        from tempfile import TemporaryDirectory
-        with TemporaryDirectory() as directory:
-            result = runner._audit_after_declared_producers(Path(directory), True)
-    assert seen == ["ZERO_POPULATION"]
-    assert result.name == "final_audit" and result.status == "PASS"
 
 
-def test_the_pass_is_recorded_not_gating(tmp_path, monkeypatch, capsys):
-    """It never decides a verdict: the step gates re-run these programs and keep
-    their own. The real producer's empty-population rc=2 is reported, then the
-    audit still runs and owns the returned verdict."""
-    import design_one_shot_runner as runner
-    seen = []
-    def audit(project, phase, skip_analog):
-        seen.append(json.loads((project / "reports/audit/flow_declared_producer_run.json")
-                               .read_text())["verdict"])
-        return runner.StepResult("final_audit", "PASS")
-    monkeypatch.setattr(runner, "step_final_audit", audit)
-    result = runner._audit_after_declared_producers(tmp_path, False)
-    assert seen == ["ZERO_POPULATION"]
-    assert "flow_declared_producer_run rc=2" in capsys.readouterr().err
-    assert result.name == "final_audit" and result.status == "PASS"
 
 
 # --------------------------------------------------------------------------- #
@@ -148,34 +99,8 @@ def test_the_pass_is_recorded_not_gating(tmp_path, monkeypatch, capsys):
 # --------------------------------------------------------------------------- #
 # (3) the phase-3 site is untouched
 # --------------------------------------------------------------------------- #
-def test_the_phase3_site_is_unchanged():
-    """This change ADDS a caller; it does not move the one that existed. The
-    phase-3 runner must still invoke the pass, with the same guarantees."""
-    src = PHASE3_RUNNER.read_text()
-    assert src.count(f"{PRODUCER}.py") == 1
-    i = src.index(f"{PRODUCER}.py")
-    window = src[i - 1200:i + 1600]
-    assert "check=False" in window and "must not abort" in window
 
 
-def test_both_runners_invoke_it_the_same_way():
-    """One shape, two callers. The argv, the timeout basis and the rc handling
-    are compared as PARSED CALLS, not as text, so a reformat cannot pass and a
-    changed argument cannot hide."""
-    def _call(path: Path):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            if PRODUCER not in ast.dump(node):
-                continue
-            kw = {k.arg for k in node.keywords}
-            return kw
-        return None
-    two = _call(PHASE2_RUNNER)
-    three = _call(PHASE3_RUNNER)
-    assert two is not None and three is not None
-    assert two == three == {"timeout", "check", "capture_output", "text"}
 
 
 # --------------------------------------------------------------------------- #

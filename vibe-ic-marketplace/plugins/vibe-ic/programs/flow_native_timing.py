@@ -28,10 +28,22 @@ def _sdc_findings(log: str, configured: set[str]):
             for item in native.sdc_diagnostics(filtered, Path(name), calibrate=False)]
 
 
-def read_sta_reports(directory: Path, config: dict) -> dict:
+def read_sta_reports(directory: Path, config: dict, *, project: Path | None = None) -> dict:
     """Sum native corner diagnostics, omitting metrics whose reports are missing."""
     directory = Path(directory)
     reports, details = [], []
+    ports, observations = {}, []
+    if project is not None:
+        path = Path(project) / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+        if path.is_file():
+            reports.append(str(path))
+            body = json.loads(path.read_text())
+            hierarchy = body["fields"] if isinstance(body.get("fields"), dict) else {}
+            rows = (body.get("top_ports") or hierarchy.get("top_ports")
+                    or body.get("ports") or hierarchy.get("ports") or [])
+            ports = {p["name"]: p for p in rows
+                     if p.get("timing_class") in {"asynchronous", "unused"}
+                     and p.get("timing_class_sources")}
     resolved = dict(config)
     state = {}
     output = {}
@@ -78,6 +90,19 @@ def read_sta_reports(directory: Path, config: dict) -> dict:
                 found = native.check_setup_counts(texts[filename], native.supply_names(resolved),
                                                   calibrate=False)
                 if found is not None:
+                    for kind, count, listed in native.check_setup_sections(texts[filename]):
+                        if kind not in {"no_input_delay", "no_output_delay", "unconstrained_endpoints"}:
+                            continue
+                        removed = []
+                        for name in listed:
+                            base = re.fullmatch(r"([A-Za-z_]\w*)(?:\[-?\d+\])*", name)
+                            port = ports.get(base[1]) if base else None
+                            if port is not None and name not in native.supply_names(resolved):
+                                removed.append(name)
+                                observations.append({"kind": "documented_port_timing", "port": name,
+                                    "timing_class": port["timing_class"], "sources": port["timing_class_sources"],
+                                    "corner": corner.name, "finding": kind, "status": "NOT_APPLICABLE"})
+                        found[kind] -= min(count, len(removed))
                     break
         if found is None:
             details.append(f"{corner.name}: native check_setup section is missing.")
@@ -99,13 +124,16 @@ def read_sta_reports(directory: Path, config: dict) -> dict:
         details.append("No native STA corner reports exist.")
     details.insert(0, f"Read {len(corners)} native STA corners; check_setup {len(counts)}/{len(corners)}, "
                       f"SDC diagnostics {len(diagnostics)}/{len(corners)}.")
-    return {"metrics": metrics, "reports": reports, "detail": " ".join(details)}
+    return {"metrics": metrics, "reports": reports, "detail": " ".join(details),
+            "observations": observations}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--project", type=Path)
     args = parser.parse_args()
-    result = read_sta_reports(args.directory, json.loads(args.config.read_text()) if args.config else {})
+    result = read_sta_reports(args.directory, json.loads(args.config.read_text()) if args.config else {},
+                              project=args.project)
     print(json.dumps(result, indent=2))

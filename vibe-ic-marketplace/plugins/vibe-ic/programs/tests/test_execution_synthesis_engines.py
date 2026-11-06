@@ -10,21 +10,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _local_workdir_argv(project: Path, workdir: str) -> list[str]:
     samepath = str(project.resolve())
     return ["docker", "run", "--rm", "-v", f"{samepath}:{samepath}",
@@ -42,9 +27,6 @@ def test_local_workdir_runs_child_from_mapped_docker_directory(tmp_path, monkeyp
     observed = {}
     monkeypatch.setattr(container_exec, "no_container_route", lambda: True)
     monkeypatch.setattr(container_exec, "local_exec_mode", lambda owner: None)
-    attestation = {"network_mode": None, "memory": 0, "memory_swap": -1,
-                   "auto_remove": True, "cid": "unit-cid"}
-    monkeypatch.setattr(ll, "local_image_attestation", lambda image: dict(attestation))
 
     class Child:
         # This completed protocol fixture owns no OS process. The supervisor
@@ -85,9 +67,6 @@ def test_local_workdir_runs_real_child_in_mapped_directory(tmp_path, monkeypatch
     marker = "relative-file-read-from-real-child\n"
     (project / "cwd-proof.txt").write_text(marker)
     monkeypatch.setattr(container_exec, "no_container_route", lambda: True)
-    attestation = {"network_mode": None, "memory": 0, "memory_swap": -1,
-                   "auto_remove": True, "cid": "unit-cid"}
-    monkeypatch.setattr(ll, "local_image_attestation", lambda image: dict(attestation))
     script = ("import os; from pathlib import Path; print(os.getcwd()); "
               "print(Path('cwd-proof.txt').read_text(), end='')")
     argv = ["docker", "run", "--rm", "-v", f"{project.resolve()}:/guest-project",
@@ -113,8 +92,6 @@ def test_local_workdir_refuses_unmapped_or_relative_paths(tmp_path, monkeypatch,
     project.mkdir()
     monkeypatch.setattr(container_exec, "no_container_route", lambda: True)
     monkeypatch.setattr(container_exec, "local_exec_mode", lambda owner: None)
-    monkeypatch.setattr(ll, "local_image_attestation",
-                        lambda image: pytest.fail("invalid --workdir reached image attestation"))
     with pytest.raises(ll.Refusal, match="LL_LOCAL_WORKDIR_INVALID"):
         ll._run_local(_local_workdir_argv(project, workdir),
                       probe_deadline_s=1, supervised=False, log=None)
@@ -129,8 +106,6 @@ def test_local_workdir_refuses_missing_directory_without_scratch_fallback(tmp_pa
     missing = project / "missing"
     monkeypatch.setattr(container_exec, "no_container_route", lambda: True)
     monkeypatch.setattr(container_exec, "local_exec_mode", lambda owner: None)
-    monkeypatch.setattr(ll, "local_image_attestation",
-                        lambda image: pytest.fail("missing --workdir reached image attestation"))
     with pytest.raises(ll.Refusal, match="LL_LOCAL_WORKDIR_INVALID"):
         ll._run_local(_local_workdir_argv(project, str(missing)),
                       probe_deadline_s=1, supervised=False, log=None)
@@ -144,8 +119,6 @@ def test_local_workdir_refuses_conflicting_caller_cwd(tmp_path, monkeypatch):
     project.mkdir()
     monkeypatch.setattr(container_exec, "no_container_route", lambda: True)
     monkeypatch.setattr(container_exec, "local_exec_mode", lambda owner: None)
-    monkeypatch.setattr(ll, "local_image_attestation",
-                        lambda image: pytest.fail("conflicting cwd reached image attestation"))
     with pytest.raises(ll.Refusal, match="LL_LOCAL_WORKDIR_INVALID"):
         ll._run_local(_local_workdir_argv(project, str(project)),
                       probe_deadline_s=1, supervised=False, log=None,

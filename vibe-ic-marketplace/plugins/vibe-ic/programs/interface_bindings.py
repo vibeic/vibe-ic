@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import tempfile
+import vibeic_temp as tempfile
 
 INPUT = "plugin_input/interface-bindings.json"
 CONTEXT = "plugin_input/interface_context"

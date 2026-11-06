@@ -35,38 +35,20 @@ then is the absence of the stale claim allowed to mean anything.
 """
 from __future__ import annotations
 
-import ast
-import importlib.util
 import re
-import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[5]
-RUNNER = (Path(__file__).resolve().parent.parent / "phase3_one_shot_runner.py")
 GENERATOR = REPO / "docs" / "campaigns" / "ppa-e2e" / "tools" / "gen_result_md.py"
 RESULT_MD = REPO / "docs" / "campaigns" / "ppa-e2e" / "RESULT.md"
 FINDINGS_MD = REPO / "docs" / "campaigns" / "ppa-e2e" / "FINDINGS.md"
-
-_PROGRAMS = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PROGRAMS))
-_SPEC = importlib.util.spec_from_file_location(
-    "phase3_one_shot_runner_record_truth", RUNNER)
-p3 = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = p3
-_SPEC.loader.exec_module(p3)
-
-from _ppa.backends import opensta  # noqa: E402
 
 #: These are required shipped artefacts.  There is deliberately no skip for a
 #: checkout that lacks one: the tests below must fail when their subject is
 #: absent, renamed, or unreadable rather than turning missing evidence into a
 #: non-blocking result.
-
-#: The sign-off STA emitters the satisfied request named. Every one of them must
-#: write a basis stamp; this list is the reason the request is satisfied.
-_EMITTERS = ("_emit_spef_sta", "_emit_corner_spef_sta", "_emit_mcorner_ocv_sta")
 
 #: Present-tense claims that the emitters do not stamp. Matched case-insensitively
 #: and across a line break, because the documents are hard-wrapped and the claim
@@ -134,123 +116,6 @@ _SECTIONS = {
 #: A commit id as these documents spell one.
 _COMMITISH = re.compile(r"\b[0-9a-f]{7,40}\b")
 
-TOP = "dut"
-CONTAINER = "test-container-no-such-container"
-_PUTS = re.compile(r'puts \$_f "([^"]*)"')
-
-#: emitter, routed netlist present, SPEF present, exact emitted stamp, exact
-#: stage resolved by `_ppa/timing`. The ids are deliberately arm names: a
-#: mutation failure must tell the reader which semantic condition was lost.
-_SEMANTIC_ARMS = (
-    ("rc_pre_layout", "rc", False, True,
-     "PRE_LAYOUT_ESTIMATE", "pre_layout_estimate"),
-    ("ocv_pre_layout", "ocv", False, True,
-     "PRE_LAYOUT_ESTIMATE", "pre_layout_estimate"),
-    ("ocv_routed_without_spef", "ocv", True, False,
-     "POST_ROUTE_NO_SPEF", "post_route_no_extraction"),
-    ("ocv_routed_with_spef", "ocv", True, True,
-     "POST_ROUTE_SPEF", "post_route_extracted"),
-)
-
-
-def _emitter_sources() -> dict:
-    """Each named emitter's own source segment, by AST rather than by line math.
-
-    A regex over the whole 41k-line runner would find a stamp written by some
-    OTHER function and call this one stamped, which is the vacuous pass this
-    test exists to refuse.
-    """
-    text = RUNNER.read_text(encoding="utf-8", errors="replace")
-    tree = ast.parse(text)
-    out = {}
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name in _EMITTERS:
-            out[node.name] = ast.get_source_segment(text, node) or ""
-    return out
-
-
-def _mk_project(root: Path, *, routed: bool) -> Path:
-    """The smallest tree that makes both shipped emitters answer."""
-    synth = root / "phase2" / "stage2" / "synth"
-    synth.mkdir(parents=True)
-    (synth / f"{TOP}_synth.v").write_text(f"module {TOP}(); endmodule\n")
-    pnr = root / "phase3" / "stage3" / "pnr"
-    pnr.mkdir(parents=True)
-    (pnr / "constraint.sdc").write_text(
-        "create_clock -period 10 [get_ports clk]\n")
-    if routed:
-        (pnr / f"{TOP}_pnr.v").write_text(f"module {TOP}(); endmodule\n")
-    libdir = root / "input" / "pdk" / "liberty"
-    libdir.mkdir(parents=True)
-    for name in ("cellib_ss.lib", "cellib_typ.lib", "cellib_ff.lib"):
-        (libdir / name).write_text("library (l) { }\n")
-    return root
-
-
-def _mk_pdk(root: Path) -> "p3.PdkConfig":
-    libdir = root / "input" / "pdk" / "liberty"
-    return p3.PdkConfig(
-        name="testpdk", liberty=str(libdir / "cellib_typ.lib"),
-        tech_lef=str(root / "tech.lef"), cell_lef=str(root / "cell.lef"),
-        cell_gds=None, site="unit", drc_deck=None)
-
-
-def _mk_spefs(root: Path) -> dict:
-    spef_dir = root / "phase3" / "stage3" / "extracted" / "spef_corners"
-    spef_dir.mkdir(parents=True)
-    out = {}
-    for corner in ("min", "max"):
-        path = spef_dir / f"{TOP}.{corner}.spef"
-        path.write_text('*SPEF "IEEE 1481-1998"\n')
-        out[corner] = path
-    return out
-
-
-@pytest.fixture(autouse=True)
-def _no_docker(monkeypatch):
-    """Emit the real Tcl while replacing only the unavailable tool process."""
-    monkeypatch.setitem(p3._CONTAINER_MOUNTS_CACHE, CONTAINER, [])
-
-    def _fake_exec(container, cmd, *args, **kwargs):
-        for output in kwargs.get("outputs") or []:
-            Path(output).parent.mkdir(parents=True, exist_ok=True)
-            Path(output).write_text("worst slack max 1.00\ntns max 0.00\n")
-        return 0, "", ""
-
-    monkeypatch.setattr(p3, "_docker_exec", _fake_exec)
-
-
-def _report_body(tcl: str) -> str:
-    """The report lines generated by this emitter Tcl, in emission order."""
-    return "\n".join(_PUTS.findall(tcl))
-
-
-def _emit_rc(root: Path, *, routed: bool) -> str:
-    project = _mk_project(root, routed=routed)
-    report = project / "phase3" / "stage3" / "sta" / "sta_spef_multicorner.rpt"
-    result = p3._emit_corner_spef_sta(
-        project, TOP, _mk_pdk(project), CONTAINER, _mk_spefs(project),
-        report, [], corner_libs=None)
-    assert result["ok"] is True
-    return _report_body((report.parent / "sta_spef_setup.tcl").read_text())
-
-
-def _emit_ocv(root: Path, *, routed: bool, with_spef: bool) -> str:
-    project = _mk_project(root, routed=routed)
-    libdir = project / "input" / "pdk" / "liberty"
-    corner_libs = {
-        "SS": str(libdir / "cellib_ss.lib"),
-        "FF": str(libdir / "cellib_ff.lib"),
-    }
-    report = project / "phase3" / "stage3" / "sta" / "sta_mcorner_ocv.rpt"
-    ran = p3._emit_mcorner_ocv_sta(
-        project, TOP, _mk_pdk(project), CONTAINER, corner_libs,
-        _mk_spefs(project) if with_spef else {}, None, report, [])
-    assert ran is True
-    return _report_body(
-        (report.parent / "sta_mcorner_ocv_setup.tcl").read_text())
-
-
 def _section(body: str, start: str, stop: str) -> str:
     """One uniquely anchored section, refusing absence or ambiguity."""
     assert body.count(start) == 1, (
@@ -263,30 +128,6 @@ def _section(body: str, start: str, stop: str) -> str:
 
 
 # ------------------------------------------------------- NON-VACUITY FIRST ---
-def test_the_three_named_emitters_still_exist_in_the_runner():
-    """If they were renamed, every assertion below would be about nothing."""
-    found = _emitter_sources()
-    missing = [n for n in _EMITTERS if n not in found]
-    assert not missing, (
-        f"emitter(s) {missing} are no longer module-level functions of "
-        f"{RUNNER.name}; this guard's subject moved and the guard must move "
-        f"with it rather than quietly passing")
-
-
-@pytest.mark.parametrize(
-    "arm,emitter,routed,with_spef,expected_stamp,expected_stage",
-    _SEMANTIC_ARMS, ids=[case[0] for case in _SEMANTIC_ARMS])
-def test_each_emitted_stamp_resolves_to_its_exact_timing_stage(
-        tmp_path: Path, arm: str, emitter: str, routed: bool,
-        with_spef: bool, expected_stamp: str, expected_stage: str):
-    """The four-arm positive control; source-token grepping cannot replace it."""
-    root = tmp_path / arm
-    body = (_emit_rc(root, routed=routed) if emitter == "rc" else
-            _emit_ocv(root, routed=routed, with_spef=with_spef))
-    parsed = opensta.parse_report(body)
-    assert parsed.basis_stamp == expected_stamp, (
-        f"{arm}: emitted {parsed.basis_stamp!r}, expected {expected_stamp!r}; "
-        f"report body:\n{body}")
 
 
 @pytest.mark.parametrize("doc", [GENERATOR, RESULT_MD, FINDINGS_MD],

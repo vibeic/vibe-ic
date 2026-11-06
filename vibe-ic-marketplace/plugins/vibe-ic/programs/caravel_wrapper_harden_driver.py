@@ -64,6 +64,8 @@ Unit tests: `programs/tests/test_caravel_wrapper_harden_driver.py`.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import json
 import os
@@ -260,7 +262,7 @@ def build_harden_command(project_dir: Path, design: str, image: str,
     # this run's work at all.
     cname = f"vibeic_caravel_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
     return [
-        "docker", "run", "--rm", "--name", cname,
+        "docker", "run", *_vtmp.docker_mounts(), "--rm", "--name", cname,
         *_dmem.docker_memory_flags(),
         "-v", f"{proj}:/work",
         "-v", f"{resolved}:/pdk",

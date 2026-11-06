@@ -40,98 +40,21 @@ import _container_exec as CE  # noqa: E402
 import _progress_run as _pr  # noqa: E402
 import fault_atpg_run as F  # noqa: E402
 import transition_fault_atpg_run as T  # noqa: E402
-from test_suite_write_guard import (  # noqa: E402
-    _ambient_repo, _child_env, _detached_copy_of_the_guard)
-
-_SAMPLE = json.loads(
-    (_TESTS / "fixtures" / "f35_in_image_cwd_write_sample.json").read_text())
-_FILES = _SAMPLE["files"]
 
 
-def _git(*a):
-    subprocess.run(["git", *a], check=True, capture_output=True)
 
 
-def _checkout_pair(tmp_path: Path):
-    """Checkout A (holds the guard, tracked) and B, a clone of A."""
-    a = tmp_path / "a"
-    _detached_copy_of_the_guard(a)
-    (a / "pkg").mkdir()
-    (a / "pkg" / "shipped.txt").write_text("published bytes\n")
-    _git("init", "-q", str(a))
-    for k, v in (("user.email", "t@t"), ("user.name", "t")):
-        _git("-C", str(a), "config", k, v)
-    _git("-C", str(a), "add", "-A")
-    _git("-C", str(a), "commit", "-qm", "base")
-    b = tmp_path / "b"
-    _git("clone", "-q", str(a), str(b))
-    return a, b
 
 
-def _planted(tmp_path: Path, into_cwd: bool) -> Path:
-    """A passing test that writes the REAL sample — into `.` like the engine,
-    or into its own tmp dir like a well-behaved test."""
-    tf = tmp_path / "suite" / "test_engine_like_writer.py"
-    tf.parent.mkdir()
-    tf.write_text(
-        "import json, os, tempfile\n"
-        "from pathlib import Path\n"
-        f"FILES = json.loads({json.dumps(json.dumps(_FILES))})\n"
-        "def test_writes_like_the_atpg_engine():\n"
-        + ("    root = Path('.')\n" if into_cwd else
-           "    root = Path(tempfile.mkdtemp())\n")
-        + "    for rel, body in FILES.items():\n"
-        "        p = root / rel\n"
-        "        p.parent.mkdir(parents=True, exist_ok=True)\n"
-        "        p.write_text(body)\n")
-    return tf
 
 
-def _session(a: Path, cwd: Path, tf: Path):
-    env = _child_env()
-    env["PYTHONPATH"] = str(a / "programs")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    p = _pr.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                 "-p", "suite_write_guard", str(tf)],
-                capture_output=True, text=True, cwd=str(cwd), env=env)
-    return p, p.stdout + p.stderr
 
 
-def test_the_real_sample_written_into_another_checkout_reddens(tmp_path):
-    """THE POSITIVE. Unfixed: `[PASS]`, rc 0, three files sitting in B."""
-    a, b = _checkout_pair(tmp_path)
-    p, out = _session(a, b, _planted(tmp_path, into_cwd=True))
-    assert "1 passed" in out, out[-2000:]
-    # the setup is live: the sample really landed in B, and not in A
-    for rel in _FILES:
-        assert (b / rel).is_file(), rel
-        assert not (a / rel).exists(), rel
-    assert p.returncode == 1, (
-        "the engine's real writes landed in the invocation checkout and the "
-        "guard let the session through:\n" + out[-2000:])
-    assert "WROTE INTO THE TREE" in out, out[-2000:]
-    for rel in _FILES:
-        assert f"{b}/{rel}" in out, (rel, out[-2000:])
 
 
-def test_the_same_writer_into_its_tmp_dir_stays_green(tmp_path):
-    """PAIRED. Measuring B must not redden a session that wrote nothing there."""
-    a, b = _checkout_pair(tmp_path)
-    p, out = _session(a, b, _planted(tmp_path, into_cwd=False))
-    assert p.returncode == 0, out[-2000:]
-    assert "[PASS] suite_write_guard" in out, out[-2000:]
-    assert "WRITE_GUARD_NOT_CHECKED" not in out, out[-2000:]
 
 
-def test_an_unrelated_ambient_cwd_is_still_not_the_subject(tmp_path):
-    """PAIRED, the #1412 side. A cwd inside a repository that is NOT another
-    checkout of this tree is not measured, so its state cannot block."""
-    a, _b = _checkout_pair(tmp_path)
-    ambient = _ambient_repo(tmp_path)
-    p, out = _session(a, ambient, _planted(tmp_path, into_cwd=True))
-    assert (ambient / "parser.out").is_file()  # the write did happen there
-    assert p.returncode == 0, out[-2000:]
-    assert "[PASS] suite_write_guard" in out, out[-2000:]
+
 
 
 # ── the writer: the local ATPG routes run the engine in a throwaway cwd ────

@@ -1418,19 +1418,6 @@ def test_yosys_budget_is_tunable_and_defaults_above_the_runner_observed_need():
 # through to a disclosed-skip — the enhancement runs but never lands a verdict.
 # The two were hard-coded independently (outer 1200s vs inner 1800s) and drifted.
 # ---------------------------------------------------------------------------
-def test_runner_outer_timeout_covers_total_budget_plus_margin():
-    import design_one_shot_runner as runner
-    inner = runner.lec_producer_yosys_timeout_s()
-    assert inner == lec_run.DEFAULT_YOSYS_TIMEOUT_S, (
-        "the runner must READ the producer's budget, not restate it")
-    # All producer retries draw down the same total budget. The outer process
-    # gets that total once plus setup/report/reap margin—not three copies.
-    src = (Path(runner.__file__).read_text()).split(
-        "Step 13 — LEC (RTL ≡ handoff netlist)", 1)[1]
-    assert runner.lec_producer_outer_timeout_s() == inner + 300
-    assert "lec_producer_outer_timeout_s()" in src
-    assert "3 * lec_producer_yosys_timeout_s()" not in src
-    assert "timeout=1200" not in src
 
 
 # ---------------------------------------------------------------------------

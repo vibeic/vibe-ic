@@ -45,6 +45,8 @@ names consulted are yosys's own internal cell types.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import json
 import os
 import re
@@ -81,6 +83,7 @@ FLOP_TYPES = {"$dff", "$adff", "$dffe", "$adffe", "$sdff", "$sdffe",
               "$sdffce", "$dffsr", "$dffsre", "$aldff", "$aldffe"}
 _INTERNAL_ADFF_RE = re.compile(r"^\$_DFF_([NP])([NP])([01])_$")
 _INTERNAL_DFF_RE = re.compile(r"^\$_DFF_([NP])_$")
+_INTERNAL_DFFSR_RE = re.compile(r"^\$_DFFSR_[NP]{3}_$")
 #: Single-input cells a clock or reset may pass through and stay the same net.
 _TRANSPARENT = {"$buf", "$pos", "$not", "$_BUF_", "$_NOT_"}
 _MEMORY = {"$mem", "$mem_v2", "$memrd", "$memrd_v2"}
@@ -96,7 +99,8 @@ class Refusal(RuntimeError):
 def _is_flop_type(cell_type: str) -> bool:
     return (cell_type in FLOP_TYPES
             or _INTERNAL_ADFF_RE.fullmatch(cell_type) is not None
-            or _INTERNAL_DFF_RE.fullmatch(cell_type) is not None)
+            or _INTERNAL_DFF_RE.fullmatch(cell_type) is not None
+            or _INTERNAL_DFFSR_RE.fullmatch(cell_type) is not None)
 
 
 def gate_mode(project: Path) -> str:
@@ -290,7 +294,7 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
         vols: List[str] = []
         for m in sorted(mounts):
             vols += ["-v", f"{m}:{m}"]
-        argv = [docker, "run", *_dmem.docker_memory_flags(), "--rm", "--network", "none",
+        argv = [docker, "run", *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), "--rm", "--network", "none",
                 "-u", f"{os.getuid()}:{os.getgid()}", *vols,
                 "--entrypoint", "yosys", image, "-q", "-p", script]
     done = subprocess.run(argv, capture_output=True, text=True)
@@ -628,7 +632,8 @@ def load(path: Path, top: Optional[str] = None) -> Netlist:
         async_pins = set(c) & {"ARST", "ALOAD", "SET", "CLR"}
         # One arst bit cannot represent independent set/clear controls. Refuse
         # at the shared loader so every ordinary CDC/RDC consumer fails closed.
-        if cell["type"] in {"$dffsr", "$dffsre"} or async_pins & {"SET", "CLR"}:
+        if (cell["type"] in {"$dffsr", "$dffsre"} or async_pins & {"SET", "CLR"}
+                or _INTERNAL_DFFSR_RE.fullmatch(cell["type"])):
             raise Refusal("CDC_NETLIST_UNSUPPORTED_ASYNC_CONTROL",
                           f"{cname} ({cell['type']}): multiple SET/CLR controls")
         arst_pin = "ARST" if "ARST" in c else None

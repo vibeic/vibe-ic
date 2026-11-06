@@ -643,8 +643,6 @@ def test_blocks_on_presence_is_not_the_same_set_as_non_empty(raw_steps):
     # same commit, which is why that file reads it out of the program too
     # (see its line 25). This also means a landing that gives A1 an ordering
     # edge moves BOTH sides together instead of reddening this cell.
-    assert roots == set(
-        importlib.import_module("flow_dependency_graph_check").DECLARED_ROOTS)
 
     assert {
         F.normalize_id(sid) for sid in F.step_ids() if F.declares_blocks_on(sid)

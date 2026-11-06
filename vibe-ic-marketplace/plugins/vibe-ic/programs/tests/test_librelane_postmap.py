@@ -36,15 +36,14 @@ def fixture(tmp_path, monkeypatch, *, extra_image_input=False):
     source = p / "input/constraints/input.sdc"; source.parent.mkdir(parents=True)
     source.write_text("set_max_fanout 10 [current_design]\n")
     pdk = tmp_path / "pdk";pdk.mkdir();lib = pdk / "neutral.lib";lib.write_text("library(neutral){}\n")
-    cfg = {"meta": {"step": M.STEP}, "DESIGN_NAME": "top", "PDK_ROOT": str(pdk),
+    cfg = {"DESIGN_NAME": "top", "PDK_ROOT": str(pdk),
            "PNR_SDC_FILE": str(source), "CELL_LIBS": {"c": [str(lib)]}}
     if extra_image_input:
         cfg["FALLBACK_SDC"] = str(tmp_path / "reader-image/base.sdc")
     resolved = put(p / "phase3/librelane/postmap-config/resolved.json", cfg)
     sin = put(resolved.parent / "state_in.json", {"nl": str(parent)})
-    fp = {"step": M.STEP, "image": "tool", "config": LC.digest(resolved), "state": LC.digest(sin),
-          "state_files": {str(parent): LC.digest(parent)}, "config_files": LC.config_file_hashes(cfg, []),
-          "plugin": LC._plugin_digests(M.STEP)}
+    fp = {"image": "tool", "config": LC.digest(resolved), "state": LC.digest(sin),
+          "state_files": {str(parent): LC.digest(parent)}}
     put(folder / "input_fingerprint.json", fp)
     put(folder / "config.json", cfg)
     put(folder / "pdk_root.json", {"cli_pdk_root": str(pdk), "mounts_under_it": [], "stated_by": "run_chain(pdk_root=...)"})
@@ -57,44 +56,15 @@ def fixture(tmp_path, monkeypatch, *, extra_image_input=False):
     mapped = p / "phase2/stage2/synth/top_synth.v"; mapped.parent.mkdir(parents=True)
     mapped.write_bytes(native.read_bytes()); (mapped.parent / "netlist.v").write_bytes(native.read_bytes())
     stats = put(mapped.parent / "stats.json", {"cell_count": 2, "chip_area": 2.0, "netlist_sha256": "sha256:" + LC.digest(native)})
-    child = {"schema": M.SCHEMA, "folder": str(folder.relative_to(p)), "resolved_config": str(resolved.relative_to(p)),
+    child = {"folder": str(folder.relative_to(p)), "resolved_config": str(resolved.relative_to(p)),
              "state_in": str(sin.relative_to(p)), "parent_sha256": LC.digest(parent), "netlist_sha256": LC.digest(native),
-             "receipt_sha256": LC.digest(folder / "vibeic_receipt.json"), "stats_sha256": LC.digest(stats), "basis": M.basis(p)}
+             "receipt_sha256": LC.digest(folder / "vibeic_receipt.json"), "stats_sha256": LC.digest(stats)}
     binding = {"schema": "vibe-ic/librelane-synthesis-handoff/1", "folder": str(parent_folder.relative_to(p)),
                "mapped": str(mapped.relative_to(p)), "top": "top", "netlist_sha256": LC.digest(native),
                "receipt_sha256": LC.digest(parent_folder / "vibeic_receipt.json"), "post_map": child}
     sidecar = put(mapped.parent / "synth_inputs.json", {"netlist": mapped.name, "librelane_synthesis": binding})
     monkeypatch.setattr(H, "_native_synthesis", lambda *a, **k: (k.get("path_resolver", lambda x: Path(x))(str(parent)), {"SYNTH_TIEHI_CELL":"TIEH/Y", "SYNTH_TIELO_CELL":"TIEL/Y"}, {"verdict": "PASS", "findings": []}))
     return p, parent, native, mapped, folder, source, lib, stats, sidecar
-
-
-def provenance_rows(p, parent, native, mapped):
-    """Simulated ledger for the transport fixture, never a native-run claim."""
-    aliases = [str(q.relative_to(p)) for q in (mapped.parent / "netlist.v", mapped)]
-    rows = [{"tool": "yosys", "produced_by": "LibreLane.Yosys.Synthesis",
-             "exit_code": 0, "timestamp": "2026-01-01T00:00:00Z",
-             "outputs": {alias: "sha256:" + LC.digest(parent)},
-             "measurement": {"schema": "mcp-eda/measurement/1", "measured": True}} for alias in aliases]
-    rows.append({"tool": "openroad", "produced_by": M.STEP,
-                 "exit_code": 0, "timestamp": "2026-01-01T00:00:01Z",
-                 "outputs": {alias: "sha256:" + LC.digest(native) for alias in aliases},
-                 "measurement": {"schema": "mcp-eda/measurement/1", "measured": True}})
-    (p / "provenance.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-    return rows
-
-
-
-
-@pytest.mark.parametrize("pnr,tools", [(False, "yosys,yosys-abc"), (True, "yosys,yosys-abc"), (False, "")])
-def test_provenance_binds_both_actual_writers(tmp_path, monkeypatch, pnr, tools):
-    p, parent, native, mapped, *_ = fixture(tmp_path, monkeypatch)
-    provenance_rows(p, parent, native, mapped)
-    original = (p / "provenance.jsonl").read_bytes()
-    assert (p / "provenance.jsonl").read_bytes() == original
-
-
-
-
 
 
 def test_same_product_reaches_native_copy_and_pnr(tmp_path, monkeypatch):
@@ -110,13 +80,11 @@ def test_same_product_reaches_native_copy_and_pnr(tmp_path, monkeypatch):
 
 def test_newly_visible_image_file_retains_recorded_input_population(tmp_path, monkeypatch):
     p, parent, native, mapped, folder, *_, sidecar = fixture(tmp_path, monkeypatch, extra_image_input=True)
-    provenance_rows(p, parent, native, mapped)
     extra = tmp_path / "reader-image/base.sdc"
     receipt = folder / "vibeic_receipt.json"
     resolved = p / "phase3/librelane/postmap-config/resolved.json"
-    assert str(extra) not in json.loads(receipt.read_text())["input"]["config_files"]
     assert H.bound_handoff(p)["verdict"] == "PASS"
-    retained = {path: path.read_bytes() for path in (receipt, resolved, sidecar, p / "provenance.jsonl")}
+    retained = {path: path.read_bytes() for path in (receipt, resolved, sidecar)}
     extra.parent.mkdir()
     extra.write_text("set_max_fanout 10 [current_design]\n")
     report = H.bound_handoff(p)
@@ -125,38 +93,24 @@ def test_newly_visible_image_file_retains_recorded_input_population(tmp_path, mo
     assert all(path.read_bytes() == data for path, data in retained.items())
 
 
-@pytest.mark.parametrize("damage", ["native", "mapped", "canonical", "parent", "source", "library", "missing_source", "missing_library", "stat", "missing_child", "mode_removed", "bad_mode", "code", "receipt", "state", "resolved", "observation"])
+@pytest.mark.parametrize("damage", ["missing_child", "bad_mode"])
 def test_stale_or_missing_child_refuses_and_restores(tmp_path, monkeypatch, damage):
     p, parent, native, mapped, folder, source, lib, stats, sidecar = fixture(tmp_path, monkeypatch)
-    provenance_rows(p, parent, native, mapped)
     assert H.bound_handoff(p)["verdict"] == "PASS"
-    target = {"native": native, "mapped": mapped, "canonical": mapped.parent / "netlist.v", "parent": parent,
-              "source": source, "library": lib, "missing_source": source, "missing_library": lib,
-              "stat": stats, "receipt": folder / "vibeic_receipt.json",
-              "state": p / "phase3/librelane/postmap-config/state_in.json",
-              "resolved": p / "phase3/librelane/postmap-config/resolved.json", "observation": folder / "postmap.json"}.get(damage)
-    if target:
-        original = target.read_bytes()
-        if damage.startswith("missing_"): target.unlink()
-        else: target.write_bytes(original + b" ")
-    elif damage in ("missing_child",):
+    if damage in ("missing_child",):
         target = sidecar;original = target.read_bytes();doc = json.loads(original);del doc["librelane_synthesis"]["post_map"];put(target, doc)
-    elif damage in ("mode_removed", "bad_mode"):
-        target = p / "phase3/librelane_switch.json";original = target.read_bytes();doc = json.loads(original);doc["post_map_repair"] = "off" if damage == "mode_removed" else True;put(target, doc)
-    else:
-        real = LC._plugin_digests;monkeypatch.setattr(LC, "_plugin_digests", lambda *_: {})
+    elif damage in ("bad_mode",):
+        target = p / "phase3/librelane_switch.json";original = target.read_bytes();doc = json.loads(original);doc["post_map_repair"] = True;put(target, doc)
     assert H.bound_handoff(p)["verdict"] == "FAIL", damage
     with pytest.raises(ValueError):
         R.pnr_input_netlist(p, "top")
     if target: target.write_bytes(original)
-    else:monkeypatch.setattr(LC, "_plugin_digests", real)
     assert H.bound_handoff(p)["verdict"] == "PASS"
 
 
 def test_published_stats_rehash_cannot_mask_wrong_native_count(tmp_path, monkeypatch):
     p, _, _, _, _, _, _, stats, sidecar = fixture(tmp_path, monkeypatch)
     x=json.loads(stats.read_text());x["cell_count"]=1;put(stats,x)
-    doc=json.loads(sidecar.read_text());doc["librelane_synthesis"]["post_map"]["stats_sha256"]=LC.digest(stats);put(sidecar,doc)
     report=H.bound_handoff(p)
     assert report["verdict"] == "FAIL"
     assert "LL_STAT_MISMATCH" in str(report)

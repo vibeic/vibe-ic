@@ -88,20 +88,12 @@ def sdc_diagnostics(sta_log: str, sdc: Path, *, calibrate: bool = True) -> list[
     return found
 
 
-def check_setup_counts(checks_rpt: str,
-                       exclude: frozenset = frozenset(), *,
-                       calibrate: bool = True) -> Optional[dict[str, int]]:
-    """check_setup findings by kind; None when the section was never written.
-
-    `exclude` names objects that are never timed (the design's supply ports,
-    from the resolved VDD/GND declarations). They are subtracted only when the
-    `-verbose` listing under the summary line names them; an unlisted count
-    stands as reported.
-    """
+def check_setup_sections(checks_rpt: str) -> Optional[list[tuple[str, int, list[str]]]]:
+    """Read native summary counts and their verbose object lists unchanged."""
     header = _CHECK_SETUP_HEADER_RE.search(checks_rpt)
     if header is None:
         return None
-    counts: dict[str, int] = {}
+    sections = []
     lines = checks_rpt[header.end():].splitlines()
     for index, line in enumerate(lines):
         m = _CHECK_SETUP_RE.match(line)
@@ -115,8 +107,21 @@ def check_setup_counts(checks_rpt: str,
             if not follow.startswith("  ") or not follow.strip():
                 break
             listed.append(follow.strip())
+        sections.append((kind, int(m.group(1)), listed))
+    return sections
+
+
+def check_setup_counts(checks_rpt: str,
+                       exclude: frozenset = frozenset(), *,
+                       calibrate: bool = True) -> Optional[dict[str, int]]:
+    """Counts by kind, subtracting supply objects only when listed by name."""
+    sections = check_setup_sections(checks_rpt)
+    if sections is None:
+        return None
+    counts: dict[str, int] = {}
+    for kind, count, listed in sections:
         dropped = sum(1 for name in listed if name in exclude)
-        counts[kind] = counts.get(kind, 0) + max(0, int(m.group(1)) - dropped)
+        counts[kind] = counts.get(kind, 0) + max(0, count - dropped)
     return counts
 
 

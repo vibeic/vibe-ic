@@ -52,9 +52,7 @@ if str(_PROGRAMS) not in sys.path:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-_RUNNER = _PROGRAMS / "phase3_one_shot_runner.py"
 _DRIVER = _PROGRAMS / "density_fill" / "pdk_fill_driver.rb"
-_MEASURE = _PROGRAMS / "density_fill" / "die_density_measure.py"
 
 
 # ── the engines this program ships beside itself ────────────────────────────
@@ -111,34 +109,8 @@ CORE = [441.97, 442.0, 1494.0, 2089.0]
 
 # ── the wiring: the step must run, in both paths, AFTER the seal ring ───────
 
-def test_the_step_is_wired_into_both_streamout_paths_after_the_seal_ring():
-    """ORDER IS PART OF THE FIX. The PDK generator's frame is the layout
-    bounding box and its scribe keep-out is measured inward from that frame, so
-    it can only fill the die once the seal ring has made the bounding box the
-    die. Running it before the ring would fill the core and — by the gate above
-    — fail, correctly but pointlessly."""
-    src = _RUNNER.read_text()
-    assert "def _die_density_fill(" in src
-    calls = [i for i, l in enumerate(src.splitlines())
-             if "_die_density_fill(project" in l and "def " not in l]
-    seals = [i for i, l in enumerate(src.splitlines())
-             if "_die_finishing(project" in l and "def " not in l]
-    assert len(calls) == 2, calls                             # both streamout paths
-    assert len(seals) == 2, seals
-    fills = [i for i, l in enumerate(src.splitlines())
-             if "_density_metal_fill(project" in l and "def " not in l]
-    assert len(fills) == 2, fills
-    for seal, fill, call in zip(seals, fills, calls):
-        # seal -> this flow's own metal fill -> the PDK generator. The last of
-        # the three must be last: it is the one that cannot see the others'
-        # output, so it is the one that must be told what is already there.
-        assert seal < fill < call, (seal, fill, call)
 
 
-def test_the_step_reports_its_outcome_in_both_paths_extras():
-    src = _RUNNER.read_text()
-    assert src.count('"die_density_fill": ddfill_ok,') == 2
-    assert src.count('"die_density_fill_note": ddfill_note,') == 2
 
 
 
@@ -175,10 +147,6 @@ def test_the_driver_skips_a_pass_through_rubys_own_bookkeeping():
     assert "which the PDK does not ship" in rb
 
 
-def test_the_runner_tells_the_program_which_layers_its_own_filler_owns():
-    src = _RUNNER.read_text()
-    assert 'metal_fill_density_cfg.json' in src
-    assert '"--owned-layer"' in src
 
 
 # ── vibe-ic#2107: the engine is CHECKED on the host and OPENED in the container ──

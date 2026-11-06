@@ -1,7 +1,7 @@
 """A failed native PSM run cannot inherit an earlier segment screen."""
 import json
 
-import phase3_one_shot_runner as R
+from _ppa import power
 
 
 def _project(tmp_path):
@@ -31,7 +31,7 @@ def test_postcheck_refuses_failed_native_even_with_fresh_report_and_stale_pass(t
             json.dumps({"verdict": "PASS"}))
         return True
 
-    verdict, reason = R._ppa_power._pdn_em_post_resize_check(
+    verdict, reason = power._pdn_em_post_resize_check(
         project, "subservient", object(), "test", failed_native,
         stale_authority)
     assert verdict == "NOT_MEASURED"

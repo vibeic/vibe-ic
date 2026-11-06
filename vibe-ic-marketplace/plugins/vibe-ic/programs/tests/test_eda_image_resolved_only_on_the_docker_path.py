@@ -45,18 +45,11 @@ IMPORTED_WITHOUT_A_RESOLVE = [
     "fault_scan_chain_insert",
     "transition_fault_atpg_run",
     "path_delay_fault_atpg_run",
-    "path_delay_coverage_check",
-    "transition_coverage_check",
     "sdd_atpg_run",
-    "sdd_coverage_check",
-    "dft_post_optimization_scan_survival_check",
-    "landing_pytest_runtime_preflight",
     "p0_tool_frontend_check",
-    "flow_step_output_content_check",
     # tools/ci, outside `programs/` (lane rfimg2): `IMAGE = image_reference()`
     # at module level made `import hermetic_candidate_runner` raise
     # ImageNotResolvable with no docker, for every importer of its grammar.
-    "hermetic_candidate_runner",
 ]
 
 #: tools/ci modules the child may import (the repo's CI runner lives there).
@@ -424,12 +417,7 @@ def test_docker_needed_and_nothing_resolvable_is_refused_by_name(monkeypatch, tm
     assert any("IMAGE_NOT_RESOLVABLE" in f for f in result["findings"]), result
 
 
-
-
 # ── landing preflight: the remedy names the image when it is read ───────────
-
-
-
 
 
 # ── fmeda: the injection backend asks for an image only as its first choice ──

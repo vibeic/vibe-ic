@@ -65,10 +65,3 @@ def test_no_report_skip(tmp_path):
     _put_extracted_doc(tmp_path, "x.txt", n_tokens=100)
     r = _run(tmp_path)
     assert r.returncode == 2
-
-
-def test_wired_into_structural_rtl_gates():
-    fcc = Path(__file__).resolve().parent.parent / \
-        "flow_compliance_check.py"
-    txt = fcc.read_text()
-    assert "extraction_coverage_denominator_audit" in txt

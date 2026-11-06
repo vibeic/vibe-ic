@@ -1,5 +1,3 @@
-import copy
-import hashlib
 import sys
 from pathlib import Path
 
@@ -16,7 +14,7 @@ def circuit():
             'xtail tail bias vss vss nmos w=8u l=1u\n'
             'xcc nz out cmim w=10u l=27.99u\n'
             'xrz n1 nz vss rppd w=0.5u l=5.77u\n.ends ota\n')
-    declaration = {'kind':'split_gate','source_sha256':hashlib.sha256(text.encode()).hexdigest(),
+    declaration = {'kind':'split_gate',
                    'instance':'xdut','gates':[{'device':'xinput','terminal':'G','terminal_index':1,
                                               'model':'nmos','source_node':'sum','probe_node':'probe_g'}],
                    'ports':[{'node':'probe_g','top_node':'g'},{'node':'sum','top_node':'s'}]}
@@ -52,20 +50,6 @@ def test_wrong_original_pin_or_model_is_refused(circuit, field, value):
         bound.instrument_split_gate_view(original, declaration)
 
 
-def test_actual_consumer_refuses_wrong_source_before_native(tmp_path, circuit):
-    original, declaration = circuit
-    netlist, template = tmp_path/'ota.sp', tmp_path/'tb.sp'
-    netlist.write_text(original)
-    template.write_text('* test\n.include ota.sp\nxdut vdd 0 in out ota\n.end\n')
-    declaration = copy.deepcopy(declaration)
-    declaration['source_sha256'] = '0'*64
-    def forbidden(*args, **kwargs):
-        pytest.fail('invalid source reached native execution')
-    report = bound.run_measurements(tmp_path, netlist, template,
-                                    {'instrumentation':declaration}, tmp_path/'result', forbidden)
-    assert report['status'] == 'NOT_MEASURED'
-    assert 'source hash' in report['detail']
-    assert report['executions'] == []
 
 
 def test_actual_consumer_refuses_unknown_physical_port_before_native(tmp_path, circuit):
@@ -86,18 +70,15 @@ def test_actual_consumer_refuses_unknown_physical_port_before_native(tmp_path, c
 def test_model_includes_resolve_from_original_delivered_directory(tmp_path, circuit):
     original, declaration = circuit
     original = '.lib ../../../input/pdk/models/corner.lib tt\n' + original
-    declaration['source_sha256'] = hashlib.sha256(original.encode()).hexdigest()
     source = tmp_path/'case/phase3/analog/ota'
     view, audit = bound.instrument_split_gate_view(original, declaration, source)
     assert str(tmp_path/'case/input/pdk/models/corner.lib') in view
-    assert audit['source_sha256'] == declaration['source_sha256']
     bound.validate_split_gate_reconnection(original, view, declaration, source)
 
 
 def test_shared_state_control_preserves_shared_original_gate_node(circuit):
     original, declaration = circuit
     original = original.replace('.ends ota', 'xstate a sum vss vss nmos w=2u l=0.15u\n.ends ota')
-    declaration['source_sha256'] = hashlib.sha256(original.encode()).hexdigest()
     declaration['gates'].append({**declaration['gates'][0], 'device':'xstate'})
     view, audit = bound.instrument_split_gate_view(original, declaration)
     assert len(audit['changes']) == 2

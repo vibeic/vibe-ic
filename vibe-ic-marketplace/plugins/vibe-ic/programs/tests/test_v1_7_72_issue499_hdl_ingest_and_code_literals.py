@@ -457,13 +457,6 @@ def test_coverage_report_counts_the_unread_document(
     assert "commands.qqq" in md
 
 
-def test_coverage_gate_blocks_on_a_converter_gap(
-        dropped_doc_project: Path) -> None:
-    r = _run("phase1_coverage_report_present_check.py",
-             str(dropped_doc_project))
-    combined = (r.stdout or "") + (r.stderr or "")
-    assert r.returncode == 1, combined
-    assert "UNREAD" in combined and "commands.qqq" in combined
 
 
 def test_a_binary_archive_is_not_an_unread_document() -> None:

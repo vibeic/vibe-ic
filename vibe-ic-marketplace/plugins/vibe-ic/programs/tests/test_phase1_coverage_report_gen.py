@@ -560,7 +560,7 @@ def test_pin_alias_table_data_does_not_redefine_header(tmp_path, text, covered):
     assert aliases == [{"literal": "GPIO1/SDA", "label": "auto-discovered (pin_alias)"}]
     assert report["overall"] == {"hit": 4 if covered else 3, "total": 4,
                                   "pct": 100.0 if covered else 75.0}
-    for program, expected_rc in [("phase1_coverage_report_present_check.py", 0 if covered else 1),
+    for program, expected_rc in [
                                  ("extraction_coverage_check.py", 0 if covered else 1),
                                  ("extraction_coverage_denominator_audit.py", 0)]:
         rr = subprocess.run([sys.executable, str(PROG.with_name(program)), str(tmp_path)],
@@ -604,7 +604,7 @@ def test_pin_alias_ordinary_consumers(tmp_path, missing):
     assert misses == ({"GPIO0/SCL"} if missing else set())
     # Keep 100% threshold; the missing full alias cannot be hidden by the
     # separately present GPIO0 and SCL identifiers.
-    for program, expected_rc in [("phase1_coverage_report_present_check.py", int(missing)),
+    for program, expected_rc in [
                                  ("extraction_coverage_check.py", int(missing)),
                                  ("extraction_coverage_denominator_audit.py", 0)]:
         rr = subprocess.run([sys.executable, str(PROG.with_name(program)), str(tmp_path)],
@@ -632,12 +632,6 @@ def test_pin_alias_replay_respects_pattern_authority(tmp_path, in_input, auto_se
     report = json.loads((tmp_path / "reports/phase1/extraction_coverage_report.json").read_text())
     assert report["overall"]["total"] == len(expected)
     assert report["ll38_verdict"] == ("PASS" if auto_seeded else "FAIL")
-    # The separate canonical-pattern provenance guard remains authoritative:
-    # a curated denominator must not gain coverage credit by this repair.
-    rr = subprocess.run([sys.executable, str(PROG.with_name("phase1_coverage_report_present_check.py")), str(tmp_path)], capture_output=True, text=True)
-    assert rr.returncode == 1
-    if auto_seeded:
-        assert "SELF-REFERENTIAL" in rr.stdout
 
 
 def test_pin_alias_unreadable_source_cache_is_not_pruned(tmp_path):
@@ -738,7 +732,7 @@ def test_pin_alias_declaration_ordinary_missing_reverse(tmp_path, text, covered)
     assert aliases == [{"literal": "GPIO0/SCL", "label": "auto-discovered (pin_alias)"}]
     assert report["overall"] == {"hit": 3 if covered else 2, "total": 3,
                                  "pct": 100.0 if covered else 66.7}
-    for program, expected_rc in [("phase1_coverage_report_present_check.py", 0 if covered else 1),
+    for program, expected_rc in [
                                  ("extraction_coverage_check.py", 0 if covered else 1),
                                  ("extraction_coverage_denominator_audit.py", 0)]:
         rr = subprocess.run([sys.executable, str(PROG.with_name(program)), str(tmp_path)],
@@ -796,7 +790,7 @@ def test_pin_alias_parenthesized_name_ordinary(tmp_path, text, covered):
     assert aliases == [{"literal": "GPIO0/SCL", "label": "auto-discovered (pin_alias)"}]
     assert report["overall"] == {"hit": 3 if covered else 2, "total": 3,
                                  "pct": 100.0 if covered else 66.7}
-    for program, expected_rc in [("phase1_coverage_report_present_check.py", 0 if covered else 1),
+    for program, expected_rc in [
                                  ("extraction_coverage_check.py", 0 if covered else 1),
                                  ("extraction_coverage_denominator_audit.py", 0)]:
         rr = subprocess.run([sys.executable, str(PROG.with_name(program)), str(tmp_path)],

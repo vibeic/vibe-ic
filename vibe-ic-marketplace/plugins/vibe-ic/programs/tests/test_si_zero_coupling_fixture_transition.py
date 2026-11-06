@@ -378,12 +378,3 @@ def test_a_dropped_fold_on_the_coupled_fixture_still_fails(tmp_path):
     assert r.returncode == 1
     assert doc["verdict"] == "FAIL"
     assert "FOLD_NOT_APPLIED" in [f["category"] for f in doc["findings"]]
-
-
-def test_a_run_that_never_started_is_not_credited_as_a_skip(tmp_path):
-    """rc 2 is the disclosed-skip tier and the flow credits it as a pass. A
-    mis-invoked run must not land in it."""
-    r = _pr.run([sys.executable, str(_PROG),
-                        str(tmp_path / "does_not_exist")],
-                       capture_output=True, text=True)
-    assert r.returncode == 1

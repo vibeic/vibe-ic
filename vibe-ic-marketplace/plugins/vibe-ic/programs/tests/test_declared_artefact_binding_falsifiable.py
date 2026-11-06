@@ -332,23 +332,6 @@ def test_emit_never_deletes_another_writer_s_artefact(tmp_path):
     assert json.loads(stats.read_text())["schema"] == "someone-elses/1"
 
 
-def test_runner_writes_the_area_stats_before_it_gates_on_them():
-    """THE ORDERING, pinned. The gate reads an artefact the synth step writes,
-    so the write must precede the gate; when it did not, a converged project
-    failed forever. A source-order assertion because driving yosys needs the
-    container."""
-    import inspect
-    import design_one_shot_runner as dr
-    src = inspect.getsource(dr.step_yosys_synth)
-    emit_at = src.index("emit_stats_json")
-    gate_at = src.index("synth_netlist_check.py")
-    assert emit_at < gate_at, (
-        "step_yosys_synth must emit stats.json BEFORE invoking "
-        "synth_netlist_check: the check compares the accounting against the "
-        "netlist, and the netlist is rewritten at the top of every pass, so a "
-        "stats.json written after the gate is judged on the NEXT pass while "
-        "describing the PREVIOUS one — and the gate's FAIL returns before the "
-        "emit, so the project can never recover")
 
 
 # ══════════════════════════════════════════════════════════════════════

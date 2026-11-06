@@ -34,6 +34,8 @@ design's own files.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import fnmatch
 import json
 import math
@@ -482,7 +484,7 @@ def _placed_keepout_boxes(project: Path, image: str, pdk_root: Path, pdk: str,
         f'file rename -force {word(partial.resolve())} {word(output.resolve())}',
     ]) + '\n')
     network, command = native_tool_command(image, ['openroad', '-exit', str(script)])
-    cmd = ['docker', 'run', '--rm', '--network', network,
+    cmd = ['docker', 'run', *_vtmp.docker_mounts(), '--rm', '--network', network,
            *_dmem.docker_memory_flags(),
            '-v', f'{project.resolve()}:{project.resolve()}',
            '-v', f'{(pdk_root / pdk).resolve()}:/pdk/{pdk}:ro',
@@ -626,7 +628,7 @@ def top_up_density(project: Path, image: str, pdk_root: Path, pdk: str,
     report = root / 'fill_report.json'
     write_json(config_path, fill_cfg)
     programs = Path(__file__).resolve().parent
-    cmd = ['docker', 'run', '--rm', *_dmem.docker_memory_flags(),
+    cmd = ['docker', 'run', *_vtmp.docker_mounts(), '--rm', *_dmem.docker_memory_flags(),
            '-v', f'{project.resolve()}:{project.resolve()}',
            '-v', f'{programs.resolve()}:{programs.resolve()}:ro',
            image, '--skip', 'python3', str(programs / 'metal_fill_emit.py'),
@@ -674,7 +676,7 @@ def measure_density_ratios(project: Path, image: str, pdk_root: Path, pdk: str,
     report = root / 'density_ratios.json'
     write_json(specs_path, specs)
     programs = Path(__file__).resolve().parent
-    cmd = ['docker', 'run', '--rm', *_dmem.docker_memory_flags(),
+    cmd = ['docker', 'run', *_vtmp.docker_mounts(), '--rm', *_dmem.docker_memory_flags(),
            '-v', f'{project.resolve()}:{project.resolve()}',
            '-v', f'{programs.resolve()}:{programs.resolve()}:ro',
            image, '--skip', 'python3', str(programs / 'die_density_ratio_emit.py'),

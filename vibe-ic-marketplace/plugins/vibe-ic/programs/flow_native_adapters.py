@@ -9,7 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 import time
 
 
@@ -98,7 +98,7 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
         text = Path(netlist).read_text()
         used = netlist_used_cells(text)
-        liberty = []
+        liberty, pad_liberty, functional_liberty = [], set(), set()
         for key in ("CELL_LIBS" if config.get("CELL_LIBS") else "LIB", "PAD_LIBS", "EXTRA_LIBS"):
             libraries = config.get(key) or []
             groups = ([paths for pattern, paths in libraries.items()
@@ -110,7 +110,9 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
                     values = [path for path in values if not path.is_file()
                               or used.intersection(_LIB_CELL_RE.findall(path.read_text()))]
                 liberty.extend(values)
+                (pad_liberty if key == "PAD_LIBS" else functional_liberty).update(values)
         liberty = list(dict.fromkeys(liberty))
+        pad_liberty.difference_update(functional_liberty)
         if not liberty:
             return commands.result(detail="Implemented CDC needs the native State netlist and Liberty models.")
         defined = {name for path in liberty if path.is_file()
@@ -122,7 +124,8 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
             physical.write_text("\n".join(f"module {name} (); endmodule" for name in stubs) + "\n")
             models.append("read_verilog -lib " + _word(physical))
         script.write_text("\n".join([
-            *["read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
+            *["read_liberty" + (" -lib" if path in pad_liberty else "")
+              + " -ignore_miss_func -ignore_miss_dir " + _word(path) for path in liberty],
             *models,
             "read_verilog -sv " + _word(netlist), "hierarchy -check -top " + top,
             "flatten", "proc", "opt_clean", "write_json " + _word(raw), ""]))
@@ -136,7 +139,10 @@ def cdc(project, directory, tool, commands, *, state=None, config=None):
     normalized = commands.run(["yosys", "-s", script])
     if normalized is None or normalized.returncode or not graph.is_file():
         return commands.result(reports=[raw, script], detail="Native CDC graph normalization did not complete.")
-    netlist = native.load(graph, top)
+    try:
+        netlist = native.load(graph, top)
+    except native.Refusal as exc:
+        return commands.result(reports=[raw, graph, script], detail=str(exc))
     native._load_latched_clock_gates(netlist)
     crossing, reset = {}, {}
     findings = native.judge(netlist, "reg_crossing", metadata=crossing, calibrate=False)
@@ -448,8 +454,9 @@ def formal(project, directory, tool, commands):
         return commands.result(detail="The owner program has not emitted a native formal .sby input.")
     statuses, covers, reports, required, observed, native_steps, scope, proof_scopes = [], [], [], [], [], [], [], []
     frontend_failures = set()
+    unmodeled_inputs = set()
 
-    def cover_model(output, key, options):
+    def cover_model(output, key, options, *, inspect_only=False):
         model, cells = output / "model/design.il", output / "model/cover_inputs.json"
         if not model.is_file():
             native_steps.append({"name": key + ".Cover.Input", "ran": False,
@@ -464,6 +471,28 @@ def formal(project, directory, tool, commands):
             return None
         conditional, assertions, explicit, subjects = [], 0, 0, set()
         modules = json.loads(cells.read_text())["modules"]
+        missing = []
+        for module, body in modules.items():
+            for kind in ("anyseq", "anyconst"):
+                free = {bit for cell in body.get("cells", {}).values() if cell["type"] == "$" + kind
+                        for bit in cell["connections"].get("Y", []) if isinstance(bit, int)}
+                if kind == "anyseq":
+                    free.update(bit for port in body.get("ports", {}).values() if port["direction"] == "input"
+                                for bit in port["bits"])
+                for name, wire in body.get("netnames", {}).items():
+                    if str(wire.get("attributes", {}).get(kind, 0)).strip("0"):
+                        lost = sum(bit not in free for bit in wire["bits"])
+                        if lost:
+                            missing.append(f"{module}.{name}: {lost}/{len(wire['bits'])} {kind} bits lack native free-input drivers")
+        if missing:
+            detail = "Native formal model lost declared free inputs: " + "; ".join(missing)
+            unmodeled_inputs.add(key)
+            scope.append(detail)
+            native_steps.append({"name": key + ".Cover.Input", "ran": True,
+                "exit_code": compiled.returncode, "status": "NOT_MEASURED", "detail": detail})
+            return None
+        if inspect_only:
+            return 0
         for module, body in modules.items():
             for name, cell in body.get("cells", {}).items():
                 if cell["type"] == "$scopeinfo" and "." not in name:
@@ -576,6 +605,8 @@ def formal(project, directory, tool, commands):
                     if top_match:
                         native_read += "--top " + top_match[1] + " "
                     native_read += "-I " + _word(config.parent / "src") + " " + reads[0][1]
+                    native_read += ("\nsetundef -undriven -anyseq a:anyseq>0"
+                                    "\nsetundef -undriven -anyconst a:anyconst>0")
                     retry = config.parent / "slang_frontend.sby"
                     retry.write_text(original_body[:reads[0].start()] + native_read + original_body[reads[0].end():])
                     destination = config.parent / "slang_frontend"
@@ -598,8 +629,6 @@ def formal(project, directory, tool, commands):
                 body = config.read_text()
                 mode_match = re.search(r"^mode\s+(\S+)\s*$", body, re.M)
                 mode = mode_match[1] if mode_match else ""
-                if mode == "cover":
-                    covers.append(status)
             row = {"name": f"SymbiYosys.{task}", "ran": True,
                    "exit_code": completed.returncode,
                    "status": status if status in {"PASS", "FAIL"} else "NOT_MEASURED"}
@@ -607,12 +636,20 @@ def formal(project, directory, tool, commands):
             if mode in {"prove", "bmc"}:
                 options = re.search(r"(?ms)^\[options\]\s*\n(.*?)(?=^\[|\Z)", body)
                 assertions = cover_model(output, key, options[1] if options else "mode cover\n")
-                if status == "PASS" and assertions is None:
+                if assertions is None and (status == "PASS" or key in unmodeled_inputs):
                     status = "NOT_MEASURED"
                     row["status"] = status
-                    row["detail"] = "The native formal model's cover targets could not be read."
+                    row["detail"] = ("The native model lacks declared free inputs." if key in unmodeled_inputs
+                                     else "The native formal model's cover targets could not be read.")
                 if mode == "prove":
                     statuses.append(status)
+            elif mode == "cover":
+                cover_model(output, key, "", inspect_only=True)
+                if key in unmodeled_inputs:
+                    status = "NOT_MEASURED"
+                    row["status"] = status
+                    row["detail"] = "The native model lacks declared free inputs."
+                covers.append(status)
             if status in {"PASS", "FAIL"}:
                 observed.append(key)
             reports.extend(native)
@@ -800,8 +837,8 @@ Path(sys.argv[5]).write_text(json.dumps(result))
     argv = ["python3", "-c", code, str(Path(__file__).resolve().parent),
             str(project), str(work), json.dumps(mapped(tool, mounts)), str(result_path)]
     options = ["-w", mapped(str(work), mounts)]
-    if os.environ.get("TMPDIR"):
-        options.extend(["-e", "TMPDIR=" + mapped(os.environ["TMPDIR"], mounts)])
+    for key, value in tempfile.configure().items():
+        options.extend(["-e", key + "=" + mapped(value, mounts)])
     completed = commands.run(["docker", "exec", *options, container, "bash", "-lc",
                               "exec " + shlex.join(mapped(argv, mounts))])
     if completed is None or completed.returncode or not result_path.is_file():
@@ -815,7 +852,8 @@ Path(sys.argv[5]).write_text(json.dumps(result))
 def execute(project, directory, tool, route, *, state=None, config=None):
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
+    parent = tempfile.current_run("adapter", directory.name) / directory.name
+    work = Path(tempfile.mkdtemp(prefix="native_", dir=parent))
     commands = Commands(work)
     if tool.get("adapter") == "macro_views":
         return macro_views(project, work, tool, commands, route)

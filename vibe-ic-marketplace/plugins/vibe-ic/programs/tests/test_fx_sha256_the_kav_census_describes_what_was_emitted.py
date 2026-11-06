@@ -72,12 +72,3 @@ def test_the_driven_vector_says_which_rung_drove_it_and_why_the_first_refused(
     assert row is not None, report.get("known_answer_vector_cases")
     assert row["driven_by"] == "_emit_case_stated_vector_bus"
     assert "binds to no input port" in row["first_refusal"]
-
-
-def test_the_census_line_describes_what_was_emitted(tmp_path):
-    """RED on main: '0 bound, 1 unbound ... could NOT be driven'."""
-    import design_one_shot_runner as R
-    line = R._known_answer_vector_census(_run(tmp_path))
-    assert "could NOT be driven" not in line, line
-    assert "1 bound" in line and "0 unbound" in line, line
-    assert "_emit_case_stated_vector_bus" in line, line

@@ -69,13 +69,6 @@ _PULSE_UNACCOUNTED_SPANS = [
 ]
 
 
-@pytest.fixture(autouse=True)
-def _isolated_runner_session(monkeypatch):
-    """Each unit case models one runner process and leaves no atexit target."""
-    monkeypatch.setattr(runner, "_RTL_SESSION_OWNED", False)
-    monkeypatch.setattr(runner, "_RTL_SESSION_PROJECT", None)
-
-
 def _project(tmp_path, text=COMPLETE_DIRECTIONAL_FALL, source="input_doc"):
     source_dir = tmp_path / "phase1" / source
     source_dir.mkdir(parents=True)
@@ -134,14 +127,6 @@ def _assert_gather_refusal(project, reason, finding=None):
     return gathered
 
 
-
-
-
-
-
-
-
-
 def test_step_rtl_gen_calls_phase1_flowback_before_class_fallback(tmp_path):
     project = _project(tmp_path)
 
@@ -150,20 +135,6 @@ def test_step_rtl_gen_calls_phase1_flowback_before_class_fallback(tmp_path):
     assert_program_candidate(result, COMPLETE_DIRECTIONAL_FALL)
     assert result.extras['deterministic_generator'] == 'spec_artifact_registry'
     assert Path(result.output_files[0]).is_file()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_unreadable_project_directory_is_named_blocked_without_writes(
@@ -189,26 +160,6 @@ def test_unreadable_project_directory_is_named_blocked_without_writes(
         phase2.chmod(0o755)
     assert sentinel.read_text() == "original\n"
     assert sorted(p.name for p in stage1.iterdir()) == ["sentinel.txt"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_finalize_on_an_already_closed_transaction_is_a_silent_no_op(
@@ -259,24 +210,6 @@ def test_stage_temp_cleanup_failure_rolls_back_before_finalize(
     assert not (project / "phase2").exists()
     assert not any(p.name.startswith(".vibeic-rtl-txn.")
                    for p in project.iterdir())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_step_preflight_blocks_symlink_before_earlier_canonical_writer(
@@ -400,10 +333,6 @@ def test_symlinked_descendant_invalidates_the_whole_source_tree(tmp_path):
         external, target_is_directory=True)
 
     _assert_gather_refusal(project, "SOURCE_OUT_OF_ROOT")
-
-
-
-
 
 
 def test_invalid_utf8_operator_prose_is_named_parse_refusal(tmp_path):

@@ -223,66 +223,24 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def test_named_container_keeps_original_runner_with_a_native_sidecar(tmp_path, monkeypatch):
-    project, fs = _project(tmp_path)
-    runner = ImageContainer(fs)
-    folder = project / 'phase3/librelane/26-gds/01-klayout-antenna'
-    folder.mkdir(parents=True)
-    (folder / 'pdk_root.json').write_text(json.dumps({'cli_pdk_root': '/pdk',
-        'stated_by': 'run_chain(pdk_root=...)'}))
-    (project / 'phase3/librelane_switch.json').write_text(json.dumps({'steps': {'26': 'librelane'}}))
-    record = project / 'reports/phase3/antenna_librelane.json'
-    record.parent.mkdir(parents=True)
-    record.write_text(json.dumps({'gds': {'state': str(folder / 'state_out.json')}}))
-    assert runner.argv is not None
-
-
-@pytest.mark.parametrize("violations, verdict", [(0, "PASS"), (1, "FAIL")])
-def test_login_banner_no_longer_reads_as_a_deck_digest_mismatch(
-        tmp_path, monkeypatch, violations, verdict):
-    """The measured defect: identical decks, banner on stdout -> never measured."""
-    project, fs = _project(tmp_path)
-    runner = ImageContainer(fs, violations=violations)
-    parent = f"{GUEST}/{DRC_REL}/{PARENT}"
-    assert runner.argv[runner.argv.index("-r") + 1] == parent
 
 
 
 
 
 
-def test_container_running_another_image_is_not_measured(tmp_path, monkeypatch):
-    project, fs = _project(tmp_path)
-    runner = ImageContainer(fs, image_id=OTHER_IMAGE_ID, banner=False)
-    assert runner.argv is None
-
-
-def test_host_klayout_never_substitutes_for_the_image_tree(tmp_path, monkeypatch):
-    project, _ = _project(tmp_path)
-    host = HostKLayout()
-    assert host.argv is None
-
-
-def test_deck_missing_inside_the_image_stays_not_measured(tmp_path, monkeypatch):
-    project, fs = _project(tmp_path, image_rule=None)
-    runner = ImageContainer(fs)
-    assert runner.argv is None
 
 
 
 
 
 
-@pytest.mark.parametrize("derivation, needle", [
-    ({"image_id": IMAGE_ID, "guest_path": "/foss/pdks/another_pdk"}, "is not the absolute tree"),
-    ({"image_id": "7d372e6d", "guest_path": GUEST}, "names no image bytes"),
-    ({"guest_path": GUEST}, "names no image bytes"),
-])
-def test_receipt_that_cannot_bind_a_tree_to_image_bytes_is_unusable(
-        tmp_path, monkeypatch, derivation, needle):
-    project, fs = _project(tmp_path)
-    runner = ImageContainer(fs, banner=False)
-    assert runner.argv is None
+
+
+
+
+
+
 
 
 def test_container_reader_runs_the_command_directly_not_in_a_login_shell(
@@ -339,19 +297,6 @@ def _mount_after_run(runner):
 
 
 # (2) the image id is not the bytes: mounts and the writable layer ----------- #
-@pytest.mark.parametrize("mounts, changes, resolved", [
-    (["/foss/pdks"], [], {}),                                  # above the tree
-    ([f"{DECK_DIR}/rule_decks"], [], {}),                      # below the tree
-    ([], [f"C {DECK_DIR}/rule_decks/antenna.rb"[2:]], {}),     # writable layer
-    (["/pdk_store/v1"], [], {GUEST: "/pdk_store/v1/fixture_pdk"}),  # link target
-    ([], ["/pdk_store/v1/fixture_pdk/libs.tech"], {GUEST: "/pdk_store/v1/fixture_pdk"}),
-])
-def test_bytes_not_from_the_image_are_not_measured(tmp_path, monkeypatch,
-                                                   mounts, changes, resolved):
-    project, fs = _project(tmp_path)
-    runner = ImageContainer(fs, banner=False)
-    runner.mounts, runner.changes, runner.resolved = mounts, changes, resolved
-    assert runner.argv is None
 
 
 

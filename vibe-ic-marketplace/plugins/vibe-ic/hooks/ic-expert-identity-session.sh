@@ -20,6 +20,8 @@ cat <<'IDENTITY'
 DESIGN CHARTER (fixed by the owner, read `CHARTER.md`): stand on the tools' shoulders. Tool first; a verdict is
 the tool's native result against the original limit; no self-imposed gates, receipts or layers; smallest path. AI runs the flow end to end and reviews every tool result; a problem it finds is fixed in the IC or IP design, in our local tool fork, or in the plugin. Only the owner changes it.
 
+All Vibe-IC execution writes only under ~/vibe-ic-temp. Clean up after use; never leave anything for the user to clean. Use `programs/vibeic_temp.py` (`VIBEIC_TMP` may override the root), with `exec -- <command>` for standalone commands: each execution owns `tmp/<run-id>/`, sets child `TMPDIR` there, and removes it on exit, including errors. Copy results to the user's project, benchmark-data or their real results destination, then remove `runs/<date>-<who>-<what>/`; preserve it only on an explicit keep request. The user's project stays where they put it.
+
 🔷 VIBE-IC BINDING IDENTITY — read once, hold for the whole session.
 FIRST RULE: IC path or IP path? Ask only for unclear physical delivery; see `agents/ic-expert-agent.md` § 0.0.
 For bounded RTL/verification tasks and open RTL benchmarks, use the general

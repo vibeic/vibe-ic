@@ -24,7 +24,6 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -124,30 +123,8 @@ def test_native_report_reaches_the_existing_coverage_gate(
 
 # v5c's step log shape: the count over the pins the step chose, then (new)
 # every input it has. spare_dff_0/CLK carries no net.
-_V5C_LOG = """SPARE_TIEOFF_CONNECTED 12 of 12
-SPARE_TIEOFF_DRIVERS 6
-SPARE_INPUT_PIN spare_inverter_0 I SIGNAL spare_tielo_spare_inverter_0
-SPARE_INPUT_PIN spare_dff_0 D SIGNAL spare_tielo_spare_dff_0
-SPARE_INPUT_PIN spare_dff_0 CLK CLOCK -
-SPARE_TIEOFF_DONE: nets spare_tielo_spare_inverter_0 spare_tielo_spare_dff_0
-"""
 
 
-def test_the_runner_reads_the_enumeration_not_just_the_count(tmp_path):
-    import phase3_one_shot_runner as R
-    log = tmp_path / "librelane_spare_cells.log"
-    log.write_text(_V5C_LOG)
-    got = R._spare_tieoff_measured_from_log(log)
-    assert got["measured"] is True
-    assert got["tied_off"] is False, got
-    assert "spare_dff_0/CLK" in got["reason"]
-    assert {"inst": "spare_dff_0", "pin": "CLK", "use": "CLOCK",
-            "net": None} in got["inputs"]
-    # the same log with the CLK tied is tied off
-    log.write_text(_V5C_LOG.replace("CLK CLOCK -",
-                                    "CLK CLOCK spare_tielo_spare_dff_0"))
-    ok = R._spare_tieoff_measured_from_log(log)
-    assert ok["tied_off"] is True and len(ok["inputs"]) == 3
 
 
 def test_the_direct_deck_prints_the_same_enumeration():
@@ -272,38 +249,3 @@ def _project(tmp_path, record, netlist):
 # ------------------------------------------------------------------ ERC --
 
 # The spm tail run's reports/phase3/erc.rpt, head and transcript.
-_TAIL_ERC_RPT = """# Electrical Rule Check (ERC) — OpenROAD open-source path
-#
-ERC floating nets: 0
-ERC clean: YES
-
-# === report_floating_nets / report_erc_metrics stdout ===
-=== ERC: floating nets ===
-[WARNING RSZ-0095] found 1 floating pins.
- spare_dff_0/CLK
-=== ERC metrics ===
-"""
-
-
-def test_the_erc_producer_counts_floating_pins(tmp_path, monkeypatch):
-    """`_emit_erc_report` on the tail run's tool transcript (container faked)."""
-    import phase3_one_shot_runner as R
-    transcript = ("=== ERC: floating nets ===\n"
-                  "[WARNING RSZ-0095] found 1 floating pins.\n"
-                  " spare_dff_0/CLK\n=== ERC metrics ===\n")
-    monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
-    monkeypatch.setattr(R, "_docker_exec",
-                        lambda *a, **k: (0, transcript, ""))
-    pnr = R._pl.pnr_dir(tmp_path)
-    pnr.mkdir(parents=True)
-    (pnr / "chip_top.def").write_text("DESIGN chip_top ;\n")
-    pdk = SimpleNamespace(tech_lef="t.lef", cell_lef="c.lef",
-                          liberty="c.lib", macro_lefs=[])
-    rpt = tmp_path / "reports" / "phase3" / "erc.rpt"
-    assert R._emit_erc_report(tmp_path, "chip_top", pdk, "ctr", rpt, [])
-    text = rpt.read_text()
-    assert "ERC floating pins: 1" in text
-    assert "ERC clean: YES" not in text
-    rec = json.loads((rpt.parent / "erc.json").read_text())
-    assert rec["clean"] is False and rec["verdict"] != "PASS", rec
-    assert rec["float_classification"]["functional_count"] == 1

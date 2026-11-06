@@ -39,7 +39,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
          readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync,
          unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { configureTemp } from "./temp_paths.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -85,7 +85,7 @@ function sourceIdentity(root, runtime = false) {
 
 function materializeRuntime() {
   const identity = sourceIdentity(SOURCE);
-  const cache = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
+  const cache = configureTemp().XDG_CACHE_HOME;
   if (!isAbsolute(cache)) throw new Error("XDG_CACHE_HOME must be absolute");
   const base = join(cache, "vibe-ic", "mcp-runtime");
   // Resolve existing ancestors before mkdir, including a symlinked cache home.

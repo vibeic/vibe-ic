@@ -57,6 +57,7 @@ from typing import (Any, Callable, Dict, List, Optional, Sequence,
                     Set, Tuple)
 
 import _watchdog as _wd
+import vibeic_temp
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
@@ -323,7 +324,6 @@ def _read_log_since(path: Optional[Path], offset: int) -> Tuple[str, int]:
 # child it spawned (GNU `timeout` puts the job in its own process group, and
 # the ppid walk catches anything that left the group).
 
-_PIDFILE_DIR = "/tmp"
 _PIDFILE_PREFIX = ".vibeic-job-"
 
 # `starttime` is field 22 of /proc/<pid>/stat. `comm` (field 2) may itself
@@ -445,7 +445,7 @@ def new_job_pidfile() -> str:
     stamp. It is a FILE PATH, never a search pattern: identity comes from the
     (pid, starttime) pair INSIDE the file, so a stranger who happened to carry
     this path in its argv still could not be selected."""
-    return "%s/%s%s.pid" % (_PIDFILE_DIR, _PIDFILE_PREFIX,
+    return "%s/%s%s.pid" % (vibeic_temp.gettempdir(), _PIDFILE_PREFIX,
                             secrets.token_hex(8))
 
 

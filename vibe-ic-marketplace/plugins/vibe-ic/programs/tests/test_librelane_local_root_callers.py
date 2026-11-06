@@ -32,13 +32,6 @@ def test_density_caller_maps_the_selected_pdk_root_to_the_run_chain_cli(
 
     monkeypatch.setattr(ll._ce, "no_container_route", lambda: True)
     monkeypatch.setattr(ll, "image_capability", lambda *_a, **_k: {})
-    attestation = {
-        "image": "fixture-image", "image_id": "sha256:" + "1" * 64,
-        "repo_digests": [], "cid": "unit-local-cid", "network_mode": "bridge",
-        "memory": 1024 ** 3, "memory_swap": 1024 ** 3, "auto_remove": True,
-        "attestation_path": "unit-only", "attestation_sha256": "0" * 64,
-    }
-    monkeypatch.setattr(ll, "local_image_attestation", lambda _image: dict(attestation))
     monkeypatch.setattr(ll, "openroad_home", lambda *_a, **_k: None)
     monkeypatch.setattr(ll, "_check_state", lambda *_a, **_k: None)
     monkeypatch.setattr(fill, "measure_density_ratios", lambda *_a, **_k: {})
@@ -117,7 +110,7 @@ def test_density_caller_refuses_when_the_selected_pdk_is_missing(tmp_path, monke
                          steps=("KLayout.Density",))
 
 
-@pytest.mark.parametrize("owner", ["ir_openroad", "sealring_capability", "fill_keepout", "si_sta"])
+@pytest.mark.parametrize("owner", ["fill_keepout", "si_sta"])
 @pytest.mark.parametrize("profile", ["local_host", "local_none", "remote"])
 def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch, owner, profile):
     """Real caller, typed provider and LOCAL parser; neutral native process leaves."""
@@ -151,8 +144,7 @@ def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch
     routed = project / "phase3/stage3/pnr/routed.def"
     routed.parent.mkdir(parents=True, exist_ok=True)
     routed.write_text("COMPONENTS 0 ; END COMPONENTS\n")
-    observed = {"owner": owner, "profile": profile, "launches": [], "calls": [],
-                "provider": image.as_record() if profile.startswith("local_") else None}
+    observed = {"owner": owner, "profile": profile, "launches": [], "calls": []}
     original_run_container = ll.run_container
 
     def record_launch(argv, **kwargs):
@@ -160,8 +152,6 @@ def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch
         return original_run_container(argv, **kwargs)
 
     def payload():
-        if owner == "sealring_capability":
-            return "True\n"
         if owner == "fill_keepout":
             (folder / "placed_keepouts.txt").write_text("DBU 1000\nTOTAL 0\nEND 0\n")
         return "NEUTRAL_NATIVE_STDOUT\n"
@@ -181,11 +171,15 @@ def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch
     monkeypatch.setattr(watchdog, "run_host_supervised", host_leaf)
     monkeypatch.setattr(ll.subprocess, "run", docker_leaf)
     try:
-        if owner == "ir_openroad":
-            metrics = folder / "metrics.json"
-            native_command = ["env", "LD_LIBRARY_PATH=/opt/or-tools/lib",
-                              "openroad", "-no_init", "-no_splash",
-                              "-metrics", str(metrics), "-exit", str(script)]
+        if owner == "fill_keepout":
+            result = fill._placed_keepout_boxes(project, image, root, "processA",
+                                                json.loads(config.read_text()), folder)
+            assert result == {"dbu": 1000, "total": 0, "boxes": [], "source": str(routed)}
+            native_command = ["openroad", "-exit", str(folder / "placed_keepouts.tcl")]
+        else:
+            result = signoff.run_sta_script(project, image, [], script, log)
+            assert result.returncode == 0 and log.read_text() == "NEUTRAL_NATIVE_STDOUT\n\n"
+            native_command = ["sta", "-no_init", "-no_splash", "-exit", str(script)]
         observed["completed"] = True
     except ll.Refusal as exc:
         observed["refusal"] = {"code": exc.code, "detail": str(exc)}
@@ -205,8 +199,8 @@ def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch
         launcher = "import os,sys;os.execvp(sys.argv[1],sys.argv[1:])"
         index = call["argv"].index(launcher)
         assert call["argv"][index - 2:index] == [image.executable, "-c"]
+        assert call["argv"][index + 1:] == native_command
     else:
         assert call["route"] == "Docker"
         assert not any("os.execvp" in str(part) for part in launch)
-        if owner in ("ir_openroad", "sealring_capability"):
-            at = launch.index("--entrypoint")
+        assert launch[launch.index(image) + 1:] == ["--skip", *native_command]

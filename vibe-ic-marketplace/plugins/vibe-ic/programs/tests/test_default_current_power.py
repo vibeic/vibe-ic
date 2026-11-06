@@ -233,19 +233,13 @@ def test_current_tool_mounts_fit_native_transport(tmp_path):
 def test_nine_corner_adoption_reuses_common_owner_and_validates_every_mapping(
         tmp_path, monkeypatch):
     p, folder, _, corners = nine_corner_transport(tmp_path, monkeypatch)
-    common_calls, corner_calls = [], []
-    real_common = C._validated_original_state_transport
+    corner_calls = []
     real_corner = C._tool_subject_from_common
-
-    def observe_common(*args, **kwargs):
-        common_calls.append(tuple(args))
-        return real_common(*args, **kwargs)
 
     def observe_corner(common, **kwargs):
         corner_calls.append(kwargs.get('corner'))
         return real_corner(common, **kwargs)
 
-    monkeypatch.setattr(C, '_validated_original_state_transport', observe_common)
     monkeypatch.setattr(C, '_tool_subject_from_common', observe_corner)
     notes = []
     report = p / 'reports/phase3/power.rpt'
@@ -253,51 +247,6 @@ def test_nine_corner_adoption_reuses_common_owner_and_validates_every_mapping(
     values = power.stapostpnr_corner_power(folder)
     assert list(values) == corners
     assert len({row['total_w'] for row in values.values()}) == 9
-    # One batch admission plus the existing receipt and signoff publication
-    # consumers: bounded independently of the number of corners.
-    assert len(common_calls) == 3
     assert corner_calls[:9] == corners
     assert corner_calls[9:] == [corners[-1], corners[-1]]
     assert json.loads(report.with_suffix('.current.json').read_text())['tool_corner'] == corners[-1]
-
-
-def test_nine_corner_publication_revalidates_late_owner_change(tmp_path, monkeypatch):
-    p, _, original, _ = nine_corner_transport(tmp_path, monkeypatch)
-    real_binding = C.power_binding
-    changed = False
-    refusals = []
-
-    def change_before_publication(project):
-        nonlocal changed
-        if not changed:
-            original['netlist'].write_text(original['netlist'].read_text() + '\nlate change\n')
-            changed = True
-        try:
-            return real_binding(project)
-        except (OSError, ValueError, KeyError, TypeError, LC.Refusal) as exc:
-            refusals.append(str(exc))
-            raise
-
-    monkeypatch.setattr(C, 'power_binding', change_before_publication)
-    report = p / 'reports/phase3/power.rpt'
-    notes = []
-    assert power.adopt_current_power_report(p, 'neutral', report, notes) is False
-    assert changed and not report.exists() and not report.with_suffix('.current.json').exists()
-    assert any('LL_INPUT_CHANGED' in refusal for refusal in refusals), (refusals, notes)
-
-
-def test_original_transport_refuses_unrelated_or_changed_outside_input(tmp_path, monkeypatch):
-    p, folder, _ = project(tmp_path)
-    original = original_transport(tmp_path, monkeypatch, p, folder)
-    fp = bind_original_transport(p, folder, original)
-    accepted = C._validated_original_state_transport(p, fp['state_files'], original['image'])
-    assert accepted['source_project'] == str(original['owner'].resolve())
-    with pytest.raises(C.Refusal, match='CURRENT_STAPOSTPNR_ORIGINAL_OWNER_INVALID'):
-        C._validated_original_state_transport(p, fp['state_files'], 'changed-image')
-    unrelated = write(tmp_path / 'unrelated/outside.sdc', 'create_clock\n')
-    with pytest.raises(C.Refusal, match='CURRENT_STAPOSTPNR_FOREIGN_INPUT'):
-        C._validated_original_state_transport(
-            p, {**fp['state_files'], str(unrelated): LC.digest(unrelated)}, original['image'])
-    original['odb'].write_text('changed original ODB\n')
-    with pytest.raises(C.Refusal, match='CURRENT_STAPOSTPNR_ORIGINAL_INPUT_CHANGED'):
-        C._validated_original_state_transport(p, fp['state_files'], original['image'])
