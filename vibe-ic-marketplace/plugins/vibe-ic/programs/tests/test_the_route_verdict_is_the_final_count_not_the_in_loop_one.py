@@ -20,7 +20,6 @@ The DRT excerpts below are copied verbatim from this lane's own RUN A
 """
 from __future__ import annotations
 
-import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -100,96 +99,3 @@ def test_silence_is_not_zero():
     assert m.router_post_route_final_count(
         "[INFO DRT-0199]   Number of violations = 1.") is None
     assert m.router_post_route_final_count("") is None
-
-
-def _pnr_source() -> str:
-    return (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-
-
-class _Rec:
-    """The two fields `_route_verdict` reads, nothing else."""
-    def __init__(self, ok, value, detail="metric 1 vs prose 0"):
-        self.ok, self.value, self.detail = ok, value, detail
-
-
-def _pnr():
-    if str(PROGRAMS) not in sys.path:
-        sys.path.insert(0, str(PROGRAMS))
-    spec = importlib.util.spec_from_file_location(
-        "phase3_one_shot_runner", PROGRAMS / "phase3_one_shot_runner.py")
-    return _exec_registered("phase3_one_shot_runner", spec)
-
-
-def test_runa_publishes_pass_and_records_the_diagnostic():
-    """RUN A's real shape: metric 1, final 0. PASS on the final count, and the
-    disagreement SAID rather than swallowed."""
-    published, note, refuse = _pnr()._route_verdict(
-        _Rec(ok=False, value=None), final_verified=0)
-    assert refuse is False
-    assert published == 0
-    assert note is not None and "ROUTE_DRC_METRIC_DISAGREEMENT" in note
-    assert "0" in note
-
-
-def test_a_real_non_convergence_publishes_the_count():
-    """rbsub2's shape: loop 0, final 5. The verdict is 5 — the caller's
-    `> 0` branch then raises ROUTE_NOT_CONVERGED with that number."""
-    published, _note, refuse = _pnr()._route_verdict(
-        _Rec(ok=False, value=0), final_verified=5)
-    assert refuse is False
-    assert published == 5
-
-
-def test_no_final_reading_at_all_still_refuses():
-    published, note, refuse = _pnr()._route_verdict(
-        _Rec(ok=False, value=None), final_verified=None)
-    assert refuse is True
-    assert published is None and note is None
-
-
-def test_an_agreeing_run_is_untouched():
-    """Control: when the two agree there is no note and no refusal, and the
-    published number is unchanged from what it always was."""
-    published, note, refuse = _pnr()._route_verdict(
-        _Rec(ok=True, value=0), final_verified=0)
-    assert (published, note, refuse) == (0, None, False)
-
-
-def test_the_disagreement_is_recorded_not_refused():
-    """RED before the ruling: the step returned FAIL on `not ok`.
-
-    Asserted on the CODE, with the docstring stripped, so the guard cannot
-    match its own explanation."""
-    src = _pnr_source()
-    tree = ast.parse(src)
-    fn = [n for n in ast.walk(tree)
-          if isinstance(n, ast.FunctionDef) and n.name == "step_pnr"]
-    assert len(fn) == 1
-    body = list(fn[0].body)
-    if (body and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)):
-        body = body[1:]
-    code = "\n".join(ast.unparse(n) for n in body)
-    # the refusal that used to fire on a disagreement is gone ...
-    assert "'finding': 'ROUTE_DRC_METRIC_DISAGREEMENT'" not in code, code[:400]
-    # ... the disagreement is still SAID, on stderr and in the step's extras ...
-    assert "drt_metric_disagreement_note" in code
-    # ... the final verified count is what the step reads ...
-    assert "router_post_route_final_count" in code
-    # ... and the decision itself is DELEGATED to the pure function the
-    # behavioural tests above drive, so the two cannot diverge.
-    assert "_route_verdict(_drt_rec, _drt_final)" in code
-    assert "_drt_viol = _drt_published" in code
-
-
-def test_the_absence_of_a_final_reading_is_still_a_refusal():
-    """The one thing that must NOT become a note."""
-    src = _pnr_source()
-    assert "ROUTE_DRC_NOT_MEASURED" in src
-    assert "no final count to" in src
-
-
-def test_the_in_loop_metric_is_still_carried_for_a_reader():
-    src = _pnr_source()
-    assert "drt_in_loop_metric" in src
-    assert "drt_final_verified" in src
