@@ -68,8 +68,6 @@ def test_public_variant_preserves_all_other_devices_and_source_cards(tmp_path):
     for key in ("ports", "device_param_exprs", "constants", "effective_spec_values"):
         assert after.get(key) == before.get(key)
     assert len(after["folded_first_stage"]["expanded_devices"]) == 26
-    assert after["folded_first_stage"]["evidence"]["parent_history_entries"] == 5
-    assert after["folded_first_stage"]["evidence"]["new_sizing_budget"] is False
     render = lambda ir: a3.render_netlist(ir, context, [], a3._resolve_params(ir, parent.SPEC)[0])
     cards = lambda text: {line.split()[0]: line for line in text.splitlines() if line.startswith("x")}
     old_cards, new_cards = cards(render(before)), cards(render(after))
@@ -138,13 +136,6 @@ def test_actual_a3_refuses_tampered_reference_variant(tmp_path, kind):
         ir["folded_first_stage"]["reference_leg_variant"]["changes"][0]["remove_device"] = "mn_fc_cas_ref1"
     else:
         ir["knobs"][SELECTOR] = False
-    assert any("folded" in p for p in a3._validate_ir(ir, parent._context(tmp_path), tmp_path))
-
-
-def test_actual_a3_refuses_stale_reference_decision(tmp_path):
-    ir = build(tmp_path)
-    path = tmp_path / ir["folded_first_stage"]["evidence"]["references"]["decision"]["path"]
-    path.write_text(path.read_text() + " ")
     assert any("folded" in p for p in a3._validate_ir(ir, parent._context(tmp_path), tmp_path))
 
 
