@@ -2817,7 +2817,19 @@
           "OpenROAD.FillInsertion",
           "OpenROAD.RCX",
           "OpenROAD.STAPostPNR"
-        ]
+        ],
+        "skip_when_unchanged": {
+          "metric": "vibeic__postroute__changed",
+          "steps": [
+            "OpenROAD.DetailedPlacement",
+            "OpenROAD.GlobalRouting",
+            "OpenROAD.RepairDesignPostGRT",
+            "OpenROAD.ResizerTimingPostGRT",
+            "OpenROAD.DetailedRouting",
+            "OpenROAD.FillInsertion",
+            "OpenROAD.RCX"
+          ]
+        }
       },
       "checks": [],
       "legacy_id": {

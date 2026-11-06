@@ -387,6 +387,12 @@ class NativeChain:
         for module in tool.get("imports", []):
             importlib.import_module(module)
         for name in tool.get("steps", []):
+            unchanged = tool.get("skip_when_unchanged", {})
+            if (name in unchanged.get("steps", [])
+                    and result.metrics.get(unchanged.get("metric")) == 0):
+                result.native_steps.append({"name": name, "ran": False, "exit_code": None,
+                                            "native_no_change": True})
+                continue
             step_class = Step.factory.get(name)
             if step_class is None:
                 result.detail += f" Native step unavailable: {name}."
@@ -409,7 +415,8 @@ class NativeChain:
             step = ObservedStep(self.owner.config, self.state)
             metric_name = getattr(step, "metric_name", None)
             if (metric_name and any((not item["ran"] or item.get("exit_code"))
-                    and not item.get("native_config_disabled") for item in result.native_steps)
+                    and not (item.get("native_config_disabled") or item.get("native_no_change"))
+                    for item in result.native_steps)
                     and not any(key == metric_name or key.startswith(metric_name + "__corner:")
                                 for key in result.metrics)):
                 result.native_steps.append({"name": name, "ran": False, "exit_code": None,
@@ -663,7 +670,8 @@ def evaluate(tool: ToolResult, measurements: list) -> str:
     if any(item["status"] == "FAIL" for item in measurements):
         return "FAIL"
     if any((not item["ran"] or item.get("status") == "NOT_MEASURED")
-           and not item.get("native_config_disabled") for item in tool.native_steps):
+           and not (item.get("native_config_disabled") or item.get("native_no_change"))
+           for item in tool.native_steps):
         return "NOT_MEASURED"
     if any(item["status"] == "NOT_MEASURED" for item in measurements):
         return "NOT_MEASURED"
