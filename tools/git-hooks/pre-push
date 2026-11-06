@@ -12,7 +12,11 @@ FAILED=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue
   if [ "$remote_sha" = "$ZERO" ]; then
-    RANGE="$local_sha --not --remotes=$REMOTE_NAME"
+    if git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
+      RANGE="$local_sha --not --remotes=$REMOTE_NAME"
+    else
+      RANGE="$local_sha"
+    fi
   else
     RANGE="${remote_sha}..${local_sha}"
   fi
