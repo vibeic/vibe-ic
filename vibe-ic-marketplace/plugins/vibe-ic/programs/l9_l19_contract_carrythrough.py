@@ -664,6 +664,9 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
     records = _source_documents(project)
     emitted: List[str] = []
     hierarchy = l9["fields"] if isinstance(l9.get("fields"), dict) else l9
+    from phase1_port_extract import annotate_timing_ports
+    if annotate_timing_ports(project, l9):
+        emitted.append("L9.top_ports.timing_class")
     macros = _hard_macro_requirements(project, records, hierarchy.get("top_module"))
     if macros and not hierarchy.get("hard_macros"):
         hierarchy["hard_macros"] = macros
