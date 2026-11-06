@@ -6,7 +6,7 @@ description: Read Static Timing Analysis reports, triage setup/hold/recovery/rem
 # STA Review
 
 > **Doctrine (v0.1.50):** 把修法寫進工具，而非寫進 prompt。
-> Mandatory program preflight first; AI is the backstop, not the lead.
+> Run the native timing tools first. AI reviews their results.
 
 STA signoff uses the selected native OpenSTA, PrimeTime or Tempus reports.
 Read the launch and capture paths, SDC clocks and exceptions, Liberty corner,
