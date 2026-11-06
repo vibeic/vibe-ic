@@ -76,9 +76,28 @@ def test_malformed_engineering_dimensions_refuse(tmp_path):
 @pytest.mark.parametrize("operator_verdict", ["PASS", "FAIL", "NOT_DETERMINED"])
 def test_normal_wrapper_uses_new_provider_over_retained_self_catalogue(
         tmp_path, monkeypatch, operator_verdict):
-    from test_owner_self_tapeout_catalogue import fixture
+    import _submission_template as template
+    import _tapeout_declaration as declaration
+    import submission_template_ingest as ingest
     import submission_template_check as catalogue
-    project, _, _ = fixture(tmp_path)
+    project = tmp_path / "design"
+    project.mkdir()
+    source = tmp_path / "catalogue"
+    source.mkdir()
+    (source / "neutral.json").write_text(json.dumps({
+        "DIE_AREA": [0, 0, 800, 1000], "SEAL_RING_WIDTH": 10}))
+    assert ingest.main([str(project), "--template", str(source)]) == 0
+    owner = {"answers": {"deliverable": "DIE"},
+             "answer_provenance": {"deliverable": {
+                 "answered_by": "owner", "citation": "Neutral owner input: deliver DIE."}},
+             "operator_template": {"path": None, "slot": None,
+                 "absent_reason": "Independent tapeout; no operator purchase or slot applies."}}
+    doc, _ = declaration.merge_answers(declaration.blank_declaration(),
+        dict(owner["answers"], answer_provenance=owner["answer_provenance"]))
+    answers = project / template.DESIGN_ANSWERS_REL
+    answers.parent.mkdir(parents=True, exist_ok=True)
+    answers.write_text(json.dumps(owner))
+    (project / declaration.DECLARATION_REL).write_text(json.dumps(doc))
     assert catalogue.catalogue_selects_self_tapeout(project)[0]
     switch = project / "phase3/librelane_switch.json"
     switch.parent.mkdir(parents=True)
