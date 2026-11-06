@@ -74,6 +74,10 @@ All paths are relative to the handoff folder. Files retain their contents and
 native corner directories. Missing essential views produce `NOT_MEASURED`
 without an index. Native failures remain available in the retained run folder.
 
+Native completion with positive timing or electrical violation counts is
+rejected even when a native checker only warns. Missing native count families
+remain `NOT_MEASURED`.
+
 The result covers the selected native flows and their enabled checks. It does
 not claim whole-design verification or tape-out acceptance. Level 4 consumes the
 plain-path index separately.

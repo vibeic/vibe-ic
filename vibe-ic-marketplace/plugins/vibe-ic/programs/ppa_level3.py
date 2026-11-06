@@ -298,7 +298,7 @@ def _orfs_sdc(original: Path, declared: dict, destination: Path) -> None:
         return
     preserved = destination.with_name("constraint-original.sdc")
     shutil.copy2(original, preserved)
-    # OpenSTA setters replace same-object bounds and expose no corresponding getters.
+    # OpenSTA setters replace same-object bounds.
     prefix = '''namespace eval ::level3_sdc {
   variable original [dict create]
   variable merge 0
