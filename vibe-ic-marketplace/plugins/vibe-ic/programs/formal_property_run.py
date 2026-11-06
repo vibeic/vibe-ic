@@ -1161,7 +1161,7 @@ def emit_invariant_sby(rtl_files: List[str], harness_file: str, top: str,
             f"{reads}")
 
     tasks_block = "\n".join(task_names)
-    opts_block = "\n".join(opts) + "\naigsmt none\n"
+    opts_block = "\n".join(opts) + "\nmulticlock on\naigsmt none\n"
     engines_block = "\n".join(engines)
     script = list(read_lines) + list(chparam_lines)
     script += [f"hierarchy -top {top}", "proc", "flatten"]

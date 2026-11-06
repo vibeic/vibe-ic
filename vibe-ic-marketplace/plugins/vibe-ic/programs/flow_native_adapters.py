@@ -418,7 +418,9 @@ def simulation(project, directory, tool, commands):
 
 
 def formal(project, directory, tool, commands):
-    from formal_property_run import _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read
+    from formal_property_run import (
+        _ensure_expert_observers_bound, _model_texts, frontend_aborted_the_read, resolve_include_headers,
+    )
     from formal_harness_gen import _resolve_top
 
     authored = {}
@@ -506,9 +508,16 @@ def formal(project, directory, tool, commands):
         return assertions
 
     for index, source in enumerate(paths):
+        model_text = _model_texts(source, source.parent, None)
         _ensure_expert_observers_bound(source, source.parent,
-                                      harness_text=_model_texts(source, source.parent, None))
-        listing = commands.run(["sby", "--dumptasks", source], cwd=source.parent)
+                                      harness_text=model_text)
+        native_source = source
+        body = source.read_text()
+        if "$global_clock" in model_text and not re.search(r"(?m)^(?:\w+:[ \t]*)?multiclock[ \t]+", body):
+            native_source = directory / f"native_input_{index + 1}.sby"
+            native_source.write_text(body.replace("[options]\n", "[options]\nmulticlock on\n", 1))
+            reports.append(native_source)
+        listing = commands.run(["sby", "--dumptasks", native_source], cwd=source.parent)
         if listing is None:
             return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
         if listing.returncode:
@@ -521,16 +530,30 @@ def formal(project, directory, tool, commands):
             required.append(key)
             output = directory / f"proof_{index + 1}_{task_index + 1}"
             first_read = len(commands.records)
-            completed = commands.run(["sby", "-f", "-d", output, source, *([task] if task else [])], cwd=source.parent)
+            completed = commands.run(["sby", "-f", "-d", output, native_source, *([task] if task else [])], cwd=source.parent)
             if completed is None:
                 return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
             config = output / "config.sby"
             if frontend_aborted_the_read(completed.stdout + completed.stderr) and config.is_file():
                 body = config.read_text()
                 reads = list(re.finditer(r"(?m)^read_verilog[ \t]+-formal[ \t]+-sv[ \t]+([^\n]+)", body))
-                converted = (commands.run(["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
-                    "-DFORMAL", "-DYOSYS", "-I.", *shlex.split(reads[0][1])], cwd=output / "src")
-                    if len(reads) == 1 else None)
+                converted = None
+                if len(reads) == 1:
+                    arguments = shlex.split(reads[0][1])
+                    sources = [output / "src" / path for path in arguments
+                               if (output / "src" / path).is_file()]
+                    supplied = staged_rtl_sources(project)
+                    for header in resolve_include_headers(sources, [output / "src", source.parent,
+                            *(path.parent for path in sources), *(path.parent for path in supplied)]):
+                        destination = output / "src" / header.name
+                        if not destination.exists():
+                            shutil.copyfile(header, destination)
+                            reports.append(destination)
+                    argv = ["sv2v", "--exclude=Assert", "--exclude=SeverityTask",
+                            "-DFORMAL", "-DYOSYS", "-I.", *arguments]
+                    converted = commands.run(argv, cwd=output / "src")
+                    if converted is not None and converted.returncode:
+                        scope.extend((converted.stderr or converted.stdout).strip().splitlines()[:1])
                 if converted is not None and converted.returncode == 0:
                     lowered = output / "sv_frontend.v"
                     lowered.write_text(converted.stdout)
