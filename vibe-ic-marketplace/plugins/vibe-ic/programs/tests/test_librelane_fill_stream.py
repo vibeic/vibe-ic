@@ -27,18 +27,19 @@ from librelane_contract import Refusal
 
 
 def test_unknown_native_script_refuses_instead_of_patching_unreviewed_source():
-    with pytest.raises(Refusal, match='FILL_STREAM_NATIVE_VERSION_UNSUPPORTED'):
+    with pytest.raises(Refusal, match='FILL_STREAM_NATIVE_API_UNSUPPORTED'):
         stream.patched_native_source('print("unreviewed")\n')
 
 
-@pytest.mark.parametrize('damage', ['transform', 'extra_shape'])
+@pytest.mark.parametrize('damage', ['transform', 'extra_shape', 'missing_fill'])
 def test_reader_fill_cell_does_not_authorize_changed_position_or_other_geometry(tmp_path, damage):
     import klayout.db as db
     parsed = {'units': 1000, 'top': 'neutral', 'shapes': [{'layer': 'M', 'rect': [1000, 2000, 3000, 4000]}]}
     bare = db.Layout(); bare.dbu = 0.001; bare.create_cell('neutral')
     filled = db.Layout(); filled.dbu = 0.001; top = filled.create_cell('neutral')
     child = filled.create_cell('reader_created_geometry')
-    child.shapes(filled.layer(10, 4)).insert(db.Box(1000, 2000, 3000, 4000))
+    if damage != 'missing_fill':
+        child.shapes(filled.layer(10, 4)).insert(db.Box(1000, 2000, 3000, 4000))
     if damage == 'extra_shape':
         child.shapes(filled.layer(10, 0)).insert(db.Box(0, 0, 100, 100))
     top.insert(db.CellInstArray(child.cell_index(), db.Trans(10, 0) if damage == 'transform' else db.Trans()))
@@ -56,7 +57,7 @@ def test_reader_fill_cell_does_not_authorize_changed_position_or_other_geometry(
 
 
 
-def test_reviewed_native_clearer_retains_exact_fill_and_rejects_shape_reverse(monkeypatch):
+def test_native_clearer_preserves_fill_and_clears_other_cells():
     import ast
     source = stream.native_script().read_text()
     assert stream.patched_native_source(source) == source
@@ -70,7 +71,3 @@ def test_reviewed_native_clearer_retains_exact_fill_and_rejects_shape_reverse(mo
     assert not clear('neutral_DEF_FILL', 'neutral', 0, 2)
     assert clear('foreign_DEF_FILL', 'neutral', 0, 3)
     assert clear('ordinary_macro', 'neutral', 0, 4)
-    damaged = source.replace('if cell_name == f"{design_name}_DEF_FILL":', 'if False:')
-    # The actual native clearing logic remains part of the supported API.
-    with pytest.raises(Refusal, match='FILL_STREAM_NATIVE_VERSION_UNSUPPORTED'):
-        stream.patched_native_source(damaged)

@@ -51,6 +51,9 @@ def test_old_hash_metadata_cannot_refuse_native_provider_results(bond_assembly):
     assert selected["technical_precheck_status"] == "PASS"
     assert selected["status"] == "NOT_SUBMITTED"
     assert selected["accepted"] is False
+    assert selected["retained_report"] == {"source": str(operator)}
+    material = next(item for item in selected["materials"] if item["path"] == str(operator))
+    assert material["sha256"] == hashlib.sha256(operator.read_bytes()).hexdigest()
 
 
 @pytest.mark.parametrize("case", ["native_failure", "missing_step", "missing_state", "missing_output"])
