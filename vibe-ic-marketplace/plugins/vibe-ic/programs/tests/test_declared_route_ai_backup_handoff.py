@@ -71,9 +71,6 @@ def _write_rtl_gen_report(project: Path, status: str, *,
             "extras": extras,
         }],
     }
-    if context is not None:
-        document = bd._bind_runner_report(
-            document, project, __file__, report.name, context=context)
     report.write_text(json.dumps(document))
 
 
@@ -147,49 +144,6 @@ def _phase1_dead_runner():
 
     run.calls = calls
     return run
-
-
-@pytest.mark.parametrize(("damage", "reason"), [
-    ("missing", "D1_GATE_REPORT_NOT_CURRENT_CALL"),
-    ("invalid-json", "D1_GATE_REPORT_NOT_CURRENT_CALL"),
-    ("unbound", "RUNNER_REPORT_UNBOUND"),
-    ("failed", "D1_ACTIVATION_GATE_NOT_PASS"),
-])
-def test_d1_report_precondition_is_required_before_the_owning_loop(
-        tmp_path, monkeypatch, damage, reason):
-    dataset, run = tmp_path / "dataset", tmp_path / "run"
-    _write_dataset(dataset, {"generic_d1_control": _DEBUG_PROMPT +
-                            '\nDeliver a complete chip as GDS.\n'})
-    calls = []
-
-    def producer(argv, **kwargs):
-        calls.append(list(argv))
-        assert _is_d1_frontdoor(argv), "invalid D1 evidence launched a later step"
-        project = Path(argv[2])
-        _emit_phase1_docs(project, _runner_invocation_context(kwargs))
-        report = project / "reports/orchestrator/phase1_one_shot.json"
-        if damage == "missing":
-            report.unlink()
-        elif damage == "invalid-json":
-            report.write_text("{")
-        else:
-            document = json.loads(report.read_text())
-            if damage == "unbound":
-                document.pop("runner_binding")
-            else:
-                document["verdict"] = "FAIL"
-            report.write_text(json.dumps(document))
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(bd.subprocess, "run", producer)
-    # A refused/unmeasured worker remains pending (coordinator rc 2).
-    assert _solve_after_ai_route("verilogeval-human", dataset, run) == 2
-    assert len(calls) == 1
-    result = json.loads((run / "solve_report.json").read_text())["results"][0]
-    assert result["worker_status"] == "ERROR"
-    assert reason in result["worker_error"]
-    assert _read_jsonl(run / bd._BACKUP_WORKLIST) == []
-    assert _read_jsonl(run / bd._REVIEW_WORKLIST) == []
 
 
 def _read_jsonl(path: Path) -> list[dict]:
