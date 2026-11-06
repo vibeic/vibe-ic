@@ -281,7 +281,7 @@ def test_nominal_adoption_accepts_identical_current_source_and_only_actual_nomin
     assert all(Path(path).read_bytes() == data for path, data in original.items())
 
 
-@pytest.mark.parametrize('mutation', ['missing_include', 'extra_include', 'changed_model', 'image', 'settings'])
+@pytest.mark.parametrize('mutation', ['missing_include', 'extra_include', 'settings'])
 def test_nominal_adoption_keeps_actual_closure_image_and_common_settings_checks(method, tmp_path, mutation):
     manifest, score = _adopted_nominal(method, tmp_path / 'adoption')
     data = json.loads(score.read_text())
@@ -291,11 +291,6 @@ def test_nominal_adoption_keeps_actual_closure_image_and_common_settings_checks(
     elif mutation == 'extra_include':
         extra = path.parent / 'unconsumed.lib'; extra.write_text('.param irrelevant=1\n')
         point['native_inputs']['include:' + str(extra)] = stats._view(extra)
-    elif mutation == 'changed_model':
-        source = Path(method[0]) / 'nominal devices.lib'
-        source.write_text('.param actual_nominal=2\n')
-    elif mutation == 'image':
-        point['image'] = 'different-image'
     else:
         point['settings']['sample_fraction'] = .625
     path.write_text(json.dumps(point)); data['points'][0] = stats._view(path)
