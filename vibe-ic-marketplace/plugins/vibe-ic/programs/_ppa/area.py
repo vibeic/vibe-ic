@@ -1007,32 +1007,6 @@ _PLACEMENT_DENSITY_FLOOR = 0.05
 _PLACEMENT_FLOOR_MAX_RATIO = 10.0
 
 
-def step25_native_density_due(project: Path, def_file: Path, pdk: Any) -> bool:
-    """Return whether the current Step-25 native density must be refreshed.
-
-    The runner decides whether Step 25 is in the selected flow.  This PPA
-    helper owns the cache admission: the current native binding, the measured
-    DEF digest, and the resolved PDK identity must all agree before a retained
-    density record can be reused.
-    """
-    import em_current_density_check as emc
-
-    binding = emc.validate_native_density(project)
-    if not binding["valid"]:
-        return True
-    try:
-        import _path_layout as _pl
-
-        doc = json.loads(
-            (_pl.reports_phase3_dir(project) /
-             "em_openroad_density.json").read_text())
-        return (doc["inputs"]["layout"]["sha256"] != emc._native_sha(def_file)
-                or doc["pdk"] != {
-                    "name": pdk.name,
-                    "tech_lef": str(pdk.tech_lef),
-                })
-    except (OSError, ValueError, KeyError, TypeError):
-        return True
 
 
 def real_core_placement_density(cell_area_um2: float, core_w: int, core_h: int,

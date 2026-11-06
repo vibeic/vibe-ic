@@ -7311,7 +7311,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         "_provenance": {
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
-        
+
             "produced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "derived_from": "block_type_topology_library",
             "library_entry": btype,

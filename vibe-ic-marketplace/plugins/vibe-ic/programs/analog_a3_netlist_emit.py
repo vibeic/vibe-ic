@@ -1902,7 +1902,7 @@ def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
             (bdir / _acc.NETLIST_PROVENANCE_ARTEFACT).write_text(
                 json.dumps({"block": block,
                             "_provenance": {"producer": PRODUCER,
-                                            
+
                                             "design_content": design_content}}),
                 encoding="utf-8")
         if tb_text:
@@ -2567,7 +2567,7 @@ def write_gap(bdir: Path, project: Path, block: str, btype: str, status: str,
         "_provenance": {
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
-            
+
             "produced_at": _now(),
             "fields_bound": [],
             "fields_defaulted": [],
@@ -3107,7 +3107,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         "_provenance": {
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
-            
+
             # The SAME stamp the netlist header carries — one event, one time.
             "produced_at": stamp,
             "rendered_from": {
@@ -3233,7 +3233,7 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
     if refused:
         return 1, {
             "producer": PRODUCER,
-            
+
             "block_list_source": src,
             "verdict": PDK_NOT_BOUND_BY_BLOCK,
             "reason": "; ".join(str(r.get("reason")) for r in refused),
@@ -3246,7 +3246,7 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
         }
     report = {
         "producer": PRODUCER,
-            
+
         "block_list_source": src,
         "verdict": "EMITTED" if (emitted or kept) else "ALL_GAP",
         "blocks_total": len(records),

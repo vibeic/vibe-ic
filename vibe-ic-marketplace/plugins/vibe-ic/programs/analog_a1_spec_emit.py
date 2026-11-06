@@ -521,7 +521,7 @@ def _gap_body(project: Path, entry: Dict[str, Any], name: str, btype: str,
         "block": name,
         "block_type": btype,
         "_provenance": {
-            
+
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
             "produced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
