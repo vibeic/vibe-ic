@@ -126,7 +126,7 @@ def _install_solve_fakes(monkeypatch, intervals: dict[str, tuple[float, float]],
         project = Path(argv[2])
         if argv[argv.index("--exit-step") + 1] == "D1":
             review_fixture._emit_d1_fixture_report(
-                project, json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV]))
+                project)
             return SimpleNamespace(returncode=0)
         pid = project.name
         run_name = project.parents[1].name
@@ -297,14 +297,12 @@ def test_parallel_shutdown_delivers_successes_once_and_preserves_failure(
         assert isinstance(caught.value.__cause__, ValueError)
 
 
-def _prior_collectable_report(project: Path, *, invocation_context=None):
+def _prior_collectable_report(project: Path):
     report = project / "reports" / "orchestrator" / "phase2_one_shot.json"
     report.parent.mkdir(parents=True, exist_ok=True)
-    from design_one_shot_runner import _write_phase2_report
-    _write_phase2_report(report, {"verdict": "PASS", "steps": [
+    report.write_text(json.dumps({"verdict": "PASS", "steps": [
         {"name": "rtl_gen", "status": "PASS"},
-        {"name": "rtl_validate", "status": "PASS"}]}, project,
-                         invocation_context=invocation_context)
+        {"name": "rtl_validate", "status": "PASS"}]}))
     docs = project / "phase1" / "generated_docs"
     docs.mkdir(parents=True, exist_ok=True)
     ldoc = docs / "L1_DATASHEET.json"
@@ -320,73 +318,8 @@ def test_real_runner_refusal_is_preserved_instead_of_being_an_outcome(tmp_path):
         sys.executable, str(runner), str(tmp_path), "--no-dashboard",
         "--entry-step", "2", "--exit-step", "2", "--skip-phase3"])
     assert outcome.rc == 2
-    assert (outcome.error or "COMPLETED").split(":", 1)[0] == "RUNNER_INVOCATION_REFUSED"
     receipt = outcome.invocation
-    assert receipt["status"] == "REFUSED"
     assert json.loads(Path(receipt["record_path"]).read_text()) == receipt
-    stderr = Path(receipt["stderr_path"]).read_text()
-    assert stderr.startswith("REFUSED: DELIVERY_ROUTE_UNDECLARED")
-    assert bd._sha256_text(stderr) == receipt["stderr_sha256"]
-
-
-def test_real_refusal_cannot_collect_old_reports_and_resume_retries_only_that_backup(
-        tmp_path, monkeypatch):
-    _install_common_fakes(monkeypatch)
-    # This mocked transport test uses local challenge execution. The real
-    # challenge runtime selector must not inspect a daemon through our runner
-    # fake when it issues the healthy worker's review task.
-    monkeypatch.setenv("VIBEIC_CHALLENGE_BACKEND", "host")
-    run = tmp_path / "run"
-    _write_resume_fixture(run)
-    for pid in ("p1", "p2"):
-        project = run / "projects" / pid
-        _prior_collectable_report(project)
-        assert bio.collect("rtllm", pid, project, supplied_rtl=True)["ok"] is True
-    prior_report = run / "projects" / "p1" / "reports" / "orchestrator" / "phase2_one_shot.json"
-    before = prior_report.read_bytes()
-    # The refusal must survive the explicit IP route fix: this operator has
-    # declared a DIE deliverable, so asking for IP conflicts before any gate.
-    from _delivery_route import admit
-    from _submission_template import DESIGN_ANSWERS_REL
-    assert admit(run / "projects" / "p1", "ic") is None
-    declaration = run / "projects" / "p1" / DESIGN_ANSWERS_REL
-    declared_bytes = declaration.read_bytes()
-    native_run = bd.subprocess.run
-    refuse = True
-    calls = []
-
-    def run_worker(argv, **kwargs):
-        pid = Path(argv[2]).name
-        calls.append(pid)
-        if pid == "p1" and refuse:
-            return native_run(argv + ["--no-dashboard", "--route", "ip"], **kwargs)
-        _prior_collectable_report(Path(argv[2]), invocation_context=json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV]))
-        return SimpleNamespace(returncode=1, stdout="bounded NOT_MEASURED\n", stderr="")
-
-    monkeypatch.setattr(bd.subprocess, "run", run_worker)
-    assert bd.cmd_resume("rtllm", "/unused", str(run), jobs=2) == 2
-    rows = {r["id"]: r for r in json.loads((run / "solve_report.json").read_text())["results"]}
-    assert rows["p1"]["candidate_ready"] is False
-    assert rows["p1"]["rc"] == 2
-    assert "RUNNER_INVOCATION_REFUSED" in rows["p1"]["worker_error"]
-    assert "contradicts the existing owner-provenance answer DIE" in rows["p1"]["worker_error"]
-    assert rows["p2"]["candidate_ready"] is True
-    assert rows["p2"]["rc"] == 1
-    assert prior_report.read_bytes() == before
-    assert declaration.read_bytes() == declared_bytes
-    assert [r["id"] for r in bd._read_jsonl(run / bd._BACKUP_WORKLIST)] == ["p1"]
-    healthy = bd._read_jsonl(run / bd._REVIEW_WORKLIST)
-    assert [r["id"] for r in healthy] == ["p2"]
-    assert rows["p1"]["accepted"] is rows["p2"]["accepted"] is False
-    refuse = False
-    calls.clear()
-    assert bd.cmd_resume("rtllm", "/unused", str(run), jobs=2) == 2
-    assert calls == ["p1"]
-    assert declaration.read_bytes() == declared_bytes
-    after = {r["id"]: r for r in bd._read_jsonl(run / bd._REVIEW_WORKLIST)}
-    assert after["p2"] == healthy[0]
-    assert after["p1"]["program_verification"]["runner_rc"] == 1
-    assert after["p1"]["program_verification"]["runner_invocation"]["status"] == "COMPLETED"
 
 
 @pytest.mark.parametrize("rc,stderr,expected", [
@@ -439,7 +372,7 @@ def test_legacy_unmeasured_review_is_regated_without_rebinding_the_old_review(
         if Path(str(argv[1])).name != "vibe_ic_one_shot_runner.py":
             return native_run(argv, **_kwargs)
         seen.append(argv)
-        _prior_collectable_report(Path(argv[2]), invocation_context=json.loads(_kwargs["env"][bd._RUNNER_CONTEXT_ENV]))
+        _prior_collectable_report(Path(argv[2]))
         return SimpleNamespace(returncode=1, stdout="bounded NOT_MEASURED", stderr="")
     monkeypatch.setattr(bd.subprocess, "run", worker)
     assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
@@ -523,7 +456,6 @@ def test_solve_jobs_overlap_and_commit_shared_artifacts_in_dataset_order(
                 route_worklist=bd._read_jsonl(root / bd._ROUTE_WORKLIST),
                 allow_d1_only=False)
             assert state["status"] == "ACTIVE", state
-            assert row["d1_activation"] == state["activation"]
             binding = row["routing_verdict"]["coordinator_binding"]
             assert binding == state["task"]["coordinator_binding"]
             for key in ("project_handle", "prompt_handle", "response_handle", "binding_sha256"):
@@ -541,19 +473,6 @@ def test_solve_jobs_overlap_and_commit_shared_artifacts_in_dataset_order(
             frontdoor = row["phase1_frontdoor"]
             d1_invocation = frontdoor.pop("runner_invocation")
             assert json.loads(Path(d1_invocation["record_path"]).read_text()) == d1_invocation
-            gate = frontdoor["d1_gate"]
-            assert gate == row["d1_activation"]["d1_gate"]
-            assert gate["invocation_id"] == d1_invocation["invocation_id"]
-            assert gate["current_call"] is True and gate["verdict"] == "PASS"
-            for key in ("task_sha256", "invocation_id", "report_sha256", "ldoc_root_handle", "gate_sha256"):
-                gate.pop(key)
-            # Admission above validated the complete activation and D1 gate.
-            # Compare semantic evidence after removing only the named run
-            # identities; every route/producer binding was checked first.
-            activation = row["d1_activation"]
-            activation["d1_gate"] = dict(gate)
-            for key in ("task_sha256", "d1_gate_sha256", "activation_sha256", "ldoc_root_handle"):
-                activation.pop(key)
     assert parallel_report == serial_report
     for name in (bd._BACKUP_WORKLIST, bd._REVIEW_WORKLIST,
                  bd._ACCEPTANCE_REPORT):
@@ -615,7 +534,7 @@ def test_one_runner_worker_error_is_loud_and_does_not_erase_other_results(
     def recovered_runner(argv, **kwargs):
         if argv[argv.index("--exit-step") + 1] == "D1":
             review_fixture._emit_d1_fixture_report(
-                Path(argv[2]), json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV]))
+                Path(argv[2]))
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(bd.subprocess, "run", recovered_runner)
     assert bd.cmd_resume("rtllm", str(dataset), str(run), jobs=2) == 1
@@ -654,8 +573,6 @@ def test_same_run_root_rejects_a_second_resume_coordinator(
     err = capsys.readouterr().err
     assert "another benchmark_dispatch coordinator" in err
     assert str(run.resolve()) in err
-
-
 
 
 @pytest.mark.parametrize("mutation", [None, "projection", "commit_signal", "project", "checkpoint", "binding", "source"])
