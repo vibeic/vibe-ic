@@ -29,7 +29,29 @@ append_if_exists_argument rd_args VIBEIC_PRR_MAX_WIRE_LENGTH -max_wire_length
 append_if_exists_argument rd_args VIBEIC_PRR_SLEW_MARGIN_PCT -slew_margin
 append_if_exists_argument rd_args VIBEIC_PRR_CAP_MARGIN_PCT -cap_margin
 append_if_exists_argument rd_args VIBEIC_PRR_MAX_UTIL_PCT -max_utilization
-odb::dbDatabase_beginEco $::block
+
+proc vic_sizing_state {} {
+    set cells [list]
+    foreach inst [$::block getInsts] {
+        lappend cells [list [$inst getName] [[$inst getMaster] getName] \
+            [$inst getLocation] [$inst getOrient] [$inst getPlacementStatus]]
+    }
+    set nets [list]
+    foreach net [$::block getNets] {
+        set pins [list]
+        foreach pin [$net getITerms] {
+            lappend pins [list [[$pin getInst] getName] [[$pin getMTerm] getName]]
+        }
+        set ports [list]
+        foreach port [$net getBTerms] {lappend ports [$port getName]}
+        lappend nets [list [$net getName] [lsort $pins] [lsort $ports]]
+    }
+    return [list [lsort $cells] [lsort $nets]]
+}
+
+# The ECO journal also records repeated CLOCK type assignments by repair_design.
+# Compare physical cells and connectivity so analysis metadata does not reroute.
+set before_sizing [vic_sizing_state]
 log_cmd repair_design {*}$rd_args
 
 if {[info exists ::env(VIBEIC_PRR_RECOVER_POWER_PCT)]} {
@@ -55,9 +77,7 @@ append_if_exists_argument hold_args VIBEIC_PRR_MAX_UTIL_PCT -max_utilization
 log_cmd repair_timing {*}$hold_args
 log_cmd repair_design {*}$rd_args
 
-set changed [expr {![odb::dbDatabase_ecoEmpty $::block]}]
-odb::dbDatabase_endEco $::block
-odb::dbDatabase_commitEco $::block
+set changed [expr {$before_sizing ne [vic_sizing_state]}]
 utl::metric_integer vibeic__postroute__changed $changed
 
 # A full reroute lets the router move neighbors that a scoped ECO route freezes.
