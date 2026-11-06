@@ -506,9 +506,16 @@ def formal(project, directory, tool, commands):
         return assertions
 
     for index, source in enumerate(paths):
+        model_text = _model_texts(source, source.parent, None)
         _ensure_expert_observers_bound(source, source.parent,
-                                      harness_text=_model_texts(source, source.parent, None))
-        listing = commands.run(["sby", "--dumptasks", source], cwd=source.parent)
+                                      harness_text=model_text)
+        native_source = source
+        body = source.read_text()
+        if "$global_clock" in model_text and not re.search(r"(?m)^(?:\w+:[ \t]*)?multiclock[ \t]+", body):
+            native_source = directory / f"native_input_{index + 1}.sby"
+            native_source.write_text(body.replace("[options]\n", "[options]\nmulticlock on\n", 1))
+            reports.append(native_source)
+        listing = commands.run(["sby", "--dumptasks", native_source], cwd=source.parent)
         if listing is None:
             return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
         if listing.returncode:
@@ -521,7 +528,7 @@ def formal(project, directory, tool, commands):
             required.append(key)
             output = directory / f"proof_{index + 1}_{task_index + 1}"
             first_read = len(commands.records)
-            completed = commands.run(["sby", "-f", "-d", output, source, *([task] if task else [])], cwd=source.parent)
+            completed = commands.run(["sby", "-f", "-d", output, native_source, *([task] if task else [])], cwd=source.parent)
             if completed is None:
                 return commands.result(reports=reports, detail="SymbiYosys is unavailable.")
             config = output / "config.sby"
