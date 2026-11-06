@@ -647,19 +647,19 @@ def test_cli_records_supported_implementation_choice(project, key, value):
         key: value}
 
 
-def test_original_prompt_recovers_lost_pdk_and_invalid_top(project):
+def test_original_prompt_recovers_lost_pdk_with_authored_top(project):
     (project / "input").mkdir()
     (project / "input/phase1_prompt.md").write_text(
-        "Implement on sky130A.\n- Top module: `unit`.\n")
+        "Implement on sky130A.\n- Top module: `not_the_authored_top`.\n")
     docs = project / "phase1/generated_docs"
-    (docs / "L9_INTEGRATION_SPEC.json").write_text('{"top_module": "missing"}')
+    (docs / "L9_INTEGRATION_SPEC.json").write_text('{"top_module": "unit"}')
     (docs / "L19_CONSTRAINTS_PDK.json").write_text('{"fields":{"pdk_target":null}}')
     config = build_config(project)
     assert config["PDK"] == "sky130A"
     assert config["DESIGN_NAME"] == "unit"
     assert config["CLOCK_PERIOD"] == 17.5
     assert json.loads((project / "work/flow/config_sources.json").read_text())["sources"] == {
-        "PDK": "input/phase1_prompt.md", "DESIGN_NAME": "input/phase1_prompt.md"}
+        "PDK": "input/phase1_prompt.md"}
 
 
 def test_primary_clock_without_period_keeps_native_default_and_records_assumption(project):
@@ -690,7 +690,9 @@ def test_nested_generated_modules_and_headers_are_native_inputs(project):
     assert config["USE_SLANG"] is True
 
 
-def test_missing_declared_top_is_not_replaced_by_an_unrelated_module(project):
+def test_missing_declared_top_is_not_replaced_by_prompt_prose_or_an_unrelated_module(project):
+    (project / "input").mkdir()
+    (project / "input/phase1_prompt.md").write_text("- Top module: `unit`.\n")
     (project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").write_text(
         '{"top_module":"missing"}')
     with pytest.raises(FileNotFoundError, match="Declared top module missing"):
@@ -734,14 +736,16 @@ def test_nested_file_with_overlapping_and_unique_modules_is_not_silently_dropped
     assert mixed in files
 
 
-def test_shared_input_resolver_recovers_declared_top_without_config_side_effects(project):
-    (project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").write_text(
-        '{"top_module":"missing"}')
+def test_shared_input_resolver_uses_authored_top_without_config_side_effects(project):
+    l9_path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    l9_path.write_text('{"top_module":null}')
     (project / "input").mkdir()
-    (project / "input/phase1_prompt.md").write_text("- Top module: `unit`.\n")
+    (project / "input/phase1_prompt.md").write_text(
+        "- Top module: `not_the_authored_top`.\n")
     files, top = resolve_rtl_inputs(project)
     assert top == "unit"
     assert files == [project / "phase2/stage1/rtl/unit.v"]
+    assert json.loads(l9_path.read_text())["top_module_source"]["step"] == "RTL authoring"
     assert not (project / "work").exists()
 
 

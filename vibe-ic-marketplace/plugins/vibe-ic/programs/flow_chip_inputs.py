@@ -606,7 +606,7 @@ def _pad_sdc(chosen: dict, library: dict) -> str:
     return "\n".join(lines) + "\n" if lines else ""
 
 
-def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str] | None = None) -> str:
+def _sdc(project: Path, config: dict, ports: list[dict]) -> str:
     directions = {bit: port["direction"] for port in ports for bit in _bits(port)}
     def collection(names):
         ports = ["[[[sta::top_instance] cell] find_port " + _tcl_word(name) + "]" for name in names]
@@ -686,32 +686,21 @@ def _sdc(project: Path, config: dict, ports: list[dict], input_masters: set[str]
     outputs = [bit for bit, value in directions.items() if value == "output"]
     if outputs and config.get("OUTPUT_CAP_LOAD") is not None:
         lines.append(f"set_load {float(config['OUTPUT_CAP_LOAD']) / 1000:g} {collection(outputs)}")
-    if input_masters:
-        from sdc_environment import _io_pad_view
-        views = [_io_pad_view(path.read_text(), input_masters) for path in _paths(config.get("PAD_LIBS"))]
-        views = [view for view in views if view.get("selected_cells_present")]
-        covered = {pin["pin"].rsplit("/", 1)[0] for view in views for pin in view.get("pins", [])}
-        if (not views or input_masters - covered
-                or any(view.get("slow_ns") is None or view.get("fast_ns") is None
-                       or view.get("pins_without_bound") for view in views)):
-            raise FileNotFoundError("Input-pad Liberty has no characterized off-chip edge bracket")
-        slow = min(float(view["slow_ns"]) for view in views)
-        fast = max(float(view["fast_ns"]) for view in views)
-        if slow < fast:
-            raise ValueError("Input-pad Liberty edge brackets do not overlap")
-        entries = " ".join("[list " + _tcl_word(view["library"]) + f" {view['slow_ns']:g} {view['fast_ns']:g}]"
-                           for view in views)
-        lines.extend([f"set _chip_pad_views [list {entries}]", "set _chip_pad_linked {}",
-            "foreach _chip_pad_view $_chip_pad_views {",
-            "  if {[llength [get_libs -quiet [lindex $_chip_pad_view 0]]]} {lappend _chip_pad_linked $_chip_pad_view}",
-            "}", f"set _chip_pad_max {slow:g}", f"set _chip_pad_min {fast:g}",
-            "if {[llength $_chip_pad_linked]} {",
-            "  set _chip_pad_max [lindex [lsort -real [lmap v $_chip_pad_linked {lindex $v 1}]] 0]",
-            "  set _chip_pad_min [lindex [lsort -real -decreasing [lmap v $_chip_pad_linked {lindex $v 2}]] 0]",
-            "}"])
-        inputs = collection([bit for bit, value in directions.items() if value == "input"])
-        lines.extend((f"set_input_transition -max $_chip_pad_max {inputs}",
-                      f"set_input_transition -min $_chip_pad_min {inputs}"))
+    # Use the same resolved drivers as LibreLane's base.sdc, including its
+    # clock-driver fallback. Liberty table coverage is not an external edge.
+    for clock_inputs in (False, True):
+        names = [bit for bit, value in directions.items()
+                 if value == "input" and (bit in clocks) == clock_inputs]
+        driver = (config.get("SYNTH_CLK_DRIVING_CELL") if clock_inputs else None) or config.get("SYNTH_DRIVING_CELL")
+        if names and driver:
+            master, pin = str(driver).rsplit("/", 1)
+            lines.append(f"set_driving_cell -lib_cell {_tcl_word(master)} -pin {_tcl_word(pin)} {collection(names)}")
+    from sdc_environment import _design_input_transition
+    declared_edge = _design_input_transition(project)
+    if declared_edge:
+        inputs = [bit for bit, value in directions.items() if value == "input"]
+        if inputs:
+            lines.append(f"set_input_transition {declared_edge[0]} {collection(inputs)}")
     return "\n".join(lines) + "\n"
 
 
@@ -740,8 +729,7 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
     wrapper.write_text(_wrapper(core_config["DESIGN_NAME"], top, ports, chosen, ordered,
                                 supplies, native, library))
     sdc = destination / "constraints.sdc"
-    input_masters = {entry["master"] for entry in chosen.values() if entry.get("direction") == "input"}
-    sdc.write_text(_sdc(project, {**native, **core_config}, ports, input_masters)
+    sdc.write_text(_sdc(project, {**native, **core_config}, ports)
                    + _pad_sdc(chosen, library))
     result = dict(core_config)
     result.update(pdn_settings)
@@ -756,6 +744,20 @@ def prepare(project: Path, core_config: dict[str, Any], on_tool_run=None) -> dic
                   PDN_ENABLE_PINS=False, MAGIC_EXT_USE_GDS=True,
                   VDD_NETS=[power], GND_NETS=[ground], FALLBACK_SDC=str(sdc),
                   PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
+    if native.get("MAGICRC"):
+        magicrc = destination / "pad-extraction.magicrc"
+        if Path(native["MAGICRC"]) != magicrc:
+            # Magic reads its rc before LibreLane's wrapper loads the step environment.
+            # Preload pad LEFs only for extraction; other Magic steps keep full views.
+            magicrc.write_text("if {[info exists ::env(_TCL_ENV_IN)]} {source $::env(_TCL_ENV_IN)}\n"
+                + "source " + _tcl_word(native["MAGICRC"]) + "\n" + r'''
+if {[info exists ::env(STEP_ID)] && $::env(STEP_ID) eq "Magic.SpiceExtraction"
+    && [info exists ::env(PAD_LEFS)]} {
+    foreach lef $::env(PAD_LEFS) {lef read $lef}
+    gds noduplicates true
+}
+''')
+        result["MAGICRC"] = str(magicrc)
     if native.get("PDN_CORE_RING") and native.get("PDN_CORE_RING_CONNECT_TO_PADS"):
         ring_layers = {native.get(f"PDN_CORE_{axis}_LAYER") or native[f"PDN_{axis}_LAYER"]
                        for axis in ("VERTICAL", "HORIZONTAL")}

@@ -2946,6 +2946,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     _iproj = _project_root_of(files, "input/docs") or _project_root_of(
         files, "plugin_output/declaration.json")
     if _iproj is not None:
+        if spec_path.suffix == '.json':
+            _content = json.loads(spec_raw)
+            if isinstance(_content, dict):
+                _rosters = [_content[key] for key in ('ports', 'top_ports', 'top_module_pins')
+                            if isinstance(_content.get(key), list)]
+                if _rosters and any(rows != _rosters[0] for rows in _rosters):
+                    _binding_findings.append(Finding(chosen, 'ERROR',
+                        'selected-interface-binding-invalid', top or rtl_name,
+                        'selected interface port rosters disagree'))
+                from l9_rtl_pin_consistency_check import _l3_fixed_port_name
+                # Delegating illustrative names does not retire a fixed-name
+                # obligation, even without an old selected-interface record.
+                _fixed = {port['name'] for rows in _rosters for port in rows
+                          if isinstance(port, dict) and port.get('name')
+                          and (port.get('required') is True or port.get('mandatory') is True
+                               or _l3_fixed_port_name(_iproj, port['name']))}
+                for name in sorted(_fixed - {port.name for port in rtl_ports}):
+                    _binding_findings.append(Finding(chosen, 'ERROR', 'port-missing', name,
+                        f"required spec port '{name}' is absent from RTL; an interface "
+                        "choice cannot rename an explicitly fixed or mandatory port"))
         _doc_text = []
         _docs_dir = _iproj / "input" / "docs"
         if _docs_dir.is_dir():

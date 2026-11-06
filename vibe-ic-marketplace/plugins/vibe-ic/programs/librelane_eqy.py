@@ -29,6 +29,7 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
                          _equiv_splitnets)
     encoding = fsm_encfile_beside_netlist(str(netlist))
     states = fsm_signal_names(encoding)
+    # Without an encoding map, compare FSM behavior rather than raw state codes.
     gold_prep = ([f"hierarchy -top {top}", "proc", "opt -nosdff -nodffe", "fsm"]
                  if states else [])
     split = _equiv_splitnets(encoding, states).replace("splitnets -ports", "splitnets", 1)
@@ -61,7 +62,10 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         "[gold]", *gold_reads, *gold_prep, "",
         "[gate]", *libraries, *gate_models,
         f"read_verilog -formal -sv -icells {netlist}", "",
-        "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
+        "[script]", f"hierarchy -top {top}", "proc",
+        *(["[gold]", "opt -nosdff -nodffe", "fsm_detect", "rename -hide a:fsm_encoding=auto", "[script]"]
+          if synthesis is not None and not states else []),
+        f"prep -top {top} -flatten",
         "memory", *(["[gold]", f"write_json {views}/gold.before-normalization.json",
                       "[gate]", f"write_json {views}/gate.before-normalization.json", "[script]"]
                     if views is not None else []),
@@ -69,7 +73,8 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str,
         observable_matchpoint_names(top).rstrip(), "",
         "[match *]", "gold-nomatch /^_[0-9]+_$/",
         "gate-nomatch /^_[0-9]+_$/", "",
-        *(["[collect *]", "group *", "", "[partition *]", "amend *", ""] if group_all else []),
+        *(["[collect *]", "group *", ""] if group_all else []),
+        "[partition *]", "amend *", "",
         "[strategy sat]", "use sat", "depth 5", *budget, "",
         "[strategy pdr]", "use sby", "engine abc pdr -rfi", *budget, ""])
 

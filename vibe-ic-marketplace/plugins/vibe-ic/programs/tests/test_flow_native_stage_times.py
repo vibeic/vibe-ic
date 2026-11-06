@@ -51,8 +51,9 @@ def test_ordinary_synthesis_keeps_native_strategy_without_search(tmp_path, monke
 
 
 @pytest.mark.parametrize("missing_corner", [False, True])
-@pytest.mark.parametrize("changed", [False, True])
-def test_routed_sizing_reads_corners_then_releases_only_signal_wires(tmp_path, missing_corner, changed):
+@pytest.mark.parametrize("change", ["none", "master", "position", "pin", "port"])
+def test_routed_sizing_reads_corners_then_releases_only_signal_wires(tmp_path, missing_corner, change):
+    changed = change != "none"
     tclsh = shutil.which("tclsh")
     if tclsh is None:
         pytest.skip("Tcl interpreter is required")
@@ -74,24 +75,44 @@ proc append_if_exists_argument {name key option} {
     upvar 1 $name value
     if {[info exists ::env($key)]} {lappend value $option $::env($key)}
 }
-proc log_cmd {args} {puts "CALL $args"}
-proc block {method} {return {signal power ground special}}
+proc log_cmd {args} {puts "CALL $args"; set ::edited 1}
+proc block {method} {
+    switch $method {
+        getInsts {return cell}
+        getNets {return {signal power ground special}}
+    }
+}
+proc cell {method} {
+    switch $method {
+        getName {return cell}
+        getMaster {return master}
+        getLocation {return [expr {$::edited && $::change eq "position" ? "10 0" : "0 0"}]}
+        getOrient {return R0}
+        getPlacementStatus {return PLACED}
+    }
+}
+proc master {method} {return [expr {$::edited && $::change eq "master" ? "wide" : "small"}]}
+proc pin {method} {
+    switch $method {
+        getInst {return cell}
+        getMTerm {return terminal}
+    }
+}
+proc terminal {method} {return [expr {$::edited && $::change eq "pin" ? "B" : "A"}]}
+proc port {method} {return [expr {$::edited && $::change eq "port" ? "out_b" : "out_a"}]}
 foreach {net type special} {signal SIGNAL 0 power POWER 0 ground GROUND 0 special SIGNAL 1} {
     proc $net {method} [string map [list TYPE $type SPECIAL $special NET $net] {
         switch $method {
             isSpecial {return SPECIAL}
             getSigType {return TYPE}
             getWire {return NET-wire}
+            getName {return NET}
+            getITerms {return [expr {"NET" eq "signal" ? "pin" : ""}]}
+            getBTerms {return [expr {"NET" eq "signal" ? "port" : ""}]}
         }
     }]
 }
 namespace eval odb {proc dbWire_destroy {wire} {puts "DESTROY $wire"}}
-namespace eval odb {
-    proc dbDatabase_beginEco {block} {puts BEGIN_ECO}
-    proc dbDatabase_ecoEmpty {block} {return [expr {!$::changed}]}
-    proc dbDatabase_endEco {block} {puts END_ECO}
-    proc dbDatabase_commitEco {block} {puts COMMIT_ECO}
-}
 namespace eval utl {proc metric_integer {key value} {puts "METRIC $key $value"}}
 proc write_views {} {puts WRITE_VIEWS}
 set ::block block
@@ -103,7 +124,7 @@ set ::env(VIBEIC_PRR_HOLD_MAX_BUFFER_PCT) 5
 set ::env(VIBEIC_PRR_SETUP_SEQUENCE) default
 set ::env(VIBEIC_ROUTED_SPEFS) {min_* min.spef nom_* nom.spef max_* max.spef}
 '''
-    prefix += f"set ::changed {int(changed)}\n"
+    prefix += f"set ::edited 0\nset ::change {change}\n"
     if missing_corner:
         prefix += "set ::env(VIBEIC_ROUTED_SPEFS) {nom_* nom.spef}\n"
     runner = tmp_path / "run.tcl"
@@ -128,6 +149,4 @@ set ::env(VIBEIC_ROUTED_SPEFS) {min_* min.spef nom_* nom.spef max_* max.spef}
         assert [line for line in lines if line.startswith("DESTROY ")] == (
             ["DESTROY signal-wire"] if changed else [])
         assert f"METRIC vibeic__postroute__changed {int(changed)}" in lines
-        assert lines.index("BEGIN_ECO") < lines.index(calls[0])
-        assert lines.index(calls[-1]) < lines.index("END_ECO") < lines.index("COMMIT_ECO")
         assert lines[-1] == "WRITE_VIEWS"

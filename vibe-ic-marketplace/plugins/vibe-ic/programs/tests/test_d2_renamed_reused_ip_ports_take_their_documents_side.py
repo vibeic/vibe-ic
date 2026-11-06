@@ -238,7 +238,12 @@ def test_selected_binding_keeps_input_and_implementation_evidence_distinct(tmp_p
                                      "no_input_authority", "required_source",
                                      "wrong_target_width", "conflicting_roster",
                                      "fixed_input_name", "negated_fixed_name",
-                                     "rename_prohibited", "negated_prohibition"])
+                                     "rename_prohibited", "negated_prohibition",
+                                     "required_source_without_binding", "mandatory_source",
+                                     "mandatory_source_without_binding",
+                                     "conflicting_roster_without_binding",
+                                     "fixed_input_name_without_binding",
+                                     "rename_prohibited_without_binding"])
 def test_spec_gate_consumes_current_selected_interface(tmp_path, control, capsys):
     """A producer projection retains examples; only current authority reconciles them."""
     import spec_conformance_check as SC
@@ -246,6 +251,9 @@ def test_spec_gate_consumes_current_selected_interface(tmp_path, control, capsys
     proj = _selected_project(tmp_path)
     path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     bound = bind_selected_interface(proj, json.loads(path.read_text()))
+    if control.endswith("_without_binding"):
+        bound.pop("selected_interface_binding")
+        control = control.removesuffix("_without_binding")
     if control == "no_binding":
         bound.pop("selected_interface_binding")
     elif control == "no_manifest":
@@ -254,10 +262,10 @@ def test_spec_gate_consumes_current_selected_interface(tmp_path, control, capsys
         doc = proj / "input/docs/L3_external_interface.md"
         doc.write_text(doc.read_text().replace("(typical)", "")
                        .replace("(or `o_memory_wdata`)", ""))
-    elif control in {"required_source", "wrong_target_width"}:
+    elif control in {"required_source", "mandatory_source", "wrong_target_width"}:
         for port in bound["ports"]:
-            if control == "required_source" and port["name"] == "o_memory_addr":
-                port["required"] = True
+            if control in {"required_source", "mandatory_source"} and port["name"] == "o_memory_addr":
+                port["mandatory" if control == "mandatory_source" else "required"] = True
             elif control == "wrong_target_width" and port["name"] == "o_memory_wdata":
                 port["width"] = 4
     elif control == "conflicting_roster":
@@ -282,7 +290,9 @@ def test_spec_gate_consumes_current_selected_interface(tmp_path, control, capsys
     rc = SC.main(["--spec", str(path), "--rtl-dir",
                   str(proj / "phase2/stage2/synth"), "--json", str(report)])
     output = capsys.readouterr().out
-    accepted = control in {"current", "negated_fixed_name", "negated_prohibition"}
+    # The declaration and input authorize the names; a cached L9 binding is
+    # no longer required. Fixed names and contradictory rosters still fail.
+    accepted = control in {"current", "no_binding", "negated_fixed_name", "negated_prohibition"}
     assert rc == (0 if accepted else 1), output
     assert path.read_bytes() == before  # The consumer validates without rewriting L9.
     findings = json.loads(report.read_text())
