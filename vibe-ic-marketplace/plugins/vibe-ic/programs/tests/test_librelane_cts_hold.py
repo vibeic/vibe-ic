@@ -6,7 +6,6 @@ writes are substituted, at the process edge (`_docker_exec`, the contract's
 """
 import importlib
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +17,6 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 sys.path.insert(0, str(PROGRAMS / 'tests'))
 contract = importlib.import_module('librelane_contract')
-runner = importlib.import_module('phase3_one_shot_runner')
 from _stated_eda_image import mock_docker_route, state_the_image  # noqa: E402
 
 CORNERS = ['nom_tt_025C_5v00', 'nom_ss_125C_4v50', 'nom_ff_n40C_5v50']
@@ -47,83 +45,12 @@ def _isolated(monkeypatch):
 
 # ------------------------------------------------------------ the real deck ---
 
-def _cmds(deck):
-    """The deck's command lines (comments name commands too)."""
-    return [ln.strip() for ln in deck.splitlines()
-            if ln.strip() and not ln.lstrip().startswith('#')]
 
 
-def _has(deck, command):
-    """A command INVOKED by the deck: first word of a line, or of a `catch`."""
-    import re
-    pat = re.compile(r'^(?:if \{\[catch \{)?' + re.escape(command) + r'(?:\s|\}|$)')
-    return any(pat.match(ln) for ln in _cmds(deck))
 
 
-def _drive_step_pnr(tmp_path, monkeypatch, switch, *, stop_at_builder=True, calls=None,
-                    declared=False):
-    """The REAL step_pnr with only the process edge substituted (T89's harness).
-
-    With ``stop_at_builder`` it returns the deck-builder kwargs; otherwise the
-    real builder runs and every session command is recorded in ``calls``."""
-    import test_pad_connected_pdn_ring as ring_fixture
-    project = tmp_path / 'proj'
-    project.mkdir(parents=True)
-    if switch is not None:
-        put(project / 'phase3/librelane_switch.json', {'steps': switch})
-    pdk = ring_fixture._pdk(tmp_path, ring=None)
-    if declared:
-        _l19(project, pdk=pdk.name)
-    # Complete the unit PDK input instead of staging an image's real Liberty.
-    pdk.liberty = str(write(tmp_path / 'neutral.lib',
-                            'library(neutral) { time_unit : "1ns"; }\n'))
-    netlist = write(tmp_path / 'dut.v', 'module dut(input clk, output q); assign q=clk; endmodule\n')
-
-    def docker(container, cmd, *a, **k):
-        if calls is not None:
-            calls.append(('docker', cmd))
-        return 1, '', 'no container in this test'
-
-    for name, value in {
-            'pnr_input_netlist': lambda *a: (netlist, 'test DUT', False),
-            '_v1_6_599_check_wrapper_pin_order_cfg': lambda *a: None,
-            '_stage_via_legalized_tech_lef': lambda *a: {'status': 'NOT_NEEDED'},
-            'set_invocation_provenance_sink': lambda *a: None,
-            '_macro_supply_preroute_decision': lambda *a, **k: None,
-            '_resolve_staged_silicon_sdc': lambda *a: None,
-            '_liberty_drv_limits': lambda *a: {},
-            '_build_auto_silicon_sdc': lambda *a, **k: '',
-            '_container_mounts': lambda c: [],
-            '_docker_exec': docker,
-            '_docker_exec_raw': lambda *a, **k: (1, '', 'no container in this test')}.items():
-        monkeypatch.setattr(runner, name, value)
-
-    class AtBuilder(Exception):
-        pass
-
-    seen = {}
-    real_builder = runner._build_pnr_tcl_text
-
-    def builder(**kwargs):
-        seen.update(kwargs)
-        if stop_at_builder:
-            raise AtBuilder
-        return real_builder(**kwargs)
-
-    monkeypatch.setattr(runner, '_build_pnr_tcl_text', builder)
-    if stop_at_builder:
-        with pytest.raises(AtBuilder):
-            runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4)
-        return seen
-    return runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4)
 
 
-@pytest.fixture
-def real_deck(tmp_path, monkeypatch):
-    """pnr.tcl exactly as the runner's own builder emits it for a design."""
-    real_builder = runner._build_pnr_tcl_text
-    kwargs = _drive_step_pnr(tmp_path / 'deck', monkeypatch, None)
-    return real_builder(**kwargs)
 
 
 # ------------------------------------------------------------- the switch ---
@@ -207,121 +134,10 @@ def test_the_plugin_step_sources_the_runners_one_sizing_pass():
 
 # ------------------------------------------------- the split, end to end ---
 
-def _fake_tool_run(project, corners, *, hold, cts_buffers=7, fail_step=None):
-    """What LibreLane writes for each step, at the run_chain edge."""
-    seen = {}
-
-    def chain(proj, image, triples, **kwargs):
-        seen['steps'] = [s for s, _, _ in triples]
-        seen['configs'] = [c for _, c, _ in triples]
-        seen['kwargs'] = kwargs
-        base = proj / 'phase3/librelane' / kwargs.get('lane', 'x')
-        folders, metrics = [], {}
-        for i, (step, _, _) in enumerate(triples, 1):
-            folder = base / f'{i:02d}-{step.lower().replace(".", "-")}'
-            if step == fail_step:
-                raise contract.Refusal('LL_STEP_FAILED', step)
-            views = {k: write(folder / f'chip_top.{k}', f'{step} {k}\n') for k in ('odb', 'def')}
-            if step == 'OpenROAD.CTS':
-                write(folder / 'cts.rpt', f'Total number of Buffers Inserted: {cts_buffers}.\n'
-                                          'Total number of Sinks: 9.\n')
-                write(folder / 'openroad-cts.log', '[INFO CTS-0010]  Clock net "clk" has 9 sinks.\n')
-                metrics['design__instance__area__stdcell'] = 1000.0
-            if step == 'OpenROAD.ResizerTimingPostCTS':
-                write(folder / 'openroad-resizertimingpostcts.log', '[INFO RSZ-0032] Inserted 2 hold buffers.\n')
-                metrics.update({'design__instance__count__hold_buffer': 2,
-                                'design__instance__count__setup_buffer': 0,
-                                'design__instance__area__stdcell': 1010.0})
-            if step == 'OpenROAD.STAMidPNR':
-                corner = json.loads(triples[i - 1][1].read_text())['PNR_CORNERS'][0]
-                metrics[f'timing__hold__ws__corner:{corner}'] = hold[corner]
-                metrics[f'timing__setup__ws__corner:{corner}'] = 5.0
-                metrics[f'clock__skew__worst_setup__corner:{corner}'] = -0.1
-                views = {}
-            state = {k: str(v) for k, v in views.items()} or json.loads(
-                ((folders[-1] / 'state_out.json') if folders else triples[0][2]).read_text())
-            state = dict(state, metrics=dict(metrics))
-            put(folder / 'state_out.json', state)
-            folders.append(folder)
-        return folders
-
-    def resolve(proj, image, pdk, step_ids, **kwargs):
-        seen['overlay'] = kwargs.get('overlay')
-        root = proj / 'phase3/librelane' / kwargs['folder']
-        lib = write(proj.parent / 'pdkroot' / pdk / 'neutral.lib',
-                    'library(x) {\n cell (neutral__dly_1) { }\n}\n')
-        out = {}
-        for step in step_ids:
-            doc = {'meta': {'step': step}, 'STA_CORNERS': corners,
-                   'PNR_CORNERS': None}
-            if step in ('OpenROAD.CTS', 'OpenROAD.ResizerTimingPostCTS'):
-                doc.update(CELL_LIBS={'nom': [f'/pdk/{pdk}/{lib.name}']},
-                           EXTRA_EXCLUDED_CELLS=[])
-            out[step] = put(root / f'{step}.json', doc)
-            put(root / f'{step}.views.json', {'inputs': ['odb'], 'outputs': []})
-        return out
-
-    return chain, resolve, seen
 
 
-def _split_project(tmp_path, switch):
-    project = tmp_path / 'proj'
-    out_dir = project / 'phase3/stage3/pnr'
-    put(project / 'phase3/librelane_switch.json',
-        dict(switch, pdk_root_host=str(tmp_path / 'pdkroot'), image='img@sha256:x'))
-    (tmp_path / 'pdkroot/pdkX').mkdir(parents=True)
-    write(out_dir / 'constraint.sdc', 'create_clock -period 24 clk\n')
-    deck = ('read_lef /t.lef\nread_liberty /l.lib\nread_verilog /n.v\nlink_design chip_top\n'
-            f'read_sdc {out_dir}/constraint.sdc\n'
-            f'{runner._PNR_RESUME_ELIDE_BEGIN}\nglobal_placement\n'
-            f'{runner._PNR_CTS_HOLD_BEGIN}\nclock_tree_synthesis -buf_list b\n'
-            f'write_def {out_dir}/post_cts.def\nrepair_timing -hold\n'
-            f'write_def {out_dir}/post_hold.def\n{runner._PNR_CTS_HOLD_END}\n'
-            f'global_route\ndetailed_route\nwrite_def {out_dir}/routed_preantenna.def\n'
-            f'{runner._PNR_RESUME_ELIDE_END}\nwrite_def {out_dir}/routed.def\n')
-    pnr_tcl = write(out_dir / 'pnr.tcl', deck)
-    return project, out_dir, pnr_tcl
 
 
-def _run_split(tmp_path, monkeypatch, *, switch=None, hold=None, arm_hold=None, fail_step=None):
-    switch = switch or {'steps': {'19': 'librelane', '20': 'librelane'}}
-    project, out_dir, pnr_tcl = _split_project(tmp_path, switch)
-    hold = hold or {c: 0.2 for c in CORNERS}
-    chain, resolve, seen = _fake_tool_run(project, CORNERS, hold=hold, fail_step=fail_step)
-    arm_hold = arm_hold or hold
-
-    def chains(proj, image, triples, **kwargs):
-        if kwargs.get('lane') == '19-cts-hold-direct-arm':
-            c2, _, s2 = _fake_tool_run(project, CORNERS, hold=arm_hold)
-            seen['arm_steps'] = [s for s, _, _ in triples]
-            return c2(proj, image, triples, **kwargs)
-        return chain(proj, image, triples, **kwargs)
-
-    monkeypatch.setattr(contract, 'resolve_step_configs', resolve)
-    monkeypatch.setattr(contract, 'run_chain', chains)
-    monkeypatch.setattr(contract, 'state_from_direct', lambda p, i, cfg, views, out, **k: (
-        seen.setdefault('bridged', []).append({v: str(x) for v, x in views.items()})
-        or put(out / 'state_in.json', {'odb': str(views['odb'])})))
-    monkeypatch.setattr(runner, '_after_restore_tcl', lambda *a, **k: '# after restore\n')
-    monkeypatch.setattr(runner, '_container_mounts', lambda c: [])
-    execs = []
-
-    def docker(container, cmd, *a, **k):
-        execs.append(cmd)
-        if 'pnr_cts_head.tcl' in cmd:
-            for ext in ('odb', 'def', 'nl.v', 'insts'):
-                write(out_dir / f'cts_hold_split/pre_cts.{ext}', f'pre {ext}\n')
-            return 0, 'head ok', ''
-        if 'pnr_cts_direct_arm.tcl' in cmd:
-            arm = project / 'phase3/tool_arms/19/openroad'
-            for name in ('post_cts.def', 'post_hold.def', 'post_hold.odb'):
-                write(arm / name, f'direct arm {name}\n')
-            return 0, 'arm ok', ''
-        return 0, 'tail ok', ''
-
-    monkeypatch.setattr(runner, '_docker_exec', docker)
-    cmd = (f'openroad -no_init -exit -metrics {out_dir}/openroad.metrics.json '
-           f'{pnr_tcl} 2>&1 | tee {out_dir}/openroad.log')
 
 
 # ------------------------------------------------------------------ gates ---
