@@ -321,6 +321,40 @@ def test_generated_lowercase_pdk_keeps_installed_registry_spelling(project):
     assert build_config(project)["PDK"] == "sky130A"
 
 
+@pytest.mark.parametrize(("declared", "installed"), [
+    ("sky130", "sky130A"), ("SKY130", "sky130A"),
+    ("gf180mcu", "gf180mcuD"), ("ihpsg13g2", "ihpsg13g2"),
+    ("sky130A-r2", "sky130A-r2"), ("gf180mcuD-r2", "gf180mcuD-r2"),
+    ("sky130B", "sky130B"), ("custom_process", "custom_process"),
+])
+def test_generated_pdk_family_reaches_registered_distribution(project, declared, installed):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.write_text(json.dumps({"fields": {"pdk_target": declared, "constraint_declarations": [
+        {"kind": "flow_setting", "token": "MAX_FANOUT_CONSTRAINT", "value": 4, "scope": declared},
+    ]}}))
+    before = path.read_bytes()
+    config = build_config(project)
+    assert config["PDK"] == installed
+    assert config["CLOCK_PERIOD"] == 17.5
+    assert config["MAX_FANOUT_CONSTRAINT"] == 4
+    assert path.read_bytes() == before
+
+
+def test_family_scoped_clock_survives_native_distribution_selection(project):
+    docs = project / "phase1/generated_docs"
+    (docs / "L19_CONSTRAINTS_PDK.json").write_text('{"fields":{"pdk_target":"sky130"}}')
+    (docs / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({"clock_domains": [
+        {"domain_kind": "primary", "source_pin": "clk", "period_ns": 17.5,
+         "pdk_scoped_target": "sky130"},
+        {"domain_kind": "primary", "source_pin": "foreign_clk", "period_ns": 24,
+         "pdk_scoped_target": "gf180mcu"},
+    ]}))
+    config = build_config(project)
+    assert config["PDK"] == "sky130A"
+    assert config["CLOCK_PORT"] == "clk"
+    assert config["CLOCK_PERIOD"] == 17.5
+
+
 def test_explicit_pdk_does_not_require_rewriting_generated_documents(project):
     path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
     path.write_text(json.dumps({"fields": {}}))
