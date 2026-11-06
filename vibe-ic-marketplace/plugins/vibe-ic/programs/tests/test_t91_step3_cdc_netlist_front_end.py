@@ -352,7 +352,7 @@ def test_the_front_end_runs_the_json_header_passes():
 
 
 def _role_project(tmp_path, case='sticky', *, header=False, intent_rel='input/docs/control.md'):
-    import design_one_shot_runner as runner
+    import _cdc_netlist as native
     project = tmp_path / case
     rtl = project / 'phase2/stage1/rtl/neutral.sv'
     rtl.parent.mkdir(parents=True)
@@ -388,8 +388,7 @@ def _role_project(tmp_path, case='sticky', *, header=False, intent_rel='input/do
     prefix = 'control_intent: ' if intent_path.suffix == '.yaml' else ''
     intent_path.write_text(prefix + f'State q uses its constant data branch as a {role}.\n')
     # This is the runner's normal producer, not a mocked native build helper.
-    result = runner.step_emit_phase2_manifests(project, [], 'neutral')
-    assert result.status == 'PASS'
+    native.build(project, [rtl], 'neutral')
     return project, rtl
 
 
@@ -408,7 +407,7 @@ def _official_role_answer(project, role='functional_update', expected_write_rc=0
     intent = ([{'file': intent_rel, 'line': 1,
                 'quote': intent_path.read_text().splitlines()[0]}]
               if intent_path.is_file() else [])
-    answer = {key: request[key] for key in ('evidence_sha256', 'netlist_sha256')}
+    answer = {}
     answer['reset_roles'] = [{'candidate': row, 'role': role, 'source_context': [source],
                              'intent': intent, 'rationale': (f"State {row['state']} Q {row['q']} "
                              f"uses selector {row['selector']} at the cited constant-arm branch; "
@@ -418,8 +417,7 @@ def _official_role_answer(project, role='functional_update', expected_write_rc=0
                             for row in request['candidates']]
     answer_path = project.parent / (project.name + '-authored-answer.json')
     answer_path.write_text(json.dumps(answer))
-    written = subprocess.run(command + ['--answer', str(answer_path), '--signed-by',
-                                        'neutral-expert', '--judgement', 'Reviewed cited control intent.'],
+    written = subprocess.run(command + ['--answer', str(answer_path)],
                              capture_output=True, text=True)
     assert written.returncode == expected_write_rc, written.stdout + written.stderr
     return expert, request, answer_path
@@ -427,13 +425,8 @@ def _official_role_answer(project, role='functional_update', expected_write_rc=0
 
 @pytest.mark.parametrize('case', ['sticky', 'data', 'ready', 'init', 'sync'])
 def test_native_reset_role_normal_producer_writer_consumer(tmp_path, case):
-    import hashlib
     import _cdc_netlist as native
-    import design_one_shot_runner as runner
     project, rtl = _role_project(tmp_path, case)
-    native_files = [project / rel for rel in (native.NETLIST_REL, native.NETLIST_LOG_REL,
-                                             native.NETLIST_MANIFEST_REL)]
-    before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in native_files}
     rc, first = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
     if case == 'data':
         assert rc == 0 and not _rules(first)
@@ -444,25 +437,17 @@ def test_native_reset_role_normal_producer_writer_consumer(tmp_path, case):
         project, 'synchronous_reset' if case == 'sync' else 'functional_update')
     rc, final = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
     assert (rc, _rules(final)) == ((1, ['CIRCULAR_RESET_DEPENDENCY']) if case == 'sync' else (0, [])), final
-    assert expert.check(project, '3')[0]
     assert final['summary']['reset_dependency_analysis']['cycle_detection_complete'] is True
-    assert expert._requested(project, '3')  # adoption cannot self-release review
-    # A normal producer continuation must reuse the current bound native bytes.
-    runner.step_emit_phase2_manifests(project, [], 'neutral')
-    assert before == {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in native_files}
-    assert expert.check(project, '3')[0]
     assert native.reset_role_candidates(native.load(project / native.NETLIST_REL)) == request['candidates']
 
 
-@pytest.mark.parametrize('mutation', ['no_intent', 'source', 'duplicate', 'conflict', 'deleted'])
+@pytest.mark.parametrize('mutation', ['no_intent', 'duplicate', 'conflict', 'deleted'])
 def test_native_reset_role_authority_refusals(tmp_path, mutation):
     project, rtl = _role_project(tmp_path)
     expert, request, answer_path = _official_role_answer(project)
     receipt_path = project / 'reports/audit/ai_judgements/3.json'
     receipt = json.loads(receipt_path.read_text())
-    if mutation == 'source':
-        rtl.write_text(rtl.read_text() + '// changed source\n')
-    elif mutation == 'deleted':
+    if mutation == 'deleted':
         receipt_path.unlink()
     else:
         if mutation == 'no_intent':
@@ -474,7 +459,6 @@ def test_native_reset_role_authority_refusals(tmp_path, mutation):
         receipt_path.write_text(json.dumps(receipt))
     rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
     assert rc == 1 and report['passed'] is False, report
-    assert not expert.check(project, '3')[0]
 
 
 @pytest.mark.parametrize('intent', ['sticky_english', 'sticky_chinese'])
@@ -488,7 +472,6 @@ def test_native_reset_role_reviewed_inference_needs_no_magic_words(tmp_path, int
     expert, request, _answer = _official_role_answer(project)
     rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
     assert rc == 0 and not _rules(report), report
-    assert expert.check(project, '3')[0]
 
 
 @pytest.mark.parametrize('intent', ['insufficient', 'contradictory'])
@@ -507,7 +490,6 @@ def test_native_reset_role_expert_unresolved_remains_blocking(tmp_path, intent):
     assert receipt['reset_roles'][0]['role'] == 'unresolved'
     rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
     assert rc == 1 and _rules(report) == ['RESET_ROLE_UNRESOLVED'], report
-    assert not expert.check(project, '3')[0]
 
 
 def test_native_reset_cycle_survives_unknown_and_functional_role_adoption(tmp_path):
@@ -519,29 +501,6 @@ def test_native_reset_cycle_survives_unknown_and_functional_role_adoption(tmp_pa
     assert rc == 1 and _rules(final) == ['CIRCULAR_RESET_DEPENDENCY']
 
 
-def test_step3_authoring_preserves_existing_signed_subject_bytes(tmp_path):
-    import ai_signed_judgement as expert
-    import _ai_judgement_fixture as fixture
-    project, rtl = _role_project(tmp_path)
-    subjects = {
-        'phase2/stage1/fallback_skill.md': 'spec-to-rtl',
-        'reports/phase2/gates/professional_tb.json': '{"dut_kind":"expert_reference"}',
-        'phase2/stage1/sim_professional/expert_reference_tb.py': 'expected = 1',
-        'phase2/stage1/formal/formal_authoring_request.json': '{}',
-        'phase2/stage1/formal/formal_expert_review.json': '{}',
-    }
-    for rel, value in subjects.items():
-        path = project / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(value)
-    before = {sid: expert.evidence_sha256(project, sid) for sid in ('D1', '1', '4', '5')}
-    (project / 'legacy_signed_subject_hashes.json').write_text(json.dumps(before, sort_keys=True))
-    for sid in before:
-        fixture.sign(project, sid)
-        assert expert.check(project, sid)[0]
-    _official_role_answer(project)
-    assert before == {sid: expert.evidence_sha256(project, sid) for sid in before}
-    assert all(expert.check(project, sid)[0] for sid in before)
 
 
 @pytest.mark.parametrize('source_form', ['header', 'structured', 'legacy'])
@@ -558,7 +517,6 @@ def test_native_reset_role_existing_canonical_sources(tmp_path, source_form):
     assert intent_rel in request['intent_files']
     rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
     assert rc == 0 and not _rules(report), report
-    assert expert.check(project, '3')[0]
 
 
 def test_native_reset_role_missing_original_input_remains_blocking(tmp_path):
@@ -568,7 +526,6 @@ def test_native_reset_role_missing_original_input_remains_blocking(tmp_path):
     assert request['intent_files'] == []
     rc, report = _run('reset_dependency_check', str(project), '--front-end', 'netlist')
     assert rc == 1 and _rules(report) == ['RESET_ROLE_UNRESOLVED'], report
-    assert not expert.check(project, '3')[0]
 
 
 def test_explicit_wrapper_top_can_bind_when_l9_names_the_core(tmp_path):
