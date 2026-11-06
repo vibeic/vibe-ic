@@ -45,6 +45,8 @@ def native_excluded_cells(config):
 
 def native_defaults(config):
     """Apply platform defaults, then the project's explicit native overrides."""
+    from flow_clock_geometry import cts_settings
+
     changes = {"EXTRA_EXCLUDED_CELLS": native_excluded_cells(config)}
     caps = [value for value in (config.get("MAX_CAPACITANCE_CONSTRAINT"),
                                config.get("CTS_MAX_CAP") or None) if value is not None]
@@ -53,6 +55,7 @@ def native_defaults(config):
     # Zero requests native auto; CTS resets both axes when either is unspecified.
     if caps and slews:
         changes.update(CTS_MAX_CAP=min(caps), CTS_MAX_SLEW=min(slews))
+    changes.update(cts_settings(config))
     if config.get("DESIGN_DIR"):
         changes.update(_load(Path(config["DESIGN_DIR"]) / "work/flow/native_overrides.json"))
     return config.copy(**changes)

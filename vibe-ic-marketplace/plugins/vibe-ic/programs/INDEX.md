@@ -530,7 +530,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_artifact_paths` | any | — | flow_artifact_paths |
 | `flow_atpg` | any | — | Run the existing ATPG programs on native State views. |
 | `flow_chip_inputs` | any | — | Generate native Chip inputs from the elaborated core and active PDK. |
-| `flow_clock_geometry` | any | — | Derive native clock-wire repair length from the core capacitance budget. |
+| `flow_clock_geometry` | any | — | flow_clock_geometry |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15). |
 | `flow_condition_reachability_check` | any | — | the self-disabling-condition guard. |
 | `flow_config` | any | — | Translate generated design documents into native LibreLane configuration. |
@@ -2055,7 +2055,7 @@ _(no programs in this group)_
 - `flow_artifact_paths` — flow_artifact_paths
 - `flow_atpg` — Run the existing ATPG programs on native State views.
 - `flow_chip_inputs` — Generate native Chip inputs from the elaborated core and active PDK.
-- `flow_clock_geometry` — Derive native clock-wire repair length from the core capacitance budget.
+- `flow_clock_geometry` — flow_clock_geometry
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15).  _[Wave 91]_
 - `flow_condition_reachability_check` — the self-disabling-condition guard.
 - `flow_config` — Translate generated design documents into native LibreLane configuration.
