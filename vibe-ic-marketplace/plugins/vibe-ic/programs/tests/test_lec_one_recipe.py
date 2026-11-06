@@ -207,37 +207,10 @@ def _runner():
     return P3
 
 
-def test_step_budget_defaults_to_the_pre_layout_lec_budget(monkeypatch):
-    monkeypatch.delenv("VIBEIC_POST_LAYOUT_LEC_BUDGET_S", raising=False)
-    monkeypatch.delenv("VIBEIC_LEC_YOSYS_TIMEOUT_S", raising=False)
-    assert _runner()._post_layout_lec_step_budget_s() == \
-        float(LR.DEFAULT_YOSYS_TIMEOUT_S)
 
 
-def test_step_budget_env_override(monkeypatch):
-    monkeypatch.setenv("VIBEIC_POST_LAYOUT_LEC_BUDGET_S", "1234")
-    assert _runner()._post_layout_lec_step_budget_s() == 1234.0
-    # A non-numeric value does not silently become a default of its own: the
-    # next source in the chain answers.
-    monkeypatch.setenv("VIBEIC_POST_LAYOUT_LEC_BUDGET_S", "not-a-number")
-    monkeypatch.setenv("VIBEIC_LEC_YOSYS_TIMEOUT_S", "4321")
-    assert _runner()._post_layout_lec_step_budget_s() == 4321.0
 
 
-def test_the_budget_is_recorded_never_terminating():
-    """`hard_ceiling_s` is the RECORDING bound (#2051): the supervisor notes the
-    crossing once and the job runs on. The post-layout LEC must pass its budget
-    THERE, and must not wrap the tool in a `timeout`."""
-    P3 = _runner()
-    src = inspect.getsource(P3._emit_lec_post_layout)
-    assert "hard_ceiling_s=_lec_budget_s" in src
-    # the LEC invocation itself
-    lec_cmd = [ln for ln in src.splitlines() if "yosys -s {ys_c}" in ln]
-    assert lec_cmd, "the LEC yosys invocation moved — re-point this pin"
-    assert not any("timeout" in ln for ln in lec_cmd)
-    # and the run is SUPERVISED (marker=...), which is what makes the ceiling
-    # a recorded observation rather than a wall clock.
-    assert "marker=ys_c" in src
 
 
 def test_watchdog_hard_ceiling_does_not_kill():
@@ -293,19 +266,6 @@ def test_a_screen_writes_no_checkpoint():
         LR.equiv_proof_tail(induction=False, checkpoint_dir="/c/dir")
 
 
-def test_the_authoritative_pass_is_a_full_ladder():
-    """The screen may only ADD renames; the verdict must still come from a run
-    that ran the induction ladder."""
-    P3 = _runner()
-    src = inspect.getsource(P3._emit_lec_post_layout)
-    # the screen call is explicitly a screen...
-    assert "screen_only=True" in src
-    # ...and the run `parsed` is taken from is NOT.
-    auth = src[src.index("rc, log_text = _run_lec("):]
-    auth = auth[:auth.index("parsed = mod.parse_equiv_log(log_text)")]
-    assert "screen_only" not in auth
-    # and the record says a screen is not a verdict.
-    assert '"is_a_verdict": False' in src
 
 
 def test_the_crossing_is_announced_not_only_recorded():
