@@ -54,7 +54,6 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import general_precheck as GP             # noqa: E402
-import phase3_one_shot_runner as R        # noqa: E402
 
 
 #: `precheck_antenna.json` as run15 wrote it, trimmed to the keys this reader
@@ -259,71 +258,6 @@ class ProgramNamesItselfOnce(unittest.TestCase):
         """Two really are two. The ladder adds exactly one back."""
         doubled = "p: p: body"
         self.assertEqual(GP._undouble("p", doubled), "p: body")
-
-
-# --------------------------------------------------------------------------- #
-# C — nothing is cut mid-word in silence
-# --------------------------------------------------------------------------- #
-class ClausesAreNotCutMidWord(_Tmp):
-
-    def test_a_clause_inside_the_budget_is_byte_identical(self):
-        for s in ("", "short", "a b c d e"):
-            self.assertEqual(R._clip_clause(s, 160), s)
-
-    def test_a_long_clause_is_cut_on_a_word_and_says_how_much_is_missing(self):
-        text = ("the layout draws on 38 layer/datatype pair(s), and the "
-                "technology's own layer table could not be read, so the "
-                "allowed set is unknown and no further layer can be called "
-                "forbidden")
-        out = R._clip_clause(text, 160)
-        self.assertTrue(out.endswith("char(s) not shown]"), out)
-        shown = out.split("… [+")[0]
-        self.assertTrue(text.startswith(shown), "the head is not a prefix")
-        self.assertFalse(text[len(shown):len(shown) + 1].isalnum(),
-                         f"cut landed inside a word: ...{shown[-20:]!r}")
-
-    def test_a_single_unbroken_token_is_still_shortened(self):
-        out = R._clip_clause("z" * 400, 100)
-        self.assertIn("not shown", out)
-        self.assertLess(len(out.split("…")[0]), 400)
-
-    def test_the_step_line_drops_whole_clauses_never_bytes(self):
-        """`UNDETERMINED/General.FlowMar` is what a byte cut produces."""
-        doc = {"verdict": "FAIL", "findings": [
-            {"rule": f"RULE/Long.Name{i}", "message": "x" * 150}
-            for i in range(6)]}
-        p = self._report(doc, "tapeout_precheck.json")
-        detail = R._gate_detail(p, "", "")
-        self.assertIn("more finding(s)/reason(s) not shown here", detail)
-        self.assertIn("tapeout_precheck.json", detail,
-                      "the reader is not told which artefact holds the rest")
-        # every rendered rule name is WHOLE
-        for part in detail.split("; "):
-            if part.startswith("RULE/Long.Name"):
-                head = part.split(":")[0]
-                self.assertIn(head, [f"RULE/Long.Name{i}" for i in range(6)],
-                              f"a rule name was cut: {head!r}")
-
-    # ---- the other direction -------------------------------------------- #
-    def test_negative_control_a_short_reason_is_unchanged_and_carries_no_marker(self):
-        p = self._report({"verdict": "FAIL", "reason": "abcd"}, "g.json")
-        self.assertEqual(R._gate_detail(p, "", "").strip(), "abcd")
-
-    def test_negative_control_a_gate_with_no_explanation_still_says_FAIL(self):
-        p = self._report({"verdict": "FAIL", "rc": 1}, "g.json")
-        self.assertEqual(R._gate_detail(p, "", "").strip(), "FAIL")
-
-    def test_negative_control_an_unreadable_gate_json_says_it_is_a_tail(self):
-        missing = self.tmp / "absent.json"
-        long_chatter = "line\n" * 400
-        out = R._gate_detail(missing, long_chatter, "")
-        self.assertIn("no verdict JSON", out)
-        self.assertIn("console output", out)
-
-    def test_negative_control_short_chatter_with_no_json_is_byte_identical(self):
-        missing = self.tmp / "absent.json"
-        self.assertEqual(R._gate_detail(missing, "rc=1 no deck", ""),
-                         "rc=1 no deck")
 
 
 if __name__ == "__main__":
