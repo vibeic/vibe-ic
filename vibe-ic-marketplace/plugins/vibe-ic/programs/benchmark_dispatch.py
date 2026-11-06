@@ -6049,8 +6049,10 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
         return False
     import flow_phase_attribution as fpa                  # noqa: PLC0415
     report, _ = fpa.step_report(Path(task["project"]))
-    validation = [row for row in (report or {}).get("steps") or []
-                  if row.get("name") == "rtl_validate"]
+    rows = (report or {}).get("steps") or []
+    validation = [row for row in rows if row.get("name") == "rtl_validation_and_lint"]
+    if not validation:
+        validation = [row for row in rows if row.get("name") == "rtl_validate"]
     return len(validation) == 1 and validation[0].get("status") in {"PASS", "FAIL"}
 
 
