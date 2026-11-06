@@ -33,7 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 

@@ -2,6 +2,8 @@
 """Project-local LibreLane step handoff. No Phase-3 step opts in implicitly."""
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import fnmatch
 import hashlib
@@ -12,7 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -1921,7 +1923,7 @@ def _openroad_convert(project: Path, image: str, config: dict, tcl_body: list[st
     for host, guest in mounts:
         volumes += ['-v', f'{host.resolve()}:{guest}:ro']
     network, command = native_tool_command(image, ['openroad', '-exit', str(tcl)])
-    completed = run_container([docker, 'run', *_dmem.docker_memory_flags(), '--rm',
+    completed = run_container([docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm',
                                '--network', network, *volumes,
                                image, '--skip', *command],
                               supervised=True, log=folder / f'{name}.log')
@@ -2359,9 +2361,8 @@ def image_pdk_root(image: str, docker: str = 'docker') -> dict[str, str]:
 def _pdk_root_cache() -> Path:
     declared = os.environ.get(PDK_ROOT_CACHE_ENV)
     if declared:
-        return Path(declared)
-    xdg = os.environ.get('XDG_CACHE_HOME')
-    return (Path(xdg) if xdg else Path.home() / '.cache') / 'vibeic' / 'pdk_root'
+        return Path(tempfile._directory(declared))
+    return Path(tempfile.gettempdir()) / 'cache/pdk_root'
 
 
 def _materialise_image_pdk(image: str, found: dict[str, str], pdk: str,
@@ -2399,7 +2400,7 @@ def _materialise_image_pdk(image: str, found: dict[str, str], pdk: str,
         # and cannot materialise that tree. Copy within the image, resolving
         # its own links, and apply directory modes after their contents.
         copied = subprocess.run([
-            docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--network', 'none',
+            docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm', '--network', 'none',
             '--user', f'{os.getuid()}:{os.getgid()}',
             '-v', f'{scratch}:{scratch}', '--entrypoint', 'python3', found['image_id'],
             '-c', 'import shutil,sys;shutil.copytree(sys.argv[1],sys.argv[2],symlinks=False)',
@@ -2624,12 +2625,13 @@ def resolve_image(project: Path | None = None, *, record: bool = True) -> str:
 # contract defines exactly those aliases in an OpenROAD init file.  A prefix
 # with several expansions is a real API skew and refuses.
 _TCL_PROBE = r'''set -e
+export VIBEIC_PROBE_DIR=$(mktemp -d "$TMPDIR/tcl-probe.XXXXXX")
 root=$(python3 -c 'import librelane,os;print(os.path.join(os.path.dirname(librelane.__file__),"scripts","openroad"))')
 own=$(grep -rhoE 'namespace +eval +(::)?[A-Za-z_][A-Za-z0-9_]*' "$root" --include='*.tcl' | awk '{print $3}' | sed 's/^:://' | sort -u)
 grep -rhoE '\b[a-z]+::[A-Za-z_][A-Za-z0-9_]*' "$root" --include='*.tcl' | sort -u \
-  | grep -vE "^($(echo $own | tr ' ' '|')|__none__)::" > /tmp/vibeic_cmds.txt
-cat > /tmp/vibeic_probe.tcl <<'EOF'
-set f [open /tmp/vibeic_cmds.txt]
+  | grep -vE "^($(echo $own | tr ' ' '|')|__none__)::" > "$VIBEIC_PROBE_DIR/vibeic_cmds.txt"
+cat > "$VIBEIC_PROBE_DIR/vibeic_probe.tcl" <<'EOF'
+set f [open [file join $env(VIBEIC_PROBE_DIR) vibeic_cmds.txt]]
 foreach c [split [read $f] "\n"] {
   if {$c eq "" || [llength [info commands ::$c]] || [llength [info procs ::$c]]} { continue }
   puts "VIBEIC_TCL_MISSING $c [lsort [info commands ::${c}*]]"
@@ -2637,7 +2639,7 @@ foreach c [split [read $f] "\n"] {
 EOF
 for bin in /foss/tools/openroad/bin/openroad /foss/tools/openroad/bin/openroad-python; do
   [ -x "$bin" ] && LD_LIBRARY_PATH="/opt/or-tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "$bin" -no_init -no_splash -exit /tmp/vibeic_probe.tcl 2>&1 | grep '^VIBEIC_TCL_MISSING' || true
+    "$bin" -no_init -no_splash -exit "$VIBEIC_PROBE_DIR/vibeic_probe.tcl" 2>&1 | grep '^VIBEIC_TCL_MISSING' || true
 done'''
 
 _CAPABILITY: dict[tuple[str, str], dict] = {}
@@ -2670,14 +2672,14 @@ def image_capability(image: str, docker: str = 'docker') -> dict:
     key = (str(image), docker)
     if key in _CAPABILITY:
         return _CAPABILITY[key]
-    probe = [docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--entrypoint', 'sh', image, '-c',
+    probe = [docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm', '--entrypoint', 'sh', image, '-c',
              'python3 -m librelane.steps run --help >/dev/null && '
              'yosys -Q -T -y /dev/null -p help >/dev/null']
     result = run_container(probe, probe_deadline_s=PROBE_DEADLINE_S)
     if result.returncode:
         raise Refusal('LL_IMAGE_INCAPABLE', f'{image}: LibreLane CLI or yosys CLI -y unavailable (rc={result.returncode})')
     try:
-        tcl = run_container([docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--network', 'none',
+        tcl = run_container([docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm', '--network', 'none',
                              '--entrypoint', 'bash', image, '-c', _TCL_PROBE],
                             probe_deadline_s=PROBE_DEADLINE_S)
     except Refusal as exc:
@@ -3263,7 +3265,7 @@ Path(output, "flow_gates.json").write_text(json.dumps({
     runtime_design = _local_config_source(
         design, [(pdk_root, '/pdk')],
         local=_provider_for_image(image) is not None or _provider_route(project))
-    cmd = [docker, 'run', *_dmem.docker_memory_flags(), '--rm',
+    cmd = [docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm',
            '-v', f'{project.resolve()}:{project.resolve()}',
            '-v', f'{pdk_root.resolve()}:/pdk:ro', *_plugin_args(step_ids),
            '--entrypoint', 'python3', image, '-c', script, str(runtime_design),
@@ -3467,7 +3469,7 @@ def emit_pdn_cfg(image: str, pdk: str, output: Path, *, docker: str = 'docker',
               '"scripts","openroad","common","pdn_cfg.tcl")).read()}))')
     provider = _provider_for_image(image)
     network = provider.network_mode if provider is not None else 'none'
-    result = run_container([docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--network',
+    result = run_container([docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm', '--network',
                             network, '--entrypoint', 'python3', image, '-c', script],
                            probe_deadline_s=PROBE_DEADLINE_S)
     if result.returncode:
@@ -3498,7 +3500,7 @@ def flow_segment(image: str, first: str, last: str, *, flow: str = 'Chip',
               'print(json.dumps([s.id for s in f.Steps]))')
     provider = _provider_for_image(image)
     network = provider.network_mode if provider is not None else 'none'
-    result = run_container([docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--network',
+    result = run_container([docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm', '--network',
                             network, '--entrypoint', 'python3', image, '-c', script, flow],
                            probe_deadline_s=PROBE_DEADLINE_S)
     try:
@@ -3540,7 +3542,7 @@ def resolve_step_config(project: Path, image: str, source: Path, output: Path,
     # probe the exact argv with a stand-in runner before creating that file;
     # in either case there is no step-specific plugin to mount yet.
     step_id = _load(source).get('meta', {}).get('step', '') if source.is_file() else ''
-    result = run_container([docker, 'run', *_dmem.docker_memory_flags(), '--rm', *volumes,
+    result = run_container([docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm', *volumes,
                             *_plugin_args([step_id]),
                             '--entrypoint', 'python3', image, '-c', script],
                            probe_deadline_s=PROBE_DEADLINE_S)
@@ -3592,7 +3594,7 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
         if home:
             volume_args += ['-e', f'HOME={home.resolve()}']
         volume_args += _plugin_args([step_id])
-        cmd = [docker, 'run', *_dmem.docker_memory_flags(), '--rm', *volume_args,
+        cmd = [docker, 'run', *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), '--rm', *volume_args,
                '--entrypoint', 'python3', image,
                '-m', 'librelane.steps', 'run', '--id', step_id, '-c', str(config),
                '-i', str(state_path), '-o', str(folder)]

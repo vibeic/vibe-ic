@@ -137,7 +137,7 @@ def extract_office_libreoffice(p: Path, out_dir: Path, fmt: str) -> ExtractResul
         errs.append("libreoffice not in PATH")
         return ExtractResult(str(p), fmt, "", None, 0, "FAIL", "; ".join(errs))
 
-    import tempfile, shutil
+    import vibeic_temp as tempfile, shutil
     # Tier 2: libreoffice in tmp dir with ASCII stem (handles CJK filenames)
     try:
         with tempfile.TemporaryDirectory(prefix="lo_extract_") as td:

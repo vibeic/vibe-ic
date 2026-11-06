@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { dockerTempMount } from "./temp_paths.mjs";
 
 const DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:latest";
 const MANAGED_LABEL = "org.vibeic.mcp-managed=true";
@@ -64,7 +65,16 @@ export function ensureContainerRuntime({ env = process.env, run = spawnSync } = 
     if (!message.includes("no such") && !message.includes("not found")) throw error;
   }
 
-  if (current && current.Image !== target.Id) {
+  const temporary = dockerTempMount(env);
+  const bindings = temporary.flatMap((flag, index) => flag === "-v" ? [temporary[index + 1]] : []);
+  const managed = current?.Config?.Labels?.["org.vibeic.mcp-managed"] === "true";
+  const needsTemporaryMount = managed && !bindings.every(binding => {
+    const [source, destination] = binding.split(":");
+    return (current.Mounts || []).some(
+      mount => mount.Type === "bind" && mount.Source === source && mount.Destination === destination
+    );
+  });
+  if (current && (current.Image !== target.Id || needsTemporaryMount)) {
     if (current.Config?.Labels?.["org.vibeic.mcp-managed"] !== "true") {
       throw new Error(
         `container ${container} uses ${current.Image}, not newest ${target.Id}; ` +
@@ -77,7 +87,7 @@ export function ensureContainerRuntime({ env = process.env, run = spawnSync } = 
 
   if (!current) {
     runDocker([
-      "run", "-d", "--name", container, "--restart", "unless-stopped",
+      "run", ...temporary, "-d", "--name", container, "--restart", "unless-stopped",
       "--label", MANAGED_LABEL, "-v", `${homedir()}:${homedir()}`,
       immutable, "sleep", "infinity",
     ], run);

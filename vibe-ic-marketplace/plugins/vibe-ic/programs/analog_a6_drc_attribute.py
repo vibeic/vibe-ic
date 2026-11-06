@@ -59,7 +59,7 @@ import json
 import re
 import shlex
 import sys
-import tempfile
+import vibeic_temp as tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 

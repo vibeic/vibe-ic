@@ -9,7 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
+import vibeic_temp as tempfile
 import time
 
 
@@ -824,8 +824,8 @@ Path(sys.argv[5]).write_text(json.dumps(result))
     argv = ["python3", "-c", code, str(Path(__file__).resolve().parent),
             str(project), str(work), json.dumps(mapped(tool, mounts)), str(result_path)]
     options = ["-w", mapped(str(work), mounts)]
-    if os.environ.get("TMPDIR"):
-        options.extend(["-e", "TMPDIR=" + mapped(os.environ["TMPDIR"], mounts)])
+    for key, value in tempfile.configure().items():
+        options.extend(["-e", key + "=" + mapped(value, mounts)])
     completed = commands.run(["docker", "exec", *options, container, "bash", "-lc",
                               "exec " + shlex.join(mapped(argv, mounts))])
     if completed is None or completed.returncode or not result_path.is_file():
@@ -839,7 +839,8 @@ Path(sys.argv[5]).write_text(json.dumps(result))
 def execute(project, directory, tool, route, *, state=None, config=None):
     project, directory = Path(project).resolve(), Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="native_", dir=directory))
+    parent = tempfile.current_run("adapter", directory.name) / directory.name
+    work = Path(tempfile.mkdtemp(prefix="native_", dir=parent))
     commands = Commands(work)
     if tool.get("adapter") == "path_delay_atpg":
         from flow_atpg import path_delay

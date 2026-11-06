@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 670
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 670)
+- **Total programs (excluding helpers / shims):** 671
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 1 (of 671)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 0 |
-| `any` | 669 |
+| `any` | 670 |
 
 ## Alphabetical listing
 
@@ -686,6 +686,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `verilog_width_resolve` | any | — | SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de... |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3). |
 | `vibe_ic_one_shot_runner` | any | — | Public all entry for the step-table runner. |
+| `vibeic_temp` | any | — | One Vibe-IC temporary root, with execution-owned allocation and cleanup. |
 | `wafer_space_precheck` | any | — | Run the official wafer.space flow with LibreLane's typed initial state. |
 | `waveform_ext_synth` | any | — | DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption). |
 | `waveform_table_conformance_check` | any | — | ENVELOPE A — COMBINATIONAL truth-table: NO clk column AND no register idiom in the table. Pure input→output value match per row; zero tim... |
@@ -722,7 +723,7 @@ _(no programs in this group)_
 
 _(no programs in this group)_
 
-### `any` (669 programs)
+### `any` (670 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
@@ -1384,6 +1385,7 @@ _(no programs in this group)_
 - `verilog_width_resolve` — SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de...
 - `version_bump_monotonic_check` — strict version-bump gate for the core-agent loop (extracted from vibe-ic:core-agent-loop §Step 3).
 - `vibe_ic_one_shot_runner` — Public all entry for the step-table runner.
+- `vibeic_temp` — One Vibe-IC temporary root, with execution-owned allocation and cleanup.
 - `wafer_space_precheck` — Run the official wafer.space flow with LibreLane's typed initial state.
 - `waveform_ext_synth` — DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption).
 - `waveform_table_conformance_check` — ENVELOPE A — COMBINATIONAL truth-table: NO clk column AND no register idiom in the table. Pure input→output value match per row; zero tim...

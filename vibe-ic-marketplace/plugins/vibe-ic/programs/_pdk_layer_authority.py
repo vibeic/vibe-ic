@@ -80,6 +80,8 @@ re-spelled so the two cannot drift.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import fnmatch
 import json
 import os
@@ -297,7 +299,7 @@ class ContainerReader:
     def _docker(container: str, argv: List[str]) -> Tuple[int, str]:
         import subprocess
         try:
-            cp = subprocess.run(["docker", "exec", container] + argv,
+            cp = subprocess.run(["docker", "exec", *_vtmp.container_env(), container] + argv,
                                 capture_output=True, text=True, timeout=120)
         except (OSError, subprocess.SubprocessError):
             return 127, ""
@@ -376,7 +378,7 @@ class ImageReader:
         import _docker_memory as _dmem
         try:
             cp = subprocess.run(
-                ["docker", "run", *_dmem.docker_memory_flags(),
+                ["docker", "run", *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(),
                  "--rm", "--init", "--entrypoint", "/bin/sh",
                  image, "-c", " ".join(shlex.quote(a) for a in argv)],
                 capture_output=True, text=True, timeout=180)
