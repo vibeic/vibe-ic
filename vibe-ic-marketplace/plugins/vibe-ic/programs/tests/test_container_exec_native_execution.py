@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 
@@ -16,7 +17,7 @@ def native_exec(monkeypatch, tmp_path):
     calls = tmp_path / "docker_calls.jsonl"
     docker = tmp_path / "docker"
     docker.write_text(
-        "#!/usr/bin/env python3\n"
+        f"#!{sys.executable}\n"
         "import json,os,sys\n"
         "with open(os.environ['DOCKER_CALLS'], 'a') as stream:\n"
         "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
