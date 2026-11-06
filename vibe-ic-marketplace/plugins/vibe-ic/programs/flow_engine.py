@@ -300,7 +300,6 @@ class NativeChain:
         self.preparation_runs: list[dict] = []
         self.preparation_accounted = 0
         self.initialization_error: Exception | None = None
-        self.synthesis_fixed = False
 
     def observe_preparation(self, run):
         self.preparation_runs.append(run)
@@ -318,7 +317,6 @@ class NativeChain:
         config = build_config(self.project, route="ic" if kind == "Chip" else "ip",
                               **({"pdk": self.pdk} if self.pdk else {}),
                               **({"on_tool_run": self.observe_preparation} if kind == "Chip" else {}))
-        self.synthesis_fixed = "SYNTH_STRATEGY" in config
         os.environ["_OPENLANE_MAX_CORES"] = "8"
         self.owner = Flow.factory.get(kind)(config, design_dir=str(self.project),
                                             pdk_root=os.environ.get("PDK_ROOT"))
@@ -327,16 +325,9 @@ class NativeChain:
         self.config = self.owner.config.to_raw_dict()
         self.state = State()
 
-    def prepare(self, *, floorplan=False, synthesis=False, directory=None):
+    def prepare(self, *, floorplan=False, directory=None):
         try:
             self.initialize()
-            if synthesis and not self.synthesis_fixed:
-                from flow_config import explore_synthesis
-                strategy = explore_synthesis(self.owner.config, self.state,
-                    directory / "synthesis_exploration", self.observe_preparation)
-                if strategy is not None:
-                    self.owner.config = self.owner.config.copy(SYNTH_STRATEGY=strategy)
-                    self.config = self.owner.config.to_raw_dict()
             if floorplan:
                 from flow_pdn_current import current_settings
                 from flow_config import _native_pdn_numbers
@@ -388,7 +379,7 @@ class NativeChain:
 
     def execute(self, directory: Path, tool: dict) -> ToolResult:
         error = self.prepare(floorplan="OpenROAD.Floorplan" in tool.get("steps", []),
-                             synthesis="Yosys.Synthesis" in tool.get("steps", []), directory=directory)
+                             directory=directory)
         result = self.preparation_result()
         if error is not None:
             return result

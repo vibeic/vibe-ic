@@ -78,7 +78,7 @@ def test_native_chip_pdn_connects_both_supplies_from_pad_access_layers(
         assert state.metrics[f"design__power_grid_violation__count__net:{net}"] == 0
 
 
-def test_core_sizing_chooses_native_smaller_timing_feasible_strategy(tmp_path, native_inputs):
+def test_core_sizing_uses_configured_or_native_default_strategy_once(tmp_path, native_inputs):
     Path(native_inputs["VERILOG_FILES"][0]).write_text(
         "module unit(input clk, reset_n, output reg [15:0] q);\n"
         "always @(posedge clk) if (!reset_n) q <= 0; else q <= q + 1; endmodule\n")
@@ -93,14 +93,12 @@ def test_core_sizing_chooses_native_smaller_timing_feasible_strategy(tmp_path, n
     native, _, area, runs = chip._native_core(tmp_path, config, automatic)
 
     assert Path.cwd() == cwd
-    assert area < original_area
-    selection = json.loads(next(automatic.glob("core_*/synthesis_exploration/selection.json")).read_text())
-    feasible = {key: row for key, row in selection["results"].items()
-                if float(row["timing__setup__ws"]) >= 0}
-    assert native["SYNTH_STRATEGY"] == selection["strategy"] == min(
-        feasible, key=lambda key: float(feasible[key]["design__instance__area"]))
+    assert area == original_area
+    assert native["SYNTH_STRATEGY"] == native_inputs["SYNTH_STRATEGY"]
     assert native["CLOCK_PERIOD"] == 20
-    assert any(run["name"] == "LibreLane.SynthesisExploration" for run in runs)
+    assert [run["name"] for run in runs] == [
+        "Yosys.JsonHeader", "Yosys.Synthesis", "OpenROAD.ReportDesignArea"]
+    assert not list(automatic.glob("core_*/synthesis_exploration"))
     assert not list(baseline.glob("core_*/synthesis_exploration"))
 
 

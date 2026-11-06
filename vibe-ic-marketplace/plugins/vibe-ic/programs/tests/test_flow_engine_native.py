@@ -48,15 +48,8 @@ def native_run(project: Path, programs: Path, strategy=None) -> dict:
         assert all(row["exit_code"] in (None, 0) for row in steps[name]["native_steps"]), steps[name]
     exploration = project / "steps/synthesis/synthesis_exploration"
     config = json.loads((project / "steps/synthesis/yosys_synthesis/config.json").read_text())
-    if strategy:
-        assert config["SYNTH_STRATEGY"] == strategy
-        assert not exploration.exists()
-    else:
-        selection = json.loads((exploration / "selection.json").read_text())
-        feasible = {key: row for key, row in selection["results"].items()
-                    if float(row["timing__setup__ws"]) >= 0}
-        assert config["SYNTH_STRATEGY"] == min(feasible,
-            key=lambda key: float(feasible[key]["design__instance__area"]))
+    assert config["SYNTH_STRATEGY"] == (strategy or "AREA 0")
+    assert not exploration.exists()
     floorplan = steps["die_floorplan_and_macros"]
     actual = [row for row in floorplan["native_steps"] if row["name"] == "OpenROAD.Floorplan"]
     assert len(actual) == 1 and actual[0]["ran"] and actual[0]["exit_code"] == 0, floorplan
