@@ -34,9 +34,8 @@ def _resim_extraction(project, name, raw):
     gds = put(bdir / f"{name}.gds", "synthetic layout prerequisite")
     extracted = put(work / "extracted.spice", raw)
     put(work / "A13.json", {"status": "PASS", "metrics": {
-        "netlist_sha256": physical._sha(bdir / f"{name}.sp"),
-        "layout_sha256": physical._sha(gds), "corners": [{"style": "ngspice()",
-        "extracted_netlist": str(extracted), "sha256": physical._sha(extracted)}]}})
+        "corners": [{"style": "ngspice()",
+        "extracted_netlist": str(extracted)}]}})
 
 
 def _real_windows(project, name, image, family):
@@ -114,7 +113,6 @@ def test_real_a14_local_reuses_a07_psp_startup(tmp_path, psp_runtime, bad_model)
         assert any(view.get("path") == str(init) for view in post["native_inputs"].values())
         executions = [c["simulation"]["native_execution"] for c in post["metrics"]["corners"]]
         assert len(executions) == len({e["log"] for e in executions}) == 2
-        assert all(e["log_sha256"] == physical._sha(Path(e["log"])) for e in executions)
 
 
 @pytest.mark.parametrize("outcome", ["success", "missing_docker", "missing_container"])
@@ -322,7 +320,6 @@ def test_named_pv_container_preserves_explicit_execution_context(project, monkey
 
 
 def _extraction_project(project, monkeypatch, parasitic=True):
-    import _analog_producer_common as pc
     import librelane_contract as lc
     bdir, _ = physical._paths(project, "unit")
     tech = project / "pdk/process/libs.tech/magic/native.tech"
@@ -330,7 +327,6 @@ def _extraction_project(project, monkeypatch, parasitic=True):
     put(bdir / "unit.gds", "native fixture")
     put(bdir / "layout_provenance.json", {"pdk_sources": {"magic_tech": str(tech)},
         "producer": "analog_a5_layout_emit", "result": "OK", "netlist_content_sha256": "bound"})
-    monkeypatch.setattr(pc, "layout_netlist_identity", lambda *a: ("MATCH", "same bytes"))
     calls = []
     def resolve(project, image, source, output, **kwargs):
         put(output, json.loads(source.read_text()))
@@ -353,9 +349,9 @@ def _pre_state(project, value=1.2):
     bdir, work = physical._paths(project, "unit")
     log = put(project / "reports/A07-unit.log", f"MEAS vout= {value}\n")
     return {"status": "NOT_MEASURED", "metrics": {"vout": value},
-            "input_views": {str(path): physical._sha(path) for path in
-                            (bdir / "unit.sp", bdir / "tb_unit.sp")},
-            "executions": [{"returncode": 0, "log": str(log), "log_sha256": physical._sha(log),
+            "input_views": [str(path) for path in
+                            (bdir / "unit.sp", bdir / "tb_unit.sp")],
+            "executions": [{"returncode": 0, "log": str(log),
                             "argv": ["ngspice", "-b", str(bdir / "tb_unit.sp")]}]}
 
 
@@ -367,18 +363,18 @@ def _op_study_state(project):
         'i_load b 0 0.0005\n.end\n')
     source = put(project / "input/source.md", "Nominal output load is 0.5 mA.\n")
     bindings = {"analysis": {"kind": "OP"}, "source": {
-        "path": str(source), "sha256": physical._sha(source)}, "measurements": {
+        "path": str(source)}, "measurements": {
         "vout": {"analysis": "OP", "expression": "v(b)", "unit": "V"},
         "iq": {"analysis": "OP", "expression": "-i(v1)*1e6", "unit": "uA"}}}
     binding_path = put(template.parent / "bindings.json", bindings)
     destination = template.parent / "native-pre"
     def run(program, argv, **kwargs):
         log = put(destination / "native.log", "MEAS vout=1.19532\nMEAS iq=30.1455\n")
-        return {"returncode": 0, "log": str(log), "log_sha256": physical._sha(log),
+        return {"returncode": 0, "log": str(log),
                 "argv": ["ngspice", *argv]}
     record = measurements.run_measurements(project, bdir / "unit.sp", template,
                                            bindings, destination, run)
-    record["native_inputs"]["bindings"] = {"path": str(binding_path), "sha256": physical._sha(binding_path)}
+    record["native_inputs"]["bindings"] = {"path": str(binding_path)}
     result = put(destination / "result.json", record)
     state = _pre_state(project)
     state["metrics"]["native_measurement_studies"] = [{"status": "PASS", "result": str(result),
@@ -430,7 +426,6 @@ def test_a14_op_study_native_failure_wins_over_partial_measurement_status(projec
     state, original = _op_study_state(project)
     log = Path(original["executions"][0]["log"])
     log.write_text(log.read_text() + ";;RESIDUAL_FAIL invalid native solution\n")
-    original["executions"][0]["log_sha256"] = physical._sha(log)
     put(Path(state["metrics"]["native_measurement_studies"][0]["result"]), original)
     state["metrics"]["native_measurement_studies"][0]["status"] = "FAIL"
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
@@ -464,7 +459,7 @@ def test_a14_op_study_conditions_flow_into_all_post_styles_and_a15(project, monk
             calls.append((argv, text))
             assert "i_load b 0 0.0005" in text
             log = put(destination / "native.log", "MEAS vout=1.19\nMEAS iq=31.0\n")
-            return {"returncode": 0, "log": str(log), "log_sha256": physical._sha(log)}
+            return {"returncode": 0, "log": str(log)}
         return run
     monkeypatch.setattr(flow, "NativeCommands", runner)
     result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
@@ -477,8 +472,6 @@ def test_a14_op_study_conditions_flow_into_all_post_styles_and_a15(project, monk
                for c in result["metrics"]["corners"])
     assert all(c["missing"] == ["dropout", "psrr"] for c in result["metrics"]["corners"])
     assert legacy.read_bytes() == before
-    assert all(c["native_measurement_study"]["native_inputs"]["bindings"]["sha256"] ==
-               original["native_inputs"]["bindings"]["sha256"] for c in result["metrics"]["corners"])
     assert all(not Path(c["native_measurement_study"]["native_inputs"]["bindings"]["path"]).is_absolute()
                for c in result["metrics"]["corners"])
     dependency_paths = {view["path"] for view in result["native_inputs"].values()}
@@ -509,7 +502,7 @@ def test_a14_op_study_conditions_flow_into_all_post_styles_and_a15(project, monk
 def test_a14_reuses_explicit_actual_canonical_inputs_without_legacy_argv(project):
     state = _pre_state(project)
     bdir, _ = physical._paths(project, "unit")
-    state["native_inputs"] = {role: {"path": str(path), "sha256": physical._sha(path)}
+    state["native_inputs"] = {role: {"path": str(path)}
         for role, path in (("netlist", bdir / "unit.sp"), ("testbench", bdir / "tb_unit.sp"),
                            ("spec", bdir / "spec.json"))}
     state["executions"][0].pop("argv")
@@ -537,8 +530,8 @@ def _declared_pre_state(project, source="sidecar"):
     def run(program, argv, **kwargs):
         log = put(Path(argv[argv.index("-o") + 1]), "MEAS vout=1.2 rising_min=1.15 falling_peak=1.25\n")
         capture = put(log.parent / "capture.log", "ngspice batch mode\n")
-        return {"returncode": 0, "log": str(capture), "log_sha256": physical._sha(capture),
-                "outputs": {str(log): physical._sha(log)},
+        return {"returncode": 0, "log": str(capture),
+                "outputs": [str(log)],
                 "argv": ["ngspice", *argv]}
     return sim.run_step("A07", project, {"name": "unit"}, {"config": config}, run)
 
@@ -653,7 +646,6 @@ def test_a14_reuses_real_a07_output_stream_only_while_current(project, changed):
     if changed is None:
         assert record["reused"] is True
         assert record["log"] == str(output)
-        assert record["log_sha256"] == execution["outputs"][str(output)]
 
 
 @pytest.mark.parametrize("kind", ["alternate_actual_tb", "changed_actual_input", "legacy_no_argv", "legacy_alternate_tb"])
@@ -662,11 +654,11 @@ def test_a14_refuses_actual_or_unproved_noncanonical_pre_testbench(project, kind
     bdir, _ = physical._paths(project, "unit")
     alternate = put(bdir / "nominal.sp", (bdir / "tb_unit.sp").read_text())
     if kind in ("alternate_actual_tb", "changed_actual_input"):
-        state["native_inputs"] = {role: {"path": str(path), "sha256": physical._sha(path)}
+        state["native_inputs"] = {role: {"path": str(path)}
             for role, path in (("netlist", bdir / "unit.sp"), ("testbench", bdir / "tb_unit.sp"),
                                ("spec", bdir / "spec.json"))}
         if kind == "alternate_actual_tb":
-            state["native_inputs"]["testbench"] = {"path": str(alternate), "sha256": physical._sha(alternate)}
+            state["native_inputs"]["testbench"] = {"path": str(alternate)}
         else:
             state["native_inputs"]["netlist"]["sha256"] = "previous native circuit bytes"
     elif kind == "legacy_no_argv":
@@ -916,8 +908,6 @@ def test_a14_accepts_source_bound_existing_nominal_corner_measurement(project):
     bdir, _ = physical._paths(project, "unit")
     log = put(bdir / "sizing_loop/nominal.ngspice.log", "MEAS vout= 1.197\n")
     put(bdir / "corner_results.json", {"_provenance": "real_ngspice", "deck_source": "a3_netlist",
-        "netlist_sha256": physical._sha(bdir / "unit.sp"),
-        "netlist_testbench_sha256": physical._sha(bdir / "tb_unit.sp"),
         "all_runs": [{"knob": "__noop__", "ok": True, "partial_measurement": False,
                       "ngspice_log": str(log.relative_to(project))}]})
     values, record = physical._pre_layout_measurements(project, "unit", {})
@@ -939,8 +929,7 @@ def _post_statistics_inputs(project):
     post_net = put(work / "unit_post.sp", ".subckt unit a b vss\nR0 a b 12.5\n.ends unit\n")
     put(work / "A14.json", {"status": "PASS", "metrics": {"corners": [
         {"style": "ngspice()", "post_testbench": str(post),
-         "post_netlist": str(post_net), "post_netlist_sha256": physical._sha(post_net),
-         "post_testbench_sha256": physical._sha(post)}]}})
+         "post_netlist": str(post_net)}]}})
 
 
 def _transferred_post_statistics_inputs(project, damage=None):
@@ -964,7 +953,7 @@ def _transferred_post_statistics_inputs(project, damage=None):
         recorded_deck = project.parent / "foreign-receipt/measurements.sp"
     put(work / "A14.json", {"status": "PASS", "metrics": {"corners": [{
         "style": "ngspice()", "post_testbench": str(recorded_deck),
-        "post_netlist": str(recorded_net), "post_netlist_sha256": physical._sha(post_net),
+        "post_netlist": str(recorded_net),
         "post_testbench_sha256": hashlib.sha256(
             ".include unit_post_ngspice.sp\n.control\nop\n.endc\n".encode()).hexdigest()}]}})
 
@@ -1115,7 +1104,6 @@ def test_a16_retains_supplied_native_report_and_detects_change_during_check(proj
     assert result["metrics"]["thermal"]["status"] == "PASS"
     assert result["status"] == "NOT_MEASURED"
     assert result["metrics"]["input_currentness"]["changed"] == ["thermal_report"]
-    assert result["native_inputs"]["thermal_report"]["sha256"] == original
 
 
 def test_a16_block_declaration_routes_mission_and_keeps_every_attempt(project, monkeypatch):
@@ -1171,7 +1159,6 @@ def test_a16_op_convergence_uses_only_fixed_stock_ngspice_controls(project, monk
     assert "reltol" not in seen["text"] and "abstol" not in seen["text"]
     assert seen["path"] != deck
     assert deck.read_text() == "* untouched mission\n.control\nop\necho MEAS max_stress=0.8\n.endc\n.end\n"
-    assert result["native_inputs"]["mission_execution_deck"]["sha256"] == physical._sha(seen["path"])
 
 
 @pytest.mark.parametrize("deck", [
@@ -1333,4 +1320,3 @@ def test_a13_splits_a_resistor_body_capacitor_and_keeps_the_native_output(projec
     bound = Path(corner["extracted_netlist"]).read_text()
     assert "a_1_2#" not in bound and "C0_0 vss a 0.5f" in bound and "C0_1 vss b 0.5f" in bound
     assert (project / "pex_native/unit.rcx.spice").read_text() == native
-    assert corner["sha256"] == physical._sha(Path(corner["extracted_netlist"]))
