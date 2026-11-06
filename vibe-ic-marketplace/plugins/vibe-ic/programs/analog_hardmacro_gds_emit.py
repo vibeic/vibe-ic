@@ -92,6 +92,8 @@ Usage:
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import json
 import re
@@ -743,7 +745,7 @@ def main(argv=None) -> int:
         return 2
 
     project = args.project.resolve()
-    import tempfile
+    import vibeic_temp as tempfile
     with tempfile.TemporaryDirectory(prefix="a8gds_") as td:
         report, rc = run(project, args.container, args.pdk_root,
                          args.block, Path(td))

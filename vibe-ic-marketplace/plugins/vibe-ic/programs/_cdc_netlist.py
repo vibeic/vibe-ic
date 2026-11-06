@@ -45,6 +45,8 @@ names consulted are yosys's own internal cell types.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import json
 import os
 import re
@@ -292,7 +294,7 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
         vols: List[str] = []
         for m in sorted(mounts):
             vols += ["-v", f"{m}:{m}"]
-        argv = [docker, "run", *_dmem.docker_memory_flags(), "--rm", "--network", "none",
+        argv = [docker, "run", *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), "--rm", "--network", "none",
                 "-u", f"{os.getuid()}:{os.getgid()}", *vols,
                 "--entrypoint", "yosys", image, "-q", "-p", script]
     done = subprocess.run(argv, capture_output=True, text=True)

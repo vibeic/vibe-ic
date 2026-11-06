@@ -298,7 +298,7 @@ def golden_still_passes(golden_src: Path, remediated_tb: Path,
     import re as _re
     if run is None:
         import shutil
-        import tempfile
+        import vibeic_temp as tempfile
 
         def run(argv):
             return (lambda cp: (cp.returncode, (cp.stdout or "") +

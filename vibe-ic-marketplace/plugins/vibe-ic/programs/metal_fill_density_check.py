@@ -247,7 +247,7 @@ def filled_gds_density(project_dir: Path) -> Tuple[List[Finding], dict]:
         return _not_measured(
             f"PDK-regulated layer(s) {unjudged} are mapped for this stream but "
             f"carry no density in {rpt.name}")
-    import tempfile  # noqa: PLC0415
+    import vibeic_temp as tempfile  # noqa: PLC0415
     with tempfile.TemporaryDirectory() as _td:
         judged = Path(_td) / "metal_density.json"
         judged.write_text(json.dumps(dict(doc, layers=dens)))

@@ -67,6 +67,8 @@ USAGE
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import ast
 import hashlib
@@ -183,7 +185,7 @@ def _in_image(digest: str, script: str, mount: Path, interpreter: str,
     # collapses `..` and symlinks, so what the container sees is what the host
     # named.
     mount = Path(mount).resolve()
-    return _run(["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+    return _run(["docker", "run", *_vtmp.docker_mounts(), "--rm", *_dmem.docker_memory_flags(),
                  "-v", f"{mount}:{mount}",
                  digest, interpreter, "-c", script], timeout=timeout)
 
@@ -596,7 +598,7 @@ def _technology_probe(image: str, command: List[str], *, parser: bool = False,
     mounts = (["-v", f"{_HERE}:/vibeic_programs:ro",
                "-e", "PYTHONPATH=/vibeic_programs",
                "-e", "PYTHONDONTWRITEBYTECODE=1"] if parser else [])
-    return _run(["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+    return _run(["docker", "run", *_vtmp.docker_mounts(), "--rm", *_dmem.docker_memory_flags(),
                  "--cpus", "2", "--network", "none", *mounts,
                  image, *prefix, *command], timeout=600)
 

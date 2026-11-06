@@ -51,6 +51,8 @@ refusal. chip-AGNOSTIC.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import os as _os                                                    # noqa: E402
 import sys as _sys                                                  # noqa: E402
 
@@ -128,7 +130,7 @@ def _image_run(image: str, entrypoint: str, args: List[str],
     import _docker_memory as _dmem
     from librelane_contract import PROBE_DEADLINE_S, run_container
     return run_container(
-        [docker, "run", "--rm", *_dmem.docker_memory_flags(),
+        [docker, "run", *_vtmp.docker_mounts(), "--rm", *_dmem.docker_memory_flags(),
          "--entrypoint", entrypoint, image, *args],
         probe_deadline_s=PROBE_DEADLINE_S)
 
@@ -455,7 +457,7 @@ def _capability_controls(arm: "_Arm", block: str, image: str,
                 import _docker_memory as _dmem
                 from librelane_contract import PROBE_DEADLINE_S, run_container
                 cp = run_container(
-                    ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+                    ["docker", "run", *_vtmp.docker_mounts(), "--rm", *_dmem.docker_memory_flags(),
                      "--entrypoint", "python3", image, "-c",
                      "import base64,pathlib,sys;print(" + repr(_UNIT_PAYLOAD_MARKER) +
                      "+base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())",

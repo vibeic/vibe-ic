@@ -25,6 +25,8 @@ No external tool dependencies -- pure Python.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 # --- sibling-import path (vibe-ic#2104) ------------------------------------
 # `programs/` is a flat directory whose modules import each other by BARE
 # name. Python puts a file's own directory on `sys.path` only when that file
@@ -3395,7 +3397,7 @@ def _liberty_head_from_image(lib: Path, image: str) -> Tuple[Optional[str], str]
         # is one the host cannot bound, and an audit is exactly the place a
         # future edit would grow. Spliced in after the run verb, as
         # `test_no_docker_run_escapes_the_ceiling` requires.
-        argv = (["docker", "run"] + _dmem.docker_memory_flags()
+        argv = (["docker", "run", *_vtmp.docker_mounts()] + _dmem.docker_memory_flags()
                 + ["--rm", "--entrypoint", "/bin/sh", image,
                    "-c",
                    f"head -c {_LIBERTY_HEAD_BYTES} {_shlex.quote(str(lib))}"])

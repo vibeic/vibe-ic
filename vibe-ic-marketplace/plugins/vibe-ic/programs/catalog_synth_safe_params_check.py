@@ -57,6 +57,8 @@ chip-AGNOSTIC: parameter names and values come only from the manifests.
 """
 from __future__ import annotations
 
+import vibeic_temp as _vtmp
+
 import argparse
 import json
 import os
@@ -263,7 +265,7 @@ def _yosys(project: Path, image: str | None, script: str, out_dir: Path):
         import p0_tool_frontend_check as frontend
         image = image or frontend.default_image()
         root, out = str(project.resolve()), str(out_dir.resolve())
-        command = ["docker", "run", *_dmem.docker_memory_flags(), "--rm",
+        command = ["docker", "run", *_vtmp.docker_mounts(), *_dmem.docker_memory_flags(), "--rm",
                    "--network", "none", "-u",
                    f"{os.getuid()}:{os.getgid()}", "-v", f"{root}:{root}:ro",
                    "-v", f"{out}:{out}", "--entrypoint", "yosys", image,

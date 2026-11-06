@@ -1001,7 +1001,7 @@ def second_engine_drc(project: Path, block: str, container: str,
             # partially re-spelled: its own CLI carries its own magicrc
             # default, so no PDK path literal appears in this file.
             import analog_a6_drc_attribute as _attr
-            import tempfile as _tf
+            import vibeic_temp as _tf
             host = Path(_tf.mkdtemp(prefix="a6_second_engine."))
             out = host / "attribution.json"
             try:

@@ -235,7 +235,7 @@ def check_text(code: str) -> Tuple[List[Finding], str]:
     Blocking it costs nothing: the protocol-correct variant (the `& tready`
     removed) was scored through the official harness and also PASSes.
     """
-    import tempfile
+    import vibeic_temp as tempfile
     with tempfile.NamedTemporaryFile("w", suffix=".v", delete=False) as fh:
         fh.write(code or "")
         tmp = Path(fh.name)
