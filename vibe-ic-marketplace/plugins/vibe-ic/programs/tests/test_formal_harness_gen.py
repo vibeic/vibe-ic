@@ -64,6 +64,48 @@ def _gen(tmp_path, text, name="dut.v", **kw):
 
 
 # ── comment hygiene ─────────────────────────────────────────────────────────
+_INTERNAL_BUS_STATE = """module bus_state #(parameter WIDTH=9)(
+    input clk,rst,select_read,input [WIDTH-1:0] data,
+    output wire [WIDTH-1:0] read_data,output wire error);
+    reg [WIDTH-1:0] stored;
+    always @(posedge clk) if(rst) stored<=9'd0; else stored<=data;
+    assign read_data=select_read ? stored : {WIDTH{1'b0}};
+    assign error=select_read && data[0];
+endmodule
+"""
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("mutate", [False, True])
+def test_internal_reset_state_uses_full_width_native_observer(tmp_path, asynchronous, mutate):
+    if not all(shutil.which(name) for name in ("yosys", "sby", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+    from flow_native_adapters import Commands, formal
+
+    text = _INTERNAL_BUS_STATE.replace("@(posedge clk)", "@(posedge clk or posedge rst)") if asynchronous else _INTERNAL_BUS_STATE
+    rtl = tmp_path / "unit.v"
+    rtl.write_text(text)
+    harness = tmp_path / "formal_bus_state.sv"
+    result = G.generate(rtl=[rtl], top="bus_state", out=harness, assertion_form="immediate")
+    assert result["verdict"] == "EMITTED", result
+    assert result["properties"][0]["target"] == "stored", result
+    content = harness.read_text()
+    assert "// @observe vibeic_obs_stored = dut.stored" in content
+    assert "wire [WIDTH-1:0] vibeic_obs_stored;" in content
+    assert "(vibeic_obs_stored == '0)" in content
+    deck = harness.with_suffix(".sby")
+    deck.write_text(emit_invariant_sby([str(rtl)], str(harness), "formal_bus_state", [], [], prove_depth=8, bmc_depth=8))
+    if mutate:
+        rtl.write_text(text.replace("stored<=9'd0", "stored<=9'h100"))
+    output = tmp_path / "run"
+    output.mkdir()
+    native = formal(tmp_path, output, {"top":"bus_state", "properties":[str(deck)]}, Commands(output))
+    rows = [r for r in native["native_steps"] if r["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
+    assert len(rows)==2 and {r["status"] for r in rows}=={"FAIL" if mutate else "PASS"},native
+    assert harness.read_text()==content
+
+
 def test_strip_comments():
     assert "secret" not in G.strip_comments("a // secret\n/* b\n c */d")
     # newlines preserved so line structure survives
