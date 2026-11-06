@@ -1025,8 +1025,6 @@
         "limit": 0,
         "unit": "count",
         "source": {
-          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
-          "line": 54,
           "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
         }
       }
@@ -1038,8 +1036,6 @@
         "limit": 0,
         "unit": "count",
         "source": {
-          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
-          "line": 54,
           "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
         }
       }
@@ -1051,8 +1047,6 @@
         "limit": null,
         "when": "has_analog",
         "source": {
-          "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
-          "line": 54,
           "note": "Leader ruling 208. Native view populations, analog spec comparison, and selected-step aggregation."
         },
         "limit_from": {
@@ -2051,8 +2045,6 @@
     "note": "Original obligation operator and literal expectation value, unchanged."
   },
   "defect_source": {
-    "file": "/mnt/ssd2/codex_tasks/in/bench/engine.leader.txt",
-    "line": 12,
     "note": "Owner ruling 206. Defect counters have limit zero."
   },
   "required_sets": {

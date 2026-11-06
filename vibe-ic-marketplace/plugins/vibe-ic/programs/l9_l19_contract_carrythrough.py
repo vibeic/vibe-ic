@@ -6,7 +6,7 @@ it only preserves requirements already stated by the design inputs. It is
 chip-agnostic: routing is by L-layer role and explicit markdown headings, never
 by design, PDK, vendor, port, or cell literals.
 
-This producer reads only the design's prose inputs plus its typed tape-out
+This producer reads only the design's prose/configuration inputs plus its typed tape-out
 declaration. It never reads RTL, a testbench, an oracle, a harness, a golden,
 or a reference implementation. Existing consumer fields win; reruns are
 idempotent. Missing or denied evidence emits nothing rather than a default.
@@ -322,6 +322,49 @@ def _l9_contract(records: List[Dict[str, str]]) -> Dict[str, Any]:
             and not (isinstance(value, dict) and not any(value.values()))}
 
 
+def _hard_macro_requirements(project: Path, records: List[Dict[str, str]],
+                             top: Optional[str]) -> List[Dict[str, Any]]:
+    """Preserve hardening intent and instances, never claim physical views."""
+    from floorplan_contract import _iter_input_files
+
+    macros: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        if record["layer"] != "L9":
+            continue
+        for heading, body in _sections(record["text"]):
+            name = re.fullmatch(r"`?([A-Za-z_][\w$]*)`?\s+(?:block|submodule|macro)",
+                                heading, re.I)
+            if not name or name.group(1) == top:
+                continue
+            for line in body.splitlines():
+                if (re.search(r"\bharden(?:ed)?\s+as\s+(?:a\s+)?(?:hard[- ]?)?macro\b", line, re.I)
+                        and not _polarity.is_denied(line)):
+                    master = name.group(1)
+                    macros[master] = {"name": master, "hardening_required": True,
+                                      "source": record["source"], "evidence": line.strip()}
+                    break
+    for rel, path, text in _iter_input_files(project):
+        if path.suffix.lower() != ".json" or not top:
+            continue
+        try:
+            config = json.loads(text)
+        except ValueError:
+            continue
+        if not isinstance(config, dict) or config.get("DESIGN_NAME") != top:
+            continue
+        declared = config.get("MACROS")
+        if not isinstance(declared, dict):
+            continue
+        for master, definition in declared.items():
+            if not isinstance(definition, dict):
+                continue
+            macro = macros.setdefault(master, {"name": master, "source": rel})
+            macro["config_source"] = rel
+            if isinstance(definition.get("instances"), dict):
+                macro["instances"] = definition["instances"]
+    return list(macros.values())
+
+
 def _load_json(path: Path) -> Optional[dict]:
     if not path.is_file():
         return None
@@ -620,6 +663,11 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
 
     records = _source_documents(project)
     emitted: List[str] = []
+    hierarchy = l9["fields"] if isinstance(l9.get("fields"), dict) else l9
+    macros = _hard_macro_requirements(project, records, hierarchy.get("top_module"))
+    if macros and not hierarchy.get("hard_macros"):
+        hierarchy["hard_macros"] = macros
+        emitted.append("L9.hard_macros")
     integration = l9.get("integration")
     integration = integration if isinstance(integration, dict) else {}
     for key, value in _l9_contract(records).items():

@@ -315,6 +315,29 @@ def test_authored_integration_top_and_sdc_reach_native_config(project):
         assert config[key] == str(sdc)
 
 
+def test_cli_explicit_clock_survives_a_conditional_virtual_clock(project, monkeypatch):
+    import flow_config
+
+    sdc = project / "conditional.sdc"
+    sdc.write_text('''if {[info exists ::env(CLOCK_PORT)] && $::env(CLOCK_PORT) ne ""} {
+  set clk_input $::env(CLOCK_PORT)
+  create_clock -name real -period 17.5 [get_ports $clk_input]
+} else {
+  set clk_input __VIRTUAL_CLK__
+  create_clock -name virtual -period 17.5
+}
+''')
+    output = project / "native.json"
+    monkeypatch.setattr(sys, "argv", ["flow_config.py", "--project", str(project),
+        "--route", "ip", "--set", 'CLOCK_PORT="clk"', "--set", f"PNR_SDC_FILE={json.dumps(str(sdc))}",
+        "--output", str(output)])
+    assert flow_config.main() == 0
+    config = json.loads(output.read_text())
+    assert config["CLOCK_PORT"] == "clk"
+    assert config["CLOCK_PERIOD"] == 17.5
+    assert config["PNR_SDC_FILE"] == str(sdc)
+
+
 def test_generated_lowercase_pdk_keeps_installed_registry_spelling(project):
     path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
     path.write_text(json.dumps({"fields": {"pdk_target": "sky130a"}}))
@@ -644,6 +667,19 @@ def test_root_module_precedes_nested_copy_and_needed_nested_module_survives(proj
     assert files == [rtl / "unit.v", leaf]
     assert not (project / "work").exists()
     assert build_config(project)["VERILOG_FILES"] == [str(path) for path in files]
+
+
+def test_resolve_rtl_inputs_treats_null_optional_ldoc_fields_as_absent(project):
+    docs = project / "phase1/generated_docs"
+    (docs / "L1_DATASHEET.json").write_text('{"tapeout_metadata": null}')
+    (docs / "L9_INTEGRATION_SPEC.json").write_text('{"top_module": null}')
+    (project / "input").mkdir()
+    (project / "input/phase1_prompt.md").write_text("- Top module: `unit`.\n")
+
+    files, top = resolve_rtl_inputs(project)
+
+    assert files == [project / "phase2/stage1/rtl/unit.v"]
+    assert top == "unit"
 
 
 def test_nested_file_with_overlapping_and_unique_modules_is_not_silently_dropped(project):
