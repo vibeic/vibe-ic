@@ -171,3 +171,8 @@ def test_the_runner_excludes_the_reference_from_the_link_set(tmp_path):
     assert sorted(rec["members"]) == ["spm.gds"], rec
     hd = tmp_path / "phase3/stage4/foundry_handoff"
     assert sorted(p.name for p in hd.glob("*.gds")) == ["spm.gds"]
+
+
+def test_the_producer_and_the_gate_name_the_same_reference_set():
+    assert PKG.REFERENCE_ONLY_SUFFIXES == (".prefinish.gds",
+                                           ".ring_reference.gds")
