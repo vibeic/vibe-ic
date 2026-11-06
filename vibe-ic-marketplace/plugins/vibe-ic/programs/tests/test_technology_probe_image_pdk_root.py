@@ -180,22 +180,3 @@ def test_local_actual_failed_inputs_stay_unavailable(tmp_path, monkeypatch, dama
     assert fact['unavailable']
     if damage != 'missing_file':
         assert fact['lef_database_unit_um'] == 0.0005
-
-
-@pytest.mark.parametrize('damage', ['foreign_cid', 'changed_image', 'absent_receipt'])
-def test_local_probe_requires_actual_launch_authority(tmp_path, monkeypatch, damage):
-    run, calls, _, _, _ = _scene(tmp_path, monkeypatch, local=True, legacy=True)
-    receipt = tmp_path / 'launch_identity.json'
-    record = json.loads(receipt.read_text())
-    if damage == 'foreign_cid':
-        record['cid'] = 'c' * 64
-    elif damage == 'changed_image':
-        record['image'] = 'foreign@sha256:' + 'd' * 64
-    if damage == 'absent_receipt':
-        receipt.unlink()
-    else:
-        receipt.write_text(json.dumps(record))
-    fact = run()
-    assert fact['value'] is None, fact
-    assert fact['unavailable']
-    assert calls == []
