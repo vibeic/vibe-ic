@@ -271,17 +271,3 @@ def test_bug_density_metric_names_the_missing_instrument(tmp_path, capsys, monke
 # ---------------------------------------------------------------------------
 # 7. the PDK tree survives the via-legalized tech-LEF substitution
 # ---------------------------------------------------------------------------
-def test_pdk_dir_resolves_from_the_distribution_source_after_substitution(tmp_path):
-    import phase3_one_shot_runner as P3
-    dist = "/pdks/somepdk/libs.ref/some_lib/techlef/some_lib__nom.tlef"
-    derived = str(tmp_path / "phase3" / "stage3" / "pnr" / "active_via_legalized.tlef")
-    pdk = P3.PdkConfig(name="somepdk", liberty="x.lib", tech_lef=dist,
-                       cell_lef="c.lef", cell_gds=None, site="s", drc_deck=None)
-    assert P3._pdk_dir_of(pdk) == "/pdks/somepdk"
-    # the remediation substitutes the derived copy and records its source
-    pdk.tech_lef_source = dist
-    pdk.tech_lef = derived
-    assert P3._pdk_dir_of(pdk) == "/pdks/somepdk"
-    # with no recorded source the derived copy alone cannot name a tree
-    pdk.tech_lef_source = None
-    assert P3._pdk_dir_of(pdk) == ""

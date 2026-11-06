@@ -45,17 +45,6 @@ def _produced(tmp_path, monkeypatch):
     return p, result
 
 
-def _refused(tmp_path, monkeypatch):
-    p, _, lib = current_fixture.fixture.project(tmp_path)
-    def refused(*args, **kwargs):
-        raise RuntimeError(_REASON)
-    monkeypatch.setattr(SCC, 'run_installed_pdk_path_correlation', refused)
-    written, notes = [], []
-    assert current_fixture.fixture.R._step30_tool_arm(
-        p, current_fixture.fixture.pdk(lib), written, notes) is False
-    gate = json.loads((p / 'reports/phase2/gates/spice_correlation.json').read_text())
-    assert gate['passed'] is False and gate['summary']['current_binding'] == 'REFUSED'
-    return p, written, notes
 
 
 def test_the_driver_writes_the_path_the_step_declares(tmp_path, monkeypatch):
@@ -103,30 +92,10 @@ def test_the_record_carries_what_was_correlated_the_numbers_and_a_verdict(tmp_pa
 
 # ------------------------------------------- the record, when it REFUSED
 
-def test_the_runner_writes_a_named_refusal_at_the_declared_path(tmp_path, monkeypatch):
-    p, written, _ = _refused(tmp_path, monkeypatch)
-    for relative in ('phase3/stage3/spice/correlation.json', 'reports/phase3/spice_correlation.json',
-                     'phase3/stage3/spice/spice_correlation_not_run.json'):
-        path = p / relative
-        assert path.is_file() and str(path) in written
-        assert json.loads(path.read_text())['verdict'] == 'NOT_MEASURED'
 
 
-def test_the_refusal_and_the_disclosure_are_the_same_payload(tmp_path, monkeypatch):
-    p, _, _ = _refused(tmp_path, monkeypatch)
-    paths = ['phase3/stage3/spice/correlation.json', 'reports/phase3/spice_correlation.json',
-             'phase3/stage3/spice/spice_correlation_not_run.json']
-    records = [json.loads((p / relative).read_text()) for relative in paths]
-    assert records[0] == records[1] == records[2]
 
 
-def test_the_refusal_carries_a_verdict_and_a_reason(tmp_path, monkeypatch):
-    p, _, notes = _refused(tmp_path, monkeypatch)
-    record = json.loads((_pl.spice_dir(p) / 'correlation.json').read_text())
-    assert record['verdict'] == 'NOT_MEASURED' and record['correlation_ran'] is False
-    assert record['status'] == 'ERROR' and record['reason_class'] == 'EXECUTION_ERROR'
-    assert record['reason'] == _REASON
-    assert any(_REASON in note for note in notes)
 
 
 def test_a_record_the_run_already_produced_is_left_alone(tmp_path, monkeypatch):

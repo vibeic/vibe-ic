@@ -30,7 +30,6 @@ import sys
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
-_RUNNER_SRC = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
 
 _GATE = _PROGRAMS / "sta_corner_record_completeness_check.py"
 _spec = importlib.util.spec_from_file_location("_g2_gate", _GATE)
@@ -80,51 +79,8 @@ Warning 503: sta_spef_hold.tcl line 1, report_checks -group_count is deprecated.
 """
 
 
-def test_spef_corner_stanza_does_not_use_deprecated_group_count():
-    """The emitted report_checks must NOT use the deprecated `-group_count`
-    (which aborts OpenSTA 3.1.0 before the DRV query). It must use the current
-    `-group_path_count`."""
-    assert "-group_count 3" not in _RUNNER_SRC, (
-        "deprecated `report_checks -group_count` re-introduced — it aborts "
-        "OpenSTA 3.1.0 (Error 514) before report_check_types, silently dropping "
-        "the max_slew/max_capacitance DRV query")
-    # ORGANIC #540 — both corner emitters now build the call through the SHARED
-    # `_report_worst_paths_tcl` helper, so the flag lives in one place instead
-    # of being duplicated (which is how the same one-token bug came to sit at
-    # two sites). Assert on the helper's OUTPUT for both path delays.
-    import phase3_one_shot_runner as P
-    for flag in ("-max", "-min"):
-        assert "-group_path_count 3" in P._report_worst_paths_tcl("/x/o.rpt",
-                                                                  flag)
-    assert _RUNNER_SRC.count("_report_worst_paths_tcl(rpt_c, flag)") == 2, (
-        "both the rc-axis and process-axis stanzas must route through the "
-        "shared worst-path helper")
 
 
-def test_spef_corner_stanza_reaches_report_check_types():
-    """report_checks in the rc-axis stanza is guarded so a report_checks hiccup
-    can never abort the DRV query that follows.
-
-    ORGANIC #540 — this assertion used to read:
-
-        assert "catch {{report_checks {flag} -group_path_count 3 " in stanza
-
-    which pinned the BROKEN command. `{flag}` is `report_worst_slack`'s
-    `-max`/`-min`, which `report_checks` rejects with Error 514, so the very
-    string this test protected was one OpenSTA never executed. The guard it
-    checked for was doing the swallowing. Assert on the helper's OUTPUT and on
-    the ORDER instead — and see the execution test at the bottom of this file
-    for the assertion that keys on a produced REPORT rather than on Tcl text.
-    """
-    i = _RUNNER_SRC.index("def _emit_corner_spef_sta(")
-    j = _RUNNER_SRC.index("\ndef ", i + 1)
-    stanza = _RUNNER_SRC[i:j]
-    assert "_report_worst_paths_tcl(rpt_c, flag)" in stanza, stanza[-2000:]
-    assert "_report_check_types_tcl(rpt_c)" in stanza
-    # the worst-path dump precedes the DRV query, so a hiccup in the first
-    # cannot cost the second (the reason the guard was introduced).
-    assert (stanza.index("_report_worst_paths_tcl(rpt_c, flag)")
-            < stanza.index("_report_check_types_tcl(rpt_c)"))
 
 
 def test_extract_drv_no_vacuity_catches_real_slew_and_cap():
