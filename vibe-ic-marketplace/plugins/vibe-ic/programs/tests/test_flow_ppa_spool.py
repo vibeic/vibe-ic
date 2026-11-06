@@ -35,6 +35,7 @@ view=step/'unit.odb';view.write_text('neutral native view')
 (step/'config.json').write_text(json.dumps({'CLOCK_PERIOD':10,'PDK':'process',
  'STD_CELL_LIBRARY':'cells','STA_CORNERS':['typical']}))
 (step/'state_out.json').write_text(json.dumps({'odb':str(view)}))
+(step/'state_out.json').chmod(0o444)
 report={'steps':[{'name':'native_mapping','status':STATUS,
  'native_metrics':{'design__instance__area':100,'power__total':1,'timing__setup__ws':2},
  'native_steps':[{'name':'Yosys.Synthesis','ran':True,'exit_code':CODE,'reports':str(step)}]}]}
