@@ -43,12 +43,10 @@ expressed with invented strings the family registry does not know.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parent.parent
-CHECK = PROGRAMS / "l8_clock_period_actionability_check.py"
 sys.path.insert(0, str(PROGRAMS))
 import _l8_clock_scope as S  # noqa: E402
 import sdc_gen  # noqa: E402
@@ -105,10 +103,6 @@ def _project(tmp_path: Path, domains: list, *, run_pdk: str | None = None,
     return tmp_path
 
 
-
-
-
-
 def _sdc_text(project: Path) -> str:
     files = list((project / "phase2" / "stage1" / "fpga").glob("*.sdc"))
     assert len(files) == 1, files
@@ -141,16 +135,12 @@ def test_outcome1_scoped_match_by_family_name(tmp_path):
     assert f"-period {1000.0 / SCOPED_MHZ:g} " in _sdc_text(proj)
 
 
-
-
 # ── OUTCOME 2: an unscoped design-owned record applies to every process ─────
 
 def test_outcome2_unscoped_design_owned_is_selected(tmp_path):
     proj = _project(tmp_path, SCOPED_PLUS_UNSCOPED, run_pdk=FOREIGN_PDK)
     assert sdc_gen.main([str(proj), "--force"]) == 0
     assert f"-period {1000.0 / UNSCOPED_MHZ:g} " in _sdc_text(proj)
-
-
 
 
 def test_outcome2_does_not_displace_outcome1(tmp_path):
@@ -171,8 +161,6 @@ def test_outcome3_only_foreign_scopes_is_refused(tmp_path):
     assert sdc_gen.main([str(proj), "--force"]) == 1
 
 
-
-
 # ── OUTCOME 4: scoped records, no run PDK — NOT_MEASURED, not MISMATCH ──────
 
 def test_outcome4_no_target_is_not_measured_not_mismatch(tmp_path):
@@ -181,8 +169,6 @@ def test_outcome4_no_target_is_not_measured_not_mismatch(tmp_path):
     as one verdict."""
     proj = _project(tmp_path, SCOPED_ONLY)          # no run record, no L19
     assert sdc_gen.main([str(proj), "--force"]) == 1
-
-
 
 
 # ── the fifth, non-verdict outcome: nothing scoped, nothing changes ─────────

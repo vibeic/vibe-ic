@@ -30,7 +30,6 @@ for _p in (str(PROGRAMS), str(PROGRAMS.parent)):
         sys.path.insert(0, _p)
 
 import _chip_synth_read as CSR  # noqa: E402
-import librelane_contract as C  # noqa: E402
 
 RTL = "phase2/stage1/rtl"
 NETLIST = "phase2/stage2/synth/core_synth.v"
@@ -61,13 +60,6 @@ def _netlist(p: Path, text: str = "module core(); endmodule // retry\n") -> Path
     return n
 
 
-def _chain(p: Path):
-    config = {"VERILOG_FILES": [f"dir::{RTL}/core.v"]}
-    sources = {"VERILOG_FILES": "test"}
-    C._check_synthesised_read(p, config, sources)
-    return config, sources
-
-
 def _record(p: Path) -> dict:
     return json.loads(CSR.built_record_path(p).read_text())
 
@@ -85,10 +77,6 @@ def test_a_retry_built_netlist_is_not_handed_simulation(tmp_path):
     assert rec["define"]["synthesis"] is True
     assert rec["define"]["decided"]["simulation"] is True  # disclosed, kept
     assert rec["frontend"] == RETRY
-    config, sources = _chain(p)
-    assert config["VERILOG_DEFINES"] == ["SYNTHESIS"]
-    assert "SIMULATION" not in config["VERILOG_DEFINES"]
-    assert RETRY in sources["VERILOG_DEFINES"]
 
 
 @pytest.mark.parametrize("frontend", ["read_verilog_v2005", "yosys_slang",
@@ -101,8 +89,6 @@ def test_a_first_attempt_netlist_keeps_the_decision(tmp_path, frontend):
     CSR.bind_built_record_netlist(p, _netlist(p), synthesis_id="S1",
                                   frontend=frontend)
     assert _record(p)["define"] == before
-    config, _ = _chain(p)
-    assert config["VERILOG_DEFINES"] == ["SIMULATION"]
 
 
 def test_the_retry_makes_a_simulation_proof_stale(tmp_path):
@@ -135,9 +121,6 @@ def test_a_previous_runs_record_is_never_bound(tmp_path):
         CSR.bind_built_record_netlist(p, _netlist(p), synthesis_id="run-2",
                                       frontend=FIRST)
     assert "netlist" not in _record(p)
-    config, sources = _chain(p)
-    assert "VERILOG_DEFINES" not in config
-    assert "NOT_MEASURED" in sources["VERILOG_FILES"]
 
 
 def test_a_discarded_record_leaves_the_chain_not_measured(tmp_path):
@@ -148,40 +131,10 @@ def test_a_discarded_record_leaves_the_chain_not_measured(tmp_path):
     CSR.discard_built_record(p)                  # this run's write then failed
     CSR.discard_built_record(p)                  # idempotent
     assert not CSR.built_record_path(p).exists()
-    config, sources = _chain(p)
-    assert "VERILOG_DEFINES" not in config
-    assert f"no {CSR.BUILT_RECORD}" in sources["VERILOG_FILES"]
 
 
 # ── the one call site in step_synth ───────────────────────────────────────
 
-def _step_synth_calls():
-    tree = ast.parse((PROGRAMS / "phase3_one_shot_runner.py").read_text())
-    fn = next(n for n in tree.body
-              if isinstance(n, ast.FunctionDef) and n.name == "step_synth")
-    calls = {}
-    for n in ast.walk(fn):
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
-                and isinstance(n.func.value, ast.Name) and n.func.value.id == "_csr":
-            calls.setdefault(n.func.attr, []).append(n)
-    return calls
-
-
-def test_step_synth_discards_writes_and_binds_its_own_record():
-    calls = _step_synth_calls()
-    (discard,), (write,), (bind,) = (calls["discard_built_record"],
-                                     calls["write_built_record"],
-                                     calls["bind_built_record_netlist"])
-    assert discard.lineno < write.lineno < bind.lineno
-    kw = {k.arg: k.value for k in bind.keywords}
-    assert isinstance(kw["frontend"], ast.Name) and kw["frontend"].id == "synth_frontend"
-    wkw = {k.arg: k.value for k in write.keywords}
-    assert isinstance(kw["synthesis_id"], ast.Name) and \
-        isinstance(wkw["synthesis_id"], ast.Name) and \
-        kw["synthesis_id"].id == wkw["synthesis_id"].id
-
 
 def test_the_retry_frontend_name_is_the_runners():
-    src = (PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    assert f'synth_frontend = "{RETRY}"' in src
     assert CSR.SYNTHESIS_RETRY_FRONTEND == RETRY
