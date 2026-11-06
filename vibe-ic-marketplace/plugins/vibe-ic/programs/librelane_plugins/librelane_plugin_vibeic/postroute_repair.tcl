@@ -382,6 +382,12 @@ proc vic_fanout_added {before now} {
 }
 
 # ---- 4. repair ---------------------------------------------------------------
+set opt_args [list]
+append_if_exists_argument opt_args VIBEIC_PRR_LIMIT_SIZING_AREA -limit_sizing_area
+append_if_exists_argument opt_args VIBEIC_PRR_LIMIT_SIZING_LEAKAGE -limit_sizing_leakage
+if {[llength $opt_args]} {
+    log_cmd set_opt_config {*}$opt_args
+}
 set rd_args [list -verbose]
 append_if_exists_argument rd_args VIBEIC_PRR_MAX_WIRE_LENGTH -max_wire_length
 append_if_exists_argument rd_args VIBEIC_PRR_SLEW_MARGIN_PCT -slew_margin
@@ -415,12 +421,21 @@ if {$::env(VIBEIC_PRR_SETUP_SEQUENCE) ne "default"} {
     lappend setup_args -sequence $::env(VIBEIC_PRR_SETUP_SEQUENCE)
 }
 append_if_exists_argument setup_args VIBEIC_PRR_SETUP_REPAIR_TNS_PCT -repair_tns
+append_if_exists_argument setup_args VIBEIC_PRR_MAX_UTIL_PCT -max_utilization
 # Hold after setup (review70 step 32: T60 moved spm SS hold -0.39 -> +0.039
 # only once hold ran after setup), and never at setup's expense.
 set hold_args [list -hold -verbose -skip_buffer_removal]
 lappend hold_args -setup_margin $::env(VIBEIC_PRR_SETUP_MARGIN)
 lappend hold_args -hold_margin $::env(VIBEIC_PRR_HOLD_MARGIN)
 lappend hold_args -max_buffer_percent $::env(VIBEIC_PRR_HOLD_MAX_BUFFER_PCT)
+append_if_exists_argument hold_args VIBEIC_PRR_MAX_UTIL_PCT -max_utilization
+# Native recovery selects its own branch, so combining this option with -setup
+# would skip setup repair. Keep it separate and retain both timing passes below.
+if {!$::vic_targeted_cap && [info exists ::env(VIBEIC_PRR_RECOVER_POWER_PCT)]} {
+    set recovery_args [list -recover_power $::env(VIBEIC_PRR_RECOVER_POWER_PCT)]
+    append_if_exists_argument recovery_args VIBEIC_PRR_MAX_UTIL_PCT -max_utilization
+    log_cmd repair_timing {*}$recovery_args
+}
 # The normal order keeps hold after setup. A failed native attempt gets one
 # alternate order on the same input route; the sign-off measurements still
 # decide whether its result is admissible.

@@ -153,6 +153,28 @@ class PostRouteRepair(ResizerStep):
         + [v for v in RCX.config_vars if v.name == "RCX_RULESETS"]
         + [
             Variable(
+                "VIBEIC_PRR_RECOVER_POWER_PCT", Optional[Decimal],
+                "Native repair_timing -recover_power percentage, called separately "
+                "before ordinary setup/hold repair. Unset disables recovery; native "
+                "zero still attempts at least one endpoint.",
+                units="%",
+            ),
+            Variable(
+                "VIBEIC_PRR_MAX_UTIL_PCT", Optional[Decimal],
+                "Native repair_timing -max_utilization for each recovery/setup/hold call.",
+                units="%",
+            ),
+            Variable(
+                "VIBEIC_PRR_LIMIT_SIZING_AREA", Optional[Decimal],
+                "Native set_opt_config candidate/current cell-area ratio. "
+                "Unset inherits the native setting.",
+            ),
+            Variable(
+                "VIBEIC_PRR_LIMIT_SIZING_LEAKAGE", Optional[Decimal],
+                "Native set_opt_config candidate/current cell-leakage ratio. "
+                "Unset inherits the native setting.",
+            ),
+            Variable(
                 "VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY",
                 Optional[Path],
                 "Receipt binding diagnostic SPEF hashes and scenes to the "
