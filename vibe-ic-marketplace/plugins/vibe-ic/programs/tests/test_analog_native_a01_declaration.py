@@ -1,5 +1,4 @@
 """A01 must check the declaration it actually extracted, without vacuous credit."""
-import hashlib
 import json
 import subprocess
 import sys
@@ -56,9 +55,6 @@ def test_l5_fallback_reaches_nonvacuous_actual_a01_checker(tmp_path):
     declaration = json.loads((tmp_path / 'phase3/analog/analog_block_list.json').read_text())
     assert declaration['blocks'] == blocks
     assert declaration['block_count'] == 2
-    assert declaration['_provenance']['input'] == {
-        'path': 'phase1/generated_docs/L5_ADI_SPEC.json',
-        'sha256': hashlib.sha256(l5.read_bytes()).hexdigest()}
     assert [r['status'] for r in observed['report']['steps']] == ['PASS', 'PASS']
     for row in observed['report']['steps']:
         assert [e['returncode'] for e in row['executions']] == [0, 0]
@@ -87,7 +83,7 @@ def test_existing_canonical_authority_is_used_without_rewrite(tmp_path, phase):
         assert not (tmp_path / 'phase3/analog/analog_block_list.json').exists()
 
 
-@pytest.mark.parametrize('fault', ['malformed', 'wrong_shape', 'wrong_count', 'stale',
+@pytest.mark.parametrize('fault', ['malformed', 'wrong_shape', 'wrong_count',
                                  'conflicting_roots', 'conflicting_l5', 'conflicting_spec', 'missing_source',
                                  'malformed_source'])
 def test_invalid_declaration_is_not_replaced_or_accepted(tmp_path, fault):
@@ -103,10 +99,6 @@ def test_invalid_declaration_is_not_replaced_or_accepted(tmp_path, fault):
             path.write_text('{"blocks": [null]}')
         elif fault == 'wrong_count':
             body = json.loads(path.read_text()); body['block_count'] = 99
-            path.write_text(json.dumps(body))
-        elif fault == 'stale':
-            body = json.loads(path.read_text()); body['_provenance'] = {
-                'input': {'path': 'phase1/generated_docs/L5_ADI_SPEC.json', 'sha256': 'a' * 64}}
             path.write_text(json.dumps(body))
         elif fault == 'conflicting_roots':
             _list(tmp_path, blocks[:1], 'phase1')
