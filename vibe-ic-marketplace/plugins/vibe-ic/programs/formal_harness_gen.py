@@ -1208,6 +1208,8 @@ def _normalize_reset_const(val: str) -> Optional[str]:
     v = " ".join(v.split())
     if _ZERO_LIT_RE.match(v.replace(" ", "")):
         return "'0"
+    if v == "'1":
+        return v
     if _ONE_BIT_ONE_RE.match(v):
         return "1'b1"
     if _SIZED_LIT_RE.match(v):
@@ -1255,24 +1257,29 @@ def _reset_branch_text(stmt: str, reset_name: str, active_low: bool
     return rest[:j + 1] if j != -1 else rest
 
 
-def find_reset_ffs(body: str, reset_name: str, active_low: bool
+def find_reset_ffs(body: str, reset_name: str, active_low: bool, clock: Optional[str] = None
                    ) -> List[ResetFF]:
     """Scan clocked always blocks; for each reset-branch `sig <= const;` return
     a ResetFF(sig, normalized-const, async?). Non-literal resets are skipped."""
     out: List[ResetFF] = []
     seen = set()
+    body = strip_hdl_comments_and_strings(body)
     for m in _ALWAYS_RE.finditer(body):
         sens = m.group("sens")
         stmt = m.group("stmt")
         if not re.search(r"\bposedge\b|\bnegedge\b", sens):
             continue  # combinational always — no registered reset value
+        if clock and (not re.search(rf"\bposedge\s+{re.escape(clock)}\b", sens)
+                or any(name not in {clock, reset_name}
+                       for name in re.findall(r"\b(?:posedge|negedge)\s+([A-Za-z_]\w*)", sens))):
+            continue
         is_async = bool(re.search(
             rf"(pos|neg)edge\s+{re.escape(reset_name)}\b", sens))
         branch = _reset_branch_text(stmt, reset_name, active_low)
         if branch is None:
             continue
         for am in re.finditer(
-                r"([A-Za-z_]\w*)\s*<=\s*([^;]+);", branch):
+                r"(?<![\w$.])([A-Za-z_]\w*)\s*<=\s*([^;]+);", branch):
             sig, rhs = am.group(1), am.group(2)
             val = _normalize_reset_const(rhs)
             if val is None or sig in seen:
@@ -1388,18 +1395,20 @@ def _reset_gated_aliases(iface: ModuleIface, reset_name: str,
 
 @dataclass
 class ResetProp:
-    output: str             # the OUTPUT port asserted
+    output: str             # the public output or observed state name
     target: str             # the registered signal that holds the value
     value: str              # normalized reset constant
     is_async: bool
     reset_gate: bool = False  # also inhibit at the FIRST currently reset edge
+    observer_width: Optional[str] = None  # internal state uses the existing observer connection
 
 
 def derive_reset_props(iface: ModuleIface, reset_name: str, active_low: bool
                        ) -> List[ResetProp]:
     """For each OUTPUT port, find its reset value (directly registered, or via a
-    plain alias or scalar reset-gated zero-reset register) → a ResetProp. Outputs
-    whose reset value cannot be pinned to a literal are omitted (fail-safe)."""
+    plain alias or scalar reset-gated zero-reset register) → a ResetProp. When
+    none qualify, use literal-reset internal state through native observers.
+    Unknown reset values are omitted."""
     ffs = {f.signal: f for f in find_reset_ffs(iface.body, reset_name, active_low)}
     aliases = _alias_map(iface.body)
     gated = _reset_gated_aliases(iface, reset_name, active_low, ffs)
@@ -1422,6 +1431,24 @@ def derive_reset_props(iface: ModuleIface, reset_name: str, active_low: bool
             continue
         props.append(ResetProp(output=p.name, target=target, value=ff.value,
                                is_async=ff.is_async, reset_gate=p.name in gated))
+    if not props:
+        declarations = re.sub(r"\b(function|task)\b.*?\bend\1\b", "", driver_body, flags=re.S)
+        widths = {}
+        for declaration in re.finditer(
+                r"\b(?:reg|logic)\s+(?:(?:signed|unsigned)\s+)?(\[[^\]]+\]\s*)?([^;]+);", declarations):
+            for item in _split_top_level(declaration[2]):
+                name = item.split("=", 1)[0].strip()
+                if re.fullmatch(r"[A-Za-z_]\w*", name):
+                    widths[name] = (declaration[1] or "").strip()
+        ports = {p.name for p in iface.ports}
+        clock = classify_clock(iface.ports)
+        for ff in find_reset_ffs(iface.body, reset_name, active_low, clock=clock) if clock else []:
+            if (ff.signal in ports or ff.signal not in widths
+                    or _procedural_driver_count(iface.body, ff.signal) != 1
+                    or re.search(rf"\bassign\s+{re.escape(ff.signal)}\s*=", driver_body)):
+                continue
+            props.append(ResetProp(output=ff.signal, target=ff.signal, value=ff.value,
+                                   is_async=ff.is_async, observer_width=widths[ff.signal]))
     return props
 
 
@@ -1800,6 +1827,13 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
             in_decls.append(f"    (* anyseq *) {decl}{p.name};")
         conns.append(f".{p.name}({p.name})")
 
+    reset_observers = {_obs_wire(p.target): p for p in props if p.observer_width is not None}
+    for wire, prop in reset_observers.items():
+        width = f"{prop.observer_width} " if prop.observer_width else ""
+        out_decls.extend([f"    // {OBSERVE_PRAGMA} {wire} = dut.{prop.target}",
+                          f"    (* keep *) wire {width}{wire};",
+                          f"    localparam {width or '[0:0] '}vibeic_reset_{prop.target} = {prop.value};"])
+
     # reset-active expression (design's own polarity)
     rst_active = f"!{reset_name}" if active_low else reset_name
 
@@ -1834,6 +1868,8 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
                      + [(p, "rst_active") for p in async_props]):
         idx += 1
         name = f"p_reset_safety_{idx}"
+        observed = _obs_wire(p.target) if p.observer_width is not None else p.output
+        reset_value = f"vibeic_reset_{p.target}" if p.observer_width is not None else p.value
         full_guard = f"f_past_valid && {guard}"
         if p.reset_gate:
             # The admission gate must inhibit a PREVIOUSLY launched transaction
@@ -1857,12 +1893,12 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
             assert_lines.append(
                 f"    always @(posedge {clock}) if ({full_guard})\n"
                 f"        a_reset_safety_{idx}: assert "
-                f"({p.output} == {p.value});")
+                f"({observed} == {reset_value});")
         else:
             prop_lines.append(
                 f"    property {name};\n"
                 f"        @(posedge {clock})\n"
-                f"            ({full_guard}) |-> ({p.output} == {p.value});\n"
+                f"            ({full_guard}) |-> ({observed} == {reset_value});\n"
                 f"    endproperty")
             assert_lines.append(
                 f"    a_reset_safety_{idx}: assert property ({name});")
@@ -1892,6 +1928,8 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
         body_parts.append("")
         body_parts.append("    // R-0915-144: L8 reset declarations, authored by this program.")
         for ob in observers or []:
+            if ob.wire in reset_observers:
+                continue
             w = f"{ob.width} " if ob.width else ""
             body_parts.append(
                 f"    // {OBSERVE_PRAGMA} {ob.wire} = dut.{ob.net}")
@@ -1971,7 +2009,7 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
         f"// {hmod}.sv — AUTO-EMITTED deterministic reset-safety harness.\n"
         f"// Generated by formal_harness_gen.py from the design's OWN L-layer\n"
         f"// interface + reset branch (design INPUT, §4.05). No chip literal.\n"
-        f"// Property: one cycle after reset, each registered output holds the\n"
+        f"// Property: one cycle after reset, each registered {'signal' if reset_observers else 'output'} holds the\n"
         f"// exact value the RTL's reset branch assigns it (construction-safe).\n"
         f"`default_nettype none\n"
         f"module {hmod}{import_decl}{param_decl} (input wire {clock});\n"
@@ -2042,7 +2080,7 @@ def _resolve_top(rtl_files: List[Path], top: Optional[str],
 def _analyze(iface: ModuleIface) -> Optional[dict]:
     """Return the construction-safe reset-safety analysis of a parsed module, or
     None when no such property is derivable (no clock / no reset / inout / no
-    registered output with a literal reset value)."""
+    registered signal with a literal reset value)."""
     if any(p.direction == "inout" for p in iface.ports):
         return None
     clock = classify_clock(iface.ports)
@@ -2389,7 +2427,7 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
         if project is None:
             reason = ("no module in the declared top's hierarchy has a "
                       "construction-safe reset-safety property (needs a clock, "
-                      "a reset and a registered output with a literal reset "
+                      "a reset and a registered signal with a literal reset "
                       "value; no inout)")
             return {"verdict": "NOT_APPLICABLE", "rc": 2, "reason": reason}
         unresolved = declared or [{
@@ -2400,7 +2438,7 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
             "author": "formal-verify", "status": "UNAUTHORED"}]
         reason = ("no module in the declared top's hierarchy has a "
                   "construction-safe reset-safety property (needs a clock, a "
-                  "reset and a registered output with a literal reset value; "
+                  "reset and a registered signal with a literal reset value; "
                   "no inout)")
         # With no construction-safe floor, formal-verify owns the whole
         # harness. Read its answer without rewriting that harness, just as
@@ -2636,6 +2674,9 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
         _facts, _facts_why, [o for o in declared if o.get("program_rule")
                              and str(o["id"]) not in _pre_refused], _inputs)
     l8_refused.update(_pre_refused)
+    for p in props:
+        if p.observer_width is not None and not any(o.wire == _obs_wire(p.target) for o in l8_obs):
+            l8_obs.append(Observer(_obs_wire(p.target), p.target, p.observer_width))
     harness = emit_harness(iface, clock, reset_name, active_low, props,
                            assertion_form=assertion_form,
                            expert_properties=(EXPERT_PROPERTIES_SVH
@@ -2789,7 +2830,8 @@ def generate(project: Optional[Path] = None, top: Optional[str] = None,
         "reset_active_low": active_low,
         "properties": [
             {"output": p.output, "target": p.target, "reset_value": p.value,
-             "reset_style": "async" if p.is_async else "sync"} for p in props],
+             "reset_style": "async" if p.is_async else "sync",
+             **({"internal_state": True} if p.observer_width is not None else {})} for p in props],
         "property_denominator": contract["property_denominator"],
         "authored_property_count": contract["authored_property_count"],
         "unresolved_obligations": unresolved,
