@@ -2986,7 +2986,9 @@
             "tool": {
               "kind": "librelane",
               "steps": [
-                "OpenROAD.CheckAntennas"
+                "OpenROAD.CheckAntennas",
+                "KLayout.Antenna",
+                "Checker.KLayoutAntenna"
               ]
             }
           }
@@ -3009,6 +3011,23 @@
           "enabled_by": "ERROR_ON_KLAYOUT_ANTENNA",
           "enabled_default": true,
           "when": "analog_physical and not digital_physical"
+        },
+        {
+          "metric": "klayout__antenna_error__count",
+          "operator": "<=",
+          "limit": 0,
+          "source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 113
+          },
+          "metric_source": {
+            "file": "/nix/store/r1rgcnnsnvcvznhx2lk9fh75kbbhj84k-python3-3.12.15-env/lib/python3.12/site-packages/librelane/steps/checker.py",
+            "line": 489
+          },
+          "unit": "count",
+          "enabled_by": "ERROR_ON_KLAYOUT_ANTENNA",
+          "enabled_default": true,
+          "when": "otherwise"
         },
         {
           "metric": "antenna__violating__nets",

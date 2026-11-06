@@ -1,0 +1,6 @@
+source($input, $topcell)
+report("Antenna", $report)
+gate = input(1, 0)
+metal = input(2, 0)
+connect(gate, metal)
+antenna_check(gate, metal, 10).output("ANTENNA", "Metal to gate ratio")

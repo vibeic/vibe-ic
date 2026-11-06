@@ -1,0 +1,13 @@
+library(neutral) {
+ delay_model : table_lookup;
+ time_unit : "1ns";
+ voltage_unit : "1V";
+ current_unit : "1mA";
+ pulling_resistance_unit : "1kohm";
+ leakage_power_unit : "1nW";
+ capacitive_load_unit(1,pf);
+ nom_process : 1;
+ nom_temperature : 25;
+ nom_voltage : 1;
+ cell(buf) { area : 1; pin(A) { direction : input; capacitance : 0.1; } pin(Y) {direction : output; function : "A";} }
+}

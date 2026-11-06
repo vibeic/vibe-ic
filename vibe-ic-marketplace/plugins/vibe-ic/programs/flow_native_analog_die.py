@@ -10,7 +10,7 @@ NATIVE = {
     "die_floorplan_and_macros": {"steps": ["OpenROAD.Floorplan", "Odb.ManualMacroPlacement"]},
     "io_pad_ring_and_power_distribution": {"steps": ["OpenROAD.PadRing", "OpenROAD.GeneratePDN"]},
     "routed_candidate_physical_checks": {"steps": ["KLayout.DRC", "Magic.SpiceExtraction", "Netgen.LVS"]},
-    "antenna_checks": {"steps": ["OpenROAD.CheckAntennas"]},
+    "antenna_checks": {"steps": ["OpenROAD.CheckAntennas", "KLayout.Antenna", "Checker.KLayoutAntenna"]},
     "candidate_parasitic_extraction": {"steps": ["Magic.RCX"]},
     "candidate_electromigration": {"steps": ["VibeIC.EMCorners"], "imports": ["flow_em_corners"]},
     "stream_out": {"steps": ["Magic.StreamOut", "KLayout.StreamOut", "KLayout.XOR", "Checker.XOR"]},

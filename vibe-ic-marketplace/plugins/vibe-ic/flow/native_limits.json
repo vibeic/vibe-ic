@@ -578,7 +578,9 @@
     },
     "antenna_checks": {
       "otherwise": [
-        "OpenROAD.CheckAntennas"
+        "OpenROAD.CheckAntennas",
+        "KLayout.Antenna",
+        "Checker.KLayoutAntenna"
       ],
       "analog_physical and not digital_physical": [
         "KLayout.Antenna",
@@ -3153,6 +3155,14 @@
       }
     ],
     "antenna_checks": [
+      {
+        "old_name": "klayout__antenna_error__count",
+        "class": "N",
+        "reason": "Existing native metric/report number and numeric limit unchanged.",
+        "native_metrics": [
+          "klayout__antenna_error__count"
+        ]
+      },
       {
         "old_name": "klayout__antenna_error__count",
         "class": "N",
