@@ -261,7 +261,6 @@ def test_actual_runner_publishes_under_existing_no_clobber_guard(tmp_path,monkey
     c = _project(tmp_path)
     published = _emit(tmp_path)
     frozen = published.read_bytes()
-    assert published.read_bytes() == frozen
     rc,out = _frontdoor(tmp_path)
     assert (rc,out["verdict"]) == (2,"REFUSED")
     assert published.read_bytes() == frozen
