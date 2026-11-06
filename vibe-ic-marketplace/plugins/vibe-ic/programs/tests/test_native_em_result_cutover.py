@@ -28,7 +28,7 @@ def density(tmp_path):
     native = rpt / "em_openroad_density_VDD.csv"
     row = {"Layer": "met1", "Status": "OK", "Basis": "AREAL", "Node0 X": 0, "Node0 Y": 0,
            "Node1 X": 1, "Node1 Y": 0, "Current(A)": 1e-5, "Jlimit(A/um^2)": limit,
-           "Ratio": .1, "J(A/um^2)": limit*.1, "Area(um^2)": .049, "Cuts": 0}
+           "Ratio": (1e-5/.049)/limit, "J(A/um^2)": 1e-5/.049, "Area(um^2)": .049, "Cuts": 0}
     write_rows(native, [row])
     return tmp_path, rpt, doc, row
 
@@ -132,3 +132,23 @@ def test_malformed_old_ir_receipt_does_not_hide_current_native_result(tmp_path):
     (rpt / "ir_drop.json").write_text(json.dumps({"verdict": "FAIL", "worst_ir_uv": 100, "vdd_v": 1.0}))
     result = em.validate_primary_ir(tmp_path)
     assert result["valid"] and result["verdict"] == "FAIL"
+
+
+@pytest.mark.parametrize("current,expected", [(1e-5, "PASS"), (1e-3, "FAIL")])
+def test_production_consumer_keeps_current_width_and_native_limit(density, current, expected):
+    project, rpt, _, row = density
+    segment = rpt / "em_segments_VDD.csv"
+    segment.write_text("Node0 Layer,Node0 X location,Node0 Y location,Node1 Layer,Node1 X location,Node1 Y location,Current\n"
+                       f"met1,0,0,met1,1,0,{current}\n")
+    row.update({"Current(A)": current, "J(A/um^2)": current/.049,
+                "Ratio": (current/.049)/row["Jlimit(A/um^2)"],
+                "Status": "OK" if expected == "PASS" else "VIOLATED"})
+    write_rows(rpt / "em_openroad_density_VDD.csv", [row])
+    geometry = rpt / "em_pg_geometry.tsv"
+    geometry.write_text("net\tlayer\tx0_um\ty0_um\tx1_um\ty1_um\tsource\n"
+                        "VDD\tmet1\t0\t-0.07\t1\t0.07\tpg_port\n")
+    verdict, report = em.evaluate(segment, None, None, em._DEFAULT_MARGIN, em._DEFAULT_BLACKS_N,
+                                  "VDD", 20, pg_geometry_path=geometry)
+    assert verdict == expected, report
+    assert report["summary"]["segments_screened"] == 1
+    assert report["worst_segments"][0]["width_um"] == pytest.approx(.14)
