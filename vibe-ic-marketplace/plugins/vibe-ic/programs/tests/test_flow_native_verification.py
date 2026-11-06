@@ -12,6 +12,38 @@ from flow_native_adapters import Commands, formal
 from flow_native_verification import eqy, eqy_partitions, gls, reset_boundary, xor
 
 
+@pytest.mark.parametrize("event", ["posedge clk", "negedge clk", "posedge clk or posedge reset"])
+def test_native_formal_preserves_global_clock_state_checks(tmp_path, event):
+    if not all(shutil.which(name) for name in ("sby", "yosys", "yices-smt2")):
+        pytest.skip("Native formal tools are required")
+    from formal_property_run import emit_invariant_sby
+
+    rtl = tmp_path / "phase2/stage1/rtl/unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit(input clk,reset,data,output reg q);\n"
+        f"always @({event}) "
+        + ("if(reset) q<=0; else " if "reset" in event else "")
+        + "q<=data; endmodule\n")
+    harness = tmp_path / "phase2/stage1/formal/formal_unit.sv"
+    harness.parent.mkdir(parents=True)
+    harness.write_text("module formal_unit(input clk);\n"
+        "(* anyseq *) wire data,reset; wire q; unit dut(clk,reset,data,q);\n"
+        "reg past_valid=0; always @($global_clock) past_valid<=1;\n"
+        "always @($global_clock) if(past_valid && !(!$past(clk) && clk))\n"
+        "  state_sync: assert(q==$past(q));\nendmodule\n")
+    deck = harness.with_suffix(".sby")
+    deck.write_text(emit_invariant_sby([str(rtl)], str(harness), "formal_unit", [], []))
+    originals = {p: p.read_bytes() for p in (rtl, harness)}
+    directory = tmp_path / "run"
+    directory.mkdir()
+    result = formal(tmp_path, directory, {"top": "unit", "properties": [str(deck)]}, Commands(directory))
+    proofs = [row for row in result["native_steps"] if row["name"] in {"SymbiYosys.prove", "SymbiYosys.bmc"}]
+    assert len(proofs) == 2, result
+    assert all(row["status"] == ("PASS" if event == "posedge clk" else "FAIL") for row in proofs), result
+    assert (result["metrics"].get("unproved_required_properties") == 0) is (event == "posedge clk"), result
+    assert {p: p.read_bytes() for p in originals} == originals
+
+
 @pytest.mark.parametrize("bad", [False, True])
 @pytest.mark.parametrize("relative", [False, True])
 def test_native_formal_retries_an_unsupported_sv_read_without_changing_properties(
