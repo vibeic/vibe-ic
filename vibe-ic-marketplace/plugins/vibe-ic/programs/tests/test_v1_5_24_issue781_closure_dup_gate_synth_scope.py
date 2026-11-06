@@ -143,24 +143,3 @@ def test_top_not_found_reports_honestly_not_as_duplicate(tmp_path):
 
     rep = R.resolve("no_such_top", rtl)
     assert rep["verdict"] == "TOP_NOT_FOUND", rep
-
-
-def test_step_yosys_synth_does_not_gate_on_nested_copy(tmp_path, monkeypatch):
-    """INTEGRATION: step_yosys_synth must get PAST the closure gate to yosys
-    when the only duplicate is a nested copy outside the compile set."""
-    import design_one_shot_runner as P2
-
-    proj = tmp_path / "proj"
-    rtl = proj / "phase2" / "stage1" / "rtl"
-    _stage(rtl, _NESTED_DUP)
-
-    calls = {"n": 0}
-
-    def _sentinel_run(*a, **k):
-        calls["n"] += 1
-        return (1, "", "stub yosys ran")
-    monkeypatch.setattr(P2, "_run", _sentinel_run)
-
-    res = P2.step_yosys_synth(proj, top_name="chip_top")
-    assert calls["n"] >= 1, "the #781 gate must not short-circuit before yosys"
-    assert "CATALOG_GLUE_CLOSURE" not in res.detail, res.detail

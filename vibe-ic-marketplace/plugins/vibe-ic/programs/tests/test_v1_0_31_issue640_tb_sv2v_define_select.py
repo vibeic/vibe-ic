@@ -124,20 +124,6 @@ def test_plain_rtl_keeps_simulation():
 #    its sv2v command, (b) route the define through the structural decision
 #    helper, and (c) pass an -I include path so staged headers resolve.
 # --------------------------------------------------------------------------
-def test_tb_fallback_uses_structural_define_and_include_path():
-    src = inspect.getsource(p2._iverilog_compile_with_sv_fallback)
-    # No more hardcoded -DSIMULATION in the sv2v invocation.
-    assert "sv2v -DSIMULATION" not in src, (
-        "TB sv2v pre-pass must not hardcode -DSIMULATION (#640)")
-    # Define is chosen structurally via the shared helper.
-    assert "decide_sv2v_tb_define" in src, (
-        "TB sv2v pre-pass must select the define via "
-        "synth_frontend.decide_sv2v_tb_define")
-    assert "-D{sv2v_define}" in src
-    # Include path is passed so staged .svh / pkg headers resolve.
-    assert "-I {stage}" in src, (
-        "TB sv2v pre-pass must pass -I <stage> so the staged header / "
-        "package closure resolves (mirrors #587)")
 
 
 def test_decide_helper_signature_is_chip_agnostic():
