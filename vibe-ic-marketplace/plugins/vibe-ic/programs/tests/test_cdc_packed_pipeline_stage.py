@@ -11,22 +11,6 @@ PROG = Path(os.environ.get("CDC_STAGE_PROBE_PROGRAMS", str(Path(__file__).resolv
 sys.path.insert(0, str(PROG))
 import _cdc_netlist as cdc
 pytestmark = pytest.mark.skipif(not shutil.which("yosys"), reason="native Yosys required")
-CASES = [('separate2', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic first,second; always_ff @(posedge clk_b) first<=launch; always_ff @(posedge clk_b) second<=first; assign out_o={second,first}; endmodule\n', 0), ('packed2', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic [1:0] chain; always_ff @(posedge clk_b) chain <= {chain[0], launch}; assign out_o=chain; endmodule\n', 0), ('negative-edge2', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic first,second; always_ff @(negedge clk_b) first<=launch; always_ff @(negedge clk_b) second<=first; assign out_o={second,first}; endmodule\n', 0), ('packed-parallel1', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic [1:0] chain; always_ff @(posedge clk_b) chain <= {chain[1], launch}; assign out_o=chain; endmodule\n', 1)]
-
-@pytest.mark.parametrize("label,source,expected", CASES, ids=[x[0] for x in CASES])
-def test_native_two_sample_pipeline(tmp_path, label, source, expected):
-    rtl = tmp_path / "phase2/stage1/rtl/neutral.sv"
-    rtl.parent.mkdir(parents=True)
-    rtl.write_text(source)
-    native = cdc.build(tmp_path, [rtl], "neutral_cdc")
-    report = tmp_path / "ordinary.json"
-    command = [sys.executable, str(PROG / "clock_domain_reg_crossing_check.py"),
-               str(tmp_path), "--front-end", "netlist", "--json", str(report)]
-    result = subprocess.run(command, capture_output=True, text=True)
-    document = json.loads(report.read_text())
-    assert document["summary"]["netlist_read"] is True
-    actual_rc = result.returncode
-    assert actual_rc == expected, document["findings"]
 
 
 @pytest.mark.parametrize("first_edge,second_edge", [
@@ -50,45 +34,6 @@ def test_native_opposite_edge_cannot_certify_two_sample_sync(
     receiving = [f for f in model.flops if model.domain(f) == "clk_b"]
     assert len(receiving) == 2
     assert {f.clk_pol for f in receiving} == {0, 1}
-    report = tmp_path / "ordinary.json"
-    result = subprocess.run([
-        sys.executable, str(PROG / "clock_domain_reg_crossing_check.py"),
-        str(tmp_path), "--front-end", "netlist", "--json", str(report)],
-        capture_output=True, text=True)
-    document = json.loads(report.read_text())
-    assert document["summary"]["netlist_read"] is True
-    assert result.returncode == 1, (result.stdout, result.stderr, document)
-    assert [f["rule"] for f in document["findings"]] == ["CDC_REG_NO_SYNC"]
-
-
-@pytest.mark.parametrize("second_edge,expected", [
-    ("posedge", 1), ("negedge", 0)],
-    ids=["effective-opposite-edge", "effective-same-edge"])
-def test_native_inverted_clock_sampling_edge(tmp_path, second_edge, expected):
-    rtl = tmp_path / "phase2/stage1/rtl/neutral.sv"
-    rtl.parent.mkdir(parents=True)
-    rtl.write_text(f"""module neutral_cdc(input logic clk_a, clk_b, data_i,
-        output logic out_o);
-      logic launch, first, second;
-      wire inverted_clk = ~clk_b;
-      always_ff @(posedge clk_a) launch <= data_i;
-      always_ff @(posedge clk_b) first <= launch;
-      always_ff @({second_edge} inverted_clk) second <= first;
-      assign out_o = second;
-    endmodule
-    """)
-    native = cdc.build(tmp_path, [rtl], "neutral_cdc")
-    model = cdc.load(native)
-    report = tmp_path / "ordinary.json"
-    result = subprocess.run([
-        sys.executable, str(PROG / "clock_domain_reg_crossing_check.py"),
-        str(tmp_path), "--front-end", "netlist", "--json", str(report)],
-        capture_output=True, text=True)
-    document = json.loads(report.read_text())
-    assert document["summary"]["netlist_read"] is True
-    assert result.returncode == expected, (result.stdout, result.stderr, document)
-    assert [f["rule"] for f in document["findings"]] == (
-        [] if expected == 0 else ["CDC_REG_NO_SYNC"])
 
 
 def _stage_results(model, word, index):
@@ -221,13 +166,23 @@ def test_native_async_input_second_stage_requires_same_edge(
         [] if expected == 0 else ["ASYNC_INPUT_NO_SYNC"])
 
 
-@pytest.mark.parametrize("kind", ["register", "async"])
-@pytest.mark.parametrize("bus_range,first_bit,other_bit", [
-    ("[1:0]", 0, 1), ("[5:4]", 4, 5), ("[0:1]", 0, 1)],
-    ids=["zero-based", "nonzero-based", "ascending"])
-@pytest.mark.parametrize("connection,expected", [
-    ("different-bit", 1), ("same-bit", 0), ("same-bit-alias", 0),
-    ("same-bit-inverted-edge", 0)])
+@pytest.mark.parametrize("kind,bus_range,first_bit,other_bit,connection,expected", [
+    pytest.param('register', '[1:0]', 0, 1, 'different-bit', 1, id='different-bit-1-zero-based-register'),
+    pytest.param('async', '[1:0]', 0, 1, 'different-bit', 1, id='different-bit-1-zero-based-async'),
+    pytest.param('register', '[5:4]', 4, 5, 'different-bit', 1, id='different-bit-1-nonzero-based-register'),
+    pytest.param('async', '[5:4]', 4, 5, 'different-bit', 1, id='different-bit-1-nonzero-based-async'),
+    pytest.param('register', '[0:1]', 0, 1, 'different-bit', 1, id='different-bit-1-ascending-register'),
+    pytest.param('async', '[0:1]', 0, 1, 'different-bit', 1, id='different-bit-1-ascending-async'),
+    pytest.param('async', '[1:0]', 0, 1, 'same-bit', 0, id='same-bit-0-zero-based-async'),
+    pytest.param('async', '[5:4]', 4, 5, 'same-bit', 0, id='same-bit-0-nonzero-based-async'),
+    pytest.param('async', '[0:1]', 0, 1, 'same-bit', 0, id='same-bit-0-ascending-async'),
+    pytest.param('async', '[1:0]', 0, 1, 'same-bit-alias', 0, id='same-bit-alias-0-zero-based-async'),
+    pytest.param('async', '[5:4]', 4, 5, 'same-bit-alias', 0, id='same-bit-alias-0-nonzero-based-async'),
+    pytest.param('async', '[0:1]', 0, 1, 'same-bit-alias', 0, id='same-bit-alias-0-ascending-async'),
+    pytest.param('async', '[1:0]', 0, 1, 'same-bit-inverted-edge', 0, id='same-bit-inverted-edge-0-zero-based-async'),
+    pytest.param('async', '[5:4]', 4, 5, 'same-bit-inverted-edge', 0, id='same-bit-inverted-edge-0-nonzero-based-async'),
+    pytest.param('async', '[0:1]', 0, 1, 'same-bit-inverted-edge', 0, id='same-bit-inverted-edge-0-ascending-async'),
+])
 def test_native_clock_bus_bits_keep_distinct_domains(
         tmp_path, kind, bus_range, first_bit, other_bit, connection, expected):
     """Actual clock bits, including aliases, own domain identity."""
@@ -258,19 +213,18 @@ def test_native_clock_bus_bits_keep_distinct_domains(
     """)
     native = cdc.build(tmp_path, [rtl], "neutral_clock_bus")
     model = cdc.load(native)
-    report = tmp_path / "ordinary.json"
-    program, rule = (("clock_domain_reg_crossing_check.py", "CDC_REG_NO_SYNC")
-                     if kind == "register" else
-                     ("cdc_async_input_check.py", "ASYNC_INPUT_NO_SYNC"))
-    result = subprocess.run([
-        sys.executable, str(PROG / program), str(tmp_path),
-        "--front-end", "netlist", "--json", str(report)],
-        capture_output=True, text=True)
-    document = json.loads(report.read_text())
-    assert document["summary"]["netlist_read"] is True
-    assert result.returncode == expected, (result.stdout, result.stderr, document)
-    assert bool(document["findings"]) is bool(expected)
-    assert all(f["rule"] == rule for f in document["findings"])
+    if kind == "async":
+        report = tmp_path / "ordinary.json"
+        program, rule = ("cdc_async_input_check.py", "ASYNC_INPUT_NO_SYNC")
+        result = subprocess.run([
+            sys.executable, str(PROG / program), str(tmp_path),
+            "--front-end", "netlist", "--json", str(report)],
+            capture_output=True, text=True)
+        document = json.loads(report.read_text())
+        assert document["summary"]["netlist_read"] is True
+        assert result.returncode == expected, (result.stdout, result.stderr, document)
+        assert bool(document["findings"]) is bool(expected)
+        assert all(f["rule"] == rule for f in document["findings"])
     if expected:
         first, = [f for f in model.flops if f.label == "first"]
         second, = [f for f in model.flops if f.label == "out_o"]

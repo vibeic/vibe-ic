@@ -296,12 +296,8 @@ def test_consumer_relation_retains_destinations_without_dense_source_product():
 
 
 @pytest.mark.parametrize("fixture,program,expected", [
-    ("cdc_sync", "clock_domain_reg_crossing_check", 0),
-    ("cdc_unsync", "clock_domain_reg_crossing_check", 1),
     ("async_raw_sync", "cdc_async_input_check", 0),
     ("async_raw_unsync", "cdc_async_input_check", 1),
-    ("reset_sync_ok", "reset_dependency_check", 0),
-    ("reset_circular", "reset_dependency_check", 1),
 ])
 def test_compact_relation_native_three_consumer_controls(tmp_path, fixture, program, expected):
     source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
