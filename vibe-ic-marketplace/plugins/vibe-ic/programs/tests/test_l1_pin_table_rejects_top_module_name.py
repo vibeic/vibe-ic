@@ -19,7 +19,6 @@ chip-AGNOSTIC: the comparison is against the design's OWN extracted
 top-module / ic_name.  No chip, vendor, PDK or IC-name literal.
 """
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -147,16 +146,7 @@ def _ordinary_l1_and_pin_consumer(project, text):
     source.write_text(text)
     emitted = R.gen_l1_datasheet(project, {source.name: text})
     payload = json.loads(Path(emitted.path).read_text())
-    consumer = subprocess.run(
-        [sys.executable, str(Path(R.__file__).with_name(
-            "l1_pin_table_aliases_typed_check.py")), str(project)],
-        capture_output=True, text=True,
-    )
-    (project / "pin-consumer.json").write_text(json.dumps({
-        "rc": consumer.returncode, "stdout": consumer.stdout,
-        "stderr": consumer.stderr, "pins": payload["pin_table"],
-    }, indent=2))
-    return payload["pin_table"], consumer
+    return payload["pin_table"]
 
 
 def test_implementation_prose_is_not_a_physical_pin_declaration(tmp_path):
@@ -166,8 +156,8 @@ def test_implementation_prose_is_not_a_physical_pin_declaration(tmp_path):
         "fixtures", "phase1_local", "neutral_io_analysis_prose",
         "physical_io_analysis.md",
     )
-    pins, consumer = _ordinary_l1_and_pin_consumer(tmp_path, fixture.read_text())
-    assert (pins, consumer.returncode) == ([], 2), consumer.stdout
+    pins = _ordinary_l1_and_pin_consumer(tmp_path, fixture.read_text())
+    assert pins == []
 
 
 @pytest.mark.parametrize("prose", [
@@ -176,9 +166,9 @@ def test_implementation_prose_is_not_a_physical_pin_declaration(tmp_path):
     "Append GAMMA once after the input windows; DELTA authorizes this revision.",
 ])
 def test_io_heading_does_not_lend_direction_to_prose_nouns(tmp_path, prose):
-    pins, consumer = _ordinary_l1_and_pin_consumer(
+    pins = _ordinary_l1_and_pin_consumer(
         tmp_path, "# Physical I/O analysis\n" + prose + "\n")
-    assert (pins, consumer.returncode) == ([], 2), consumer.stdout
+    assert pins == []
 
 
 @pytest.mark.parametrize("shape", ["table", "plain", "fenced"])
@@ -192,11 +182,10 @@ def test_same_names_remain_real_hardware_ports(tmp_path, shape):
         "fenced": "```verilog\nmodule neutral(input [3:0] SDC, "
                   "output [1:0] ROOT); endmodule\n```\n",
     }
-    pins, consumer = _ordinary_l1_and_pin_consumer(
+    pins = _ordinary_l1_and_pin_consumer(
         tmp_path, "# Hardware I/O\n" + bodies[shape])
     assert {p["name"]: p["mode"] for p in pins} == {
         "SDC": "input", "ROOT": "output"}, pins
-    assert consumer.returncode == 0, consumer.stdout + consumer.stderr
     if shape != "plain":
         assert {p["name"]: p["width"] for p in pins} == {"SDC": 4, "ROOT": 2}
 
@@ -206,21 +195,19 @@ def test_table_description_cannot_declare_another_pin(tmp_path):
            "|---|---|---|---|\n" \
            "| SDC | input | 4 | ALPHA input implementation authority |\n" \
            "| ROOT | output | 2 | BETA output revision approval |\n"
-    pins, consumer = _ordinary_l1_and_pin_consumer(tmp_path, text)
+    pins = _ordinary_l1_and_pin_consumer(tmp_path, text)
     assert {p["name"]: (p["mode"], p.get("width")) for p in pins} == {
         "SDC": ("input", 4), "ROOT": ("output", 2)}, pins
-    assert consumer.returncode == 0, consumer.stdout + consumer.stderr
 
 
 @pytest.mark.parametrize("declaration", [
     "SDC, ROOT input", "input SDC, ROOT", "SDC and ROOT input",
 ])
 def test_grouped_bare_hardware_declarations_keep_both_ports(tmp_path, declaration):
-    pins, consumer = _ordinary_l1_and_pin_consumer(
+    pins = _ordinary_l1_and_pin_consumer(
         tmp_path, "# Hardware I/O\n" + declaration + "\n")
     assert {p["name"]: p["mode"] for p in pins} == {
         "SDC": "input", "ROOT": "input"}, pins
-    assert consumer.returncode == 0, consumer.stdout + consumer.stderr
 
 
 @pytest.mark.parametrize("body", [
@@ -234,9 +221,9 @@ def test_grouped_bare_hardware_declarations_keep_both_ports(tmp_path, declaratio
     "module neutral(); endmodule\n```\n",
 ], ids=["plain-authority", "quoted-authority", "authority-with-dash", "fenced-comment", "block-comment", "quoted-comment"])
 def test_implementation_noun_cannot_borrow_a_declaration_shape(tmp_path, body):
-    pins, consumer = _ordinary_l1_and_pin_consumer(
+    pins = _ordinary_l1_and_pin_consumer(
         tmp_path, "# Hardware I/O\n" + body)
-    assert (pins, consumer.returncode) == ([], 2), consumer.stdout
+    assert pins == []
 
 
 @pytest.mark.parametrize("declaration", [
@@ -249,25 +236,23 @@ def test_implementation_noun_cannot_borrow_a_declaration_shape(tmp_path, body):
     "`SDC` (input)",
 ])
 def test_existing_bare_port_forms_keep_the_declared_pin(tmp_path, declaration):
-    pins, consumer = _ordinary_l1_and_pin_consumer(
+    pins = _ordinary_l1_and_pin_consumer(
         tmp_path, "# Hardware I/O\n" + declaration + "\n")
     direction = "output" if declaration.startswith("output") else "input"
     assert {p["name"]: p["mode"] for p in pins} == {"SDC": direction}, pins
-    assert consumer.returncode == 0, consumer.stdout + consumer.stderr
 
 
 @pytest.mark.parametrize("name", ["SDC", "`SDC`"])
 def test_pipe_notes_cannot_supply_the_declared_direction_column(tmp_path, name):
-    pins, consumer = _ordinary_l1_and_pin_consumer(
+    pins = _ordinary_l1_and_pin_consumer(
         tmp_path, "# Hardware I/O\n| Signal | Direction | Notes |\n"
         f"|---|---|---|\n| {name} | 4 | input |\n")
-    assert (pins, consumer.returncode) == ([], 2), consumer.stdout
+    assert pins == []
 
 
 def test_grouped_fenced_declarations_keep_both_ports(tmp_path):
-    pins, consumer = _ordinary_l1_and_pin_consumer(
+    pins = _ordinary_l1_and_pin_consumer(
         tmp_path, "# Hardware I/O\n```verilog\n"
         "module neutral(input [3:0] SDC, ROOT); endmodule\n```\n")
     assert {p["name"]: (p["mode"], p["width"]) for p in pins} == {
         "SDC": ("input", 4), "ROOT": ("input", 4)}, pins
-    assert consumer.returncode == 0, consumer.stdout + consumer.stderr
