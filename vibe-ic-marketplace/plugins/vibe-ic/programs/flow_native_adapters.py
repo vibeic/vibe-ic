@@ -585,11 +585,10 @@ def formal(project, directory, tool, commands):
                         frontend_failures.update(range(first_read, retry_index))
                         reports.extend([retry, output / "status"])
                         output, completed = destination, alternate
-                        read_error = ""
                 if not (output / "model/design.il").is_file():
                     errors = [line for line in (completed.stdout + completed.stderr).splitlines()
                               if "ERROR:" in line or "error:" in line or "Source line " in line]
-                    scope.append(read_error or " ".join(errors[:2]))
+                    scope.append(" ".join(part for part in [read_error, *errors[:2]] if part))
             native = sorted(output.rglob("status"))
             config = output / "config.sby"
             word = (output / "status").read_text().strip().split() if (output / "status").is_file() else []
