@@ -13,6 +13,7 @@ import fnmatch
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -60,6 +61,84 @@ def view_files(macro):
     return [p for key in ("gds", "lef", "lib", "nl", "spef") for p in paths(macro.get(key))]
 
 
+def native_hierarchy(config, directory, commands):
+    """Read Slang's elaborated instance bodies, before synthesis flattens them."""
+    directory.mkdir(parents=True, exist_ok=True)
+    arguments = ["--top", config["DESIGN_NAME"], "--dump-ast", "--ast-compilation-only",
+                 *(config.get("SLANG_ARGUMENTS") or [])]
+    arguments += ["-G" + value for value in config.get("SYNTH_PARAMETERS") or []]
+    defines = [*(config.get("VERILOG_DEFINES") or []), "__librelane__", "__pnr__",
+               "PDK_" + config["PDK"].replace("-", "_"), "SCL_" + config["STD_CELL_LIBRARY"]]
+    if config.get("VERILOG_POWER_DEFINE"):
+        defines.append(config["VERILOG_POWER_DEFINE"])
+    arguments += ["-D" + value for value in defines]
+    arguments += ["-I" + str(path) for path in paths(config.get("VERILOG_INCLUDE_DIRS"))]
+    arguments += [str(path) for path in paths(config.get("VERILOG_FILES"))]
+    # Slang's response-file parser owns quoting for paths and parameter strings.
+    (directory / "arguments.f").write_text("\n".join(json.dumps(value) for value in arguments) + "\n")
+    before = commands.seconds
+    completed = commands.run(["yosys", "-Q", "-T", "-p", "read_slang -f arguments.f"], cwd=directory)
+    if completed is not None and commands.records:
+        commands.records[-1]["tool_seconds"] = commands.seconds - before
+    if completed is None or completed.returncode:
+        raise FileNotFoundError(f"Cannot resolve {config['DESIGN_NAME']} parameters: native hierarchy failed; see command log")
+    start = re.search(r"(?m)^\{", completed.stdout)
+    try:
+        tree = json.JSONDecoder().raw_decode(completed.stdout[start.start():])[0] if start else {}
+    except ValueError as exc:
+        raise FileNotFoundError("Native hierarchy left no readable elaborated AST") from exc
+    if tree.get("kind") != "Root":
+        raise FileNotFoundError("Native hierarchy left no elaborated instance root")
+    (directory / "hierarchy.json").write_text(json.dumps(tree, indent=2) + "\n")
+    return tree
+
+
+def instance_parameters(tree, names, top=None):
+    """Keep native constant literals; never evaluate a source expression here."""
+    found = {name: [] for name in names}
+    literal = re.compile(r'(?:[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|'
+                         r"\d+'s?[bodh][+-]?[0-9a-fA-F_]+|'[01]|\"(?:[^\"\\]|\\.)*\")")
+
+    def walk(node, path=""):
+        if isinstance(node, list):
+            for item in node:
+                walk(item, path)
+        elif isinstance(node, dict):
+            if node.get("kind") == "Instance":
+                path = (path + "." if path else "") + node["name"]
+                body = node.get("body")
+                if not isinstance(body, dict):
+                    raise FileNotFoundError(f"Unresolved native instance body at {path}")
+                name = body.get("name")
+                if name in found:
+                    values = {}
+                    for member in body.get("members", []):
+                        if member.get("isLocal") or member.get("kind") not in {"Parameter", "TypeParameter"}:
+                            continue
+                        value = str(member.get("value", ""))
+                        if member["kind"] == "TypeParameter" or not literal.fullmatch(value):
+                            raise FileNotFoundError(f"Unresolved parameter {path}.{member['name']}: {value!r}")
+                        values[member["name"]] = value
+                    found[name].append((path, values))
+            for value in node.values():
+                walk(value, path)
+
+    roots = [member for member in tree.get("members", []) if member.get("kind") == "Instance"
+             and member.get("body", {}).get("name") == top] if top else [tree]
+    if len(roots) != 1:
+        raise FileNotFoundError(f"Native hierarchy did not resolve the selected top {top}")
+    walk(roots)
+    resolved = {}
+    for name, instances in found.items():
+        if not instances:
+            raise FileNotFoundError(f"Child {name}: no resolved instance in the parent's native hierarchy")
+        values = instances[0][1]
+        if any(bound != values for _, bound in instances[1:]):
+            raise FileNotFoundError(f"Child {name}: instances bind different parameter values: {instances}")
+        resolved[name] = values
+    return resolved
+
+
 def handover(state, definition):
     """Point MACROS directly at native files, keeping corner distinctions."""
     for kind in ("gds", "lef", "nl", "lib", "spef"):
@@ -87,7 +166,7 @@ def handover(state, definition):
         definition[kind] = consumed
 
 
-def _child(project, name, config, raw, pdk, commands, library=None):
+def _child(project, name, config, raw, pdk, commands, library=None, parameters=None):
     from librelane.flows import Flow
     from flow_native_adapters import testbenches
     from flow_config import resolve_rtl_inputs
@@ -121,6 +200,25 @@ def _child(project, name, config, raw, pdk, commands, library=None):
     include_dirs = list(dict.fromkeys([*(path.parent for path in [*sources, *supplied]),
                                       *paths(resolved.get("VERILOG_INCLUDE_DIRS"))]))
     headers = resolve_include_headers(sources, include_dirs)
+    if parameters is not None:
+        supplied_parameters = native.get("SYNTH_PARAMETERS") or []
+        explicit = {value.split("=", 1)[0].strip() for value in supplied_parameters}
+        candidate = [f"{key}={value}" for key, value in parameters.items() if key not in explicit]
+        selected = native.copy(VERILOG_FILES=list(map(str, sources)),
+            VERILOG_INCLUDE_DIRS=list(map(str, include_dirs)), SYNTH_PARAMETERS=candidate + supplied_parameters)
+        actual = instance_parameters(native_hierarchy(selected, child / "parameter_resolution", commands),
+                                     [name], top=name)[name]
+        if set(actual) != set(parameters):
+            raise FileNotFoundError(f"Child {name}: parent hierarchy did not resolve child parameters "
+                                   f"{sorted(set(actual) - set(parameters))}")
+        for key in explicit:
+            if key not in parameters or actual.get(key) != parameters[key]:
+                raise FileNotFoundError(f"Child {name}: supplied SYNTH_PARAMETERS conflicts with parent binding "
+                                       f"for {key}: {actual.get(key)!r} versus {parameters.get(key)!r}")
+        if actual != parameters:
+            raise FileNotFoundError(f"Child {name}: native child parameter values {actual} cannot implement "
+                                   f"the parent's resolved bindings {parameters}")
+        resolved["SYNTH_PARAMETERS"] = [f"{key}={value}" for key, value in parameters.items()]
     for source in sources:
         rtl = child / "input/rtl" / source.name
         rtl.parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +267,10 @@ def _child(project, name, config, raw, pdk, commands, library=None):
 
 
 def produce(project, directory, commands, route):
+    from catalog_glue_closure_resolver import _strip_comments, build_index
     from ip_integration_check import audit
+    from librelane.flows import Flow
+    from flow_config import resolve_rtl_inputs
 
     l9_path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     l9 = json.loads(l9_path.read_text()) if l9_path.is_file() else {}
@@ -202,13 +303,45 @@ def produce(project, directory, commands, route):
     packages, reports, native_steps, tool_seconds = {}, [], [], 0.0
     for macro in declared:
         name = macro["name"]
-        definition = wrapper.get("MACROS", {}).get(name)
-        if not definition:
+        if not wrapper.get("MACROS", {}).get(name):
             raise FileNotFoundError(f"Supplied wrapper MACROS does not declare {name}")
         if name not in configs:
             raise FileNotFoundError(f"Child {name}: no supplied native hardening configuration or RTL")
+    parent = {**wrapper, **current, "MACROS": {}}
+    if "VERILOG_FILES" not in current:
+        if (project / "phase2/stage1/rtl").is_dir():
+            parent["VERILOG_FILES"] = list(map(str, resolve_rtl_inputs(project)[0]))
+    # Parent-selected definitions win; read missing child implementations for
+    # elaboration while their physical views are still being produced.
+    supplied = list(dict.fromkeys(paths(parent.get("VERILOG_FILES"))))
+    known = set()
+    def definitions(path):
+        index = build_index({path: _strip_comments(path.read_text())})
+        return {(kind, name) for kind in ("mod_def", "pkg_def", "macro_def") for name in index[kind]}
+    for source in supplied:
+        known.update(definitions(source))
+    for macro in declared:
+        child_config = resolve_config(*configs[macro["name"]], pdk, library)
+        for source in paths(child_config.get("VERILOG_FILES")):
+            names = definitions(source)
+            if source in supplied or (names and names <= known):
+                continue
+            supplied.append(source)
+            known.update(names)
+    parent["VERILOG_FILES"] = list(map(str, supplied))
+    include_dirs = paths(parent.get("VERILOG_INCLUDE_DIRS"))
+    parent["VERILOG_INCLUDE_DIRS"] = list(map(str, dict.fromkeys([
+        *include_dirs, *(path.parent for path in paths(parent.get("VERILOG_FILES")))])))
+    parent_native = Flow.factory.get("Classic")(parent, design_dir=str(wrapper_path.parent),
+        pdk_root=os.environ.get("PDK_ROOT")).config
+    parameters = instance_parameters(native_hierarchy(parent_native, directory / "parent_parameters", commands),
+                                     [macro["name"] for macro in declared], top=top)
+    reports.append(directory / "parent_parameters/hierarchy.json")
+    for macro in declared:
+        name = macro["name"]
+        definition = wrapper.get("MACROS", {}).get(name)
         child, summary, code = _child(project, name, *configs[name], pdk, commands,
-                                     library=wrapper.get("STD_CELL_LIBRARY"))
+                                     library=wrapper.get("STD_CELL_LIBRARY"), parameters=parameters[name])
         if (child / "reports/flow_engine.json").is_file():
             reports.append(str(child / "reports/flow_engine.json"))
         native_steps.extend(run for row in summary.get("steps", [])
@@ -224,7 +357,7 @@ def produce(project, directory, commands, route):
                  or f"public entry exited {code}; see child command log")),
                 "ran": True, "exit_code": next((r.get("tool_exit_code") for r in failed
                     if r.get("tool_exit_code")), code or 1), "native_steps": native_steps,
-                "tool_seconds": tool_seconds}
+                "tool_seconds": tool_seconds + sum(row.get("tool_seconds", 0) for row in commands.records)}
         final = next((child / "steps" / row["name"] / "state_out.json"
                       for row in reversed(summary.get("steps", []))
                       if (child / "steps" / row["name"] / "state_out.json").is_file()), None)
@@ -240,4 +373,4 @@ def produce(project, directory, commands, route):
     return {**commands.result({"macro_count": len(packages)}, [*reports, path],
         "MACROS points directly at child native outputs; native corner views retained."),
         "ran": True, "exit_code": report["rc"], "native_steps": native_steps,
-        "tool_seconds": tool_seconds}
+        "tool_seconds": tool_seconds + sum(row.get("tool_seconds", 0) for row in commands.records)}
