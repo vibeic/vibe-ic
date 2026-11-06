@@ -20,7 +20,7 @@ and the contribution guides for extending it.
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
 | Executable flow | [`flow/steps.json`](plugins/vibe-ic/flow/steps.json), including conditional IC/IP, analog and hardware paths |
-| Test files | **3267** under `plugins/vibe-ic/programs/tests/` + **54** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
+| Test files | **3264** under `plugins/vibe-ic/programs/tests/` + **54** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
 | License | Apache-2.0 |
 
 Every count above is generated, not typed: `python3 plugins/vibe-ic/programs/gen_program_inventory.py` writes [`PROGRAM_INVENTORY.json`](plugins/vibe-ic/programs/PROGRAM_INVENTORY.json), and `--check` fails when a stated count drifts from the tree. Several of these populations are simultaneously true and count different things — the artefact carries a `definition` for each, so quote the key, not a bare number.
@@ -419,11 +419,11 @@ vibe-ic-marketplace/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
         ├── skills/                      ← 70 skills, each + compliance.yaml
-        ├── programs/                    ← 4176 *.py at any depth (776 top level)
+        ├── programs/                    ← 4173 *.py at any depth (776 top level)
         │   ├── vibe_ic_one_shot_runner.py ← public entry
         │   ├── flow_engine.py, flow_native_adapters.py
         │   ├── pdk_registry.json, ic_class_registry.json
-        │   └── tests/                   ← 3267 test files
+        │   └── tests/                   ← 3264 test files
         ├── mcp-eda/                     ← bundled MCP server, 56 tools
         ├── ip-catalog/                  ← reusable open-source IP index
         └── hooks/
