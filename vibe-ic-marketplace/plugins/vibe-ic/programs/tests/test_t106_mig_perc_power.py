@@ -233,8 +233,40 @@ def _current_power_scene(tmp_path):
     return project_root, folder, library
 
 
+def test_step_33_on_librelane_publishes_the_worst_corner_report_unedited(tmp_path):
+    runner, _ = _pdk('/unused.lib')
+    project, folder, library = _current_power_scene(tmp_path)
+    rpt3 = runner._pl.reports_phase3_dir(project)
+    written, notes = [], []
+    import _opensta_current as current
+    power.adopt_current_power_report(project, 'neutral', rpt3 / 'power.rpt', notes)
+    current.power_binding(project)
+    power.emit_signoff_record(project, rpt3 / 'power.rpt', rpt3 / 'power.json',
+                              'vectorless_sdc', notes, tool_rc=0)
+    record = json.loads((rpt3 / 'power.json').read_text())
+    assert record['total_power_w'] == pytest.approx(2.646044e-02), notes
+    assert record['power_basis'] == 'POST_ROUTE_SPEF'
+    assert record['activity']['basis'] == power.BASIS_VECTORLESS
+    assert (folder / 'max_typ/power.rpt').read_text() in (rpt3 / 'power.rpt').read_text()
+    current.power_binding(project)
+    receipt = json.loads((rpt3 / 'power.current.json').read_text())
+    assert receipt['tool_corner'] == 'max_typ'
+    assert receipt['source_report']['sha256'] == contract.digest(folder / 'max_typ/power.rpt')
 
 
+def test_step_33_retires_an_unbound_direct_record_even_with_a_legacy_dual_flag(tmp_path):
+    runner, pdk = _pdk('/p/cells__tt_025C_5v00.lib')
+    _stapostpnr(tmp_path)
+    rpt3 = runner._pl.reports_phase3_dir(tmp_path)
+    put(rpt3 / 'power.json', {'total_power_w': 0.0215, 'activity': {'basis': 'VECTORLESS'}})
+    write(rpt3 / 'power.rpt', 'Total 1.65e-02 4.94e-03 1.58e-06 2.15e-02 100.0%\n')
+    notes = []
+    power.adopt_current_power_report(tmp_path, 'spm', rpt3 / 'power.rpt', notes)
+    record = json.loads((rpt3 / 'power.json').read_text())
+    assert record['power_measurement'] == 'NOT_MEASURED'
+    assert record['verdict'] == 'NOT_MEASURED'
+    assert 'total_power_w' not in record
+    assert any('current power NOT_MEASURED' in note for note in notes)
 
 
 # ---------------------------------------------------------------- step 29 ---
@@ -594,6 +626,23 @@ def test_the_gate_level_sim_step_ships_in_the_plugin_the_contract_mounts():
     assert 'BLOCKING gate-level simulation verdict' in source
 
 
+def test_post_route_power_keeps_native_clock_analysis_and_pre_pnr_keeps_ideal_clocks(tmp_path, monkeypatch):
+    """Post-route power adopts the current native STAPostPNR session.
+
+    A second standalone post-route deck would lose that session's clock-tree
+    analysis. The pre-PnR estimate still has no tree to propagate.
+    """
+    runner, _ = _pdk('/unused.lib')
+    project, folder, library = _current_power_scene(tmp_path)
+    rpt = runner._pl.reports_phase3_dir(project) / 'power.rpt'
+    pdk = _pdk(str(library))[1]
+    monkeypatch.setattr(runner, '_docker_exec',
+                        lambda *a, **k: pytest.fail('parallel post-route power session ran'))
+    assert power.adopt_current_power_report(project, 'neutral', rpt, [])
+    assert (folder / 'max_typ/power.rpt').read_text() in rpt.read_text()
+    import _opensta_current as current
+    current.power_binding(project)
+    assert not (rpt.parent / 'power_neutral.tcl').exists()
 
 
 STA_PATH = '''Startpoint: u_core/_417_ (rising edge-triggered flip-flop clocked by clk)
