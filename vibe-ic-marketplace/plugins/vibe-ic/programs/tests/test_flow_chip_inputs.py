@@ -673,10 +673,85 @@ def test_native_timing_environment_and_pad_edge_bracket_reach_sdc(inputs):
     assert "set_clock_uncertainty 0.25" in text
     assert "set_clock_transition 0.15" in text
     assert "set_max_transition 3 [current_design]" in text
-    assert "set_max_capacitance 0.2 [current_design]" in text
+    assert "set_max_capacitance 0.2 $_chip_core_pins" in text
+    assert "set_max_capacitance 0.2 [current_design]" not in text
     assert "set_load 0.01" in text
     assert "set _chip_pad_max 1" in text
     assert "set _chip_pad_min 0.08" in text
+
+
+@pytest.mark.parametrize("hierarchical", [False, True])
+def test_native_core_cap_limit_and_pad_liberty_limit_both_remain(tmp_path, hierarchical):
+    import shutil
+    import subprocess
+
+    sta = shutil.which("sta")
+    if sta is None:
+        pytest.skip("Native OpenSTA required for capacitance limit checks")
+    library = tmp_path / "cells.lib"
+    library.write_text('''library (cells) {
+      delay_model : table_lookup;
+      time_unit : "1ns";
+      voltage_unit : "1V";
+      current_unit : "1mA";
+      capacitive_load_unit (1,pf);
+      nom_voltage : 5;
+      nom_temperature : 25;
+      nom_process : 1;
+      cell (receiver) {
+        pin (PAD) { direction : input; capacitance : 3.12; }
+        pin (Y) { direction : output; function : "PAD"; max_capacitance : 1; }
+      }
+      cell (buffer) {
+        pin (A) { direction : input; capacitance : 0.01; }
+        pin (Z) { direction : output; function : "A"; max_capacitance : 1; }
+      }
+      cell (driver) {
+        pin (A) { direction : input; capacitance : 0.28; }
+        pin (PAD) { direction : output; function : "A"; max_capacitance : 4; }
+      }
+    }''')
+    netlist = tmp_path / "chip.v"
+    design = '''module chip(input bond_in, output bond_out);
+      wire a, b;
+      receiver pad_in(.PAD(bond_in), .Y(a));
+      buffer core_buf(.A(a), .Z(b));
+      driver pad_out(.A(b), .PAD(bond_out));
+    endmodule'''
+    if hierarchical:
+        design = design.replace("driver pad_out", "pad_shell pad_out")
+        design += '''\nmodule pad_shell(input A, output PAD);
+          driver io_inst(.A(A), .PAD(PAD));
+        endmodule'''
+    netlist.write_text(design)
+    pad_pin = "pad_out/io_inst/PAD" if hierarchical else "pad_out/PAD"
+    ports = [{"name": name, "direction": direction, "indexed": False}
+             for name, direction in (("bond_in", "input"), ("bond_out", "output"))]
+    config = {"CLOCK_PORT": ["bond_in"], "CLOCK_PERIOD": 24, "IO_DELAY_CONSTRAINT": 20,
+              "MAX_CAPACITANCE_CONSTRAINT": .2, "OUTPUT_CAP_LOAD": 3530}
+    sdc = tmp_path / "constraints.sdc"
+    sdc.write_text(chip._sdc(tmp_path, config, ports))
+    script = tmp_path / "check.tcl"
+    script.write_text(f'''read_liberty {{{library}}}
+read_verilog {{{netlist}}}
+link_design chip
+read_sdc {{{sdc}}}
+puts CORE_AND_PAD_LIMITS
+report_check_types -max_capacitance
+set_load 4.5 [get_ports bond_out]
+puts PAD_OWN_LIMIT_VIOLATION
+report_check_types -max_capacitance -violators
+exit
+''')
+    process = subprocess.run([sta, "-no_init", "-no_splash", "-exit", script],
+                             capture_output=True, text=True, check=True)
+    first, second = process.stdout.split("PAD_OWN_LIMIT_VIOLATION")
+    assert "Error" not in process.stdout + process.stderr
+    assert any("core_buf/Z" in line and "0.20" in line and "VIOLATED" in line
+               for line in first.splitlines()), process.stdout
+    assert not any(pad_pin in line and "VIOLATED" in line for line in first.splitlines()), process.stdout
+    assert any(pad_pin in line and "4.00" in line and "VIOLATED" in line
+               for line in second.splitlines()), process.stdout
 
 
 @pytest.mark.parametrize("linked, maximum, minimum", [("fast_view", "0.8", "0.04"),
