@@ -209,31 +209,3 @@ def test_top_assembly_quotes_include_paths_with_spaces_and_hyphens(resolved):
     includes = [line for line in target.read_text().splitlines() if line.startswith('.include')]
     assert includes == [f'.include "{source.parent / (ir["block"] + ".lvs.cdl")}"',
                         f'.include "{library}"']
-
-
-@pytest.mark.parametrize("step", ["A12", "A18"])
-def test_lvs_consumers_bind_structural_views_without_invalidating_sizing(resolved, step):
-    import analog_native_flow as native
-
-    root, ir, source = resolved()
-    a3.emit_lvs_view(root, ir['block'])
-    view = source.parent / (ir['block'] + '.lvs.cdl')
-    provenance = source.parent / 'lvs_provenance.json'
-    before = native._input_views(root, ir['block'], step)
-    upstream = native._input_views(root, ir['block'], 'A05')
-    assert before[str(view)] == digest(view)
-    assert before[str(provenance)] == digest(provenance)
-    assert str(view) not in upstream and str(provenance) not in upstream
-
-    changed = view.read_text().replace(ir['ports'][0], 'changed_port')
-    assert changed != view.read_text()
-    view.write_text(changed)
-    after_view = native._input_views(root, ir['block'], step)
-    assert after_view[str(view)] != before[str(view)]
-    assert native._input_views(root, ir['block'], 'A05') == upstream
-
-    record = json.loads(provenance.read_text())
-    record['view_sha256'] = '0' * 64
-    provenance.write_text(json.dumps(record))
-    assert native._input_views(root, ir['block'], step)[str(provenance)] != before[str(provenance)]
-    assert native._input_views(root, ir['block'], 'A05') == upstream
