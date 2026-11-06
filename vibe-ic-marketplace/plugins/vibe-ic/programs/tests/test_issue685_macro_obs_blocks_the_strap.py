@@ -162,8 +162,7 @@ def test_the_planner_reads_OBS_at_all():
     over the whole planning path — plus, below, behaviourally, which is the
     check a rename cannot fool."""
     import inspect
-    src = (inspect.getsource(R._macro_pdn_grid_outcome)
-           + inspect.getsource(R._macro_pdn_grid_plan))
+    src = inspect.getsource(R._macro_pdn_grid_outcome)
     assert "_macro_obs_layers_from_lef" in src
     # and the same claim without any reference to source text at all
     assert _plan(_with_obs(T.MACRO_LEF, ["L4"]))["strap_layer"] != "L4"
