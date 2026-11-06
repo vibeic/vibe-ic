@@ -355,73 +355,48 @@ def test_cut_scalar_area_units_differ_from_explicit_per_cut_json(authority, area
 ])
 def test_native_cut_area_reaches_the_gate_only_on_the_same_bound_segment(
         tmp_path, monkeypatch, damage, expected):
-    # Reuse the existing explicitly offline native-transport fixture. The
-    # real producer writes its binding after this transport, and the real
-    # consumer checks it; these are not native IC measurements.
-    import test_default_power_density as T
     import em_current_density_check as E
-    tech = T.TECH.replace("LAYER cutA\n TYPE CUT ;\n", "LAYER cutA\n TYPE CUT ;\n DCCURRENTDENSITY AVERAGE 0.18 ;\n")
-    tech += """
-LAYER wireB
- TYPE ROUTING ;
- THICKNESS 1 ;
- DCCURRENTDENSITY AVERAGE 1 ;
-END wireB
-VIA native_cut
- LAYER wireA ;
- RECT -0.2 -0.2 0.2 0.2 ;
- LAYER cutA ;
- RECT -0.13 -0.13 0.13 0.13 ;
- LAYER wireB ;
- RECT -0.2 -0.2 0.2 0.2 ;
-END native_cut
-"""
-    monkeypatch.setattr(T, "TECH", tech)
-    project, pdk, _ = T.build(tmp_path, monkeypatch, via=True, direct=True)
-    R = T.R
-    original_transport = R._docker_exec
+    project = tmp_path / "project"
     rpt = project / "reports/phase3"
+    rpt.mkdir(parents=True)
+    tech = rpt / "native.tlef"
+    tech.write_text("LAYER wireA\n TYPE ROUTING ;\n WIDTH 1 ;\n THICKNESS 1 ;\n DCCURRENTDENSITY AVERAGE 1 ;\nEND wireA\n"
+                    "LAYER cutA\n TYPE CUT ;\n DCCURRENTDENSITY AVERAGE 0.18 ;\nEND cutA\n"
+                    "LAYER wireB\n TYPE ROUTING ;\n THICKNESS 1 ;\n DCCURRENTDENSITY AVERAGE 1 ;\nEND wireB\n"
+                    "VIA native_cut\n LAYER wireA ;\n RECT -0.2 -0.2 0.2 0.2 ;\n LAYER cutA ;\n RECT -0.13 -0.13 0.13 0.13 ;\n LAYER wireB ;\n RECT -0.2 -0.2 0.2 0.2 ;\nEND native_cut\n")
+    (rpt / "em.json").write_text(json.dumps({"tool": "openroad-psm", "native_rc": 0,
+        "verdict": "MEASURED", "nets_analysed": ["PWR"]}))
+    (rpt / "em_openroad_density.json").write_text(json.dumps({"verdict": "MEASURED",
+        "execution": {"native_rc": 0}, "authority": {"snapshot": str(tech)},
+        "pdk": {"name": "neutral"}, "power_basis": {"complete": True}, "nets": {"PWR": {}}}))
+    header = "Node0 Layer,Node0 X location,Node0 Y location,Node1 Layer,Node1 X location,Node1 Y location,Current\n"
+    density_header = "Layer,Node0 X,Node0 Y,Node1 X,Node1 Y,Current(A),Area(um^2),J(A/um^2),Jlimit(A/um^2),Ratio,Status,Cuts,Basis\n"
     current = 6.2e-5 if damage == "over_limit" else 1e-6
     area = 0.2028
-
-    def transport(*args, **kwargs):
-        rc, log, error = original_transport(*args, **kwargs)
-        psm = rpt / "em_segments_PWR.csv"
-        psm.write_text(T.HEADER + f"wireA,0,0,wireA,1,0,0.000001\nwireA,0,0,wireB,0,0,{current}\n")
-        native = rpt / "em_openroad_density_PWR.csv"
-        before = T.digest(native)
-        row = ["cutA", "0", "0", "0", "0", str(current), str(area),
-               str(current / area), str(0.18e-3 * 0.9),
-               str(current / area / (0.18e-3 * 0.9)),
-               "VIOLATED" if damage == "over_limit" else "OK", "3", "AREAL"]
-        if damage == "node": row[1] = "1"
-        if damage == "current": row[5] = str(current * 2)
-        if damage == "layer": row[0] = "wireA"
-        if damage == "area": row[6] = "0"
-        if damage == "no_limit": row[8:11] = ["0", "0", "NO_LIMIT"]; row[12] = "NO_LIMIT"
-        first = native.read_text().splitlines()[:2]
-        native.write_text("\n".join(first + ([] if damage == "missing_row" else [",".join(row)])) + "\n")
-        if damage.endswith("native_diagonal"):
-            # The rounded case retains the actual native line361524 I/Area/J
-            # decimals on neutral nodes; the inconsistent case lies outside
-            # every interval permitted by the same serializer.
-            i, a, j = (("1.374e-10", "1.2420e-1", "1.107e-9")
-                       if damage != "bound_native_diagonal" else
-                       ("0.000001", "1", "0.000001"))
-            if damage == "inconsistent_native_diagonal":
-                j = "1.300e-9"
-            psm.write_text(T.HEADER + f"wireA,0,0,wireA,1,1,{i}\n")
-            ratio = float(j) / 0.0009
-            native.write_text(T.DHEADER + f"wireA,0,0,1,1,{i},{a},{j},0.0009,{ratio},OK,0,AREAL\n")
-        log = log.replace(before, T.digest(native))
-        (rpt / "ir_em.log").write_text(log)
-        return rc, log, error
-
-    monkeypatch.setattr(R, "_docker_exec", transport)
-    assert R._emit_ir_em_reports(project, "unit", pdk, "offline", rpt / "ir_drop.rpt",
-                                 rpt / "em.rpt", []) == (True, True)
+    psm_rows = ["wireA,0,0,wireA,1,0,0.000001", f"wireA,0,0,wireB,0,0,{current}"]
+    row = ["cutA", "0", "0", "0", "0", str(current), str(area), str(current / area),
+           str(0.18e-3 * 0.9), str(current / area / (0.18e-3 * 0.9)),
+           "VIOLATED" if damage == "over_limit" else "OK", "3", "AREAL"]
+    if damage == "node": row[1] = "1"
+    if damage == "current": row[5] = str(current * 2)
+    if damage == "layer": row[0] = "wireA"
+    if damage == "area": row[6] = "0"
+    if damage == "no_limit": row[8:11] = ["0", "0", "NO_LIMIT"]; row[12] = "NO_LIMIT"
+    density_rows = ["wireA,0,0,1,0,0.000001,1,0.000001,0.0009,0.001111111,OK,0,AREAL"]
+    if damage != "missing_row": density_rows.append(",".join(row))
+    if damage.endswith("native_diagonal"):
+        i, a, j = (("1.374e-10", "1.2420e-1", "1.107e-9")
+                   if damage != "bound_native_diagonal" else ("0.000001", "1", "0.000001"))
+        if damage == "inconsistent_native_diagonal": j = "1.300e-9"
+        psm_rows = [f"wireA,0,0,wireA,1,1,{i}"]
+        density_rows = [f"wireA,0,0,1,1,{i},{a},{j},0.0009,{float(j) / 0.0009},OK,0,AREAL"]
+    (rpt / "em_segments_PWR.csv").write_text(header + "\n".join(psm_rows) + "\n")
+    (rpt / "em_segments.csv").write_text("Net," + header + "\n".join("PWR," + row for row in psm_rows) + "\n")
+    (rpt / "em_openroad_density_PWR.csv").write_text(density_header + "\n".join(density_rows) + "\n")
+    geometry = rpt / "em_pg_geometry.tsv"
+    geometry.write_text("net\tlayer\tx0_um\ty0_um\tx1_um\ty1_um\tsource\nPWR\twireA\t0\t-0.5\t2\t0.5\tspecial_wire\n")
     verdict, report = E.evaluate(rpt / "em_segments.csv", None, None, 0.1, 2.0, None, 20,
-                                 pg_geometry_path=rpt / "em_pg_geometry.tsv")
+                                 pg_geometry_path=geometry)
     assert verdict == expected, report
     assert report["pass"] is (expected == "PASS")
     if expected == "PASS":

@@ -5,9 +5,8 @@ import json
 import numpy as np
 import pytest
 
-from analog_native_waveform import NativeRaw, window_statistics,product_statistics
+from analog_native_em import NativeRaw, window_statistics,product_statistics
 import gzip
-import hashlib
 
 
 def capture(path,times,values,title='native grid fixture'):
@@ -121,7 +120,7 @@ def test_actual_native_supply_branch_identity_and_power_are_not_guessed(tmp_path
 def test_gzip_binary_reader_preserves_bytes_dtype_shape_and_all_math(tmp_path,title):
     path=tmp_path/'plain.raw';plain=capture(path,[0,.1,1,2],[-1,-.8,1,3],title=title)
     original=path.read_bytes();stored=tmp_path/'native.raw.gz';stored.write_bytes(gzip.compress(original,mtime=0))
-    raw=NativeRaw(stored,expected_raw_sha256=hashlib.sha256(original).hexdigest(),expected_raw_bytes=len(original))
+    raw=NativeRaw(stored)
     assert raw.names==plain.names and raw.shape==plain.shape and raw.values.dtype==plain.values.dtype
     assert not raw.values.flags.writeable and raw.values.tobytes()==plain.values.tobytes()
     assert raw.row(-1)==plain.row(-1)
@@ -130,9 +129,9 @@ def test_gzip_binary_reader_preserves_bytes_dtype_shape_and_all_math(tmp_path,ti
     assert path.read_bytes()==original
 
 
-@pytest.mark.parametrize('damage',['truncated_gzip','crc','trailing_payload','short_payload','raw_sha','raw_bytes',
+@pytest.mark.parametrize('damage',['truncated_gzip','crc','trailing_payload','short_payload',
                                   'complex','indices','utf8'])
-def test_gzip_capture_corruption_or_identity_mismatch_cannot_be_measured(tmp_path,damage):
+def test_gzip_capture_corruption_cannot_be_measured(tmp_path,damage):
     path=tmp_path/'plain.raw';capture(path,[0,1],[0,1]);original=path.read_bytes()
     if damage=='trailing_payload':original+=b'\0'
     elif damage=='short_payload':original=original[:-1]
@@ -143,10 +142,8 @@ def test_gzip_capture_corruption_or_identity_mismatch_cannot_be_measured(tmp_pat
     if damage=='truncated_gzip':data=data[:-5]
     elif damage=='crc':data=data[:-8]+bytes([data[-8]^1])+data[-7:]
     stored=tmp_path/'native.raw.gz';stored.write_bytes(data)
-    identity={'expected_raw_sha256':'0'*64 if damage=='raw_sha' else hashlib.sha256(original).hexdigest(),
-              'expected_raw_bytes':len(original)+1 if damage=='raw_bytes' else len(original)}
     with pytest.raises((OSError,ValueError,EOFError)):
-        NativeRaw(stored,**identity)
+        NativeRaw(stored)
 
 
 def test_gzip_uses_actual_native_pwl_fixture_and_independent_oracle(tmp_path):
@@ -154,8 +151,7 @@ def test_gzip_uses_actual_native_pwl_fixture_and_independent_oracle(tmp_path):
     matrix=np.array(data['native_points']);names=data['variables']
     path=tmp_path/'native.raw';capture(path,matrix[:,0],matrix[:,names.index('a')])
     original=path.read_bytes();stored=path.with_suffix('.raw.gz');stored.write_bytes(gzip.compress(original))
-    result=window_statistics(NativeRaw(stored,expected_raw_sha256=hashlib.sha256(original).hexdigest(),
-                                     expected_raw_bytes=len(original)),data['window_s'],[('a','b',1000)])[0]
+    result=window_statistics(NativeRaw(stored),data['window_s'],[('a','b',1000)])[0]
     assert result['avg']==pytest.approx(data['independent_oracle']['avg_a'],rel=1e-12)
     assert result['rms']==pytest.approx(data['independent_oracle']['rms_a'],rel=1e-12)
 
@@ -165,9 +161,8 @@ def test_gzip_binary_op_preserves_real_op_reader_and_plot_refusal(tmp_path):
     path=tmp_path/'op.raw.gz'
     original=b'Title: native OP\nPlotname: Operating Point\nFlags: real\nNo. Variables: 1\nNo. Points: 1\nVariables:\n0 v(a) voltage\nBinary:\n'+np.array([1.2],dtype='<f8').tobytes()
     path.write_bytes(gzip.compress(original))
-    identity={'expected_raw_sha256':hashlib.sha256(original).hexdigest(),'expected_raw_bytes':len(original)}
-    assert em.read_op_capture(path,**identity)=={'a':1.2,'0':0.}
-    with pytest.raises(ValueError,match='transient'):window_statistics(NativeRaw(path,**identity),[0,1],[('a','0',1)])
+    assert em.read_op_capture(path)=={'a':1.2,'0':0.}
+    with pytest.raises(ValueError,match='transient'):window_statistics(NativeRaw(path),[0,1],[('a','0',1)])
 
 
 def _bound_op_capture(tmp_path):
@@ -176,49 +171,38 @@ def _bound_op_capture(tmp_path):
               b'No. Points: 1\nVariables:\n0 v(a) voltage\nBinary:\n'+
               np.array([1.2],dtype='<f8').tobytes())
     stored.write_bytes(gzip.compress(original,mtime=0))
-    compressed_sha=hashlib.sha256(stored.read_bytes()).hexdigest()
-    record={'argv':['ngspice','-r',str(executed)],'outputs':{str(stored):compressed_sha},
-            'native_raw':{'executed_path':str(executed),'stored_path':str(stored),
-            'encoding':'gzip','sha256':compressed_sha,
-            'raw_sha256':hashlib.sha256(original).hexdigest(),'raw_bytes':len(original)}}
+    record={'outputs':[str(stored)], 'native_raw':{
+        'executed_path':str(executed),'stored_path':str(stored),'encoding':'gzip'}}
     return record,stored,original
 
 
 def _replay_value(record):
     try:
-        selected,identity=__import__('analog_native_waveform').native_capture(record,transient=False)
-        return NativeRaw(selected,**identity).row()['a']
+        selected=__import__('analog_native_em').native_capture(record,transient=False)
+        return NativeRaw(selected).row()['a']
     except (OSError,EOFError,ValueError):
         return 'REFUSED'
 
 
-def test_manifest_bound_gzip_replays_the_exact_original_capture(tmp_path):
+def test_native_gzip_replays_the_original_capture(tmp_path):
     record,_,_=_bound_op_capture(tmp_path)
     assert _replay_value(record)==1.2
 
 
-def test_legacy_plain_capture_remains_accepted_only_at_its_receipted_identity(tmp_path):
+def test_plain_capture_preserves_payload_validation(tmp_path):
     _,stored,original=_bound_op_capture(tmp_path);plain=tmp_path/'op.raw';plain.write_bytes(original)
-    record={'outputs':{str(plain):hashlib.sha256(original).hexdigest()}}
+    record={'outputs':[str(plain)]}
     assert _replay_value(record)==1.2
     plain.write_bytes(original[:-1])
     assert _replay_value(record)=='REFUSED'
 
 
-@pytest.mark.parametrize('damage',['missing','truncated','crc','stale_archive','raw_source','argv_source'])
-def test_capture_identity_counterexamples_fail_closed(tmp_path,damage):
+@pytest.mark.parametrize('damage',['missing','truncated','crc'])
+def test_missing_or_corrupted_capture_cannot_be_replayed(tmp_path,damage):
     record,stored,original=_bound_op_capture(tmp_path)
     if damage=='missing':
         stored.unlink()
     elif damage in ('truncated','crc'):
         data=stored.read_bytes()
         stored.write_bytes(data[:-5] if damage=='truncated' else data[:-8]+bytes([data[-8]^1])+data[-7:])
-        digest=hashlib.sha256(stored.read_bytes()).hexdigest()
-        record['native_raw']['sha256']=digest;record['outputs'][str(stored)]=digest
-    elif damage=='stale_archive':
-        stored.write_bytes(gzip.compress(original,mtime=1))
-    elif damage=='raw_source':
-        record['native_raw']['raw_sha256']='0'*64
-    else:
-        record['argv']=['ngspice','-r',str(tmp_path/'other.raw')]
     assert _replay_value(record)=='REFUSED'

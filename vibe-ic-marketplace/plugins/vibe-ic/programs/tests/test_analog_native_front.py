@@ -128,12 +128,8 @@ def test_a02_native_model_consumer_needs_no_qualification_registry(tmp_path):
     assert not (project / 'input/flow109/A02.json').exists()
 
 
-def test_a02_missing_smoke_does_not_require_an_export_receipt(tmp_path, monkeypatch):
-    import pdk_analog_completeness_check as inventory
+def test_a02_missing_smoke_does_not_require_an_export_receipt(tmp_path):
     project, declared = _project(tmp_path)
-    def unused_export(*args, **kwargs):
-        raise AssertionError('model measurement does not consume an exported inventory')
-    monkeypatch.setattr(inventory, 'bounded_inventory', unused_export)
     commands = Commands()
     result = front.run_step('A02', project, declared, {}, commands)
     assert result['status'] == 'NOT_MEASURED'

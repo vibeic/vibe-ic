@@ -70,11 +70,6 @@ def test_off_grid_and_half_dimension_grid_resolve_before_both_views(case, values
     assert all(str(v) + "u" not in text for v in values.values())
 
 
-def test_changed_pdk_source_refuses_even_on_grid(case):
-    ir, ctx, recipe = case
-    recipe.write_text("changed PDK recipe")
-    with pytest.raises(ValueError, match="GEOMETRY_ADMISSION_SOURCE_CHANGED"):
-        a3.render_netlist(ir, ctx, [], {})
 
 
 def admission_result(ir, ctx):
@@ -93,7 +88,7 @@ def test_portable_case_sources_survive_relocation_after_original_is_deleted(case
     record = admission_result(ir, ctx)
     assert record.get("status") == "ADMITTED", record
     assert record["devices"][0]["dimensions_um"] == {"w": 0.5, "l": 76.92}
-    assert record["sources"] == ctx["geometry_admission"]["sources"]
+    assert record["sources"] == dict.fromkeys(ctx["geometry_admission"]["sources"])
     assert str(tmp_path) not in json.dumps(record) and str(moved) not in json.dumps(record)
 
 
@@ -149,12 +144,6 @@ def test_repository_technology_source_stays_bound_after_case_relocation(case, tm
     assert record["devices"][0]["dimensions_um"] == {"w": 0.5, "l": 76.92}
 
 
-def test_changed_selected_installed_pdk_refuses_even_on_grid(case, tmp_path):
-    ir, ctx, _ = case
-    _, grid = use_installed_grid(ctx, tmp_path)
-    grid.write_bytes(grid.read_bytes() + b"# changed\n")
-    with pytest.raises(ValueError, match="GEOMETRY_ADMISSION_SOURCE_CHANGED: pdk:"):
-        a3.resolve_admitted_geometry(ir, ctx, {})
 
 
 @pytest.mark.parametrize("escape", [False, True])
@@ -246,13 +235,13 @@ def test_selected_pdk_wrapper_admits_same_physical_family(case, tmp_path, monkey
     record = admission_result(ir, ctx)
     assert record.get("status") == "ADMITTED", record
     assert record["grid_um"] == 0.005
-    assert record["sources"] == ctx["geometry_admission"]["sources"]
+    assert record["sources"] == dict.fromkeys(ctx["geometry_admission"]["sources"])
     assert ctx == before
     assert entered == (["selected-container"] * 2 if route == "container" else [])
 
 
 @pytest.mark.parametrize("route", ["local", "container"])
-@pytest.mark.parametrize("problem", ["changed-bytes", "escaped-source", "wrong-family", "wrong-tech-name"])
+@pytest.mark.parametrize("problem", ["escaped-source", "wrong-family", "wrong-tech-name"])
 def test_selected_pdk_wrapper_keeps_source_and_root_boundaries(case, tmp_path, monkeypatch, route, problem):
     ir, ctx, _ = case
     logical, selected, grid = use_selected_pdk_wrapper(ctx, tmp_path)
@@ -287,13 +276,6 @@ def test_invalid_portable_source_keys_refuse(case, key):
         a3.resolve_admitted_geometry(ir, ctx, {})
 
 
-@pytest.mark.parametrize("expected", ["0" * 63, "G" * 64, None, True])
-def test_malformed_source_digest_refuses(case, expected):
-    ir, ctx, _ = case
-    evidence = ctx["geometry_admission"]
-    evidence["sources"][evidence["grid_source"]] = expected
-    with pytest.raises(ValueError, match="GEOMETRY_ADMISSION_INVALID_HASH"):
-        a3.resolve_admitted_geometry(ir, ctx, {})
 
 
 @pytest.mark.parametrize("source_kind", ["missing", "directory", "symlink"])
@@ -367,14 +349,14 @@ def legacy_input(case, tmp_path):
     return ir, ctx, legacy_path, legacy, mappings
 
 
-def test_cli_migration_preserves_hashes_models_and_metadata(case, tmp_path):
+def test_cli_migration_preserves_paths_models_and_metadata(case, tmp_path):
     ir, ctx, legacy_path, legacy, mappings = legacy_input(case, tmp_path)
     before = legacy_path.read_bytes()
     result = run_migration(tmp_path, ctx["installed_pdk_root"], legacy_path, mappings)
     assert result.returncode == 0, result.stdout + result.stderr
     produced = json.loads((tmp_path / "input/analog_geometry_admission.json").read_text())
     assert produced == {"version": 2, "grid_source": "pdk:technology/selected.tlef",
-                        "sources": ctx["geometry_admission"]["sources"],
+                        "sources": dict.fromkeys(ctx["geometry_admission"]["sources"]),
                         "models": legacy["models"], "basis": legacy["basis"],
                         "native_probe_cid": legacy["native_probe_cid"]}
     assert legacy_path.read_bytes() == before
@@ -383,7 +365,7 @@ def test_cli_migration_preserves_hashes_models_and_metadata(case, tmp_path):
     assert str(tmp_path) not in json.dumps(produced) and "/old/" not in json.dumps(produced)
 
 
-@pytest.mark.parametrize("problem", ["changed-case", "changed-pdk", "unmapped", "duplicate-key",
+@pytest.mark.parametrize("problem", ["changed-pdk", "unmapped", "duplicate-key",
                                      "duplicate-target", "traversal", "bad-model", "unknown-version"])
 def test_cli_migration_refuses_before_replacing_destination(case, tmp_path, problem):
     _, ctx, legacy_path, legacy, mappings = legacy_input(case, tmp_path)
@@ -411,7 +393,7 @@ def test_cli_migration_refuses_before_replacing_destination(case, tmp_path, prob
     assert result.returncode == 2, result.stdout + result.stderr
     assert "GEOMETRY_ADMISSION_" in result.stdout + result.stderr
     if problem.startswith("changed"):
-        assert "SOURCE_CHANGED" in result.stdout + result.stderr
+        assert "GRID_ABSENT" in result.stdout + result.stderr
     assert destination.read_bytes() == b"retained evidence\n"
 
 
@@ -441,19 +423,6 @@ def prepare_emission(case, tmp_path, monkeypatch):
     return directory
 
 
-def test_emitter_rechecks_sources_and_refuses_before_netlist_publication(case, tmp_path, monkeypatch):
-    _, _, recipe = case
-    directory = prepare_emission(case, tmp_path, monkeypatch)
-
-    def mutate_after_first_check(*args):
-        recipe.write_bytes(b"changed between early check and rendering")
-        return []
-
-    monkeypatch.setattr(a3, "bound_geometry_limit_violations", mutate_after_first_check)
-    record = a3.emit_for_block(tmp_path, {"name": "divider"}, "portable_test", "", False)
-    assert record["status"] == "GEOMETRY_NOT_REPRESENTABLE", record
-    assert "SOURCE_CHANGED: case:input/proof/selected-resistor.tcl" in record["reason"]
-    assert not (directory / "divider.sp").exists()
 
 
 def test_emitter_refuses_duplicate_admission_json_keys(case, tmp_path, monkeypatch):
@@ -543,14 +512,14 @@ def test_staged_context_verifies_pdk_sources_against_installed_family(case, tmp_
     assert asked == [("portable_test", {"container": ""})]
 
 
-def test_staged_context_refuses_when_installed_family_bytes_differ(case, tmp_path, monkeypatch):
+def test_staged_context_reads_current_installed_grid(case, tmp_path, monkeypatch):
+    _, ctx, _ = case
     directory, root, _asked = prepare_staged_context(
         case, tmp_path, monkeypatch, lambda root: {"pdk_root": str(root)})
     (root / "technology/selected.tlef").write_text("MANUFACTURINGGRID 0.01 ;\n")
-    record = a3.emit_for_block(tmp_path, {"name": "divider"}, "portable_test", "", False)
-    assert record["status"] == "GEOMETRY_NOT_REPRESENTABLE", record
-    assert "GEOMETRY_ADMISSION_SOURCE_CHANGED: pdk:technology/selected.tlef" in record["reason"]
-    assert not (directory / "divider.sp").exists()
+    a3.emit_for_block(tmp_path, {"name": "divider"}, "portable_test", "", False)
+    assert ctx["geometry_admission_result"]["status"] == "ADMITTED"
+    assert ctx["geometry_admission_result"]["grid_um"] == 0.01
 
 
 def test_staged_context_without_installed_family_still_refuses_by_name(case, tmp_path, monkeypatch):

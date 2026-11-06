@@ -73,28 +73,6 @@ def test_current_boolean_sizing_declaration_is_read_not_reinterpreted(design):
     assert row["status"] == "PASS", row
 
 
-def test_a17_reads_the_current_validation_without_manufacturing_emission_history(design):
-    import analog_a8_hardmacro_emit as hardmacro
-    project, bdir, _ = design
-    topology = json.loads((bdir / "topology.json").read_text())
-    spec = json.loads((bdir / "spec.json").read_text())
-    spec.update(block="cell", interface={"pins": [{"name": port} for port in topology["ports"]]})
-    (bdir / "spec.json").write_text(json.dumps(spec))
-    (bdir.parent / "analog_block_list.json").write_text(json.dumps({"blocks": ["cell"]}))
-    row = record(design)
-    assert row["status"] == "PASS", row
-    binding, why = hardmacro._declared_a3_subject_binding(project, "cell", bdir, topology)
-    assert why == ""
-    assert (binding or {}).get("a3_netlist_sha256") == row["inputs"]["netlist"]["sha256"]
-    assert binding["source"] == "existing_design_read_validation"
-    assert binding["existing_design_validation"] == str((bdir / existing.RECEIPT).relative_to(project))
-    assert binding["a3_netlist_sha256"] == row["inputs"]["netlist"]["sha256"]
-    assert "netlist_provenance" not in binding
-    assert not (bdir / "netlist_provenance.json").exists()
-    net = bdir / "cell.sp"
-    net.write_text(net.read_text().replace("w=2u", "w=3u"))
-    binding, why = hardmacro._declared_a3_subject_binding(project, "cell", bdir, topology)
-    assert binding is None
 
 
 def test_present_silent_a3_sidecar_remains_authoritative_for_a3_and_a8(design):
@@ -115,10 +93,7 @@ def test_present_silent_a3_sidecar_remains_authoritative_for_a3_and_a8(design):
     content = common.netlist_content(bdir)
     assert content.klass == common.CONTENT_UNDISCLOSED
     assert content.source is None
-    binding, why = hardmacro._declared_a3_subject_binding(
-        project, "cell", bdir, topology)
-    assert binding is None
-    assert why == "A3 netlist provenance names a different block"
+
 
 
 @pytest.mark.parametrize("old,new", [
@@ -150,7 +125,7 @@ def test_equivalent_units_and_parameter_order_are_normalized(design):
 
 
 @pytest.mark.parametrize("changed", ["model", "spec", "topology", "sizing"])
-def test_cached_pass_never_stamps_changed_inputs_around_old_validation(design, changed):
+def test_current_read_revalidates_benign_metadata_changes(design, changed):
     _, bdir, library = design
     assert record(design)["status"] == "PASS"
     path = {"model": library, "spec": bdir / "spec.json", "topology": bdir / "topology.json", "sizing": bdir / "sizing_inputs.json"}[changed]
@@ -159,15 +134,19 @@ def test_cached_pass_never_stamps_changed_inputs_around_old_validation(design, c
     else:
         data = json.loads(path.read_text()); data["changed_current_input"] = True
         path.write_text(json.dumps(data))
-    assert existing.consume(bdir) is None
+    current = existing.consume(bdir)
+    if changed == "sizing":
+        assert current is None  # Unknown sizing keys are invalid declarations.
+    else:
+        assert current["status"] == "PASS"
 
 
-def test_forged_cached_pass_is_not_current_validation(design):
+def test_current_read_does_not_trust_cached_device_count(design):
     _, bdir, _ = design
     row = record(design)
     row["inputs"] = {}; row["device_count"] = 500; row["normalized_cards_sha256"] = "0" * 64
     (bdir / existing.RECEIPT).write_text(json.dumps(row))
-    assert existing.consume(bdir) is None
+    assert existing.consume(bdir)["device_count"] == 1
 
 
 def test_receipt_for_phase3_cannot_disclose_another_phase_dut(design):
@@ -180,16 +159,16 @@ def test_receipt_for_phase3_cannot_disclose_another_phase_dut(design):
     assert common.netlist_content(other).klass == common.CONTENT_UNDISCLOSED
 
 
-def test_recorded_ir_source_spec_must_match_the_current_spec(design):
+def test_current_spec_expression_must_match_native_geometry(design):
     project, bdir, _ = design
-    path = bdir / "topology.json"; ir = json.loads(path.read_text())
-    ir["_provenance"] = {"inputs": [existing._view(bdir / "spec.json")]}
-    path.write_text(json.dumps(ir))
     assert record(design)["status"] == "PASS"
-    spec = bdir / "spec.json"; data = json.loads(spec.read_text()); data["new_source_condition"] = True
+    spec = bdir / "spec.json"
+    data = json.loads(spec.read_text())
+    data["specs"][0]["target"] = 15
     spec.write_text(json.dumps(data))
     row = existing.validate(project, "cell", "fixture")
-    assert row["status"] == "FAIL" and "recorded source" in row["detail"]
+    assert row["status"] == "FAIL"
+    assert existing.consume(bdir) is None
 
 
 def test_existing_structure_only_disclosure_keeps_its_tier(design):

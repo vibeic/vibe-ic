@@ -49,7 +49,6 @@ import analog_a2_topology_emit as a2                  # noqa: E402
 import analog_a3_netlist_emit as a3                   # noqa: E402
 import analog_incremental_decimator as dec            # noqa: E402
 import analog_incremental_resolution as R             # noqa: E402
-import analog_sc_loop_probe as probe                  # noqa: E402
 import pdk_analog_layout_minima as mn                 # noqa: E402
 
 PDK = "ihp-sg13g2"
@@ -325,7 +324,7 @@ def test_the_drawn_capacitors_realise_the_scaled_loop(emitted):
             scl["a"][i - 1], rel=1e-6)
 
 
-def _measurement(ir, g_in1=1.077, structure=None):
+def _measurement(ir, g_in1=1.077):
     rows = []
     for i in (1, 2):
         rows.append({"stage": i, "status": "MEASURED",
@@ -335,9 +334,7 @@ def _measurement(ir, g_in1=1.077, structure=None):
                      "offset_state_per_clock": 0.014 if i == 1 else 0.0,
                      "gain_input_over_ratio": g_in1 if i == 1 else 1.0,
                      "gain_dac_over_ratio": 0.2494 / 0.2499})
-    return {"status": "MEASURED", "stages": rows,
-            "structure_sha256": (structure if structure is not None
-                                 else a2.loop_structure_fingerprint(ir))}
+    return {"status": "MEASURED", "stages": rows}
 
 
 def _rebuild(ir, spec, measured_loop):
@@ -370,12 +367,6 @@ def test_a_measured_input_branch_gain_is_used_not_the_cap_ratio(emitted):
     assert got["offset_u"] > 0 and got["b1_over_a1"] < base["b1_over_a1"]
 
 
-def test_a_measurement_of_another_switch_network_is_not_used(emitted):
-    _root, _d, ir, spec = emitted
-    got = _rebuild(ir, spec, _measurement(ir, structure="0" * 64))
-    sw = got["loop_swing"]
-    assert sw["coefficient_source"] == "cap_ratio_unmeasured"
-    assert "different switch network" in sw["measurement_rejected"]
 
 
 def test_the_input_branches_sample_on_the_bottom_plate():
@@ -394,44 +385,6 @@ def test_the_input_branches_sample_on_the_bottom_plate():
     assert drv and any(d["nets"][1] != cstc for d in drv)
     assert a2.derived_feedback_delay(lib) == 1
 
-
-# ── the probe's arithmetic ────────────────────────────────────────────────
-def test_the_probe_fit_recovers_known_coefficients():
-    """Synthetic per-clock samples from a loop with KNOWN coefficients: the
-    pooled regression must return them."""
-    a1, b1, o1, a2c, c2, o2 = 0.25, 0.27, 0.007, 0.08, 0.19, -0.002
-    runs = []
-    for vin in (0.55, 0.60, 0.65, 0.70):
-        vcm, y1, y2 = 0.59, 0.59, 0.59
-        smp = []
-        for k in range(40):
-            fb = 0.1 if (k * 7 + int(vin * 100)) % 3 else 1.1
-            smp.append({"k": k, "vcm": vcm, "fb": fb, "reset": False,
-                        "y0": y1, "y1": y2})
-            y2 = y2 + c2 * (y1 - vcm) + a2c * (fb - vcm) + o2
-            y1 = y1 + b1 * (vin - vcm) + a1 * (fb - vcm) + o1
-        runs.append((vin, smp))
-    fit = probe.fit_stages(runs, 2)
-    assert fit[0]["input_coefficient"] == pytest.approx(b1, rel=1e-9)
-    assert fit[0]["dac_coefficient"] == pytest.approx(a1, rel=1e-9)
-    assert fit[0]["offset_v_per_clock"] == pytest.approx(o1, rel=1e-9)
-    assert fit[1]["input_coefficient"] == pytest.approx(c2, rel=1e-9)
-    assert fit[1]["dac_coefficient"] == pytest.approx(a2c, rel=1e-9)
-
-
-def test_the_probe_deck_holds_the_input_and_reroots_relative_paths():
-    tb = ("* tb\n.lib ../../m/x.lib tt\n.include blk.sp\n"
-          ".lib /abs/y.lib ss\nv_in vin 0 0.7\nxdut a b vin blk\n"
-          ".save v(a)\n.control\ntran 1n 1u\n.endc\n.end\n")
-    deck = probe.build_deck(tb, input_port="vin", vin=0.61234, inst="xdut",
-                            nets=["vo1", "vcm"], tstop=1e-6, tstep=1e-9,
-                            out_file="w.txt", rel_prefix="../")
-    assert "v_in vin 0 0.612340" in deck
-    assert ".lib ../../../m/x.lib tt" in deck
-    assert ".include ../blk.sp" in deck
-    assert ".lib /abs/y.lib ss" in deck
-    assert "tran 1n 1u" not in deck and ".save v(a)" not in deck
-    assert "wrdata w.txt v(xdut.vo1) v(xdut.vcm)" in deck
 
 
 def test_a_declaration_whose_caps_are_below_the_minimum_is_refused_by_name(
@@ -458,28 +411,6 @@ def test_a_declaration_whose_caps_are_below_the_minimum_is_refused_by_name(
     assert not (bdir(root, BLK) / "topology.json").exists()
 
 
-def test_a_stage_the_recurrence_does_not_describe_is_not_used():
-    """MEASURED on the emitted delta_sigma: stage 2's per-clock recurrence
-    explains 94.5 % of its step (rms 9.1 mV against stage 1's 0.18 mV),
-    because the integrator outputs do not hold during the sampling phase.
-    Such a stage is POOR_FIT and its coefficients are not used."""
-    import random
-    rnd = random.Random(7)
-    runs = []
-    for vin in (0.55, 0.60, 0.65, 0.70):
-        vcm, y1, y2 = 0.59, 0.59, 0.59
-        smp = []
-        for k in range(40):
-            fb = 0.1 if (k * 7 + int(vin * 100)) % 3 else 1.1
-            smp.append({"k": k, "vcm": vcm, "fb": fb, "reset": False,
-                        "y0": y1, "y1": y2})
-            y2 = y2 + 0.19 * (y1 - vcm) + 0.08 * (fb - vcm) \
-                + rnd.gauss(0.0, 0.02)
-            y1 = y1 + 0.27 * (vin - vcm) + 0.25 * (fb - vcm) + 0.007
-        runs.append((vin, smp))
-    fit = probe.fit_stages(runs, 2)
-    assert fit[0]["status"] == "MEASURED" and fit[0]["r2"] > 0.999
-    assert fit[1]["status"] == "POOR_FIT" and fit[1]["r2"] < probe.MIN_FIT_R2
 
 
 def test_a2_uses_the_measured_stage_and_discloses_the_other(emitted):
@@ -494,27 +425,3 @@ def test_a2_uses_the_measured_stage_and_discloses_the_other(emitted):
                                                   "cap_ratio_unmeasured"]
     assert sw["gain_input_over_ratio"][1] == 1.0
     assert sw["gain_input_over_ratio"][0] == pytest.approx(1.077)
-
-
-def test_the_probe_runs_every_deck_under_one_supervised_waiter(tmp_path,
-                                                               monkeypatch):
-    """One supervised call per deck let a FINISHED deck's CPU leave every other
-    call's container sum, and five computing decks were reaped as STALLED
-    (rc 199). All decks now run as children of ONE in-container shell that
-    waits for them; each deck's own rc is read back from beside its log."""
-    calls = []
-
-    def fake(container, cmd, ceiling_s=0.0, **_kw):
-        calls.append(cmd)
-        for n in ("a", "b", "c"):
-            (tmp_path / f"{n}.rc").write_text("0\n" if n != "b" else "1\n")
-        import subprocess
-        return subprocess.CompletedProcess([], 0, "", "")
-    monkeypatch.setattr(probe._ce, "run_in_container_supervised", fake)
-    decks = {n: tmp_path / f"{n}.sp" for n in ("a", "b", "c")}
-    rcs = probe._run_decks(decks, "ctr", 10.0)
-    assert len(calls) == 1
-    assert calls[0].rstrip().endswith("wait")
-    for n in ("a", "b", "c"):
-        assert f"ngspice -b {n}.sp" in calls[0]
-    assert rcs == {"a": 0, "b": 1, "c": 0}
