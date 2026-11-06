@@ -154,6 +154,52 @@ def test_native_cocotb_core_scenario_annotates_the_wrapper(activity_case, scoped
         assert native.count("SCOPED_SDC_READ") == 1
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("complete", [False, True])
+def test_native_base_sdc_uses_each_linked_designs_captured_configuration(activity_case, wrapped, complete):
+    native_tools()
+    from librelane.common import get_script_dir
+
+    project, state, config, tool = activity_case
+    base = str(Path(get_script_dir()) / "base.sdc")
+    settings = {"DESIGN_NAME": "unit", "FALLBACK_SDC": base, "CLOCK_PORT": ["a"],
+        "IO_DELAY_CONSTRAINT": 20, "MAX_FANOUT_CONSTRAINT": 4,
+        "CLOCK_UNCERTAINTY_CONSTRAINT": 0.1, "CLOCK_TRANSITION_CONSTRAINT": 0.1,
+        "OUTPUT_CAP_LOAD": 1, "SYNTH_DRIVING_CELL": "plain/Y", "TIME_DERATING_CONSTRAINT": 0}
+    if complete:
+        settings["CLOCK_PERIOD"] = 24
+    if wrapped:
+        chip = project / "work/flow/chip"
+        chip.mkdir(parents=True)
+        (chip / "core_state.json").write_text(json.dumps(state))
+        (chip / "config.json").write_text(json.dumps(settings))
+        (chip / "sizing.json").write_text(json.dumps(
+            {"top": "unit", "state_out": str(chip / "core_state.json")}))
+        wrapper = "module package_unit(input pad_a,output pad_y); unit compute_stage(.a(pad_a),.y(pad_y)); endmodule\n"
+        (chip / "wrapper.v").write_text(wrapper)
+        mapped = project / "chip.v"
+        mapped.write_text(Path(state["nl"]).read_text() + wrapper)
+        state["nl"], config["DESIGN_NAME"], config["CLOCK_PERIOD"] = str(mapped), "package_unit", 30
+        Path(config["SIGNOFF_SDC_FILE"]).write_text(
+            'current_design package_unit\n'
+            'if {$::env(DESIGN_NAME) ne "package_unit" || $::env(CLOCK_PERIOD) != 30} {error "wrong chip configuration"}\n'
+            'create_clock -name reference -period $::env(CLOCK_PERIOD)\n')
+    else:
+        config.pop("SIGNOFF_SDC_FILE")
+        config.update(settings)
+    result = run_case(activity_case)
+    assert evaluate(ToolResult(**result), []) == ("PASS" if complete else "FAIL"), result
+    if complete:
+        assert result["metrics"]["activity__annotated_pin_count"] > 0
+        native = (project / "result/power.rpt").read_text()
+        assert "[INFO] Using clock a" in native
+        assert "[INFO] Setting input delay to: 4.8" in native
+        assert "[INFO] Setting clock transition to: 0.1\n" in native
+    else:
+        assert result["metrics"] == {}
+        assert 'can\'t read "::env(CLOCK_PERIOD)"' in (project / "result/power.rpt").read_text()
+
+
 @pytest.mark.parametrize("instance", ["compute_stage", "signal_core"])
 @pytest.mark.parametrize("flattened", [False, True, "yosys", "renamed"])
 def test_native_core_scenario_annotates_the_wrapper_core(activity_case, monkeypatch, instance, flattened):
