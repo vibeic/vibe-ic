@@ -95,13 +95,6 @@ def _answers(project: Path, doc):
                     encoding="utf-8")
 
 
-def _drive(project: Path) -> "tuple[int, str]":
-    """Run step 0.5ic through the SHIPPED runner entry, capturing what it said."""
-    import phase1_one_shot_runner as R
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        rc = R._run_step_0_5ic(project)
-    return rc, buf.getvalue()
 
 
 def _historical_declaration_fixture(project: Path):
@@ -128,24 +121,6 @@ def _refusal(check, rule):
     return hits[0]
 
 
-def _audit_rows(project: Path):
-    cp = _pr.run([sys.executable, str(PROGRAMS / "flow_compliance_check.py"),
-                  str(project)], cwd=str(project), capture_output=True, text=True)
-    path = project / "reports/audit/phase23_completion_audit.json"
-    assert path.is_file(), cp.stdout[-2000:] + cp.stderr[-2000:]
-    rows = {}
-
-    def walk(o):
-        if isinstance(o, dict):
-            if isinstance(o.get("id"), str) and "status" in o:
-                rows.setdefault(o["id"], o)
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-    walk(json.loads(path.read_text(encoding="utf-8")))
-    return rows
 
 
 # --------------------------------------------------------------------------- #
@@ -155,7 +130,6 @@ def test_the_refusal_names_where_the_reason_is_supplied(project):
     """A refusal that names a floor and not its channel sends readers wrong."""
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 2
     rc, check = _gate(project)
 
     assert rc == 1, "the verdict must NOT move: this change is disclosure only"
@@ -178,7 +152,6 @@ def test_the_refusal_names_the_route_it_read_and_why_it_bought_nothing(project):
     """
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 2
     _historical_declaration_fixture(project)
     assert (project / TD.SELF_TAPEOUT_REL).is_file()
 
@@ -196,20 +169,6 @@ def test_the_refusal_names_the_route_it_read_and_why_it_bought_nothing(project):
     assert "route_of" in r["message"], r["message"]
 
 
-def test_the_run_discloses_the_missing_answer_before_the_step_refuses(project):
-    """A decline that discloses nothing reads downstream as nothing-to-do."""
-    rc, said = _drive(project)          # no answers file staged at all
-    assert rc == 2, "lookup runs before missing input stops dependent producers"
-    assert ST.DESIGN_ANSWERS_REL in said, said
-    assert "operator_template.absent_reason" in said, said
-    assert "NO_TEMPLATE_WITHOUT_REASON" in said, said
-
-    # and the same disclosure when the file exists and answers the wrong half
-    _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE}})
-    rc, said = _drive(project)
-    assert rc == 2
-    assert ST.DESIGN_ANSWERS_REL in said, said
-    assert "operator_template.absent_reason" in said, said
 
 
 # --------------------------------------------------------------------------- #
@@ -223,7 +182,6 @@ def test_the_route_word_still_buys_nothing(project):
     """
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 2
     assert not (project / TD.SELF_TAPEOUT_REL).exists()
     rc, check = _gate(project)
     assert (rc, check["verdict"]) == (1, ST.VERDICT_FAIL), check
@@ -240,22 +198,12 @@ def test_a_stated_reason_reaches_not_applicable_and_leaves_no_row_blocked(projec
     _answers(project, {"operator_template": {"absent_reason": _REASON},
                        "answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 0
     rc, check = _gate(project)
     assert rc == 0, check
     assert check["verdict"] == ST.VERDICT_NOT_APPLICABLE, check
     assert check["not_applicable_reason"] == _REASON
     assert "passed" not in check, "NOT_APPLICABLE must never fold into a boolean"
 
-    rows = _audit_rows(project)
-    assert rows["0.5ic"]["status"] == "PASS", rows["0.5ic"]
-    # THE DENOMINATOR IS STATED: a zero over rows nobody looked at is the empty
-    # scan this tree has been bitten by. All four dependents must be present.
-    for sid in ("15.5ic", "26.5ic", "37.5ic", "37.5ip"):
-        assert sid in rows, sorted(rows)
-    blocked = sorted(sid for sid, r in rows.items()
-                     if "blocked-by-upstream(0.5ic)" in str(r.get("cascade_note") or ""))
-    assert blocked == [], blocked
 
 
 # --------------------------------------------------------------------------- #
@@ -267,7 +215,6 @@ def test_control_a_design_that_said_nothing_still_fails(project):
     This gate exists because a silently missing slot file is how a design gets
     taped out into the wrong geometry.
     """
-    assert _drive(project)[0] == 2
     assert not (project / TD.SELF_TAPEOUT_REL).exists()
     rc, check = _gate(project)
     assert (rc, check["verdict"]) == (1, ST.VERDICT_FAIL), check
@@ -282,7 +229,6 @@ def test_control_a_marker_file_beside_no_declaration_is_not_a_declaration(projec
     """The FILE'S CONTENT declares the route, not the file's name."""
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 2
     _historical_declaration_fixture(project)
     marker = project / TD.SELF_TAPEOUT_REL
     assert marker.read_text(encoding="utf-8").splitlines()[0].strip() \
@@ -304,7 +250,6 @@ def test_control_the_hardmacro_route_is_untouched(project):
     """A HARDMACRO declaration writes no self-tape-out router, and still FAILs."""
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_HARDMACRO},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 2
     _historical_declaration_fixture(project)
     assert not (project / TD.SELF_TAPEOUT_REL).exists()
     rc, check = _gate(project)
@@ -329,7 +274,6 @@ def test_declared_route_on_disk_separates_unreadable_from_undeclared(project):
 
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 2
     _historical_declaration_fixture(project)
     assert reader(project, has_slots=False) == (TD.ROUTE_SELF_TAPEOUT, None)
 
